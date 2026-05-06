@@ -1,11 +1,13 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
   isWorkspacePluginAllowedByConfig,
   normalizePluginConfigId,
 } from "../plugins/plugin-config-trust.js";
+import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 export type ProviderAuthAliasLookupParams = {
@@ -31,9 +33,16 @@ let providerAuthAliasMapCache = new WeakMap<
   Map<string, Record<string, string>>
 >();
 
-function buildProviderAuthAliasMapCacheKey(params?: ProviderAuthAliasLookupParams): string {
+function buildProviderAuthAliasMapCacheKey(
+  params: ProviderAuthAliasLookupParams | undefined,
+  env: NodeJS.ProcessEnv,
+): string {
   return JSON.stringify({
-    workspaceDir: params?.workspaceDir ?? "",
+    pluginControlPlane: resolvePluginControlPlaneFingerprint({
+      config: params?.config,
+      env,
+      workspaceDir: params?.workspaceDir,
+    }),
     includeUntrustedWorkspacePlugins: params?.includeUntrustedWorkspacePlugins === true,
     plugins: params?.config?.plugins ?? null,
   });
@@ -100,7 +109,7 @@ export function resolveProviderAuthAliasMap(
   params?: ProviderAuthAliasLookupParams,
 ): Record<string, string> {
   const env = params?.env ?? process.env;
-  const cacheKey = buildProviderAuthAliasMapCacheKey(params);
+  const cacheKey = buildProviderAuthAliasMapCacheKey(params, env);
   let envCache = providerAuthAliasMapCache.get(env);
   if (!envCache) {
     envCache = new Map<string, Record<string, string>>();
@@ -110,15 +119,26 @@ export function resolveProviderAuthAliasMap(
   if (cached) {
     return cached;
   }
-  const registry = loadPluginManifestRegistryForPluginRegistry({
-    config: params?.config,
-    workspaceDir: params?.workspaceDir,
-    env,
-    includeDisabled: true,
-  });
+  const config = params?.config ?? {};
+  const snapshot =
+    params?.workspaceDir !== undefined
+      ? (getCurrentPluginMetadataSnapshot({
+          config,
+          workspaceDir: params.workspaceDir,
+          env,
+        }) ??
+        loadPluginMetadataSnapshot({
+          config,
+          workspaceDir: params.workspaceDir,
+          env,
+        }))
+      : loadPluginMetadataSnapshot({
+          config,
+          env,
+        });
   const preferredAliases = new Map<string, ProviderAuthAliasCandidate>();
   const aliases: Record<string, string> = Object.create(null) as Record<string, string>;
-  for (const plugin of registry.plugins) {
+  for (const plugin of snapshot.plugins) {
     if (!shouldUsePluginAuthAliases(plugin, params)) {
       continue;
     }

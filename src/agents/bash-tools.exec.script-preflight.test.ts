@@ -1,8 +1,8 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { __setFsSafeTestHooksForTest } from "../infra/fs-safe.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { __testing, createExecTool } from "./bash-tools.exec.js";
 
@@ -91,6 +91,21 @@ describe("exec interactive OpenClaw channel login guard", () => {
     await expect(
       tool.execute("call-wrapped-openclaw-channel-login", {
         command: "sudo -u openclaw bash -lc 'openclaw channels login --channel whatsapp'",
+      }),
+    ).rejects.toThrow(/exec cannot run interactive OpenClaw channel login commands/);
+    await expect(
+      tool.execute("call-clustered-sudo-channel-login", {
+        command: "sudo -EH bash -lc 'openclaw channels login --channel whatsapp'",
+      }),
+    ).rejects.toThrow(/exec cannot run interactive OpenClaw channel login commands/);
+    await expect(
+      tool.execute("call-deep-env-channel-login", {
+        command: "env env env env env env openclaw channels login --channel whatsapp",
+      }),
+    ).rejects.toThrow(/exec cannot run interactive OpenClaw channel login commands/);
+    await expect(
+      tool.execute("call-env-s-trailing-channel-login", {
+        command: "env -S 'openclaw channels' login --channel whatsapp",
       }),
     ).rejects.toThrow(/exec cannot run interactive OpenClaw channel login commands/);
   });

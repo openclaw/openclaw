@@ -16,6 +16,7 @@ export type {
   AgentHarnessAttemptResult,
   AgentHarnessCompactParams,
   AgentHarnessCompactResult,
+  AgentHarnessDeliveryDefaults,
   AgentHarnessResultClassification,
   AgentHarnessResetParams,
   AgentHarnessSupport,
@@ -30,6 +31,7 @@ export type { CompactEmbeddedPiSessionParams } from "../agents/pi-embedded-runne
 export type { EmbeddedPiCompactResult } from "../agents/pi-embedded-runner/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export type { MessagingToolSend } from "../agents/pi-embedded-messaging.types.js";
+export type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 export type { AgentApprovalEventData, AgentEventPayload } from "../infra/agent-events.js";
 export type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 export type { NormalizedUsage } from "../agents/usage.js";
@@ -74,14 +76,22 @@ export {
   selectDefaultNodeFromList,
 } from "../agents/tools/nodes-utils.js";
 export { formatToolAggregate } from "../auto-reply/tool-meta.js";
+export {
+  HEARTBEAT_RESPONSE_TOOL_NAME,
+  normalizeHeartbeatToolResponse,
+} from "../auto-reply/heartbeat-tool-response.js";
 export { isMessagingTool, isMessagingToolSendAction } from "../agents/pi-embedded-messaging.js";
 export {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
 } from "../agents/pi-embedded-subscribe.tools.js";
 export { normalizeUsage } from "../agents/usage.js";
-export { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
-export { resolveSessionAgentIds } from "../agents/agent-scope.js";
+export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
+export {
+  resolveAgentDir,
+  resolveDefaultAgentDir,
+  resolveSessionAgentIds,
+} from "../agents/agent-scope.js";
 export { resolveModelAuthMode } from "../agents/model-auth.js";
 export { supportsModelTools } from "../agents/model-tool-support.js";
 export { resolveAttemptSpawnWorkspaceDir } from "../agents/pi-embedded-runner/run/attempt.thread-helpers.js";
@@ -99,8 +109,15 @@ export {
 } from "../agents/runtime-plan/tools.js";
 export { normalizeProviderToolSchemas } from "../agents/pi-embedded-runner/tool-schema-runtime.js";
 export { resolveSandboxContext } from "../agents/sandbox.js";
+export { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
+export type { EmbeddedContextFile } from "../agents/pi-embedded-helpers/types.js";
 export { isSubagentSessionKey } from "../routing/session-key.js";
-export { acquireSessionWriteLock } from "../agents/session-write-lock.js";
+export {
+  acquireSessionWriteLock,
+  resolveSessionWriteLockAcquireTimeoutMs,
+  type SessionWriteLockAcquireTimeoutConfig,
+} from "../agents/session-write-lock.js";
+export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
   isToolWrappedWithBeforeToolCallHook,
@@ -141,8 +158,14 @@ export {
 /**
  * Derive the same compact user-facing tool detail that Pi uses for progress logs.
  */
-export function inferToolMetaFromArgs(toolName: string, args: unknown): string | undefined {
-  const display = resolveToolDisplay({ name: toolName, args });
+export type ToolProgressDetailMode = "explain" | "raw";
+
+export function inferToolMetaFromArgs(
+  toolName: string,
+  args: unknown,
+  options?: { detailMode?: ToolProgressDetailMode },
+): string | undefined {
+  const display = resolveToolDisplay({ name: toolName, args, detailMode: options?.detailMode });
   return formatToolDetail(display);
 }
 

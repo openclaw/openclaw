@@ -20,13 +20,13 @@ export type MSTeamsTeamsSdk = {
 /**
  * A Teams SDK App instance used for token management and proactive messaging.
  */
-export type MSTeamsApp = InstanceType<MSTeamsTeamsSdk["App"]>;
+type MSTeamsApp = InstanceType<MSTeamsTeamsSdk["App"]>;
 
 /**
  * Token provider compatible with the existing codebase, wrapping the Teams
  * SDK App's token methods.
  */
-export type MSTeamsTokenProvider = {
+type MSTeamsTokenProvider = {
   getAccessToken: (scope: string) => Promise<string>;
 };
 
@@ -76,7 +76,7 @@ async function loadAzureIdentity(): Promise<AzureIdentityModule> {
 
 let msTeamsSdkPromise: Promise<MSTeamsTeamsSdk> | null = null;
 
-export async function loadMSTeamsSdk(): Promise<MSTeamsTeamsSdk> {
+async function loadMSTeamsSdk(): Promise<MSTeamsTeamsSdk> {
   msTeamsSdkPromise ??= Promise.all([
     import("@microsoft/teams.apps"),
     import("@microsoft/teams.api"),
@@ -876,9 +876,41 @@ export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials):
           return false;
         }
         return true;
-      } catch {
+      } catch (err) {
+        // Network-level failures (DNS, firewall, TLS) must be distinguished from
+        // invalid tokens so callers can log them at an appropriate severity.
+        // Rethrow so the JWT middleware can emit an actionable warning instead of
+        // silently returning 401 (which looks identical to a bad credential).
+        if (isJwksNetworkError(err)) {
+          throw err;
+        }
         return false;
       }
     },
   };
+}
+
+/**
+ * Return true when the error originated from a network-level failure fetching
+ * the JWKS endpoint (DNS resolution, connection refused, TLS handshake, etc.)
+ * rather than from token verification logic.
+ */
+function isJwksNetworkError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const code = (err as NodeJS.ErrnoException).code;
+  if (
+    code === "ECONNREFUSED" ||
+    code === "ENOTFOUND" ||
+    code === "EHOSTUNREACH" ||
+    code === "ETIMEDOUT" ||
+    code === "ECONNRESET"
+  ) {
+    return true;
+  }
+  // jwks-rsa wraps fetch failures with a message containing the URL or "key fetching"
+  return (
+    /jwks|key fetch|getSigningKey/i.test(err.message) && /network|fetch|connect/i.test(err.message)
+  );
 }

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -9,12 +10,19 @@ import { createThrowingRuntime } from "./onboard-non-interactive.test-helpers.js
 import type { installGatewayDaemonNonInteractive } from "./onboard-non-interactive/local/daemon-install.js";
 
 const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
-const preparePostConfigBundledRuntimeDepsMock = vi.hoisted(() => vi.fn(async () => {}));
 const testConfigStore = new Map<string, OpenClawConfig>();
 type InstallGatewayDaemonResult = Awaited<ReturnType<typeof installGatewayDaemonNonInteractive>>;
 const installGatewayDaemonNonInteractiveMock = vi.hoisted(() =>
   vi.fn(async (): Promise<InstallGatewayDaemonResult> => ({ installed: true })),
 );
+const createPreMigrationBackupMock = vi.hoisted(() => vi.fn(async () => undefined));
+const migrationProviderMock = vi.hoisted(() => ({
+  id: "hermes",
+  label: "Hermes",
+  description: "Hermes migration provider",
+  plan: vi.fn(),
+  apply: vi.fn(),
+}));
 const healthCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const gatewayServiceMock = vi.hoisted(() => ({
   label: "LaunchAgent",
@@ -132,9 +140,20 @@ vi.mock("./health.js", () => ({
   healthCommand: healthCommandMock,
 }));
 
-vi.mock("./post-config-runtime-deps.js", () => ({
-  preparePostConfigBundledRuntimeDeps: preparePostConfigBundledRuntimeDepsMock,
+vi.mock("../plugins/migration-provider-runtime.js", () => ({
+  ensureStandaloneMigrationProviderRegistryLoaded: vi.fn(),
+  resolvePluginMigrationProviders: () => [migrationProviderMock],
+  resolvePluginMigrationProvider: ({ providerId }: { providerId: string }) =>
+    providerId === migrationProviderMock.id ? migrationProviderMock : undefined,
 }));
+
+vi.mock("./migrate/apply.js", async (importActual) => {
+  const actual = await importActual<typeof import("./migrate/apply.js")>();
+  return {
+    ...actual,
+    createPreMigrationBackup: createPreMigrationBackupMock,
+  };
+});
 
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => gatewayServiceMock,
@@ -316,12 +335,15 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
   afterEach(() => {
     waitForGatewayReachableMock = undefined;
     testConfigStore.clear();
+    ensureWorkspaceAndSessionsMock.mockClear();
     installGatewayDaemonNonInteractiveMock.mockClear();
+    createPreMigrationBackupMock.mockClear();
+    migrationProviderMock.plan.mockReset();
+    migrationProviderMock.apply.mockReset();
     healthCommandMock.mockClear();
     gatewayServiceMock.isLoaded.mockClear();
     gatewayServiceMock.readRuntime.mockClear();
     readLastGatewayErrorLineMock.mockClear();
-    preparePostConfigBundledRuntimeDepsMock.mockClear();
   });
 
   it("writes gateway token auth into config", async () => {
@@ -356,14 +378,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(cfg?.tools?.profile).toBe("coding");
       expect(cfg?.gateway?.auth?.mode).toBe("token");
       expect(cfg?.gateway?.auth?.token).toBe(token);
-      expect(preparePostConfigBundledRuntimeDepsMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          config: expect.objectContaining({
-            gateway: expect.objectContaining({ mode: "local" }),
-          }),
-          runtime,
-        }),
-      );
     });
   }, 60_000);
 
@@ -399,6 +413,84 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
+  it("applies non-interactive migration imports instead of ignoring import flags", async () => {
+    await withStateDir("state-noninteractive-import-", async (stateDir) => {
+      const source = path.join(stateDir, "hermes-home");
+      const workspace = path.join(stateDir, "openclaw");
+      const planned: MigrationPlan = {
+        providerId: "hermes",
+        source,
+        target: workspace,
+        summary: {
+          total: 1,
+          planned: 1,
+          migrated: 0,
+          skipped: 0,
+          conflicts: 0,
+          errors: 0,
+          sensitive: 0,
+        },
+        items: [
+          {
+            id: "workspace:AGENTS.md",
+            kind: "workspace",
+            action: "copy",
+            status: "planned",
+            source: path.join(source, "AGENTS.md"),
+            target: path.join(workspace, "AGENTS.md"),
+          },
+        ],
+      };
+      const applied: MigrationApplyResult = {
+        ...planned,
+        summary: {
+          ...planned.summary,
+          planned: 0,
+          migrated: 1,
+        },
+        items: planned.items.map((item) => ({ ...item, status: "migrated" as const })),
+      };
+      migrationProviderMock.plan.mockResolvedValueOnce(planned);
+      migrationProviderMock.apply.mockResolvedValueOnce(applied);
+
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "local",
+          workspace,
+          authChoice: "skip",
+          skipHealth: true,
+          importFrom: "hermes",
+          importSource: source,
+        },
+        runtime,
+      );
+
+      expect(migrationProviderMock.plan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source,
+          includeSecrets: false,
+          overwrite: false,
+          config: expect.objectContaining({
+            agents: expect.objectContaining({
+              defaults: expect.objectContaining({ workspace }),
+            }),
+          }),
+        }),
+      );
+      expect(migrationProviderMock.apply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source,
+          reportDir: expect.stringContaining(path.join(stateDir, "migration", "hermes")),
+        }),
+        planned,
+      );
+      expect(readTestConfig().agents?.defaults?.workspace).toBe(workspace);
+      expect(ensureWorkspaceAndSessionsMock).not.toHaveBeenCalled();
+      expect(healthCommandMock).not.toHaveBeenCalled();
+    });
+  }, 60_000);
+
   it("writes gateway.remote url/token", async () => {
     await withStateDir("state-remote-", async (_stateDir) => {
       const port = getPseudoPort(30_000);
@@ -422,7 +514,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(cfg.gateway?.mode).toBe("remote");
       expect(cfg.gateway?.remote?.url).toBe(`ws://127.0.0.1:${port}`);
       expect(cfg.gateway?.remote?.token).toBe(token);
-      expect(preparePostConfigBundledRuntimeDepsMock).not.toHaveBeenCalled();
     });
   }, 60_000);
 

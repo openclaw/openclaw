@@ -691,6 +691,97 @@ describe("memory-core dreaming phases", () => {
     );
   });
 
+  it("keeps primary session transcripts out of configured subagent workspaces", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const subagentWorkspaceDir = await createDreamingWorkspace();
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
+
+    const mainSessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    const subagentSessionsDir = resolveSessionTranscriptsDirForAgent("agi-ceo");
+    await fs.mkdir(mainSessionsDir, { recursive: true });
+    await fs.mkdir(subagentSessionsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(mainSessionsDir, "main-session.jsonl"),
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: "2026-04-05T18:01:00.000Z",
+            content: [{ type: "text", text: "Main workspace should stay in main dreams." }],
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(subagentSessionsDir, "subagent-session.jsonl"),
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: "2026-04-05T18:02:00.000Z",
+            content: [{ type: "text", text: "CEO workspace should stay in CEO dreams." }],
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    const { beforeAgentReply } = createHarness(
+      {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+          list: [{ id: "agi-ceo", workspace: subagentWorkspaceDir }],
+        },
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 7,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    try {
+      await withDreamingTestClock(async () => {
+        await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    const mainCorpus = await fs.readFile(
+      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
+      "utf-8",
+    );
+    const subagentCorpus = await fs.readFile(
+      path.join(subagentWorkspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
+      "utf-8",
+    );
+    expect(mainCorpus).toContain("Main workspace should stay in main dreams.");
+    expect(mainCorpus).not.toContain("CEO workspace should stay in CEO dreams.");
+    expect(subagentCorpus).toContain("CEO workspace should stay in CEO dreams.");
+    expect(subagentCorpus).not.toContain("Main workspace should stay in main dreams.");
+  });
+
   it("redacts sensitive session content before writing session corpus", async () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
@@ -2495,17 +2586,6 @@ describe("memory-core dreaming phases", () => {
     expect(after1).toHaveLength(1);
     expect(after1[0]?.dailyCount).toBe(1);
 
-    // Clear the daily ingestion checkpoint so the file is re-read on the second
-    // sweep (simulating a new day where the same lookback window still covers
-    // this file).
-    const dailyStatePath = path.join(workspaceDir, "memory", ".dreams", "daily-ingestion.json");
-    try {
-      await fs.unlink(dailyStatePath);
-    } catch {
-      // ignore if not created
-    }
-
-    // Second ingestion on 2026-04-06 (next day).
     const day2Ms = Date.parse("2026-04-06T10:00:00.000Z");
     const { beforeAgentReply: reply2 } = createHarness(configForTest, workspaceDir);
     await withDreamingTestClock(async () => {
@@ -2524,8 +2604,6 @@ describe("memory-core dreaming phases", () => {
       nowMs: day2Ms,
     });
     expect(after2).toHaveLength(1);
-    // With the fix, dailyCount should be 2 because the ingestion date changed.
-    // Before the fix, it stayed at 1 because dayBucket was the file date.
     expect(after2[0]?.dailyCount).toBe(2);
   });
 });

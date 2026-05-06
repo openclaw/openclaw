@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
@@ -14,7 +16,7 @@ import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage, formatUncaughtError } from "../../infra/errors.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
@@ -31,7 +33,7 @@ import {
   type SavedMedia,
   saveMediaBuffer,
 } from "../../media/store.js";
-import { createChannelReplyPipeline } from "../../plugin-sdk/channel-reply-pipeline.js";
+import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-message.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -94,19 +96,21 @@ import {
 } from "../protocol/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../protocol/schema/primitives.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
+import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import {
   capArrayByJsonBytes,
   loadSessionEntry,
   resolveGatewayModelSupportsImages,
   resolveGatewaySessionThinkingDefault,
   resolveDeletedAgentIdFromSessionKey,
-  readRecentSessionMessages,
+  readRecentSessionMessagesAsync,
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
+import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import {
   buildWebchatAssistantMessageFromReplyPayloads,
@@ -233,12 +237,70 @@ type ChatSendOriginatingRoute = {
   explicitDeliverRoute: boolean;
 };
 
+const ACTIVE_CHAT_SEND_DEDUPE_PREFIX = "chat:active-send";
+
+function resolveActiveChatSendRunId(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const runId = (value as { runId?: unknown }).runId;
+  return typeof runId === "string" && runId.trim() ? runId : null;
+}
+
+function buildActiveChatSendDedupeKey(params: {
+  attachmentCount: number;
+  explicitDeliverRoute: boolean;
+  message: string;
+  originatingChannel: string;
+  sessionKey: string;
+}): string | null {
+  const message = params.message.trim();
+  if (
+    !message ||
+    message.startsWith("/") ||
+    params.attachmentCount > 0 ||
+    params.explicitDeliverRoute ||
+    normalizeMessageChannel(params.originatingChannel) !== INTERNAL_MESSAGE_CHANNEL
+  ) {
+    return null;
+  }
+  const digest = createHash("sha256")
+    .update(JSON.stringify([params.sessionKey, message]))
+    .digest("hex")
+    .slice(0, 32);
+  return `${ACTIVE_CHAT_SEND_DEDUPE_PREFIX}:${digest}`;
+}
+
 type ChatSendExplicitOrigin = {
   originatingChannel?: string;
   originatingTo?: string;
   accountId?: string;
   messageThreadId?: string;
 };
+
+function formatAttachmentFailureForLog(err: unknown): string {
+  const primary = formatUncaughtError(err);
+  const cause = err instanceof Error ? err.cause : undefined;
+  if (cause === undefined) {
+    return primary;
+  }
+  const causeText = formatUncaughtError(cause);
+  if (!causeText || causeText === primary) {
+    return primary;
+  }
+  return `${primary}\nCaused by: ${causeText}`;
+}
+
+function logAttachmentFailure(
+  logGateway: Pick<GatewayRequestContext["logGateway"], "error">,
+  label: string,
+  err: unknown,
+): void {
+  logGateway.error(label, {
+    error: formatAttachmentFailureForLog(err),
+    consoleMessage: `${label}: ${formatForLog(err)}`,
+  });
+}
 
 type SideResultPayload = {
   kind: "btw";
@@ -954,46 +1016,47 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
   sessionKey: string;
   message: string;
   savedImages: SavedMedia[];
+  cfg: OpenClawConfig;
 }) {
   const mediaFields = resolveChatSendTranscriptMediaFields(params.savedImages);
   if (!("MediaPath" in mediaFields)) {
     return;
   }
-  const sessionManager = SessionManager.open(params.transcriptPath);
-  const branch = sessionManager.getBranch();
-  const target = [...branch].toReversed().find((entry) => {
-    if (entry.type !== "message" || entry.message.role !== "user") {
+  const index = await readSessionTranscriptIndex(params.transcriptPath);
+  const target = index?.entries.toReversed().find((entry) => {
+    const message = entry.record.message as Record<string, unknown> | undefined;
+    if (!message || message.role !== "user") {
       return false;
     }
-    const existingPaths = Array.isArray((entry.message as { MediaPaths?: unknown }).MediaPaths)
-      ? (entry.message as { MediaPaths?: unknown[] }).MediaPaths
+    const existingPaths = Array.isArray((message as { MediaPaths?: unknown }).MediaPaths)
+      ? (message as { MediaPaths?: unknown[] }).MediaPaths
       : undefined;
     if (
-      (typeof (entry.message as { MediaPath?: unknown }).MediaPath === "string" &&
-        (entry.message as { MediaPath?: string }).MediaPath) ||
+      (typeof (message as { MediaPath?: unknown }).MediaPath === "string" &&
+        (message as { MediaPath?: string }).MediaPath) ||
       (existingPaths && existingPaths.length > 0)
     ) {
       return false;
     }
-    return (
-      extractTranscriptUserText((entry.message as { content?: unknown }).content) === params.message
-    );
+    return extractTranscriptUserText((message as { content?: unknown }).content) === params.message;
   });
-  if (!target || target.type !== "message") {
+  const targetMessage = target?.record.message as Record<string, unknown> | undefined;
+  if (!target || !target.id || !targetMessage) {
     return;
   }
   const rewrittenMessage = {
-    ...target.message,
+    ...targetMessage,
     ...mediaFields,
   };
   await rewriteTranscriptEntriesInSessionFile({
     sessionFile: params.transcriptPath,
     sessionKey: params.sessionKey,
+    config: params.cfg,
     request: {
       replacements: [
         {
           entryId: target.id,
-          message: rewrittenMessage,
+          message: rewrittenMessage as AgentMessage,
         },
       ],
     },
@@ -1282,9 +1345,12 @@ function ensureTranscriptFile(params: { transcriptPath: string; sessionId: strin
   }
 }
 
-function transcriptHasIdempotencyKey(transcriptPath: string, idempotencyKey: string): boolean {
+async function transcriptHasIdempotencyKey(
+  transcriptPath: string,
+  idempotencyKey: string,
+): Promise<boolean> {
   try {
-    const lines = fs.readFileSync(transcriptPath, "utf-8").split(/\r?\n/);
+    const lines = (await fs.promises.readFile(transcriptPath, "utf-8")).split(/\r?\n/);
     for (const line of lines) {
       if (!line.trim()) {
         continue;
@@ -1300,7 +1366,7 @@ function transcriptHasIdempotencyKey(transcriptPath: string, idempotencyKey: str
   }
 }
 
-function appendAssistantTranscriptMessage(params: {
+async function appendAssistantTranscriptMessage(params: {
   message: string;
   label?: string;
   content?: Array<Record<string, unknown>>;
@@ -1315,7 +1381,8 @@ function appendAssistantTranscriptMessage(params: {
     origin: AbortOrigin;
     runId: string;
   };
-}): TranscriptAppendResult {
+  cfg?: OpenClawConfig;
+}): Promise<TranscriptAppendResult> {
   const transcriptPath = resolveTranscriptPath({
     sessionId: params.sessionId,
     storePath: params.storePath,
@@ -1339,17 +1406,21 @@ function appendAssistantTranscriptMessage(params: {
     }
   }
 
-  if (params.idempotencyKey && transcriptHasIdempotencyKey(transcriptPath, params.idempotencyKey)) {
+  if (
+    params.idempotencyKey &&
+    (await transcriptHasIdempotencyKey(transcriptPath, params.idempotencyKey))
+  ) {
     return { ok: true };
   }
 
-  return appendInjectedAssistantMessageToTranscript({
+  return await appendInjectedAssistantMessageToTranscript({
     transcriptPath,
     message: params.message,
     label: params.label,
     content: params.content,
     idempotencyKey: params.idempotencyKey,
     abortMeta: params.abortMeta,
+    config: params.cfg,
   });
 }
 
@@ -1378,24 +1449,25 @@ function collectSessionAbortPartials(params: {
   return out;
 }
 
-function persistAbortedPartials(params: {
+async function persistAbortedPartials(params: {
   context: Pick<GatewayRequestContext, "logGateway">;
   sessionKey: string;
   snapshots: AbortedPartialSnapshot[];
-}) {
+}): Promise<void> {
   if (params.snapshots.length === 0) {
     return;
   }
-  const { storePath, entry } = loadSessionEntry(params.sessionKey);
+  const { cfg, storePath, entry } = loadSessionEntry(params.sessionKey);
   for (const snapshot of params.snapshots) {
     const sessionId = entry?.sessionId ?? snapshot.sessionId ?? snapshot.runId;
-    const appended = appendAssistantTranscriptMessage({
+    const appended = await appendAssistantTranscriptMessage({
       message: snapshot.text,
       sessionId,
       storePath,
       sessionFile: entry?.sessionFile,
       createIfMissing: true,
       idempotencyKey: `${snapshot.runId}:assistant`,
+      cfg,
       abortMeta: {
         aborted: true,
         origin: snapshot.abortOrigin,
@@ -1520,14 +1592,14 @@ function resolveAuthorizedRunIdsForSession(params: {
   };
 }
 
-function abortChatRunsForSessionKeyWithPartials(params: {
+async function abortChatRunsForSessionKeyWithPartials(params: {
   context: GatewayRequestContext;
   ops: ChatAbortOps;
   sessionKey: string;
   abortOrigin: AbortOrigin;
   stopReason?: string;
   requester: ChatAbortRequester;
-}) {
+}): Promise<{ aborted: boolean; runIds: string[]; unauthorized: boolean }> {
   const { matchedSessionRuns, authorizedRunIds } = resolveAuthorizedRunIdsForSession({
     chatAbortControllers: params.context.chatAbortControllers,
     sessionKey: params.sessionKey,
@@ -1560,7 +1632,7 @@ function abortChatRunsForSessionKeyWithPartials(params: {
   }
   const res = { aborted: runIds.length > 0, runIds, unauthorized: false };
   if (res.aborted) {
-    persistAbortedPartials({
+    await persistAbortedPartials({
       context: params.context,
       sessionKey: params.sessionKey,
       snapshots,
@@ -1669,7 +1741,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const localMessages =
       sessionId && storePath
-        ? readRecentSessionMessages(sessionId, storePath, entry?.sessionFile, {
+        ? await readRecentSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
             maxMessages: max,
             maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
           })
@@ -1728,7 +1800,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       verboseLevel,
     });
   },
-  "chat.abort": ({ params, respond, context, client }) => {
+  "chat.abort": async ({ params, respond, context, client }) => {
     if (!validateChatAbortParams(params)) {
       respond(
         false,
@@ -1749,7 +1821,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     const requester = resolveChatAbortRequester(client);
 
     if (!runId) {
-      const res = abortChatRunsForSessionKeyWithPartials({
+      const res = await abortChatRunsForSessionKeyWithPartials({
         context,
         ops,
         sessionKey: rawSessionKey,
@@ -1790,7 +1862,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       stopReason: "rpc",
     });
     if (res.aborted && partialText && partialText.trim()) {
-      persistAbortedPartials({
+      await persistAbortedPartials({
         context,
         sessionKey: rawSessionKey,
         snapshots: [
@@ -1823,6 +1895,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const p = params as {
       sessionKey: string;
+      sessionId?: string;
       message: string;
       thinking?: string;
       deliver?: boolean;
@@ -1897,6 +1970,8 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const rawSessionKey = p.sessionKey;
     const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+    const requestedSessionId = normalizeOptionalText(p.sessionId);
+    const backingSessionId = entry?.sessionId ?? requestedSessionId;
     const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, sessionKey);
     if (deletedAgentId !== null) {
       respond(
@@ -1944,7 +2019,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
 
     if (stopCommand) {
-      const res = abortChatRunsForSessionKeyWithPartials({
+      const res = await abortChatRunsForSessionKeyWithPartials({
         context,
         ops: createChatAbortOps(context),
         sessionKey: rawSessionKey,
@@ -1975,6 +2050,35 @@ export const chatHandlers: GatewayRequestHandlers = {
         runId: clientRunId,
       });
       return;
+    }
+    const clientInfo = client?.connect?.client;
+    const originatingRoute = resolveChatSendOriginatingRoute({
+      client: clientInfo,
+      deliver: p.deliver,
+      entry,
+      explicitOrigin: explicitOriginResult.value,
+      hasConnectedClient: client?.connect !== undefined,
+      mainKey: cfg.session?.mainKey,
+      sessionKey,
+    });
+    const activeChatSendDedupeKey = buildActiveChatSendDedupeKey({
+      attachmentCount: normalizedAttachments.length,
+      explicitDeliverRoute: originatingRoute.explicitDeliverRoute,
+      message: rawMessage,
+      originatingChannel: originatingRoute.originatingChannel,
+      sessionKey,
+    });
+    if (activeChatSendDedupeKey) {
+      const activeRunId = resolveActiveChatSendRunId(
+        context.dedupe.get(activeChatSendDedupeKey)?.payload,
+      );
+      if (activeRunId && context.chatAbortControllers.has(activeRunId)) {
+        respond(true, { runId: activeRunId, status: "in_flight" as const }, undefined, {
+          cached: true,
+          runId: activeRunId,
+        });
+        return;
+      }
     }
     const explicitOriginTargetsPlugin = explicitOriginTargetsPluginBinding(
       explicitOriginResult.value,
@@ -2026,6 +2130,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           agentId,
         }));
       } catch (err) {
+        logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
         respond(
           false,
           undefined,
@@ -2042,7 +2147,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       const activeRunAbort = registerChatAbortController({
         chatAbortControllers: context.chatAbortControllers,
         runId: clientRunId,
-        sessionId: entry?.sessionId ?? clientRunId,
+        sessionId: backingSessionId ?? clientRunId,
         sessionKey: rawSessionKey,
         timeoutMs,
         now,
@@ -2056,6 +2161,13 @@ export const chatHandlers: GatewayRequestHandlers = {
           runId: clientRunId,
         });
         return;
+      }
+      if (activeChatSendDedupeKey) {
+        context.dedupe.set(activeChatSendDedupeKey, {
+          ts: now,
+          ok: true,
+          payload: { runId: clientRunId },
+        });
       }
       context.addChatRun(clientRunId, {
         sessionKey,
@@ -2086,22 +2198,13 @@ export const chatHandlers: GatewayRequestHandlers = {
       const messageForAgent = systemProvenanceReceipt
         ? [systemProvenanceReceipt, parsedMessage].filter(Boolean).join("\n\n")
         : parsedMessage;
-      const clientInfo = client?.connect?.client;
       const {
         originatingChannel,
         originatingTo,
         accountId,
         messageThreadId,
         explicitDeliverRoute,
-      } = resolveChatSendOriginatingRoute({
-        client: clientInfo,
-        deliver: p.deliver,
-        entry,
-        explicitOrigin: explicitOriginResult.value,
-        hasConnectedClient: client?.connect !== undefined,
-        mainKey: cfg.session?.mainKey,
-        sessionKey,
-      });
+      } = originatingRoute;
       // Inject timestamp so agents know the current date/time.
       // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
       // See: https://github.com/moltbot/moltbot/issues/3658
@@ -2145,7 +2248,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         ctx.MediaStaged = true;
       }
 
-      const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+      const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
         cfg,
         agentId,
         channel: INTERNAL_MESSAGE_CHANNEL,
@@ -2160,7 +2263,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         }
         userTranscriptUpdatePromise = (async () => {
           const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
-          const resolvedSessionId = latestEntry?.sessionId ?? entry?.sessionId;
+          const resolvedSessionId = latestEntry?.sessionId ?? backingSessionId;
           if (!resolvedSessionId) {
             return;
           }
@@ -2192,7 +2295,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           return;
         }
         const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
-        const resolvedSessionId = latestEntry?.sessionId ?? entry?.sessionId;
+        const resolvedSessionId = latestEntry?.sessionId ?? backingSessionId;
         if (!resolvedSessionId) {
           return;
         }
@@ -2211,15 +2314,25 @@ export const chatHandlers: GatewayRequestHandlers = {
           sessionKey,
           message: parsedMessage,
           savedImages: await persistedImagesPromise,
+          cfg,
         });
       };
       const appendWebchatAgentMediaTranscriptIfNeeded = async (payload: ReplyPayload) => {
         if (!agentRunStarted || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
           return;
         }
-        const transcriptPayload = stripVisibleTextFromTtsSupplement(payload);
+        const [transcriptPayload] = await normalizeWebchatReplyMediaPathsForDisplay({
+          cfg,
+          sessionKey,
+          agentId,
+          accountId,
+          payloads: [stripVisibleTextFromTtsSupplement(payload)],
+        });
+        if (!transcriptPayload) {
+          return;
+        }
         const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
-        const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
+        const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
         const resolvedTranscriptPath = resolveTranscriptPath({
           sessionId,
           storePath: latestStorePath,
@@ -2255,6 +2368,9 @@ export const chatHandlers: GatewayRequestHandlers = {
         const persistedContentForAppend = hasAssistantDisplayMediaContent(persistedAssistantContent)
           ? persistedAssistantContent
           : undefined;
+        if (!persistedContentForAppend?.length) {
+          return;
+        }
         const transcriptReply =
           mediaMessage?.transcriptText ??
           extractAssistantDisplayTextFromContent(assistantContent) ??
@@ -2262,7 +2378,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         if (!transcriptReply && !persistedAssistantContent?.length && !assistantContent?.length) {
           return;
         }
-        const appended = appendAssistantTranscriptMessage({
+        const appended = await appendAssistantTranscriptMessage({
           message: transcriptReply,
           ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
           sessionId,
@@ -2271,6 +2387,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           agentId,
           createIfMissing: true,
           idempotencyKey: `${clientRunId}:assistant-media`,
+          cfg,
         });
         if (appended.ok) {
           if (appended.messageId && assistantContent?.length) {
@@ -2357,6 +2474,12 @@ export const chatHandlers: GatewayRequestHandlers = {
       })
         .then(async () => {
           await rewriteUserTranscriptMedia();
+          // WebChat persistence has two owners. Agent runs persist model-visible turns
+          // through Pi's SessionManager; this dispatcher only owns live delivery payloads.
+          // Do not blindly mirror agent-run final payloads into JSONL or chat.history can
+          // duplicate normal Pi assistant turns. The non-agent branch below has no Pi
+          // assistant turn, so it appends a gateway-injected assistant entry before
+          // broadcasting the final UI event.
           if (!agentRunStarted) {
             await emitUserTranscriptUpdate();
             const btwReplies = deliveredReplies
@@ -2386,14 +2509,21 @@ export const chatHandlers: GatewayRequestHandlers = {
                 sessionKey,
               });
             } else {
-              const finalPayloads = appendedWebchatAgentMedia
+              const rawFinalPayloads = appendedWebchatAgentMedia
                 ? []
                 : deliveredReplies
                     .filter((entry) => entry.kind === "final")
                     .map((entry) => entry.payload);
+              const finalPayloads = await normalizeWebchatReplyMediaPathsForDisplay({
+                cfg,
+                sessionKey,
+                agentId,
+                accountId,
+                payloads: rawFinalPayloads,
+              });
               const { storePath: latestStorePath, entry: latestEntry } =
                 loadSessionEntry(sessionKey);
-              const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
+              const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
               const resolvedTranscriptPath = resolveTranscriptPath({
                 sessionId,
                 storePath: latestStorePath,
@@ -2467,7 +2597,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 persistedContentForAppend?.length ||
                 assistantContent?.length
               ) {
-                const appended = appendAssistantTranscriptMessage({
+                const appended = await appendAssistantTranscriptMessage({
                   message: transcriptReply,
                   ...(persistedContentForAppend?.length
                     ? { content: persistedContentForAppend }
@@ -2477,6 +2607,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   sessionFile: latestEntry?.sessionFile,
                   agentId,
                   createIfMissing: true,
+                  cfg,
                 });
                 if (appended.ok) {
                   if (appended.messageId && assistantContent?.length) {
@@ -2625,7 +2756,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const appended = appendAssistantTranscriptMessage({
+    const appended = await appendAssistantTranscriptMessage({
       message: p.message,
       label: p.label,
       sessionId,
@@ -2633,6 +2764,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionFile: entry?.sessionFile,
       agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
       createIfMissing: true,
+      cfg,
     });
     if (!appended.ok || !appended.messageId || !appended.message) {
       respond(

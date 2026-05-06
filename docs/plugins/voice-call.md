@@ -41,9 +41,8 @@ the Gateway, then restart the Gateway to load it.
       </Tab>
     </Tabs>
 
-    If npm reports the OpenClaw-owned package as deprecated, that package version
-    is from an older external package train; use a current packaged OpenClaw
-    build or the local folder path until a newer npm package is published.
+    Use the bare package to follow the current official release tag. Pin an
+    exact version only when you need a reproducible install.
 
     Restart the Gateway afterwards so the plugin loads.
 
@@ -109,6 +108,18 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
           provider: "twilio", // or "telnyx" | "plivo" | "mock"
           fromNumber: "+15550001234", // or TWILIO_FROM_NUMBER for Twilio
           toNumber: "+15550005678",
+          sessionScope: "per-phone", // per-phone | per-call
+          numbers: {
+            "+15550009999": {
+              inboundGreeting: "Silver Fox Cards, how can I help?",
+              responseSystemPrompt: "You are a concise baseball card specialist.",
+              tts: {
+                providers: {
+                  openai: { voice: "alloy" },
+                },
+              },
+            },
+          },
 
           twilio: {
             accountSid: "ACxxxxxxxx",
@@ -192,6 +203,14 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
   </Accordion>
 </AccordionGroup>
 
+## Session scope
+
+By default, Voice Call uses `sessionScope: "per-phone"` so repeat calls from
+the same caller keep conversation memory. Set `sessionScope: "per-call"` when
+each carrier call should start with fresh context, for example reception,
+booking, IVR, or Google Meet bridge flows where the same phone number may
+represent different meetings.
+
 ## Realtime voice conversations
 
 `realtime` selects a full-duplex realtime voice provider for live call
@@ -210,9 +229,11 @@ Current runtime behaviour:
 - Bundled realtime voice providers: Google Gemini Live (`google`) and OpenAI (`openai`), registered by their provider plugins.
 - Provider-owned raw config lives under `realtime.providers.<providerId>`.
 - Voice Call exposes the shared `openclaw_agent_consult` realtime tool by default. The realtime model can call it when the caller asks for deeper reasoning, current information, or normal OpenClaw tools.
+- `realtime.consultPolicy` optionally adds guidance for when the realtime model should call `openclaw_agent_consult`.
+- `realtime.agentContext.enabled` is default-off. When enabled, Voice Call injects a bounded agent identity, system prompt override, and selected workspace-file capsule into the realtime provider instructions at session setup.
 - `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns those snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true.
 - If `realtime.provider` points at an unregistered provider, or no realtime voice provider is registered at all, Voice Call logs a warning and skips realtime media instead of failing the whole plugin.
-- Consult session keys reuse the existing voice session when available, then fall back to the caller/callee phone number so follow-up consult calls keep context during the call.
+- Consult session keys reuse the stored call session when available, then fall back to the configured `sessionScope` (`per-phone` by default, or `per-call` for isolated calls).
 
 ### Tool policy
 
@@ -224,6 +245,51 @@ Current runtime behaviour:
 | `owner`          | Expose the consult tool and let the regular agent use the normal agent tool policy.                                                      |
 | `none`           | Do not expose the consult tool. Custom `realtime.tools` are still passed through to the realtime provider.                               |
 
+`realtime.consultPolicy` controls only the realtime model instructions:
+
+| Policy        | Guidance                                                                                        |
+| ------------- | ----------------------------------------------------------------------------------------------- |
+| `auto`        | Keep the default prompt and let the provider decide when to call the consult tool.              |
+| `substantive` | Answer simple conversational glue directly and consult before facts, memory, tools, or context. |
+| `always`      | Consult before every substantive answer.                                                        |
+
+### Agent voice context
+
+Enable `realtime.agentContext` when the voice bridge should sound like the
+configured OpenClaw agent without paying a full agent-consult round trip on
+ordinary turns. The context capsule is added once when the realtime session is
+created, so it does not add per-turn latency. Calls to
+`openclaw_agent_consult` still run the full OpenClaw agent and should be used
+for tool work, current information, memory lookups, or workspace state.
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          agentId: "main",
+          realtime: {
+            enabled: true,
+            provider: "google",
+            toolPolicy: "safe-read-only",
+            consultPolicy: "substantive",
+            agentContext: {
+              enabled: true,
+              maxChars: 6000,
+              includeIdentity: true,
+              includeSystemPrompt: true,
+              includeWorkspaceFiles: true,
+              files: ["SOUL.md", "IDENTITY.md", "USER.md"],
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
 ### Realtime provider examples
 
 <Tabs>
@@ -231,6 +297,9 @@ Current runtime behaviour:
     Defaults: API key from `realtime.providers.google.apiKey`,
     `GEMINI_API_KEY`, or `GOOGLE_GENERATIVE_AI_API_KEY`; model
     `gemini-2.5-flash-native-audio-preview-12-2025`; voice `Kore`.
+    `sessionResumption` and `contextWindowCompression` default on for longer,
+    reconnectable calls. Use `silenceDurationMs`, `startSensitivity`, and
+    `endSensitivity` to tune faster turn-taking on telephony audio.
 
     ```json5
     {
@@ -246,11 +315,15 @@ Current runtime behaviour:
                 provider: "google",
                 instructions: "Speak briefly. Call openclaw_agent_consult before using deeper tools.",
                 toolPolicy: "safe-read-only",
+                consultPolicy: "substantive",
+                agentContext: { enabled: true },
                 providers: {
                   google: {
                     apiKey: "${GEMINI_API_KEY}",
                     model: "gemini-2.5-flash-native-audio-preview-12-2025",
                     voice: "Kore",
+                    silenceDurationMs: 500,
+                    startSensitivity: "high",
                   },
                 },
               },
@@ -491,6 +564,57 @@ identity.
 Auto-responses use the agent system. Tune with `responseModel`,
 `responseSystemPrompt`, and `responseTimeoutMs`.
 
+### Per-number Routing
+
+Use `numbers` when one Voice Call plugin receives calls for multiple phone
+numbers and each number should behave like a different line. For example, one
+number can use a casual personal assistant while another uses a business
+persona, a different response agent, and a different TTS voice.
+
+Routes are selected from the provider-supplied dialed `To` number. Keys must be
+E.164 numbers. When a call arrives, Voice Call resolves the matching route once,
+stores the matched route on the call record, and reuses that effective config
+for the greeting, classic auto-response path, realtime consult path, and TTS
+playback. If no route matches, the global Voice Call config is used.
+Outbound calls do not use `numbers`; pass the outbound target, message, and
+session explicitly when initiating the call.
+
+Route overrides currently support:
+
+- `inboundGreeting`
+- `tts`
+- `agentId`
+- `responseModel`
+- `responseSystemPrompt`
+- `responseTimeoutMs`
+
+The `tts` route value deep-merges over the global Voice Call `tts` config, so
+you can usually override only the provider voice:
+
+```json5
+{
+  inboundGreeting: "Hello from the main line.",
+  responseSystemPrompt: "You are the default voice assistant.",
+  tts: {
+    provider: "openai",
+    providers: {
+      openai: { voice: "coral" },
+    },
+  },
+  numbers: {
+    "+15550001111": {
+      inboundGreeting: "Silver Fox Cards, how can I help?",
+      responseSystemPrompt: "You are a concise baseball card specialist.",
+      tts: {
+        providers: {
+          openai: { voice: "alloy" },
+        },
+      },
+    },
+  },
+}
+```
+
 ### Spoken output contract
 
 For auto-responses, Voice Call appends a strict spoken-output contract to
@@ -667,6 +791,12 @@ configured `publicUrl` still fails when it points at local or private network
 space, because the carrier cannot call back into those addresses. Do not use
 `localhost`, `127.0.0.1`, `0.0.0.0`, `10.x`, `172.16.x`-`172.31.x`,
 `192.168.x`, `169.254.x`, `fc00::/7`, or `fd00::/8` as `publicUrl`.
+
+Twilio notify-mode outbound calls send their initial `<Say>` TwiML directly in
+the create-call request, so the first spoken message does not depend on Twilio
+fetching webhook TwiML. A public webhook is still required for status callbacks,
+conversation calls, pre-connect DTMF, realtime streams, and post-connect call
+control.
 
 Use one public exposure path:
 

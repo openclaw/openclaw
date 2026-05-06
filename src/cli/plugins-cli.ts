@@ -1,17 +1,11 @@
-import os from "node:os";
-import path from "node:path";
 import type { Command } from "commander";
 import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
-import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  tracePluginLifecyclePhase,
-  tracePluginLifecyclePhaseAsync,
-} from "../plugins/plugin-lifecycle-trace.js";
+import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
-import { shortenHomePath } from "../utils.js";
+import { shortenHomeInString } from "../utils.js";
 import type { PluginInspectOptions } from "./plugins-inspect-command.js";
 import type { PluginsListOptions } from "./plugins-list-command.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
@@ -24,6 +18,11 @@ export type PluginUpdateOptions = {
 
 export type PluginMarketplaceListOptions = {
   json?: boolean;
+};
+
+export type PluginSearchOptions = {
+  json?: boolean;
+  limit?: number;
 };
 
 export type PluginUninstallOptions = {
@@ -39,13 +38,6 @@ export type PluginRegistryOptions = {
   refresh?: boolean;
 };
 
-export type PluginsDepsCliOptions = {
-  json?: boolean;
-  packageRoot?: string;
-  prune?: boolean;
-  repair?: boolean;
-};
-
 function countEnabledPlugins(plugins: readonly { enabled: boolean }[]): number {
   return plugins.filter((plugin) => plugin.enabled).length;
 }
@@ -58,6 +50,40 @@ function formatRegistryState(state: "missing" | "fresh" | "stale"): string {
     return theme.warn(state);
   }
   return theme.warn(state);
+}
+
+function reportMissingPlugin(id: string) {
+  defaultRuntime.error(
+    `Plugin not found: ${id}. Run \`openclaw plugins list\` to see installed plugins.`,
+  );
+  return defaultRuntime.exit(1);
+}
+
+function matchesPluginId(plugin: { id: string }, id: string) {
+  return plugin.id === id;
+}
+
+function isConfigSelectedShadowDiagnostic(entry: { level?: string; message?: string }): boolean {
+  return (
+    entry.level === "warn" &&
+    typeof entry.message === "string" &&
+    entry.message.includes("duplicate plugin id resolved by explicit config-selected plugin")
+  );
+}
+
+function isErroredConfigSelectedShadowDiagnostic(params: {
+  entry: { level?: string; message?: string; pluginId?: string };
+  plugins: readonly { id: string; origin: string; status: string }[];
+}): boolean {
+  if (!params.entry.pluginId || !isConfigSelectedShadowDiagnostic(params.entry)) {
+    return false;
+  }
+  return params.plugins.some(
+    (plugin) =>
+      plugin.id === params.entry.pluginId &&
+      plugin.origin === "config" &&
+      plugin.status === "error",
+  );
 }
 
 export function registerPluginsCli(program: Command) {
@@ -82,18 +108,14 @@ export function registerPluginsCli(program: Command) {
     });
 
   plugins
-    .command("deps")
-    .description("Inspect or repair bundled plugin runtime dependencies")
-    .option("--json", "Print JSON")
-    .option("--package-root <path>", "OpenClaw package root to inspect")
-    .option("--prune", "Prune stale unknown external runtime dependency roots", false)
-    .option("--repair", "Install missing bundled runtime dependencies", false)
-    .action(async (opts: PluginsDepsCliOptions) => {
-      const { runPluginsDepsCommand } = await import("./plugins-deps-command.js");
-      await runPluginsDepsCommand({
-        config: getRuntimeConfig(),
-        options: opts,
-      });
+    .command("search")
+    .description("Search ClawHub plugin packages")
+    .argument("[query...]", "Search query")
+    .option("--limit <n>", "Max results", (value) => Number.parseInt(value, 10))
+    .option("--json", "Print JSON", false)
+    .action(async (queryParts: string[], opts: PluginSearchOptions) => {
+      const { runPluginsSearchCommand } = await import("./plugins-search-command.js");
+      await runPluginsSearchCommand(queryParts, opts);
     });
 
   plugins
@@ -115,13 +137,22 @@ export function registerPluginsCli(program: Command) {
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
       const { enablePluginInConfig } = await import("../plugins/enable.js");
+      const { normalizePluginId } = await import("../plugins/config-state.js");
+      const { buildPluginRegistrySnapshotReport } = await import("../plugins/status.js");
       const { applySlotSelectionForPlugin, logSlotWarnings } =
         await import("./plugins-command-helpers.js");
       const { refreshPluginRegistryAfterConfigMutation } =
         await import("./plugins-registry-refresh.js");
       const snapshot = await readConfigFileSnapshot();
       const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-      const enableResult = enablePluginInConfig(cfg, id);
+      const report = buildPluginRegistrySnapshotReport({ config: cfg });
+      id = normalizePluginId(id);
+      if (!report.plugins.some((plugin) => matchesPluginId(plugin, id))) {
+        return reportMissingPlugin(id);
+      }
+      const enableResult = enablePluginInConfig(cfg, id, {
+        updateChannelConfig: false,
+      });
       let next: OpenClawConfig = enableResult.config;
       const slotResult = applySlotSelectionForPlugin(next, id);
       next = slotResult.config;
@@ -132,6 +163,7 @@ export function registerPluginsCli(program: Command) {
       await refreshPluginRegistryAfterConfigMutation({
         config: next,
         reason: "policy-changed",
+        policyPluginIds: [enableResult.pluginId],
         logger: {
           warn: (message) => defaultRuntime.log(theme.warn(message)),
         },
@@ -153,12 +185,21 @@ export function registerPluginsCli(program: Command) {
     .description("Disable a plugin in config")
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
+      const { normalizePluginId } = await import("../plugins/config-state.js");
+      const { buildPluginRegistrySnapshotReport } = await import("../plugins/status.js");
       const { setPluginEnabledInConfig } = await import("./plugins-config.js");
       const { refreshPluginRegistryAfterConfigMutation } =
         await import("./plugins-registry-refresh.js");
       const snapshot = await readConfigFileSnapshot();
       const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-      const next = setPluginEnabledInConfig(cfg, id, false);
+      const report = buildPluginRegistrySnapshotReport({ config: cfg });
+      id = normalizePluginId(id);
+      if (!report.plugins.some((plugin) => matchesPluginId(plugin, id))) {
+        return reportMissingPlugin(id);
+      }
+      const next = setPluginEnabledInConfig(cfg, id, false, {
+        updateChannelConfig: false,
+      });
       await replaceConfigFile({
         nextConfig: next,
         ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
@@ -166,6 +207,7 @@ export function registerPluginsCli(program: Command) {
       await refreshPluginRegistryAfterConfigMutation({
         config: next,
         reason: "policy-changed",
+        policyPluginIds: [id],
         logger: {
           warn: (message) => defaultRuntime.log(theme.warn(message)),
         },
@@ -182,178 +224,14 @@ export function registerPluginsCli(program: Command) {
     .option("--force", "Skip confirmation prompt", false)
     .option("--dry-run", "Show what would be removed without making changes", false)
     .action(async (id: string, opts: PluginUninstallOptions) => {
-      const {
-        loadInstalledPluginIndexInstallRecords,
-        removePluginInstallRecordFromRecords,
-        withoutPluginInstallRecords,
-        withPluginInstallRecords,
-      } = await import("../plugins/installed-plugin-index-records.js");
-      const { buildPluginSnapshotReport } = await import("../plugins/status.js");
-      const {
-        applyPluginUninstallDirectoryRemoval,
-        formatUninstallActionLabels,
-        formatUninstallSlotResetPreview,
-        planPluginUninstall,
-        resolveUninstallChannelConfigKeys,
-        UNINSTALL_ACTION_LABELS,
-      } = await import("../plugins/uninstall.js");
-      const { commitPluginInstallRecordsWithConfig } =
-        await import("./plugins-install-record-commit.js");
-      const { refreshPluginRegistryAfterConfigMutation } =
-        await import("./plugins-registry-refresh.js");
-      const { resolvePluginUninstallId } = await import("./plugins-uninstall-selection.js");
-      const { promptYesNo } = await import("./prompt.js");
-      const snapshot = await tracePluginLifecyclePhaseAsync(
-        "config read",
-        () => readConfigFileSnapshot(),
-        { command: "uninstall" },
-      );
-      const sourceConfig = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-      const installRecords = await tracePluginLifecyclePhaseAsync(
-        "install records load",
-        () => loadInstalledPluginIndexInstallRecords(),
-        { command: "uninstall" },
-      );
-      const cfg = withPluginInstallRecords(sourceConfig, installRecords);
-      const report = tracePluginLifecyclePhase(
-        "plugin registry snapshot",
-        () => buildPluginSnapshotReport({ config: cfg }),
-        { command: "uninstall" },
-      );
-      const extensionsDir = path.join(resolveStateDir(process.env, os.homedir), "extensions");
-      const keepFiles = Boolean(opts.keepFiles || opts.keepConfig);
-
-      if (opts.keepConfig) {
-        defaultRuntime.log(theme.warn("`--keep-config` is deprecated, use `--keep-files`."));
-      }
-
-      const { plugin, pluginId } = resolvePluginUninstallId({
-        rawId: id,
-        config: cfg,
-        plugins: report.plugins,
-      });
-      const hasEntry = pluginId in (cfg.plugins?.entries ?? {});
-      const hasInstall = pluginId in (cfg.plugins?.installs ?? {});
-
-      if (!hasEntry && !hasInstall) {
-        if (plugin) {
-          defaultRuntime.error(
-            `Plugin "${pluginId}" is not managed by plugins config/install records and cannot be uninstalled.`,
-          );
-        } else {
-          defaultRuntime.error(`Plugin not found: ${id}`);
-        }
-        return defaultRuntime.exit(1);
-      }
-
-      const channelIds = plugin?.status === "loaded" ? plugin.channelIds : undefined;
-      const plan = planPluginUninstall({
-        config: cfg,
-        pluginId,
-        channelIds,
-        deleteFiles: !keepFiles,
-        extensionsDir,
-      });
-      if (!plan.ok) {
-        defaultRuntime.error(plan.error);
-        return defaultRuntime.exit(1);
-      }
-
-      const preview: string[] = [];
-      if (plan.actions.entry) {
-        preview.push(UNINSTALL_ACTION_LABELS.entry);
-      }
-      if (plan.actions.install) {
-        preview.push(UNINSTALL_ACTION_LABELS.install);
-      }
-      if (plan.actions.allowlist) {
-        preview.push(UNINSTALL_ACTION_LABELS.allowlist);
-      }
-      if (plan.actions.denylist) {
-        preview.push(UNINSTALL_ACTION_LABELS.denylist);
-      }
-      if (plan.actions.loadPath) {
-        preview.push(UNINSTALL_ACTION_LABELS.loadPath);
-      }
-      if (plan.actions.memorySlot) {
-        preview.push(formatUninstallSlotResetPreview("memory"));
-      }
-      if (plan.actions.contextEngineSlot) {
-        preview.push(formatUninstallSlotResetPreview("contextEngine"));
-      }
-      const channels = cfg.channels as Record<string, unknown> | undefined;
-      if (plan.actions.channelConfig && hasInstall && channels) {
-        for (const key of resolveUninstallChannelConfigKeys(pluginId, { channelIds })) {
-          if (Object.hasOwn(channels, key)) {
-            preview.push(`${UNINSTALL_ACTION_LABELS.channelConfig} (channels.${key})`);
-          }
-        }
-      }
-      if (plan.directoryRemoval) {
-        preview.push(`directory: ${shortenHomePath(plan.directoryRemoval.target)}`);
-      }
-
-      const pluginName = plugin?.name || pluginId;
-      defaultRuntime.log(
-        `Plugin: ${theme.command(pluginName)}${pluginName !== pluginId ? theme.muted(` (${pluginId})`) : ""}`,
-      );
-      defaultRuntime.log(`Will remove: ${preview.length > 0 ? preview.join(", ") : "(nothing)"}`);
-
-      if (opts.dryRun) {
-        defaultRuntime.log(theme.muted("Dry run, no changes made."));
-        return;
-      }
-
-      if (!opts.force) {
-        const confirmed = await promptYesNo(`Uninstall plugin "${pluginId}"?`);
-        if (!confirmed) {
-          defaultRuntime.log("Cancelled.");
-          return;
-        }
-      }
-
-      const nextInstallRecords = removePluginInstallRecordFromRecords(installRecords, pluginId);
-      const nextConfig = withoutPluginInstallRecords(plan.config);
-      await tracePluginLifecyclePhaseAsync(
-        "config mutation",
-        () =>
-          commitPluginInstallRecordsWithConfig({
-            previousInstallRecords: installRecords,
-            nextInstallRecords,
-            nextConfig,
-            ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-          }),
-        { command: "uninstall" },
-      );
-      const directoryResult = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
-      for (const warning of directoryResult.warnings) {
-        defaultRuntime.log(theme.warn(warning));
-      }
-      await refreshPluginRegistryAfterConfigMutation({
-        config: nextConfig,
-        reason: "source-changed",
-        installRecords: nextInstallRecords,
-        traceCommand: "uninstall",
-        logger: {
-          warn: (message) => defaultRuntime.log(theme.warn(message)),
-        },
-      });
-
-      const removed = formatUninstallActionLabels({
-        ...plan.actions,
-        directory: directoryResult.directoryRemoved,
-      });
-
-      defaultRuntime.log(
-        `Uninstalled plugin "${pluginId}". Removed: ${removed.length > 0 ? removed.join(", ") : "nothing"}.`,
-      );
-      defaultRuntime.log("Restart the gateway to apply changes.");
+      const { runPluginUninstallCommand } = await import("./plugins-uninstall-command.js");
+      await runPluginUninstallCommand(id, opts);
     });
 
   plugins
     .command("install")
     .description(
-      "Install a plugin or hook pack (path, archive, npm spec, clawhub:package, or marketplace entry)",
+      "Install a plugin or hook pack (path, archive, npm spec, git repo, clawhub:package, or marketplace entry)",
     )
     .argument(
       "<path-or-spec-or-plugin>",
@@ -482,9 +360,17 @@ export function registerPluginsCli(program: Command) {
       const report = buildPluginDiagnosticsReport({ effectiveOnly: true });
       const errors = report.plugins.filter((p) => p.status === "error");
       const diags = report.diagnostics.filter((d) => d.level === "error");
+      const shadowed = report.diagnostics.filter((entry) =>
+        isErroredConfigSelectedShadowDiagnostic({ entry, plugins: report.plugins }),
+      );
       const compatibility = buildPluginCompatibilityNotices({ report });
 
-      if (errors.length === 0 && diags.length === 0 && compatibility.length === 0) {
+      if (
+        errors.length === 0 &&
+        diags.length === 0 &&
+        shadowed.length === 0 &&
+        compatibility.length === 0
+      ) {
         defaultRuntime.log("No plugin issues detected.");
         return;
       }
@@ -505,6 +391,31 @@ export function registerPluginsCli(program: Command) {
         for (const diag of diags) {
           const target = diag.pluginId ? `${diag.pluginId}: ` : "";
           lines.push(`- ${target}${diag.message}`);
+        }
+      }
+      if (shadowed.length > 0) {
+        if (lines.length > 0) {
+          lines.push("");
+        }
+        lines.push(theme.warn("Plugin source shadowing:"));
+        for (const diag of shadowed) {
+          const active = report.plugins.find((plugin) => plugin.id === diag.pluginId);
+          const target = diag.pluginId ? `${diag.pluginId}: ` : "";
+          lines.push(`- ${target}${diag.message}`);
+          if (active) {
+            lines.push(`  active: ${shortenHomeInString(active.source)} (${active.origin})`);
+            if (active.status === "error") {
+              lines.push(`  active status: error${active.error ? `: ${active.error}` : ""}`);
+            }
+          }
+          if (diag.source) {
+            lines.push(`  shadowed: ${shortenHomeInString(diag.source)}`);
+          }
+          lines.push("  repair:");
+          lines.push("    openclaw plugins inspect " + (diag.pluginId ?? "<plugin-id>"));
+          lines.push("    edit or remove the config-selected plugin source");
+          lines.push("    openclaw plugins registry --refresh");
+          lines.push("    openclaw gateway restart --force");
         }
       }
       if (compatibility.length > 0) {

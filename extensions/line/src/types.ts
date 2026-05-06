@@ -1,12 +1,17 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-message";
 
 export type LineTokenSource = "config" | "env" | "file" | "none";
 
-export interface LineThreadBindingsConfig {
+interface LineThreadBindingsConfig {
   enabled?: boolean;
   idleHours?: number;
   maxAgeHours?: number;
+  spawnSessions?: boolean;
+  defaultSpawnContext?: "isolated" | "fork";
+  /** @deprecated Use spawnSessions instead. */
   spawnSubagentSessions?: boolean;
+  /** @deprecated Use spawnSessions instead. */
   spawnAcpSessions?: boolean;
 }
 
@@ -56,6 +61,7 @@ export interface ResolvedLineAccount {
 export interface LineSendResult {
   messageId: string;
   chatId: string;
+  receipt: MessageReceipt;
 }
 
 export type LineProbeResult = BaseProbeResult<string> & {
@@ -67,7 +73,7 @@ export type LineProbeResult = BaseProbeResult<string> & {
   };
 };
 
-export type LineFlexMessagePayload = {
+type LineFlexMessagePayload = {
   altText: string;
   contents: unknown;
 };

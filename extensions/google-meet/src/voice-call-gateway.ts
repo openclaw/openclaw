@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   GatewayClient,
   startGatewayClientWhenEventLoopReady,
@@ -18,11 +19,18 @@ type VoiceCallSpeakResult = {
   error?: string;
 };
 
-export type VoiceCallMeetJoinResult = {
+type VoiceCallMeetJoinResult = {
   callId: string;
   dtmfSent: boolean;
   introSent: boolean;
 };
+
+function sleep(ms: number): Promise<void> {
+  if (ms <= 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 async function createConnectedGatewayClient(
   config: GoogleMeetConfig,
@@ -75,21 +83,24 @@ export async function joinMeetViaVoiceCallGateway(params: {
   dtmfSequence?: string;
   logger?: RuntimeLogger;
   message?: string;
+  requesterSessionKey?: string;
+  sessionKey?: string;
 }): Promise<VoiceCallMeetJoinResult> {
   let client: VoiceCallGatewayClient | undefined;
 
   try {
     client = await createConnectedGatewayClient(params.config);
     params.logger?.info(
-      `[google-meet] Delegating Twilio join to Voice Call (dtmf=${params.dtmfSequence ? "yes" : "no"}, intro=${params.message ? "yes" : "no"})`,
+      `[google-meet] Delegating Twilio join to Voice Call (dtmf=${params.dtmfSequence ? "pre-connect" : "none"}, intro=${params.message ? "delayed" : "none"})`,
     );
     const start = (await client.request(
       "voicecall.start",
       {
         to: params.dialInNumber,
         mode: "conversation",
-        ...(params.message ? { message: params.message } : {}),
         ...(params.dtmfSequence ? { dtmfSequence: params.dtmfSequence } : {}),
+        ...(params.requesterSessionKey ? { requesterSessionKey: params.requesterSessionKey } : {}),
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       },
       { timeoutMs: params.config.voiceCall.requestTimeoutMs },
     )) as VoiceCallStartResult;
@@ -97,12 +108,57 @@ export async function joinMeetViaVoiceCallGateway(params: {
       throw new Error(start.error || "voicecall.start did not return callId");
     }
     params.logger?.info(
-      `[google-meet] Voice Call Twilio join started: callId=${start.callId} dtmf=${params.dtmfSequence ? "yes" : "no"} intro=${params.message ? "yes" : "no"}`,
+      `[google-meet] Voice Call Twilio phone leg started: callId=${start.callId}`,
     );
+    const dtmfSent = Boolean(params.dtmfSequence);
+    if (dtmfSent) {
+      params.logger?.info(
+        `[google-meet] Meet DTMF queued before realtime connect: callId=${start.callId} digits=${params.dtmfSequence?.length ?? 0}`,
+      );
+    }
+    let introSent = false;
+    if (params.message) {
+      const delayMs = params.dtmfSequence ? params.config.voiceCall.postDtmfSpeechDelayMs : 0;
+      if (delayMs > 0) {
+        params.logger?.info(
+          `[google-meet] Waiting ${delayMs}ms after Meet DTMF before speaking intro for callId=${start.callId}`,
+        );
+        await sleep(delayMs);
+      }
+      let spoken: VoiceCallSpeakResult;
+      try {
+        spoken = (await client.request(
+          "voicecall.speak",
+          {
+            callId: start.callId,
+            allowTwimlFallback: false,
+            message: params.message,
+          },
+          { timeoutMs: params.config.voiceCall.requestTimeoutMs },
+        )) as VoiceCallSpeakResult;
+      } catch (err) {
+        params.logger?.warn?.(
+          `[google-meet] Skipped intro speech because realtime bridge was not ready: ${formatErrorMessage(err)}`,
+        );
+        spoken = { success: false };
+      }
+      if (spoken.success === false) {
+        params.logger?.warn?.(
+          `[google-meet] Skipped intro speech because realtime bridge was not ready: ${
+            spoken.error || "voicecall.speak failed"
+          }`,
+        );
+      } else {
+        introSent = true;
+        params.logger?.info(
+          `[google-meet] Intro speech requested after Meet dial sequence: callId=${start.callId}`,
+        );
+      }
+    }
     return {
       callId: start.callId,
-      dtmfSent: Boolean(params.dtmfSequence),
-      introSent: Boolean(params.message),
+      dtmfSent,
+      introSent,
     };
   } finally {
     await client?.stopAndWait({ timeoutMs: 1_000 });

@@ -2,6 +2,7 @@ import http from "node:http";
 import { URL } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveConfiguredCapabilityProvider } from "openclaw/plugin-sdk/provider-selection-runtime";
+import type { TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   createWebhookInFlightLimiter,
@@ -13,7 +14,11 @@ import {
   requestBodyErrorToText,
 } from "../api.js";
 import { isAllowlistedCaller, normalizePhoneNumber } from "./allowlist.js";
-import { normalizeVoiceCallConfig, type VoiceCallConfig } from "./config.js";
+import {
+  normalizeVoiceCallConfig,
+  resolveVoiceCallEffectiveConfig,
+  type VoiceCallConfig,
+} from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { getHeader } from "./http-headers.js";
 import type { CallManager } from "./manager.js";
@@ -35,6 +40,12 @@ const TRANSCRIPT_LOG_MAX_CHARS = 200;
 
 type RealtimeTranscriptionRuntime = typeof import("./realtime-transcription.runtime.js");
 type ResponseGeneratorModule = typeof import("./response-generator.js");
+type Logger = {
+  info: (message: string) => void;
+  warn: (message: string) => void;
+  error: (message: string) => void;
+  debug?: (message: string) => void;
+};
 
 let realtimeTranscriptionRuntimePromise: Promise<RealtimeTranscriptionRuntime> | undefined;
 let responseGeneratorModulePromise: Promise<ResponseGeneratorModule> | undefined;
@@ -65,6 +76,28 @@ function sanitizeTranscriptForLog(value: string): string {
     return sanitized;
   }
   return `${sanitized.slice(0, TRANSCRIPT_LOG_MAX_CHARS)}...`;
+}
+
+function appendRecentTalkEventMetadata(call: CallRecord, event: TalkEvent): void {
+  const metadata = call.metadata ?? {};
+  const recent = Array.isArray(metadata.recentTalkEvents)
+    ? metadata.recentTalkEvents.filter(
+        (entry): entry is { at: string; type: string; sessionId: string; turnId?: string } =>
+          !!entry && typeof entry === "object" && !Array.isArray(entry),
+      )
+    : [];
+  recent.push({
+    at: event.timestamp,
+    type: event.type,
+    sessionId: event.sessionId,
+    turnId: event.turnId,
+  });
+  call.metadata = {
+    ...metadata,
+    lastTalkEventAt: event.timestamp,
+    lastTalkEventType: event.type,
+    recentTalkEvents: recent.slice(-10),
+  };
 }
 
 function buildRequestUrl(
@@ -158,6 +191,7 @@ export class VoiceCallWebhookServer {
   private coreConfig: CoreConfig | null;
   private fullConfig: OpenClawConfig | null;
   private agentRuntime: CoreAgentDeps | null;
+  private logger: Logger;
   private stopStaleCallReaper: (() => void) | null = null;
   private readonly webhookInFlightLimiter = createWebhookInFlightLimiter();
 
@@ -175,6 +209,7 @@ export class VoiceCallWebhookServer {
     coreConfig?: CoreConfig,
     fullConfig?: OpenClawConfig,
     agentRuntime?: CoreAgentDeps,
+    logger?: Logger,
   ) {
     this.config = normalizeVoiceCallConfig(config);
     this.manager = manager;
@@ -182,6 +217,12 @@ export class VoiceCallWebhookServer {
     this.coreConfig = coreConfig ?? null;
     this.fullConfig = fullConfig ?? null;
     this.agentRuntime = agentRuntime ?? null;
+    this.logger = logger ?? {
+      info: console.log,
+      warn: console.warn,
+      error: console.error,
+      debug: console.debug,
+    };
   }
 
   /**
@@ -382,6 +423,12 @@ export class VoiceCallWebhookServer {
         const safePartial = sanitizeTranscriptForLog(partial);
         console.log(`[voice-call] Partial for ${callId}: ${safePartial} (chars=${partial.length})`);
       },
+      onTalkEvent: (providerCallId, _streamSid, event) => {
+        const call = this.manager.getCallByProviderCallId(providerCallId);
+        if (call) {
+          appendRecentTalkEventMetadata(call, event);
+        }
+      },
       onConnect: (callId, streamSid) => {
         console.log(`[voice-call] Media stream connected: ${callId} -> ${streamSid}`);
         this.clearPendingDisconnectHangup(callId);
@@ -492,12 +539,12 @@ export class VoiceCallWebhookServer {
         const url = this.resolveListeningUrl(bind, webhookPath);
         this.listeningUrl = url;
         this.startPromise = null;
-        console.log(`[voice-call] Webhook server listening on ${url}`);
+        this.logger.info(`[voice-call] Webhook server listening on ${url}`);
         if (this.mediaStreamHandler) {
           const address = this.server?.address();
           const actualPort =
             address && typeof address === "object" ? address.port : this.config.serve.port;
-          console.log(
+          this.logger.info(
             `[voice-call] Media stream WebSocket on ws://${bind}:${actualPort}${streamPath}`,
           );
         }
@@ -859,12 +906,16 @@ export class VoiceCallWebhookServer {
 
     try {
       const { generateVoiceResponse } = await loadResponseGeneratorModule();
+      const numberRouteKey =
+        typeof call.metadata?.numberRouteKey === "string" ? call.metadata.numberRouteKey : call.to;
+      const effectiveConfig = resolveVoiceCallEffectiveConfig(this.config, numberRouteKey).config;
 
       const result = await generateVoiceResponse({
-        voiceConfig: this.config,
+        voiceConfig: effectiveConfig,
         coreConfig: this.coreConfig,
         agentRuntime: this.agentRuntime,
         callId,
+        sessionKey: call.sessionKey,
         from: call.from,
         transcript: call.transcript,
         userMessage,

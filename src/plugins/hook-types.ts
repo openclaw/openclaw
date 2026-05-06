@@ -30,6 +30,7 @@ import type {
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
 } from "./hook-message.types.js";
+import type { PluginJsonValue } from "./host-hook-json.js";
 import type {
   PluginAgentTurnPrepareEvent,
   PluginAgentTurnPrepareResult,
@@ -299,6 +300,11 @@ export type PluginHookBeforeAgentFinalizeResult = {
    */
   action?: "continue" | "revise" | "finalize";
   reason?: string;
+  retry?: {
+    instruction: string;
+    idempotencyKey?: string;
+    maxAttempts?: number;
+  };
 };
 
 export type PluginHookBeforeCompactionEvent = {
@@ -398,6 +404,10 @@ export type PluginHookToolContext = {
   trace?: DiagnosticTraceContext;
   toolName: string;
   toolCallId?: string;
+  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Plugin callers type JSON reads by namespace.
+  getSessionExtension?: <T extends PluginJsonValue = PluginJsonValue>(
+    namespace: string,
+  ) => T | undefined;
 };
 
 export type PluginHookBeforeToolCallEvent = {
@@ -618,6 +628,8 @@ export type PluginHookGatewayCronJobState = {
 
 export type PluginHookGatewayCronJob = {
   id: string;
+  /** Agent id that owns this cron job. */
+  agentId?: string;
   name?: string;
   description?: string;
   enabled?: boolean;
@@ -652,6 +664,10 @@ export type PluginHookCronChangedEvent = {
   action: "added" | "updated" | "removed" | "started" | "finished";
   jobId: string;
   job?: PluginHookGatewayCronJob;
+  /** Top-level session target for downstream routing (mirrors job.sessionTarget). */
+  sessionTarget?: string;
+  /** Agent id that owns this cron job (mirrors job.agentId). */
+  agentId?: string;
   runAtMs?: number;
   durationMs?: number;
   status?: PluginHookGatewayCronRunStatus;
@@ -662,6 +678,7 @@ export type PluginHookCronChangedEvent = {
   deliveryError?: string;
   sessionId?: string;
   sessionKey?: string;
+  runId?: string;
   nextRunAtMs?: number;
   model?: string;
   provider?: string;
@@ -703,7 +720,8 @@ export type PluginInstallRequestKind =
   | "plugin-dir"
   | "plugin-archive"
   | "plugin-file"
-  | "plugin-npm";
+  | "plugin-npm"
+  | "plugin-git";
 export type PluginInstallSourcePathKind = "file" | "directory";
 
 export type PluginInstallFinding = {

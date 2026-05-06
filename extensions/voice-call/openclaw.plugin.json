@@ -5,6 +5,9 @@
     "onStartup": true,
     "onCommands": ["voicecall"]
   },
+  "contracts": {
+    "tools": ["voice_call"]
+  },
   "channelEnvVars": {
     "voice-call": [
       "TELNYX_API_KEY",
@@ -40,6 +43,11 @@
     },
     "inboundGreeting": {
       "label": "Inbound Greeting",
+      "advanced": true
+    },
+    "numbers": {
+      "label": "Per-number Routing",
+      "help": "Inbound overrides keyed by dialed E.164 number.",
       "advanced": true
     },
     "telnyx.apiKey": {
@@ -140,6 +148,11 @@
       "help": "Controls the shared openclaw_agent_consult tool.",
       "advanced": true
     },
+    "realtime.consultPolicy": {
+      "label": "Realtime Consult Policy",
+      "help": "Guides when the realtime voice model should call openclaw_agent_consult.",
+      "advanced": true
+    },
     "realtime.fastContext.enabled": {
       "label": "Enable Fast Realtime Context",
       "help": "Searches memory/session context before the full consult agent.",
@@ -159,6 +172,31 @@
     },
     "realtime.fastContext.fallbackToConsult": {
       "label": "Fallback To Full Consult",
+      "advanced": true
+    },
+    "realtime.agentContext.enabled": {
+      "label": "Enable Agent Voice Context",
+      "help": "Injects a compact agent identity, system prompt, and workspace context capsule into realtime voice instructions.",
+      "advanced": true
+    },
+    "realtime.agentContext.maxChars": {
+      "label": "Agent Voice Context Limit",
+      "advanced": true
+    },
+    "realtime.agentContext.includeIdentity": {
+      "label": "Include Agent Identity",
+      "advanced": true
+    },
+    "realtime.agentContext.includeSystemPrompt": {
+      "label": "Include Agent System Prompt",
+      "advanced": true
+    },
+    "realtime.agentContext.includeWorkspaceFiles": {
+      "label": "Include Agent Workspace Files",
+      "advanced": true
+    },
+    "realtime.agentContext.files": {
+      "label": "Agent Voice Context Files",
       "advanced": true
     },
     "realtime.providers": {
@@ -185,6 +223,10 @@
     "store": {
       "label": "Call Log Store Path",
       "advanced": true
+    },
+    "sessionScope": {
+      "label": "Session Scope",
+      "help": "Use per-phone to preserve caller memory across calls, or per-call to isolate every call into a fresh voice session."
     },
     "responseModel": {
       "label": "Response Model",
@@ -271,6 +313,38 @@
       },
       "inboundGreeting": {
         "type": "string"
+      },
+      "numbers": {
+        "type": "object",
+        "propertyNames": {
+          "pattern": "^\\+[1-9]\\d{1,14}$"
+        },
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "inboundGreeting": {
+              "type": "string"
+            },
+            "tts": {
+              "$ref": "#/properties/tts"
+            },
+            "agentId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "responseModel": {
+              "type": "string"
+            },
+            "responseSystemPrompt": {
+              "type": "string"
+            },
+            "responseTimeoutMs": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
       },
       "outbound": {
         "type": "object",
@@ -437,6 +511,10 @@
             "type": "string",
             "enum": ["safe-read-only", "owner", "none"]
           },
+          "consultPolicy": {
+            "type": "string",
+            "enum": ["auto", "substantive", "always"]
+          },
           "tools": {
             "type": "array",
             "items": {
@@ -503,6 +581,35 @@
               },
               "fallbackToConsult": {
                 "type": "boolean"
+              }
+            }
+          },
+          "agentContext": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "maxChars": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "includeIdentity": {
+                "type": "boolean"
+              },
+              "includeSystemPrompt": {
+                "type": "boolean"
+              },
+              "includeWorkspaceFiles": {
+                "type": "boolean"
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
               }
             }
           },
@@ -763,6 +870,10 @@
       },
       "store": {
         "type": "string"
+      },
+      "sessionScope": {
+        "type": "string",
+        "enum": ["per-phone", "per-call"]
       },
       "responseModel": {
         "type": "string"

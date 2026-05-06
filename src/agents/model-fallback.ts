@@ -5,6 +5,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
@@ -25,6 +26,7 @@ import {
 } from "./failover-policy.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
+  isModelFallbackDecisionLogEnabled,
   logModelFallbackDecision,
   type ModelFallbackDecisionParams,
   type ModelFallbackStepFields,
@@ -181,11 +183,12 @@ type ModelFallbackRunResult<T> = {
 
 type ModelFallbackAuthRuntime = typeof import("./model-fallback-auth.runtime.js");
 
-let modelFallbackAuthRuntimePromise: Promise<ModelFallbackAuthRuntime> | undefined;
+const modelFallbackAuthRuntimeLoader = createLazyImportLoader<ModelFallbackAuthRuntime>(
+  () => import("./model-fallback-auth.runtime.js"),
+);
 
 async function loadModelFallbackAuthRuntime() {
-  modelFallbackAuthRuntimePromise ??= import("./model-fallback-auth.runtime.js");
-  return await modelFallbackAuthRuntimePromise;
+  return await modelFallbackAuthRuntimeLoader.load();
 }
 
 function buildFallbackSuccess<T>(params: {
@@ -355,6 +358,22 @@ function recordFailedCandidateAttempt(params: {
   });
 }
 
+function appendFailedCandidateAttempt(params: {
+  attempts: FallbackAttempt[];
+  candidate: ModelCandidate;
+  error: unknown;
+}): void {
+  const described = describeFailoverError(params.error);
+  params.attempts.push({
+    provider: params.candidate.provider,
+    model: params.candidate.model,
+    error: described.rawError ?? described.message,
+    reason: described.reason ?? "unknown",
+    status: described.status,
+    code: described.code,
+  });
+}
+
 function findLiveSessionModelSwitchRedirectIndex(params: {
   error: LiveSessionModelSwitchError;
   candidates: ModelCandidate[];
@@ -505,6 +524,12 @@ function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefined): s
   }
   return DEFAULT_PROVIDER;
 }
+
+export const __testing = {
+  resolveFallbackCandidates,
+  resolveImageFallbackCandidates,
+  resolveCooldownDecision,
+} as const;
 
 function resolveFallbackCandidates(params: {
   cfg: OpenClawConfig | undefined;
@@ -813,6 +838,9 @@ export async function runWithModelFallback<T>(params: {
   let lastError: unknown;
   const cooldownProbeUsedProviders = new Set<string>();
   const observeDecision = async (decision: ModelFallbackDecisionParams) => {
+    if (!params.onFallbackStep && !isModelFallbackDecisionLogEnabled()) {
+      return;
+    }
     const fallbackStep = logModelFallbackDecision(decision);
     if (fallbackStep) {
       await params.onFallbackStep?.(fallbackStep);
@@ -821,6 +849,10 @@ export async function runWithModelFallback<T>(params: {
   const observeFailedCandidate = async (
     failedAttempt: Parameters<typeof recordFailedCandidateAttempt>[0],
   ) => {
+    if (!params.onFallbackStep && !isModelFallbackDecisionLogEnabled()) {
+      appendFailedCandidateAttempt(failedAttempt);
+      return;
+    }
     const fallbackStep = recordFailedCandidateAttempt(failedAttempt);
     if (fallbackStep) {
       await params.onFallbackStep?.(fallbackStep);

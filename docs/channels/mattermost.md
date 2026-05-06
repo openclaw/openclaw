@@ -7,15 +7,11 @@ title: "Mattermost"
 sidebarTitle: "Mattermost"
 ---
 
-Status: bundled plugin (bot token + WebSocket events). Channels, groups, and DMs are supported. Mattermost is a self-hostable team messaging platform; see the official site at [mattermost.com](https://mattermost.com) for product details and downloads.
+Status: downloadable plugin (bot token + WebSocket events). Channels, groups, and DMs are supported. Mattermost is a self-hostable team messaging platform; see the official site at [mattermost.com](https://mattermost.com) for product details and downloads.
 
-## Bundled plugin
+## Install
 
-<Note>
-Mattermost ships as a bundled plugin in current OpenClaw releases, so normal packaged builds do not need a separate install.
-</Note>
-
-If you are on an older build or a custom install that excludes Mattermost, install a current npm package when one is published:
+Install Mattermost before configuring the channel:
 
 <Tabs>
   <Tab title="npm registry">
@@ -29,10 +25,6 @@ If you are on an older build or a custom install that excludes Mattermost, insta
     ```
   </Tab>
 </Tabs>
-
-If npm reports the OpenClaw-owned package as deprecated, use a current packaged
-OpenClaw build or the local checkout path until a newer npm package is
-published.
 
 Details: [Plugins](/tools/plugin)
 
@@ -93,7 +85,9 @@ Native slash commands are opt-in. When enabled, OpenClaw registers `oc_*` slash 
     - If `callbackUrl` is omitted, OpenClaw derives one from gateway host/port + `callbackPath`.
     - For multi-account setups, `commands` can be set at the top level or under `channels.mattermost.accounts.<id>.commands` (account values override top-level fields).
     - Command callbacks are validated with the per-command tokens returned by Mattermost when OpenClaw registers `oc_*` commands.
-    - Slash callbacks fail closed when registration failed, startup was partial, or the callback token does not match one of the registered commands.
+    - OpenClaw refreshes current Mattermost command registration before accepting each callback so stale tokens from deleted or regenerated slash commands stop being accepted without a gateway restart.
+    - Callback validation fails closed if the Mattermost API cannot confirm the command is still current; failed validations are cached briefly, concurrent lookups are coalesced, and fresh lookup starts are rate-limited per command to bound replay pressure.
+    - Slash callbacks fail closed when registration failed, startup was partial, or the callback token does not match the resolved command's registered token (a token valid for one command cannot reach upstream validation for a different command).
 
   </Accordion>
   <Accordion title="Reachability requirement">
@@ -367,7 +361,7 @@ When a user clicks a button:
 <AccordionGroup>
   <Accordion title="Implementation notes">
     - Button callbacks use HMAC-SHA256 verification (automatic, no config needed).
-    - Mattermost strips callback data from its API responses (security feature), so all buttons are removed on click — partial removal is not possible.
+    - Mattermost strips callback data from its API responses (security feature), so all buttons are removed on click - partial removal is not possible.
     - Action IDs containing hyphens or underscores are sanitized automatically (Mattermost routing limitation).
 
   </Accordion>
@@ -397,7 +391,7 @@ External scripts and webhooks can post buttons directly via the Mattermost REST 
       {
         actions: [
           {
-            id: "mybutton01", // alphanumeric only — see below
+            id: "mybutton01", // alphanumeric only - see below
             type: "button", // required, or clicks are silently ignored
             name: "Approve", // display label
             style: "primary", // optional: "default", "primary", "danger"
@@ -422,11 +416,11 @@ External scripts and webhooks can post buttons directly via the Mattermost REST 
 **Critical rules**
 
 1. Attachments go in `props.attachments`, not top-level `attachments` (silently ignored).
-2. Every action needs `type: "button"` — without it, clicks are swallowed silently.
-3. Every action needs an `id` field — Mattermost ignores actions without IDs.
+2. Every action needs `type: "button"` - without it, clicks are swallowed silently.
+3. Every action needs an `id` field - Mattermost ignores actions without IDs.
 4. Action `id` must be **alphanumeric only** (`[a-zA-Z0-9]`). Hyphens and underscores break Mattermost's server-side action routing (returns 404). Strip them before use.
 5. `context.action_id` must match the button's `id` so the confirmation message shows the button name (e.g., "Approve") instead of a raw ID.
-6. `context.action_id` is required — the interaction handler returns 400 without it.
+6. `context.action_id` is required - the interaction handler returns 400 without it.
 
 </Warning>
 
@@ -473,7 +467,7 @@ context = {**ctx, "_token": token}
   <Accordion title="Common HMAC pitfalls">
     - Python's `json.dumps` adds spaces by default (`{"key": "val"}`). Use `separators=(",", ":")` to match JavaScript's compact output (`{"key":"val"}`).
     - Always sign **all** context fields (minus `_token`). The gateway strips `_token` then signs everything remaining. Signing a subset causes silent verification failure.
-    - Use `sort_keys=True` — the gateway sorts keys before signing, and Mattermost may reorder context fields when storing the payload.
+    - Use `sort_keys=True` - the gateway sorts keys before signing, and Mattermost may reorder context fields when storing the payload.
     - Derive the secret from the bot token (deterministic), not random bytes. The secret must be the same across the process that creates buttons and the gateway that verifies.
 
   </Accordion>
@@ -483,7 +477,7 @@ context = {**ctx, "_token": token}
 
 The Mattermost plugin includes a directory adapter that resolves channel and user names via the Mattermost API. This enables `#channel-name` and `@username` targets in `openclaw message send` and cron/webhook deliveries.
 
-No configuration is needed — the adapter uses the bot token from the account config.
+No configuration is needed - the adapter uses the bot token from the account config.
 
 ## Multi-account
 
@@ -537,8 +531,8 @@ Mattermost supports multiple accounts under `channels.mattermost.accounts`:
 
 ## Related
 
-- [Channel Routing](/channels/channel-routing) — session routing for messages
-- [Channels Overview](/channels) — all supported channels
-- [Groups](/channels/groups) — group chat behavior and mention gating
-- [Pairing](/channels/pairing) — DM authentication and pairing flow
-- [Security](/gateway/security) — access model and hardening
+- [Channel Routing](/channels/channel-routing) - session routing for messages
+- [Channels Overview](/channels) - all supported channels
+- [Groups](/channels/groups) - group chat behavior and mention gating
+- [Pairing](/channels/pairing) - DM authentication and pairing flow
+- [Security](/gateway/security) - access model and hardening

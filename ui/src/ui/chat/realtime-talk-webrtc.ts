@@ -1,6 +1,7 @@
 import type { RealtimeTalkWebRtcSdpSessionResult } from "./realtime-talk-shared.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  createRealtimeTalkEventEmitter,
   submitRealtimeTalkConsult,
   type RealtimeTalkTransport,
   type RealtimeTalkTransportContext,
@@ -14,6 +15,11 @@ type RealtimeServerEvent = {
   delta?: string;
   transcript?: string;
   arguments?: string;
+  error?: unknown;
+  response?: {
+    status?: string;
+    status_details?: unknown;
+  };
 };
 
 type ToolBuffer = {
@@ -29,11 +35,15 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private audio: HTMLAudioElement | null = null;
   private closed = false;
   private toolBuffers = new Map<string, ToolBuffer>();
+  private readonly consultAbortControllers = new Set<AbortController>();
+  private readonly emitTalkEvent: ReturnType<typeof createRealtimeTalkEventEmitter>;
 
   constructor(
     private readonly session: RealtimeTalkWebRtcSdpSessionResult,
     private readonly ctx: RealtimeTalkTransportContext,
-  ) {}
+  ) {
+    this.emitTalkEvent = createRealtimeTalkEventEmitter(ctx, session);
+  }
 
   async start(): Promise<void> {
     if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === "undefined") {
@@ -55,7 +65,10 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       this.peer.addTrack(track, this.media);
     }
     this.channel = this.peer.createDataChannel("oai-events");
-    this.channel.addEventListener("open", () => this.ctx.callbacks.onStatus?.("listening"));
+    this.channel.addEventListener("open", () => {
+      this.ctx.callbacks.onStatus?.("listening");
+      this.emitTalkEvent({ type: "session.ready" });
+    });
     this.channel.addEventListener("message", (event) => this.handleRealtimeEvent(event.data));
     this.peer.addEventListener("connectionstatechange", () => {
       if (this.closed) {
@@ -87,6 +100,9 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   stop(): void {
+    if (!this.closed) {
+      this.emitTalkEvent({ type: "session.closed", final: true });
+    }
     this.closed = true;
     this.channel?.close();
     this.channel = null;
@@ -96,6 +112,10 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     this.media = null;
     this.audio?.remove();
     this.audio = null;
+    for (const controller of this.consultAbortControllers) {
+      controller.abort();
+    }
+    this.consultAbortControllers.clear();
     this.toolBuffers.clear();
   }
 
@@ -106,6 +126,9 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private handleRealtimeEvent(data: unknown): void {
+    if (this.closed) {
+      return;
+    }
     let event: RealtimeServerEvent;
     try {
       event = JSON.parse(String(data)) as RealtimeServerEvent;
@@ -116,6 +139,12 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       case "conversation.item.input_audio_transcription.completed":
         if (event.transcript) {
           this.ctx.callbacks.onTranscript?.({ role: "user", text: event.transcript, final: true });
+          this.emitTalkEvent({
+            type: "transcript.done",
+            final: true,
+            itemId: event.item_id,
+            payload: { role: "user", text: event.transcript },
+          });
         }
         return;
       case "response.audio_transcript.done":
@@ -125,6 +154,12 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
             text: event.transcript,
             final: true,
           });
+          this.emitTalkEvent({
+            type: "output.text.done",
+            final: true,
+            itemId: event.item_id,
+            payload: { text: event.transcript },
+          });
         }
         return;
       case "response.function_call_arguments.delta":
@@ -133,9 +168,52 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       case "response.function_call_arguments.done":
         void this.handleToolCall(event);
         return;
+      case "input_audio_buffer.speech_started":
+        this.ctx.callbacks.onStatus?.("listening", "Speech detected");
+        this.emitTalkEvent({ type: "turn.started", payload: { source: event.type } });
+        return;
+      case "input_audio_buffer.speech_stopped":
+        this.ctx.callbacks.onStatus?.("thinking", "Processing speech");
+        this.emitTalkEvent({ type: "input.audio.committed", final: true });
+        return;
+      case "response.created":
+        this.ctx.callbacks.onStatus?.("thinking", "Generating response");
+        return;
+      case "response.done":
+        this.ctx.callbacks.onStatus?.("listening", this.extractResponseStatus(event));
+        this.emitTalkEvent({
+          type: "turn.ended",
+          final: true,
+          payload: { status: event.response?.status ?? "completed" },
+        });
+        return;
+      case "error":
+        this.ctx.callbacks.onStatus?.("error", this.extractErrorDetail(event.error));
+        this.emitTalkEvent({
+          type: "session.error",
+          final: true,
+          payload: { message: this.extractErrorDetail(event.error) },
+        });
+        return;
       default:
         return;
     }
+  }
+
+  private extractResponseStatus(event: RealtimeServerEvent): string | undefined {
+    const status = event.response?.status;
+    return status && status !== "completed" ? `Response ${status}` : undefined;
+  }
+
+  private extractErrorDetail(error: unknown): string {
+    if (!error || typeof error !== "object") {
+      return "Realtime provider error";
+    }
+    const record = error as Record<string, unknown>;
+    const message = typeof record.message === "string" ? record.message.trim() : "";
+    const code = typeof record.code === "string" ? record.code.trim() : "";
+    const type = typeof record.type === "string" ? record.type.trim() : "";
+    return message || code || type || "Realtime provider error";
   }
 
   private bufferToolDelta(event: RealtimeServerEvent): void {
@@ -161,12 +239,25 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     if (name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME || !callId) {
       return;
     }
-    await submitRealtimeTalkConsult({
-      ctx: this.ctx,
+    this.emitTalkEvent({
+      type: "tool.call",
       callId,
-      args: buffered?.args || event.arguments || "{}",
-      submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
+      itemId: key,
+      payload: { name, args: buffered?.args || event.arguments || "{}" },
     });
+    const abortController = new AbortController();
+    this.consultAbortControllers.add(abortController);
+    try {
+      await submitRealtimeTalkConsult({
+        ctx: this.ctx,
+        callId,
+        args: buffered?.args || event.arguments || "{}",
+        signal: abortController.signal,
+        submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
+      });
+    } finally {
+      this.consultAbortControllers.delete(abortController);
+    }
   }
 
   private submitToolResult(callId: string, result: unknown): void {

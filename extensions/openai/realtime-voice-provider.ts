@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   createProviderHttpError,
@@ -19,8 +20,14 @@ import type {
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ } from "openclaw/plugin-sdk/realtime-voice";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import {
+  REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+  REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+} from "openclaw/plugin-sdk/realtime-voice";
+import {
+  normalizeResolvedSecretInputString,
+  normalizeSecretInputString,
+} from "openclaw/plugin-sdk/secret-input";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import WebSocket from "ws";
 import {
@@ -31,7 +38,7 @@ import {
   trimToUndefined,
 } from "./realtime-provider-shared.js";
 
-export type OpenAIRealtimeVoice =
+type OpenAIRealtimeVoice =
   | "alloy"
   | "ash"
   | "ballad"
@@ -81,6 +88,7 @@ type RealtimeEvent = {
   response?: {
     id?: string;
     status?: string;
+    status_details?: unknown;
   };
   error?: unknown;
 };
@@ -126,6 +134,77 @@ function normalizeProviderConfig(
     azureDeployment: trimToUndefined(raw?.azureDeployment),
     azureApiVersion: trimToUndefined(raw?.azureApiVersion),
   };
+}
+
+type OpenAIRealtimeApiKeyResolution =
+  | { status: "available"; value: string }
+  | { status: "missing" };
+
+const KEYCHAIN_SECRET_REF_RE = /^keychain:([^:]+):([^:]+)$/;
+const KEYCHAIN_LOOKUP_TIMEOUT_MS = 5000;
+const resolvedKeychainSecretRefCache = new Map<string, string>();
+
+function resolveKeychainSecretRef(value: string): string | undefined {
+  const trimmed = value.trim();
+  const match = KEYCHAIN_SECRET_REF_RE.exec(trimmed);
+  if (!match) {
+    return trimmed || undefined;
+  }
+  const cached = resolvedKeychainSecretRefCache.get(trimmed);
+  if (cached) {
+    return cached;
+  }
+  const [, service, account] = match;
+  try {
+    const resolved =
+      execFileSync(
+        "/usr/bin/security",
+        ["find-generic-password", "-s", service, "-a", account, "-w"],
+        {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout: KEYCHAIN_LOOKUP_TIMEOUT_MS,
+        },
+      ).trim() || undefined;
+    if (resolved) {
+      resolvedKeychainSecretRefCache.set(trimmed, resolved);
+    }
+    return resolved;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveOpenAIRealtimeApiKey(
+  configuredApiKey: string | undefined,
+): OpenAIRealtimeApiKeyResolution {
+  const configured = normalizeSecretInputString(configuredApiKey);
+  if (configured) {
+    const value = resolveKeychainSecretRef(configured);
+    return value ? { status: "available", value } : { status: "missing" };
+  }
+
+  const envValue = normalizeSecretInputString(process.env.OPENAI_API_KEY);
+  if (!envValue) {
+    return { status: "missing" };
+  }
+  const value = resolveKeychainSecretRef(envValue);
+  return value ? { status: "available", value } : { status: "missing" };
+}
+
+function requireOpenAIRealtimeApiKey(configuredApiKey: string | undefined): string {
+  const resolved = resolveOpenAIRealtimeApiKey(configuredApiKey);
+  if (resolved.status === "available") {
+    return resolved.value;
+  }
+  throw new Error("OpenAI API key missing");
+}
+
+function hasOpenAIRealtimeApiKeyInput(configuredApiKey: string | undefined): boolean {
+  return Boolean(
+    normalizeSecretInputString(configuredApiKey) ??
+    normalizeSecretInputString(process.env.OPENAI_API_KEY),
+  );
 }
 
 function base64ToBuffer(b64: string): Buffer {
@@ -197,12 +276,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (!this.isConnected() || !this.ws) {
       return;
     }
-    this.sendEvent({
-      type: "response.create",
-      response: {
-        instructions: instructions ?? this.config.instructions,
-      },
-    });
+    this.sendUserMessage(instructions ?? this.config.instructions ?? "Greet the meeting.");
   }
 
   submitToolResult(callId: string, result: unknown): void {
@@ -267,7 +341,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       });
 
       connectTimeout = setTimeout(() => {
-        if (!this.connected && !this.intentionallyClosed) {
+        if (!this.sessionConfigured && !this.intentionallyClosed) {
           this.ws?.terminate();
           settleReject(new Error("OpenAI realtime connection timeout"));
         }
@@ -288,7 +362,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           },
         });
         this.sendSessionUpdate();
-        settleResolve();
       });
 
       this.ws.on("message", (data: Buffer) => {
@@ -304,7 +377,14 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           },
         });
         try {
-          this.handleEvent(JSON.parse(data.toString()) as RealtimeEvent);
+          const event = JSON.parse(data.toString()) as RealtimeEvent;
+          this.handleEvent(event);
+          if (event.type === "session.updated") {
+            settleResolve();
+          }
+          if (event.type === "error" && !this.sessionConfigured) {
+            settleReject(new Error(readRealtimeErrorDetail(event.error)));
+          }
         } catch (error) {
           console.error("[openai] realtime event parse failed:", error);
         }
@@ -322,7 +402,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
             capability: "realtime-voice",
           },
         });
-        if (!this.connected) {
+        if (!this.sessionConfigured) {
           settleReject(error instanceof Error ? error : new Error(String(error)));
         }
         this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
@@ -341,6 +421,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         if (this.intentionallyClosed) {
           settleResolve();
           this.config.onClose?.("completed");
+          return;
+        }
+        if (!this.sessionConfigured && !settled) {
+          settleReject(new Error("OpenAI realtime connection closed before ready"));
           return;
         }
         void this.attemptReconnect();
@@ -451,7 +535,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           threshold: cfg.vadThreshold ?? 0.5,
           prefix_padding_ms: cfg.prefixPaddingMs ?? 300,
           silence_duration_ms: cfg.silenceDurationMs ?? 500,
-          create_response: true,
+          create_response: cfg.autoRespondToAudio ?? true,
         },
         temperature: cfg.temperature ?? 0.8,
         ...(cfg.tools && cfg.tools.length > 0
@@ -470,6 +554,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private handleEvent(event: RealtimeEvent): void {
+    this.config.onEvent?.({
+      direction: "server",
+      type: event.type,
+      detail: this.describeServerEvent(event),
+    });
     switch (event.type) {
       case "session.created":
         return;
@@ -489,7 +578,8 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         this.responseActive = true;
         return;
 
-      case "response.audio.delta": {
+      case "response.audio.delta":
+      case "response.output_audio.delta": {
         if (!event.delta) {
           return;
         }
@@ -507,16 +597,20 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       }
 
       case "input_audio_buffer.speech_started":
-        this.handleBargeIn();
+        if (this.config.autoRespondToAudio ?? true) {
+          this.handleBargeIn();
+        }
         return;
 
       case "response.audio_transcript.delta":
+      case "response.output_audio_transcript.delta":
         if (event.delta) {
           this.config.onTranscript?.("assistant", event.delta, false);
         }
         return;
 
       case "response.audio_transcript.done":
+      case "response.output_audio_transcript.done":
         if (event.transcript) {
           this.config.onTranscript?.("assistant", event.transcript, true);
         }
@@ -623,6 +717,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   private sendEvent(event: unknown): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
+      const type =
+        event && typeof event === "object" && typeof (event as { type?: unknown }).type === "string"
+          ? (event as { type: string }).type
+          : "unknown";
+      this.config.onEvent?.({ direction: "client", type });
       const payload = JSON.stringify(event);
       captureWsEvent({
         url: this.resolveConnectionParams().url,
@@ -637,6 +736,23 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       });
       this.ws.send(payload);
     }
+  }
+
+  private describeServerEvent(event: RealtimeEvent): string | undefined {
+    if (event.type === "error") {
+      return readRealtimeErrorDetail(event.error);
+    }
+    if (event.type === "response.done") {
+      const status = event.response?.status;
+      const details =
+        event.response?.status_details === undefined
+          ? undefined
+          : JSON.stringify(event.response.status_details);
+      return (
+        [status ? `status=${status}` : undefined, details].filter(Boolean).join(" ") || undefined
+      );
+    }
+    return undefined;
   }
 }
 
@@ -656,8 +772,12 @@ function resolveOpenAIRealtimeBrowserOfferHeaders(): Record<string, string> | un
     transport: "http",
     defaultHeaders: {},
   });
+  // Strip server-side-only attribution headers: browser direct fetches to
+  // api.openai.com fail CORS preflight when these are present (only
+  // authorization,content-type are allowed by the endpoint's CORS policy).
+  const SERVER_ONLY_HEADERS = new Set(["user-agent", "originator", "version"]);
   const browserHeaders = Object.fromEntries(
-    Object.entries(headers ?? {}).filter(([key]) => key.toLowerCase() !== "user-agent"),
+    Object.entries(headers ?? {}).filter(([key]) => !SERVER_ONLY_HEADERS.has(key.toLowerCase())),
   );
   return Object.keys(browserHeaders).length > 0 ? browserHeaders : undefined;
 }
@@ -666,10 +786,7 @@ async function createOpenAIRealtimeBrowserSession(
   req: RealtimeVoiceBrowserSessionCreateRequest,
 ): Promise<RealtimeVoiceBrowserSession> {
   const config = normalizeProviderConfig(req.providerConfig);
-  const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error("OpenAI API key missing");
-  }
+  const apiKey = requireOpenAIRealtimeApiKey(config.apiKey);
   if (config.azureEndpoint || config.azureDeployment) {
     throw new Error("OpenAI Realtime browser sessions do not support Azure endpoints yet");
   }
@@ -681,6 +798,14 @@ async function createOpenAIRealtimeBrowserSession(
     model,
     instructions: req.instructions,
     audio: {
+      input: {
+        turn_detection: {
+          type: "server_vad",
+          create_response: true,
+          interrupt_response: true,
+        },
+        transcription: { model: "whisper-1" },
+      },
       output: { voice },
     },
   };
@@ -735,7 +860,7 @@ async function createOpenAIRealtimeBrowserSession(
   const offerHeaders = resolveOpenAIRealtimeBrowserOfferHeaders();
   return {
     provider: "openai",
-    transport: "webrtc-sdp",
+    transport: "webrtc",
     clientSecret,
     offerUrl: "https://api.openai.com/v1/realtime/calls",
     ...(offerHeaders ? { offerHeaders } : {}),
@@ -749,16 +874,28 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
   return {
     id: "openai",
     label: "OpenAI Realtime Voice",
+    defaultModel: OPENAI_REALTIME_DEFAULT_MODEL,
     autoSelectOrder: 10,
+    capabilities: {
+      transports: ["webrtc", "gateway-relay"],
+      inputAudioFormats: [
+        REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+        REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      ],
+      outputAudioFormats: [
+        REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+        REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      ],
+      supportsBrowserSession: true,
+      supportsBargeIn: true,
+      supportsToolCalls: true,
+    },
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) =>
-      Boolean(normalizeProviderConfig(providerConfig).apiKey || process.env.OPENAI_API_KEY),
+      hasOpenAIRealtimeApiKeyInput(normalizeProviderConfig(providerConfig).apiKey),
     createBridge: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
-      const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
-      if (!apiKey) {
-        throw new Error("OpenAI API key missing");
-      }
+      const apiKey = requireOpenAIRealtimeApiKey(config.apiKey);
       return new OpenAIRealtimeVoiceBridge({
         ...req,
         apiKey,
@@ -776,5 +913,3 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
     createBrowserSession: createOpenAIRealtimeBrowserSession,
   };
 }
-
-export type { OpenAIRealtimeVoiceProviderConfig };

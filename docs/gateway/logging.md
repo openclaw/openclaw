@@ -10,10 +10,21 @@ title: "Gateway logging"
 
 For a user-facing overview (CLI + Control UI + config), see [/logging](/logging).
 
-OpenClaw has two log “surfaces”:
+OpenClaw has two log "surfaces":
 
 - **Console output** (what you see in the terminal / Debug UI).
 - **File logs** (JSON lines) written by the gateway logger.
+
+At startup, the Gateway logs the resolved default agent model together with the
+mode defaults that affect new sessions, for example:
+
+```text
+agent model: openai-codex/gpt-5.5 (thinking=medium, fast=on)
+```
+
+`thinking` comes from the default agent, model params, or global agent default;
+when it is unset, the startup summary shows `medium`. `fast` comes from the
+default agent or model `fastMode` params.
 
 ## File-based logger
 
@@ -41,6 +52,9 @@ openclaw logs --follow
   raise the file log level.
 - To capture verbose-only details in file logs, set `logging.level` to `debug` or
   `trace`.
+- Trace logging also includes diagnostic timing summaries for selected hot paths,
+  such as plugin tool factory preparation. See
+  [/tools/plugin#slow-plugin-tool-setup](/tools/plugin#slow-plugin-tool-setup).
 
 ## Console capture
 
@@ -76,7 +90,7 @@ does not make them emit raw secrets.
 
 The gateway prints WebSocket protocol logs in two modes:
 
-- **Normal mode (no `--verbose`)**: only “interesting” RPC results are printed:
+- **Normal mode (no `--verbose`)**: only "interesting" RPC results are printed:
   - errors (`ok=false`)
   - slow calls (default threshold: `>= 50ms`)
   - parse errors

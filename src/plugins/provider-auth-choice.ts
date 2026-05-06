@@ -1,4 +1,3 @@
-import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import {
   resolveDefaultAgentId,
   resolveAgentDir,
@@ -130,18 +129,24 @@ async function noteDefaultModelResult(params: {
 
 async function applyDefaultModelFromAuthChoice(params: {
   config: OpenClawConfig;
+  configBeforeProviderAuth?: OpenClawConfig;
   selectedModel: string;
   selectedModelDisplay?: string;
   preserveExistingDefaultModel: boolean | undefined;
   prompter: WizardPrompter;
   runSelectedModelHook: (config: OpenClawConfig) => Promise<void>;
 }): Promise<OpenClawConfig> {
-  const previousPrimary = resolveConfiguredDefaultModelPrimary(params.config);
+  const defaultModelBaseConfig = params.configBeforeProviderAuth ?? params.config;
+  const previousPrimary = resolveConfiguredDefaultModelPrimary(defaultModelBaseConfig);
   const preservesDifferentPrimary =
     params.preserveExistingDefaultModel === true &&
     previousPrimary !== undefined &&
     previousPrimary !== params.selectedModel;
-  const nextConfig = applyDefaultModel(params.config, params.selectedModel, {
+  const defaultModelConfig =
+    params.preserveExistingDefaultModel === true
+      ? restoreConfiguredPrimaryModel(params.config, defaultModelBaseConfig)
+      : params.config;
+  const nextConfig = applyDefaultModel(defaultModelConfig, params.selectedModel, {
     preserveExistingPrimary: params.preserveExistingDefaultModel === true,
   });
   if (!preservesDifferentPrimary) {
@@ -215,12 +220,7 @@ export async function runProviderPluginAuthMethod(params: {
   opts?: Partial<ProviderAuthOptionBag>;
 }): Promise<{ config: OpenClawConfig; defaultModel?: string }> {
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
-  const defaultAgentId = resolveDefaultAgentId(params.config);
-  const agentDir =
-    params.agentDir ??
-    (agentId === defaultAgentId
-      ? resolveOpenClawAgentDir()
-      : resolveAgentDir(params.config, agentId));
+  const agentDir = params.agentDir ?? resolveAgentDir(params.config, agentId);
   const workspaceDir =
     params.workspaceDir ??
     resolveAgentWorkspaceDir(params.config, agentId) ??
@@ -372,6 +372,9 @@ export async function applyAuthChoiceLoadedPluginProvider(
         pluginId: installCatalogEntry.pluginId,
         label: installCatalogEntry.label,
         install: installCatalogEntry.install,
+        ...(installCatalogEntry.origin === "bundled"
+          ? { trustedSourceLinkedOfficialInstall: true }
+          : {}),
       },
       prompter: params.prompter,
       runtime: params.runtime,
@@ -394,6 +397,7 @@ export async function applyAuthChoiceLoadedPluginProvider(
     nextConfig = enabledConfig;
   }
 
+  const configBeforeProviderAuth = nextConfig;
   const applied = await runProviderPluginAuthMethod({
     config: nextConfig,
     env: params.env,
@@ -416,6 +420,7 @@ export async function applyAuthChoiceLoadedPluginProvider(
     if (params.setDefaultModel) {
       nextConfig = await applyDefaultModelFromAuthChoice({
         config: nextConfig,
+        configBeforeProviderAuth,
         selectedModel,
         selectedModelDisplay,
         preserveExistingDefaultModel: params.preserveExistingDefaultModel,
@@ -458,10 +463,7 @@ export async function applyAuthChoicePluginProvider(
   }
 
   const agentId = params.agentId ?? resolveDefaultAgentId(nextConfig);
-  const defaultAgentId = resolveDefaultAgentId(nextConfig);
-  const agentDir =
-    params.agentDir ??
-    (agentId === defaultAgentId ? resolveOpenClawAgentDir() : resolveAgentDir(nextConfig, agentId));
+  const agentDir = params.agentDir ?? resolveAgentDir(nextConfig, agentId);
   const workspaceDir =
     resolveAgentWorkspaceDir(nextConfig, agentId) ?? resolveDefaultAgentWorkspaceDir();
 
@@ -476,7 +478,7 @@ export async function applyAuthChoicePluginProvider(
   const provider = resolveProviderMatch(providers, options.providerId);
   if (!provider) {
     await params.prompter.note(
-      `${options.label} auth plugin is not available. Enable it and re-run onboarding.`,
+      `${options.label} auth plugin is not available. Install or enable the plugin, then rerun onboarding. If this started after an update, run "openclaw doctor --fix" first.`,
       options.label,
     );
     return { config: nextConfig };
@@ -488,6 +490,7 @@ export async function applyAuthChoicePluginProvider(
     return { config: nextConfig };
   }
 
+  const configBeforeProviderAuth = nextConfig;
   const applied = await runProviderPluginAuthMethod({
     config: nextConfig,
     env: params.env,
@@ -509,6 +512,7 @@ export async function applyAuthChoicePluginProvider(
     if (params.setDefaultModel) {
       nextConfig = await applyDefaultModelFromAuthChoice({
         config: nextConfig,
+        configBeforeProviderAuth,
         selectedModel,
         selectedModelDisplay,
         preserveExistingDefaultModel: params.preserveExistingDefaultModel,

@@ -1,14 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { performance } from "node:perf_hooks";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "./diagnostic-flags.js";
 import { isTruthyEnvValue } from "./env.js";
+import { appendRegularFileSync } from "./regular-file.js";
 
-export const OPENCLAW_DIAGNOSTICS_TIMELINE_SCHEMA_VERSION = "openclaw.diagnostics.v1";
+const OPENCLAW_DIAGNOSTICS_TIMELINE_SCHEMA_VERSION = "openclaw.diagnostics.v1";
 
-export type DiagnosticsTimelineEventType =
+type DiagnosticsTimelineEventType =
   | "span.start"
   | "span.end"
   | "span.error"
@@ -17,9 +18,9 @@ export type DiagnosticsTimelineEventType =
   | "provider.request"
   | "childProcess.exit";
 
-export type DiagnosticsTimelineAttributes = Record<string, string | number | boolean | null>;
+type DiagnosticsTimelineAttributes = Record<string, string | number | boolean | null>;
 
-export type DiagnosticsTimelineEvent = {
+type DiagnosticsTimelineEvent = {
   type: DiagnosticsTimelineEventType;
   name: string;
   timestamp?: string;
@@ -167,7 +168,7 @@ export function emitDiagnosticsTimelineEvent(
       mkdirSync(dir, { recursive: true });
       createdTimelineDirs.add(dir);
     }
-    appendFileSync(path, line, "utf8");
+    appendRegularFileSync({ filePath: path, content: line });
   } catch (error) {
     if (!warnedAboutTimelineWrite) {
       warnedAboutTimelineWrite = true;

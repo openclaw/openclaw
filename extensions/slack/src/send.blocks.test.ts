@@ -1,10 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { createSlackSendTestClient, installSlackBlockTestMocks } from "./blocks.test-helpers.js";
+import {
+  clearSlackThreadParticipationCache,
+  hasSlackThreadParticipation,
+} from "./sent-thread-cache.js";
 
 installSlackBlockTestMocks();
 const { sendMessageSlack } = await import("./send.js");
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 const SLACK_TEXT_LIMIT = 8000;
+
+function slackDnsRequestError(): Error {
+  return Object.assign(new Error("A request error occurred: getaddrinfo EAI_AGAIN slack.com"), {
+    code: "slack_webapi_request_error",
+    original: Object.assign(new Error("getaddrinfo EAI_AGAIN slack.com"), {
+      code: "EAI_AGAIN",
+      syscall: "getaddrinfo",
+      hostname: "slack.com",
+    }),
+  });
+}
 
 describe("sendMessageSlack NO_REPLY guard", () => {
   it("suppresses NO_REPLY text before any Slack API call", async () => {
@@ -17,6 +32,7 @@ describe("sendMessageSlack NO_REPLY guard", () => {
 
     expect(client.chat.postMessage).not.toHaveBeenCalled();
     expect(result.messageId).toBe("suppressed");
+    expect(result.receipt.platformMessageIds).toEqual([]);
   });
 
   it("suppresses NO_REPLY with surrounding whitespace", async () => {
@@ -53,6 +69,49 @@ describe("sendMessageSlack NO_REPLY guard", () => {
 
     expect(client.chat.postMessage).toHaveBeenCalled();
     expect(result.messageId).toBe("171234.567");
+  });
+});
+
+describe("sendMessageSlack thread participation", () => {
+  it("records participation after a successful threaded send", async () => {
+    clearSlackThreadParticipationCache();
+    const client = createSlackSendTestClient();
+
+    await sendMessageSlack("channel:C123", "hello thread", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      threadTs: "1712345678.123456",
+    });
+
+    expect(hasSlackThreadParticipation("default", "C123", "1712345678.123456")).toBe(true);
+  });
+
+  it("does not record participation for unthreaded sends", async () => {
+    clearSlackThreadParticipationCache();
+    const client = createSlackSendTestClient();
+
+    await sendMessageSlack("channel:C123", "hello channel", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+    });
+
+    expect(hasSlackThreadParticipation("default", "C123", "1712345678.123456")).toBe(false);
+  });
+
+  it("does not record participation for invalid thread ids", async () => {
+    clearSlackThreadParticipationCache();
+    const client = createSlackSendTestClient();
+
+    await sendMessageSlack("channel:C123", "hello invalid thread", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      threadTs: "not-a-slack-thread",
+    });
+
+    expect(hasSlackThreadParticipation("default", "C123", "not-a-slack-thread")).toBe(false);
   });
 });
 
@@ -112,7 +171,104 @@ describe("sendMessageSlack blocks", () => {
         blocks: [{ type: "divider" }],
       }),
     );
-    expect(result).toEqual({ messageId: "171234.567", channelId: "C123" });
+    expect(result).toMatchObject({ messageId: "171234.567", channelId: "C123" });
+    expect(result.receipt).toMatchObject({
+      primaryPlatformMessageId: "171234.567",
+      platformMessageIds: ["171234.567"],
+      parts: [
+        expect.objectContaining({
+          platformMessageId: "171234.567",
+          kind: "card",
+          raw: expect.objectContaining({ channel: "slack", channelId: "C123" }),
+        }),
+      ],
+    });
+  });
+
+  it("posts user-target block messages directly without conversations.open", async () => {
+    const client = createSlackSendTestClient();
+    client.conversations.open.mockRejectedValueOnce(new Error("missing_scope"));
+
+    const result = await sendMessageSlack("user:U123", "", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      blocks: [{ type: "divider" }],
+    });
+
+    expect(client.conversations.open).not.toHaveBeenCalled();
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "U123",
+        text: "Shared a Block Kit message",
+      }),
+    );
+    expect(result).toMatchObject({ messageId: "171234.567", channelId: "U123" });
+    expect(result.receipt.platformMessageIds).toEqual(["171234.567"]);
+  });
+
+  it("retries Slack postMessage DNS request errors without enabling broad write retries", async () => {
+    const client = createSlackSendTestClient();
+    client.chat.postMessage
+      .mockRejectedValueOnce(slackDnsRequestError())
+      .mockResolvedValueOnce({ ts: "171234.999" });
+
+    const result = await sendMessageSlack("channel:C123", "hello", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ messageId: "171234.999", channelId: "C123" });
+    expect(result.receipt.parts[0]).toEqual(
+      expect.objectContaining({
+        platformMessageId: "171234.999",
+        kind: "text",
+      }),
+    );
+  });
+
+  it("retries Slack conversations.open DNS request errors for threaded DMs", async () => {
+    const client = createSlackSendTestClient();
+    client.conversations.open
+      .mockRejectedValueOnce(slackDnsRequestError())
+      .mockResolvedValueOnce({ channel: { id: "D123" } });
+
+    const result = await sendMessageSlack("user:U123", "hello", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      threadTs: "171234.100",
+    });
+
+    expect(client.conversations.open).toHaveBeenCalledTimes(2);
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "D123", thread_ts: "171234.100" }),
+    );
+    expect(result).toMatchObject({ messageId: "171234.567", channelId: "D123" });
+    expect(result.receipt.threadId).toBe("171234.100");
+  });
+
+  it("does not retry Slack platform errors", async () => {
+    const client = createSlackSendTestClient();
+    const platformError = Object.assign(
+      new Error("An API error occurred: message_limit_exceeded"),
+      {
+        data: { ok: false, error: "message_limit_exceeded" },
+      },
+    );
+    client.chat.postMessage.mockRejectedValue(platformError);
+
+    await expect(
+      sendMessageSlack("channel:C123", "hello", {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+      }),
+    ).rejects.toThrow("message_limit_exceeded");
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
   });
 
   it("derives fallback text from image blocks", async () => {

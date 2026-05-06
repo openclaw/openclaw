@@ -1917,6 +1917,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     releaseWsSession("sess-2");
     releaseWsSession("sess-boundary");
     releaseWsSession("sess-fallback");
+    releaseWsSession("sess-explicit-sse");
     releaseWsSession("sess-boundary-http-fallback");
     releaseWsSession("sess-full-context-replay");
     releaseWsSession("sess-encrypted-full-context-replay");
@@ -2681,6 +2682,33 @@ describe("createOpenAIWebSocketStreamFn", () => {
     }
   });
 
+  it("ends the HTTP fallback stream when explicit SSE transport is selected", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-explicit-sse");
+    const stream = await resolveStream(
+      streamFn(
+        modelStub as Parameters<typeof streamFn>[0],
+        contextStub as Parameters<typeof streamFn>[1],
+        { transport: "sse" } as Parameters<typeof streamFn>[2],
+      ),
+    );
+
+    await expect(
+      Promise.race([
+        (
+          stream as unknown as {
+            result: () => Promise<{ content?: Array<{ text?: string }> }>;
+          }
+        ).result(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("SSE fallback result timed out")), 100),
+        ),
+      ]),
+    ).resolves.toMatchObject({
+      content: [{ text: "http fallback response" }],
+    });
+    expect(streamSimpleCalls).toHaveLength(1);
+  });
+
   it("falls back to HTTP when WebSocket errors before any output in auto mode", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-runtime-fallback");
     const stream = streamFn(
@@ -3391,6 +3419,12 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(httpFallbackCalls[0]?.context).toMatchObject({
       systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
     });
+  });
+
+  it("keeps the default websocket HTTP fallback on the OpenClaw transport", () => {
+    expect(
+      openAIWsStreamTesting.getDefaultHttpFallbackStreamFnForTest(modelStub as never),
+    ).toBeTypeOf("function");
   });
 
   it("forwards temperature and maxTokens to response.create", async () => {

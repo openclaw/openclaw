@@ -1,14 +1,14 @@
 import type { NpmProjectInstallEnvOptions } from "./npm-install-env.js";
 import { createNpmProjectInstallEnv } from "./npm-install-env.js";
 
-export type SafeNpmInstallEnvOptions = NpmProjectInstallEnvOptions & {
+type SafeNpmInstallEnvOptions = NpmProjectInstallEnvOptions & {
   ignoreWorkspaces?: boolean;
   legacyPeerDeps?: boolean;
   packageLock?: boolean;
   quiet?: boolean;
 };
 
-export type SafeNpmInstallArgsOptions = {
+type SafeNpmInstallArgsOptions = {
   ignoreWorkspaces?: boolean;
   loglevel?: "error" | "silent";
   noAudit?: boolean;
@@ -27,9 +27,11 @@ export function createSafeNpmInstallEnv(
     npm_config_audit: "false",
     npm_config_fund: "false",
     npm_config_ignore_scripts: "true",
+    npm_config_legacy_peer_deps: options.legacyPeerDeps ? "true" : "false",
     npm_config_package_lock: options.packageLock === true ? "true" : "false",
+    npm_config_strict_peer_deps: "false",
+    ...(options.packageLock === true ? { npm_config_save: "true" } : {}),
     ...(options.ignoreWorkspaces ? { npm_config_workspaces: "false" } : {}),
-    ...(options.legacyPeerDeps ? { npm_config_legacy_peer_deps: "true" } : {}),
   };
   if (options.quiet) {
     Object.assign(nextEnv, {

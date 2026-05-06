@@ -51,7 +51,8 @@ streaming surfaces can look like duplicates. Prefer `collect`/`steer` if you wan
 one response per inbound message.
 
 For runtime-specific timing and dependency behavior, see
-[Steering queue](/concepts/queue-steering).
+[Steering queue](/concepts/queue-steering). For the explicit `/steer <message>`
+command, see [Steer](/tools/steer).
 
 Configure globally or per channel via `messages.queue`:
 
@@ -112,13 +113,14 @@ keys.
 
 ## Troubleshooting
 
-- If commands seem stuck, enable verbose logs and look for “queued for …ms” lines to confirm the queue is draining.
+- If commands seem stuck, enable verbose logs and look for "queued for ...ms" lines to confirm the queue is draining.
 - If you need queue depth, enable verbose logs and watch for queue timing lines.
 - Codex app-server runs that accept a turn and then stop emitting progress are interrupted by the Codex adapter so the active session lane can release instead of waiting for the outer run timeout.
-- When diagnostics are enabled, sessions that remain in `processing` past `diagnostics.stuckSessionWarnMs` log a stuck-session warning. Active embedded runs, active reply operations, and active lane tasks remain warning-only by default; stale startup bookkeeping with no active session work can release the affected session lane so queued work drains.
+- When diagnostics are enabled, sessions that remain in `processing` past `diagnostics.stuckSessionWarnMs` with no observed reply, tool, status, block, or ACP progress are classified by current activity. Active work logs as `session.long_running`; active work with no recent progress logs as `session.stalled`; `session.stuck` is reserved for stale session bookkeeping with no active work, and only that path can release the affected session lane so queued work drains. Repeated `session.stuck` diagnostics back off while the session remains unchanged.
 
 ## Related
 
 - [Session management](/concepts/session)
 - [Steering queue](/concepts/queue-steering)
+- [Steer](/tools/steer)
 - [Retry policy](/concepts/retry)

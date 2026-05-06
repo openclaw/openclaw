@@ -1,7 +1,7 @@
 // Public agent/model/runtime helpers for plugins that integrate with core agent flows.
 
 export * from "../agents/agent-scope.js";
-export { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
 export * from "../agents/current-time.js";
 export * from "../agents/date-time.js";
 export * from "../agents/defaults.js";
@@ -22,6 +22,7 @@ export * from "../agents/tools/common.js";
 export * from "../agents/tools/web-guarded-fetch.js";
 export * from "../agents/tools/web-shared.js";
 export * from "../agents/tools/web-fetch-utils.js";
+export * from "../tools/index.js";
 // Intentional public runtime surface: channel plugins use ingress agent helpers directly.
 export * from "../agents/agent-command.js";
 export * from "../tts/tts.js";

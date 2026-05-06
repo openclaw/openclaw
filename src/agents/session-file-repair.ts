@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { replaceFileAtomic } from "../infra/replace-file.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "./stream-message-shared.js";
+
+/** Placeholder for blank user messages — preserves the user turn so strict
+ * providers that require at least one user message don't reject the transcript. */
+export const BLANK_USER_FALLBACK_TEXT = "(continue)";
 
 type RepairReport = {
   repaired: boolean;
@@ -12,14 +17,9 @@ type RepairReport = {
   reason?: string;
 };
 
-// Persisted assistant entries with `content: []` (written by older builds when
-// a stream/provider error fired before any block was produced) are valid JSON
-// but not valid for AWS Bedrock Converse replay; rewriting them on disk lets a
-// poisoned session recover across gateway restarts instead of needing a fresh
-// session. The sentinel text is shared with stream-message-shared.ts and
-// replay-history.ts so a session repaired offline reads byte-identically to a
-// live stream-error turn — that byte-identity is what makes the repair pass
-// idempotent (a healed entry is then indistinguishable from a fresh one).
+// The sentinel text is shared with stream-message-shared.ts and
+// replay-history.ts so a repaired entry is byte-identical to a live
+// stream-error turn, keeping the repair pass idempotent.
 
 type SessionMessageEntry = {
   type: "message";
@@ -32,6 +32,31 @@ function isSessionHeader(entry: unknown): entry is { type: string; id: string } 
   }
   const record = entry as { type?: unknown; id?: unknown };
   return record.type === "session" && typeof record.id === "string" && record.id.length > 0;
+}
+
+/**
+ * Detect a `type: "message"` entry whose `message.role` is missing, `null`, or
+ * not a non-empty string. Such entries surface in the wild as "null role"
+ * JSONL corruption (e.g. #77228 reported transcripts that contained 935+
+ * entries with null roles after an earlier failure). They cannot be replayed
+ * to any provider — every provider router branches on `message.role` — and
+ * preserving them through repair just relocates the corruption from the
+ * original file into the post-repair file. Treat them as malformed lines:
+ * drop during repair so the cleaned transcript no longer carries them.
+ */
+function isStructurallyInvalidMessageEntry(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const record = entry as { type?: unknown; message?: unknown };
+  if (record.type !== "message") {
+    return false;
+  }
+  if (!record.message || typeof record.message !== "object") {
+    return true;
+  }
+  const role = (record.message as { role?: unknown }).role;
+  return typeof role !== "string" || role.trim().length === 0;
 }
 
 function isAssistantEntryWithEmptyContent(entry: unknown): entry is SessionMessageEntry {
@@ -53,11 +78,8 @@ function isAssistantEntryWithEmptyContent(entry: unknown): entry is SessionMessa
   if (!Array.isArray(message.content) || message.content.length !== 0) {
     return false;
   }
-  // Only error turns are eligible for on-disk rewrite. A clean stop with
-  // empty content (silent-reply / NO_REPLY path documented in
-  // run.empty-error-retry.test.ts) is a valid historical assistant turn —
-  // mutating it into a synthetic failure message would permanently corrupt
-  // the transcript and replay fabricated failure text on future requests.
+  // Only error stops — clean stops with empty content (NO_REPLY path) are
+  // valid silent replies that must not be overwritten with synthetic text.
   return message.stopReason === "error";
 }
 
@@ -79,7 +101,19 @@ type UserEntryRepair =
 function repairUserEntryWithBlankTextContent(entry: SessionMessageEntry): UserEntryRepair {
   const content = entry.message.content;
   if (typeof content === "string") {
-    return content.trim() ? { kind: "keep" } : { kind: "drop" };
+    if (content.trim()) {
+      return { kind: "keep" };
+    }
+    return {
+      kind: "rewrite",
+      entry: {
+        ...entry,
+        message: {
+          ...entry.message,
+          content: BLANK_USER_FALLBACK_TEXT,
+        },
+      },
+    };
   }
   if (!Array.isArray(content)) {
     return { kind: "keep" };
@@ -101,7 +135,16 @@ function repairUserEntryWithBlankTextContent(entry: SessionMessageEntry): UserEn
     return false;
   });
   if (nextContent.length === 0) {
-    return { kind: "drop" };
+    return {
+      kind: "rewrite",
+      entry: {
+        ...entry,
+        message: {
+          ...entry.message,
+          content: [{ type: "text", text: BLANK_USER_FALLBACK_TEXT }],
+        },
+      },
+    };
   }
   if (!touched) {
     return { kind: "keep" };
@@ -137,13 +180,12 @@ function buildRepairSummaryParts(params: {
   if (params.rewrittenUserMessages > 0) {
     parts.push(`rewrote ${params.rewrittenUserMessages} user message(s)`);
   }
-  // Caller only invokes this once at least one counter is non-zero, so the
-  // empty-array branch is unreachable in production. Kept for defensive output.
   return parts.length > 0 ? parts.join(", ") : "no changes";
 }
 
 export async function repairSessionFileIfNeeded(params: {
   sessionFile: string;
+  debug?: (message: string) => void;
   warn?: (message: string) => void;
 }): Promise<RepairReport> {
   const sessionFile = params.sessionFile.trim();
@@ -177,6 +219,15 @@ export async function repairSessionFileIfNeeded(params: {
     }
     try {
       const entry: unknown = JSON.parse(line);
+      if (isStructurallyInvalidMessageEntry(entry)) {
+        // Drop "null role" / missing-role message entries the same way we
+        // drop unparseable JSONL: they cannot be replayed to any provider
+        // and preserving them through repair just relocates the corruption
+        // into the post-repair file (#77228: 935+ null-role entries
+        // surviving the auto-repair pass).
+        droppedLines += 1;
+        continue;
+      }
       if (isAssistantEntryWithEmptyContent(entry)) {
         entries.push(rewriteAssistantEntryWithEmptyContent(entry));
         rewrittenAssistantMessages += 1;
@@ -228,28 +279,19 @@ export async function repairSessionFileIfNeeded(params: {
 
   const cleaned = `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
   const backupPath = `${sessionFile}.bak-${process.pid}-${Date.now()}`;
-  const tmpPath = `${sessionFile}.repair-${process.pid}-${Date.now()}.tmp`;
   try {
     const stat = await fs.stat(sessionFile).catch(() => null);
     await fs.writeFile(backupPath, content, "utf-8");
     if (stat) {
       await fs.chmod(backupPath, stat.mode);
     }
-    await fs.writeFile(tmpPath, cleaned, "utf-8");
-    if (stat) {
-      await fs.chmod(tmpPath, stat.mode);
-    }
-    await fs.rename(tmpPath, sessionFile);
+    await replaceFileAtomic({
+      filePath: sessionFile,
+      content: cleaned,
+      preserveExistingMode: true,
+      tempPrefix: `${path.basename(sessionFile)}.repair`,
+    });
   } catch (err) {
-    try {
-      await fs.unlink(tmpPath);
-    } catch (cleanupErr) {
-      params.warn?.(
-        `session file repair cleanup failed: ${cleanupErr instanceof Error ? cleanupErr.message : "unknown error"} (${path.basename(
-          tmpPath,
-        )})`,
-      );
-    }
     return {
       repaired: false,
       droppedLines,
@@ -260,7 +302,7 @@ export async function repairSessionFileIfNeeded(params: {
     };
   }
 
-  params.warn?.(
+  params.debug?.(
     `session file repaired: ${buildRepairSummaryParts({
       droppedLines,
       rewrittenAssistantMessages,

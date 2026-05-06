@@ -4,6 +4,21 @@
  * instead.
  */
 
+import {
+  createChannelReplyPipeline as createChannelReplyPipelineCompat,
+  createReplyPrefixContext as createReplyPrefixContextCompat,
+  createReplyPrefixOptions as createReplyPrefixOptionsCompat,
+  createTypingCallbacks as createTypingCallbacksCompat,
+  resolveChannelSourceReplyDeliveryMode as resolveChannelSourceReplyDeliveryModeCompat,
+  type ChannelReplyPipeline as ChannelReplyPipelineCompat,
+  type CreateTypingCallbacksParams as CreateTypingCallbacksParamsCompat,
+  type ReplyPrefixContext as ReplyPrefixContextCompat,
+  type ReplyPrefixContextBundle as ReplyPrefixContextBundleCompat,
+  type ReplyPrefixOptions as ReplyPrefixOptionsCompat,
+  type SourceReplyDeliveryMode as SourceReplyDeliveryModeCompat,
+  type TypingCallbacks as TypingCallbacksCompat,
+} from "./channel-reply-core.js";
+
 const shouldWarnCompatImport =
   process.env.VITEST !== "true" &&
   process.env.NODE_ENV !== "test" &&
@@ -68,6 +83,31 @@ export { collectOpenGroupPolicyConfiguredRouteWarnings } from "./channel-policy.
 export * from "./reply-history.js";
 export * from "./directory-runtime.js";
 export { mapAllowlistResolutionInputs } from "./allow-from.js";
+
+/** @deprecated Use `openclaw/plugin-sdk/channel-message`. */
+export const createChannelReplyPipeline = createChannelReplyPipelineCompat;
+/** @deprecated Use `openclaw/plugin-sdk/channel-message`. */
+export const createReplyPrefixContext = createReplyPrefixContextCompat;
+/** @deprecated Use `openclaw/plugin-sdk/channel-message`. */
+export const createReplyPrefixOptions = createReplyPrefixOptionsCompat;
+/** @deprecated Use `openclaw/plugin-sdk/channel-message`. */
+export const createTypingCallbacks = createTypingCallbacksCompat;
+/** @deprecated Use `openclaw/plugin-sdk/channel-message`. */
+export const resolveChannelSourceReplyDeliveryMode = resolveChannelSourceReplyDeliveryModeCompat;
+/** @deprecated Use `openclaw/plugin-sdk/channel-message`. */
+export type ChannelReplyPipeline = ChannelReplyPipelineCompat;
+/** @deprecated Use `openclaw/plugin-sdk/channel-message`. */
+export type CreateTypingCallbacksParams = CreateTypingCallbacksParamsCompat;
+/** @deprecated Use `openclaw/plugin-sdk/channel-message`. */
+export type ReplyPrefixContext = ReplyPrefixContextCompat;
+/** @deprecated Use `openclaw/plugin-sdk/channel-message`. */
+export type ReplyPrefixContextBundle = ReplyPrefixContextBundleCompat;
+/** @deprecated Use `openclaw/plugin-sdk/channel-message`. */
+export type ReplyPrefixOptions = ReplyPrefixOptionsCompat;
+/** @deprecated Use `openclaw/plugin-sdk/channel-message`. */
+export type SourceReplyDeliveryMode = SourceReplyDeliveryModeCompat;
+/** @deprecated Use `openclaw/plugin-sdk/channel-message`. */
+export type TypingCallbacks = TypingCallbacksCompat;
 
 export {
   resolveBlueBubblesGroupRequireMention,

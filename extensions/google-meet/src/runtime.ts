@@ -3,7 +3,12 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
+import type {
+  GoogleMeetConfig,
+  GoogleMeetMode,
+  GoogleMeetModeInput,
+  GoogleMeetTransport,
+} from "./config.js";
 import { addGoogleMeetSetupCheck, getGoogleMeetSetupStatus } from "./setup.js";
 import { isSameMeetUrlForReuse, resolveChromeNodeInfo } from "./transports/chrome-browser-proxy.js";
 import { createMeetWithBrowserProxyOnNode } from "./transports/chrome-create.js";
@@ -27,8 +32,17 @@ import {
   speakMeetViaVoiceCallGateway,
 } from "./voice-call-gateway.js";
 
+type ChromeAudioBridgeResult = NonNullable<
+  | Awaited<ReturnType<typeof launchChromeMeet>>["audioBridge"]
+  | Awaited<ReturnType<typeof launchChromeMeetOnNode>>["audioBridge"]
+>;
+
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function buildTwilioVoiceCallSessionKey(meetingSessionId: string): string {
+  return `voice:google-meet:${meetingSessionId}`;
 }
 
 export function normalizeMeetUrl(input: unknown): string {
@@ -55,8 +69,12 @@ function resolveTransport(input: GoogleMeetTransport | undefined, config: Google
   return input ?? config.defaultTransport;
 }
 
-function resolveMode(input: GoogleMeetMode | undefined, config: GoogleMeetConfig) {
-  return input ?? config.defaultMode;
+function resolveMode(input: GoogleMeetModeInput | undefined, config: GoogleMeetConfig) {
+  return input === "realtime" ? "agent" : (input ?? config.defaultMode);
+}
+
+function isGoogleMeetTalkBackMode(mode: GoogleMeetMode): boolean {
+  return mode === "agent" || mode === "bidi";
 }
 
 function hasRealtimeAudioOutputAdvanced(
@@ -64,6 +82,43 @@ function hasRealtimeAudioOutputAdvanced(
   startOutputBytes: number,
 ): boolean {
   return (health?.lastOutputBytes ?? 0) > startOutputBytes;
+}
+
+type TranscriptCheckpoint = {
+  lines: number;
+  lastCaptionAt?: string;
+  lastCaptionText?: string;
+};
+
+function transcriptCheckpoint(health: GoogleMeetChromeHealth | undefined): TranscriptCheckpoint {
+  return {
+    lines: health?.transcriptLines ?? 0,
+    lastCaptionAt: health?.lastCaptionAt,
+    lastCaptionText: health?.lastCaptionText,
+  };
+}
+
+function hasTranscriptAdvanced(
+  health: GoogleMeetChromeHealth | undefined,
+  start: TranscriptCheckpoint,
+): boolean {
+  if ((health?.transcriptLines ?? 0) > start.lines) {
+    return true;
+  }
+  if (health?.lastCaptionAt && health.lastCaptionAt !== start.lastCaptionAt) {
+    return true;
+  }
+  return Boolean(health?.lastCaptionText && health.lastCaptionText !== start.lastCaptionText);
+}
+
+function resolveProbeTimeoutMs(input: number | undefined, fallback: number): number {
+  if (input === undefined) {
+    return Math.min(Math.max(fallback, 1), 120_000);
+  }
+  if (!Number.isFinite(input) || input <= 0) {
+    throw new Error("timeoutMs must be a positive number");
+  }
+  return Math.min(Math.trunc(input), 120_000);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -83,7 +138,7 @@ function evaluateSpeechReadiness(session: GoogleMeetSession): {
   reason?: NonNullable<GoogleMeetChromeHealth["speechBlockedReason"]>;
   message?: string;
 } {
-  if (session.mode !== "realtime" || !session.chrome) {
+  if (!isGoogleMeetTalkBackMode(session.mode) || !session.chrome) {
     return { ready: true };
   }
   if (!isManagedChromeBrowserSession(session)) {
@@ -107,6 +162,13 @@ function evaluateSpeechReadiness(session: GoogleMeetSession): {
     };
   }
   if (health?.inCall === true) {
+    if (health.micMuted === true) {
+      return {
+        ready: false,
+        reason: "meet-microphone-muted",
+        message: "Turn on the OpenClaw Google Meet microphone before asking OpenClaw to speak.",
+      };
+    }
     if (session.chrome.audioBridge) {
       return { ready: true };
     }
@@ -169,22 +231,37 @@ export class GoogleMeetRuntime {
     return [...this.#sessions.values()].toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
-  status(sessionId?: string): {
+  async status(sessionId?: string): Promise<{
     found: boolean;
     session?: GoogleMeetSession;
     sessions?: GoogleMeetSession[];
-  } {
+  }> {
     this.#refreshHealth(sessionId);
     if (!sessionId) {
-      return { found: true, sessions: this.list() };
+      const sessions = [...this.#sessions.values()].toSorted((a, b) =>
+        a.createdAt.localeCompare(b.createdAt),
+      );
+      await Promise.all(sessions.map((session) => this.#refreshStatusHealthForSession(session)));
+      return { found: true, sessions };
     }
     const session = this.#sessions.get(sessionId);
+    if (session) {
+      await this.#refreshStatusHealthForSession(session);
+    }
     return session ? { found: true, session } : { found: false };
   }
 
-  async setupStatus(options: { transport?: GoogleMeetTransport; mode?: GoogleMeetMode } = {}) {
+  async setupStatus(
+    options: {
+      transport?: GoogleMeetTransport;
+      mode?: GoogleMeetModeInput;
+      dialInNumber?: string;
+    } = {},
+  ) {
     const transport = resolveTransport(options.transport, this.params.config);
     const mode = resolveMode(options.mode, this.params.config);
+    const twilioDialInNumber =
+      transport === "twilio" ? normalizeDialInNumber(options.dialInNumber) : undefined;
     const shouldCheckChromeNode =
       transport === "chrome-node" ||
       (!options.transport && Boolean(this.params.config.chromeNode.node));
@@ -192,6 +269,7 @@ export class GoogleMeetRuntime {
       fullConfig: this.params.fullConfig,
       mode,
       transport,
+      twilioDialInNumber,
     });
     if (shouldCheckChromeNode) {
       try {
@@ -213,7 +291,7 @@ export class GoogleMeetRuntime {
         });
       }
     }
-    if (transport === "chrome" && mode === "realtime") {
+    if (transport === "chrome" && isGoogleMeetTalkBackMode(mode)) {
       try {
         await assertBlackHole2chAvailable({
           runtime: this.params.runtime,
@@ -248,7 +326,7 @@ export class GoogleMeetRuntime {
         ok: commands.length > 0 && missingCommands.length === 0,
         message:
           commands.length === 0
-            ? "Chrome realtime audio commands are not configured"
+            ? "Chrome talk-back audio commands are not configured"
             : missingCommands.length === 0
               ? `Chrome audio command${commands.length === 1 ? "" : "s"} available: ${commands.join(", ")}`
               : `Chrome audio command${missingCommands.length === 1 ? "" : "s"} missing: ${missingCommands.join(", ")}`,
@@ -303,8 +381,8 @@ export class GoogleMeetRuntime {
       ];
       reusable.updatedAt = nowIso();
       const spoken =
-        mode === "realtime" && speechInstructions
-          ? (await this.speak(reusable.id, speechInstructions)).spoken
+        isGoogleMeetTalkBackMode(mode) && speechInstructions
+          ? await this.#speakWhenReady(reusable, speechInstructions)
           : false;
       return { session: reusable, spoken };
     }
@@ -326,9 +404,18 @@ export class GoogleMeetRuntime {
             ? "signed-in Google Chrome profile on a paired node"
             : "signed-in Google Chrome profile",
       realtime: {
-        enabled: mode === "realtime",
-        provider: this.params.config.realtime.provider,
-        model: this.params.config.realtime.model,
+        enabled: isGoogleMeetTalkBackMode(mode),
+        strategy: mode === "bidi" ? "bidi" : "agent",
+        provider:
+          mode === "bidi"
+            ? (this.params.config.realtime.voiceProvider ?? this.params.config.realtime.provider)
+            : undefined,
+        model: mode === "bidi" ? this.params.config.realtime.model : undefined,
+        transcriptionProvider:
+          mode === "agent"
+            ? (this.params.config.realtime.transcriptionProvider ??
+              this.params.config.realtime.provider)
+            : undefined,
         toolPolicy: this.params.config.realtime.toolPolicy,
       },
       notes: [],
@@ -343,6 +430,7 @@ export class GoogleMeetRuntime {
                 config: this.params.config,
                 fullConfig: this.params.fullConfig,
                 meetingSessionId: session.id,
+                requesterSessionKey: request.requesterSessionKey,
                 mode,
                 url,
                 logger: this.params.logger,
@@ -352,6 +440,7 @@ export class GoogleMeetRuntime {
                 config: this.params.config,
                 fullConfig: this.params.fullConfig,
                 meetingSessionId: session.id,
+                requesterSessionKey: request.requesterSessionKey,
                 mode,
                 url,
                 logger: this.params.logger,
@@ -361,32 +450,15 @@ export class GoogleMeetRuntime {
           launched: result.launched,
           nodeId: "nodeId" in result ? result.nodeId : undefined,
           browserProfile: this.params.config.chrome.browserProfile,
-          audioBridge: result.audioBridge
-            ? {
-                type: result.audioBridge.type,
-                provider:
-                  result.audioBridge.type === "command-pair" ||
-                  result.audioBridge.type === "node-command-pair"
-                    ? result.audioBridge.providerId
-                    : undefined,
-              }
-            : undefined,
           health: "browser" in result ? result.browser : undefined,
         };
-        if (
-          result.audioBridge?.type === "command-pair" ||
-          result.audioBridge?.type === "node-command-pair"
-        ) {
-          this.#sessionStops.set(session.id, result.audioBridge.stop);
-          this.#sessionSpeakers.set(session.id, result.audioBridge.speak);
-          this.#sessionHealth.set(session.id, result.audioBridge.getHealth);
-        }
+        this.#attachChromeAudioBridge(session, result.audioBridge);
         session.notes.push(
           result.audioBridge
             ? transport === "chrome-node"
               ? "Chrome node transport joins as the signed-in Google profile on the selected node and routes realtime audio through the node bridge."
               : "Chrome transport joins as the signed-in Google profile and routes realtime audio through the configured bridge."
-            : mode === "realtime"
+            : isGoogleMeetTalkBackMode(mode)
               ? "Chrome transport joins as the signed-in Google profile and expects BlackHole 2ch audio routing."
               : "Chrome transport joins as the signed-in Google profile without starting the realtime audio bridge.",
         );
@@ -396,7 +468,9 @@ export class GoogleMeetRuntime {
           request.dialInNumber ?? this.params.config.twilio.defaultDialInNumber,
         );
         if (!dialInNumber) {
-          throw new Error("dialInNumber required for twilio transport");
+          throw new Error(
+            "Twilio transport requires a Meet dial-in phone number. Google Meet URLs do not include dial-in details; pass dialInNumber with optional pin/dtmfSequence, configure twilio.defaultDialInNumber, or use chrome/chrome-node transport.",
+          );
         }
         const dtmfSequence = buildMeetDtmfSequence({
           pin: request.pin ?? this.params.config.twilio.defaultPin,
@@ -408,12 +482,15 @@ export class GoogleMeetRuntime {
               dialInNumber,
               dtmfSequence,
               logger: this.params.logger,
-              message:
-                mode === "realtime"
-                  ? (request.message ??
-                    this.params.config.voiceCall.introMessage ??
-                    this.params.config.realtime.introMessage)
-                  : undefined,
+              ...(request.requesterSessionKey
+                ? { requesterSessionKey: request.requesterSessionKey }
+                : {}),
+              sessionKey: buildTwilioVoiceCallSessionKey(session.id),
+              message: isGoogleMeetTalkBackMode(mode)
+                ? (request.message ??
+                  this.params.config.voiceCall.introMessage ??
+                  this.params.config.realtime.introMessage)
+                : undefined,
             })
           : undefined;
         delegatedTwilioSpoken = Boolean(voiceCallResult?.introSent);
@@ -435,7 +512,9 @@ export class GoogleMeetRuntime {
         }
         session.notes.push(
           this.params.config.voiceCall.enabled
-            ? "Twilio transport delegated the call to the voice-call plugin and sent configured DTMF."
+            ? dtmfSequence
+              ? "Twilio transport delegated the phone leg to the voice-call plugin, then queued configured DTMF before realtime connect."
+              : "Twilio transport delegated the call to the voice-call plugin without configured DTMF."
             : "Twilio transport is an explicit dial plan; voice-call delegation is disabled.",
         );
       }
@@ -448,8 +527,8 @@ export class GoogleMeetRuntime {
     const spoken =
       transport === "twilio"
         ? delegatedTwilioSpoken
-        : mode === "realtime" && speechInstructions
-          ? (await this.speak(session.id, speechInstructions)).spoken
+        : isGoogleMeetTalkBackMode(mode) && speechInstructions
+          ? await this.#speakWhenReady(session, speechInstructions)
           : false;
     return { session, spoken };
   }
@@ -494,6 +573,7 @@ export class GoogleMeetRuntime {
       return { found: true, spoken: true, session };
     }
     await this.#refreshBrowserHealthForChromeSession(session);
+    await this.#ensureChromeRealtimeBridge(session);
     const speak = this.#sessionSpeakers.get(sessionId);
     if (!speak || session.state !== "active") {
       return { found: true, spoken: false, session };
@@ -511,6 +591,39 @@ export class GoogleMeetRuntime {
     session.updatedAt = nowIso();
     this.#refreshHealth(sessionId);
     return { found: true, spoken: true, session };
+  }
+
+  async #speakWhenReady(session: GoogleMeetSession, instructions: string): Promise<boolean> {
+    let result = await this.speak(session.id, instructions);
+    if (result.spoken || session.transport === "twilio") {
+      return result.spoken;
+    }
+    const waitMs = Math.min(
+      Math.max(0, this.params.config.chrome.waitForInCallMs),
+      Math.max(0, this.params.config.chrome.joinTimeoutMs),
+    );
+    const deadline = Date.now() + waitMs;
+    while (Date.now() < deadline) {
+      await sleep(250);
+      result = await this.speak(session.id, instructions);
+      if (result.spoken) {
+        return true;
+      }
+      const health = result.session?.chrome?.health;
+      if (health?.manualActionRequired || result.session?.state !== "active") {
+        return false;
+      }
+      const blocked = health?.speechBlockedReason;
+      if (
+        blocked &&
+        blocked !== "not-in-call" &&
+        blocked !== "browser-unverified" &&
+        blocked !== "meet-microphone-muted"
+      ) {
+        return false;
+      }
+    }
+    return false;
   }
 
   async testSpeech(request: GoogleMeetJoinRequest): Promise<{
@@ -531,7 +644,7 @@ export class GoogleMeetRuntime {
   }> {
     if (request.mode === "transcribe") {
       throw new Error(
-        "test_speech requires mode: realtime; use join mode: transcribe for observe-only sessions.",
+        "test_speech requires mode: agent or bidi; use join mode: transcribe for observe-only sessions.",
       );
     }
     const url = normalizeMeetUrl(request.url);
@@ -543,14 +656,14 @@ export class GoogleMeetRuntime {
         session.state === "active" &&
         isSameMeetUrlForReuse(session.url, url) &&
         session.transport === transport &&
-        session.mode === "realtime",
+        isGoogleMeetTalkBackMode(session.mode),
     );
     const startOutputBytes = existingSession?.chrome?.health?.lastOutputBytes ?? 0;
     const result = await this.join({
       ...request,
       transport,
       url,
-      mode: "realtime",
+      mode: "agent",
       message: request.message ?? "Say exactly: Google Meet speech test complete.",
     });
     let health = result.session.chrome?.health;
@@ -588,8 +701,122 @@ export class GoogleMeetRuntime {
     };
   }
 
-  async #refreshBrowserHealthForChromeSession(session: GoogleMeetSession) {
-    if (!isManagedChromeBrowserSession(session) || evaluateSpeechReadiness(session).ready) {
+  async testListen(request: GoogleMeetJoinRequest): Promise<{
+    createdSession: boolean;
+    inCall?: boolean;
+    manualActionRequired?: boolean;
+    manualActionReason?: GoogleMeetChromeHealth["manualActionReason"];
+    manualActionMessage?: string;
+    listenVerified: boolean;
+    listenTimedOut: boolean;
+    captioning?: boolean;
+    captionsEnabledAttempted?: boolean;
+    transcriptLines?: number;
+    lastCaptionAt?: string;
+    lastCaptionSpeaker?: string;
+    lastCaptionText?: string;
+    recentTranscript?: GoogleMeetChromeHealth["recentTranscript"];
+    session: GoogleMeetSession;
+  }> {
+    const requestedMode = request.mode ? resolveMode(request.mode, this.params.config) : undefined;
+    if (requestedMode && isGoogleMeetTalkBackMode(requestedMode)) {
+      throw new Error(
+        "test_listen requires mode: transcribe; use test_speech for talk-back sessions.",
+      );
+    }
+    const url = normalizeMeetUrl(request.url);
+    const transport = resolveTransport(request.transport, this.params.config);
+    if (transport === "twilio") {
+      throw new Error("test_listen supports chrome or chrome-node transports");
+    }
+    const beforeSessions = this.list();
+    const before = new Set(beforeSessions.map((session) => session.id));
+    const existingSession = beforeSessions.find(
+      (session) =>
+        session.state === "active" &&
+        isSameMeetUrlForReuse(session.url, url) &&
+        session.transport === transport &&
+        session.mode === "transcribe",
+    );
+    const start = transcriptCheckpoint(existingSession?.chrome?.health);
+    const result = await this.join({
+      ...request,
+      transport,
+      url,
+      mode: "transcribe",
+      message: undefined,
+    });
+    let health = result.session.chrome?.health;
+    const timeoutMs = resolveProbeTimeoutMs(
+      request.timeoutMs,
+      this.params.config.chrome.joinTimeoutMs,
+    );
+    const shouldWait =
+      health?.manualActionRequired !== true && isManagedChromeBrowserSession(result.session);
+    if (shouldWait && !hasTranscriptAdvanced(health, start)) {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        await sleep(250);
+        await this.#refreshCaptionHealthForSession(result.session);
+        health = result.session.chrome?.health;
+        if (health?.manualActionRequired || hasTranscriptAdvanced(health, start)) {
+          break;
+        }
+      }
+    }
+    const listenVerified = hasTranscriptAdvanced(health, start);
+    return {
+      createdSession: !before.has(result.session.id),
+      inCall: health?.inCall,
+      manualActionRequired: health?.manualActionRequired,
+      manualActionReason: health?.manualActionReason,
+      manualActionMessage: health?.manualActionMessage,
+      listenVerified,
+      listenTimedOut: shouldWait && !listenVerified && health?.manualActionRequired !== true,
+      captioning: health?.captioning,
+      captionsEnabledAttempted: health?.captionsEnabledAttempted,
+      transcriptLines: health?.transcriptLines,
+      lastCaptionAt: health?.lastCaptionAt,
+      lastCaptionSpeaker: health?.lastCaptionSpeaker,
+      lastCaptionText: health?.lastCaptionText,
+      recentTranscript: health?.recentTranscript,
+      session: result.session,
+    };
+  }
+
+  async #refreshCaptionHealthForSession(session: GoogleMeetSession) {
+    if (session.mode !== "transcribe") {
+      this.#refreshSpeechReadiness(session);
+      return;
+    }
+    await this.#refreshBrowserHealthForChromeSession(session);
+  }
+
+  async #refreshStatusHealthForSession(session: GoogleMeetSession) {
+    if (session.transport === "chrome" || session.transport === "chrome-node") {
+      if (session.chrome?.health?.manualActionRequired) {
+        this.#refreshSpeechReadiness(session);
+        return;
+      }
+      await this.#refreshBrowserHealthForChromeSession(session, { force: true, readOnly: true });
+      return;
+    }
+    this.#refreshSpeechReadiness(session);
+  }
+
+  async #refreshBrowserHealthForChromeSession(
+    session: GoogleMeetSession,
+    options: { force?: boolean; readOnly?: boolean } = {},
+  ) {
+    if (!isManagedChromeBrowserSession(session)) {
+      this.#refreshSpeechReadiness(session);
+      return;
+    }
+    if (
+      !options.force &&
+      isGoogleMeetTalkBackMode(session.mode) &&
+      evaluateSpeechReadiness(session).ready
+    ) {
       this.#refreshSpeechReadiness(session);
       return;
     }
@@ -599,10 +826,14 @@ export class GoogleMeetRuntime {
           ? await recoverCurrentMeetTabOnNode({
               runtime: this.params.runtime,
               config: this.params.config,
+              mode: session.mode,
+              readOnly: options.readOnly,
               url: session.url,
             })
           : await recoverCurrentMeetTab({
               config: this.params.config,
+              mode: session.mode,
+              readOnly: options.readOnly,
               url: session.url,
             });
       if (result.found && result.browser && session.chrome) {
@@ -620,8 +851,69 @@ export class GoogleMeetRuntime {
     this.#refreshSpeechReadiness(session);
   }
 
+  #attachChromeAudioBridge(
+    session: GoogleMeetSession,
+    audioBridge: ChromeAudioBridgeResult | undefined,
+  ) {
+    if (!session.chrome || !audioBridge) {
+      return;
+    }
+    session.chrome.audioBridge = {
+      type: audioBridge.type,
+      provider:
+        audioBridge.type === "command-pair" || audioBridge.type === "node-command-pair"
+          ? audioBridge.providerId
+          : undefined,
+    };
+    if (audioBridge.type === "command-pair" || audioBridge.type === "node-command-pair") {
+      this.#sessionStops.set(session.id, audioBridge.stop);
+      this.#sessionSpeakers.set(session.id, audioBridge.speak);
+      this.#sessionHealth.set(session.id, audioBridge.getHealth);
+    }
+  }
+
+  async #ensureChromeRealtimeBridge(session: GoogleMeetSession) {
+    if (
+      !isGoogleMeetTalkBackMode(session.mode) ||
+      session.transport !== "chrome" ||
+      session.state !== "active" ||
+      !session.chrome ||
+      session.chrome.audioBridge
+    ) {
+      return;
+    }
+    const health = session.chrome.health;
+    if (
+      health?.inCall !== true ||
+      health.micMuted === true ||
+      health.manualActionRequired === true
+    ) {
+      return;
+    }
+    const result = await launchChromeMeet({
+      runtime: this.params.runtime,
+      config: {
+        ...this.params.config,
+        chrome: {
+          ...this.params.config.chrome,
+          launch: false,
+        },
+      },
+      fullConfig: this.params.fullConfig,
+      meetingSessionId: session.id,
+      mode: session.mode,
+      url: session.url,
+      logger: this.params.logger,
+    });
+    this.#attachChromeAudioBridge(session, result.audioBridge);
+    session.updatedAt = nowIso();
+  }
+
   #refreshSpeechReadiness(session: GoogleMeetSession) {
     const readiness = evaluateSpeechReadiness(session);
+    if (readiness.ready) {
+      session.notes = session.notes.filter((note) => !note.startsWith("Realtime speech blocked:"));
+    }
     if (session.chrome) {
       session.chrome.health = {
         ...session.chrome.health,

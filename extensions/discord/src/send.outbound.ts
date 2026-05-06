@@ -2,7 +2,7 @@ import { ChannelType } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
+import type { OutboundMediaAccess, PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { resolveChunkMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
@@ -11,6 +11,7 @@ import { resolveDiscordAccount } from "./accounts.js";
 import { createChannelMessage, createThread, type RequestClient } from "./internal/discord.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
 import { parseAndResolveRecipient } from "./recipient-resolution.js";
+import { createDiscordSendResult, type DiscordReceiptResultSource } from "./send.receipt.js";
 import {
   buildDiscordMessageRequest,
   buildDiscordSendError,
@@ -35,10 +36,7 @@ type DiscordSendOpts = {
   accountId?: string;
   mediaUrl?: string;
   filename?: string;
-  mediaAccess?: {
-    localRoots?: readonly string[];
-    readFile?: (filePath: string) => Promise<Buffer>;
-  };
+  mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   verbose?: boolean;
@@ -58,10 +56,7 @@ type DiscordClientRequest = ReturnType<typeof createDiscordClient>["request"];
 
 const DEFAULT_DISCORD_MEDIA_MAX_MB = 100;
 
-type DiscordChannelMessageResult = {
-  id?: string | null;
-  channel_id?: string | null;
-};
+type DiscordChannelMessageResult = DiscordReceiptResultSource;
 
 async function sendDiscordThreadTextChunks(params: {
   rest: RequestClient;
@@ -108,11 +103,24 @@ function isForumLikeType(channelType?: number): boolean {
 function toDiscordSendResult(
   result: DiscordChannelMessageResult,
   fallbackChannelId: string,
+  params: {
+    kind?: Parameters<typeof createDiscordSendResult>[0]["kind"];
+    threadId?: string | number;
+    replyToId?: string;
+  } = {},
 ): DiscordSendResult {
-  return {
-    messageId: result.id || "unknown",
-    channelId: result.channel_id ?? fallbackChannelId,
+  const resultParams: Parameters<typeof createDiscordSendResult>[0] = {
+    result,
+    fallbackChannelId,
+    kind: params.kind ?? "text",
   };
+  if (params.threadId != null) {
+    resultParams.threadId = params.threadId;
+  }
+  if (params.replyToId) {
+    resultParams.replyToId = params.replyToId;
+  }
+  return createDiscordSendResult(resultParams);
 }
 
 async function resolveDiscordSendTarget(
@@ -155,6 +163,7 @@ export async function sendMessageDiscord(
   const textWithTables = convertMarkdownTables(text ?? "", effectiveTableMode);
   const textWithMentions = rewriteDiscordKnownMentions(textWithTables, {
     accountId: accountInfo.accountId,
+    mentionAliases: accountInfo.config.mentionAliases,
   });
   const { token, rest, request } = createDiscordClient({ ...opts, cfg });
   const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId);
@@ -224,6 +233,7 @@ export async function sendMessageDiscord(
           mediaCaption ?? "",
           opts.mediaUrl,
           opts.filename,
+          opts.mediaAccess,
           opts.mediaLocalRoots,
           opts.mediaReadFile,
           mediaMaxBytes,
@@ -279,10 +289,11 @@ export async function sendMessageDiscord(
         channel_id: resultChannelId,
       },
       channelId,
+      { kind: opts.mediaUrl ? "media" : "text", threadId },
     );
   }
 
-  let result: { id: string; channel_id: string } | { id: string | null; channel_id: string };
+  let result: DiscordChannelMessageResult;
   try {
     if (opts.mediaUrl) {
       result = await sendDiscordMedia(
@@ -291,6 +302,7 @@ export async function sendMessageDiscord(
         textWithMentions,
         opts.mediaUrl,
         opts.filename,
+        opts.mediaAccess,
         opts.mediaLocalRoots,
         opts.mediaReadFile,
         mediaMaxBytes,
@@ -333,7 +345,10 @@ export async function sendMessageDiscord(
     accountId: accountInfo.accountId,
     direction: "outbound",
   });
-  return toDiscordSendResult(result, channelId);
+  return toDiscordSendResult(result, channelId, {
+    kind: opts.mediaUrl ? "media" : opts.components || opts.embeds ? "card" : "text",
+    replyToId: opts.replyTo,
+  });
 }
 
 export async function sendStickerDiscord(
@@ -356,7 +371,7 @@ export async function sendStickerDiscord(
       }),
     "sticker",
   )) as { id: string; channel_id: string };
-  return toDiscordSendResult(res, channelId);
+  return toDiscordSendResult(res, channelId, { kind: "card" });
 }
 
 export async function sendPollDiscord(
@@ -384,7 +399,7 @@ export async function sendPollDiscord(
       }),
     "poll",
   )) as { id: string; channel_id: string };
-  return toDiscordSendResult(res, channelId);
+  return toDiscordSendResult(res, channelId, { kind: "card" });
 }
 
 async function resolveDiscordStructuredSendContext(
@@ -406,6 +421,7 @@ async function resolveDiscordStructuredSendContext(
   const rewrittenContent = content
     ? rewriteDiscordKnownMentions(content, {
         accountId: accountInfo.accountId,
+        mentionAliases: accountInfo.config.mentionAliases,
       })
     : undefined;
   return { rest, request, channelId, rewrittenContent };

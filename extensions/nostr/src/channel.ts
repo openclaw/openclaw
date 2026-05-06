@@ -4,6 +4,7 @@ import {
   createTopLevelChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-message";
 import {
   buildPassiveChannelStatusSummary,
   buildTrafficStatusSummary,
@@ -85,6 +86,11 @@ const nostrConfigAdapter = createTopLevelChannelConfigAdapter<ResolvedNostrAccou
       .filter(Boolean),
 });
 
+const nostrMessageAdapter = createChannelMessageAdapterFromOutbound({
+  id: "nostr",
+  outbound: nostrOutboundAdapter,
+});
+
 export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChannelPlugin({
   base: {
     id: "nostr",
@@ -118,6 +124,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChanne
         }),
     },
     messaging: {
+      targetPrefixes: ["nostr"],
       normalizeTarget: (target) => {
         // Strip nostr: prefix if present
         const cleaned = target.trim().replace(/^nostr:/i, "");
@@ -136,6 +143,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChanne
       },
       resolveOutboundSessionRoute: (params) => resolveNostrOutboundSessionRoute(params),
     },
+    message: nostrMessageAdapter,
     status: {
       ...createComputedAccountStatusAdapter<ResolvedNostrAccount>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
@@ -204,5 +212,3 @@ export async function getNostrProfileState(accountId: string = DEFAULT_ACCOUNT_I
   }
   return bus.getProfileState();
 }
-
-export { getActiveNostrBuses, getNostrMetrics } from "./gateway.js";

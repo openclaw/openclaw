@@ -2,7 +2,7 @@
 summary: "Advanced setup and development workflows for OpenClaw"
 read_when:
   - Setting up a new machine
-  - You want “latest + greatest” without breaking your personal setup
+  - You want "latest + greatest" without breaking your personal setup
 title: "Setup"
 ---
 
@@ -22,12 +22,14 @@ Pick a setup workflow based on how often you want updates and whether you want t
 ## Prereqs (from source)
 
 - Node 24 recommended (Node 22 LTS, currently `22.14+`, still supported)
-- `pnpm` preferred (or Bun if you intentionally use the [Bun workflow](/install/bun))
-- Docker (optional; only for containerized setup/e2e — see [Docker](/install/docker))
+- `pnpm` required for source checkouts. OpenClaw loads bundled plugins from the
+  `extensions/*` pnpm workspace packages in dev mode, so root `npm install` does
+  not prepare the full source tree.
+- Docker (optional; only for containerized setup/e2e - see [Docker](/install/docker))
 
 ## Tailoring strategy (so updates do not hurt)
 
-If you want “100% tailored to me” _and_ easy updates, keep your customization in:
+If you want "100% tailored to me" _and_ easy updates, keep your customization in:
 
 - **Config:** `~/.openclaw/openclaw.json` (JSON/JSON5-ish)
 - **Workspace:** `~/.openclaw/workspace` (skills, prompts, memories; make it a private git repo)
@@ -44,7 +46,7 @@ From inside this repo, use the local CLI entry:
 openclaw setup
 ```
 
-If you don’t have a global install yet, run it via `pnpm openclaw setup` (or `bun run openclaw setup` if you are using the Bun workflow).
+If you don't have a global install yet, run it via `pnpm openclaw setup`.
 
 ## Run the Gateway from this repo
 
@@ -101,18 +103,12 @@ session and auto-attaches from interactive terminals. Non-interactive shells sta
 detached and print `tmux attach -t openclaw-gateway-watch-main`; use
 `OPENCLAW_GATEWAY_WATCH_ATTACH=0 pnpm gateway:watch` to keep an interactive run
 detached, or `pnpm gateway:watch:raw` for foreground watch mode. The watcher
-reloads on relevant source, config, and bundled-plugin metadata changes.
+reloads on relevant source, config, and bundled-plugin metadata changes. If the
+watched Gateway exits during startup, `gateway:watch` runs
+`openclaw doctor --fix --non-interactive` once and retries; set
+`OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR=0` to disable that dev-only repair pass.
 `pnpm openclaw setup` is the one-time local config/workspace initialization step for a fresh checkout.
 `pnpm gateway:watch` does not rebuild `dist/control-ui`, so rerun `pnpm ui:build` after `ui/` changes or use `pnpm ui:dev` while developing the Control UI.
-
-If you are intentionally using the Bun workflow, the equivalent commands are:
-
-```bash
-bun install
-# First run only (or after resetting local OpenClaw config/workspace)
-bun run openclaw setup
-bun run gateway:watch
-```
 
 ### 2) Point the macOS app at your running Gateway
 
@@ -123,7 +119,7 @@ In **OpenClaw.app**:
 
 ### 3) Verify
 
-- In-app Gateway status should read **“Using existing gateway …”**
+- In-app Gateway status should read **"Using existing gateway …"**
 - Or via CLI:
 
 ```bash
@@ -157,14 +153,14 @@ Use this when debugging auth or deciding what to back up:
 
 ## Updating (without wrecking your setup)
 
-- Keep `~/.openclaw/workspace` and `~/.openclaw/` as “your stuff”; don’t put personal prompts/config into the `openclaw` repo.
-- Updating source: `git pull` + your chosen package-manager install step (`pnpm install` by default; `bun install` for Bun workflow) + keep using the matching `gateway:watch` command.
+- Keep `~/.openclaw/workspace` and `~/.openclaw/` as "your stuff"; don't put personal prompts/config into the `openclaw` repo.
+- Updating source: `git pull` + `pnpm install` + keep using `pnpm gateway:watch`.
 
 ## Linux (systemd user service)
 
 Linux installs use a systemd **user** service. By default, systemd stops user
 services on logout/idle, which kills the Gateway. Onboarding attempts to enable
-lingering for you (may prompt for sudo). If it’s still off, run:
+lingering for you (may prompt for sudo). If it's still off, run:
 
 ```bash
 sudo loginctl enable-linger $USER

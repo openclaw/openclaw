@@ -131,6 +131,11 @@ const knownDeprecatedSurfaceMarkers = [
     marker: "@deprecated Broad compatibility barrel",
   },
   {
+    code: "legacy-root-sdk-import",
+    file: "src/plugin-sdk/compat.ts",
+    marker: "@deprecated Use `openclaw/plugin-sdk/channel-message`.",
+  },
+  {
     code: "channel-route-key-aliases",
     file: "src/plugin-sdk/channel-route.ts",
     marker: "channelRouteIdentityKey",

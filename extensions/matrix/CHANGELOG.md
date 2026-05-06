@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026.5.4
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.3
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.2
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
 ## Unreleased
 
 ### Changes
@@ -192,7 +210,7 @@ collapsed here.
 ### Fixes
 
 - Plugins/bundled runtimes: ship bundled plugin runtime sidecars like WhatsApp `light-runtime-api.js`, Matrix `runtime-api.js`, and other plugin runtime entry files in the npm package again, so global installs stop failing on missing bundled plugin runtime surfaces.
-- Plugins/Matrix: avoid duplicate `resolveMatrixAccountStringValues` runtime-api exports under Jiti so bundled Matrix installs no longer crash at startup with `Cannot redefine property: resolveMatrixAccountStringValues`. Fixes #52909 and #52891. Thanks @vincentkoc.
+- Plugins/Matrix: avoid duplicate `resolveMatrixAccountStringValues` runtime-api exports under source loaders so bundled Matrix installs no longer crash at startup with `Cannot redefine property: resolveMatrixAccountStringValues`. Fixes #52909 and #52891. Thanks @vincentkoc.
 
 ## 2026.3.22
 

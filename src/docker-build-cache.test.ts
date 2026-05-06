@@ -6,9 +6,9 @@ import { beforeAll, describe, expect, it } from "vitest";
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePaths = [
   "Dockerfile",
-  "Dockerfile.sandbox",
-  "Dockerfile.sandbox-browser",
-  "Dockerfile.sandbox-common",
+  "scripts/docker/sandbox/Dockerfile",
+  "scripts/docker/sandbox/Dockerfile.browser",
+  "scripts/docker/sandbox/Dockerfile.common",
   "scripts/docker/cleanup-smoke/Dockerfile",
   "scripts/docker/install-sh-smoke/Dockerfile",
   "scripts/docker/install-sh-e2e/Dockerfile",
@@ -85,7 +85,7 @@ describe("docker build cache layout", () => {
   });
 
   it("does not leave empty shell continuation lines in sandbox-common", async () => {
-    const dockerfile = await readRepoFile("Dockerfile.sandbox-common");
+    const dockerfile = await readRepoFile("scripts/docker/sandbox/Dockerfile.common");
     expect(dockerfile).not.toContain("apt-get install -y --no-install-recommends ${PACKAGES} \\");
     expect(dockerfile).toContain(
       'RUN if [ "${INSTALL_PNPM}" = "1" ]; then npm install -g pnpm; fi',
@@ -113,6 +113,11 @@ describe("docker build cache layout", () => {
     expect(dockerfile).toContain(
       "npm install -g --prefix /tmp/openclaw-prefix /tmp/openclaw-current.tgz --no-fund --no-audit",
     );
+    expect(dockerfile).toContain(
+      "cp -a /tmp/openclaw-prefix/lib/node_modules/. /app/node_modules/",
+    );
+    expect(dockerfile).toContain("rm -rf /app/node_modules/openclaw");
+    expect(dockerfile).toContain("ln -sf /app /app/node_modules/openclaw");
   });
 
   it("copies manifests before install in the qr-import image", async () => {

@@ -4,7 +4,6 @@ import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agen
 import { resolveModelAuthMode } from "../agents/model-auth.js";
 import {
   buildModelAliasIndex,
-  isCliProvider,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
@@ -33,7 +32,7 @@ import {
   type SessionScope,
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readLatestSessionUsageFromTranscript } from "../gateway/session-utils.fs.js";
+import { readRecentSessionUsageFromTranscript } from "../gateway/session-utils.fs.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import {
@@ -47,7 +46,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import {
   estimateUsageCost,
@@ -56,6 +54,7 @@ import {
   resolveModelCostConfig,
 } from "../utils/usage-format.js";
 import { VERSION } from "../version.js";
+import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
 import { formatFastModeLabel } from "./status-labels.js";
 
@@ -97,6 +96,7 @@ export type StatusArgs = {
   activeModelAuth?: string;
   usageLine?: string;
   timeLine?: string;
+  uptimeLine?: string;
   queue?: QueueStatus;
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
   subagentsLine?: string;
@@ -198,51 +198,6 @@ function resolveExecutionLabel(
   return `${runtime}/${sandboxMode}`;
 }
 
-const AGENT_RUNTIME_LABELS: Readonly<Record<string, string>> = {
-  pi: "OpenClaw Pi Default",
-  codex: "OpenAI Codex",
-  "codex-cli": "OpenAI Codex",
-  "claude-cli": "Claude CLI",
-  "google-gemini-cli": "Gemini CLI",
-};
-
-function resolveAgentRuntimeLabel(
-  args: Pick<StatusArgs, "config" | "sessionEntry" | "resolvedHarness"> & {
-    fallbackProvider?: string;
-  },
-): string {
-  const acpAgentRaw = normalizeOptionalString(args.sessionEntry?.acp?.agent);
-  const acpAgent = acpAgentRaw ? sanitizeTerminalText(acpAgentRaw) : undefined;
-  if (acpAgent) {
-    const backendRaw = normalizeOptionalString(args.sessionEntry?.acp?.backend);
-    const backend = backendRaw ? sanitizeTerminalText(backendRaw) : undefined;
-    return backend ? `${acpAgent} (acp/${backend})` : `${acpAgent} (acp)`;
-  }
-
-  const runtimeRaw =
-    normalizeOptionalString(args.resolvedHarness) ??
-    normalizeOptionalString(args.sessionEntry?.agentRuntimeOverride) ??
-    normalizeOptionalString(args.sessionEntry?.agentHarnessId);
-  const runtime = normalizeOptionalLowercaseString(runtimeRaw);
-  if (runtime && runtime !== "auto" && runtime !== "default") {
-    return AGENT_RUNTIME_LABELS[runtime] ?? sanitizeTerminalText(runtimeRaw ?? runtime);
-  }
-
-  const providerRaw =
-    normalizeOptionalString(args.sessionEntry?.modelProvider) ??
-    normalizeOptionalString(args.sessionEntry?.providerOverride) ??
-    normalizeOptionalString(args.fallbackProvider);
-  const provider = providerRaw ? sanitizeTerminalText(providerRaw) : undefined;
-  if (provider && isCliProvider(provider, args.config)) {
-    return (
-      AGENT_RUNTIME_LABELS[normalizeOptionalLowercaseString(providerRaw) ?? ""] ??
-      `${provider} (cli)`
-    );
-  }
-
-  return AGENT_RUNTIME_LABELS.pi;
-}
-
 const formatTokens = (total: number | null | undefined, contextTokens: number | null) => {
   const ctx = contextTokens ?? null;
   if (total == null) {
@@ -325,11 +280,12 @@ const readUsageFromSessionLog = (
   }
 
   try {
-    const snapshot = readLatestSessionUsageFromTranscript(
+    const snapshot = readRecentSessionUsageFromTranscript(
       sessionId,
       storePath,
       sessionEntry?.sessionFile,
       agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined),
+      256 * 1024,
     );
     if (!snapshot) {
       return undefined;
@@ -960,6 +916,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   return [
     versionLine,
     args.timeLine,
+    args.uptimeLine,
     modelLine,
     configuredFallbacksLine,
     fallbackLine,

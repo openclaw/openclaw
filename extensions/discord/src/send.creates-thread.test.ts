@@ -12,6 +12,7 @@ vi.mock("openclaw/plugin-sdk/web-media", async () => {
 let addRoleDiscord: typeof import("./send.js").addRoleDiscord;
 let banMemberDiscord: typeof import("./send.js").banMemberDiscord;
 let createThreadDiscord: typeof import("./send.js").createThreadDiscord;
+let DiscordThreadInitialMessageError: typeof import("./send.js").DiscordThreadInitialMessageError;
 let listGuildEmojisDiscord: typeof import("./send.js").listGuildEmojisDiscord;
 let listThreadsDiscord: typeof import("./send.js").listThreadsDiscord;
 let reactMessageDiscord: typeof import("./send.js").reactMessageDiscord;
@@ -60,6 +61,7 @@ beforeAll(async () => {
     addRoleDiscord,
     banMemberDiscord,
     createThreadDiscord,
+    DiscordThreadInitialMessageError,
     listGuildEmojisDiscord,
     listThreadsDiscord,
     reactMessageDiscord,
@@ -235,6 +237,32 @@ describe("sendMessageDiscord", () => {
     );
   });
 
+  it("keeps created non-forum thread details when initial message send fails", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    getMock.mockResolvedValue({ type: ChannelType.GuildText });
+    postMock
+      .mockResolvedValueOnce({ id: "t1", name: "thread", type: ChannelType.PublicThread })
+      .mockRejectedValueOnce(new Error("missing access"));
+
+    let thrown: unknown;
+    try {
+      await createThreadDiscord(
+        "chan1",
+        { name: "thread", content: "Hello thread!" },
+        discordClientOpts(rest),
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(DiscordThreadInitialMessageError);
+    expect(thrown).toMatchObject({
+      name: "DiscordThreadInitialMessageError",
+      initialMessageError: "missing access",
+      thread: { id: "t1", name: "thread", type: ChannelType.PublicThread },
+    });
+  });
+
   it("sends initial message for message-attached threads with content", async () => {
     const { rest, getMock, postMock } = makeDiscordRest();
     postMock.mockResolvedValue({ id: "t1" });
@@ -406,7 +434,10 @@ describe("sendStickerDiscord", () => {
       token: "t",
       content: "hiya",
     });
-    expect(res).toEqual({ messageId: "msg1", channelId: "789" });
+    expect(res).toMatchObject({ messageId: "msg1", channelId: "789" });
+    expect(res.receipt.parts[0]).toEqual(
+      expect.objectContaining({ platformMessageId: "msg1", kind: "card" }),
+    );
     expect(postMock).toHaveBeenCalledWith(
       Routes.channelMessages("789"),
       expect.objectContaining({
@@ -439,7 +470,10 @@ describe("sendPollDiscord", () => {
         token: "t",
       },
     );
-    expect(res).toEqual({ messageId: "msg1", channelId: "789" });
+    expect(res).toMatchObject({ messageId: "msg1", channelId: "789" });
+    expect(res.receipt.parts[0]).toEqual(
+      expect.objectContaining({ platformMessageId: "msg1", kind: "card" }),
+    );
     expect(postMock).toHaveBeenCalledWith(
       Routes.channelMessages("789"),
       expect.objectContaining({
@@ -520,9 +554,13 @@ describe("retry rate limits", () => {
         retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 1000, jitter: 0 },
       });
 
-      await expect(promise).resolves.toEqual({
+      await expect(promise).resolves.toMatchObject({
         messageId: "msg1",
         channelId: "789",
+        receipt: expect.objectContaining({
+          primaryPlatformMessageId: "msg1",
+          platformMessageIds: ["msg1"],
+        }),
       });
       expect(setTimeoutSpy.mock.calls[0]?.[1]).toBe(1);
     } finally {
@@ -547,14 +585,32 @@ describe("retry rate limits", () => {
     expect(postMock).toHaveBeenCalledTimes(2);
   });
 
-  it("does not retry non-rate-limit errors", async () => {
+  it("does not retry permanent non-rate-limit errors", async () => {
     const { rest, postMock } = makeDiscordRest();
-    postMock.mockRejectedValueOnce(new Error("network error"));
+    postMock.mockRejectedValueOnce(new Error("invalid request"));
 
     await expect(
       sendMessageDiscord("channel:789", "hello", discordClientOpts(rest)),
-    ).rejects.toThrow("network error");
+    ).rejects.toThrow("invalid request");
     expect(postMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries transient network errors", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "789" });
+
+    const result = await sendMessageDiscord("channel:789", "hello", {
+      cfg: DISCORD_TEST_CFG,
+      rest,
+      token: "t",
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+
+    expect(result).toMatchObject({ messageId: "msg1", channelId: "789" });
+    expect(result.receipt.platformMessageIds).toEqual(["msg1"]);
+    expect(postMock).toHaveBeenCalledTimes(2);
   });
 
   it("retries reactions on rate limits", async () => {

@@ -5,13 +5,6 @@ export type DeliveryProgress = {
   hasDelivered: boolean;
 };
 
-export function createDeliveryProgress(): DeliveryProgress {
-  return {
-    hasReplied: false,
-    hasDelivered: false,
-  };
-}
-
 export function resolveReplyToForSend(params: {
   replyToId?: number;
   replyToMode: ReplyToMode;
@@ -28,7 +21,7 @@ export function markReplyApplied(progress: DeliveryProgress, replyToId?: number)
   }
 }
 
-export function markDelivered(progress: DeliveryProgress): void {
+function markDelivered(progress: DeliveryProgress): void {
   progress.hasDelivered = true;
 }
 

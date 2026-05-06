@@ -8,8 +8,8 @@ import { createGatewayHttpServer } from "./server-http.js";
 import { createHooksRequestHandler } from "./server/hooks-request-handler.js";
 import { withTempConfig } from "./test-temp-config.js";
 
-export type GatewayHttpServer = ReturnType<typeof createGatewayHttpServer>;
-export type GatewayServerOptions = Partial<Parameters<typeof createGatewayHttpServer>[0]>;
+type GatewayHttpServer = ReturnType<typeof createGatewayHttpServer>;
+type GatewayServerOptions = Partial<Parameters<typeof createGatewayHttpServer>[0]>;
 type HooksHandlerDeps = Parameters<typeof createHooksRequestHandler>[0];
 
 const responseEndPromises = new WeakMap<ServerResponse, Promise<void>>();
@@ -107,11 +107,22 @@ export async function dispatchRequest(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
+  let timeout: NodeJS.Timeout | undefined;
   server.emit("request", req, res);
-  await Promise.race([
-    responseEndPromises.get(res) ?? new Promise((resolve) => setImmediate(resolve)),
-    new Promise((resolve) => setTimeout(resolve, 2_000)),
-  ]);
+  try {
+    await Promise.race([
+      responseEndPromises.get(res) ?? new Promise((resolve) => setImmediate(resolve)),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`gateway test request timed out: ${req.method ?? "GET"} ${req.url}`));
+        }, 15_000);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 export async function withGatewayTempConfig(
@@ -221,7 +232,7 @@ export function createHooksHandler(
   });
 }
 
-export type RouteVariant = {
+type RouteVariant = {
   label: string;
   path: string;
 };

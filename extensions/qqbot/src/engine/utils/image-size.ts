@@ -10,13 +10,13 @@ import type { SsrfPolicyConfig } from "../adapter/types.js";
 import { formatErrorMessage } from "./format.js";
 import { debugLog } from "./log.js";
 
-export interface ImageSize {
+interface ImageSize {
   width: number;
   height: number;
 }
 
 /** Default dimensions used when probing fails. */
-export const DEFAULT_IMAGE_SIZE: ImageSize = { width: 512, height: 512 };
+const DEFAULT_IMAGE_SIZE: ImageSize = { width: 512, height: 512 };
 
 /**
  * Parse image dimensions from the PNG header.
@@ -199,7 +199,7 @@ export async function getImageSizeFromUrl(
 }
 
 /** Parse image dimensions from a Base64 data URL. */
-export function getImageSizeFromDataUrl(dataUrl: string): ImageSize | null {
+function getImageSizeFromDataUrl(dataUrl: string): ImageSize | null {
   try {
     // Format: data:image/png;base64,xxxxx
     const matches = dataUrl.match(/^data:image\/[^;]+;base64,(.+)$/);

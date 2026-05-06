@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { CallMode } from "../config.js";
+import {
+  resolveVoiceCallEffectiveConfig,
+  resolveVoiceCallSessionKey,
+  type CallMode,
+} from "../config.js";
 import { resolvePreferredTtsVoice } from "../tts-provider-voice.js";
 import {
   type EndReason,
@@ -119,6 +123,7 @@ export async function initiateCall(
   const initialMessage = opts.message;
   const mode = opts.mode ?? ctx.config.outbound.defaultMode;
   const dtmfSequence = opts.dtmfSequence;
+  const requesterSessionKey = opts.requesterSessionKey?.trim();
   if (dtmfSequence) {
     const validationError = validateDtmfDigits(dtmfSequence);
     if (validationError) {
@@ -162,13 +167,19 @@ export async function initiateCall(
     state: "initiated",
     from,
     to,
-    sessionKey,
+    sessionKey: resolveVoiceCallSessionKey({
+      config: ctx.config,
+      callId,
+      phone: to,
+      explicitSessionKey: sessionKey,
+    }),
     startedAt: Date.now(),
     transcript: [],
     processedEventIds: [],
     metadata: {
       ...(initialMessage && { initialMessage }),
       mode,
+      ...(requesterSessionKey ? { requesterSessionKey } : {}),
     },
   };
 
@@ -237,7 +248,11 @@ export async function speak(
     transitionState(call, "speaking");
     persistCallRecord(ctx.storePath, call);
 
-    const voice = resolvePreferredTtsVoice(ctx.config);
+    const numberRouteKey =
+      typeof call.metadata?.numberRouteKey === "string" ? call.metadata.numberRouteKey : call.to;
+    const voice = resolvePreferredTtsVoice(
+      resolveVoiceCallEffectiveConfig(ctx.config, numberRouteKey).config,
+    );
     await provider.playTts({
       callId,
       providerCallId,

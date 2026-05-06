@@ -44,6 +44,13 @@ function createSendMessageMock() {
   })) as unknown as typeof runtimeSendMessage;
 }
 
+const longChildCompletionOutput = [
+  "34/34 tests pass, clean build. Now docker repro:",
+  "Root cause: the requester's announce delivery accepted a prefix-only assistant payload as delivered.",
+  "PR: https://github.com/openclaw/openclaw/pull/12345",
+  "Verification: pnpm test src/agents/subagent-announce-delivery.test.ts passed with the regression enabled.",
+].join("\n");
+
 async function deliverSlackThreadAnnouncement(params: {
   callGateway: typeof runtimeCallGateway;
   isActive: boolean;
@@ -53,6 +60,7 @@ async function deliverSlackThreadAnnouncement(params: {
   queueEmbeddedPiMessage?: (sessionId: string, message: string) => boolean;
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
+  sourceTool?: string;
 }) {
   __testing.setDepsForTest({
     callGateway: params.callGateway,
@@ -81,6 +89,7 @@ async function deliverSlackThreadAnnouncement(params: {
     bestEffortDeliver: true,
     directIdempotencyKey: params.directIdempotencyKey,
     internalEvents: params.internalEvents,
+    sourceTool: params.sourceTool,
   });
 }
 
@@ -88,6 +97,7 @@ async function deliverDiscordDirectMessageCompletion(params: {
   callGateway: typeof runtimeCallGateway;
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
+  sourceTool?: string;
 }) {
   const origin = {
     channel: "discord",
@@ -118,6 +128,7 @@ async function deliverDiscordDirectMessageCompletion(params: {
     bestEffortDeliver: true,
     directIdempotencyKey: "announce-dm-fallback-empty",
     internalEvents: params.internalEvents,
+    sourceTool: params.sourceTool,
   });
 }
 
@@ -178,6 +189,7 @@ async function deliverSlackChannelAnnouncement(params: {
   queueEmbeddedPiMessage?: (sessionId: string, message: string) => boolean;
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
+  sourceTool?: string;
 }) {
   const origin = {
     channel: "slack",
@@ -212,6 +224,7 @@ async function deliverSlackChannelAnnouncement(params: {
     bestEffortDeliver: true,
     directIdempotencyKey: params.directIdempotencyKey,
     internalEvents: params.internalEvents,
+    sourceTool: params.sourceTool,
   });
 }
 
@@ -583,6 +596,272 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("uses direct fallback when announce-agent delivery returns only a child-result prefix", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "34/34 tests pass, clean build. Now docker repro:" }],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-4",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-thread-fallback-prefix",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "thread completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: longChildCompletionOutput,
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct-thread-fallback",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: longChildCompletionOutput,
+        idempotencyKey: "announce-thread-fallback-prefix",
+      }),
+    );
+  });
+
+  it("uses direct fallback when announce-agent delivery returns a word-boundary child-result prefix", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "34/34 tests pass, clean build. Now docker repro" }],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-4",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-thread-fallback-word-prefix",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "thread completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: longChildCompletionOutput,
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct-thread-fallback",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: longChildCompletionOutput,
+        idempotencyKey: "announce-thread-fallback-word-prefix",
+      }),
+    );
+  });
+
+  it("uses direct fallback when announce-agent delivery returns a mid-word child-result prefix", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "34/34 tests pass, clean build. Now dock" }],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-4",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-thread-fallback-midword-prefix",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "thread completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: longChildCompletionOutput,
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct-thread-fallback",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: longChildCompletionOutput,
+        idempotencyKey: "announce-thread-fallback-midword-prefix",
+      }),
+    );
+  });
+
+  it("keeps all grouped child results in direct completion fallback", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-4",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-thread-fallback-grouped-results",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:first",
+          childSessionId: "child-session-1",
+          announceType: "subagent task",
+          taskLabel: "first task",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "first child result",
+          replyInstruction: "Summarize the result.",
+        },
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:second",
+          childSessionId: "child-session-2",
+          announceType: "subagent task",
+          taskLabel: "second task",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "second child result",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct-thread-fallback",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "first task:\nfirst child result\n\nsecond task:\nsecond child result",
+        idempotencyKey: "announce-thread-fallback-grouped-results",
+      }),
+    );
+  });
+
+  it("keeps concise requester rewrites primary even when child output is long", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "Tests passed and the PR is ready for review." }],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-4",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-thread-rewrite-primary",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "thread completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: longChildCompletionOutput,
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct",
+      }),
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps copied complete-sentence requester summaries primary", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "34/34 tests pass, clean build." }],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-4",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-thread-copied-summary-primary",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "thread completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: longChildCompletionOutput,
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct",
+      }),
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("uses a direct thread fallback when announce-agent delivery fails", async () => {
     const callGateway = vi.fn(async () => {
       throw new Error("UNAVAILABLE: gateway lost final output");
@@ -829,6 +1108,263 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
+  it("does not fallback when announce-agent delivered media through the message tool", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        didSendViaMessagingTool: false,
+        messagingToolSentMediaUrls: ["/tmp/generated-night-drive.mp3"],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+          mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          replyInstruction: "Deliver the generated music through the message tool.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct",
+      }),
+    );
+    expect(callGateway).toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("delivers generated media completions through the announce agent in automatic DMs", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [
+          {
+            text: "The track is ready.",
+            mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      sourceTool: "music_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+          mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          replyInstruction:
+            "Tell the user the music is ready. If visible source delivery requires the message tool, send it there with the generated media attached.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct",
+      }),
+    );
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          deliver: true,
+          channel: "discord",
+          accountId: "acct-1",
+          to: "dm:U123",
+          threadId: undefined,
+        }),
+      }),
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("falls back to direct send for generated media completions in default group routes", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [
+          {
+            text: "The track is ready.",
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-channel",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-media-message-tool",
+      sourceTool: "music_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+          mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          replyInstruction:
+            "Tell the user the music is ready. If visible source delivery requires the message tool, send it there with the generated media attached.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct-fallback",
+      }),
+    );
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          deliver: false,
+          channel: "slack",
+          accountId: "acct-1",
+          to: "channel:C123",
+          threadId: undefined,
+        }),
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        threadId: undefined,
+        content: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+        requesterSessionKey: "agent:main:slack:channel:C123",
+        bestEffort: true,
+        idempotencyKey: "announce-channel-media-message-tool",
+      }),
+    );
+  });
+
+  it("does not fallback for generated media group completions when message tool evidence exists", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        didSendViaMessagingTool: false,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            accountId: "acct-1",
+            to: "channel:C123",
+            text: "The track is ready.",
+            mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-channel",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-media-message-tool-evidence",
+      sourceTool: "music_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+          mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          replyInstruction: "Deliver the generated music through the message tool.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct",
+      }),
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not fallback while generated media announce-agent run is still pending", async () => {
+    const callGateway = createGatewayMock({
+      runId: "video_generate:task-123:ok",
+      status: "accepted",
+      acceptedAt: Date.now(),
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-channel",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-media-pending",
+      sourceTool: "video_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "video_generation",
+          childSessionKey: "video_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "video generation task",
+          taskLabel: "lobster trailer",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 video.\nMEDIA:/tmp/lobster-trailer.mp4",
+          mediaUrls: ["/tmp/lobster-trailer.mp4"],
+          replyInstruction: "Deliver the generated video through the message tool.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct",
+      }),
+    );
+    expect(callGateway).toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("uses a direct channel fallback when announce-agent returns no visible output", async () => {
     const callGateway = createGatewayMock({
       result: {
@@ -1008,5 +1544,34 @@ describe("extractThreadCompletionFallbackText", () => {
         },
       ]),
     ).toBe("sample task");
+  });
+
+  it("combines multiple task completion results for grouped announce fallback", () => {
+    expect(
+      extractThreadCompletionFallbackText([
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:first",
+          announceType: "subagent task",
+          taskLabel: "first task",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "first child result",
+          replyInstruction: "Summarize the result.",
+        },
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:second",
+          announceType: "subagent task",
+          taskLabel: "second task",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "second child result",
+          replyInstruction: "Summarize the result.",
+        },
+      ]),
+    ).toBe("first task:\nfirst child result\n\nsecond task:\nsecond child result");
   });
 });
