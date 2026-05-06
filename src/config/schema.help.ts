@@ -1508,6 +1508,12 @@ export const FIELD_HELP: Record<string, string> = {
   "session.maintenance.highWaterBytes":
     "Target size after disk-budget cleanup (high-water mark). Defaults to 80% of maxDiskBytes; set explicitly for tighter reclaim behavior on constrained disks.",
   cron: "Global scheduler settings for stored cron jobs, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling job volume or integrating external webhook receivers.",
+  tasks:
+    "Task registry maintenance settings. Controls how long terminal task records (cron runs, CLI invocations, subagent runs) are retained before pruning, and how often the maintenance sweep runs. Lower retention reduces per-sweep CPU on installations with thousands of accumulated terminal tasks.",
+  "tasks.retentionMs":
+    "How long to retain terminal task records before pruning, in milliseconds. Default: 604800000 (7 days). The sweep walks every retained record once per cycle, so reducing this on large/long-lived installations directly reduces background CPU.",
+  "tasks.sweepIntervalMs":
+    "How often the task registry maintenance sweep runs, in milliseconds. Default: 60000 (one minute). Rarely needs tuning; raise to reduce sweep cadence under steady-state load, lower to clear pruned records sooner after they expire.",
   "cron.enabled":
     "Enables cron job execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all cron execution without deleting jobs.",
   "cron.store":

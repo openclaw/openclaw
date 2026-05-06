@@ -54,13 +54,16 @@ import {
   summarizeTaskAuditFindings,
 } from "./task-registry.audit.js";
 import type { TaskAuditSummary } from "./task-registry.audit.js";
+import {
+  applyTasksConfig,
+  getTaskRetentionMs,
+  getTaskSweepIntervalMs,
+} from "./task-registry.runtime-config.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary, TaskStatus } from "./task-registry.types.js";
 
 const log = createSubsystemLogger("tasks/task-registry-maintenance");
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
-const TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
-const TASK_SWEEP_INTERVAL_MS = 60_000;
 
 /**
  * Number of tasks to process before yielding to the event loop.
@@ -532,7 +535,7 @@ function shouldPruneTerminalTask(task: TaskRecord, now: number): boolean {
     return now >= task.cleanupAfter;
   }
   const terminalAt = task.endedAt ?? task.lastEventAt ?? task.createdAt;
-  return now - terminalAt >= TASK_RETENTION_MS;
+  return now - terminalAt >= getTaskRetentionMs();
 }
 
 function shouldStampCleanupAfter(task: TaskRecord): boolean {
@@ -541,7 +544,7 @@ function shouldStampCleanupAfter(task: TaskRecord): boolean {
 
 function resolveCleanupAfter(task: TaskRecord): number {
   const terminalAt = task.endedAt ?? task.lastEventAt ?? task.createdAt;
-  return terminalAt + TASK_RETENTION_MS;
+  return terminalAt + getTaskRetentionMs();
 }
 
 function getNormalizedTaskChildSessionKey(task: TaskRecord): string | undefined {
@@ -967,6 +970,22 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
   const recoveryHookRegistered = hasDetachedTaskRecoveryHook();
   let processed = 0;
   for (const task of tasks) {
+    // Fast skip: a terminal task that is already stamped, not yet due for
+    // cleanup, and not on the ACP runtime has no work this sweep. The bulk of
+    // a populated task store falls into this branch, so short-circuiting here
+    // avoids the downstream getTaskById clone and per-record checks.
+    if (
+      isTerminalTask(task) &&
+      typeof task.cleanupAfter === "number" &&
+      now < task.cleanupAfter &&
+      task.runtime !== "acp"
+    ) {
+      processed += 1;
+      if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
+        await yieldToEventLoop();
+      }
+      continue;
+    }
     const current = taskRegistryMaintenanceRuntime.getTaskById(task.taskId);
     if (!current) {
       continue;
@@ -1070,7 +1089,8 @@ export async function sweepTaskRegistry(): Promise<TaskRegistryMaintenanceSummar
   return runTaskRegistryMaintenance();
 }
 
-export function startTaskRegistryMaintenance() {
+export function startTaskRegistryMaintenance(cfg?: OpenClawConfig) {
+  applyTasksConfig(cfg?.tasks);
   taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
   deferredSweep = setTimeout(() => {
     deferredSweep = null;
@@ -1080,7 +1100,7 @@ export function startTaskRegistryMaintenance() {
   if (sweeper) {
     return;
   }
-  sweeper = setInterval(startScheduledSweep, TASK_SWEEP_INTERVAL_MS);
+  sweeper = setInterval(startScheduledSweep, getTaskSweepIntervalMs());
   sweeper.unref?.();
 }
 

@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   createManagedTaskFlow,
@@ -9,6 +14,12 @@ import {
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-registry.js";
+import {
+  DEFAULT_TASK_RETENTION_MS,
+  getTaskRetentionMs,
+  getTaskSweepIntervalMs,
+  resetTaskRegistryRuntimeConfigForTests,
+} from "../tasks/task-registry.runtime-config.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { tasksAuditCommand, tasksMaintenanceCommand } from "./tasks.js";
 
@@ -116,6 +127,31 @@ describe("tasks commands", () => {
         code: "stale_running",
         token: runningFlow.flowId,
       });
+    });
+  });
+
+  it("applies configured tasks.retentionMs to CLI maintenance", async () => {
+    await withTaskCommandStateDir(async () => {
+      resetTaskRegistryRuntimeConfigForTests();
+      // Sanity: no override yet, defaults are in effect.
+      expect(getTaskRetentionMs()).toBe(DEFAULT_TASK_RETENTION_MS);
+      const configured: OpenClawConfig = {
+        tasks: { retentionMs: 3_600_000, sweepIntervalMs: 30_000 },
+      } as OpenClawConfig;
+      setRuntimeConfigSnapshot(configured);
+      try {
+        const runtime = createRuntime();
+        await tasksMaintenanceCommand({ json: true, apply: false }, runtime);
+        // The CLI maintenance entry point must mirror the gateway scheduler
+        // path and apply tasks.* through the shared runtime-config seam,
+        // otherwise a separate CLI process would stamp `cleanupAfter` using
+        // the 7d default and disagree with the configured gateway.
+        expect(getTaskRetentionMs()).toBe(3_600_000);
+        expect(getTaskSweepIntervalMs()).toBe(30_000);
+      } finally {
+        clearRuntimeConfigSnapshot();
+        resetTaskRegistryRuntimeConfigForTests();
+      }
     });
   });
 

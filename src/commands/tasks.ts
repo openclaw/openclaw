@@ -34,6 +34,7 @@ import {
   reconcileInspectableTasks,
   reconcileTaskLookupToken,
 } from "../tasks/task-registry.reconcile.js";
+import { applyTasksConfig } from "../tasks/task-registry.runtime-config.js";
 import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
 import type { TaskNotifyPolicy, TaskRecord } from "../tasks/task-registry.types.js";
 import { isRich, theme } from "../terminal/theme.js";
@@ -55,6 +56,12 @@ function configureTaskMaintenanceFromConfig(): void {
   configureTaskRegistryMaintenance({
     cronStorePath: resolveCronStorePath(cfg.cron?.store),
   });
+  // Mirror the gateway scheduler path (`startTaskRegistryMaintenance(cfg)`)
+  // so manual `openclaw tasks maintenance` invocations honor the configured
+  // retention/sweep interval instead of falling back to defaults. Without
+  // this, a separate CLI process would stamp `cleanupAfter` using the 7d
+  // default and disagree with a gateway configured for a different value.
+  applyTasksConfig(cfg.tasks);
 }
 
 function truncate(value: string, maxChars: number) {

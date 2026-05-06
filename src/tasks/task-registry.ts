@@ -26,6 +26,7 @@ import {
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-runtime-internal.js";
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
+import { getTaskRetentionMs } from "./task-registry.runtime-config.js";
 import {
   getTaskRegistryObservers,
   getTaskRegistryStore,
@@ -49,7 +50,6 @@ import type {
 } from "./task-registry.types.js";
 
 const log = createSubsystemLogger("tasks/registry");
-const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
 const tasks = new Map<string, TaskRecord>();
 const taskDeliveryStates = new Map<string, TaskDeliveryState>();
@@ -682,14 +682,10 @@ function pickPreferredRunIdTask(matches: TaskRecord[]): TaskRecord | undefined {
 }
 
 function compareTasksNewestFirst(
-  left: Pick<TaskRecord, "createdAt"> & { insertionIndex?: number },
-  right: Pick<TaskRecord, "createdAt"> & { insertionIndex?: number },
+  left: Pick<TaskRecord, "createdAt">,
+  right: Pick<TaskRecord, "createdAt">,
 ): number {
-  const createdAtDiff = right.createdAt - left.createdAt;
-  if (createdAtDiff !== 0) {
-    return createdAtDiff;
-  }
-  return (right.insertionIndex ?? 0) - (left.insertionIndex ?? 0);
+  return right.createdAt - left.createdAt;
 }
 
 function findExistingTaskForCreate(params: {
@@ -982,7 +978,7 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
   const next = normalizeTaskTimestamps({ ...current, ...patch });
   if (isTerminalTaskStatus(next.status) && typeof next.cleanupAfter !== "number") {
     const terminalAt = next.endedAt ?? next.lastEventAt ?? Date.now();
-    next.cleanupAfter = terminalAt + DEFAULT_TASK_RETENTION_MS;
+    next.cleanupAfter = terminalAt + getTaskRetentionMs();
   }
   const sessionIndexChanged =
     normalizeOptionalString(current.ownerKey) !== normalizeOptionalString(next.ownerKey) ||
@@ -1585,7 +1581,7 @@ export function createTaskRecord(params: {
   });
   if (isTerminalTaskStatus(record.status) && typeof record.cleanupAfter !== "number") {
     record.cleanupAfter =
-      (record.endedAt ?? record.lastEventAt ?? record.createdAt) + DEFAULT_TASK_RETENTION_MS;
+      (record.endedAt ?? record.lastEventAt ?? record.createdAt) + getTaskRetentionMs();
   }
   tasks.set(taskId, record);
   upsertTaskDeliveryState({
@@ -1945,10 +1941,13 @@ export async function cancelTaskById(params: {
 
 export function listTaskRecords(): TaskRecord[] {
   ensureTaskRegistryReady();
-  return [...tasks.values()]
-    .map((task, insertionIndex) => Object.assign({}, cloneTaskRecord(task), { insertionIndex }))
-    .toSorted(compareTasksNewestFirst)
-    .map(({ insertionIndex: _, ...task }) => task);
+  // For records with equal createdAt the historical contract is
+  // "latest-inserted wins." Map iteration order is insertion order; reverse it
+  // so later inserts come first, then rely on Array.prototype.toSorted being
+  // stable (ES2019+) to keep that order for equal keys. This avoids the
+  // previous triple-clone (clone + insertionIndex, sort, strip) pattern —
+  // we now clone exactly once per record.
+  return [...tasks.values()].toReversed().map(cloneTaskRecord).toSorted(compareTasksNewestFirst);
 }
 
 export function hasActiveTaskForChildSessionKey(params: {
@@ -2009,20 +2008,19 @@ function listTasksFromIndex(index: Map<string, Set<string>>, key: string): TaskR
   if (!ids || ids.size === 0) {
     return [];
   }
-  return [...ids]
-    .map((taskId, insertionIndex) => {
-      const task = tasks.get(taskId);
-      return task ? Object.assign({}, cloneTaskRecord(task), { insertionIndex }) : null;
-    })
-    .filter(
-      (
-        task,
-      ): task is TaskRecord & {
-        insertionIndex: number;
-      } => Boolean(task),
-    )
-    .toSorted(compareTasksNewestFirst)
-    .map(({ insertionIndex: _, ...task }) => task);
+  // Resolve to TaskRecord clones, dropping ids whose underlying task has been
+  // removed. Reverse the index iteration so that for equal-createdAt records
+  // the latest-inserted wins after the stable sort below — matching the
+  // historical "newest first, latest insert breaks ties" contract.
+  const records: TaskRecord[] = [];
+  const idArray = [...ids];
+  for (let i = idArray.length - 1; i >= 0; i -= 1) {
+    const task = tasks.get(idArray[i]);
+    if (task) {
+      records.push(cloneTaskRecord(task));
+    }
+  }
+  return records.toSorted(compareTasksNewestFirst);
 }
 
 export function findLatestTaskForSessionKey(sessionKey: string): TaskRecord | undefined {
