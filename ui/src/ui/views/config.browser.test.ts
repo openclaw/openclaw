@@ -2,6 +2,7 @@ import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import type { ThemeMode, ThemeName } from "../theme.ts";
+import { translateConfigHelp, translateConfigLabel } from "./config-form.shared.ts";
 import { renderConfig, resetConfigViewStateForTests, type ConfigProps } from "./config.ts";
 
 describe("config view", () => {
@@ -435,6 +436,43 @@ describe("config view", () => {
       expect(text).not.toContain("Exec Approval Forwarding");
       expect(text).not.toContain("Approval Agent Filter");
       expect(text).not.toContain("advanced");
+    } finally {
+      await i18n.setLocale("en");
+    }
+  });
+
+  it("localizes Vietnamese settings labels across config sections", async () => {
+    await i18n.setLocale("vi");
+    try {
+      expect(translateConfigLabel("Native Commands")).toBe("Lệnh native");
+      expect(translateConfigLabel("Hook Mapping Deliver Reply")).toBe(
+        "Gửi phản hồi từ ánh xạ hook",
+      );
+      expect(translateConfigLabel("Browser Action Timeout (ms)")).toBe(
+        "Thời gian chờ thao tác trình duyệt (ms)",
+      );
+      expect(translateConfigLabel("Control UI Assets Root")).toBe("Gốc tài nguyên Control UI");
+      expect(translateConfigLabel("Assistant Avatar")).toBe("Ảnh đại diện trợ lý");
+      expect(translateConfigLabel("Enable Image Understanding")).toBe("Bật hiểu ảnh");
+      expect(translateConfigLabel("Audio Understanding Timeout (sec)")).toBe(
+        "Thời gian chờ hiểu âm thanh (giây)",
+      );
+
+      const browserHelp = translateConfigHelp(
+        "Default timeout in milliseconds for browser action requests before the client gives up waiting. Raise this when healthy waits or UI interactions exceed the default request budget.",
+      );
+      expect(browserHelp).toContain("thời gian chờ");
+      expect(browserHelp).toContain("tương tác UI");
+      expect(browserHelp).not.toContain("Default timeout");
+      expect(browserHelp).not.toContain("gives up waiting");
+
+      const imageHelp = translateConfigHelp(
+        "Enable image understanding so attached or referenced images can be interpreted into textual context. Disable if you need text-only operation or want to avoid image-processing costs.",
+      );
+      expect(imageHelp).toContain("Bật hiểu ảnh");
+      expect(imageHelp).toContain("chế độ chỉ văn bản");
+      expect(imageHelp).not.toContain("image understanding");
+      expect(imageHelp).not.toContain("text-only operation");
     } finally {
       await i18n.setLocale("en");
     }
