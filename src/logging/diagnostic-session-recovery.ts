@@ -73,7 +73,17 @@ export function recoveryOutcomeMutatesSessionState(
   if (!outcome) {
     return false;
   }
-  return outcome.status === "aborted" || outcome.status === "released";
+  return (
+    outcome.status === "aborted" ||
+    outcome.status === "released" ||
+    recoveryOutcomeClearsQueuedSessionState(outcome)
+  );
+}
+
+export function recoveryOutcomeClearsQueuedSessionState(
+  outcome: StuckSessionRecoveryOutcome,
+): boolean {
+  return outcome.status === "noop" && outcome.reason === "no_active_work";
 }
 
 export function recoveryOutcomeReleasedCount(outcome: StuckSessionRecoveryOutcome): number {

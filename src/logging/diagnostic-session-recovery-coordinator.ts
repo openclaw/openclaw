@@ -2,6 +2,7 @@ import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { markDiagnosticActivity as markActivity } from "./diagnostic-runtime.js";
 import type { SessionAttentionClassification } from "./diagnostic-session-attention.js";
 import {
+  recoveryOutcomeClearsQueuedSessionState,
   recoveryOutcomeMutatesSessionState,
   recoveryOutcomeReleasedCount,
   type StuckSessionRecoveryOutcome,
@@ -108,7 +109,10 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
   state.lastStuckWarnAgeMs = undefined;
   state.lastLongRunningWarnAgeMs = undefined;
   const released = recoveryOutcomeReleasedCount(params.outcome);
-  state.queueDepth = released > 0 ? 0 : Math.max(0, state.queueDepth - 1);
+  state.queueDepth =
+    released > 0 || recoveryOutcomeClearsQueuedSessionState(params.outcome)
+      ? 0
+      : Math.max(0, state.queueDepth - 1);
   emitDiagnosticEvent({
     type: "session.state",
     sessionId: state.sessionId,

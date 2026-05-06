@@ -9,6 +9,7 @@ import { getGatewayModelPricingCacheFingerprint } from "../gateway/model-pricing
 import { getCachedGatewayModelPricing } from "../gateway/model-pricing-cache.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { resolveUserPath } from "../utils.js";
 
 /**
  * A single tier in a tiered-pricing schedule.  Prices are expressed as
@@ -201,11 +202,21 @@ function buildProviderCostIndex(
   return entries;
 }
 
+function resolveModelsJsonCostPath(config?: OpenClawConfig): string {
+  const agentDirOverride =
+    process.env.OPENCLAW_AGENT_DIR?.trim() || process.env.PI_CODING_AGENT_DIR?.trim();
+  const agentDir = agentDirOverride
+    ? resolveUserPath(agentDirOverride)
+    : resolveDefaultAgentDir(config ?? {});
+  return path.join(agentDir, "models.json");
+}
+
 function loadModelsJsonCostIndex(options?: {
   allowPluginNormalization?: boolean;
+  config?: OpenClawConfig;
 }): Map<string, ModelCostConfig> {
   const useRawEntries = options?.allowPluginNormalization === false;
-  const modelsPath = path.join(resolveDefaultAgentDir({}), "models.json");
+  const modelsPath = resolveModelsJsonCostPath(options?.config);
   try {
     const stat = fs.statSync(modelsPath);
     if (
@@ -292,8 +303,10 @@ export function resolveModelCostConfigFingerprint(config?: OpenClawConfig): stri
       buildProviderCostIndex(config?.models?.providers, { allowPluginNormalization: false }),
     ),
     configuredNormalized: serializeCostIndex(buildProviderCostIndex(config?.models?.providers)),
-    modelsJsonRaw: serializeCostIndex(loadModelsJsonCostIndex({ allowPluginNormalization: false })),
-    modelsJsonNormalized: serializeCostIndex(loadModelsJsonCostIndex()),
+    modelsJsonRaw: serializeCostIndex(
+      loadModelsJsonCostIndex({ allowPluginNormalization: false, config }),
+    ),
+    modelsJsonNormalized: serializeCostIndex(loadModelsJsonCostIndex({ config })),
     gatewayPricing: getGatewayModelPricingCacheFingerprint(),
   });
 }
@@ -313,6 +326,7 @@ export function resolveModelCostConfig(params: {
   // synchronous and do not drag plugin/provider discovery into the hot path.
   const rawModelsJsonCost = loadModelsJsonCostIndex({
     allowPluginNormalization: false,
+    config: params.config,
   }).get(rawKey);
   if (rawModelsJsonCost) {
     return rawModelsJsonCost;
@@ -333,7 +347,7 @@ export function resolveModelCostConfig(params: {
   if (shouldUseNormalizedCostLookup(params)) {
     const key = toResolvedModelKey(params);
     if (key && key !== rawKey) {
-      const modelsJsonCost = loadModelsJsonCostIndex().get(key);
+      const modelsJsonCost = loadModelsJsonCostIndex({ config: params.config }).get(key);
       if (modelsJsonCost) {
         return modelsJsonCost;
       }
