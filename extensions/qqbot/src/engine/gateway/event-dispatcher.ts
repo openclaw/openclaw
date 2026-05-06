@@ -7,7 +7,7 @@
 
 import { recordKnownUser } from "../session/known-users.js";
 import type { InteractionEvent } from "../types.js";
-import { parseRefIndices } from "../utils/text-parsing.js";
+import { MSG_TYPE_QUOTE, parseRefIndices } from "../utils/text-parsing.js";
 import { readOptionalMessageSceneExt } from "./codec.js";
 import { GatewayEvent } from "./constants.js";
 import type { QueuedMessage } from "./message-queue.js";
@@ -66,7 +66,7 @@ export function dispatchEvent(
         content: ev.content,
         messageId: ev.id,
         timestamp: ev.timestamp,
-        attachments: ev.attachments,
+        attachments: resolveCurrentMessageAttachments(ev),
         refMsgIdx: refs.refMsgIdx,
         msgIdx: refs.msgIdx,
         msgType: ev.message_type,
@@ -165,7 +165,7 @@ function buildGroupQueuedMessage(
     messageId: ev.id,
     timestamp: ev.timestamp,
     groupOpenid: ev.group_openid,
-    attachments: ev.attachments,
+    attachments: resolveCurrentMessageAttachments(ev),
     refMsgIdx: refs.refMsgIdx,
     msgIdx: refs.msgIdx,
     msgType: ev.message_type,
@@ -174,4 +174,21 @@ function buildGroupQueuedMessage(
     mentions: ev.mentions,
     messageScene: ev.message_scene,
   };
+}
+
+function resolveCurrentMessageAttachments(event: {
+  attachments?: QueuedMessage["attachments"];
+  message_type?: number;
+  msg_elements?: Array<{ attachments?: QueuedMessage["attachments"] }>;
+}): QueuedMessage["attachments"] | undefined {
+  if (event.attachments?.length) {
+    return event.attachments;
+  }
+  if (event.message_type === MSG_TYPE_QUOTE) {
+    return undefined;
+  }
+
+  const elementAttachments =
+    event.msg_elements?.flatMap((element) => element.attachments ?? []) ?? [];
+  return elementAttachments.length > 0 ? elementAttachments : undefined;
 }
