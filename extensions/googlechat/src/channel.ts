@@ -35,7 +35,6 @@ import {
   resolveGoogleChatConfigAccessorAccount,
   resolveDefaultGoogleChatAccountId,
   resolveGoogleChatAccount,
-  listGoogleChatAccountIds,
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,
   type ChannelStatusIssue,
