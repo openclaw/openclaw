@@ -470,6 +470,7 @@ jobs:
 
           workdir="$GITHUB_WORKSPACE"
           auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::${auth_header}"
 
           reset_checkout_dir() {
             mkdir -p "$workdir"
@@ -668,6 +669,7 @@ jobs:
 
           workdir="$GITHUB_WORKSPACE"
           auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::${auth_header}"
 
           reset_checkout_dir() {
             mkdir -p "$workdir"
@@ -763,6 +765,7 @@ jobs:
 
           workdir="$GITHUB_WORKSPACE"
           auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::${auth_header}"
 
           reset_checkout_dir() {
             mkdir -p "$workdir"
@@ -869,6 +872,7 @@ jobs:
 
           workdir="$GITHUB_WORKSPACE"
           auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::${auth_header}"
 
           reset_checkout_dir() {
             mkdir -p "$workdir"
@@ -972,6 +976,7 @@ jobs:
 
           workdir="$GITHUB_WORKSPACE"
           auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::${auth_header}"
 
           reset_checkout_dir() {
             mkdir -p "$workdir"
@@ -1069,6 +1074,7 @@ jobs:
 
           workdir="$GITHUB_WORKSPACE"
           auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::${auth_header}"
 
           reset_checkout_dir() {
             mkdir -p "$workdir"
@@ -1149,6 +1155,7 @@ jobs:
 
           workdir="$GITHUB_WORKSPACE"
           auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::${auth_header}"
 
           reset_checkout_dir() {
             mkdir -p "$workdir"
@@ -1339,6 +1346,7 @@ jobs:
 
           workdir="$GITHUB_WORKSPACE"
           auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::${auth_header}"
 
           reset_checkout_dir() {
             mkdir -p "$workdir"
@@ -1499,6 +1507,7 @@ jobs:
 
           workdir="$GITHUB_WORKSPACE"
           auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::${auth_header}"
 
           reset_checkout_dir() {
             mkdir -p "$workdir"
@@ -1698,6 +1707,7 @@ jobs:
 
           workdir="$GITHUB_WORKSPACE"
           auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::${auth_header}"
 
           reset_checkout_dir() {
             mkdir -p "$workdir"
@@ -2051,6 +2061,7 @@ jobs:
 
           workdir="$GITHUB_WORKSPACE"
           auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::${auth_header}"
 
           reset_checkout_dir() {
             mkdir -p "$workdir"
