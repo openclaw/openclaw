@@ -699,7 +699,10 @@ describe("subagent announce formatting", () => {
       sourceTool: "subagent_announce",
     });
     expect(msg).toContain("final answer: 2");
-    expect(msg).not.toContain("✅ Subagent");
+    expect(msg).not.toContain("️ Subagent");
+    // Branch 2 (expectsCompletionMessage) must include SILENT_REPLY_TOKEN guard to prevent duplicates.
+    expect(msg).toContain(SILENT_REPLY_TOKEN);
+    expect(msg).toContain("already delivered the substance of this result");
   });
 
   it("keeps completion delivery enabled for extension channels captured from requester origin", async () => {
