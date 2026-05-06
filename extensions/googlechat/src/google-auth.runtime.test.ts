@@ -108,6 +108,40 @@ describe("googlechat google auth runtime", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("preserves Request properties when gaxios passes a Request object", async () => {
+    const release = vi.fn();
+    const injectedFetch = vi.fn(globalThis.fetch);
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response("ok", { status: 200 }),
+      release,
+    });
+
+    const guardedFetch = createGoogleAuthFetch(injectedFetch);
+    const request = new Request("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: "grant_type=refresh_token",
+    });
+
+    const response = await guardedFetch(request);
+
+    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://oauth2.googleapis.com/token",
+        init: expect.objectContaining({
+          method: "POST",
+          body: expect.anything(), // body is a ReadableStream in Request
+        }),
+      }),
+    );
+    // Native Headers in init should have the expected values
+    const callInit = mocks.fetchWithSsrFGuard.mock.calls[0]?.[0].init;
+    expect(callInit.headers.get("Content-Type")).toBe("application/x-www-form-urlencoded");
+
+    await expect(response.text()).resolves.toBe("ok");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("lets the guard resolve the ambient runtime fetch when no override is injected", async () => {
     const release = vi.fn();
     mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
@@ -379,9 +413,11 @@ describe("googlechat google auth runtime", () => {
 
     const normalized = __testing.normalizeGoogleAuthPreparedRequestHeaders(config);
 
-    expect(normalized.headers).toBeInstanceOf(Headers);
-    expect(normalized.headers.has("x-test")).toBe(true);
-    expect(normalized.headers.get("x-test")).toBe("1");
+    expect(normalized.headers).not.toBeInstanceOf(Headers);
+    expect(Object.prototype.hasOwnProperty.call(normalized.headers, "get")).toBe(false);
+    expect(typeof (normalized.headers as any).get).toBe("function");
+    expect((normalized.headers as any).get("x-test")).toBe("1");
+    expect((normalized.headers as any).get("X-TEST")).toBe("1");
   });
 
   it("normalizes Google auth response headers before upstream cache-control reads", () => {

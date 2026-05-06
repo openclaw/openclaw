@@ -74,11 +74,82 @@ let googleAuthRuntimePromise: Promise<GoogleAuthRuntime> | null = null;
 
 function normalizeGoogleAuthPreparedRequestHeaders<T extends GoogleAuthRequestWithUnknownHeaders>(
   config: T,
-): T & { headers: Headers } {
-  if (!(config.headers instanceof Headers)) {
-    config.headers = new Headers(config.headers as HeadersInit | undefined);
+): T {
+  if (config.headers && !(config.headers instanceof Headers)) {
+    const headers = config.headers as Record<string, unknown>;
+
+    const setHeader = (name: string, value: string): void => {
+      const lowerName = name.toLowerCase();
+      for (const key of Object.keys(headers)) {
+        if (key.toLowerCase() === lowerName) {
+          delete headers[key];
+        }
+      }
+      headers[name] = value;
+    };
+
+    const getHeader = (name: string): string | null => {
+      const lowerName = name.toLowerCase();
+      for (const key of Object.keys(headers)) {
+        if (key.toLowerCase() === lowerName) {
+          return String(headers[key]);
+        }
+      }
+      return null;
+    };
+
+    const hasHeader = (name: string): boolean => {
+      return getHeader(name) !== null;
+    };
+
+    const deleteHeader = (name: string): void => {
+      const lowerName = name.toLowerCase();
+      for (const key of Object.keys(headers)) {
+        if (key.toLowerCase() === lowerName) {
+          delete headers[key];
+        }
+      }
+    };
+
+    if (
+      typeof (headers as any).get !== "function" ||
+      typeof (headers as any).set !== "function" ||
+      typeof (headers as any).has !== "function" ||
+      typeof (headers as any).delete !== "function"
+    ) {
+      const proto = Object.create(Object.getPrototypeOf(headers));
+      if (typeof (headers as any).get !== "function") {
+        Object.defineProperty(proto, "get", {
+          value: getHeader,
+          enumerable: false,
+          configurable: true,
+        });
+      }
+      if (typeof (headers as any).set !== "function") {
+        Object.defineProperty(proto, "set", {
+          value: setHeader,
+          enumerable: false,
+          configurable: true,
+        });
+      }
+      if (typeof (headers as any).has !== "function") {
+        Object.defineProperty(proto, "has", {
+          value: hasHeader,
+          enumerable: false,
+          configurable: true,
+        });
+      }
+      if (typeof (headers as any).delete !== "function") {
+        Object.defineProperty(proto, "delete", {
+          value: deleteHeader,
+          enumerable: false,
+          configurable: true,
+        });
+      }
+      Object.setPrototypeOf(headers, proto);
+    }
   }
-  return config as T & { headers: Headers };
+  return config;
 }
 
 function normalizeGoogleAuthResponseHeaders<T extends GoogleAuthResponseWithUnknownHeaders>(
@@ -436,8 +507,24 @@ function resolveGoogleAuthDispatcherPolicy(
 
 export function createGoogleAuthFetch(baseFetch?: FetchLike): FetchLike {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const url = input instanceof Request ? input.url : String(input);
-    const guardedOptions = resolveGoogleAuthDispatcherPolicy(input, init);
+    let url: string;
+    let nextInit: RequestInit;
+
+    if (input instanceof Request) {
+      url = input.url;
+      nextInit = {
+        method: input.method,
+        headers: new Headers(input.headers),
+        body: input.body,
+        ...(input.body && !init?.duplex ? { duplex: "half" } : {}),
+        ...init,
+      } as RequestInit;
+    } else {
+      url = String(input);
+      nextInit = init ?? {};
+    }
+
+    const guardedOptions = resolveGoogleAuthDispatcherPolicy(url, nextInit);
     const { response, release } = await fetchWithSsrFGuard({
       auditContext: GOOGLE_AUTH_AUDIT_CONTEXT,
       dispatcherPolicy: guardedOptions.dispatcherPolicy,
