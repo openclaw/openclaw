@@ -41,6 +41,12 @@ export type AgentSandboxConfig = {
   /** Container/workspace scope for sandbox isolation. */
   scope?: "session" | "agent" | "shared";
   workspaceRoot?: string;
+  /**
+   * Sandbox workspace lifecycle.
+   * - "persistent": reuse the per-scope workspace (default)
+   * - "ephemeral": create and clean a fresh workspace for each isolated run
+   */
+  workspaceLifecycle?: "persistent" | "ephemeral";
   /** Docker-specific sandbox settings. */
   docker?: SandboxDockerSettings;
   /** SSH-specific sandbox settings. */

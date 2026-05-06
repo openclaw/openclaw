@@ -682,6 +682,7 @@ export async function runEmbeddedAttempt(
     params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
   const sandbox = await resolveSandboxContext({
     config: params.config,
+    runId: params.runId,
     sessionKey: sandboxSessionKey,
     workspaceDir: resolvedWorkspace,
   });
@@ -3640,6 +3641,12 @@ export async function runEmbeddedAttempt(
         });
       } catch (err) {
         cleanupError = err;
+      } finally {
+        try {
+          await sandbox?.cleanup?.();
+        } catch (err) {
+          cleanupError ??= err;
+        }
       }
       emitDiagnosticRunCompleted?.(
         cleanupError || promptError

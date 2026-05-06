@@ -88,7 +88,14 @@ export async function listSandboxBrowsers(): Promise<SandboxBrowserInfo[]> {
   return results;
 }
 
-export async function removeSandboxContainer(containerName: string): Promise<void> {
+export async function removeSandboxContainer(
+  containerName: string,
+  options?: {
+    fallbackBackendId?: string;
+    forceUnregistered?: boolean;
+    sessionKey?: string;
+  },
+): Promise<void> {
   const config = getRuntimeConfig();
   const registry = await readRegistry();
   const entry = registry.entries.find((item) => item.containerName === containerName);
@@ -99,11 +106,29 @@ export async function removeSandboxContainer(containerName: string): Promise<voi
       config,
       agentId: resolveSandboxAgentId(entry.sessionKey),
     });
+  } else if (options?.forceUnregistered && options.fallbackBackendId) {
+    const manager = getSandboxBackendManager(options.fallbackBackendId);
+    await manager?.removeRuntime({
+      entry: {
+        containerName,
+        backendId: options.fallbackBackendId,
+        runtimeLabel: containerName,
+        sessionKey: options.sessionKey ?? containerName,
+        createdAtMs: Date.now(),
+        lastUsedAtMs: Date.now(),
+        image: "",
+      },
+      config,
+      agentId: resolveSandboxAgentId(options.sessionKey ?? ""),
+    });
   }
   await removeRegistryEntry(containerName);
 }
 
-export async function removeSandboxBrowserContainer(containerName: string): Promise<void> {
+export async function removeSandboxBrowserContainer(
+  containerName: string,
+  options?: { forceUnregistered?: boolean; sessionKey?: string },
+): Promise<void> {
   const config = getRuntimeConfig();
   const registry = await readBrowserRegistry();
   const entry = registry.entries.find((item) => item.containerName === containerName);
@@ -111,6 +136,19 @@ export async function removeSandboxBrowserContainer(containerName: string): Prom
     await dockerSandboxBackendManager.removeRuntime({
       entry: toBrowserDockerRuntimeEntry(entry),
       config,
+    });
+  } else if (options?.forceUnregistered) {
+    await dockerSandboxBackendManager.removeRuntime({
+      entry: toBrowserDockerRuntimeEntry({
+        containerName,
+        sessionKey: options.sessionKey ?? containerName,
+        createdAtMs: Date.now(),
+        lastUsedAtMs: Date.now(),
+        image: "",
+        cdpPort: 0,
+      }),
+      config,
+      agentId: resolveSandboxAgentId(options.sessionKey ?? ""),
     });
   }
   await removeBrowserRegistryEntry(containerName);

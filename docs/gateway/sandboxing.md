@@ -303,6 +303,8 @@ With the OpenShell backend:
 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
 
+Set `agents.defaults.sandbox.workspaceLifecycle: "ephemeral"` to create a fresh sandbox workspace for each isolated run and remove it after run cleanup. This is separate from Docker `tmpfs`: the default `docker.tmpfs` entries make paths such as `/tmp`, `/var/tmp`, and `/run` memory-backed inside the container, while `workspaceLifecycle: "ephemeral"` makes the OpenClaw workspace disposable. Use `workspaceAccess: "none"` or `"ro"` when you need to avoid writes to the host workspace.
+
 <Note>
 **Skills note:** the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`, OpenClaw mirrors eligible skills into the sandbox workspace (`.../skills`) so they can be read. With `"rw"`, workspace skills are readable from `/workspace/skills`.
 </Note>

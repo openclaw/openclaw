@@ -9,6 +9,8 @@ import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandb
 const updateRegistryMock = vi.hoisted(() => vi.fn());
 const syncSkillsToWorkspaceMock = vi.hoisted(() => vi.fn(async () => undefined));
 const ensureSandboxBrowserMock = vi.hoisted(() => vi.fn(async () => null));
+const removeSandboxContainerMock = vi.hoisted(() => vi.fn(async () => undefined));
+const removeSandboxBrowserContainerMock = vi.hoisted(() => vi.fn(async () => undefined));
 const browserControlAuthMock = vi.hoisted(() => ({
   ensureBrowserControlAuth: vi.fn(async () => ({ auth: { token: "test-browser-token" } })),
   resolveBrowserControlAuth: vi.fn(() => ({ token: "test-browser-token" })),
@@ -27,6 +29,14 @@ vi.mock("./sandbox/registry.js", () => ({
 
 vi.mock("./sandbox/browser.js", () => ({
   ensureSandboxBrowser: ensureSandboxBrowserMock,
+  resolveSandboxBrowserContainerName: vi.fn(({ cfg, scopeKey }) =>
+    `${cfg.browser.containerPrefix}${scopeKey.replace(/[^a-zA-Z0-9_.-]/g, "-")}`.slice(0, 63),
+  ),
+}));
+
+vi.mock("./sandbox/manage.js", () => ({
+  removeSandboxContainer: removeSandboxContainerMock,
+  removeSandboxBrowserContainer: removeSandboxBrowserContainerMock,
 }));
 
 vi.mock("../plugin-sdk/browser-control-auth.js", () => browserControlAuthMock);
@@ -332,5 +342,185 @@ describe("resolveSandboxContext", () => {
         eligibility: { remote: { note: "test-remote" } },
       }),
     );
+  }, 15_000);
+
+  it("creates and cleans an ephemeral sandbox workspace for a run", async () => {
+    removeSandboxContainerMock.mockClear();
+    removeSandboxBrowserContainerMock.mockClear();
+
+    const workspaceRoot = await createSandboxFixtureDir("ephemeral-root");
+    const hostWorkspace = await createSandboxFixtureDir("host-workspace");
+    let receivedScopeKey = "";
+    const restore = registerSandboxBackend("test-ephemeral-backend", async (params) => {
+      receivedScopeKey = params.scopeKey;
+      return {
+        id: "test-ephemeral-backend",
+        runtimeId: `runtime-${params.scopeKey}`,
+        runtimeLabel: "Test Ephemeral Runtime",
+        workdir: "/workspace",
+        buildExecSpec: async () => ({
+          argv: ["test-ephemeral-backend", "exec"],
+          env: process.env,
+          stdinMode: "pipe-closed",
+        }),
+        runShellCommand: async () => ({
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.alloc(0),
+          code: 0,
+        }),
+      };
+    });
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "test-ephemeral-backend",
+              scope: "session",
+              workspaceAccess: "none",
+              workspaceLifecycle: "ephemeral",
+              workspaceRoot,
+              prune: { idleHours: 0, maxAgeDays: 0 },
+            },
+          },
+        },
+      };
+
+      const result = await resolveSandboxContext({
+        config: cfg,
+        runId: "run-123",
+        sessionKey: "agent:worker:task",
+        workspaceDir: hostWorkspace,
+      });
+
+      expect(result).not.toBeNull();
+      expect(receivedScopeKey).toContain("agent:worker:task:run:run-123");
+      expect(result?.workspaceDir).toContain("run-123");
+      expect(result?.workspaceDir).not.toBe(hostWorkspace);
+      await fs.writeFile(path.join(result!.workspaceDir, "ephemeral.txt"), "temp");
+
+      await result?.cleanup?.();
+
+      expect(removeSandboxContainerMock).toHaveBeenCalledWith(
+        result?.runtimeId,
+        expect.objectContaining({
+          fallbackBackendId: "test-ephemeral-backend",
+          forceUnregistered: true,
+        }),
+      );
+      expect(removeSandboxBrowserContainerMock).not.toHaveBeenCalled();
+      await expect(fs.access(result!.workspaceDir)).rejects.toThrow();
+    } finally {
+      restore();
+    }
+  }, 15_000);
+
+  it("cleans an ephemeral workspace if backend setup fails", async () => {
+    const workspaceRoot = await createSandboxFixtureDir("ephemeral-fail-root");
+    const hostWorkspace = await createSandboxFixtureDir("ephemeral-fail-host");
+    const restore = registerSandboxBackend("test-ephemeral-fail-backend", async () => {
+      throw new Error("backend setup failed");
+    });
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "test-ephemeral-fail-backend",
+              scope: "session",
+              workspaceAccess: "none",
+              workspaceLifecycle: "ephemeral",
+              workspaceRoot,
+              prune: { idleHours: 0, maxAgeDays: 0 },
+            },
+          },
+        },
+      };
+
+      await expect(
+        resolveSandboxContext({
+          config: cfg,
+          runId: "run-fail",
+          sessionKey: "agent:worker:task",
+          workspaceDir: hostWorkspace,
+        }),
+      ).rejects.toThrow("backend setup failed");
+
+      expect(await fs.readdir(workspaceRoot)).toEqual([]);
+    } finally {
+      restore();
+    }
+  }, 15_000);
+
+  it("pre-registers browser cleanup before ephemeral browser setup can fail", async () => {
+    ensureSandboxBrowserMock.mockRejectedValueOnce(new Error("browser setup failed"));
+    removeSandboxContainerMock.mockClear();
+    removeSandboxBrowserContainerMock.mockClear();
+
+    const workspaceRoot = await createSandboxFixtureDir("ephemeral-browser-root");
+    const hostWorkspace = await createSandboxFixtureDir("ephemeral-browser-host");
+    const restore = registerSandboxBackend("test-ephemeral-browser-backend", async (params) => ({
+      id: "test-ephemeral-browser-backend",
+      runtimeId: `runtime-${params.scopeKey}`,
+      runtimeLabel: "Test Ephemeral Browser Runtime",
+      workdir: "/workspace",
+      capabilities: { browser: true },
+      buildExecSpec: async () => ({
+        argv: ["test-ephemeral-browser-backend", "exec"],
+        env: process.env,
+        stdinMode: "pipe-closed",
+      }),
+      runShellCommand: async () => ({
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      }),
+    }));
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "test-ephemeral-browser-backend",
+              scope: "session",
+              workspaceAccess: "none",
+              workspaceLifecycle: "ephemeral",
+              workspaceRoot,
+              prune: { idleHours: 0, maxAgeDays: 0 },
+              browser: { enabled: true },
+            },
+          },
+        },
+      };
+
+      await expect(
+        resolveSandboxContext({
+          config: cfg,
+          runId: "run-browser",
+          sessionKey: "agent:worker:browser",
+          workspaceDir: hostWorkspace,
+        }),
+      ).rejects.toThrow("browser setup failed");
+
+      expect(removeSandboxBrowserContainerMock).toHaveBeenCalledWith(
+        expect.stringContaining("agent-worker-browser-run-run-browser"),
+        expect.objectContaining({
+          forceUnregistered: true,
+        }),
+      );
+      expect(removeSandboxContainerMock).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          fallbackBackendId: "test-ephemeral-browser-backend",
+          forceUnregistered: true,
+        }),
+      );
+      expect(await fs.readdir(workspaceRoot)).toEqual([]);
+    } finally {
+      restore();
+    }
   }, 15_000);
 });

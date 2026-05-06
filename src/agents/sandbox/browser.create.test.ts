@@ -90,6 +90,7 @@ function buildConfig(enableNoVnc: boolean): SandboxConfig {
     backend: "docker",
     scope: "session",
     workspaceAccess: "none",
+    workspaceLifecycle: "persistent",
     workspaceRoot: "/tmp/openclaw-sandboxes",
     docker: {
       image: "openclaw-sandbox:bookworm-slim",
