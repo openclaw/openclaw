@@ -179,6 +179,7 @@ export async function preflightDiscordMessage(
     author,
     member: params.data.member,
     pluralkitInfo,
+    identityLinks: params.cfg.session?.identityLinks,
   });
 
   if (author.bot) {
