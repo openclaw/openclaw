@@ -50,6 +50,8 @@ function expectNpmInstallIntoRoot(params: { calls: unknown[][]; npmRoot: string 
     "npm",
     "install",
     "--omit=dev",
+    "--omit=peer",
+    "--legacy-peer-deps",
     "--loglevel=error",
     "--ignore-scripts",
     "--no-audit",

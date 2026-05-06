@@ -1372,6 +1372,8 @@ export async function installPluginFromNpmSpec(
       "npm",
       ...createSafeNpmInstallArgs({
         omitDev: true,
+        omitPeer: true,
+        legacyPeerDeps: true,
         loglevel: "error",
         noAudit: true,
         noFund: true,
@@ -1382,7 +1384,11 @@ export async function installPluginFromNpmSpec(
     {
       cwd: npmRoot,
       timeoutMs: Math.max(timeoutMs, 300_000),
-      env: createSafeNpmInstallEnv(process.env, { packageLock: true, quiet: true }),
+      env: createSafeNpmInstallEnv(process.env, {
+        legacyPeerDeps: true,
+        packageLock: true,
+        quiet: true,
+      }),
     },
   );
   if (install.code !== 0) {
