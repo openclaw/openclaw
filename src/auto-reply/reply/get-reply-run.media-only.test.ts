@@ -1199,8 +1199,8 @@ describe("runPreparedReply media-only handling", () => {
     const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
     expect(call?.commandBody).toContain(heartbeatPrompt);
     expect(call?.followupRun.prompt).toContain(heartbeatPrompt);
-    expect(call?.transcriptCommandBody).toBe("[OpenClaw heartbeat poll]");
-    expect(call?.followupRun.transcriptPrompt).toBe("[OpenClaw heartbeat poll]");
+    expect(call?.transcriptCommandBody).toBe(heartbeatPrompt);
+    expect(call?.followupRun.transcriptPrompt).toBe(heartbeatPrompt);
   });
 
   it("uses persisted Discord chat metadata for system-event CLI static prompt identity", async () => {
