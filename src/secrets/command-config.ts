@@ -8,6 +8,7 @@ export type CommandSecretAssignment = {
   path: string;
   pathSegments: string[];
   value: unknown;
+  createIfMissing?: boolean;
 };
 
 export type ResolveAssignmentsFromSnapshotResult = {
@@ -18,6 +19,7 @@ export type ResolveAssignmentsFromSnapshotResult = {
 export type UnresolvedCommandSecretAssignment = {
   path: string;
   pathSegments: string[];
+  createIfMissing?: boolean;
 };
 
 export type AnalyzeAssignmentsFromSnapshotResult = {
@@ -54,6 +56,7 @@ export function analyzeCommandSecretAssignmentsFromSnapshot(params: {
       continue;
     }
 
+    const usesSiblingRef = target.entry.secretShape === "sibling_ref"; // pragma: allowlist secret
     const resolved = getPath(params.resolvedConfig, target.pathSegments);
     if (!isExpectedResolvedSecretValue(resolved, target.entry.expectedResolvedValue)) {
       if (params.inactiveRefPaths?.has(target.path)) {
@@ -63,12 +66,14 @@ export function analyzeCommandSecretAssignmentsFromSnapshot(params: {
         inactive.push({
           path: target.path,
           pathSegments: [...target.pathSegments],
+          ...(usesSiblingRef ? { createIfMissing: true } : {}),
         });
         continue;
       }
       unresolved.push({
         path: target.path,
         pathSegments: [...target.pathSegments],
+        ...(usesSiblingRef ? { createIfMissing: true } : {}),
       });
       continue;
     }
@@ -77,6 +82,7 @@ export function analyzeCommandSecretAssignmentsFromSnapshot(params: {
       path: target.path,
       pathSegments: [...target.pathSegments],
       value: resolved,
+      ...(usesSiblingRef ? { createIfMissing: true } : {}),
     });
 
     const hasCompetingSiblingRef =

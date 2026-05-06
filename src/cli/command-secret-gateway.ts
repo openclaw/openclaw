@@ -9,7 +9,7 @@ import {
   analyzeCommandSecretAssignmentsFromSnapshot,
   type UnresolvedCommandSecretAssignment,
 } from "../secrets/command-config.js";
-import { getPath, setPathExistingStrict } from "../secrets/path-utils.js";
+import { getPath, setPathCreateStrict, setPathExistingStrict } from "../secrets/path-utils.js";
 import { resolveSecretRefValue } from "../secrets/resolve.js";
 import { collectConfigAssignments } from "../secrets/runtime-config-collectors.js";
 import { createResolverContext } from "../secrets/runtime-shared.js";
@@ -51,10 +51,24 @@ type GatewaySecretsResolveResult = {
     path?: string;
     pathSegments: string[];
     value: unknown;
+    createIfMissing?: boolean;
   }>;
   diagnostics?: string[];
   inactiveRefPaths?: string[];
 };
+
+function applyResolvedSecretAssignment(
+  resolvedConfig: OpenClawConfig,
+  pathSegments: string[],
+  value: unknown,
+  createIfMissing: boolean | undefined,
+): void {
+  if (createIfMissing) {
+    setPathCreateStrict(resolvedConfig, pathSegments, value);
+    return;
+  }
+  setPathExistingStrict(resolvedConfig, pathSegments, value);
+}
 
 const WEB_RUNTIME_SECRET_TARGET_ID_PREFIXES = ["tools.web.search", "plugins.entries."] as const;
 const WEB_RUNTIME_SECRET_PATH_PREFIXES = ["tools.web.search.", "plugins.entries."] as const;
@@ -361,7 +375,12 @@ function classifyConfiguredTargetRefs(params: {
 }
 
 function parseGatewaySecretsResolveResult(payload: unknown): {
-  assignments: Array<{ path?: string; pathSegments: string[]; value: unknown }>;
+  assignments: Array<{
+    path?: string;
+    pathSegments: string[];
+    value: unknown;
+    createIfMissing?: boolean;
+  }>;
   diagnostics: string[];
   inactiveRefPaths: string[];
 } {
@@ -580,6 +599,11 @@ function scrubUnresolvedAssignments(
   unresolved: UnresolvedCommandSecretAssignment[],
 ): void {
   for (const entry of unresolved) {
+    // sibling_ref shape: the resolved-value path is intentionally absent when the
+    // user is on the legacy ref-only shape. Skip the scrub; nothing to clear.
+    if (entry.createIfMissing && getPath(config, entry.pathSegments) === undefined) {
+      continue;
+    }
     setPathExistingStrict(config, entry.pathSegments, undefined);
   }
 }
@@ -641,7 +665,12 @@ async function resolveTargetSecretLocally(params: {
           ? `${params.target.path} resolved to a non-string or empty value.`
           : `${params.target.path} resolved to an unsupported value type.`,
     });
-    setPathExistingStrict(params.resolvedConfig, params.target.pathSegments, resolved);
+    applyResolvedSecretAssignment(
+      params.resolvedConfig,
+      params.target.pathSegments,
+      resolved,
+      params.target.entry.secretShape === "sibling_ref", // pragma: allowlist secret
+    );
   } catch (error) {
     if (!enforcesResolvedSecrets(params.mode)) {
       params.localResolutionDiagnostics.push(
@@ -748,7 +777,12 @@ export async function resolveCommandSecretRefsViaGateway(params: {
       continue;
     }
     try {
-      setPathExistingStrict(resolvedConfig, pathSegments, assignment.value);
+      applyResolvedSecretAssignment(
+        resolvedConfig,
+        pathSegments,
+        assignment.value,
+        assignment.createIfMissing,
+      );
     } catch (err) {
       const path = pathSegments.join(".");
       throw new Error(
@@ -787,10 +821,11 @@ export async function resolveCommandSecretRefsViaGateway(params: {
         if (localFallback.targetStatesByPath[unresolved.path] !== "resolved_local") {
           continue;
         }
-        setPathExistingStrict(
+        applyResolvedSecretAssignment(
           resolvedConfig,
           unresolved.pathSegments,
           getPath(localFallback.resolvedConfig, unresolved.pathSegments),
+          unresolved.createIfMissing,
         );
         targetStatesByPath[unresolved.path] = "resolved_local";
       }

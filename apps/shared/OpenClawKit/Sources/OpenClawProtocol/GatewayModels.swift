@@ -1468,21 +1468,25 @@ public struct SecretsResolveAssignment: Codable, Sendable {
     public let path: String?
     public let pathsegments: [String]
     public let value: AnyCodable
+    public let createifmissing: Bool?
 
     public init(
         path: String?,
         pathsegments: [String],
-        value: AnyCodable)
+        value: AnyCodable,
+        createifmissing: Bool?)
     {
         self.path = path
         self.pathsegments = pathsegments
         self.value = value
+        self.createifmissing = createifmissing
     }
 
     private enum CodingKeys: String, CodingKey {
         case path
         case pathsegments = "pathSegments"
         case value
+        case createifmissing = "createIfMissing"
     }
 }
 

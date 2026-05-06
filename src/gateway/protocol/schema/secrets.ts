@@ -18,6 +18,7 @@ export const SecretsResolveAssignmentSchema = Type.Object(
     path: Type.Optional(NonEmptyString),
     pathSegments: Type.Array(NonEmptyString),
     value: Type.Unknown(),
+    createIfMissing: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
