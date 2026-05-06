@@ -59,6 +59,7 @@ type AgentCliOpts = {
   runId?: string;
   extraSystemPrompt?: string;
   local?: boolean;
+  noFallback?: boolean;
 };
 
 function protectJsonStdout(opts: Pick<AgentCliOpts, "json">): void {
@@ -107,6 +108,23 @@ function isGatewayAgentTimeoutError(err: unknown): boolean {
 
 function isGatewayAgentEmbeddedFallbackError(err: unknown): boolean {
   return isGatewayTransportError(err);
+}
+
+function isNoFallbackEnvEnabled(): boolean {
+  const raw = process.env.OPENCLAW_AGENT_NO_FALLBACK;
+  if (raw === undefined) return false;
+  const normalized = raw.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function isEmbeddedFallbackDisabled(opts: Pick<AgentCliOpts, "noFallback">): boolean {
+  return opts.noFallback === true || isNoFallbackEnvEnabled();
+}
+
+function createGatewayFallbackDisabledError(err: unknown): Error {
+  return new Error(
+    `Gateway agent failed and embedded fallback is disabled. Re-run without --no-fallback or unset OPENCLAW_AGENT_NO_FALLBACK to allow local embedded fallback. Original error: ${String(err)}`,
+  );
 }
 
 function createGatewayTimeoutFallbackSessionId(): string {
@@ -237,7 +255,12 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
   try {
     return await agentViaGatewayCommand(opts, runtime);
   } catch (err) {
+    const fallbackDisabled = isEmbeddedFallbackDisabled(opts);
+
     if (isGatewayAgentTimeoutError(err)) {
+      if (fallbackDisabled) {
+        throw createGatewayFallbackDisabledError(err);
+      }
       const fallbackSession = createGatewayTimeoutFallbackSession(opts.agent);
       runtime.error?.(
         `EMBEDDED FALLBACK: Gateway agent timed out; running embedded agent with fresh session ${fallbackSession.sessionId}: ${String(err)}`,
@@ -262,6 +285,10 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
 
     if (!isGatewayAgentEmbeddedFallbackError(err)) {
       throw err;
+    }
+
+    if (fallbackDisabled) {
+      throw createGatewayFallbackDisabledError(err);
     }
 
     runtime.error?.(

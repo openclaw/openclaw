@@ -58,6 +58,7 @@ programmatic delivery.
 | `--agent \<id\>`              | Target a configured agent (uses its `main` session)         |
 | `--session-id \<id\>`         | Reuse an existing session by id                             |
 | `--local`                     | Force local embedded runtime (skip Gateway)                 |
+| `--no-fallback`               | Fail if Gateway dispatch fails instead of running embedded  |
 | `--deliver`                   | Send the reply to a chat channel                            |
 | `--channel \<name\>`          | Delivery channel (whatsapp, telegram, discord, slack, etc.) |
 | `--reply-to \<target\>`       | Delivery target override                                    |
@@ -73,6 +74,8 @@ programmatic delivery.
 - By default, the CLI goes **through the Gateway**. Add `--local` to force the
   embedded runtime on the current machine.
 - If the Gateway is unreachable, the CLI **falls back** to the local embedded run.
+- Add `--no-fallback` or set `OPENCLAW_AGENT_NO_FALLBACK=1` for diagnostic
+  probes that must fail when the Gateway path fails.
 - Session selection: `--to` derives the session key (group/channel targets
   preserve isolation; direct chats collapse to `main`).
 - Thinking and verbose flags persist into the session store.
