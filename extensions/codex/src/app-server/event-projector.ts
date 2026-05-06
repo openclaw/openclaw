@@ -663,7 +663,7 @@ export class CodexAppServerEventProjector {
       return;
     }
     const meta = itemMeta(item, this.toolProgressDetailMode());
-    const suppressChannelProgress = shouldSynthesizeToolProgressForItem(item);
+    const suppressChannelProgress = shouldSuppressChannelProgressForItem(item);
     this.emitAgentEvent({
       stream: "item",
       data: {
@@ -1163,14 +1163,19 @@ function shouldSynthesizeToolProgressForItem(item: CodexThreadItem): boolean {
     case "webSearch":
     case "mcpToolCall":
       return true;
-    // Dynamic OpenClaw tool requests are emitted at the item/tool/call request
-    // boundary in run-attempt.ts. Re-emitting them from item notifications can
-    // duplicate start/result events when the app-server sends both signals.
-    case "dynamicToolCall":
-      return false;
     default:
       return false;
   }
+}
+
+function shouldSuppressChannelProgressForItem(item: CodexThreadItem): boolean {
+  if (shouldSynthesizeToolProgressForItem(item)) {
+    return true;
+  }
+  // Dynamic OpenClaw tool requests are emitted at the item/tool/call request
+  // boundary in run-attempt.ts. Re-emitting item notifications to channels can
+  // duplicate start/result progress when the app-server sends both signals.
+  return item.type === "dynamicToolCall";
 }
 
 function itemToolArgs(item: CodexThreadItem): Record<string, unknown> | undefined {

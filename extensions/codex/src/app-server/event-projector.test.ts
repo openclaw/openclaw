@@ -802,7 +802,12 @@ describe("CodexAppServerEventProjector", () => {
     expect(onAgentEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         stream: "item",
-        data: expect.objectContaining({ phase: "start", kind: "tool", name: "message" }),
+        data: expect.objectContaining({
+          phase: "start",
+          kind: "tool",
+          name: "message",
+          suppressChannelProgress: true,
+        }),
       }),
     );
     expect(onAgentEvent).not.toHaveBeenCalledWith(
