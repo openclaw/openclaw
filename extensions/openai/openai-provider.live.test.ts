@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { buildOpenAIProvider } from "./openai-provider.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
-const DEFAULT_LIVE_MODEL_IDS = ["gpt-5.5", "gpt-5.4-mini", "gpt-5.4-nano"] as const;
+const DEFAULT_LIVE_MODEL_IDS = ["chat-latest", "gpt-5.5", "gpt-5.4-mini", "gpt-5.4-nano"] as const;
 const liveEnabled = OPENAI_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
 
@@ -16,6 +16,7 @@ type LiveModelCase = {
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
   contextWindow: number;
   maxTokens: number;
+  reasoning: boolean;
 };
 
 function findOpenAIModel(modelId: string): Model<Api> | null {
@@ -24,6 +25,16 @@ function findOpenAIModel(modelId: string): Model<Api> | null {
 
 function resolveLiveModelCase(modelId: string): LiveModelCase {
   switch (modelId) {
+    case "chat-latest":
+      return {
+        modelId,
+        templateId: "gpt-5.5",
+        templateName: "GPT-5.5",
+        cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+        contextWindow: 400_000,
+        maxTokens: 128_000,
+        reasoning: false,
+      };
     case "gpt-5.5":
       return {
         modelId,
@@ -32,6 +43,7 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         cost: { input: 5, output: 30, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 1_000_000,
         maxTokens: 128_000,
+        reasoning: true,
       };
     case "gpt-5.5-pro":
       return {
@@ -41,6 +53,7 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 1_000_000,
         maxTokens: 128_000,
+        reasoning: true,
       };
     case "gpt-5.4":
       return {
@@ -50,6 +63,7 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
         contextWindow: 400_000,
         maxTokens: 128_000,
+        reasoning: true,
       };
     case "gpt-5.4-pro":
       return {
@@ -59,6 +73,7 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         cost: { input: 21, output: 168, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 400_000,
         maxTokens: 128_000,
+        reasoning: true,
       };
     case "gpt-5.4-mini":
       return {
@@ -68,6 +83,7 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         cost: { input: 0.25, output: 2, cacheRead: 0.025, cacheWrite: 0 },
         contextWindow: 400_000,
         maxTokens: 128_000,
+        reasoning: true,
       };
     case "gpt-5.4-nano":
       return {
@@ -77,6 +93,7 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         cost: { input: 0.05, output: 0.4, cacheRead: 0.005, cacheWrite: 0 },
         contextWindow: 400_000,
         maxTokens: 128_000,
+        reasoning: true,
       };
     default:
       throw new Error(`Unsupported live OpenAI model: ${modelId}`);
@@ -113,7 +130,7 @@ describeLive("buildOpenAIProvider live", () => {
               provider: "openai",
               api: "openai-completions",
               baseUrl: "https://api.openai.com/v1",
-              reasoning: true,
+              reasoning: liveCase.reasoning,
               input: ["text", "image"],
               cost: liveCase.cost,
               contextWindow: liveCase.contextWindow,
@@ -146,6 +163,7 @@ describeLive("buildOpenAIProvider live", () => {
         id: liveCase.modelId,
         api: "openai-responses",
         baseUrl: "https://api.openai.com/v1",
+        reasoning: liveCase.reasoning,
       });
 
       const client = new OpenAI({
@@ -158,7 +176,7 @@ describeLive("buildOpenAIProvider live", () => {
         instructions: "Return exactly OK and no other text.",
         input: "Return exactly OK.",
         max_output_tokens: 64,
-        reasoning: { effort: "none" },
+        ...(liveCase.reasoning ? { reasoning: { effort: "none" as const } } : {}),
         text: { verbosity: "low" },
       });
 
