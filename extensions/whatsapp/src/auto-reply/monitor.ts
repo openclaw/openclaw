@@ -27,7 +27,13 @@ import {
   resolveReconnectPolicy,
   sleepWithAbort,
 } from "../reconnect.js";
-import { formatError, getWebAuthAgeMs, logoutWeb, readWebSelfId } from "../session.js";
+import {
+  formatError,
+  getStatusCode,
+  getWebAuthAgeMs,
+  logoutWeb,
+  readWebSelfId,
+} from "../session.js";
 import { resolveWhatsAppSocketTiming } from "../socket-timing.js";
 import { getRuntimeConfig, getRuntimeConfigSourceSnapshot } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
@@ -41,6 +47,8 @@ import { isLikelyWhatsAppCryptoError } from "./util.js";
 function isNonRetryableWebCloseStatus(statusCode: unknown): boolean {
   // WhatsApp 440 = session conflict ("Unknown Stream Errored (conflict)").
   // This is persistent until the operator resolves the conflicting session.
+  // 428 = Baileys DisconnectReason.connectionClosed — generic WebSocket close,
+  // often transient; keep it on the reconnect path rather than stopping here.
   return statusCode === 440;
 }
 
@@ -371,6 +379,54 @@ export async function monitorWebChannel(
           },
         });
       } catch (error) {
+        // Baileys 428 = DisconnectReason.connectionClosed — can fire during the
+        // opening handshake for transient socket closes. Route through the same
+        // reconnect policy as auth-unstable errors instead of rethrowing to the
+        // generic channel manager, so the WhatsApp-specific retry/stop path runs.
+        if (getStatusCode(error) === 428) {
+          const retryDecision = controller.consumeReconnectAttempt();
+          statusController.noteReconnectAttempts(retryDecision.reconnectAttempts);
+          statusController.noteClose({
+            statusCode: 428,
+            error: formatError(error),
+            reconnectAttempts: retryDecision.reconnectAttempts,
+            healthState: retryDecision.healthState,
+          });
+          if (retryDecision.action === "stop") {
+            reconnectLogger.warn(
+              {
+                connectionId,
+                status: 428,
+                reconnectAttempts: retryDecision.reconnectAttempts,
+                maxAttempts: reconnectPolicy.maxAttempts,
+              },
+              "web reconnect: 428 during opening; max attempts reached",
+            );
+            runtime.error(
+              `WhatsApp Web connection closed during setup (status 428) after ${retryDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts} attempts. Relink with \`${formatCliCommand("openclaw channels login --channel whatsapp")}\` if the issue persists.`,
+            );
+            await controller.shutdown();
+            break;
+          }
+          reconnectLogger.info(
+            {
+              connectionId,
+              status: 428,
+              reconnectAttempts: retryDecision.reconnectAttempts,
+              delayMs: retryDecision.delayMs,
+            },
+            "web reconnect: 428 during opening; retrying",
+          );
+          runtime.error(
+            `WhatsApp Web connection closed during setup (status 428). Retry ${retryDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} in ${formatDurationPrecise(retryDecision.delayMs ?? 0)}.`,
+          );
+          try {
+            await controller.waitBeforeRetry(retryDecision.delayMs ?? 0);
+          } catch {
+            break;
+          }
+          continue;
+        }
         if (!isRetryableAuthUnstableError(error)) {
           throw error;
         }

@@ -135,6 +135,88 @@ describe("web auto-reply connection", () => {
     }
   });
 
+  it("retries opening-phase Boom 428 through the reconnect policy instead of escaping to channel manager", async () => {
+    // Regression for #75736: Baileys 428 = DisconnectReason.connectionClosed can
+    // fire during the handshake for transient socket closes. Before this fix the
+    // error was rethrown past the WhatsApp reconnect loop and the generic channel
+    // manager logged a bare "channel exited" with no retry or guidance.
+    const boom428 = {
+      output: {
+        statusCode: 428,
+        payload: { error: "Precondition Required", message: "Connection Terminated" },
+      },
+    };
+    const listenerFactory = vi.fn(async () => {
+      throw boom428;
+    });
+
+    const sleep = vi.fn(async () => {});
+    const { runtime, run } = startWebAutoReplyMonitor({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory,
+      sleep,
+      reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 2, factor: 1.1 },
+    });
+
+    await run;
+
+    // Must have retried (maxAttempts=2 means 2 calls before stopping)
+    expect(listenerFactory).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalled();
+    // First attempt emits a retry message, not a bare rethrow
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("status 428"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Retry 1/2"));
+    // Final stop emits exhausted-attempts message
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("2/2 attempts"));
+  });
+
+  it("retries post-open Baileys 428 (event-loop-stall close) instead of stopping", async () => {
+    // Regression for #77443: on Windows 11, DefaultResourceLoader.reload() uses
+    // synchronous fs ops that block the event loop for 10+ seconds on first agent
+    // startup. Baileys fires DisconnectReason.connectionClosed (428) when its
+    // keepalive timers can't run during the stall. The channel must retry rather
+    // than stop, so it recovers automatically once the stall clears.
+    const sleep = vi.fn(async () => {});
+    const scripted = createScriptedWebListenerFactory();
+    const { controller, run } = startWebAutoReplyMonitor({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory: scripted.listenerFactory,
+      sleep,
+      reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(scripted.getListenerCount()).toBe(1);
+      },
+      { timeout: 250, interval: 2 },
+    );
+    scripted.resolveClose(0, {
+      status: 428,
+      isLoggedOut: false,
+      error: "Connection Terminated",
+    });
+
+    // Must NOT stop immediately — 428 is retryable, so a second listener is created.
+    await vi.waitFor(
+      () => {
+        expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(2);
+      },
+      { timeout: 250, interval: 2 },
+    );
+
+    controller.abort();
+    scripted.resolveClose(scripted.getListenerCount() - 1, {
+      status: 499,
+      isLoggedOut: false,
+      error: "aborted",
+    });
+    await run;
+
+    expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(2);
+    expect(sleep).toHaveBeenCalled();
+  });
+
   it("treats status 440 as non-retryable and stops without retrying", async () => {
     const sleep = vi.fn(async () => {});
     const scripted = createScriptedWebListenerFactory();
