@@ -202,3 +202,34 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Connection/provider additions: update all UI surfaces + docs + status/config forms.
 - Provider tool schemas: prefer flat string enum helpers over `Type.Union([Type.Literal(...)])`; some providers reject `anyOf`. Not a repo-wide protocol/schema ban.
 - External messaging: no token-delta channel messages. Follow `docs/concepts/streaming.md`; preview/block streaming uses edits/chunks and preserves final/fallback delivery.
+
+## Multitenant runtime (Rockie additions)
+
+This repo is the per-tenant Fly machine image for the Rockie platform on top of the OpenClaw fork. Cross-link: `../docs/architecture.md` in the workspace meta-repo for the cross-repo picture. The OpenClaw upstream content above is preserved for merge-compat with `openclaw/openclaw`.
+
+### Image
+- `Dockerfile.multitenant` (root) — bakes the official `claude` and `codex` binaries, the OpenClaw gateway (`/app/dist/index.js`), the Go PTY-WS broker (`apps/broker/`), and the skills overlay assembled from `platform-skills/`.
+
+### Mode router
+- `overlay/multitenant/entrypoint.sh` — selects runtime via `$MODE`:
+  - `subscription` — runs official `claude` or `codex` (per `$BINARY`) using the tenant's OAuth on the Fly volume.
+  - `byok` — runs OpenClaw gateway with the tenant's pasted API key (env vars).
+  - `open-weights` — runs OpenClaw gateway pointed at a platform-hosted endpoint (Cerebras, Chutes).
+- The PTY-WebSocket broker (`apps/broker/`) always starts in background on port 7681 so platform-context can spawn PTYs for either subscription or byok mode.
+
+### Skills overlay
+- `overlay/multitenant/assemble-skills.sh` — pulls from `platform-skills/skills/<name>/` (canonical) and writes to BOTH `~/.claude/skills/` and `~/.codex/skills/` inside the image. The `rockie-claude/` and `rockie-codex/` repos are local overlay copies, NOT consulted by this script.
+
+### Broker (apps/broker/)
+Go binary, frame protocol:
+- `0x01 <bytes>` — stdin (client→server) and stdout/stderr combined (server→client). Direction disambiguates.
+- `0x02 <rows:uint16 BE><cols:uint16 BE>` — TTY resize (client→server only).
+- `0x03 <code:int32 BE>` — process exit code (server→client).
+- `GET /ws?token=...&binary=claude|codex|bash&cwd=...` — PTY bridge.
+- `POST /spawn` — headless one-shot (JSON: binary, args, cwd, timeout_sec).
+
+### Process for changes here
+1. Touched `Dockerfile.multitenant`, `overlay/multitenant/**`, or `apps/broker/**`? The build-runtime-image workflow (Phase 4 of the active plan, TBD) will rebuild + push to GHCR.
+2. New mode? Update `entrypoint.sh` AND the frontend mode picker (`platform-frontend/src/app/(auth)/signup/page.tsx`).
+3. `go test ./apps/broker/...` before commit. The pre-commit hooks in the meta-repo enforce backpressure.
+4. For local end-to-end exercise: `/dogfood-runtime` skill in the meta-repo.
