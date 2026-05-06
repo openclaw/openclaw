@@ -353,6 +353,7 @@ export function createSessionsSpawnTool(
             agentGroupId: opts?.agentGroupId ?? undefined,
             agentGroupSpace: opts?.agentGroupSpace,
             agentMemberRoleIds: opts?.agentMemberRoleIds,
+            requesterAgentIdOverride: opts?.requesterAgentIdOverride,
             sandboxed: opts?.sandboxed,
           },
         );
