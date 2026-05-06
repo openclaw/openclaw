@@ -162,7 +162,9 @@ vi.mock("../auth-token.js", () => ({
   validateAnthropicSetupToken: vi.fn(() => undefined),
 }));
 
-vi.mock("../../plugins/provider-auth-choice-helpers.js", () => {
+vi.mock("../../plugins/provider-auth-choice-helpers.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../plugins/provider-auth-choice-helpers.js")>();
   const normalize = (value: string | undefined) => value?.trim().toLowerCase() ?? "";
   const isRecord = (value: unknown): value is Record<string, unknown> =>
     Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -178,6 +180,7 @@ vi.mock("../../plugins/provider-auth-choice-helpers.js", () => {
   };
 
   return {
+    ...actual,
     resolveProviderMatch: vi.fn((providers: ProviderPlugin[], rawProvider?: string) => {
       const requested = normalize(rawProvider);
       return (
@@ -719,6 +722,60 @@ describe("modelsAuthLoginCommand", () => {
       ...existingModels,
       "openai-codex/gpt-5.5": {},
     });
+  });
+
+  it("keeps an existing primary when login omits --set-default and the patch recommends another", async () => {
+    const runtime = createRuntime();
+    currentConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.4", fallbacks: [] },
+          models: {
+            "openai-codex/gpt-5.4": {},
+            "anthropic/claude-sonnet-4-6": {},
+          },
+        },
+      },
+    };
+    runProviderAuth.mockResolvedValue({
+      profiles: [
+        {
+          profileId: "openai:default",
+          credential: { type: "api_key", provider: "openai", key: "sk-demo" },
+        },
+      ],
+      configPatch: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+            models: { "openai/gpt-5.5": { alias: "GPT" } },
+          },
+        },
+      },
+      defaultModel: "openai/gpt-5.5",
+    });
+    mocks.resolvePluginProviders.mockReturnValue([
+      createProvider({
+        id: "openai",
+        label: "OpenAI",
+        run: runProviderAuth as ProviderPlugin["auth"][number]["run"],
+      }),
+    ]);
+
+    await modelsAuthLoginCommand({ provider: "openai" }, runtime);
+
+    expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual({
+      primary: "openai-codex/gpt-5.4",
+      fallbacks: [],
+    });
+    expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual({
+      "openai-codex/gpt-5.4": {},
+      "anthropic/claude-sonnet-4-6": {},
+      "openai/gpt-5.5": { alias: "GPT" },
+    });
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Default model available: openai/gpt-5.5 (use --set-default to apply)",
+    );
   });
 
   it("overwrites an existing primary when login uses --set-default", async () => {
