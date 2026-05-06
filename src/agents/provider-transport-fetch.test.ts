@@ -381,6 +381,46 @@ describe("buildGuardedModelFetch", () => {
     expect(refreshTimeout).toHaveBeenCalledTimes(2);
   });
 
+  it("preserves the JSON error body on non-OK SSE responses so providers can surface error detail", async () => {
+    // Google's streamGenerateContent returns a JSON `{ error: { ... } }` body
+    // for 4xx responses but keeps content-type: text/event-stream. The
+    // sanitizer must not strip that body, otherwise createProviderHttpError
+    // sees an empty body and the thrown error degrades to just a status code.
+    const errorBody = JSON.stringify({
+      error: {
+        code: 400,
+        message: "GenerateContentRequest.contents: contents is not specified",
+        status: "INVALID_ARGUMENT",
+      },
+    });
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(errorBody, {
+        status: 400,
+        headers: { "content-type": "text/event-stream" },
+      }),
+      finalUrl:
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini:streamGenerateContent",
+      release: vi.fn(async () => undefined),
+    });
+
+    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
+    const model = {
+      id: "gemini-3.1-pro-preview",
+      provider: "google",
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    } as unknown as Model<"google-generative-ai">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini:streamGenerateContent",
+      { method: "POST" },
+    );
+
+    expect(response.status).toBe(400);
+    expect(response.ok).toBe(false);
+    expect(await response.text()).toBe(errorBody);
+  });
+
   describe("long retry-after handling", () => {
     const anthropicModel = {
       id: "sonnet-4.6",

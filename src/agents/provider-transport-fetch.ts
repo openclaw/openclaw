@@ -48,7 +48,12 @@ function findSseEventBoundary(buffer: string): { index: number; length: number }
 
 function sanitizeOpenAISdkSseResponse(response: Response): Response {
   const contentType = response.headers.get("content-type") ?? "";
-  if (!response.body || !/\btext\/event-stream\b/i.test(contentType)) {
+  // Non-OK responses bypass the OpenAI SDK's SSE parser; callers read the raw
+  // body via createProviderHttpError to surface the provider's error detail.
+  // Some providers (e.g. Google's streamGenerateContent) return a JSON error
+  // body but keep the streaming content-type, and stripping non-`data:` lines
+  // would erase that body and leave only a status code in the thrown error.
+  if (!response.ok || !response.body || !/\btext\/event-stream\b/i.test(contentType)) {
     return response;
   }
 
