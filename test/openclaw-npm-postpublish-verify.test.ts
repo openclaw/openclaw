@@ -7,6 +7,7 @@ import {
   buildPublishedInstallScenarios,
   collectInstalledBundledRuntimeSidecarPaths,
   collectInstalledContextEngineRuntimeErrors,
+  collectInstalledPluginSdkZodArtifactErrors,
   collectInstalledRootDependencyManifestErrors,
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
@@ -140,6 +141,48 @@ describe("collectInstalledContextEngineRuntimeErrors", () => {
       );
 
       expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("collectInstalledPluginSdkZodArtifactErrors", () => {
+  function makeInstalledPackageRoot(): string {
+    return mkdtempSync(join(tmpdir(), "openclaw-postpublish-zod-sdk-"));
+  }
+
+  it("rejects plugin-sdk zod artifacts with a bare zod export", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      mkdirSync(join(packageRoot, "dist", "plugin-sdk"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "plugin-sdk", "zod.js"),
+        'import "../zod-D2c0iocA.js";\nexport * from "zod";\n',
+        "utf8",
+      );
+
+      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([
+        "installed package plugin SDK artifact 'dist/plugin-sdk/zod.js' must be self-contained but imports zod.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts plugin-sdk zod artifacts that only import package-local chunks", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      mkdirSync(join(packageRoot, "dist", "plugin-sdk"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "plugin-sdk", "zod.js"),
+        'export { z } from "../zod-D2c0iocA.js";\n',
+        "utf8",
+      );
+
+      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
