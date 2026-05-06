@@ -19,6 +19,7 @@ import {
 import {
   inferUniqueProviderFromConfiguredModels,
   isCliProvider,
+  normalizeProviderId,
   normalizeStoredOverrideModel,
   parseModelRef,
   resolveConfiguredModelRef,
@@ -77,6 +78,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeOptionalLowercaseString,
+  resolvePrimaryStringValue,
 } from "../shared/string-coerce.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
@@ -373,6 +375,7 @@ type SessionListRowContext = {
   subagentRuns: ReturnType<typeof buildSubagentRunReadIndex>;
   storeChildSessionsByKey: Map<string, string[]>;
   selectedModelByOverrideRef: Map<string, ReturnType<typeof resolveSessionModelRef>>;
+  modelIdentityByEntryKey: Map<string, ReturnType<typeof resolveSessionModelIdentityRef>>;
   thinkingLevelsByModelRef: Map<string, ReturnType<typeof listThinkingLevelOptions>>;
 };
 
@@ -491,12 +494,123 @@ function buildSessionListRowContext(params: {
     subagentRuns,
     storeChildSessionsByKey: buildStoreChildSessionIndex(params.store, params.now, subagentRuns),
     selectedModelByOverrideRef: new Map(),
+    modelIdentityByEntryKey: new Map(),
     thinkingLevelsByModelRef: new Map(),
   };
 }
 
 function createSessionRowModelCacheKey(provider: string | undefined, model: string | undefined) {
   return `${normalizeLowercaseStringOrEmpty(provider)}\0${normalizeOptionalString(model) ?? ""}`;
+}
+
+function parseQualifiedModelRefForSessionList(
+  raw: string | undefined,
+): { provider: string; model: string } | undefined {
+  const trimmed = normalizeOptionalString(raw);
+  const slash = trimmed?.indexOf("/") ?? -1;
+  if (!trimmed || slash <= 0 || slash === trimmed.length - 1) {
+    return undefined;
+  }
+  const provider = normalizeProviderId(trimmed.slice(0, slash).trim());
+  const model = normalizeOptionalString(trimmed.slice(slash + 1));
+  return model ? { provider, model } : undefined;
+}
+
+function createSessionDefaultModelCacheKey(cfg: OpenClawConfig, agentId?: string): string {
+  const normalizedAgentId = normalizeAgentId(agentId);
+  const primary = normalizedAgentId
+    ? resolveAgentEffectiveModelPrimary(cfg, normalizedAgentId)
+    : resolvePrimaryStringValue(cfg.agents?.defaults?.model);
+  return normalizeOptionalString(primary) ?? "";
+}
+
+function createSessionEntryModelCacheKey(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  entry?:
+    | SessionEntry
+    | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">;
+  fallbackModelRef?: string;
+}) {
+  return [
+    createSessionDefaultModelCacheKey(params.cfg, params.agentId),
+    normalizeOptionalString(params.entry?.providerOverride) ?? "",
+    normalizeOptionalString(params.entry?.modelOverride) ?? "",
+    normalizeOptionalString(params.entry?.modelProvider) ?? "",
+    normalizeOptionalString(params.entry?.model) ?? "",
+    normalizeOptionalString(params.fallbackModelRef) ?? "",
+  ].join("\0");
+}
+
+function resolveSessionDefaultModelRefForRow(
+  cfg: OpenClawConfig,
+  agentId?: string,
+): { provider: string; model: string } {
+  if (agentId) {
+    const primary = resolveAgentEffectiveModelPrimary(cfg, agentId)?.trim();
+    const parsed = parseQualifiedModelRefForSessionList(primary);
+    if (parsed) {
+      return parsed;
+    }
+    return resolveDefaultModelForAgent({ cfg, agentId });
+  }
+  return resolveConfiguredModelRef({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+}
+
+function resolveSessionRowModelIdentityRef(params: {
+  cfg: OpenClawConfig;
+  entry?:
+    | SessionEntry
+    | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">;
+  agentId: string;
+  fallbackModelRef?: string;
+  rowContext?: SessionListRowContext;
+}): ReturnType<typeof resolveSessionModelIdentityRef> {
+  if (!params.rowContext) {
+    return resolveSessionModelIdentityRef(
+      params.cfg,
+      params.entry,
+      params.agentId,
+      params.fallbackModelRef,
+    );
+  }
+  const key = createSessionEntryModelCacheKey({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    entry: params.entry,
+    fallbackModelRef: params.fallbackModelRef,
+  });
+  const cached = params.rowContext.modelIdentityByEntryKey.get(key);
+  if (cached) {
+    return cached;
+  }
+
+  const runtimeModel = normalizeOptionalString(params.entry?.model);
+  const runtimeProvider = normalizeOptionalString(params.entry?.modelProvider);
+  if (
+    !runtimeModel &&
+    !runtimeProvider &&
+    !normalizeOptionalString(params.fallbackModelRef) &&
+    !normalizeOptionalString(params.entry?.providerOverride) &&
+    !normalizeOptionalString(params.entry?.modelOverride)
+  ) {
+    const resolved = resolveSessionDefaultModelRefForRow(params.cfg, params.agentId);
+    params.rowContext.modelIdentityByEntryKey.set(key, resolved);
+    return resolved;
+  }
+
+  const resolved = resolveSessionModelIdentityRef(
+    params.cfg,
+    params.entry,
+    params.agentId,
+    params.fallbackModelRef,
+  );
+  params.rowContext.modelIdentityByEntryKey.set(key, resolved);
+  return resolved;
 }
 
 function resolveSessionSelectedModelRef(params: {
@@ -1578,12 +1692,13 @@ export function buildGatewaySessionRow(params: {
     agentId: sessionAgentId,
     rowContext,
   });
-  const resolvedModel = resolveSessionModelIdentityRef(
+  const resolvedModel = resolveSessionRowModelIdentityRef({
     cfg,
     entry,
-    sessionAgentId,
-    subagentRun?.model,
-  );
+    agentId: sessionAgentId,
+    fallbackModelRef: subagentRun?.model,
+    rowContext,
+  });
   const runtimeModelPresent =
     Boolean(entry?.model?.trim()) || Boolean(entry?.modelProvider?.trim());
   const needsTranscriptTotalTokens =

@@ -1440,6 +1440,44 @@ describe("listSessionsFromStore selected model display", () => {
     expect(result.sessions[0]?.modelProvider).toBe("anthropic");
     expect(result.sessions[0]?.model).toBe("claude-opus-4-7");
   });
+
+  test("uses qualified selected defaults for rows without runtime model metadata", () => {
+    const cfg = {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.4" } },
+        list: [
+          { id: "main", model: { primary: "anthropic/claude-sonnet-4-6" } },
+          {
+            id: "review",
+            model: { primary: "vercel-ai-gateway/anthropic/claude-haiku-4-5" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: 2,
+        } as SessionEntry,
+        "agent:review:review": {
+          sessionId: "sess-review",
+          updatedAt: 1,
+        } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    expect(
+      result.sessions.map((session) => [session.key, session.modelProvider, session.model]),
+    ).toEqual([
+      ["agent:main:main", "anthropic", "claude-sonnet-4-6"],
+      ["agent:review:review", "vercel-ai-gateway", "anthropic/claude-haiku-4-5"],
+    ]);
+  });
 });
 
 describe("resolveSessionModelIdentityRef", () => {
