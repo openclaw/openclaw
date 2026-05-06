@@ -1,11 +1,12 @@
 import { z } from "zod";
 import { saveJsonFile } from "../infra/json-file.js";
-import { readJsonFile, readJsonFileSync, writeJsonAtomic } from "../infra/json-files.js";
+import { tryReadJson, tryReadJsonSync, writeJson } from "../infra/json-files.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { clearCurrentPluginMetadataSnapshotState } from "./current-plugin-metadata-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveCompatRegistryVersion } from "./installed-plugin-index-policy.js";
 import {
@@ -82,6 +83,7 @@ const InstalledPluginIndexRecordSchema = z.object({
   origin: z.string(),
   enabled: z.boolean(),
   enabledByDefault: z.boolean().optional(),
+  enabledByDefaultOnPlatforms: StringArraySchema.optional(),
   syntheticAuthRefs: StringArraySchema.optional(),
   startup: InstalledPluginIndexStartupSchema,
   compat: z.array(z.string()),
@@ -159,14 +161,14 @@ function parseInstalledPluginIndex(value: unknown): InstalledPluginIndex | null 
 export async function readPersistedInstalledPluginIndex(
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<InstalledPluginIndex | null> {
-  const parsed = await readJsonFile<unknown>(resolveInstalledPluginIndexStorePath(options));
+  const parsed = await tryReadJson<unknown>(resolveInstalledPluginIndexStorePath(options));
   return parseInstalledPluginIndex(parsed);
 }
 
 export function readPersistedInstalledPluginIndexSync(
   options: InstalledPluginIndexStoreOptions = {},
 ): InstalledPluginIndex | null {
-  const parsed = readJsonFileSync(resolveInstalledPluginIndexStorePath(options));
+  const parsed = tryReadJsonSync(resolveInstalledPluginIndexStorePath(options));
   return parseInstalledPluginIndex(parsed);
 }
 
@@ -175,12 +177,12 @@ export async function writePersistedInstalledPluginIndex(
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<string> {
   const filePath = resolveInstalledPluginIndexStorePath(options);
-  await writeJsonAtomic(
+  await writeJson(
     filePath,
     { ...index, warning: INSTALLED_PLUGIN_INDEX_WARNING },
     {
       trailingNewline: true,
-      ensureDirMode: 0o700,
+      dirMode: 0o700,
       mode: 0o600,
     },
   );
@@ -251,7 +253,7 @@ function refreshPersistedPolicyState(
         origin: plugin.origin,
         config: normalizedConfig,
         rootConfig: params.config,
-        enabledByDefault: plugin.enabledByDefault,
+        enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
       }).enabled,
     })),
   };

@@ -139,11 +139,11 @@ Set `diagnostics.otel.captureContent.*` to `true` only when your collector and
 retention policy are approved for prompt, response, tool, or system-prompt
 text. Each subkey is opt-in independently:
 
-- `inputMessages` — user prompt content.
-- `outputMessages` — model response content.
-- `toolInputs` — tool argument payloads.
-- `toolOutputs` — tool result payloads.
-- `systemPrompt` — assembled system/developer prompt.
+- `inputMessages` - user prompt content.
+- `outputMessages` - model response content.
+- `toolInputs` - tool argument payloads.
+- `toolOutputs` - tool result payloads.
+- `systemPrompt` - assembled system/developer prompt.
 
 When any subkey is enabled, model and tool spans get bounded, redacted
 `openclaw.content.*` attributes for that class only.
@@ -216,10 +216,17 @@ OpenClaw classifies sessions by the work it can still observe:
   still making progress.
 - `session.stalled`: active work exists, but the active run has not reported
   recent progress. Stalled embedded runs stay observe-only at first, then
-  abort-drain after at least 10 minutes and 5x `diagnostics.stuckSessionWarnMs`
-  with no progress so queued turns behind the lane can resume.
+  abort-drain after `diagnostics.stuckSessionAbortMs` with no progress so queued
+  turns behind the lane can resume. When unset, the abort threshold defaults to
+  the safer extended window of at least 10 minutes and 5x
+  `diagnostics.stuckSessionWarnMs`.
 - `session.stuck`: stale session bookkeeping with no active work. This releases
   the affected session lane immediately.
+
+Recovery emits structured `session.recovery.requested` and
+`session.recovery.completed` events. Diagnostic session state is marked idle
+only after a mutating recovery outcome (`aborted` or `released`) and only if the
+same processing generation is still current.
 
 Only `session.stuck` emits the `openclaw.session.stuck` counter, the
 `openclaw.session.stuck_age_ms` histogram, and the `openclaw.session.stuck`
@@ -268,11 +275,11 @@ heartbeat tick. For the config knob and defaults, see
 - `openclaw.exec`
   - `openclaw.exec.target`, `openclaw.exec.mode`, `openclaw.outcome`, `openclaw.failureKind`, `openclaw.exec.command_length`, `openclaw.exec.exit_code`, `openclaw.exec.timed_out`
 - `openclaw.webhook.processed`
-  - `openclaw.channel`, `openclaw.webhook`, `openclaw.chatId`
+  - `openclaw.channel`, `openclaw.webhook`
 - `openclaw.webhook.error`
-  - `openclaw.channel`, `openclaw.webhook`, `openclaw.chatId`, `openclaw.error`
+  - `openclaw.channel`, `openclaw.webhook`, `openclaw.error`
 - `openclaw.message.processed`
-  - `openclaw.channel`, `openclaw.outcome`, `openclaw.chatId`, `openclaw.messageId`, `openclaw.reason`
+  - `openclaw.channel`, `openclaw.outcome`, `openclaw.reason`
 - `openclaw.message.delivery`
   - `openclaw.channel`, `openclaw.delivery.kind`, `openclaw.outcome`, `openclaw.errorCategory`, `openclaw.delivery.result_count`
 - `openclaw.session.stuck`
@@ -295,7 +302,7 @@ to them directly without OTLP export.
 
 **Model usage**
 
-- `model.usage` — tokens, cost, duration, context, provider/model/channel,
+- `model.usage` - tokens, cost, duration, context, provider/model/channel,
   session ids. `usage` is provider/turn accounting for cost and telemetry;
   `context.used` is the current prompt/context snapshot and can be lower than
   provider `usage.total` when cached input or tool-loop calls are involved.
@@ -315,7 +322,7 @@ to them directly without OTLP export.
 
 **Harness lifecycle**
 
-- `harness.run.started` / `harness.run.completed` / `harness.run.error` —
+- `harness.run.started` / `harness.run.completed` / `harness.run.error` -
   per-run lifecycle for the agent harness. Includes `harnessId`, optional
   `pluginId`, provider/model/channel, and run id. Completion adds
   `durationMs`, `outcome`, optional `resultClassification`, `yieldDetected`,
@@ -325,7 +332,7 @@ to them directly without OTLP export.
 
 **Exec**
 
-- `exec.process.completed` — terminal outcome, duration, target, mode, exit
+- `exec.process.completed` - terminal outcome, duration, target, mode, exit
   code, and failure kind. Command text and working directories are not
   included.
 
@@ -373,8 +380,8 @@ You can also leave `diagnostics-otel` out of `plugins.allow`, or run
 
 ## Related
 
-- [Logging](/logging) — file logs, console output, CLI tailing, and the Control UI Logs tab
-- [Gateway logging internals](/gateway/logging) — WS log styles, subsystem prefixes, and console capture
-- [Diagnostics flags](/diagnostics/flags) — targeted debug-log flags
-- [Diagnostics export](/gateway/diagnostics) — operator support-bundle tool (separate from OTEL export)
-- [Configuration reference](/gateway/configuration-reference#diagnostics) — full `diagnostics.*` field reference
+- [Logging](/logging) - file logs, console output, CLI tailing, and the Control UI Logs tab
+- [Gateway logging internals](/gateway/logging) - WS log styles, subsystem prefixes, and console capture
+- [Diagnostics flags](/diagnostics/flags) - targeted debug-log flags
+- [Diagnostics export](/gateway/diagnostics) - operator support-bundle tool (separate from OTEL export)
+- [Configuration reference](/gateway/configuration-reference#diagnostics) - full `diagnostics.*` field reference

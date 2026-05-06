@@ -1,6 +1,7 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/ids.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
 import {
@@ -12,6 +13,10 @@ import {
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
 import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import {
+  getOfficialExternalPluginCatalogEntry,
+  resolveOfficialExternalPluginInstall,
+} from "../plugins/official-external-plugin-catalog.js";
 import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
@@ -29,17 +34,19 @@ import {
 } from "../shared/avatar-policy.js";
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net/ip.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { isRecord } from "../utils.js";
+import { isRecord, resolveUserPath } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
 import { materializeRuntimeConfig } from "./materialize.js";
+import { collectConfiguredModelRefs } from "./model-refs.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
+const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
 
 type UnknownIssueRecord = Record<string, unknown>;
 type ConfigPathSegment = string | number;
@@ -49,10 +56,6 @@ type AllowedValuesCollection = {
   hasValues: boolean;
 };
 type JsonSchemaLike = Record<string, unknown>;
-type ConfiguredModelRef = {
-  path: string;
-  value: string;
-};
 
 function stripDeprecatedValidationKeys(raw: unknown): unknown {
   if (!isRecord(raw) || !isRecord(raw.commands) || !Object.hasOwn(raw.commands, "modelsWrite")) {
@@ -93,6 +96,22 @@ function toConfigPathSegments(path: unknown): ConfigPathSegment[] {
 
 function formatConfigPath(segments: readonly ConfigPathSegment[]): string {
   return segments.join(".");
+}
+
+function formatMissingOfficialExternalPluginWarning(pluginId: string): string | null {
+  const catalogEntry = getOfficialExternalPluginCatalogEntry(pluginId);
+  if (!catalogEntry) {
+    return null;
+  }
+  const install = resolveOfficialExternalPluginInstall(catalogEntry);
+  const npmSpec = install?.npmSpec?.trim();
+  const clawhubSpec = install?.clawhubSpec?.trim();
+  const installSpec =
+    install?.defaultChoice === "clawhub" ? (clawhubSpec ?? npmSpec) : (npmSpec ?? clawhubSpec);
+  if (!installSpec) {
+    return null;
+  }
+  return `plugin not installed: ${pluginId} — install the official external plugin with: openclaw plugins install ${installSpec}`;
 }
 
 function asJsonSchemaLike(value: unknown): JsonSchemaLike | null {
@@ -1109,58 +1128,6 @@ function validateConfigObjectWithPluginsBase(
     issues.push(issue);
   };
 
-  const collectConfiguredModelRefs = (): ConfiguredModelRef[] => {
-    const refs: ConfiguredModelRef[] = [];
-    const pushModelRef = (path: string, value: unknown) => {
-      if (typeof value === "string" && value.trim()) {
-        refs.push({ path, value: value.trim() });
-      }
-    };
-    const collectModelConfig = (path: string, value: unknown) => {
-      if (typeof value === "string") {
-        pushModelRef(path, value);
-        return;
-      }
-      if (!isRecord(value)) {
-        return;
-      }
-      pushModelRef(`${path}.primary`, value.primary);
-      if (Array.isArray(value.fallbacks)) {
-        for (const [index, entry] of value.fallbacks.entries()) {
-          pushModelRef(`${path}.fallbacks.${index}`, entry);
-        }
-      }
-    };
-    const collectFromAgent = (path: string, agent: unknown) => {
-      if (!isRecord(agent)) {
-        return;
-      }
-      for (const key of [
-        "model",
-        "imageModel",
-        "imageGenerationModel",
-        "videoGenerationModel",
-        "musicGenerationModel",
-        "pdfModel",
-      ]) {
-        collectModelConfig(`${path}.${key}`, agent[key]);
-      }
-      if (isRecord(agent.models)) {
-        for (const modelRef of Object.keys(agent.models)) {
-          pushModelRef(`${path}.models.${modelRef}`, modelRef);
-        }
-      }
-    };
-
-    collectFromAgent("agents.defaults", config.agents?.defaults);
-    if (Array.isArray(config.agents?.list)) {
-      for (const [index, entry] of config.agents.list.entries()) {
-        collectFromAgent(`agents.list.${index}`, entry);
-      }
-    }
-    return refs;
-  };
-
   const parseProviderModelRef = (value: string): { provider: string; model: string } | null => {
     const slashIndex = value.indexOf("/");
     if (slashIndex <= 0 || slashIndex >= value.length - 1) {
@@ -1172,7 +1139,7 @@ function validateConfigObjectWithPluginsBase(
   };
 
   const validateConfiguredModelRefs = () => {
-    const configuredRefs = collectConfiguredModelRefs();
+    const configuredRefs = collectConfiguredModelRefs(config);
     if (configuredRefs.length === 0) {
       return;
     }
@@ -1382,6 +1349,96 @@ function validateConfigObjectWithPluginsBase(
   const knownIds = ensureKnownIds();
   const normalizedPlugins = ensureNormalizedPlugins();
   const effectiveConfig = ensureCompatConfig();
+  const blockedPluginDiagnostics = new Map<string, { message: string; source?: string }>();
+  const blockedPluginDiagnosticsWithSource: Array<{ message: string; source: string }> = [];
+  const normalizeBlockedDiagnosticPath = (value: string | undefined): string => {
+    const trimmed = value?.trim();
+    if (!trimmed) {
+      return "";
+    }
+    try {
+      return path.resolve(resolveUserPath(trimmed, opts.env ?? process.env));
+    } catch {
+      return path.resolve(trimmed);
+    }
+  };
+  for (const diag of registry.diagnostics) {
+    if (!diag.message.startsWith(BLOCKED_PLUGIN_CANDIDATE_PREFIX)) {
+      continue;
+    }
+    if (!diag.pluginId && diag.source) {
+      blockedPluginDiagnosticsWithSource.push({
+        message: diag.message,
+        source: diag.source,
+      });
+    }
+    if (diag.pluginId) {
+      const normalizedPluginId = normalizePluginId(diag.pluginId);
+      for (const key of [diag.pluginId, normalizedPluginId]) {
+        if (!key || blockedPluginDiagnostics.has(key)) {
+          continue;
+        }
+        blockedPluginDiagnostics.set(key, {
+          message: diag.message,
+          ...(diag.source ? { source: diag.source } : {}),
+        });
+      }
+    }
+  }
+  const blockedDiagnosticSourceMatchesPluginId = (
+    diagnostic: { message: string; source: string },
+    pluginId: string,
+  ): boolean => {
+    const normalizedPluginId = normalizePluginId(pluginId);
+    if (!normalizedPluginId) {
+      return false;
+    }
+    const sourcePath = normalizeBlockedDiagnosticPath(diagnostic.source);
+    if (!sourcePath) {
+      return false;
+    }
+    if (
+      normalizePluginId(path.basename(sourcePath)) === normalizedPluginId ||
+      normalizePluginId(path.basename(path.dirname(sourcePath))) === normalizedPluginId
+    ) {
+      return true;
+    }
+    const loadPaths = config.plugins?.load?.paths;
+    if (!Array.isArray(loadPaths)) {
+      return false;
+    }
+    for (const loadPath of loadPaths) {
+      if (typeof loadPath !== "string") {
+        continue;
+      }
+      const resolvedLoadPath = normalizeBlockedDiagnosticPath(loadPath);
+      if (!resolvedLoadPath) {
+        continue;
+      }
+      if (normalizePluginId(path.basename(resolvedLoadPath)) !== normalizedPluginId) {
+        continue;
+      }
+      if (
+        sourcePath === resolvedLoadPath ||
+        isPathInside(resolvedLoadPath, sourcePath) ||
+        isPathInside(sourcePath, resolvedLoadPath)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const findBlockedPluginDiagnostic = (pluginId: string) => {
+    const direct =
+      blockedPluginDiagnostics.get(pluginId) ??
+      blockedPluginDiagnostics.get(normalizePluginId(pluginId));
+    if (direct) {
+      return direct;
+    }
+    return blockedPluginDiagnosticsWithSource.find((diagnostic) =>
+      blockedDiagnosticSourceMatchesPluginId(diagnostic, pluginId),
+    );
+  };
   const pushMissingPluginIssue = (
     path: string,
     pluginId: string,
@@ -1393,6 +1450,27 @@ function validateConfigObjectWithPluginsBase(
         message: `plugin removed: ${pluginId} (stale config entry ignored; remove it from plugins config)`,
       });
       return;
+    }
+    const blockedDiagnostic = findBlockedPluginDiagnostic(pluginId);
+    if (blockedDiagnostic) {
+      const source = blockedDiagnostic.source ? `; source: ${blockedDiagnostic.source}` : "";
+      const message = `plugin present but blocked: ${pluginId} (see preceding plugin warning${source}; fix the blocked plugin path instead of removing config)`;
+      if (opts?.warnOnly) {
+        warnings.push({ path, message });
+      } else {
+        issues.push({ path, message });
+      }
+      return;
+    }
+    if (opts?.warnOnly) {
+      const externalInstallWarning = formatMissingOfficialExternalPluginWarning(pluginId);
+      if (externalInstallWarning) {
+        warnings.push({
+          path,
+          message: externalInstallWarning,
+        });
+        return;
+      }
     }
     if (opts?.warnOnly) {
       warnings.push({

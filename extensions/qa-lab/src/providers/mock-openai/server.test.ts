@@ -221,6 +221,48 @@ describe("qa mock openai server", () => {
     expect(partialBody).toContain('"type":"response.output_text.delta"');
     expect(partialBody).toContain("QA_PARTIAL_OK");
 
+    const telegramLongResponse = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          makeUserInput("Telegram long final QA check. Use the scripted long final response."),
+        ],
+      }),
+    });
+    expect(telegramLongResponse.status).toBe(200);
+    const telegramLongBody = await telegramLongResponse.text();
+    expect(telegramLongBody).toContain('"type":"response.output_text.delta"');
+    expect(telegramLongBody).toContain('"phase":"final_answer"');
+    expect(telegramLongBody).toContain("TELEGRAM-LONG-FINAL-BEGIN");
+    expect(telegramLongBody).toContain("TELEGRAM-LONG-FINAL-END");
+    expect(telegramLongBody.length).toBeGreaterThan(4_500);
+
+    const telegramThreeChunkLongResponse = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          makeUserInput(
+            "Telegram long final three chunk QA check. Use the scripted three chunk final response.",
+          ),
+        ],
+      }),
+    });
+    expect(telegramThreeChunkLongResponse.status).toBe(200);
+    const telegramThreeChunkLongBody = await telegramThreeChunkLongResponse.text();
+    expect(telegramThreeChunkLongBody).toContain('"type":"response.output_text.delta"');
+    expect(telegramThreeChunkLongBody).toContain('"phase":"final_answer"');
+    expect(telegramThreeChunkLongBody).toContain("TELEGRAM-LONG-FINAL-3CHUNK-BEGIN");
+    expect(telegramThreeChunkLongBody).toContain("TELEGRAM-LONG-FINAL-3CHUNK-END");
+    expect(telegramThreeChunkLongBody.length).toBeGreaterThan(8_000);
+
     const blockResponse = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
       headers: {
@@ -265,6 +307,43 @@ describe("qa mock openai server", () => {
     const body = await response.text();
     expect(body).toContain('"name":"read"');
     expect(body).toContain("qa-progress-target.txt");
+  });
+
+  it("plans deterministic tool-progress reads for exact-marker prompts", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Tool progress QA check: use the read tool exactly once on `QA_KICKOFF_TASK.md` before answering. After that read completes, reply with only this exact marker and no other text: `TOOL_PROGRESS_MARKER_OK`.";
+
+    const toolPlan = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [makeUserInput(prompt)],
+      }),
+    });
+
+    expect(toolPlan.status).toBe(200);
+    const toolPlanBody = await toolPlan.text();
+    expect(toolPlanBody).toContain('"name":"read"');
+    expect(toolPlanBody).toContain("QA_KICKOFF_TASK.md");
+
+    const final = await expectResponsesJson<{
+      output: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      input: [
+        makeUserInput(prompt),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_1",
+          output: JSON.stringify({ text: "kickoff task" }),
+        },
+      ],
+    });
+    expect(final.output[0]?.content?.[0]?.text).toBe("TOOL_PROGRESS_MARKER_OK");
   });
 
   it("requires deterministic tool-progress error prompts to observe a failed tool", async () => {
@@ -1833,7 +1912,7 @@ describe("qa mock openai server", () => {
     });
 
     const channelPrompt =
-      "@qa-sut.example.test Image generation check: generate a QA lighthouse image and summarize it in one short sentence.";
+      '@qa-sut.example.test /tool image_generate action=generate prompt="QA lighthouse image for Matrix delivery testing" size=1024x1024 count=1';
     const genericPrompt =
       "Continue with the QA scenario plan and report worked, failed, and blocked items.";
 

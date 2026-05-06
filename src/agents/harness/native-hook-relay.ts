@@ -1,14 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import {
-  chmodSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import {
   createServer,
   request as httpRequest,
@@ -18,7 +9,9 @@ import {
 } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
+import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
 import { runBeforeToolCallHook } from "../pi-tools.before-tool-call.js";
@@ -81,6 +74,7 @@ export type NativeHookRelayRegistration = {
   agentId?: string;
   sessionId: string;
   sessionKey?: string;
+  config?: OpenClawConfig;
   runId: string;
   allowedEvents: readonly NativeHookRelayEvent[];
   expiresAtMs: number;
@@ -98,6 +92,7 @@ export type RegisterNativeHookRelayParams = {
   agentId?: string;
   sessionId: string;
   sessionKey?: string;
+  config?: OpenClawConfig;
   runId: string;
   allowedEvents?: readonly NativeHookRelayEvent[];
   ttlMs?: number;
@@ -299,6 +294,7 @@ export function registerNativeHookRelay(
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(params.config ? { config: params.config } : {}),
     runId: params.runId,
     allowedEvents,
     expiresAtMs: Date.now() + normalizePositiveInteger(params.ttlMs, DEFAULT_RELAY_TTL_MS),
@@ -819,18 +815,10 @@ function writeNativeHookRelayBridgeRecord(
   registryPath: string,
   record: NativeHookRelayBridgeRecord,
 ): void {
-  const tempPath = path.join(
-    path.dirname(registryPath),
-    `.${path.basename(registryPath)}.${process.pid}.${randomUUID()}.tmp`,
+  privateFileStoreSync(path.dirname(registryPath)).writeText(
+    path.basename(registryPath),
+    `${JSON.stringify(record)}\n`,
   );
-  try {
-    writeFileSync(tempPath, `${JSON.stringify(record)}\n`, { mode: 0o600, flag: "wx" });
-    renameSync(tempPath, registryPath);
-    chmodSync(registryPath, 0o600);
-  } catch (error) {
-    rmSync(tempPath, { force: true });
-    throw error;
-  }
 }
 
 function nativeHookRelayBridgeRegistryPath(relayId: string): string {
@@ -878,6 +866,7 @@ async function runNativeHookRelayPreToolUse(params: {
       ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
       sessionId: params.registration.sessionId,
       ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
+      ...(params.registration.config ? { config: params.registration.config } : {}),
       runId: params.registration.runId,
     },
   });

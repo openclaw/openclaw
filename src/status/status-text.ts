@@ -1,3 +1,4 @@
+import os from "node:os";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -6,6 +7,7 @@ import {
   resolveSessionAgentId,
   resolveAgentModelFallbacksOverride,
 } from "../agents/agent-scope.js";
+import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
 import {
@@ -18,6 +20,7 @@ import type { ThinkLevel } from "../auto-reply/thinking.js";
 import { toAgentModelListLike } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import {
   formatUsageWindowSummary,
   loadProviderUsageSummary,
@@ -77,6 +80,19 @@ function loadStatusSubagentsRuntime(): Promise<typeof import("./status-subagents
 function loadStatusQueueRuntime(): Promise<typeof import("./status-queue.runtime.js")> {
   const runtimePromise = (statusQueueRuntimePromise ??= import("./status-queue.runtime.js"));
   return runtimePromise;
+}
+
+function resolveStatusRuntimeContextTokens(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): number | undefined {
+  return resolveContextTokensForModel({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    allowAsyncLoad: false,
+  });
 }
 
 function shouldLoadUsageSummary(params: {
@@ -154,6 +170,16 @@ function formatAgentTaskCountsLine(agentId: string): string | undefined {
     return undefined;
   }
   return `📌 Tasks: ${snapshot.activeCount} active · ${snapshot.totalCount} total · agent-local`;
+}
+
+function formatStatusUptimeDuration(ms: number): string {
+  return formatDurationCompact(ms, { spaced: true }) ?? "0s";
+}
+
+export function buildStatusUptimeLine(): string {
+  const gatewayUptimeMs = Math.max(0, Math.round(process.uptime() * 1000));
+  const systemUptimeMs = Math.max(0, Math.round(os.uptime() * 1000));
+  return `⏱️ Uptime: gateway ${formatStatusUptimeDuration(gatewayUptimeMs)} · system ${formatStatusUptimeDuration(systemUptimeMs)}`;
 }
 
 export async function buildStatusText(params: BuildStatusTextParams): Promise<string> {
@@ -330,6 +356,15 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
     (agentDefaults.thinkingDefault as ThinkLevel | undefined);
+  const runtimeContextProvider = resolveStatusAuthProvider({
+    provider: modelRefs.active.provider || provider,
+    effectiveHarness,
+  });
+  const runtimeContextTokens = resolveStatusRuntimeContextTokens({
+    cfg,
+    provider: runtimeContextProvider,
+    model: modelRefs.active.model || model,
+  });
   return buildStatusMessage({
     config: cfg,
     agent: {
@@ -350,6 +385,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       typeof agentDefaults.contextTokens === "number" && agentDefaults.contextTokens > 0
         ? agentDefaults.contextTokens
         : undefined,
+    runtimeContextTokens,
     sessionEntry,
     sessionKey,
     parentSessionKey,
@@ -365,6 +401,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     resolvedElevated: resolvedElevatedLevel,
     modelAuth: selectedModelAuth,
     activeModelAuth,
+    uptimeLine: buildStatusUptimeLine(),
     usageLine: usageLine ?? undefined,
     queue: {
       mode: queueSettings.mode,
