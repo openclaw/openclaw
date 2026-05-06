@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -81,6 +82,7 @@ function createTaskRegistryMaintenanceHarness(params: {
             sessionKey: "",
             storeSessionKey: "",
             entry: acpEntry,
+            acp: acpEntry?.acp,
             storeReadFailed: false,
           } satisfies AcpSessionStoreEntry)
         : ({
@@ -89,6 +91,7 @@ function createTaskRegistryMaintenanceHarness(params: {
             sessionKey: "",
             storeSessionKey: "",
             entry: undefined,
+            acp: undefined,
             storeReadFailed: false,
           } satisfies AcpSessionStoreEntry),
     loadSessionStore: params.loadSessionStore ?? (() => sessionStore),
@@ -447,6 +450,109 @@ describe("task-registry maintenance issue #60299", () => {
 
     expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
     expect(currentTasks.get(task.taskId)).toMatchObject({ status: "lost" });
+  });
+
+  it("marks stale ACP tasks lost when metadata still says running but the transcript file is gone", async () => {
+    const childSessionKey = "agent:codex:acp:zombie-session";
+    const now = Date.now();
+    const task = makeStaleTask({
+      runtime: "acp",
+      childSessionKey,
+      createdAt: now - GRACE_EXPIRED_MS - 8 * 24 * 60 * 60_000,
+      startedAt: now - GRACE_EXPIRED_MS - 8 * 24 * 60 * 60_000,
+      lastEventAt: now - GRACE_EXPIRED_MS - 8 * 24 * 60 * 60_000,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      acpEntry: {
+        sessionId: childSessionKey,
+        updatedAt: now - 8 * 24 * 60 * 60_000,
+        sessionFile: undefined,
+        acp: {
+          backend: "codex",
+          agent: "codex",
+          runtimeSessionName: "zombie-session",
+          mode: "persistent",
+          state: "running",
+          lastActivityAt: now - 8 * 24 * 60 * 60_000,
+        },
+      },
+    });
+
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "lost" });
+  });
+
+  it("marks stale ACP tasks lost when sessionFile points to a nonexistent file", async () => {
+    const childSessionKey = "agent:codex:acp:dangling-session";
+    const now = Date.now();
+    const danglingPath = `/tmp/nonexistent-acp-zombie-${Date.now()}.jsonl`;
+    const task = makeStaleTask({
+      runtime: "acp",
+      childSessionKey,
+      createdAt: now - GRACE_EXPIRED_MS - 8 * 24 * 60 * 60_000,
+      startedAt: now - GRACE_EXPIRED_MS - 8 * 24 * 60 * 60_000,
+      lastEventAt: now - GRACE_EXPIRED_MS - 8 * 24 * 60 * 60_000,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      acpEntry: {
+        sessionId: childSessionKey,
+        updatedAt: now - 8 * 24 * 60 * 60_000,
+        sessionFile: danglingPath,
+        acp: {
+          backend: "codex",
+          agent: "codex",
+          runtimeSessionName: "dangling-session",
+          mode: "persistent",
+          state: "running",
+          lastActivityAt: now - 8 * 24 * 60 * 60_000,
+        },
+      },
+    });
+
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "lost" });
+  });
+
+  it("keeps stale ACP tasks live when the transcript file exists on disk", async () => {
+    const childSessionKey = "agent:codex:acp:live-session";
+    const now = Date.now();
+    const task = makeStaleTask({
+      runtime: "acp",
+      childSessionKey,
+      createdAt: now - GRACE_EXPIRED_MS - 8 * 24 * 60 * 60_000,
+      startedAt: now - GRACE_EXPIRED_MS - 8 * 24 * 60 * 60_000,
+      lastEventAt: now - GRACE_EXPIRED_MS - 8 * 24 * 60 * 60_000,
+    });
+
+    const livePath = `/tmp/acp-live-session-${Date.now()}.jsonl`;
+    fs.writeFileSync(livePath, '{"type":"session"}\n');
+    try {
+      const { currentTasks } = createTaskRegistryMaintenanceHarness({
+        tasks: [task],
+        acpEntry: {
+          sessionId: childSessionKey,
+          updatedAt: now - 8 * 24 * 60 * 60_000,
+          sessionFile: livePath,
+          acp: {
+            backend: "codex",
+            agent: "codex",
+            runtimeSessionName: "live-session",
+            mode: "persistent",
+            state: "running",
+            lastActivityAt: now - 8 * 24 * 60 * 60_000,
+          },
+        },
+      });
+
+      expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
+      expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
+    } finally {
+      fs.rmSync(livePath, { force: true });
+    }
   });
 
   it("keeps chat-backed cli tasks live while the owning run context is still active", async () => {
