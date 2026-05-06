@@ -34,6 +34,36 @@ describe("isHeartbeatUserMessage", () => {
     ).toBe(true);
   });
 
+  it("matches heartbeat prompts with metadata prefix", () => {
+    const metadataPrefix = `Conversation info (untrusted metadata):
+\`\`\`json
+{
+  "chat_id": "user:1000001",
+  "message_id": "heartbeat-0001",
+  "sender_id": "1000001",
+  "sender": "TestUser"
+}
+\`\`\``;
+    const heartbeatWithMetadata = `${metadataPrefix}\n\n${HEARTBEAT_TRANSCRIPT_PROMPT}`;
+    expect(
+      isHeartbeatUserMessage({
+        role: "user",
+        content: heartbeatWithMetadata,
+      }),
+    ).toBe(true);
+
+    const heartbeatPromptWithMetadata = `${metadataPrefix}\n\n${HEARTBEAT_PROMPT}`;
+    expect(
+      isHeartbeatUserMessage(
+        {
+          role: "user",
+          content: heartbeatPromptWithMetadata,
+        },
+        HEARTBEAT_PROMPT,
+      ),
+    ).toBe(true);
+  });
+
   it("ignores quoted or non-user token mentions", () => {
     expect(
       isHeartbeatUserMessage({
