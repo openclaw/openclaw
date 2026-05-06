@@ -26,6 +26,22 @@ vi.mock("./channel-react-action.runtime.js", async () => {
       }
       return undefined;
     },
+    readNumberParam: (
+      params: Record<string, unknown>,
+      key: string,
+      options?: { required?: boolean },
+    ) => {
+      const value = params[key];
+      if (typeof value === "number" && Number.isFinite(value)) {
+        return value;
+      }
+      if (options?.required) {
+        const err = new Error(`${key} required`);
+        err.name = "ToolInputError";
+        throw err;
+      }
+      return undefined;
+    },
     isWhatsAppGroupJid: (value?: string | null) => (value ?? "").trim().endsWith("@g.us"),
     normalizeWhatsAppTarget: (value?: string | null) => {
       const raw = (value ?? "").trim();
@@ -73,6 +89,32 @@ describe("whatsapp react action messageId resolution", () => {
 
   beforeEach(() => {
     hoisted.handleWhatsAppAction.mockClear();
+  });
+
+  it("routes location actions", async () => {
+    await handleWhatsAppReactAction({
+      action: "location",
+      params: {
+        to: "+1555",
+        latitude: 18.4861,
+        longitude: -69.9312,
+        locationName: "Santo Domingo",
+        locationAddress: "Distrito Nacional",
+      },
+      cfg: baseCfg,
+      accountId: "default",
+    });
+    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "location",
+        to: "+1555",
+        latitude: 18.4861,
+        longitude: -69.9312,
+        locationName: "Santo Domingo",
+        locationAddress: "Distrito Nacional",
+      }),
+      baseCfg,
+    );
   });
 
   it("uses explicit messageId when provided", async () => {

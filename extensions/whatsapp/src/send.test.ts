@@ -17,6 +17,7 @@ const loadWebMediaMock = vi.fn();
 let sendMessageWhatsApp: typeof import("./send.js").sendMessageWhatsApp;
 let sendPollWhatsApp: typeof import("./send.js").sendPollWhatsApp;
 let sendReactionWhatsApp: typeof import("./send.js").sendReactionWhatsApp;
+let sendLocationWhatsApp: typeof import("./send.js").sendLocationWhatsApp;
 let resetLogger: typeof import("openclaw/plugin-sdk/runtime-env").resetLogger;
 let setLoggerOverride: typeof import("openclaw/plugin-sdk/runtime-env").setLoggerOverride;
 
@@ -83,9 +84,11 @@ describe("web outbound", () => {
   const sendMessage = vi.fn(async () => acceptedSendResult("text", "msg123"));
   const sendPoll = vi.fn(async () => acceptedSendResult("poll", "poll123"));
   const sendReaction = vi.fn(async () => acceptedSendResult("reaction", "reaction123"));
+  const sendLocation = vi.fn(async () => acceptedSendResult("location", "loc123"));
 
   beforeAll(async () => {
-    ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } = await import("./send.js"));
+    ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp, sendLocationWhatsApp } =
+      await import("./send.js"));
     ({ resetLogger, setLoggerOverride } = await import("openclaw/plugin-sdk/runtime-env"));
   });
 
@@ -121,6 +124,7 @@ describe("web outbound", () => {
       sendMessage,
       sendPoll,
       sendReaction,
+      sendLocation,
     });
   });
 
@@ -435,6 +439,7 @@ describe("web outbound", () => {
       sendMessage,
       sendPoll,
       sendReaction,
+      sendLocation,
     });
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: Buffer.from("img"),
@@ -514,6 +519,45 @@ describe("web outbound", () => {
     expect(content).not.toContain(`"to":"+1555"`);
     expect(content).not.toContain(`"jid":"1555@s.whatsapp.net"`);
     expect(content).not.toContain("Lunch?");
+  });
+
+  it("sends native locations via active listener", async () => {
+    const result = await sendLocationWhatsApp(
+      "+1555",
+      {
+        latitude: 18.4861,
+        longitude: -69.9312,
+        locationName: "Santo Domingo",
+        locationAddress: "Distrito Nacional",
+      },
+      { verbose: false, cfg: WHATSAPP_TEST_CFG },
+    );
+
+    expect(result).toEqual({
+      messageId: "loc123",
+      toJid: "1555@s.whatsapp.net",
+    });
+    expect(sendComposingTo).toHaveBeenCalledWith("+1555");
+    expect(sendLocation).toHaveBeenCalledWith("+1555", 18.4861, -69.9312, {
+      locationName: "Santo Domingo",
+      locationAddress: "Distrito Nacional",
+      accuracyInMeters: undefined,
+    });
+  });
+
+  it("skips composing for newsletter location sends", async () => {
+    await sendLocationWhatsApp(
+      "120363401234567890@newsletter",
+      { latitude: 18.4861, longitude: -69.9312 },
+      { verbose: false, cfg: WHATSAPP_TEST_CFG },
+    );
+
+    expect(sendComposingTo).not.toHaveBeenCalled();
+    expect(sendLocation).toHaveBeenCalledWith("120363401234567890@newsletter", 18.4861, -69.9312, {
+      locationName: undefined,
+      locationAddress: undefined,
+      accuracyInMeters: undefined,
+    });
   });
 
   it("sends reactions via active listener", async () => {

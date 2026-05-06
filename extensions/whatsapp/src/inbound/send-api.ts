@@ -161,6 +161,28 @@ export function createWebSendApi(params: {
       } as AnyMessageContent);
       return normalizeWhatsAppSendResult(result, "reaction");
     },
+    sendLocation: async (
+      to: string,
+      latitude: number,
+      longitude: number,
+      options?: { locationName?: string; locationAddress?: string; accuracyInMeters?: number },
+    ): Promise<WhatsAppSendResult> => {
+      const jid = toWhatsappJid(to);
+      const locationPayload: Record<string, unknown> = {
+        degreesLatitude: latitude,
+        degreesLongitude: longitude,
+      };
+      if (options?.locationName) locationPayload.name = options.locationName;
+      if (options?.locationAddress) locationPayload.address = options.locationAddress;
+      if (options?.accuracyInMeters != null) {
+        locationPayload.accuracyInMeters = options.accuracyInMeters;
+      }
+      const result = await params.sock.sendMessage(jid, {
+        location: locationPayload,
+      } as AnyMessageContent);
+      recordWhatsAppOutbound(params.defaultAccountId);
+      return normalizeWhatsAppSendResult(result, "location");
+    },
     sendComposingTo: async (to: string): Promise<void> => {
       const jid = toWhatsappJid(to);
       if (isWhatsAppNewsletterJid(jid)) {

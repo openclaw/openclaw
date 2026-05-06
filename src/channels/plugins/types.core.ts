@@ -776,6 +776,22 @@ export type ChannelPollContext = {
   gatewayClientScopes?: readonly string[];
 };
 
+export type ChannelLocationResult = {
+  messageId: string;
+  toJid?: string;
+};
+
+export type ChannelLocationContext = {
+  cfg: OpenClawConfig;
+  to: string;
+  latitude: number;
+  longitude: number;
+  locationName?: string;
+  locationAddress?: string;
+  accuracyInMeters?: number;
+  accountId?: string | null;
+};
+
 /** Minimal base for all channel probe results. Channel-specific probes extend this. */
 export type BaseProbeResult<TError = string | null> = {
   ok: boolean;

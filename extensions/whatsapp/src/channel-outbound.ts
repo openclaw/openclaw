@@ -8,7 +8,7 @@ import { createWhatsAppOutboundBase } from "./outbound-base.js";
 import { normalizeWhatsAppPayloadTextPreservingIndentation } from "./outbound-media-contract.js";
 import { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
 import { getWhatsAppRuntime } from "./runtime.js";
-import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
+import { sendLocationWhatsApp, sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
 
 export function normalizeWhatsAppChannelPayloadText(text: string | undefined): string {
   return normalizeWhatsAppPayloadTextPreservingIndentation(text);
@@ -33,6 +33,25 @@ export const whatsappChannelOutbound = {
       resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
     normalizeText: normalizeWhatsAppChannelSendText,
   }),
+  sendLocation: async ({
+    cfg,
+    to,
+    latitude,
+    longitude,
+    locationName,
+    locationAddress,
+    accuracyInMeters,
+    accountId,
+  }) =>
+    await sendLocationWhatsApp(
+      to,
+      { latitude, longitude, locationName, locationAddress, accuracyInMeters },
+      {
+        verbose: getWhatsAppRuntime().logging.shouldLogVerbose(),
+        accountId: accountId ?? undefined,
+        cfg,
+      },
+    ),
   sendTextOnlyErrorPayloads: true,
   normalizePayload: ({ payload }: { payload: { text?: string } }) => ({
     ...payload,

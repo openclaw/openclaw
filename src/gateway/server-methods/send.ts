@@ -3,6 +3,7 @@ import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
@@ -140,6 +141,36 @@ async function resolveRequestedChannel(params: {
     }
   }
   return { cfg, channel };
+}
+
+function parseFiniteNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return undefined;
+}
+
+function buildLocationMirrorText(params: {
+  latitude: number;
+  longitude: number;
+  locationName?: string;
+  locationAddress?: string;
+  accuracyInMeters?: number;
+}): string {
+  const parts: string[] = [];
+  const name = normalizeOptionalString(params.locationName);
+  const address = normalizeOptionalString(params.locationAddress);
+  if (name) {
+    parts.push(name);
+  }
+  if (address && address !== name) {
+    parts.push(address);
+  }
+  parts.push(`${params.latitude}, ${params.longitude}`);
+  if (typeof params.accuracyInMeters === "number") {
+    parts.push(`±${params.accuracyInMeters}m`);
+  }
+  return `📍 ${parts.join(" • ")}`;
 }
 
 function resolveGatewayOutboundTarget(params: {
@@ -398,6 +429,11 @@ export const sendHandlers: GatewayRequestHandlers = {
       replyToId?: string;
       threadId?: string;
       sessionKey?: string;
+      latitude?: unknown;
+      longitude?: unknown;
+      locationName?: unknown;
+      locationAddress?: unknown;
+      accuracyInMeters?: unknown;
       idempotencyKey: string;
     };
     const idem = request.idempotencyKey;
@@ -414,7 +450,21 @@ export const sendHandlers: GatewayRequestHandlers = {
           .map((entry) => normalizeOptionalString(entry))
           .filter((entry): entry is string => Boolean(entry))
       : undefined;
-    if (!message && !mediaUrl && (mediaUrls?.length ?? 0) === 0) {
+    const latitude = parseFiniteNumber(request.latitude);
+    const longitude = parseFiniteNumber(request.longitude);
+    const hasLocation = latitude != null || longitude != null;
+    if (hasLocation && (latitude == null || longitude == null)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "invalid send params: latitude and longitude are both required for location sends",
+        ),
+      );
+      return;
+    }
+    if (!hasLocation && !message && !mediaUrl && (mediaUrls?.length ?? 0) === 0) {
       respond(
         false,
         undefined,
@@ -469,19 +519,6 @@ export const sendHandlers: GatewayRequestHandlers = {
           accountId,
         });
         const deliveryTarget = idLikeTarget?.to ?? resolvedTarget.to;
-        const outboundDeps = context.deps ? createOutboundSendDeps(context.deps) : undefined;
-        const outboundPayloads = [
-          {
-            text: message,
-            mediaUrl,
-            mediaUrls,
-            ...(request.asVoice === true ? { audioAsVoice: true } : {}),
-          },
-        ];
-        const outboundPayloadPlan = createOutboundPayloadPlan(outboundPayloads);
-        const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPayloadPlan);
-        const mirrorText = mirrorProjection.text;
-        const mirrorMediaUrls = mirrorProjection.mediaUrls;
         const providedSessionKey = normalizeOptionalLowercaseString(request.sessionKey);
         const explicitAgentId = normalizeOptionalString(request.agentId);
         const sessionAgentId = providedSessionKey
@@ -538,6 +575,59 @@ export const sendHandlers: GatewayRequestHandlers = {
           sessionKey: outboundSessionKey,
           conversationType: outboundRoute?.chatType,
         });
+        if (hasLocation && latitude != null && longitude != null) {
+          const outbound = plugin.outbound;
+          if (!outbound?.sendLocation) {
+            return {
+              ok: false,
+              error: errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                `unsupported location channel: ${channel}`,
+              ),
+              meta: { channel },
+            };
+          }
+          const result = await outbound.sendLocation({
+            cfg,
+            to: deliveryTarget,
+            latitude,
+            longitude,
+            locationName: normalizeOptionalString(request.locationName),
+            locationAddress: normalizeOptionalString(request.locationAddress),
+            accuracyInMeters: parseFiniteNumber(request.accuracyInMeters),
+            accountId,
+          });
+          if (outboundSessionKey) {
+            await appendAssistantMessageToSessionTranscript({
+              agentId: effectiveAgentId,
+              sessionKey: outboundSessionKey,
+              text: buildLocationMirrorText({
+                latitude,
+                longitude,
+                locationName: normalizeOptionalString(request.locationName) ?? undefined,
+                locationAddress: normalizeOptionalString(request.locationAddress) ?? undefined,
+                accuracyInMeters: parseFiniteNumber(request.accuracyInMeters),
+              }),
+              idempotencyKey: idem,
+              config: cfg,
+            });
+          }
+          const payload = buildGatewayDeliveryPayload({ runId: idem, channel, result });
+          return createGatewayInflightSuccess({ context, dedupeKey, payload, channel });
+        }
+        const outboundDeps = context.deps ? createOutboundSendDeps(context.deps) : undefined;
+        const outboundPayloads = [
+          {
+            text: message,
+            mediaUrl,
+            mediaUrls,
+            ...(request.asVoice === true ? { audioAsVoice: true } : {}),
+          },
+        ];
+        const outboundPayloadPlan = createOutboundPayloadPlan(outboundPayloads);
+        const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPayloadPlan);
+        const mirrorText = mirrorProjection.text;
+        const mirrorMediaUrls = mirrorProjection.mediaUrls;
         const results = await deliverOutboundPayloads({
           cfg,
           channel: outboundChannel,
