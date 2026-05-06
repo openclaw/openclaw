@@ -798,6 +798,14 @@
       "types": "./dist/plugin-sdk/channel-lifecycle.d.ts",
       "default": "./dist/plugin-sdk/channel-lifecycle.js"
     },
+    "./plugin-sdk/channel-message": {
+      "types": "./dist/plugin-sdk/channel-message.d.ts",
+      "default": "./dist/plugin-sdk/channel-message.js"
+    },
+    "./plugin-sdk/channel-message-runtime": {
+      "types": "./dist/plugin-sdk/channel-message-runtime.d.ts",
+      "default": "./dist/plugin-sdk/channel-message-runtime.js"
+    },
     "./plugin-sdk/channel-pairing": {
       "types": "./dist/plugin-sdk/channel-pairing.d.ts",
       "default": "./dist/plugin-sdk/channel-pairing.js"
