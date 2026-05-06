@@ -59,38 +59,33 @@ A plugin migration is not considered complete until it ends in **deploy-prod**.
 
 ## The pattern for making changes
 
-### Rule 0: Prefer plugins/scripts over core changes
-When Joshua wants a new capability, the default decision tree is:
+### All feature work lives in plugins
+Polytropos is plugin-first by design. **Feature implementation does not go into the fork.**
 
-1) **Plugin-only** (best)
-   - add a plugin or extend an existing one
-   - verify with `openclaw plugins list` + `openclaw doctor`
+### The only allowed core-fork changes
+Changes submitted to this fork must be exactly one of:
 
-2) **Plugin + script workaround** (acceptable)
-   - use a script when platform constraints make plugins awkward
-   - scripts should still be versioned and reproducible
+1) **New events / hook points** that plugins can consume
+2) **New config keys + logic gates** (namespaced under `polytropos.*`, additive defaults)
+3) **New log lines** (diagnostics/observability)
 
-3) **Minimal core seam** (only if blocked)
-   - add the smallest possible “hook point” or “exported helper” in core
-   - the seam should be obviously safe and default-off
-   - avoid spreading changes across the codebase
+If a change doesn’t fit one of those buckets, it doesn’t belong in the fork.
 
-### Rule 1: Core changes must be small and localized
-If core needs to change, we aim for:
+### How we ship a new capability
+1) Implement the capability in `polytropos-plugins` (new plugin or change an existing plugin).
+2) If the plugin cannot do the job with existing hooks/config/logs:
+   - add the smallest possible core change (prefer a **single-line event emission** or a **single log line**)
+   - document the event/hook in `POLYTROPOS-EVENTS.md`
+3) Verify in runtime.
 
-- **single-file** or near-single-file changes
-- config-gated behavior
-- additive APIs over breaking changes
+### Plugin migration completion gates
+A plugin migration is considered complete only when:
 
-The goal is to keep upstream merges realistic.
-
-### Rule 2: Every plugin migration has gates
-For a plugin to be considered migrated, it must pass:
-
-- `pnpm verify:plugin <pluginId>` (artifact/layout correctness)
-- `pnpm verify:doctor-plugin <pluginId>` (no doctor warnings for that plugin)
-- runtime verification:
-  - `openclaw plugins list | rg <pluginId>` shows it loaded from `~/.openclaw/extensions/<pluginId>/...`
+- it is deployed as a **production copy** under `~/.openclaw/extensions/<pluginId>` (not a symlink), and
+- it passes the monorepo gates:
+  - `pnpm verify:plugin <pluginId>`
+  - `pnpm verify:doctor-plugin <pluginId>`
+- `openclaw plugins list` shows it loaded from `~/.openclaw/extensions/<pluginId>/...`
 
 ---
 
