@@ -29,6 +29,10 @@ async function createCaseDir(prefix: string): Promise<string> {
   return dir;
 }
 
+async function symlinkDir(targetDir: string, linkPath: string): Promise<void> {
+  await fs.symlink(targetDir, linkPath, process.platform === "win32" ? "junction" : "dir");
+}
+
 async function syncSourceSkillsToTarget(sourceWorkspace: string, targetWorkspace: string) {
   await syncSkillsToWorkspace({
     sourceWorkspaceDir: sourceWorkspace,
@@ -356,5 +360,33 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(await pathExists(path.join(targetWorkspace, "skills", "remote-only", "SKILL.md"))).toBe(
       true,
     );
+  });
+
+  it("dereferences managed symlinked skill directories when syncing into the target workspace", async () => {
+    const sourceWorkspace = await createCaseDir("source");
+    const targetWorkspace = await createCaseDir("target");
+    const outsideRoot = await createCaseDir("outside");
+    const externalSkillDir = path.join(outsideRoot, "managed-symlink-skill");
+    const managedDir = path.join(sourceWorkspace, ".managed");
+
+    await writeSkill({
+      dir: externalSkillDir,
+      name: "managed-symlink-skill",
+      description: "Managed symlink skill",
+    });
+    await fs.mkdir(managedDir, { recursive: true });
+    await symlinkDir(externalSkillDir, path.join(managedDir, "managed-symlink-skill"));
+
+    await syncSourceSkillsToTarget(sourceWorkspace, targetWorkspace);
+
+    const syncedSkillDir = path.join(targetWorkspace, "skills", "managed-symlink-skill");
+    const prompt = buildPrompt(targetWorkspace, {
+      bundledSkillsDir: path.join(targetWorkspace, ".bundled"),
+      managedSkillsDir: path.join(targetWorkspace, ".managed"),
+    });
+
+    expect(prompt).toContain("Managed symlink skill");
+    expect(await pathExists(path.join(syncedSkillDir, "SKILL.md"))).toBe(true);
+    expect((await fs.lstat(syncedSkillDir)).isSymbolicLink()).toBe(false);
   });
 });
