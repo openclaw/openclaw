@@ -92,16 +92,37 @@ function getAgentIdentity(
     : null;
 }
 
+function rowMatchesSessionDefaults(
+  row: GatewaySessionRow,
+  defaults: SessionsListResult["defaults"] | undefined,
+): boolean {
+  return (
+    (!row.modelProvider || row.modelProvider === defaults?.modelProvider) &&
+    (!row.model || row.model === defaults?.model)
+  );
+}
+
 function resolveThinkLevelOptions(
   row: GatewaySessionRow,
+  defaults?: SessionsListResult["defaults"],
 ): readonly { value: string; label: string }[] {
-  const defaultLabel = formatInheritedThinkingLabel(row.thinkingDefault);
+  const sessionModelMatchesDefaults = rowMatchesSessionDefaults(row, defaults);
+  const defaultLabel = formatInheritedThinkingLabel(
+    row.thinkingDefault ?? (sessionModelMatchesDefaults ? defaults?.thinkingDefault : undefined),
+  );
   const options: readonly GatewayThinkingLevelOption[] = row.thinkingLevels?.length
     ? row.thinkingLevels
-    : (row.thinkingOptions?.length ? row.thinkingOptions : DEFAULT_THINK_LEVELS).map((label) => ({
-        id: normalizeThinkingOptionValue(label),
-        label,
-      }));
+    : sessionModelMatchesDefaults && defaults?.thinkingLevels?.length
+      ? defaults.thinkingLevels
+      : (row.thinkingOptions?.length
+          ? row.thinkingOptions
+          : sessionModelMatchesDefaults && defaults?.thinkingOptions?.length
+            ? defaults.thinkingOptions
+            : DEFAULT_THINK_LEVELS
+        ).map((label) => ({
+          id: normalizeThinkingOptionValue(label),
+          label,
+        }));
   return [
     { value: "", label: defaultLabel },
     ...options.map((option) => ({
@@ -617,7 +638,10 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : t("common.na");
   const rawThinking = row.thinkingLevel ?? "";
   const thinking = rawThinking ? normalizeThinkingOptionValue(rawThinking) : "";
-  const thinkLevels = withCurrentLabeledOption(resolveThinkLevelOptions(row), thinking);
+  const thinkLevels = withCurrentLabeledOption(
+    resolveThinkLevelOptions(row, props.result?.defaults),
+    thinking,
+  );
   const fastMode = row.fastMode === true ? "on" : row.fastMode === false ? "off" : "";
   const fastLevels = withCurrentLabeledOption(buildFastLevelOptions(), fastMode);
   const verbose = row.verboseLevel ?? "";

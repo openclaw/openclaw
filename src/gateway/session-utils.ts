@@ -374,6 +374,7 @@ type SessionListRowContext = {
   storeChildSessionsByKey: Map<string, string[]>;
   selectedModelByOverrideRef: Map<string, ReturnType<typeof resolveSessionModelRef>>;
   thinkingLevelsByModelRef: Map<string, ReturnType<typeof listThinkingLevelOptions>>;
+  thinkingDefaultByAgentModelRef: Map<string, string>;
 };
 
 function resolveRuntimeChildSessionKeys(
@@ -492,11 +493,23 @@ function buildSessionListRowContext(params: {
     storeChildSessionsByKey: buildStoreChildSessionIndex(params.store, params.now, subagentRuns),
     selectedModelByOverrideRef: new Map(),
     thinkingLevelsByModelRef: new Map(),
+    thinkingDefaultByAgentModelRef: new Map(),
   };
 }
 
 function createSessionRowModelCacheKey(provider: string | undefined, model: string | undefined) {
   return `${normalizeLowercaseStringOrEmpty(provider)}\0${normalizeOptionalString(model) ?? ""}`;
+}
+
+function createSessionRowThinkingDefaultCacheKey(params: {
+  agentId: string | undefined;
+  provider: string | undefined;
+  model: string | undefined;
+}) {
+  return `${normalizeAgentId(params.agentId)}\0${createSessionRowModelCacheKey(
+    params.provider,
+    params.model,
+  )}`;
 }
 
 function resolveSessionSelectedModelRef(params: {
@@ -546,6 +559,60 @@ function resolveSessionRowThinkingLevels(params: {
   const levels = listThinkingLevelOptions(params.provider, params.model, params.modelCatalog);
   params.rowContext.thinkingLevelsByModelRef.set(key, levels);
   return levels;
+}
+
+function resolveSessionRowThinkingDefault(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+  agentId: string;
+  modelCatalog?: ModelCatalogEntry[];
+  rowContext?: SessionListRowContext;
+}): string {
+  if (!params.rowContext) {
+    return resolveGatewaySessionThinkingDefault({
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.model,
+      agentId: params.agentId,
+      modelCatalog: params.modelCatalog,
+    });
+  }
+  const key = createSessionRowThinkingDefaultCacheKey(params);
+  if (params.rowContext.thinkingDefaultByAgentModelRef.has(key)) {
+    return params.rowContext.thinkingDefaultByAgentModelRef.get(key)!;
+  }
+  const defaultLevel = resolveGatewaySessionThinkingDefault({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    agentId: params.agentId,
+    modelCatalog: params.modelCatalog,
+  });
+  params.rowContext.thinkingDefaultByAgentModelRef.set(key, defaultLevel);
+  return defaultLevel;
+}
+
+function seedSessionRowContextDefaultThinking(params: {
+  rowContext: SessionListRowContext;
+  cfg: OpenClawConfig;
+  defaults: GatewaySessionsDefaults;
+}) {
+  if (
+    !params.defaults.modelProvider ||
+    !params.defaults.model ||
+    !params.defaults.thinkingDefault
+  ) {
+    return;
+  }
+  params.rowContext.thinkingDefaultByAgentModelRef.set(
+    createSessionRowThinkingDefaultCacheKey({
+      agentId: resolveDefaultAgentId(params.cfg),
+      provider: params.defaults.modelProvider,
+      model: params.defaults.model,
+    }),
+    params.defaults.thinkingDefault,
+  );
 }
 
 function mergeChildSessionKeys(
@@ -1702,6 +1769,14 @@ export function buildGatewaySessionRow(params: {
     modelCatalog: params.modelCatalog,
     rowContext,
   });
+  const thinkingDefault = resolveSessionRowThinkingDefault({
+    cfg,
+    provider: thinkingProvider,
+    model: thinkingModel,
+    agentId: sessionAgentId,
+    modelCatalog: params.modelCatalog,
+    rowContext,
+  });
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
 
@@ -1731,15 +1806,7 @@ export function buildGatewaySessionRow(params: {
     thinkingLevel: entry?.thinkingLevel,
     thinkingLevels,
     thinkingOptions: thinkingLevels.map((level) => level.label),
-    thinkingDefault: lightweight
-      ? entry?.thinkingLevel
-      : resolveGatewaySessionThinkingDefault({
-          cfg,
-          provider: thinkingProvider,
-          model: thinkingModel,
-          agentId: sessionAgentId,
-          modelCatalog: params.modelCatalog,
-        }),
+    thinkingDefault,
     fastMode: entry?.fastMode,
     verboseLevel: entry?.verboseLevel,
     traceLevel: entry?.traceLevel,
@@ -2040,6 +2107,10 @@ export function listSessionsFromStore(params: {
     defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
   });
   const { entries, totalCount, limitApplied } = selection;
+  const defaults = getSessionDefaults(cfg, params.modelCatalog);
+  if (entries.length > 0) {
+    seedSessionRowContextDefaultThinking({ rowContext: getRowContext(), cfg, defaults });
+  }
 
   const sessions = entries.map(([key, entry], index) => {
     const includeTranscriptFields = index < sessionListTranscriptFieldRows;
@@ -2066,7 +2137,7 @@ export function listSessionsFromStore(params: {
     totalCount,
     limitApplied,
     hasMore: sessions.length < totalCount,
-    defaults: getSessionDefaults(cfg, params.modelCatalog),
+    defaults,
     sessions,
   };
 }
@@ -2109,6 +2180,10 @@ export async function listSessionsFromStoreAsync(params: {
     defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
   });
   const { entries, totalCount, limitApplied } = selection;
+  const defaults = getSessionDefaults(cfg, params.modelCatalog);
+  if (entries.length > 0) {
+    seedSessionRowContextDefaultThinking({ rowContext: getRowContext(), cfg, defaults });
+  }
 
   const sessions: GatewaySessionRow[] = [];
   for (let i = 0; i < entries.length; i++) {
@@ -2167,7 +2242,7 @@ export async function listSessionsFromStoreAsync(params: {
     totalCount,
     limitApplied,
     hasMore: sessions.length < totalCount,
-    defaults: getSessionDefaults(cfg, params.modelCatalog),
+    defaults,
     sessions,
   };
 }
