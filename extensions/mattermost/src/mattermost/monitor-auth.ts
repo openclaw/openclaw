@@ -1,6 +1,10 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import type { MattermostChannel } from "./client.js";
+import {
+  mapMattermostChannelTypeToChatType,
+  resolveMattermostChannelType,
+} from "./monitor-gating.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import {
   evaluateSenderGroupAccessForPolicy,
@@ -69,17 +73,6 @@ export function isMattermostSenderAllowed(params: {
   return match.allowed;
 }
 
-function mapMattermostChannelKind(channelType?: string | null): "direct" | "group" | "channel" {
-  const normalized = channelType?.trim().toUpperCase();
-  if (normalized === "D") {
-    return "direct";
-  }
-  if (normalized === "G" || normalized === "P") {
-    return "group";
-  }
-  return "channel";
-}
-
 export type MattermostCommandAuthDecision =
   | {
       ok: true;
@@ -146,7 +139,25 @@ export function authorizeMattermostCommandInvocation(params: {
     };
   }
 
-  const kind = mapMattermostChannelKind(channelInfo.type);
+  const channelType = resolveMattermostChannelType(channelInfo.type);
+  if (!channelType) {
+    // Treat incomplete channel records like unknown channels so policy checks fail closed.
+    return {
+      ok: false,
+      denyReason: "unknown-channel",
+      commandAuthorized: false,
+      channelInfo,
+      kind: "channel",
+      chatType: "channel",
+      channelName: channelInfo.name ?? "",
+      channelDisplay: channelInfo.display_name ?? channelInfo.name ?? "",
+      roomLabel: channelInfo.name
+        ? `#${channelInfo.name}`
+        : channelInfo.display_name || `#${channelId}`,
+    };
+  }
+
+  const kind = mapMattermostChannelTypeToChatType(channelType);
   const chatType = kind;
   const channelName = channelInfo.name ?? "";
   const channelDisplay = channelInfo.display_name ?? channelName;
