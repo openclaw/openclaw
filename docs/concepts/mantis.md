@@ -125,8 +125,30 @@ Useful desktop smoke flags:
 - `--lease-id <cbx_...>` or `OPENCLAW_MANTIS_CRABBOX_LEASE_ID` reuses a warmed desktop.
 - `--browser-url <url>` changes the page opened in the visible browser.
 - `--html-file <path>` renders a repo-local HTML artifact in the visible browser. Mantis uses this to capture the generated Discord status-reaction timeline through a real Crabbox desktop.
+- `--browser-profile-dir <remote-path>` reuses a remote Chrome user-data-dir so a persistent Mantis desktop can stay logged in between runs. Use this for the long-lived Discord Web viewer profile.
+- `--browser-profile-archive-env <name>` restores a base64 `.tgz` Chrome user-data-dir archive from the named environment variable before launching the browser. Use this for logged-in witnesses such as Discord Web. The default env var is `OPENCLAW_MANTIS_BROWSER_PROFILE_TGZ_B64`.
+- `--video-duration <seconds>` controls the MP4 capture length. Use a longer duration for slow logged-in web apps that need time to settle.
 - `--keep-lease` or `OPENCLAW_MANTIS_KEEP_VM=1` keeps a newly created passing lease open for VNC inspection. Failed runs keep the lease by default when one was created so an operator can reconnect.
 - `--class`, `--idle-timeout`, and `--ttl` tune machine size and lease lifetime.
+
+For Discord Web evidence, Mantis uses a dedicated viewer account instead of a
+bot token. The live Discord API scenario remains the oracle: it creates the real
+thread, sends the SUT `thread-reply`, and checks the attachment through Discord
+REST. When `OPENCLAW_QA_DISCORD_CAPTURE_UI_METADATA=1` is set, the scenario also
+writes a Discord Web URL artifact. When `OPENCLAW_QA_DISCORD_KEEP_THREADS=1` is
+set, it leaves that thread available long enough for a logged-in browser to open
+and record it.
+
+The GitHub workflow opens the candidate thread URL in Discord Web, captures a
+screenshot, records an MP4, and generates a trimmed GIF preview when Crabbox
+media tooling is available. Prefer a persistent viewer profile path configured
+through `MANTIS_DISCORD_VIEWER_CHROME_PROFILE_DIR`, because full Chrome profile
+archives can outgrow GitHub's secret-size limit. For small/bootstrap profiles,
+the workflow can also restore a base64 `.tgz` archive from
+`MANTIS_DISCORD_VIEWER_CHROME_PROFILE_TGZ_B64`. If neither profile source is
+configured, the workflow still publishes the deterministic baseline/candidate
+attachment screenshots and logs a notice that the logged-in Discord Web witness
+was skipped.
 
 The first full desktop transport primitive is the Slack desktop smoke:
 

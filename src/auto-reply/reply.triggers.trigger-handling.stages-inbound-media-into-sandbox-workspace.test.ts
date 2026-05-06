@@ -120,7 +120,7 @@ beforeEach(() => {
   childProcessMocks.spawn.mockClear();
   fsSafeMocks.rootCopyFrom.mockReset().mockImplementation(rootCopyFromForTest);
   fsSafeMocks.root.mockReset().mockImplementation(async (rootDir: string) => ({
-    copyFrom: async (sourcePath: string, relativePath: string, options?: { maxBytes?: number }) =>
+    copyIn: async (relativePath: string, sourcePath: string, options?: { maxBytes?: number }) =>
       await rootCopyFromForTest({
         sourcePath,
         rootDir,

@@ -1,4 +1,4 @@
-import "../../../../src/infra/fs-safe-defaults.js";
+import { configureFsSafePython } from "@openclaw/fs-safe/config";
 export { isPathInside } from "@openclaw/fs-safe/path";
 export {
   readRegularFile,
@@ -6,6 +6,13 @@ export {
   type RegularFileStatResult,
 } from "@openclaw/fs-safe/advanced";
 export { walkDirectory, type WalkDirectoryEntry } from "@openclaw/fs-safe/walk";
+
+const hasPythonModeOverride =
+  process.env.FS_SAFE_PYTHON_MODE != null || process.env.OPENCLAW_FS_SAFE_PYTHON_MODE != null;
+
+if (!hasPythonModeOverride) {
+  configureFsSafePython({ mode: "off" });
+}
 
 export function isFileMissingError(
   err: unknown,

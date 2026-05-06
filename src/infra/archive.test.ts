@@ -11,6 +11,7 @@ import {
   readZipCentralDirectoryEntryCount,
   resolvePackedRootDir,
 } from "./archive.js";
+import type { FsSafeError } from "./fs-safe.js";
 
 const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-archive-" });
 const directorySymlinkType = process.platform === "win32" ? "junction" : undefined;
@@ -222,30 +223,30 @@ describe("archive utils", () => {
       zip.file("slot/target.txt", "owned");
       await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
 
-      await withRealpathSymlinkRebindRace({
-        shouldFlip: (realpathInput) => realpathInput === slotDir,
-        symlinkPath: slotDir,
-        symlinkTarget: outsideDir,
-        timing: "after-realpath",
-        run: async () => {
-          await expect(
-            extractArchive({
+      await expect(
+        withRealpathSymlinkRebindRace({
+          shouldFlip: (realpathInput) => realpathInput === slotDir,
+          symlinkPath: slotDir,
+          symlinkTarget: outsideDir,
+          timing: "after-realpath",
+          run: async () => {
+            await extractArchive({
               archivePath,
               destDir: extractDir,
               timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
-            }),
-          ).rejects.toMatchObject({
-            code: "destination-symlink-traversal",
-          } satisfies Partial<ArchiveSecurityError>);
-        },
-      });
+            });
+          },
+        }),
+      ).rejects.toMatchObject({
+        code: "destination-symlink-traversal",
+      } satisfies Partial<ArchiveSecurityError>);
 
       await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("SAFE");
     });
   });
 
   it.runIf(process.platform !== "win32")(
-    "rejects zip extraction when a hardlink appears after atomic rename",
+    "rejects zip extraction when a hardlink appears during destination verification",
     async () => {
       await withArchiveCase("zip", async ({ workDir, archivePath, extractDir }) => {
         const outsideDir = path.join(workDir, "outside");
@@ -256,15 +257,20 @@ describe("archive utils", () => {
         const zip = new JSZip();
         zip.file("package/payload.bin", "owned");
         await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+        const extractedRealPath = path.join(
+          await fs.realpath(extractDir),
+          "package",
+          "payload.bin",
+        );
 
-        const realRename = fs.rename.bind(fs);
+        const realLstat = fs.lstat.bind(fs);
         let linked = false;
-        const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
-          await realRename(...args);
-          if (!linked) {
+        const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+          if (!linked && String(args[0]) === extractedRealPath) {
+            await fs.link(extractedRealPath, outsideAlias);
             linked = true;
-            await fs.link(String(args[1]), outsideAlias);
           }
+          return await realLstat(...args);
         });
 
         try {
@@ -275,13 +281,13 @@ describe("archive utils", () => {
               timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
             }),
           ).rejects.toMatchObject({
-            code: "destination-symlink-traversal",
-          } satisfies Partial<ArchiveSecurityError>);
+            code: "hardlink",
+          } satisfies Partial<FsSafeError>);
         } finally {
-          renameSpy.mockRestore();
+          lstatSpy.mockRestore();
         }
 
-        await expect(fs.readFile(outsideAlias, "utf8")).resolves.toBe("owned");
+        await expect(fs.readFile(outsideAlias, "utf8")).resolves.toBe("");
         await expect(fs.stat(extractedPath)).rejects.toMatchObject({ code: "ENOENT" });
       });
     },

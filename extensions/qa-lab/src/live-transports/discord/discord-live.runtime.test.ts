@@ -343,6 +343,16 @@ describe("discord live qa runtime", () => {
     expect(html).toContain("mantis-thread-report.md");
   });
 
+  it("builds Discord Web message URLs for logged-in Mantis capture", () => {
+    expect(
+      __testing.buildDiscordWebMessageUrl({
+        guildId: "111111111111111111",
+        messageId: "333333333333333333",
+        threadId: "222222222222222222",
+      }),
+    ).toBe("https://discord.com/channels/111111111111111111/222222222222222222/333333333333333333");
+  });
+
   it("waits for the Discord account to become connected, not just running", async () => {
     vi.useFakeTimers();
     try {

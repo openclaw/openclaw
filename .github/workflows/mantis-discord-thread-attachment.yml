@@ -245,6 +245,24 @@ jobs:
       - name: Build Mantis harness
         run: pnpm build
 
+      - name: Setup Go for Crabbox CLI
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          cache: false
+
+      - name: Install Crabbox CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_dir="${RUNNER_TEMP}/crabbox"
+          mkdir -p "$install_dir" "$HOME/.local/bin"
+          git clone --depth 1 https://github.com/openclaw/crabbox.git "$install_dir/src"
+          go build -C "$install_dir/src" -o "$HOME/.local/bin/crabbox" ./cmd/crabbox
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/crabbox" --version
+          "$HOME/.local/bin/crabbox" warmup --help 2>&1 | grep -q -- "-desktop"
+
       - name: Prepare baseline and candidate worktrees
         shell: bash
         env:
@@ -307,6 +325,14 @@ jobs:
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           OPENCLAW_QA_DISCORD_CAPTURE_CONTENT: "1"
+          MANTIS_DISCORD_VIEWER_CHROME_PROFILE_TGZ_B64: ${{ secrets.MANTIS_DISCORD_VIEWER_CHROME_PROFILE_TGZ_B64 }}
+          MANTIS_DISCORD_VIEWER_CHROME_PROFILE_DIR: ${{ vars.MANTIS_DISCORD_VIEWER_CHROME_PROFILE_DIR }}
+          CRABBOX_COORDINATOR: ${{ secrets.CRABBOX_COORDINATOR }}
+          CRABBOX_COORDINATOR_TOKEN: ${{ secrets.CRABBOX_COORDINATOR_TOKEN }}
+          OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR: ${{ secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR }}
+          OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN: ${{ secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}
+          CRABBOX_ACCESS_CLIENT_ID: ${{ secrets.CRABBOX_ACCESS_CLIENT_ID }}
+          CRABBOX_ACCESS_CLIENT_SECRET: ${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}
           CANDIDATE_SHA: ${{ needs.validate_candidate.outputs.candidate_revision }}
           BASELINE_LABEL: ${{ needs.resolve_request.outputs.baseline_ref }}
         run: |
@@ -331,7 +357,14 @@ jobs:
             local lane="$1"
             local repo_root="${GITHUB_WORKSPACE}/${worktree_root}/${lane}"
             local output_dir=".artifacts/qa-e2e/mantis/discord-thread-attachment/${lane}"
-            pnpm --dir "$repo_root" openclaw qa discord \
+            local lane_env=()
+            if [[ "$lane" == "candidate" ]]; then
+              lane_env=(
+                OPENCLAW_QA_DISCORD_CAPTURE_UI_METADATA=1
+                OPENCLAW_QA_DISCORD_KEEP_THREADS=1
+              )
+            fi
+            env "${lane_env[@]}" pnpm --dir "$repo_root" openclaw qa discord \
               --repo-root "$repo_root" \
               --output-dir "$output_dir" \
               --provider-mode mock-openai \
@@ -346,6 +379,73 @@ jobs:
 
           run_lane baseline
           run_lane candidate
+
+          capture_candidate_discord_web() {
+            if [[ -z "${MANTIS_DISCORD_VIEWER_CHROME_PROFILE_TGZ_B64:-}" && -z "${MANTIS_DISCORD_VIEWER_CHROME_PROFILE_DIR:-}" ]]; then
+              echo "::notice::No Mantis Discord viewer browser profile is configured; skipping logged-in Discord Web video."
+              return 0
+            fi
+            CRABBOX_COORDINATOR="${CRABBOX_COORDINATOR:-${OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR:-}}"
+            CRABBOX_COORDINATOR_TOKEN="${CRABBOX_COORDINATOR_TOKEN:-${OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN:-}}"
+            export CRABBOX_COORDINATOR CRABBOX_COORDINATOR_TOKEN
+            if [[ -z "${CRABBOX_COORDINATOR_TOKEN:-}" ]]; then
+              echo "::warning::Crabbox coordinator token missing; skipping logged-in Discord Web video."
+              return 0
+            fi
+
+            local ui_json="$root/candidate/discord-thread-reply-filepath-attachment-ui.json"
+            if [[ ! -f "$ui_json" ]]; then
+              echo "::warning::Candidate Discord UI metadata is missing; skipping logged-in Discord Web video."
+              return 0
+            fi
+            local discord_url
+            discord_url="$(jq -r '.discordWebUrl // empty' "$ui_json")"
+            if [[ -z "$discord_url" ]]; then
+              echo "::warning::Candidate Discord UI URL is empty; skipping logged-in Discord Web video."
+              return 0
+            fi
+
+            local desktop_dir="$root/candidate/discord-web"
+            local profile_args=()
+            if [[ -n "${MANTIS_DISCORD_VIEWER_CHROME_PROFILE_TGZ_B64:-}" ]]; then
+              profile_args+=(--browser-profile-archive-env MANTIS_DISCORD_VIEWER_CHROME_PROFILE_TGZ_B64)
+            fi
+            if [[ -n "${MANTIS_DISCORD_VIEWER_CHROME_PROFILE_DIR:-}" ]]; then
+              profile_args+=(--browser-profile-dir "$MANTIS_DISCORD_VIEWER_CHROME_PROFILE_DIR")
+            fi
+            pnpm openclaw qa mantis desktop-browser-smoke \
+              --browser-url "$discord_url" \
+              "${profile_args[@]}" \
+              --video-duration 24 \
+              --output-dir "$desktop_dir" \
+              --provider hetzner \
+              --class standard \
+              --idle-timeout 30m \
+              --ttl 90m
+
+            cp "$desktop_dir/desktop-browser-smoke.png" "$root/candidate/discord-thread-reply-filepath-attachment-discord-web.png"
+            if [[ -f "$desktop_dir/desktop-browser-smoke.mp4" ]]; then
+              cp "$desktop_dir/desktop-browser-smoke.mp4" "$root/candidate/discord-thread-reply-filepath-attachment-discord-web.mp4"
+            fi
+
+            if [[ -f "$root/candidate/discord-thread-reply-filepath-attachment-discord-web.mp4" ]]; then
+              if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+                sudo apt-get update && sudo apt-get install -y ffmpeg || true
+              fi
+              crabbox media preview \
+                --input "$root/candidate/discord-thread-reply-filepath-attachment-discord-web.mp4" \
+                --output "$root/candidate/discord-thread-reply-filepath-attachment-discord-web-preview.gif" \
+                --trimmed-video-output "$root/candidate/discord-thread-reply-filepath-attachment-discord-web-change.mp4" \
+                --json > "$root/candidate/discord-thread-reply-filepath-attachment-discord-web-preview.json" || {
+                  rm -f "$root/candidate/discord-thread-reply-filepath-attachment-discord-web-preview.gif"
+                  rm -f "$root/candidate/discord-thread-reply-filepath-attachment-discord-web-change.mp4"
+                  rm -f "$root/candidate/discord-thread-reply-filepath-attachment-discord-web-preview.json"
+                  echo "::warning::Could not generate logged-in Discord Web motion preview; keeping screenshot/full MP4."
+                }
+            fi
+          }
+
+          capture_candidate_discord_web
 
           baseline_status="$(jq -r '.scenarios[] | select(.id == "discord-thread-reply-filepath-attachment") | .status' "$root/baseline/discord-qa-summary.json")"
           candidate_status="$(jq -r '.scenarios[] | select(.id == "discord-thread-reply-filepath-attachment") | .status' "$root/candidate/discord-qa-summary.json")"
@@ -380,6 +480,18 @@ jobs:
             echo "- Result: \`${comparison_status}\`"
             echo "- Baseline screenshot: \`baseline/discord-thread-reply-filepath-attachment-attachment.png\`"
             echo "- Candidate screenshot: \`candidate/discord-thread-reply-filepath-attachment-attachment.png\`"
+            if [[ -f "$root/candidate/discord-thread-reply-filepath-attachment-discord-web.png" ]]; then
+              echo "- Candidate logged-in Discord Web screenshot: \`candidate/discord-thread-reply-filepath-attachment-discord-web.png\`"
+            fi
+            if [[ -f "$root/candidate/discord-thread-reply-filepath-attachment-discord-web-preview.gif" ]]; then
+              echo "- Candidate logged-in Discord Web preview: \`candidate/discord-thread-reply-filepath-attachment-discord-web-preview.gif\`"
+            fi
+            if [[ -f "$root/candidate/discord-thread-reply-filepath-attachment-discord-web-change.mp4" ]]; then
+              echo "- Candidate logged-in Discord Web change clip: \`candidate/discord-thread-reply-filepath-attachment-discord-web-change.mp4\`"
+            fi
+            if [[ -f "$root/candidate/discord-thread-reply-filepath-attachment-discord-web.mp4" ]]; then
+              echo "- Candidate logged-in Discord Web video: \`candidate/discord-thread-reply-filepath-attachment-discord-web.mp4\`"
+            fi
           } > "$root/mantis-report.md"
 
           jq -n \
@@ -402,6 +514,12 @@ jobs:
               artifacts: [
                 { kind: "timeline", lane: "baseline", label: "Baseline missing filePath attachment", path: "baseline/discord-thread-reply-filepath-attachment-attachment.png", targetPath: "baseline.png", alt: "Baseline Discord thread reply without filePath attachment", width: 420 },
                 { kind: "timeline", lane: "candidate", label: "Candidate includes filePath attachment", path: "candidate/discord-thread-reply-filepath-attachment-attachment.png", targetPath: "candidate.png", alt: "Candidate Discord thread reply with filePath attachment", width: 420 },
+                { kind: "desktopScreenshot", lane: "candidate", label: "Candidate logged-in Discord Web", path: "candidate/discord-thread-reply-filepath-attachment-discord-web.png", targetPath: "candidate-discord-web.png", alt: "Logged-in Discord Web showing the candidate thread attachment", width: 560, required: false, inline: true },
+                { kind: "motionPreview", lane: "candidate", label: "Candidate logged-in Discord Web motion", path: "candidate/discord-thread-reply-filepath-attachment-discord-web-preview.gif", targetPath: "candidate-discord-web-preview.gif", alt: "Animated logged-in Discord Web proof for the candidate thread attachment", width: 560, required: false, inline: true },
+                { kind: "motionClip", lane: "candidate", label: "Candidate logged-in Discord Web change MP4", path: "candidate/discord-thread-reply-filepath-attachment-discord-web-change.mp4", targetPath: "candidate-discord-web-change.mp4", required: false },
+                { kind: "fullVideo", lane: "candidate", label: "Candidate logged-in Discord Web MP4", path: "candidate/discord-thread-reply-filepath-attachment-discord-web.mp4", targetPath: "candidate-discord-web.mp4", required: false },
+                { kind: "metadata", lane: "candidate", label: "Candidate logged-in Discord Web preview metadata", path: "candidate/discord-thread-reply-filepath-attachment-discord-web-preview.json", targetPath: "candidate-discord-web-preview.json", required: false },
+                { kind: "metadata", lane: "candidate", label: "Candidate Discord UI metadata", path: "candidate/discord-thread-reply-filepath-attachment-ui.json", targetPath: "candidate-discord-ui.json", required: false },
                 { kind: "metadata", lane: "run", label: "Comparison JSON", path: "comparison.json", targetPath: "comparison.json" },
                 { kind: "report", lane: "run", label: "Mantis report", path: "mantis-report.md", targetPath: "mantis-report.md" }
               ]

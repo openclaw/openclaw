@@ -36,6 +36,7 @@
 
 import * as crypto from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { MediaSource, OpenedLocalFile } from "../messaging/media-source.js";
 import { openLocalFile } from "../messaging/media-source.js";
 import {
@@ -564,30 +565,38 @@ async function putToPresignedUrl(
       ) as ArrayBuffer;
 
       const startTime = Date.now();
-      const response = await fetch(presignedUrl, {
-        method: "PUT",
-        body: new Blob([ab]),
-        headers: { "Content-Length": String(data.length) },
+      const { response, release } = await fetchWithSsrFGuard({
+        url: presignedUrl,
+        auditContext: "qqbot-media-part-upload",
+        init: {
+          method: "PUT",
+          body: new Blob([ab]),
+          headers: { "Content-Length": String(data.length) },
+        },
         signal: controller.signal,
       });
-      const elapsed = Date.now() - startTime;
-      const requestId = response.headers.get("x-cos-request-id") ?? "-";
-      const etag = response.headers.get("ETag") ?? "-";
+      try {
+        const elapsed = Date.now() - startTime;
+        const requestId = response.headers.get("x-cos-request-id") ?? "-";
+        const etag = response.headers.get("ETag") ?? "-";
 
-      if (!response.ok) {
-        const body = await response.text().catch(() => "");
-        logger?.error?.(
-          `${prefix} PUT part ${partIndex}/${totalParts}: HTTP ${response.status} ${response.statusText} (${elapsed}ms, requestId=${requestId}) body=${body.slice(0, 160)}`,
+        if (!response.ok) {
+          const body = await response.text().catch(() => "");
+          logger?.error?.(
+            `${prefix} PUT part ${partIndex}/${totalParts}: HTTP ${response.status} ${response.statusText} (${elapsed}ms, requestId=${requestId}) body=${body.slice(0, 160)}`,
+          );
+          throw new Error(
+            `COS PUT failed: ${response.status} ${response.statusText} - ${body.slice(0, 120)}`,
+          );
+        }
+
+        logger?.debug?.(
+          `${prefix} PUT part ${partIndex}/${totalParts} OK (${elapsed}ms ETag=${etag} requestId=${requestId})`,
         );
-        throw new Error(
-          `COS PUT failed: ${response.status} ${response.statusText} - ${body.slice(0, 120)}`,
-        );
+        return;
+      } finally {
+        await release();
       }
-
-      logger?.debug?.(
-        `${prefix} PUT part ${partIndex}/${totalParts} OK (${elapsed}ms ETag=${etag} requestId=${requestId})`,
-      );
-      return;
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
       if (lastError.name === "AbortError") {

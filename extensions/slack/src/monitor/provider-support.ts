@@ -331,7 +331,9 @@ export async function startSlackSocketAndWaitForDisconnect(params: {
     }
     if (err === undefined || err === null || err === "") {
       const suffix = disconnect ? ` after ${disconnect.event}` : "";
-      throw new Error(`Slack Socket Mode start failed${suffix} without error detail`);
+      throw new Error(`Slack Socket Mode start failed${suffix} without error detail`, {
+        cause: err,
+      });
     }
     throw err;
   }

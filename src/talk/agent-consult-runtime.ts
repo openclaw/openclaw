@@ -162,7 +162,7 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
             return next;
           }
         } else {
-          params.logger.warn(`[realtime-voice] ${decision.message}`);
+          params.logger.warn(`[talk] ${decision.message}`);
         }
       }
     }
@@ -280,7 +280,7 @@ export async function consultRealtimeVoiceAgent(params: {
   const text = collectRealtimeVoiceAgentConsultVisibleText(result.payloads ?? []);
   if (!text) {
     const reason = result.meta?.aborted ? "agent run aborted" : "agent returned no speakable text";
-    params.logger.warn(`[realtime-voice] agent consult produced no answer: ${reason}`);
+    params.logger.warn(`[talk] agent consult produced no answer: ${reason}`);
     return { text: params.fallbackText ?? "I need a moment to verify that before answering." };
   }
   return { text };

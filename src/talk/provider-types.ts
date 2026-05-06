@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { TalkTransport } from "./talk-events.js";
 
 export type RealtimeVoiceProviderId = string;
 
@@ -72,6 +73,17 @@ export type RealtimeVoiceBridgeCallbacks = {
 
 export type RealtimeVoiceProviderConfig = Record<string, unknown>;
 
+export type RealtimeVoiceProviderCapabilities = {
+  transports: TalkTransport[];
+  inputAudioFormats: RealtimeVoiceAudioFormat[];
+  outputAudioFormats: RealtimeVoiceAudioFormat[];
+  supportsBrowserSession?: boolean;
+  supportsBargeIn?: boolean;
+  supportsToolCalls?: boolean;
+  supportsVideoFrames?: boolean;
+  supportsSessionResumption?: boolean;
+};
+
 export type RealtimeVoiceProviderResolveConfigContext = {
   cfg: OpenClawConfig;
   rawConfig: RealtimeVoiceProviderConfig;
@@ -107,7 +119,7 @@ export type RealtimeVoiceBrowserAudioContract = {
 
 export type RealtimeVoiceBrowserWebRtcSdpSession = {
   provider: RealtimeVoiceProviderId;
-  transport?: "webrtc-sdp";
+  transport: "webrtc";
   clientSecret: string;
   offerUrl?: string;
   offerHeaders?: Record<string, string>;
@@ -118,7 +130,7 @@ export type RealtimeVoiceBrowserWebRtcSdpSession = {
 
 export type RealtimeVoiceBrowserJsonPcmWebSocketSession = {
   provider: RealtimeVoiceProviderId;
-  transport: "json-pcm-websocket";
+  transport: "provider-websocket";
   protocol: string;
   clientSecret: string;
   websocketUrl: string;

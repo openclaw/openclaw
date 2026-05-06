@@ -451,7 +451,9 @@ describe("applyPatch", () => {
             symlinkTarget: outside,
             timing: "before-realpath",
             run: async () => {
-              await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/under root/i);
+              await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
+                /under root|unable to resolve opened file path/i,
+              );
             },
           });
           await expect(fs.stat(path.join(outside, "nested"))).rejects.toMatchObject({

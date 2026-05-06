@@ -119,6 +119,11 @@ timeline, or `--scenario discord-thread-reply-filepath-attachment` to create a
 real Discord thread and verify that `message.thread-reply` preserves a
 `filePath` attachment. These scenarios stay out of the default live Discord lane
 because they are before/after repro probes rather than broad smoke coverage.
+The thread-attachment Mantis workflow can also add a logged-in Discord Web
+witness video when `MANTIS_DISCORD_VIEWER_CHROME_PROFILE_DIR` or
+`MANTIS_DISCORD_VIEWER_CHROME_PROFILE_TGZ_B64` is configured in the QA
+environment. That viewer profile is only for visual capture; the pass/fail
+decision still comes from the Discord REST oracle.
 
 CI uses the same command surface in `.github/workflows/qa-live-transports-convex.yml`. Scheduled and default manual runs execute the fast Matrix profile with live frontier credentials, `--fast`, and `OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000`. Manual `matrix_profile=all` fans out into the five profile shards so the exhaustive catalog can run in parallel while keeping one artifact directory per shard.
 
