@@ -737,7 +737,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     expect(streamFn).not.toBe(streamSimple);
   });
 
-  it("keeps explicit custom currentStreamFn values unchanged", () => {
+  it("wraps explicit custom currentStreamFn with empty-tools guard", () => {
     const currentStreamFn = vi.fn();
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: currentStreamFn as never,
@@ -750,7 +750,11 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       } as never,
     });
 
-    expect(streamFn).toBe(currentStreamFn);
+    // Custom streamFns are now wrapped with wrapStreamFnStripEmptyTools,
+    // so the returned function is a different reference that strips empty
+    // tools/tool_choice from outgoing payloads.
+    expect(streamFn).not.toBe(currentStreamFn);
+    expect(typeof streamFn).toBe("function");
   });
 });
 
@@ -2186,11 +2190,9 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     );
 
     const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
-    const stream = wrapped(
-      { api: "google-gemini" } as never,
-      { messages } as never,
-      {} as never,
-    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
+    const stream = wrapped({ api: "google-gemini" } as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
