@@ -800,6 +800,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/uninstall: preserve configured workspace directories during state-only cleanup, so nested workspaces under `.openclaw` are not deleted unless workspace removal is selected. Fixes #75052. Thanks @Jason-Bai.
 - CLI/message: skip eager model context warmup and preserve channel-declared gateway execution for Discord and Telegram message actions, avoiding Codex app-server/model discovery during simple send/read commands. Thanks @fuller-stack-dev.
 - Codex/app-server: resolve managed binaries from bundled `dist` chunks and from the `@openai/codex` package bin when installs do not provide a nearby `.bin/codex` shim, avoiding false missing-binary startup failures.
 - Plugins/ClawHub: use the ClawHub artifact resolver response as the install decision before downloading, keeping legacy ZIP fallback and future ClawPack npm-pack installs on the same explicit resolver path. Thanks @vincentkoc.
