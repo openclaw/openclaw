@@ -353,11 +353,13 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         output_format: req.outputFormat ?? DEFAULT_OUTPUT_FORMAT,
       };
       if (imageSize !== undefined) {
-        // NB2 edit expects aspect_ratio + resolution; GPT Image 2 and Flux use image_size
+        // NB2 edit uses its own geometry schema; GPT Image 2 and Flux use image_size
         if (model.startsWith("fal-ai/nano-banana-") && hasInputImages) {
-          requestBody.aspect_ratio = imageSize;
+          if (req.aspectRatio) {
+            requestBody.aspect_ratio = req.aspectRatio;
+          }
           if (req.resolution) {
-            requestBody.resolution = mapResolutionToEdge(req.resolution);
+            requestBody.resolution = req.resolution;
           }
         } else {
           requestBody.image_size = imageSize;
