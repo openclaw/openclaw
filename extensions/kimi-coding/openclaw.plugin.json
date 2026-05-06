@@ -5,6 +5,12 @@
   },
   "enabledByDefault": true,
   "providers": ["kimi", "kimi-coding"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "kimi-coding-native",
+      "hosts": ["api.kimi.com"]
+    }
+  ],
   "providerRequest": {
     "providers": {
       "kimi": {

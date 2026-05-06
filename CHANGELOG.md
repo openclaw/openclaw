@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Fixes
+
+- Providers/Kimi: switch the bundled Kimi Coding provider to the OpenAI-compatible `/chat/completions` endpoint (`https://api.kimi.com/coding/v1`) so image attachments (`image_url` base64) are accepted instead of returning 403 Forbidden. Fixes #75959. Thanks @hpfan.
+
 ### Changes
 
 - Plugins/install: add `npm-pack:<path.tgz>` installs so local npm pack artifacts run through the same managed npm-root install, lockfile verification, dependency scan, and install-record path as registry npm plugins.

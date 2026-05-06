@@ -18,8 +18,8 @@ describe("kimi coding onboard", () => {
     const provider = cfg.models?.providers?.kimi;
 
     expect(provider).toMatchObject({
-      api: "anthropic-messages",
-      baseUrl: "https://api.kimi.com/coding/",
+      api: "openai-completions",
+      baseUrl: "https://api.kimi.com/coding/v1",
     });
     expect(provider?.models?.map((model) => model.id)).toEqual(["kimi-code"]);
     expect(cfg.agents?.defaults?.models?.[KIMI_MODEL_REF]?.alias).toBe("Kimi");
