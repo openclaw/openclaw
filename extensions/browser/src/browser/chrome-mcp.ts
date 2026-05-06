@@ -46,6 +46,12 @@ type ChromeMcpCallOptions = {
    * or routine tool calls (which would re-fire the macOS consent dialog).
    */
   allowReconnect?: boolean;
+  /**
+   * Explicit `/start` recovery is allowed to create the MCP child that attaches
+   * to an already-running existing-session browser. Passive status/list paths
+   * must leave this unset so they remain non-spawning.
+   */
+  allowExistingSessionAttach?: boolean;
 };
 
 export type ChromeMcpProfileOptions = {
@@ -851,7 +857,9 @@ export async function ensureChromeMcpAvailable(
   if (!cacheReady) {
     const health = await probeChromeMcpHealth(profileName, profileOptions);
     if (!health.cacheAttached) {
-      const gate = decideStartGate(health);
+      const gate = decideStartGate(health, {
+        explicitStart: options.allowExistingSessionAttach === true,
+      });
       if (!gate.mayStart) {
         throw new BrowserProfileUnavailableError(
           formatStartGateBlockedMessage(profileName, health, gate),
@@ -906,7 +914,19 @@ const CHROME_PROCESS_NAMES_LOWER = [
   "google chrome beta",
   "google chrome canary",
   "google chrome dev",
+  "brave browser",
+  "brave browser beta",
+  "brave browser nightly",
+  "microsoft edge",
+  "microsoft edge beta",
+  "microsoft edge dev",
+  "microsoft edge canary",
 ];
+
+export function isChromeRemoteDebuggingOwnerProcess(command: string): boolean {
+  const lower = command.trim().toLowerCase();
+  return CHROME_PROCESS_NAMES_LOWER.some((name) => lower.startsWith(name));
+}
 
 /**
  * Returns the macOS Chrome user-data directory, or null on other platforms.
@@ -1147,8 +1167,7 @@ export async function probeChromePortOwner(port: number): Promise<ChromePortOwne
     }
     const command = pidMatch[1]?.trim() ?? "";
     const pid = Number.parseInt(pidMatch[2] ?? "", 10);
-    const lower = command.toLowerCase();
-    if (CHROME_PROCESS_NAMES_LOWER.some((name) => lower.startsWith(name))) {
+    if (isChromeRemoteDebuggingOwnerProcess(command)) {
       return {
         kind: "chrome",
         process: command,
@@ -1268,6 +1287,11 @@ export type ChromeBrowserAuthHealth = {
 export type StartGateDecision =
   | { mayStart: true; reason: string }
   | { mayStart: false; reason: string; level: ChromeBrowserAuthLevel };
+
+type StartGateOptions = {
+  /** True only for explicit POST /start, never passive status/list probes. */
+  explicitStart?: boolean;
+};
 
 /**
  * Visual auth verifier. Wired here as a typed extension point so the
@@ -1476,11 +1500,25 @@ export async function probeChromeMcpHealth(
  *              we can't safely attach to — re-spawning chrome-devtools-mcp
  *              would still pop the consent dialog, so we hold.
  */
-export function decideStartGate(health: ChromeBrowserAuthHealth): StartGateDecision {
+export function decideStartGate(
+  health: ChromeBrowserAuthHealth,
+  options: StartGateOptions = {},
+): StartGateDecision {
   if (health.level === "high") {
+    if (options.explicitStart && !health.cacheAttached) {
+      return { mayStart: true, reason: "browser-live-attach" };
+    }
     return { mayStart: false, reason: "browser-already-attached", level: "high" };
   }
   if (health.level === "medium") {
+    if (
+      options.explicitStart &&
+      health.port !== null &&
+      health.reasons.includes("owner:platform-unsupported") &&
+      health.reasons.includes("file:devtools-active-port-detected")
+    ) {
+      return { mayStart: true, reason: "browser-live-attach-owner-unverified" };
+    }
     return {
       mayStart: false,
       reason: "browser-auth-visual-verification-required",

@@ -257,7 +257,10 @@ describe("basic browser routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.body).toEqual({ ok: true, profile: "openclaw" });
-    expect(ensureBrowserAvailable).toHaveBeenCalledWith({ headless: true });
+    expect(ensureBrowserAvailable).toHaveBeenCalledWith({
+      headless: true,
+      explicitStart: true,
+    });
   });
 
   it("rejects invalid start headless values", async () => {

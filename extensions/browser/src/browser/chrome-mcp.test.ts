@@ -9,6 +9,7 @@ import {
   decideStartGate,
   ensureChromeMcpAvailable,
   evaluateChromeMcpScript,
+  isChromeRemoteDebuggingOwnerProcess,
   formatStartGateBlockedMessage,
   listChromeMcpTabs,
   navigateChromeMcpPage,
@@ -1222,6 +1223,14 @@ describe("decideStartGate", () => {
     });
   });
 
+  it("HIGH live/no-cache: explicit start may warm the MCP cache", () => {
+    const gate = decideStartGate(
+      makeHealth({ level: "high", attached: true, cacheAttached: false }),
+      { explicitStart: true },
+    );
+    expect(gate).toEqual({ mayStart: true, reason: "browser-live-attach" });
+  });
+
   it("MEDIUM: mayStart=false until visual verification", () => {
     const gate = decideStartGate(makeHealth({ level: "medium" }));
     expect(gate.mayStart).toBe(false);
@@ -1229,6 +1238,21 @@ describe("decideStartGate", () => {
       expect(gate.level).toBe("medium");
       expect(gate.reason).toBe("browser-auth-visual-verification-required");
     }
+  });
+
+  it("MEDIUM platform-unsupported owner: explicit start may attach when DevToolsActivePort is valid", () => {
+    const gate = decideStartGate(
+      makeHealth({
+        level: "medium",
+        port: 50211,
+        reasons: ["file:devtools-active-port-detected", "owner:platform-unsupported"],
+      }),
+      { explicitStart: true },
+    );
+    expect(gate).toEqual({
+      mayStart: true,
+      reason: "browser-live-attach-owner-unverified",
+    });
   });
 
   it("LOW with emptyState: mayStart=true", () => {
@@ -1246,6 +1270,15 @@ describe("decideStartGate", () => {
   });
 });
 
+describe("Chrome remote-debugging owner classifier", () => {
+  it("recognizes documented Chrome, Brave, and Edge listener processes", () => {
+    expect(isChromeRemoteDebuggingOwnerProcess("Google Chrome")).toBe(true);
+    expect(isChromeRemoteDebuggingOwnerProcess("Brave Browser")).toBe(true);
+    expect(isChromeRemoteDebuggingOwnerProcess("Microsoft Edge")).toBe(true);
+    expect(isChromeRemoteDebuggingOwnerProcess("node")).toBe(false);
+  });
+});
+
 describe("ensureChromeMcpAvailable spawn gate", () => {
   beforeEach(async () => {
     await resetChromeMcpSessionsForTest();
@@ -1255,7 +1288,7 @@ describe("ensureChromeMcpAvailable spawn gate", () => {
     setBrowserAuthSignalProbesForTest(null);
   });
 
-  it("refuses to spawn when confidence is HIGH (browser already attached)", async () => {
+  it("refuses to spawn when confidence is HIGH from passive callers", async () => {
     let spawned = false;
     const factory: ChromeMcpSessionFactory = async () => {
       spawned = true;
@@ -1284,6 +1317,66 @@ describe("ensureChromeMcpAvailable spawn gate", () => {
       ensureChromeMcpAvailable("chrome-live", { userDataDir: "/tmp/chrome-fake" }),
     ).rejects.toThrow(/already attached/);
     expect(spawned).toBe(false);
+  });
+
+  it("permits explicit start to warm a HIGH live/no-cache existing-session browser", async () => {
+    let spawned = 0;
+    const factory: ChromeMcpSessionFactory = async () => {
+      spawned += 1;
+      return createFakeSession();
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+    setBrowserAuthSignalProbesForTest({
+      fileProbe: async () => ({
+        enabled: true,
+        toggleEnabled: true,
+        port: 50211,
+        browserUuid: "abc",
+        portListening: true,
+        reason: "devtools-active-port-detected",
+      }),
+      portOwnerProbe: async () => ({
+        kind: "chrome",
+        process: "Google Chrome",
+        pid: 37121,
+        reason: "lsof-chrome-listener",
+      }),
+      jsonVersionProbe: async () => ({ ok: true, reason: "chrome-json-version" }),
+    });
+
+    await ensureChromeMcpAvailable(
+      "chrome-live",
+      { userDataDir: "/tmp/chrome-fake" },
+      { allowExistingSessionAttach: true },
+    );
+    expect(spawned).toBe(1);
+  });
+
+  it("permits explicit start on non-macOS owner-unknown DevToolsActivePort attach", async () => {
+    let spawned = 0;
+    const factory: ChromeMcpSessionFactory = async () => {
+      spawned += 1;
+      return createFakeSession();
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+    setBrowserAuthSignalProbesForTest({
+      fileProbe: async () => ({
+        enabled: true,
+        toggleEnabled: true,
+        port: 50211,
+        browserUuid: "abc",
+        portListening: true,
+        reason: "devtools-active-port-detected",
+      }),
+      portOwnerProbe: async () => ({ kind: "unknown", reason: "platform-unsupported" }),
+    });
+
+    await ensureChromeMcpAvailable(
+      "chrome-live",
+      { userDataDir: "/tmp/chrome-fake" },
+      { allowExistingSessionAttach: true },
+    );
+    expect(spawned).toBe(1);
   });
 
   it("refuses to spawn when confidence is MEDIUM (visual verifier required)", async () => {

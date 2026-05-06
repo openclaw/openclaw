@@ -49,12 +49,14 @@ type AvailabilityOps = {
   isHttpReachable: (timeoutMs?: number) => Promise<boolean>;
   isTransportAvailable: (timeoutMs?: number) => Promise<boolean>;
   isReachable: (timeoutMs?: number) => Promise<boolean>;
-  ensureBrowserAvailable: (opts?: { headless?: boolean }) => Promise<void>;
+  ensureBrowserAvailable: (opts?: BrowserEnsureOptions) => Promise<void>;
   stopRunningBrowser: () => Promise<{ stopped: boolean }>;
 };
 
 type BrowserEnsureOptions = {
   headless?: boolean;
+  /** True only for POST /start; keeps passive status/list probes non-spawning. */
+  explicitStart?: boolean;
 };
 
 const MANAGED_LAUNCH_FAILURE_THRESHOLD = 3;
@@ -344,13 +346,19 @@ export function createProfileAvailability({
       if (health.cacheAttached) {
         return;
       }
-      const gate = decideStartGate(health);
+      const gate = decideStartGate(health, { explicitStart: options?.explicitStart === true });
       if (!gate.mayStart) {
         throw new BrowserProfileUnavailableError(
           formatStartGateBlockedMessage(profile.name, health, gate),
         );
       }
-      await ensureChromeMcpAvailable(profile.name, profile);
+      if (options?.explicitStart === true) {
+        await ensureChromeMcpAvailable(profile.name, profile, {
+          allowExistingSessionAttach: true,
+        });
+      } else {
+        await ensureChromeMcpAvailable(profile.name, profile);
+      }
       await waitForChromeMcpReadyAfterAttach();
       return;
     }

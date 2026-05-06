@@ -287,7 +287,10 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
           if (!headlessOverride.ok) {
             return;
           }
-          await profileCtx.ensureBrowserAvailable({ headless: headlessOverride.headless });
+          await profileCtx.ensureBrowserAvailable({
+            headless: headlessOverride.headless,
+            explicitStart: true,
+          });
           res.json({ ok: true, profile: profileCtx.profile.name });
         },
       });
