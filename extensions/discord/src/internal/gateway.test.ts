@@ -10,6 +10,7 @@ import {
 } from "discord-api-types/v10";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sharedGatewayIdentifyLimiter } from "./gateway-identify-limiter.js";
+import { GatewayHeartbeatTimers } from "./gateway-lifecycle.js";
 import { GatewayPlugin } from "./gateway.js";
 
 function attachOpenSocket(gateway: GatewayPlugin) {
@@ -509,6 +510,36 @@ describe("GatewayPlugin", () => {
 
     expect(gateway.heartbeatInterval).toBeUndefined();
     expect(gateway.firstHeartbeatTimeout).toBeUndefined();
+  });
+
+  it("waits a full interval after the randomized first heartbeat before timing out", () => {
+    vi.useFakeTimers();
+    const timers = new GatewayHeartbeatTimers();
+    const onAckTimeout = vi.fn();
+    const onHeartbeat = vi.fn(() => {
+      acked = false;
+    });
+    let acked = true;
+
+    timers.start({
+      intervalMs: 1_000,
+      isAcked: () => acked,
+      onAckTimeout,
+      onHeartbeat,
+      random: () => 0.95,
+    });
+
+    vi.advanceTimersByTime(950);
+    expect(onHeartbeat).toHaveBeenCalledTimes(1);
+    expect(onAckTimeout).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(999);
+    expect(onAckTimeout).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(onAckTimeout).toHaveBeenCalledTimes(1);
+
+    timers.stop();
   });
 
   it("spaces identify sends by gateway max concurrency bucket", async () => {
