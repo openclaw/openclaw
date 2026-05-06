@@ -1,12 +1,18 @@
 import { execFileSync, execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { resolveRenderableAvatarUrl } from "./update-clawtributors-avatar.js";
+import {
+  parseRenderedClawtributorEntries,
+  renderClawtributorsBlock,
+} from "./update-clawtributors-render.js";
 import type { ApiContributor, Entry, MapConfig, User } from "./update-clawtributors.types.js";
 
 const REPO = "openclaw/openclaw";
 const PER_LINE = 10;
-const AVATAR_PROBE_SIZE = 40;
 const AVATAR_SIZE = 48;
+const CLAWTRIBUTOR_ASSET_DIR = resolve("docs/assets/clawtributors");
+const CLAWTRIBUTOR_ASSET_PATH_PREFIX = "docs/assets/clawtributors";
 const CLAWTRIBUTORS_START = "<!-- clawtributors:start -->";
 const CLAWTRIBUTORS_END = "<!-- clawtributors:end -->";
 const CLAWTRIBUTORS_HIDDEN_START = "<!-- clawtributors:hidden:start";
@@ -29,7 +35,6 @@ const raw = run(`gh api "repos/${REPO}/contributors?per_page=100&anon=1" --pagin
 const contributors = parsePaginatedJson(raw) as ApiContributor[];
 const apiByLogin = new Map<string, User>();
 const contributionsByLogin = new Map<string, number>();
-const defaultAvatarByLogin = new Map<string, Promise<boolean>>();
 
 for (const item of contributors) {
   if (!item?.login || !item?.html_url || !item?.avatar_url) {
@@ -281,7 +286,7 @@ for (const [login, loc] of linesByLogin.entries()) {
 }
 
 const entries = Array.from(entriesByKey.values());
-const visibleEntries = await filterVisibleEntries(entries, hiddenReadmeLogins);
+const visibleEntries = entries;
 
 visibleEntries.sort((a, b) => {
   if (b.score !== a.score) {
@@ -290,17 +295,16 @@ visibleEntries.sort((a, b) => {
   return a.display.localeCompare(b.display);
 });
 
-const markdownLines: string[] = [];
-for (let i = 0; i < visibleEntries.length; i += PER_LINE) {
-  const chunk = visibleEntries.slice(i, i + PER_LINE);
-  const parts = chunk.map((entry) => {
-    return `[![${escapeMarkdownLabel(entry.display)}](${entry.avatar_url})](${entry.html_url})`;
-  });
-  markdownLines.push(parts.join(" "));
-}
+const { entries: renderableEntries, localAssetCount } =
+  await resolveRenderableEntries(visibleEntries);
 
-const block = `${CLAWTRIBUTORS_START}\n${markdownLines.join("\n")}\n${CLAWTRIBUTORS_END}`;
-const hiddenBlock = buildHiddenReadmeBlock(entries, visibleEntries);
+const block = renderClawtributorsBlock(renderableEntries, {
+  perLine: PER_LINE,
+  avatarSize: AVATAR_SIZE,
+  startMarker: CLAWTRIBUTORS_START,
+  endMarker: CLAWTRIBUTORS_END,
+});
+const hiddenBlock = buildHiddenReadmeBlock();
 const hiddenRange = findHiddenReadmeRange(currentReadme);
 const readmeWithoutMeta = hiddenRange
   ? `${currentReadme.slice(0, hiddenRange.start)}${currentReadme.slice(hiddenRange.end)}`
@@ -315,7 +319,7 @@ const next = `${readmeWithoutMeta.slice(0, range.start)}${block}\n${hiddenBlock}
 writeFileSync(readmePath, next);
 
 console.log(
-  `Updated README clawtributors: ${visibleEntries.length} visible (${entries.length - visibleEntries.length} default-avatar entries hidden)`,
+  `Updated README clawtributors: ${renderableEntries.length} visible (${hiddenReadmeLogins.size} legacy-hidden entries restored, ${localAssetCount} oversized avatars cached locally)`,
 );
 console.log(`\nTop 25 by composite score: (commits*2 + PRs*10 + sqrt(LOC)) * tenure`);
 console.log(`  tenure = 1.0 + (days_since_first_commit / repo_age)^2 * 0.5`);
@@ -436,55 +440,23 @@ function fetchUser(login: string): User | null {
   }
 }
 
-function isDefaultGitHubAvatar(login: string): Promise<boolean> {
-  const normalized = normalizeLogin(login)?.toLowerCase();
-  if (!normalized) {
-    return Promise.resolve(false);
-  }
-  const cached = defaultAvatarByLogin.get(normalized);
-  if (cached) {
-    return cached;
-  }
-  const pending = probeDefaultGitHubAvatar(normalized);
-  defaultAvatarByLogin.set(normalized, pending);
-  return pending;
-}
-
-async function probeDefaultGitHubAvatar(login: string): Promise<boolean> {
-  try {
-    const response = await fetch(`https://github.com/${login}.png?size=${AVATAR_PROBE_SIZE}`, {
-      headers: { "user-agent": "openclaw-clawtributors" },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!response.ok) {
-      return false;
-    }
-    const buffer = Buffer.from(await response.arrayBuffer());
-    const dimensions = readImageDimensions(buffer);
-    return Boolean(
-      dimensions && (dimensions.width > AVATAR_PROBE_SIZE || dimensions.height > AVATAR_PROBE_SIZE),
-    );
-  } catch {
-    return false;
-  }
-}
-
-async function filterVisibleEntries(
+async function resolveRenderableEntries(
   entries: Entry[],
-  hiddenLogins: ReadonlySet<string>,
-): Promise<Entry[]> {
-  const results = await mapConcurrent(entries, 8, async (entry) => {
-    const login = entry.login ?? entry.key;
-    if (!login) {
+): Promise<{ entries: Entry[]; localAssetCount: number }> {
+  let localAssetCount = 0;
+  const renderableEntries = await mapConcurrent(entries, 8, async (entry) => {
+    const resolved = await resolveRenderableAvatarUrl(entry, {
+      avatarSize: AVATAR_SIZE,
+      assetDir: CLAWTRIBUTOR_ASSET_DIR,
+      assetPathPrefix: CLAWTRIBUTOR_ASSET_PATH_PREFIX,
+    });
+    if (!resolved.usedLocalAsset) {
       return entry;
     }
-    const normalized = normalizeLogin(login)?.toLowerCase();
-    if (normalized && hiddenLogins.has(normalized)) {
-      return null;
-    }
-    return (await isDefaultGitHubAvatar(login)) ? null : entry;
+    localAssetCount += 1;
+    return { ...entry, avatar_url: resolved.avatarUrl };
   });
-  return results.filter((entry): entry is Entry => entry !== null);
+  return { entries: renderableEntries, localAssetCount };
 }
 
 async function mapConcurrent<T, R>(
@@ -503,90 +475,6 @@ async function mapConcurrent<T, R>(
   });
   await Promise.all(workers);
   return results;
-}
-
-function readImageDimensions(buffer: Buffer): { width: number; height: number } | null {
-  if (isPng(buffer)) {
-    return readPngDimensions(buffer);
-  }
-  if (isJpeg(buffer)) {
-    return readJpegDimensions(buffer);
-  }
-  return null;
-}
-
-function isPng(buffer: Buffer): boolean {
-  return (
-    buffer.length >= 24 &&
-    buffer[0] === 0x89 &&
-    buffer[1] === 0x50 &&
-    buffer[2] === 0x4e &&
-    buffer[3] === 0x47 &&
-    buffer[4] === 0x0d &&
-    buffer[5] === 0x0a &&
-    buffer[6] === 0x1a &&
-    buffer[7] === 0x0a
-  );
-}
-
-function readPngDimensions(buffer: Buffer): { width: number; height: number } | null {
-  if (buffer.length < 24) {
-    return null;
-  }
-  return {
-    width: buffer.readUInt32BE(16),
-    height: buffer.readUInt32BE(20),
-  };
-}
-
-function isJpeg(buffer: Buffer): boolean {
-  return buffer.length >= 4 && buffer[0] === 0xff && buffer[1] === 0xd8;
-}
-
-function readJpegDimensions(buffer: Buffer): { width: number; height: number } | null {
-  let offset = 2;
-  while (offset + 9 < buffer.length) {
-    if (buffer[offset] !== 0xff) {
-      offset += 1;
-      continue;
-    }
-
-    const marker = buffer[offset + 1];
-    offset += 2;
-
-    if (marker === 0xd8 || marker === 0xd9) {
-      continue;
-    }
-    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
-      continue;
-    }
-    if (offset + 2 > buffer.length) {
-      return null;
-    }
-
-    const length = buffer.readUInt16BE(offset);
-    if (length < 2 || offset + length > buffer.length) {
-      return null;
-    }
-
-    if (
-      (marker >= 0xc0 && marker <= 0xc3) ||
-      (marker >= 0xc5 && marker <= 0xc7) ||
-      (marker >= 0xc9 && marker <= 0xcb) ||
-      (marker >= 0xcd && marker <= 0xcf)
-    ) {
-      if (length < 7) {
-        return null;
-      }
-      return {
-        height: buffer.readUInt16BE(offset + 3),
-        width: buffer.readUInt16BE(offset + 5),
-      };
-    }
-
-    offset += length;
-  }
-  return null;
 }
 
 function resolveLogin(
@@ -674,10 +562,6 @@ function normalizeIdentifier(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-function escapeMarkdownLabel(value: string): string {
-  return value.replace(/([\\[\]])/g, "\\$1");
-}
-
 function parseReadmeEntries(
   content: string,
 ): Array<{ display: string; html_url: string; avatar_url: string }> {
@@ -686,35 +570,7 @@ function parseReadmeEntries(
     return [];
   }
   const block = content.slice(range.start, range.end);
-  const entries: Array<{ display: string; html_url: string; avatar_url: string }> = [];
-  const markdown = /\[!\[([^\]]+)\]\(([^)]+)\)\]\(([^)]+)\)/g;
-  for (const match of block.matchAll(markdown)) {
-    const [, alt, src, href] = match;
-    if (!href || !src || !alt) {
-      continue;
-    }
-    entries.push({ html_url: href, avatar_url: src, display: alt.replace(/\\([\\[\]])/g, "$1") });
-  }
-  const linked = /<a href="([^"]+)"><img src="([^"]+)"[^>]*alt="([^"]+)"[^>]*>/g;
-  for (const match of block.matchAll(linked)) {
-    const [, href, src, alt] = match;
-    if (!href || !src || !alt) {
-      continue;
-    }
-    entries.push({ html_url: href, avatar_url: src, display: alt });
-  }
-  const standalone = /<img src="([^"]+)"[^>]*alt="([^"]+)"[^>]*>/g;
-  for (const match of block.matchAll(standalone)) {
-    const [, src, alt] = match;
-    if (!src || !alt) {
-      continue;
-    }
-    if (entries.some((entry) => entry.display === alt && entry.avatar_url === src)) {
-      continue;
-    }
-    entries.push({ html_url: fallbackHref(alt), avatar_url: src, display: alt });
-  }
-  return entries;
+  return parseRenderedClawtributorEntries(block);
 }
 
 function parseHiddenReadmeLogins(content: string): string[] {
@@ -729,23 +585,10 @@ function parseHiddenReadmeLogins(content: string): string[] {
     .filter((login): login is string => Boolean(login));
 }
 
-function buildHiddenReadmeBlock(entries: Entry[], visibleEntries: Entry[]): string {
-  const visibleLogins = new Set(
-    visibleEntries
-      .map((entry) => normalizeLogin(entry.login ?? entry.key)?.toLowerCase() ?? null)
-      .filter((login): login is string => Boolean(login)),
-  );
-  const hiddenLogins = entries
-    .map((entry) => normalizeLogin(entry.login ?? entry.key)?.toLowerCase() ?? null)
-    .filter((login): login is string => Boolean(login))
-    .filter((login) => !visibleLogins.has(login))
-    .toSorted((a, b) => a.localeCompare(b));
+function buildHiddenReadmeBlock(): string {
   const notice =
-    "default-avatar-cache: hidden from the rendered wall because these users still use GitHub's default avatar";
-  if (hiddenLogins.length === 0) {
-    return `${CLAWTRIBUTORS_HIDDEN_START}\n${notice}\n${CLAWTRIBUTORS_HIDDEN_END}\n`;
-  }
-  return `${CLAWTRIBUTORS_HIDDEN_START}\n${notice}\n${hiddenLogins.join("\n")}\n${CLAWTRIBUTORS_HIDDEN_END}\n`;
+    "legacy-hidden-logins: retired; oversized avatars now use local resized assets so the contributor wall keeps everyone visible";
+  return `${CLAWTRIBUTORS_HIDDEN_START}\n${notice}\n${CLAWTRIBUTORS_HIDDEN_END}\n`;
 }
 
 function findClawtributorsRange(content: string): { start: number; end: number } | null {
@@ -791,11 +634,6 @@ function loginFromUrl(url: string): string | null {
     return null;
   }
   return login;
-}
-
-function fallbackHref(value: string): string {
-  const encoded = encodeURIComponent(value.trim());
-  return encoded ? `https://github.com/search?q=${encoded}` : "https://github.com";
 }
 
 function pickDisplay(
