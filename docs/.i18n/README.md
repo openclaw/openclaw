@@ -66,15 +66,16 @@ Fields:
 
 - `scripts/docs-i18n` still owns translation generation.
 - Doc mode writes `x-i18n.source_hash` into each translated page.
-- Each publish workflow precomputes a pending file list by comparing the current English source hash to the stored locale `x-i18n.source_hash`.
+- The publish workflow precomputes a pending file list by comparing the current English source hash to the stored locale `x-i18n.source_hash`.
 - If the pending count is `0`, the expensive translation step is skipped entirely.
 - If there are pending files, the workflow translates only those files.
-- The publish workflow retries transient model-format failures, but unchanged files stay skipped because the same hash check runs on each retry.
-- The source repo also dispatches zh-CN, zh-TW, ja-JP, es, pt-BR, ko, de, fr, ar, it, vi, nl, fa, tr, uk, id, pl, and th refreshes after published GitHub releases so release docs can catch up without waiting for the daily cron.
+- Locale workers retry transient model-format failures, but unchanged files stay skipped because the same hash check runs on each retry.
+- Locale workers upload artifacts; the publish repo finalizer commits all successful locale outputs together.
+- Published GitHub releases dispatch one aggregate translation refresh so release docs can catch up without waiting for the weekly reconciliation.
 
 ## Operational notes
 
 - Sync metadata is written to `.openclaw-sync/source.json` in the publish repo.
 - Source repo secret: `OPENCLAW_DOCS_SYNC_TOKEN`
 - Publish repo secret: `OPENCLAW_DOCS_I18N_OPENAI_API_KEY`
-- If locale output looks stale, check the matching `Translate <locale>` workflow in `openclaw/docs` first.
+- If locale output looks stale, check the `Translate All` workflow in `openclaw/docs` first.
