@@ -46,6 +46,7 @@ import {
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
+import { readLatestAssistantReply } from "./tools/agent-step.js";
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
 type SubagentAnnounceDeps = {
@@ -450,6 +451,28 @@ export async function runSubagentAnnounceFlow(params: {
 
     if (!outcome) {
       outcome = { status: "unknown" };
+    }
+
+    // Unified post-compaction retry: after both branches have resolved,
+    // check once for post-compaction assistant output before finalizing.
+    // This catches the case where auto-compaction ran mid-turn and the
+    // real assistant reply is not yet in the session history.
+    if (reply && !isAnnounceSkip(reply) && !isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
+      try {
+        const latestReply = await readLatestAssistantReply({
+          sessionKey: params.childSessionKey,
+          limit: 100,
+        });
+        if (latestReply?.trim() && latestReply !== reply) {
+          // Assistant has produced newer output after compaction
+          const cleaned = latestReply.trim();
+          if (!isAnnounceSkip(cleaned) && !isSilentReplyText(cleaned, SILENT_REPLY_TOKEN)) {
+            reply = cleaned;
+          }
+        }
+      } catch {
+        // Best-effort; keep existing reply on failure
+      }
     }
 
     // Build status label
