@@ -54,26 +54,44 @@ function parseGoogleChatInboundPayload(
     commonEventObject?: { hostApp?: string };
     chat?: {
       messagePayload?: { space?: GoogleChatSpace; message?: GoogleChatMessage };
+      addedToSpacePayload?: { space?: GoogleChatSpace; message?: GoogleChatMessage };
+      removedFromSpacePayload?: { space?: GoogleChatSpace };
       user?: GoogleChatUser;
       eventTime?: string;
     };
     authorizationEventObject?: { systemIdToken?: string };
   };
 
-  if (rawObj.commonEventObject?.hostApp === "CHAT" && rawObj.chat?.messagePayload) {
+  if (rawObj.commonEventObject?.hostApp === "CHAT" && rawObj.chat) {
     const chat = rawObj.chat;
-    const messagePayload = chat.messagePayload;
-    eventPayload = {
-      type: "MESSAGE",
-      space: messagePayload?.space,
-      message: messagePayload?.message,
-      user: chat.user,
-      eventTime: chat.eventTime,
-    };
-    addOnBearerToken =
-      typeof rawObj.authorizationEventObject?.systemIdToken === "string"
-        ? rawObj.authorizationEventObject.systemIdToken.trim()
-        : "";
+    // Handle all supported add-on payload variants (#65007).
+    const messagePayload =
+      chat.messagePayload ?? chat.addedToSpacePayload ?? undefined;
+    const isRemoval = !messagePayload && chat.removedFromSpacePayload != null;
+    if (messagePayload) {
+      eventPayload = {
+        type: chat.addedToSpacePayload ? "ADDED_TO_SPACE" : "MESSAGE",
+        space: messagePayload.space,
+        message: messagePayload.message,
+        user: chat.user,
+        eventTime: chat.eventTime,
+      };
+      addOnBearerToken =
+        typeof rawObj.authorizationEventObject?.systemIdToken === "string"
+          ? rawObj.authorizationEventObject.systemIdToken.trim()
+          : "";
+    } else if (isRemoval) {
+      eventPayload = {
+        type: "REMOVED_FROM_SPACE",
+        space: chat.removedFromSpacePayload!.space,
+        user: chat.user,
+        eventTime: chat.eventTime,
+      };
+      addOnBearerToken =
+        typeof rawObj.authorizationEventObject?.systemIdToken === "string"
+          ? rawObj.authorizationEventObject.systemIdToken.trim()
+          : "";
+    }
   }
 
   const event = eventPayload as GoogleChatEvent;
