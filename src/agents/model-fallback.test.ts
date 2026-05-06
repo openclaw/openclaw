@@ -147,7 +147,10 @@ let authTempRoot = "";
 let authTempCounter = 0;
 
 beforeAll(() => {
-  setCurrentPluginMetadataSnapshot(loadPluginMetadataSnapshot({ config: {} }), { config: {} });
+  setCurrentPluginMetadataSnapshot(loadPluginMetadataSnapshot({ config: {}, env: process.env }), {
+    config: {},
+    env: process.env,
+  });
 });
 
 afterAll(() => {
