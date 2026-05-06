@@ -403,9 +403,10 @@ describe("launchd bootstrap repair", () => {
     expect(state.launchctlCalls.some((call) => call[0] === "kickstart")).toBe(false);
   });
 
-  it("treats bootstrap exit 130 as success and nudges the already-loaded service", async () => {
+  it("treats bootstrap exit 130 as success and nudges the already-loaded service when stopped", async () => {
     state.bootstrapError = "Service already loaded";
     state.bootstrapCode = 130;
+    state.serviceRunning = false;
     const env = createDefaultLaunchdEnv();
 
     const repair = await repairLaunchAgentBootstrap({ env });
@@ -417,9 +418,21 @@ describe("launchd bootstrap repair", () => {
     ]);
   });
 
-  it("treats 'already exists in domain' bootstrap failures as success and nudges the service", async () => {
+  it("skips kickstart when already-loaded service is actively running", async () => {
+    state.bootstrapError = "Service already loaded";
+    state.bootstrapCode = 130;
+    const env = createDefaultLaunchdEnv();
+
+    const repair = await repairLaunchAgentBootstrap({ env });
+
+    expect(repair).toEqual({ ok: true, status: "already-loaded" });
+    expect(state.launchctlCalls.some((call) => call[0] === "kickstart")).toBe(false);
+  });
+
+  it("treats 'already exists in domain' bootstrap failures as success and nudges the service when stopped", async () => {
     state.bootstrapError =
       "Could not bootstrap service: 5: Input/output error: already exists in domain for gui/501";
+    state.serviceRunning = false;
     const env = createDefaultLaunchdEnv();
 
     const repair = await repairLaunchAgentBootstrap({ env });
@@ -448,6 +461,7 @@ describe("launchd bootstrap repair", () => {
   it("returns a typed kickstart failure when already-loaded recovery cannot nudge the service", async () => {
     state.bootstrapError = "Service already loaded";
     state.bootstrapCode = 130;
+    state.serviceRunning = false;
     state.kickstartError = "launchctl kickstart failed: permission denied";
     state.kickstartFailuresRemaining = 1;
     const env = createDefaultLaunchdEnv();
