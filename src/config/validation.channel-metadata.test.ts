@@ -51,6 +51,32 @@ function createTelegramSchemaRegistry(): PluginManifestRegistry {
   };
 }
 
+function createBlueBubblesLiveSchemaRegistry(): PluginManifestRegistry {
+  return {
+    diagnostics: [],
+    plugins: [
+      createPluginManifestRecord({
+        id: "bluebubbles",
+        channels: ["bluebubbles"],
+        channelConfigs: {
+          bluebubbles: {
+            schema: {
+              type: "object",
+              properties: {
+                pluginOwnedFutureKey: {
+                  type: "boolean",
+                },
+              },
+              additionalProperties: false,
+            },
+            uiHints: {},
+          },
+        },
+      }),
+    ],
+  };
+}
+
 function createPluginConfigSchemaRegistry(): PluginManifestRegistry {
   return {
     diagnostics: [],
@@ -203,6 +229,20 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
         expect.objectContaining({ dmPolicy: "pairing" }),
       );
     }
+  });
+
+  it("validates bundled channels with the live plugin-owned schema instead of generated fallback metadata", async () => {
+    mockLoadPluginManifestRegistry.mockReturnValue(createBlueBubblesLiveSchemaRegistry());
+
+    const result = validateConfigObjectRawWithPlugins({
+      channels: {
+        bluebubbles: {
+          pluginOwnedFutureKey: true,
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
   });
 });
 
