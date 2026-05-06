@@ -141,7 +141,8 @@ MCP servers can use stdio or HTTP transport:
         "headers": {
           "Authorization": "Bearer ${MY_SECRET_TOKEN}"
         },
-        "connectionTimeoutMs": 30000
+        "connectionTimeoutMs": 30000,
+        "requestTimeoutMs": 600000
       }
     }
   }
@@ -157,6 +158,8 @@ MCP servers can use stdio or HTTP transport:
   descriptions and logs
 - `connectionTimeoutMs` overrides the default 30-second connection timeout for
   both stdio and HTTP transports
+- `requestTimeoutMs` overrides the default 10-minute per-tool-call timeout;
+  progress notifications reset this timeout while the tool is still active
 
 ##### Tool naming
 

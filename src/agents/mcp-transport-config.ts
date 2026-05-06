@@ -2,6 +2,7 @@ import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize
 import { logWarn } from "../logger.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
+import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import {
   describeHttpMcpServerLaunchConfig,
   resolveHttpMcpServerLaunchConfig,
@@ -15,6 +16,7 @@ import {
 type ResolvedBaseMcpTransportConfig = {
   description: string;
   connectionTimeoutMs: number;
+  requestTimeoutMs: number;
 };
 
 type ResolvedStdioMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
@@ -36,6 +38,7 @@ type ResolvedHttpMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
 type ResolvedMcpTransportConfig = ResolvedStdioMcpTransportConfig | ResolvedHttpMcpTransportConfig;
 
 const DEFAULT_CONNECTION_TIMEOUT_MS = 30_000;
+export const DEFAULT_BUNDLE_MCP_REQUEST_TIMEOUT_MS = 10 * 60_000;
 
 function getConnectionTimeoutMs(rawServer: unknown): number {
   if (
@@ -47,6 +50,18 @@ function getConnectionTimeoutMs(rawServer: unknown): number {
     return (rawServer as { connectionTimeoutMs: number }).connectionTimeoutMs;
   }
   return DEFAULT_CONNECTION_TIMEOUT_MS;
+}
+
+function getRequestTimeoutMs(rawServer: unknown): number {
+  if (
+    rawServer &&
+    typeof rawServer === "object" &&
+    typeof (rawServer as { requestTimeoutMs?: unknown }).requestTimeoutMs === "number" &&
+    (rawServer as { requestTimeoutMs: number }).requestTimeoutMs > 0
+  ) {
+    return resolveSafeTimeoutDelayMs((rawServer as { requestTimeoutMs: number }).requestTimeoutMs);
+  }
+  return DEFAULT_BUNDLE_MCP_REQUEST_TIMEOUT_MS;
 }
 
 function getRequestedTransport(rawServer: unknown): string {
@@ -99,6 +114,7 @@ function resolveHttpTransportConfig(
     headers: launch.config.headers,
     description: describeHttpMcpServerLaunchConfig(launch.config),
     connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
+    requestTimeoutMs: getRequestTimeoutMs(rawServer),
   };
 }
 
@@ -127,6 +143,7 @@ export function resolveMcpTransportConfig(
       cwd: stdioLaunch.config.cwd,
       description: describeStdioMcpServerLaunchConfig(stdioLaunch.config),
       connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
+      requestTimeoutMs: getRequestTimeoutMs(rawServer),
     };
   }
 
