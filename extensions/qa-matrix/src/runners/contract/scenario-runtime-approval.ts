@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import { MATRIX_QA_DRIVER_DM_ROOM_KEY, resolveMatrixQaScenarioRoomId } from "./scenario-catalog.js";
 import {
@@ -165,6 +166,35 @@ async function waitForApprovalEvent(params: {
     expectedKind: params.expectedKind,
   });
   return matched;
+}
+
+async function waitForObservedApprovalEvent(params: {
+  context: MatrixQaScenarioContext;
+  expectedApprovalId: string;
+  expectedKind: MatrixQaApprovalKind;
+  roomId: string;
+  timeoutMs: number;
+}) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < params.timeoutMs) {
+    const observedMatch = params.context.observedEvents.find((event) =>
+      isExpectedApprovalEvent(event, params),
+    );
+    if (observedMatch) {
+      assertApprovalMetadata({
+        event: observedMatch,
+        expectedKind: params.expectedKind,
+      });
+      return {
+        event: observedMatch,
+        since: undefined,
+      };
+    }
+    await sleep(Math.min(100, Math.max(25, params.timeoutMs - (Date.now() - startedAt))));
+  }
+  throw new Error(
+    `timed out waiting for observed Matrix approval ${params.expectedApprovalId} in ${params.roomId}`,
+  );
 }
 
 async function reactToApproval(params: {
@@ -598,12 +628,12 @@ export async function runApprovalChannelTargetBothScenario(context: MatrixQaScen
     roomId: context.roomId,
     since: startSince,
   });
-  const dmApproval = await waitForApprovalEvent({
+  const dmApproval = await waitForObservedApprovalEvent({
     context,
     expectedApprovalId: approvalId,
     expectedKind: "exec",
     roomId: dmRoomId,
-    since: startSince,
+    timeoutMs: context.timeoutMs,
   });
   if (channelApproval.event.approval?.id !== dmApproval.event.approval?.id) {
     throw new Error("target=both delivered different approval ids to channel and DM");
