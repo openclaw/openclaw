@@ -1454,7 +1454,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCall.name).toBe("write");
   });
 
-  it("keeps blank names blank and assigns fallback ids when both name and id are blank", async () => {
+  it("replaces blank names with _blank sentinel and assigns fallback ids when both name and id are blank", async () => {
     const finalToolCall = { type: "toolCall", id: "", name: "" };
     const finalMessage = { role: "assistant", content: [finalToolCall] };
     const baseFn = vi.fn(() =>
@@ -1467,7 +1467,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
     await stream.result();
 
-    expect(finalToolCall.name).toBe("");
+    expect(finalToolCall.name).toBe("_blank");
     expect(finalToolCall.id).toBe("call_auto_1");
   });
 
@@ -1597,9 +1597,9 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     const stream = await invokeWrappedStream(baseFn, new Set(["exec", "exec2"]));
     await stream.result();
 
-    expect(finalToolCall.name).toBe("");
+    expect(finalToolCall.name).toBe("_blank");
   });
-  it("does not collapse whitespace-only tool names to empty strings", async () => {
+  it("replaces blank/whitespace-only tool names with _blank sentinel to prevent dispatch loops", async () => {
     const partialToolCall = { type: "toolCall", name: "   " };
     const finalToolCall = { type: "toolCall", name: "\t  " };
     const event = {
@@ -1615,8 +1615,10 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     }
     await stream.result();
 
-    expect(partialToolCall.name).toBe("   ");
-    expect(finalToolCall.name).toBe("\t  ");
+    // Blank names are replaced with "_blank" so pi-agent-core produces a
+    // clear "Tool _blank not found" error instead of looping (#34129).
+    expect(partialToolCall.name).toBe("_blank");
+    expect(finalToolCall.name).toBe("_blank");
     expect(baseFn).toHaveBeenCalledTimes(1);
   });
 
