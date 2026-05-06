@@ -902,6 +902,35 @@ describe("model-selection", () => {
         ),
       ).toBe(false);
     });
+
+    it("does not rewrite a bare allowlist key when another entry aliases that same string", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.5",
+            },
+            models: {
+              "gpt-5.5": {},
+              "claude-cli/claude-opus-4-6": { alias: "gpt-5.5" },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [
+          { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+          { provider: "claude-cli", id: "claude-opus-4-6", name: "Claude Opus 4.6 CLI" },
+        ],
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+      });
+
+      expect(result.allowedKeys.has("openai/gpt-5.5")).toBe(true);
+      expect(result.allowedKeys.has("claude-cli/claude-opus-4-6")).toBe(true);
+    });
   });
 
   describe("resolveAllowedModelRef", () => {

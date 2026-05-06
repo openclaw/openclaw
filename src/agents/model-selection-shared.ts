@@ -673,12 +673,12 @@ export function buildAllowedModelSetWithFallbacks(params: {
       syntheticCatalogEntries.set(key, buildSyntheticAllowedCatalogEntry({ parsed, metadata }));
     }
   };
-  const addAllowedModelRef = (raw: string) => {
+  const addAllowedModelRef = (raw: string, options?: { resolveAliasFirst?: boolean }) => {
     const trimmed = raw.trim();
     if (!trimmed) {
       return;
     }
-    if (!trimmed.includes("/")) {
+    if (options?.resolveAliasFirst && !trimmed.includes("/")) {
       const aliasMatch = aliasIndex.byAlias.get(normalizeLowercaseStringOrEmpty(trimmed));
       if (aliasMatch) {
         addAllowedRef(aliasMatch.ref);
@@ -709,7 +709,7 @@ export function buildAllowedModelSetWithFallbacks(params: {
   }
 
   for (const fallback of params.fallbackModels) {
-    addAllowedModelRef(fallback);
+    addAllowedModelRef(fallback, { resolveAliasFirst: true });
   }
 
   if (defaultKey) {
