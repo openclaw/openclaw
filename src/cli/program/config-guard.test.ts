@@ -14,12 +14,14 @@ vi.mock("../../config/config.js", () => ({
   setRuntimeConfigSnapshot: setRuntimeConfigSnapshotMock,
 }));
 
+type ConfigIssue = { path: string; message: string };
+
 function makeSnapshot() {
   return {
     exists: false,
     valid: true,
-    issues: [],
-    legacyIssues: [],
+    issues: [] as ConfigIssue[],
+    legacyIssues: [] as ConfigIssue[],
     path: "/tmp/openclaw.json",
   };
 }
@@ -134,7 +136,9 @@ describe("ensureConfigReady", () => {
   });
 
   it("does not exit for invalid config on allowlisted commands", async () => {
-    setInvalidSnapshot();
+    setInvalidSnapshot({
+      issues: [{ path: "agents.defaults", message: 'Unrecognized key: "agentRuntime"' }],
+    });
     const statusRuntime = await runEnsureConfigReady(["status"]);
     expect(statusRuntime.exit).not.toHaveBeenCalled();
 
@@ -146,6 +150,10 @@ describe("ensureConfigReady", () => {
 
     const gatewayRuntime = await runEnsureConfigReady(["gateway", "health"]);
     expect(gatewayRuntime.exit).not.toHaveBeenCalled();
+
+    const doctorRuntime = await runEnsureConfigReady(["doctor", "fix"]);
+    expect(doctorRuntime.exit).not.toHaveBeenCalled();
+    expect(doctorRuntime.error).toHaveBeenCalledWith(expect.stringContaining("agentRuntime"));
   });
 
   it("allows an explicit invalid-config override", async () => {
