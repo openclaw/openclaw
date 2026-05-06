@@ -228,7 +228,13 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     const resolvedAccountId = accountId || undefined;
 
     const mediaUrl =
-      typeof params.media === "string" ? params.media.trim() || undefined : undefined;
+      typeof params.media === "string"
+        ? params.media.trim() || undefined
+        : typeof params.filePath === "string"
+          ? params.filePath.trim() || undefined
+          : typeof params.path === "string"
+            ? params.path.trim() || undefined
+            : undefined;
 
     const result = await (
       await loadMattermostChannelRuntime()
