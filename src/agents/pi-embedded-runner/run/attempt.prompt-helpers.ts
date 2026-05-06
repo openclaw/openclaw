@@ -434,7 +434,7 @@ function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: stri
 function isInterSessionOrphanedUserMessage(message: { provenance?: unknown }): boolean {
   const provenance = message.provenance;
   return (
-    Boolean(provenance) &&
+    provenance !== null &&
     typeof provenance === "object" &&
     "kind" in provenance &&
     provenance.kind === "inter_session"
