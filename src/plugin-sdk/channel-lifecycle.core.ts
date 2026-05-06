@@ -17,8 +17,16 @@ export type ChannelRunQueueTaskContext = {
   lifecycleSignal?: AbortSignal;
 };
 
+export type ChannelRunQueueTaskOptions = {
+  onSkip?: () => void | Promise<void>;
+};
+
 export type ChannelRunQueue = {
-  enqueue: (key: string, task: (context: ChannelRunQueueTaskContext) => Promise<void>) => void;
+  enqueue: (
+    key: string,
+    task: (context: ChannelRunQueueTaskContext) => Promise<void>,
+    options?: ChannelRunQueueTaskOptions,
+  ) => void;
   deactivate: () => void;
 };
 
@@ -59,15 +67,20 @@ export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRun
   };
 
   return {
-    enqueue(key, task) {
+    enqueue(key, task, options) {
+      const onSkip = async () => {
+        await options?.onSkip?.();
+      };
       void queue
         .enqueue(key, async () => {
           if (!runState.isActive()) {
+            await onSkip();
             return;
           }
           runState.onRunStart();
           try {
             if (!runState.isActive()) {
+              await onSkip();
               return;
             }
             await task({ lifecycleSignal: params.abortSignal });

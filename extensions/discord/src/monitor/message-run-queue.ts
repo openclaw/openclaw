@@ -73,6 +73,21 @@ async function processDiscordQueuedMessage(params: {
   }
 }
 
+function cleanupSkippedDiscordQueuedMessage(params: {
+  job: DiscordInboundJob;
+  replayGuard: ClaimableDedupe;
+}) {
+  try {
+    params.job.runtime.replyTypingFeedback?.onCleanup?.();
+  } finally {
+    releaseDiscordInboundReplay({
+      replayKeys: params.job.replayKeys,
+      error: new DiscordRetryableInboundError("discord queued run skipped before processing"),
+      replayGuard: params.replayGuard,
+    });
+  }
+}
+
 export function createDiscordMessageRunQueue(
   params: DiscordMessageRunQueueParams,
 ): DiscordMessageRunQueue {
@@ -87,14 +102,20 @@ export function createDiscordMessageRunQueue(
 
   return {
     enqueue(job) {
-      runQueue.enqueue(job.queueKey, async ({ lifecycleSignal }) => {
-        await processDiscordQueuedMessage({
-          job,
-          lifecycleSignal,
-          replayGuard,
-          testing: params.__testing,
-        });
-      });
+      runQueue.enqueue(
+        job.queueKey,
+        async ({ lifecycleSignal }) => {
+          await processDiscordQueuedMessage({
+            job,
+            lifecycleSignal,
+            replayGuard,
+            testing: params.__testing,
+          });
+        },
+        {
+          onSkip: () => cleanupSkippedDiscordQueuedMessage({ job, replayGuard }),
+        },
+      );
     },
     deactivate: runQueue.deactivate,
   };

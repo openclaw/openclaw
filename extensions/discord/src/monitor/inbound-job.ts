@@ -12,6 +12,7 @@ type DiscordInboundJobRuntimeField =
   | "guildHistories"
   | "client"
   | "threadBindings"
+  | "replyTypingFeedback"
   | "discordRestFetch";
 
 type DiscordInboundJobRuntime = Pick<DiscordMessagePreflightContext, DiscordInboundJobRuntimeField>;
@@ -51,6 +52,7 @@ export function buildDiscordInboundJob(
     message,
     data,
     threadChannel,
+    replyTypingFeedback,
     ...payload
   } = ctx;
 
@@ -72,6 +74,7 @@ export function buildDiscordInboundJob(
       guildHistories,
       client,
       threadBindings,
+      replyTypingFeedback,
       discordRestFetch,
     },
     replayKeys: options?.replayKeys ? [...options.replayKeys] : undefined,
