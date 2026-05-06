@@ -14,6 +14,8 @@ export {
   createGuildScheduledEvent,
   createGuildSticker,
   deleteChannelPermission,
+  deleteGuildScheduledEvent,
+  editGuildScheduledEvent,
   getGuild,
   getGuildMember,
   getGuildVoiceState,

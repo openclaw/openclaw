@@ -116,6 +116,38 @@ export function registerMessageDiscordAdminCommands(message: Command, helpers: M
 
   helpers
     .withMessageBase(
+      event
+        .command("edit")
+        .description("Edit a scheduled event")
+        .requiredOption("--guild-id <id>", "Guild id")
+        .requiredOption("--event-id <id>", "Scheduled event id"),
+    )
+    .option("--event-name <name>", "Event name")
+    .option("--start-time <iso>", "Event start time")
+    .option("--end-time <iso>", "Event end time")
+    .option("--desc <text>", "Event description")
+    .option("--channel-id <id>", "Channel id")
+    .option("--location <text>", "Event location")
+    .option("--event-type <stage|external|voice>", "Event type")
+    .option("--image <url>", "Cover image URL or local file path")
+    .action(async (opts) => {
+      await helpers.runMessageAction("event-edit", opts);
+    });
+
+  helpers
+    .withMessageBase(
+      event
+        .command("delete")
+        .description("Delete a scheduled event")
+        .requiredOption("--guild-id <id>", "Guild id")
+        .requiredOption("--event-id <id>", "Scheduled event id"),
+    )
+    .action(async (opts) => {
+      await helpers.runMessageAction("event-delete", opts);
+    });
+
+  helpers
+    .withMessageBase(
       message
         .command("timeout")
         .description("Timeout a member")

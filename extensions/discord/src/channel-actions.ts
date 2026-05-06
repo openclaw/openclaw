@@ -146,6 +146,8 @@ function describeDiscordMessageTool({
   if (discovery.isEnabled("events")) {
     actions.add("event-list");
     actions.add("event-create");
+    actions.add("event-edit");
+    actions.add("event-delete");
   }
   if (discovery.isEnabled("moderation", false)) {
     actions.add("timeout");

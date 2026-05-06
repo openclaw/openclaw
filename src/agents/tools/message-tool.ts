@@ -384,6 +384,9 @@ function buildThreadSchema() {
 function buildEventSchema() {
   return {
     query: Type.Optional(Type.String()),
+    eventId: Type.Optional(
+      Type.String({ description: "Scheduled event id for event-edit and event-delete." }),
+    ),
     eventName: Type.Optional(Type.String()),
     eventType: Type.Optional(Type.String()),
     startTime: Type.Optional(Type.String()),

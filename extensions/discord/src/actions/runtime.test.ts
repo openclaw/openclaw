@@ -29,11 +29,16 @@ const discordSendMocks = {
   createThreadDiscord: vi.fn(async () => ({})),
   deleteChannelDiscord: vi.fn(async () => ({ ok: true, channelId: "C1" })),
   deleteMessageDiscord: vi.fn(async () => ({})),
+  deleteScheduledEventDiscord: vi.fn(async () => undefined),
   editChannelDiscord: vi.fn(async () => ({
     id: "C1",
     name: "edited",
   })),
   editMessageDiscord: vi.fn(async () => ({})),
+  editScheduledEventDiscord: vi.fn(async () => ({
+    id: "EVT1",
+    description: "edited",
+  })),
   fetchChannelPermissionsDiscord: vi.fn(async () => ({})),
   fetchMessageDiscord: vi.fn(async () => ({})),
   fetchReactionsDiscord: vi.fn(async () => ({})),
@@ -63,7 +68,9 @@ const {
   createChannelDiscord,
   createThreadDiscord,
   deleteChannelDiscord,
+  deleteScheduledEventDiscord,
   editChannelDiscord,
+  editScheduledEventDiscord,
   fetchReactionsDiscord,
   fetchMessageDiscord,
   kickMemberDiscord,
@@ -1125,5 +1132,94 @@ describe("handleDiscordAction per-account gating", () => {
       cfg,
       accountId: "ops",
     });
+  });
+});
+
+const eventsEnabled = (key: keyof DiscordActionConfig) => key === "events";
+const eventsDisabled = () => false;
+
+describe("handleDiscordGuildAction - scheduled events", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("forwards optional fields and omits unset ones for eventEdit", async () => {
+    const result = await handleGuildAction(
+      "eventEdit",
+      {
+        guildId: "G1",
+        eventId: "E1",
+        description: "now featuring Album X",
+      },
+      eventsEnabled,
+    );
+    expect(editScheduledEventDiscord).toHaveBeenCalledWith(
+      "G1",
+      "E1",
+      { description: "now featuring Album X" },
+      { cfg: DISCORD_TEST_CFG },
+    );
+    expect(result.details).toMatchObject({ ok: true, event: { id: "EVT1" } });
+  });
+
+  it("encodes external entity_metadata.location when eventType is external", async () => {
+    await handleGuildAction(
+      "eventEdit",
+      {
+        guildId: "G1",
+        eventId: "E1",
+        entityType: "external",
+        location: "Online",
+      },
+      eventsEnabled,
+    );
+    expect(editScheduledEventDiscord).toHaveBeenCalledWith(
+      "G1",
+      "E1",
+      { entity_type: 3, entity_metadata: { location: "Online" } },
+      { cfg: DISCORD_TEST_CFG },
+    );
+  });
+
+  it("forwards entity_metadata.location for location-only edits without re-passing eventType", async () => {
+    await handleGuildAction(
+      "eventEdit",
+      {
+        guildId: "G1",
+        eventId: "E1",
+        location: "Mars",
+      },
+      eventsEnabled,
+    );
+    expect(editScheduledEventDiscord).toHaveBeenCalledWith(
+      "G1",
+      "E1",
+      { entity_metadata: { location: "Mars" } },
+      { cfg: DISCORD_TEST_CFG },
+    );
+  });
+
+  it("respects events gating for eventEdit", async () => {
+    await expect(
+      handleGuildAction("eventEdit", { guildId: "G1", eventId: "E1" }, eventsDisabled),
+    ).rejects.toThrow(/Discord events are disabled/);
+  });
+
+  it("forwards guildId and eventId for eventDelete", async () => {
+    const result = await handleGuildAction(
+      "eventDelete",
+      { guildId: "G1", eventId: "E1" },
+      eventsEnabled,
+    );
+    expect(deleteScheduledEventDiscord).toHaveBeenCalledWith("G1", "E1", {
+      cfg: DISCORD_TEST_CFG,
+    });
+    expect(result.details).toMatchObject({ ok: true, eventId: "E1" });
+  });
+
+  it("respects events gating for eventDelete", async () => {
+    await expect(
+      handleGuildAction("eventDelete", { guildId: "G1", eventId: "E1" }, eventsDisabled),
+    ).rejects.toThrow(/Discord events are disabled/);
   });
 });

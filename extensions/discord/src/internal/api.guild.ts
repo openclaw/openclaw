@@ -6,6 +6,7 @@ import {
   type APIGuildScheduledEvent,
   type APIRole,
   type APIVoiceState,
+  type RESTPatchAPIGuildScheduledEventJSONBody,
   type RESTPostAPIGuildScheduledEventJSONBody,
 } from "discord-api-types/v10";
 import type { RequestClient, RequestData } from "./rest.js";
@@ -96,6 +97,25 @@ export async function createGuildScheduledEvent(
   return (await rest.post(Routes.guildScheduledEvents(guildId), {
     body,
   })) as APIGuildScheduledEvent;
+}
+
+export async function editGuildScheduledEvent(
+  rest: RequestClient,
+  guildId: string,
+  eventId: string,
+  body: RESTPatchAPIGuildScheduledEventJSONBody,
+): Promise<APIGuildScheduledEvent> {
+  return (await rest.patch(Routes.guildScheduledEvent(guildId, eventId), {
+    body,
+  })) as APIGuildScheduledEvent;
+}
+
+export async function deleteGuildScheduledEvent(
+  rest: RequestClient,
+  guildId: string,
+  eventId: string,
+): Promise<void> {
+  await rest.delete(Routes.guildScheduledEvent(guildId, eventId));
 }
 
 export async function timeoutGuildMember(
