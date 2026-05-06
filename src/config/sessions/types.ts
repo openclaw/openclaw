@@ -190,6 +190,12 @@ export type SessionEntry = {
   pluginOwnerId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  /**
+   * Short grace window for the first owner message after an explicit Discord
+   * channel/thread /new or /reset. While active, a queued owner message can be
+   * wrapped with startup-recovery instructions before the window is consumed.
+   */
+  postRotationStartupUntilMs?: number;
   /** Durable guard state for automatic subagent orphan recovery. */
   subagentRecovery?: SubagentRecoveryState;
   /** Timestamp (ms) when the current sessionId first became active. */

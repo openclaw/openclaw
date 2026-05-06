@@ -93,6 +93,67 @@ import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 
+function shouldApplyPostRotationStartupSteer(params: {
+  sessionEntry?: SessionEntry;
+  followupRun: FollowupRun;
+  sessionCtx: TemplateContext;
+  now?: number;
+}): boolean {
+  const now = params.now ?? Date.now();
+  return (
+    params.followupRun.run.senderIsOwner === true &&
+    params.sessionCtx.Provider === "discord" &&
+    typeof params.sessionEntry?.postRotationStartupUntilMs === "number" &&
+    params.sessionEntry.postRotationStartupUntilMs > now
+  );
+}
+
+function buildPostRotationStartupSteerPrompt(text: string): string {
+  const trimmed = text.trim();
+  const ownerMessage = trimmed.length > 0 ? trimmed : text;
+  return [
+    "System: This is the first owner message after /new or /reset in a Discord channel or thread session.",
+    "It arrived while Session Startup preload reads were still running.",
+    "Treat it as implicit-mention-equivalent for this turn. Prioritize the owner message now.",
+    "If any Session Startup preload reads were interrupted or skipped because this message was queued, continue and finish them before you end the turn.",
+    "Do not re-greet or explain the startup mechanics unless the owner asks.",
+    "Owner message:",
+    ownerMessage,
+  ].join("\n\n");
+}
+
+async function clearPostRotationStartupWindow(params: {
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  storePath?: string;
+}): Promise<void> {
+  const { sessionEntry, sessionStore, sessionKey, storePath } = params;
+  if (!sessionKey) {
+    return;
+  }
+  const persistedEntry = sessionStore?.[sessionKey] ?? sessionEntry;
+  if (typeof persistedEntry?.postRotationStartupUntilMs !== "number") {
+    return;
+  }
+  if (sessionEntry) {
+    sessionEntry.postRotationStartupUntilMs = undefined;
+  }
+  if (sessionStore?.[sessionKey]) {
+    sessionStore[sessionKey] = {
+      ...sessionStore[sessionKey],
+      postRotationStartupUntilMs: undefined,
+    };
+  }
+  if (storePath) {
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey,
+      update: async () => ({ postRotationStartupUntilMs: undefined }),
+    });
+  }
+}
+
 function buildInlinePluginStatusPayload(params: {
   entry: SessionEntry | undefined;
   includeTraceLines: boolean;
@@ -1019,11 +1080,27 @@ export async function runReplyAgent(params: {
     const steerSessionId =
       (sessionKey ? replyRunRegistry.resolveSessionId(sessionKey) : undefined) ??
       followupRun.run.sessionId;
-    const steered = queueEmbeddedPiMessage(steerSessionId, followupRun.prompt, {
+    const shouldApplyPostRotationSteer = shouldApplyPostRotationStartupSteer({
+      sessionEntry: activeSessionEntry,
+      followupRun,
+      sessionCtx,
+    });
+    const steerPrompt = shouldApplyPostRotationSteer
+      ? buildPostRotationStartupSteerPrompt(followupRun.prompt)
+      : followupRun.prompt;
+    const steered = queueEmbeddedPiMessage(steerSessionId, steerPrompt, {
       steeringMode: resolvePiSteeringModeForQueueMode(resolvedQueue.mode),
       ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
     });
     if (steered && !effectiveShouldFollowup) {
+      if (shouldApplyPostRotationSteer) {
+        await clearPostRotationStartupWindow({
+          sessionEntry: activeSessionEntry,
+          sessionStore: activeSessionStore,
+          sessionKey,
+          storePath,
+        });
+      }
       await touchActiveSessionEntry();
       typing.cleanup();
       return undefined;
@@ -1162,6 +1239,12 @@ export async function runReplyAgent(params: {
   };
   const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
   let preflightCompactionApplied = false;
+  const shouldClearPostRotationStartupAfterRun = shouldApplyPostRotationStartupSteer({
+    sessionEntry: activeSessionEntry,
+    followupRun,
+    sessionCtx,
+  });
+  let startedRun = false;
 
   try {
     await typingSignals.signalRunStart();
@@ -1261,6 +1344,7 @@ export async function runReplyAgent(params: {
 
     replyOperation.setPhase("running");
     const runStartedAt = Date.now();
+    startedRun = true;
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
       transcriptCommandBody,
@@ -1927,6 +2011,14 @@ export async function runReplyAgent(params: {
     returnWithQueuedFollowupDrain(undefined);
     throw error;
   } finally {
+    if (startedRun && shouldClearPostRotationStartupAfterRun) {
+      await clearPostRotationStartupWindow({
+        sessionEntry: activeSessionEntry,
+        sessionStore: activeSessionStore,
+        sessionKey,
+        storePath,
+      });
+    }
     if (shouldDrainQueuedFollowupsAfterClear) {
       replyOperation.completeThen(drainQueuedFollowupsAfterClear);
     } else {
