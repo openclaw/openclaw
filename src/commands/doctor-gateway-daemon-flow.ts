@@ -12,10 +12,11 @@ import {
   launchAgentPlistExists,
   repairLaunchAgentBootstrap,
 } from "../daemon/launchd.js";
+import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
-import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
+import { formatPortDiagnostics, inspectPortUsage, type PortUsage } from "../infra/ports.js";
 import {
   formatGatewayRestartHandoffDiagnostic,
   readGatewayRestartHandoffSync,
@@ -42,6 +43,17 @@ import {
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import { healthCommand } from "./health.js";
+
+function portUsageMatchesGatewayService(params: {
+  diagnostics: PortUsage;
+  serviceRuntime?: GatewayServiceRuntime;
+}): boolean {
+  const servicePid = params.serviceRuntime?.pid;
+  if (typeof servicePid !== "number") {
+    return false;
+  }
+  return params.diagnostics.listeners.some((listener) => listener.pid === servicePid);
+}
 
 async function maybeRepairLaunchAgentBootstrap(params: {
   env: Record<string, string | undefined>;
@@ -180,6 +192,20 @@ export async function maybeRepairGatewayDaemon(params: {
     const diagnostics = await inspectPortUsage(port);
     if (diagnostics.status === "busy") {
       note(formatPortDiagnostics(diagnostics).join("\n"), "Gateway port");
+      if (
+        loaded &&
+        serviceRuntime?.status === "running" &&
+        portUsageMatchesGatewayService({ diagnostics, serviceRuntime })
+      ) {
+        note(
+          [
+            "Gateway service is already running and owns the configured port.",
+            "Doctor will not restart a live gateway only because the status RPC timed out.",
+          ].join("\n"),
+          "Gateway",
+        );
+        return;
+      }
     } else if (loaded && serviceRuntime?.status === "running") {
       const lastError = await readLastGatewayErrorLine(process.env);
       if (lastError) {

@@ -348,6 +348,25 @@ describe("maybeRepairGatewayDaemon", () => {
     );
   });
 
+  it("skips live gateway restart when the running service owns the configured port", async () => {
+    setPlatform("linux");
+    service.readRuntime.mockResolvedValue({ status: "running", pid: 12_345 });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 12_345, command: "openclaw" }],
+      hints: [],
+    });
+
+    await runNonInteractiveRepair();
+
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway service is already running and owns the configured port."),
+      "Gateway",
+    );
+  });
+
   it("skips gateway restart during non-interactive update repairs", async () => {
     setPlatform("linux");
 
