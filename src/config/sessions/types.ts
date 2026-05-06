@@ -147,6 +147,30 @@ export type SubagentRecoveryState = {
   wedgedReason?: string;
 };
 
+export type LaneExecutionState =
+  | "active"
+  | "draining"
+  | "suspended"
+  | "resuming"
+  | "circuit_open"
+  | "failed_handoff";
+
+export interface QuotaSuspension {
+  schemaVersion: 1;
+  suspendedAt: number; // epoch ms
+  reason: "quota_exhausted" | "manual" | "circuit_open";
+  failedProvider: string;
+  failedModel: string;
+  /** Recovery briefing text injected into the next attempt when state === "resuming". */
+  summary?: string;
+  /** Opaque pointer to an external snapshot blob (path/key); not the briefing text itself. */
+  snapshotRef?: string;
+  /** Lane that was set to concurrency=0 when this suspension was issued. */
+  laneId?: string;
+  expectedResumeBy?: number; // Reaper TTL (e.g. 30min)
+  state: LaneExecutionState; // State machine check for hot-path
+}
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -192,6 +216,8 @@ export type SessionEntry = {
   abortedLastRun?: boolean;
   /** Durable guard state for automatic subagent orphan recovery. */
   subagentRecovery?: SubagentRecoveryState;
+  /** Quota cascade protection and state-aware failover status. */
+  quotaSuspension?: QuotaSuspension;
   /** Timestamp (ms) when the current sessionId first became active. */
   sessionStartedAt?: number;
   /** Timestamp (ms) of the last user/channel interaction that should extend idle lifetime. */
