@@ -323,6 +323,42 @@ profile is selected, OpenClaw also keeps `CODEX_API_KEY` and `OPENAI_API_KEY`
 out of the spawned stdio app-server child and sends the selected credentials
 through the app-server login RPC.
 
+### OAuth ownership for isolated agents
+
+The native Codex backend route is distinct from the direct PI route. Keep them
+separate when you read auth issues:
+
+| Surface         | Native Codex backend                                 | Direct PI route              |
+| --------------- | ---------------------------------------------------- | ---------------------------- |
+| Model ref       | `openai/gpt-5.5`                                     | `openai-codex/gpt-*`         |
+| Backend/runtime | `codex` (`agentRuntime.id: "codex"`)                 | PI                           |
+| Execution path  | Codex app-server thread                              | OpenClaw PI runner           |
+| Auth provider   | `openai-codex` OAuth (Codex sign-in or auth profile) | `openai-codex` OAuth profile |
+
+Both routes use the same `openai-codex` OAuth token family. That family rotates
+its refresh token every time it is used. When more than one isolated agent owns
+its own Codex home and tries to refresh independently, only one refresh wins;
+the others see:
+
+```text
+401 token_revoked
+refresh_token_reused
+```
+
+To avoid that, give each isolated Codex backend exactly one refresh owner:
+
+- Run `codex login` (or the OpenClaw onboarding flow) inside each agent's
+  isolated `CODEX_HOME` so each backend has its own token set; or
+- Bind the agents to a single canonical OpenClaw `openai-codex` auth profile so
+  OpenClaw refreshes it through one locked owner and mirrors valid credentials.
+
+Do not copy a single Codex OAuth token set into multiple isolated agent homes
+and let each backend refresh on its own. The recovery is to re-authenticate the
+affected agents and pick one of the safe setups above.
+
+See [Codex harness per-agent setup](/plugins/codex-harness#per-agent-codex) for
+the matching backend-side configuration.
+
 ## Image generation
 
 The bundled `openai` plugin registers image generation through the `image_generate` tool.
