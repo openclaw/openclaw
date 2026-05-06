@@ -366,7 +366,7 @@ describe("sanitizeThinkingForRecovery", () => {
     expect(result.prefill).toBe(false);
   });
 
-  it("marks signed thinking without text as a prefill recovery case", () => {
+  it("drops incomplete assistant text instead of prefilling it during recovery", () => {
     const messages = castAgentMessages([
       { role: "user", content: "hello" },
       {
@@ -376,8 +376,9 @@ describe("sanitizeThinkingForRecovery", () => {
     ]);
 
     const result = sanitizeThinkingForRecovery(messages);
-    expect(result.messages).toBe(messages);
-    expect(result.prefill).toBe(true);
+    expect(result.prefill).toBe(false);
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toMatchObject({ role: "user" });
   });
 
   it("marks signed thinking with an empty text block as incomplete text", () => {
