@@ -26,9 +26,8 @@ export type MSTeamsWebhookConfig = {
  *
  * When enabled, the plugin handles the `signin/tokenExchange` and
  * `signin/verifyState` invoke activities that Teams sends after an
- * `oauthCard` is presented to the user. The exchanged user token is
- * persisted via the Bot Framework User Token service so downstream
- * tools can call Microsoft Graph with delegated permissions.
+ * `oauthCard` is presented to the user. Trusted plugin tools can request
+ * the delegated user token at execution time through their tool context.
  *
  * Prerequisites (Azure portal):
  * - The bot's Azure AD (Entra) app is configured with an exposed API

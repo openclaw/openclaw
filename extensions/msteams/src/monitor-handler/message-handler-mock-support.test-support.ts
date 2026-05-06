@@ -6,6 +6,8 @@ const runtimeApiMockState = vi.hoisted(() => ({
     counts: {},
     capturedCtxPayload: params.ctxPayload,
   })),
+  hasFinalInboundReplyDispatch: vi.fn(() => false),
+  resolveInboundReplyDispatchCounts: vi.fn(() => ({ final: 0 })),
 }));
 
 export function getRuntimeApiMockState() {
@@ -16,6 +18,8 @@ vi.mock("openclaw/plugin-sdk/inbound-reply-dispatch", () => {
   return {
     dispatchReplyFromConfigWithSettledDispatcher:
       runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
+    hasFinalInboundReplyDispatch: runtimeApiMockState.hasFinalInboundReplyDispatch,
+    resolveInboundReplyDispatchCounts: runtimeApiMockState.resolveInboundReplyDispatchCounts,
   };
 });
 

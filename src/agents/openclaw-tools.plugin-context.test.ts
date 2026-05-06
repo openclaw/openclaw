@@ -190,6 +190,40 @@ describe("openclaw plugin tool context", () => {
     );
   });
 
+  it("forwards trusted chat type", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        agentChatType: "direct",
+      },
+    });
+
+    expect(result.context.messageChatType).toBe("direct");
+  });
+
+  it("forwards runtime-only plugin auth context", async () => {
+    const pluginAuth = {
+      getDelegatedAccessToken: vi.fn(async () => ({
+        ok: false as const,
+        reason: "not_configured" as const,
+      })),
+    };
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        pluginAuth,
+      },
+    });
+
+    expect(result.context.auth).toBe(pluginAuth);
+    await expect(
+      result.context.auth?.getDelegatedAccessToken({ provider: "msteams" }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: "not_configured",
+    });
+  });
+
   it("does not inject ambient thread defaults into plugin tools", async () => {
     const executeMock = vi.fn(async () => ({
       content: [{ type: "text" as const, text: "ok" }],

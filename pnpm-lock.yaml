@@ -296,6 +296,24 @@ importers:
         specifier: 0.1.9
         version: 0.1.9
 
+  examples/msteams-obo-downstream-api:
+    dependencies:
+      '@azure/msal-node':
+        specifier: 5.1.5
+        version: 5.1.5
+      jose:
+        specifier: 6.2.3
+        version: 6.2.3
+      tsx:
+        specifier: 4.21.0
+        version: 4.21.0
+
+  examples/plugins/msteams-graph-profile:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../../..
+
   extensions/acpx:
     dependencies:
       '@agentclientprotocol/claude-agent-acp':

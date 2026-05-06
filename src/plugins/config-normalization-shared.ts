@@ -1,9 +1,11 @@
+import { isChatType, type ChatType } from "../channels/chat-type.js";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import type { DelegatedAccessTokenProvider } from "./delegated-auth-types.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
 export type NormalizedPluginsConfig = {
@@ -19,6 +21,15 @@ export type NormalizedPluginsConfig = {
     string,
     {
       enabled?: boolean;
+      auth?: {
+        delegatedAccess?: {
+          enabled?: boolean;
+          providers?: DelegatedAccessTokenProvider[];
+          audiences?: string[];
+          scopes?: string[];
+          chatTypes?: ChatType[];
+        };
+      };
       hooks?: {
         allowPromptInjection?: boolean;
         allowConversationAccess?: boolean;
@@ -86,6 +97,15 @@ function normalizeHookTimeouts(value: unknown): Record<string, number> | undefin
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
+function normalizeDelegatedAccessTokenProviders(value: unknown): DelegatedAccessTokenProvider[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => normalizeOptionalLowercaseString(entry))
+    .filter((entry): entry is DelegatedAccessTokenProvider => Boolean(entry));
+}
+
 function normalizePluginEntries(
   entries: unknown,
   normalizePluginId: NormalizePluginId,
@@ -104,6 +124,62 @@ function normalizePluginEntries(
       continue;
     }
     const entry = value as Record<string, unknown>;
+    const authRaw = entry.auth;
+    const delegatedAccessRaw =
+      authRaw && typeof authRaw === "object" && !Array.isArray(authRaw)
+        ? (authRaw as { delegatedAccess?: unknown }).delegatedAccess
+        : undefined;
+    const delegatedAccess =
+      delegatedAccessRaw &&
+      typeof delegatedAccessRaw === "object" &&
+      !Array.isArray(delegatedAccessRaw)
+        ? {
+            enabled: (delegatedAccessRaw as { enabled?: unknown }).enabled,
+            providers: normalizeDelegatedAccessTokenProviders(
+              (delegatedAccessRaw as { providers?: unknown }).providers,
+            ),
+            audiences: Array.isArray((delegatedAccessRaw as { audiences?: unknown }).audiences)
+              ? ((delegatedAccessRaw as { audiences?: unknown }).audiences as unknown[])
+                  .map((audience) => normalizeOptionalString(audience))
+                  .filter((audience): audience is string => Boolean(audience))
+              : [],
+            scopes: Array.isArray((delegatedAccessRaw as { scopes?: unknown }).scopes)
+              ? ((delegatedAccessRaw as { scopes?: unknown }).scopes as unknown[])
+                  .map((scope) => normalizeOptionalString(scope))
+                  .filter((scope): scope is string => Boolean(scope))
+              : [],
+            chatTypes: Array.isArray((delegatedAccessRaw as { chatTypes?: unknown }).chatTypes)
+              ? ((delegatedAccessRaw as { chatTypes?: unknown }).chatTypes as unknown[])
+                  .map((chatType) => normalizeOptionalLowercaseString(chatType))
+                  .filter((chatType): chatType is ChatType => isChatType(chatType))
+              : [],
+          }
+        : undefined;
+    const normalizedAuth =
+      delegatedAccess &&
+      (typeof delegatedAccess.enabled === "boolean" ||
+        delegatedAccess.providers.length > 0 ||
+        delegatedAccess.audiences.length > 0 ||
+        delegatedAccess.scopes.length > 0 ||
+        delegatedAccess.chatTypes.length > 0)
+        ? {
+            delegatedAccess: {
+              ...(typeof delegatedAccess.enabled === "boolean"
+                ? { enabled: delegatedAccess.enabled }
+                : {}),
+              ...(delegatedAccess.providers.length > 0
+                ? { providers: delegatedAccess.providers }
+                : {}),
+              ...(delegatedAccess.audiences.length > 0
+                ? { audiences: delegatedAccess.audiences }
+                : {}),
+              ...(delegatedAccess.scopes.length > 0 ? { scopes: delegatedAccess.scopes } : {}),
+              ...(delegatedAccess.chatTypes.length > 0
+                ? { chatTypes: delegatedAccess.chatTypes }
+                : {}),
+            },
+          }
+        : undefined;
     const hooksRaw = entry.hooks;
     const hooks =
       hooksRaw && typeof hooksRaw === "object" && !Array.isArray(hooksRaw)
@@ -168,6 +244,7 @@ function normalizePluginEntries(
       ...normalized[normalizedKey],
       enabled:
         typeof entry.enabled === "boolean" ? entry.enabled : normalized[normalizedKey]?.enabled,
+      auth: normalizedAuth ?? normalized[normalizedKey]?.auth,
       hooks: normalizedHooks ?? normalized[normalizedKey]?.hooks,
       subagent: normalizedSubagent ?? normalized[normalizedKey]?.subagent,
       config: "config" in entry ? entry.config : normalized[normalizedKey]?.config,

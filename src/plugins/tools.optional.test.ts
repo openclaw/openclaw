@@ -1,8 +1,10 @@
+import { Buffer } from "node:buffer";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "../agents/tool-policy.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import type { OpenClawPluginAuthContext } from "./tool-types.js";
 
 type MockRegistryToolEntry = {
   pluginId: string;
@@ -50,6 +52,22 @@ function makeTool(name: string) {
       return { content: [{ type: "text", text: "ok" }] };
     },
   };
+}
+
+function createJwt(payload: Record<string, unknown>): string {
+  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  return `${header}.${body}.signature`;
+}
+
+function createDeferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
 }
 
 function createContext() {
@@ -366,6 +384,14 @@ function expectResolvedToolNames(
   expectedToolNames: readonly string[],
 ) {
   expect(tools.map((tool) => tool.name)).toEqual(expectedToolNames);
+}
+
+async function executeToolDetails(
+  tool: ReturnType<typeof resolvePluginTools>[number] | undefined,
+  params: Record<string, unknown>,
+) {
+  const result = await tool?.execute("call", params);
+  return (result as { details?: unknown } | undefined)?.details;
 }
 
 function expectLoaderCall(overrides: Record<string, unknown>) {
@@ -917,6 +943,112 @@ describe("resolvePluginTools optional tools", () => {
     expect(resolveOptionalDemoTools()).toHaveLength(0);
     expect(resolveOptionalDemoTools(["other_tool"])).toHaveLength(0);
     expect(factory).not.toHaveBeenCalled();
+  });
+
+  it("does not expose delegated auth to optional factories unless the optional tool is allowlisted", async () => {
+    const delegatedAuth: OpenClawPluginAuthContext = {
+      getDelegatedAccessToken: vi.fn(async () => ({
+        ok: false as const,
+        reason: "not_configured" as const,
+      })),
+    };
+    let blockedFactoryAuth: unknown;
+    let allowedFactoryAuth: unknown;
+    const base = createContext();
+    const baseContext = {
+      ...base,
+      auth: delegatedAuth,
+      config: {
+        ...base.config,
+        plugins: {
+          ...base.config.plugins,
+          enabled: true,
+          entries: {
+            "optional-demo": {
+              auth: {
+                delegatedAccess: {
+                  enabled: true,
+                  providers: ["msteams"],
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    setRegistry([
+      {
+        pluginId: "optional-demo",
+        optional: true,
+        source: "/tmp/optional-demo.js",
+        names: ["optional_tool"],
+        factory: (ctx) => {
+          blockedFactoryAuth = (ctx as { auth?: unknown }).auth;
+          return makeTool("optional_tool");
+        },
+      },
+    ]);
+    installToolManifestSnapshot({
+      config: baseContext.config as never,
+      plugin: {
+        id: "optional-demo",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: {
+          tools: ["optional_tool"],
+        },
+      },
+    });
+
+    expect(
+      resolvePluginTools({
+        context: baseContext as never,
+      }),
+    ).toHaveLength(0);
+    expect(blockedFactoryAuth).toBeUndefined();
+
+    setRegistry([
+      {
+        pluginId: "optional-demo",
+        optional: true,
+        source: "/tmp/optional-demo.js",
+        names: ["optional_tool"],
+        factory: (ctx) => {
+          allowedFactoryAuth = (ctx as { auth?: unknown }).auth;
+          return makeTool("optional_tool");
+        },
+      },
+    ]);
+    installToolManifestSnapshot({
+      config: baseContext.config as never,
+      plugin: {
+        id: "optional-demo",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: {
+          tools: ["optional_tool"],
+        },
+      },
+    });
+    const tools = resolvePluginTools({
+      context: baseContext as never,
+      toolAllowlist: ["optional_tool"],
+    });
+
+    expectResolvedToolNames(tools, ["optional_tool"]);
+    expect(allowedFactoryAuth).toBeDefined();
+    const auth = allowedFactoryAuth as OpenClawPluginAuthContext;
+    await expect(
+      auth.getDelegatedAccessToken({
+        provider: "msteams",
+      }),
+    ).resolves.toEqual({ ok: false, reason: "unavailable" });
+    expect(delegatedAuth.getDelegatedAccessToken).not.toHaveBeenCalled();
   });
 
   it("invokes unnamed optional tool factories when a tool allowlist may match the result", () => {
@@ -1488,6 +1620,1296 @@ describe("resolvePluginTools optional tools", () => {
       registry.diagnostics,
       "plugin tool is malformed (schema-bug): broken_tool missing parameters object",
     );
+  });
+
+  it("exposes delegated auth only to explicitly authorized plugin entries", async () => {
+    const delegatedAuth: OpenClawPluginAuthContext = {
+      getDelegatedAccessToken: vi.fn(async () => ({
+        ok: true as const,
+        token: "delegated-token",
+      })),
+    };
+    let allowedContext: { auth?: OpenClawPluginAuthContext } | undefined;
+    let deniedContext: { auth?: OpenClawPluginAuthContext } | undefined;
+    setRegistry([
+      {
+        pluginId: "allowed",
+        optional: false,
+        source: "/tmp/allowed.js",
+        names: ["allowed_tool"],
+        factory: (ctx) => {
+          allowedContext = ctx as { auth?: OpenClawPluginAuthContext };
+          return {
+            ...makeTool("allowed_tool"),
+            async execute() {
+              const result = await allowedContext?.auth?.getDelegatedAccessToken({
+                provider: "msteams",
+              });
+              return { content: [{ type: "text" as const, text: "ok" }], details: result };
+            },
+          };
+        },
+      },
+      {
+        pluginId: "denied",
+        optional: false,
+        source: "/tmp/denied.js",
+        names: ["denied_tool"],
+        factory: (ctx) => {
+          deniedContext = ctx as { auth?: OpenClawPluginAuthContext };
+          return makeTool("denied_tool");
+        },
+      },
+    ]);
+    const base = createContext();
+    const config = {
+      ...base.config,
+      plugins: {
+        ...base.config.plugins,
+        enabled: true,
+        allow: ["allowed", "denied"],
+        entries: {
+          allowed: {
+            auth: { delegatedAccess: { enabled: true } },
+          },
+        },
+      },
+    };
+    installToolManifestSnapshots({
+      config: config as never,
+      plugins: [
+        {
+          id: "allowed",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: { tools: ["allowed_tool"] },
+        },
+        {
+          id: "denied",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: { tools: ["denied_tool"] },
+        },
+      ],
+    });
+
+    const tools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        auth: delegatedAuth,
+        config,
+      } as never,
+    });
+
+    expectResolvedToolNames(tools, ["allowed_tool", "denied_tool"]);
+    expect(allowedContext?.auth).toBeDefined();
+    expect(Object.prototype.hasOwnProperty.call(deniedContext ?? {}, "auth")).toBe(false);
+    await expect(
+      allowedContext?.auth?.getDelegatedAccessToken({ provider: "msteams" }),
+    ).resolves.toEqual({ ok: false, reason: "unavailable" });
+    await expect(tools[0]?.execute("call", {})).resolves.toMatchObject({
+      details: {
+        ok: true,
+        token: "delegated-token",
+      },
+    });
+  });
+
+  it("uses effective runtime config for delegated auth policy", async () => {
+    const delegatedAuth: OpenClawPluginAuthContext = {
+      getDelegatedAccessToken: vi.fn(async () => ({
+        ok: true as const,
+        token: "delegated-token",
+      })),
+    };
+    const factory = vi.fn((rawCtx: unknown) => {
+      const ctx = rawCtx as { auth?: OpenClawPluginAuthContext };
+      return {
+        ...makeTool("runtime_policy_tool"),
+        async execute() {
+          const result = await ctx.auth?.getDelegatedAccessToken({
+            provider: "msteams",
+          });
+          return { content: [{ type: "text" as const, text: "ok" }], details: result };
+        },
+      };
+    });
+    setRegistry([
+      {
+        pluginId: "runtime-policy",
+        optional: false,
+        source: "/tmp/runtime-policy.js",
+        names: ["runtime_policy_tool"],
+        factory,
+      },
+    ]);
+    const base = createContext();
+    const sourceConfig = {
+      ...base.config,
+      plugins: {
+        ...base.config.plugins,
+        enabled: true,
+        allow: ["runtime-policy"],
+        entries: {
+          "runtime-policy": {
+            auth: { delegatedAccess: { enabled: true } },
+          },
+        },
+      },
+    };
+    const runtimeConfigWithAuth = {
+      ...sourceConfig,
+      plugins: {
+        ...sourceConfig.plugins,
+      },
+    };
+    const runtimeConfigWithoutAuth = {
+      ...sourceConfig,
+      plugins: {
+        ...sourceConfig.plugins,
+        entries: {},
+      },
+    };
+    installToolManifestSnapshot({
+      config: sourceConfig as never,
+      plugin: {
+        id: "runtime-policy",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: { tools: ["runtime_policy_tool"] },
+      },
+    });
+
+    const enabledTools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        auth: delegatedAuth,
+        config: sourceConfig,
+        runtimeConfig: runtimeConfigWithAuth,
+      } as never,
+    });
+    const disabledTools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        auth: delegatedAuth,
+        config: sourceConfig,
+        runtimeConfig: runtimeConfigWithoutAuth,
+      } as never,
+    });
+
+    expectResolvedToolNames(enabledTools, ["runtime_policy_tool"]);
+    expectResolvedToolNames(disabledTools, ["runtime_policy_tool"]);
+    await expect(executeToolDetails(enabledTools[0], {})).resolves.toEqual({
+      ok: true,
+      token: "delegated-token",
+    });
+    await expect(executeToolDetails(disabledTools[0], {})).resolves.toBeUndefined();
+    expect(delegatedAuth.getDelegatedAccessToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("caches delegated auth plugin tool descriptors while resolving auth at execution time", async () => {
+    const firstAuth: OpenClawPluginAuthContext = {
+      getDelegatedAccessToken: vi.fn(async () => ({
+        ok: true as const,
+        token: "first-token",
+      })),
+    };
+    const secondAuth: OpenClawPluginAuthContext = {
+      getDelegatedAccessToken: vi.fn(async () => ({
+        ok: true as const,
+        token: "second-token",
+      })),
+    };
+    const observedAuth: Array<OpenClawPluginAuthContext | undefined> = [];
+    const factory = vi.fn((rawCtx: unknown) => {
+      const ctx = rawCtx as { auth?: OpenClawPluginAuthContext };
+      observedAuth.push(ctx.auth);
+      return {
+        ...makeTool("auth_sensitive_tool"),
+        async execute() {
+          const result = await ctx.auth?.getDelegatedAccessToken({
+            provider: "msteams",
+          });
+          return { content: [{ type: "text" as const, text: "ok" }], details: result };
+        },
+      };
+    });
+    setRegistry([
+      {
+        pluginId: "auth-sensitive",
+        optional: false,
+        source: "/tmp/auth-sensitive.js",
+        names: ["auth_sensitive_tool"],
+        factory,
+      },
+    ]);
+    const base = createContext();
+    const config = {
+      ...base.config,
+      plugins: {
+        ...base.config.plugins,
+        enabled: true,
+        allow: ["auth-sensitive"],
+        entries: {
+          "auth-sensitive": {
+            auth: { delegatedAccess: { enabled: true } },
+          },
+        },
+      },
+    };
+    installToolManifestSnapshot({
+      config: config as never,
+      plugin: {
+        id: "auth-sensitive",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: { tools: ["auth_sensitive_tool"] },
+      },
+    });
+
+    const first = resolvePluginTools({
+      context: {
+        ...createContext(),
+        auth: firstAuth,
+        config,
+      } as never,
+    });
+    const second = resolvePluginTools({
+      context: {
+        ...createContext(),
+        auth: secondAuth,
+        config,
+      } as never,
+    });
+
+    expectResolvedToolNames(first, ["auth_sensitive_tool"]);
+    expectResolvedToolNames(second, ["auth_sensitive_tool"]);
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(observedAuth[0]).toBeDefined();
+    await expect(first[0]?.execute("first-call", {})).resolves.toMatchObject({
+      details: {
+        ok: true,
+        token: "first-token",
+      },
+    });
+    await expect(second[0]?.execute("second-call", {})).resolves.toMatchObject({
+      details: {
+        ok: true,
+        token: "second-token",
+      },
+    });
+    expect(factory).toHaveBeenCalledTimes(2);
+    expect(firstAuth.getDelegatedAccessToken).toHaveBeenCalledTimes(1);
+    expect(secondAuth.getDelegatedAccessToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let a no-auth resolution poison cached delegated auth tools", async () => {
+    const delegatedAuth: OpenClawPluginAuthContext = {
+      getDelegatedAccessToken: vi.fn(async () => ({
+        ok: true as const,
+        token: "delegated-token",
+      })),
+    };
+    const factory = vi.fn((rawCtx: unknown) => {
+      const ctx = rawCtx as { auth?: OpenClawPluginAuthContext };
+      return {
+        ...makeTool("auth_sensitive_tool"),
+        async execute() {
+          const result = await ctx.auth?.getDelegatedAccessToken({
+            provider: "msteams",
+          });
+          return { content: [{ type: "text" as const, text: "ok" }], details: result };
+        },
+      };
+    });
+    setRegistry([
+      {
+        pluginId: "auth-sensitive",
+        optional: false,
+        source: "/tmp/auth-sensitive.js",
+        names: ["auth_sensitive_tool"],
+        factory,
+      },
+    ]);
+    const base = createContext();
+    const config = {
+      ...base.config,
+      plugins: {
+        ...base.config.plugins,
+        enabled: true,
+        allow: ["auth-sensitive"],
+        entries: {
+          "auth-sensitive": {
+            auth: { delegatedAccess: { enabled: true } },
+          },
+        },
+      },
+    };
+    installToolManifestSnapshot({
+      config: config as never,
+      plugin: {
+        id: "auth-sensitive",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: { tools: ["auth_sensitive_tool"] },
+      },
+    });
+
+    const noAuthTools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        config,
+      } as never,
+    });
+    const authTools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        auth: delegatedAuth,
+        config,
+      } as never,
+    });
+
+    expect(factory).toHaveBeenCalledTimes(1);
+    await expect(executeToolDetails(noAuthTools[0], {})).resolves.toEqual({
+      ok: false,
+      reason: "unavailable",
+    });
+    await expect(executeToolDetails(authTools[0], {})).resolves.toEqual({
+      ok: true,
+      token: "delegated-token",
+    });
+    expect(delegatedAuth.getDelegatedAccessToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps mixed plugin descriptor caches auth-sensitive when any entry receives factory auth", () => {
+    const delegatedAuth: OpenClawPluginAuthContext = {
+      getDelegatedAccessToken: vi.fn(async () => ({
+        ok: true as const,
+        token: "delegated-token",
+      })),
+    };
+    const authFactory = vi.fn((rawCtx: unknown) => {
+      const ctx = rawCtx as { auth?: OpenClawPluginAuthContext };
+      if (!ctx.auth) {
+        return undefined;
+      }
+      return makeTool("auth_sensitive_tool");
+    });
+    const passiveFactory = vi.fn(() => makeTool("passive_tool"));
+    const registry = createToolRegistry([
+      {
+        pluginId: "mixed-auth",
+        optional: false,
+        source: "/tmp/mixed-auth.js",
+        names: ["auth_sensitive_tool"],
+        factory: authFactory,
+      },
+      {
+        pluginId: "mixed-auth",
+        optional: true,
+        source: "/tmp/mixed-auth.js",
+        names: [],
+        factory: passiveFactory,
+      },
+    ]);
+    setActivePluginRegistry(registry as never, "test-tool-registry", "gateway-bindable", "/tmp");
+    const base = createContext();
+    const config = {
+      ...base.config,
+      plugins: {
+        ...base.config.plugins,
+        enabled: true,
+        allow: ["mixed-auth"],
+        entries: {
+          "mixed-auth": {
+            auth: { delegatedAccess: { enabled: true } },
+          },
+        },
+      },
+    };
+    installToolManifestSnapshot({
+      config: config as never,
+      plugin: {
+        id: "mixed-auth",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: { tools: ["auth_sensitive_tool", "passive_tool"] },
+        toolMetadata: {
+          passive_tool: {
+            optional: true,
+          },
+        },
+      },
+    });
+    const toolAllowlist = [DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, "passive_tool"];
+
+    const authTools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        auth: delegatedAuth,
+        config,
+      } as never,
+      toolAllowlist,
+    });
+    const secondAuthTools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        auth: delegatedAuth,
+        config,
+      } as never,
+      toolAllowlist,
+    });
+
+    expectResolvedToolNames(authTools, ["auth_sensitive_tool", "passive_tool"]);
+    expectResolvedToolNames(secondAuthTools, ["auth_sensitive_tool", "passive_tool"]);
+    expect(authFactory).toHaveBeenCalledTimes(1);
+    expect(passiveFactory).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves delegated auth for implicit optional tools declared by manifest", async () => {
+    const delegatedAuth: OpenClawPluginAuthContext = {
+      getDelegatedAccessToken: vi.fn(async () => ({
+        ok: true as const,
+        token: "delegated-token",
+      })),
+    };
+    const factory = vi.fn((rawCtx: unknown) => {
+      const ctx = rawCtx as { auth?: OpenClawPluginAuthContext };
+      return {
+        ...makeTool("implicit_auth_tool"),
+        async execute() {
+          const result = await ctx.auth?.getDelegatedAccessToken({
+            provider: "msteams",
+          });
+          return { content: [{ type: "text" as const, text: "ok" }], details: result };
+        },
+      };
+    });
+    setRegistry([
+      {
+        pluginId: "implicit-auth",
+        optional: true,
+        source: "/tmp/implicit-auth.js",
+        names: [],
+        declaredNames: ["implicit_auth_tool"],
+        factory,
+      },
+    ]);
+    const base = createContext();
+    const config = {
+      ...base.config,
+      plugins: {
+        ...base.config.plugins,
+        enabled: true,
+        allow: ["implicit-auth"],
+        entries: {
+          "implicit-auth": {
+            auth: { delegatedAccess: { enabled: true } },
+          },
+        },
+      },
+    };
+    installToolManifestSnapshot({
+      config: config as never,
+      plugin: {
+        id: "implicit-auth",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: { tools: ["implicit_auth_tool"] },
+      },
+    });
+
+    const tools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        auth: delegatedAuth,
+        config,
+      } as never,
+      toolAllowlist: ["implicit_auth_tool"],
+    });
+
+    expectResolvedToolNames(tools, ["implicit_auth_tool"]);
+    await expect(executeToolDetails(tools[0], {})).resolves.toEqual({
+      ok: true,
+      token: "delegated-token",
+    });
+    expect(delegatedAuth.getDelegatedAccessToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves delegated auth for optional tools selected by wildcard allowlist", async () => {
+    const delegatedAuth: OpenClawPluginAuthContext = {
+      getDelegatedAccessToken: vi.fn(async () => ({
+        ok: true as const,
+        token: "delegated-token",
+      })),
+    };
+    const factory = vi.fn((rawCtx: unknown) => {
+      const ctx = rawCtx as { auth?: OpenClawPluginAuthContext };
+      return {
+        ...makeTool("wildcard_auth_tool"),
+        async execute() {
+          const result = await ctx.auth?.getDelegatedAccessToken({
+            provider: "msteams",
+          });
+          return { content: [{ type: "text" as const, text: "ok" }], details: result };
+        },
+      };
+    });
+    setRegistry([
+      {
+        pluginId: "wildcard-auth",
+        optional: true,
+        source: "/tmp/wildcard-auth.js",
+        names: ["wildcard_auth_tool"],
+        factory,
+      },
+    ]);
+    const base = createContext();
+    const config = {
+      ...base.config,
+      plugins: {
+        ...base.config.plugins,
+        enabled: true,
+        allow: ["wildcard-auth"],
+        entries: {
+          "wildcard-auth": {
+            auth: { delegatedAccess: { enabled: true } },
+          },
+        },
+      },
+    };
+    installToolManifestSnapshot({
+      config: config as never,
+      plugin: {
+        id: "wildcard-auth",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: { tools: ["wildcard_auth_tool"] },
+      },
+    });
+
+    const tools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        auth: delegatedAuth,
+        config,
+      } as never,
+      toolAllowlist: ["*"],
+    });
+
+    expectResolvedToolNames(tools, ["wildcard_auth_tool"]);
+    await expect(executeToolDetails(tools[0], {})).resolves.toEqual({
+      ok: true,
+      token: "delegated-token",
+    });
+    expect(delegatedAuth.getDelegatedAccessToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("isolates delegated auth across concurrent executions of a cached plugin tool", async () => {
+    const firstRelease = createDeferred();
+    const secondRelease = createDeferred();
+    const firstAuth: OpenClawPluginAuthContext = {
+      getDelegatedAccessToken: vi.fn(async () => {
+        await firstRelease.promise;
+        return {
+          ok: true as const,
+          token: "first-token",
+        };
+      }),
+    };
+    const secondAuth: OpenClawPluginAuthContext = {
+      getDelegatedAccessToken: vi.fn(async () => {
+        await secondRelease.promise;
+        return {
+          ok: true as const,
+          token: "second-token",
+        };
+      }),
+    };
+    const factory = vi.fn((rawCtx: unknown) => {
+      const ctx = rawCtx as { auth?: OpenClawPluginAuthContext };
+      return {
+        ...makeTool("auth_sensitive_tool"),
+        async execute() {
+          const result = await ctx.auth?.getDelegatedAccessToken({
+            provider: "msteams",
+          });
+          return { content: [{ type: "text" as const, text: "ok" }], details: result };
+        },
+      };
+    });
+    setRegistry([
+      {
+        pluginId: "auth-sensitive",
+        optional: false,
+        source: "/tmp/auth-sensitive.js",
+        names: ["auth_sensitive_tool"],
+        factory,
+      },
+    ]);
+    const base = createContext();
+    const config = {
+      ...base.config,
+      plugins: {
+        ...base.config.plugins,
+        enabled: true,
+        allow: ["auth-sensitive"],
+        entries: {
+          "auth-sensitive": {
+            auth: { delegatedAccess: { enabled: true } },
+          },
+        },
+      },
+    };
+    installToolManifestSnapshot({
+      config: config as never,
+      plugin: {
+        id: "auth-sensitive",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: { tools: ["auth_sensitive_tool"] },
+      },
+    });
+
+    const first = resolvePluginTools({
+      context: {
+        ...createContext(),
+        auth: firstAuth,
+        config,
+      } as never,
+    });
+    const second = resolvePluginTools({
+      context: {
+        ...createContext(),
+        auth: secondAuth,
+        config,
+      } as never,
+    });
+    const firstExecution = executeToolDetails(first[0], {});
+    const secondExecution = executeToolDetails(second[0], {});
+    await Promise.resolve();
+
+    expect(factory).toHaveBeenCalledTimes(2);
+    expect(firstAuth.getDelegatedAccessToken).toHaveBeenCalledTimes(1);
+    expect(secondAuth.getDelegatedAccessToken).toHaveBeenCalledTimes(1);
+
+    secondRelease.resolve();
+    firstRelease.resolve();
+    await expect(Promise.all([firstExecution, secondExecution])).resolves.toEqual([
+      { ok: true, token: "first-token" },
+      { ok: true, token: "second-token" },
+    ]);
+  });
+
+  it("revokes delegated auth for detached async work after tool execution settles", async () => {
+    const lateStart = createDeferred();
+    const delegatedAuth: OpenClawPluginAuthContext = {
+      getDelegatedAccessToken: vi.fn(async () => ({
+        ok: true as const,
+        token: "delegated-token",
+      })),
+    };
+    let lateResult: Promise<unknown> | undefined;
+    const factory = vi.fn((rawCtx: unknown) => {
+      const ctx = rawCtx as { auth?: OpenClawPluginAuthContext };
+      return {
+        ...makeTool("auth_sensitive_tool"),
+        async execute() {
+          lateResult = lateStart.promise.then(() =>
+            ctx.auth?.getDelegatedAccessToken({
+              provider: "msteams",
+            }),
+          );
+          return { content: [{ type: "text" as const, text: "ok" }] };
+        },
+      };
+    });
+    setRegistry([
+      {
+        pluginId: "auth-sensitive",
+        optional: false,
+        source: "/tmp/auth-sensitive.js",
+        names: ["auth_sensitive_tool"],
+        factory,
+      },
+    ]);
+    const base = createContext();
+    const config = {
+      ...base.config,
+      plugins: {
+        ...base.config.plugins,
+        enabled: true,
+        allow: ["auth-sensitive"],
+        entries: {
+          "auth-sensitive": {
+            auth: { delegatedAccess: { enabled: true } },
+          },
+        },
+      },
+    };
+    installToolManifestSnapshot({
+      config: config as never,
+      plugin: {
+        id: "auth-sensitive",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: { tools: ["auth_sensitive_tool"] },
+      },
+    });
+
+    const tools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        auth: delegatedAuth,
+        config,
+      } as never,
+    });
+
+    await tools[0]?.execute("call", {});
+    lateStart.resolve();
+    await expect(lateResult).resolves.toEqual({ ok: false, reason: "unavailable" });
+    expect(delegatedAuth.getDelegatedAccessToken).not.toHaveBeenCalled();
+  });
+
+  it("enforces delegated auth provider, audience, and scope allowlists", async () => {
+    const allowedToken = createJwt({
+      aud: "api://allowed",
+      scp: "allowed.scope",
+    });
+    const delegatedAuth: OpenClawPluginAuthContext = {
+      getDelegatedAccessToken: vi.fn(async () => ({
+        ok: true as const,
+        token: allowedToken,
+      })),
+    };
+    let pluginContext: { auth?: OpenClawPluginAuthContext } | undefined;
+    setRegistry([
+      {
+        pluginId: "allowed",
+        optional: false,
+        source: "/tmp/allowed.js",
+        names: ["allowed_tool"],
+        factory: (ctx) => {
+          pluginContext = ctx as { auth?: OpenClawPluginAuthContext };
+          return {
+            ...makeTool("allowed_tool"),
+            async execute(_toolCallId: string, request: unknown) {
+              const result = await pluginContext?.auth?.getDelegatedAccessToken(
+                request as Parameters<OpenClawPluginAuthContext["getDelegatedAccessToken"]>[0],
+              );
+              return { content: [{ type: "text" as const, text: "ok" }], details: result };
+            },
+          };
+        },
+      },
+    ]);
+    const base = createContext();
+    const config = {
+      ...base.config,
+      plugins: {
+        ...base.config.plugins,
+        enabled: true,
+        allow: ["allowed"],
+        entries: {
+          allowed: {
+            auth: {
+              delegatedAccess: {
+                enabled: true,
+                providers: ["msteams"],
+                audiences: ["api://allowed"],
+                scopes: ["allowed.scope"],
+              },
+            },
+          },
+        },
+      },
+    };
+    installToolManifestSnapshot({
+      config: config as never,
+      plugin: {
+        id: "allowed",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: { tools: ["allowed_tool"] },
+      },
+    });
+
+    const tools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        auth: delegatedAuth,
+        config,
+      } as never,
+    });
+
+    await expect(
+      pluginContext?.auth?.getDelegatedAccessToken({
+        provider: "msteams",
+        audience: "api://allowed",
+        scopes: ["allowed.scope"],
+      }),
+    ).resolves.toEqual({ ok: false, reason: "unavailable" });
+    await expect(
+      executeToolDetails(tools[0], {
+        provider: "msteams",
+        audience: "api://other",
+        scopes: ["allowed.scope"],
+      }),
+    ).resolves.toEqual({ ok: false, reason: "not_configured" });
+    await expect(
+      executeToolDetails(tools[0], {
+        provider: "msteams",
+        audience: "api://allowed",
+      }),
+    ).resolves.toEqual({ ok: false, reason: "not_configured" });
+    await expect(
+      executeToolDetails(tools[0], {
+        provider: "msteams",
+        audience: "api://allowed",
+        scopes: ["allowed.scope", "other.scope"],
+      }),
+    ).resolves.toEqual({ ok: false, reason: "not_configured" });
+    await expect(
+      executeToolDetails(tools[0], {
+        provider: "msteams",
+        audience: "api://allowed",
+        scopes: ["allowed.scope"],
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      token: allowedToken,
+    });
+    expect(delegatedAuth.getDelegatedAccessToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts Entra app-id audience claims for api scheme delegated auth policies", async () => {
+    const downstreamAppId = "b37997f3-9806-4b6b-86ac-d2c9ff8c1eea";
+    const allowedToken = createJwt({
+      aud: downstreamAppId,
+      scp: "allowed.scope",
+    });
+    const delegatedAuth: OpenClawPluginAuthContext = {
+      getDelegatedAccessToken: vi.fn(async () => ({
+        ok: true as const,
+        token: allowedToken,
+      })),
+    };
+    let pluginContext: { auth?: OpenClawPluginAuthContext } | undefined;
+    setRegistry([
+      {
+        pluginId: "allowed",
+        optional: false,
+        source: "/tmp/allowed.js",
+        names: ["allowed_tool"],
+        factory: (ctx) => {
+          pluginContext = ctx as { auth?: OpenClawPluginAuthContext };
+          return {
+            ...makeTool("allowed_tool"),
+            async execute(_toolCallId: string, request: unknown) {
+              const result = await pluginContext?.auth?.getDelegatedAccessToken(
+                request as Parameters<OpenClawPluginAuthContext["getDelegatedAccessToken"]>[0],
+              );
+              return { content: [{ type: "text" as const, text: "ok" }], details: result };
+            },
+          };
+        },
+      },
+    ]);
+    const base = createContext();
+    const config = {
+      ...base.config,
+      plugins: {
+        ...base.config.plugins,
+        enabled: true,
+        allow: ["allowed"],
+        entries: {
+          allowed: {
+            auth: {
+              delegatedAccess: {
+                enabled: true,
+                providers: ["msteams"],
+                audiences: [`api://${downstreamAppId}`],
+                scopes: ["allowed.scope"],
+              },
+            },
+          },
+        },
+      },
+    };
+    installToolManifestSnapshot({
+      config: config as never,
+      plugin: {
+        id: "allowed",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: { tools: ["allowed_tool"] },
+      },
+    });
+
+    const tools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        auth: delegatedAuth,
+        config,
+      } as never,
+    });
+
+    await expect(
+      executeToolDetails(tools[0], {
+        provider: "msteams",
+        audience: `api://${downstreamAppId}`,
+        scopes: ["allowed.scope"],
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      token: allowedToken,
+    });
+    await expect(
+      executeToolDetails(tools[0], {
+        provider: "msteams",
+        audience: downstreamAppId,
+        scopes: ["allowed.scope"],
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      token: allowedToken,
+    });
+    expect(delegatedAuth.getDelegatedAccessToken).toHaveBeenCalledTimes(2);
+  });
+
+  it("enforces delegated auth chat type allowlists from trusted runtime context", async () => {
+    const allowedToken = createJwt({
+      aud: "api://allowed",
+      scp: "allowed.scope",
+    });
+    const delegatedAuth: OpenClawPluginAuthContext = {
+      getDelegatedAccessToken: vi.fn(async () => ({
+        ok: true as const,
+        token: allowedToken,
+      })),
+    };
+    let pluginContext: { auth?: OpenClawPluginAuthContext } | undefined;
+    setRegistry([
+      {
+        pluginId: "allowed",
+        optional: false,
+        source: "/tmp/allowed.js",
+        names: ["allowed_tool"],
+        factory: (ctx) => {
+          pluginContext = ctx as { auth?: OpenClawPluginAuthContext };
+          return {
+            ...makeTool("allowed_tool"),
+            async execute(_toolCallId: string, request: unknown) {
+              const result = await pluginContext?.auth?.getDelegatedAccessToken(
+                request as Parameters<OpenClawPluginAuthContext["getDelegatedAccessToken"]>[0],
+              );
+              return { content: [{ type: "text" as const, text: "ok" }], details: result };
+            },
+          };
+        },
+      },
+    ]);
+    const base = createContext();
+    const config = {
+      ...base.config,
+      plugins: {
+        ...base.config.plugins,
+        enabled: true,
+        allow: ["allowed"],
+        entries: {
+          allowed: {
+            auth: {
+              delegatedAccess: {
+                enabled: true,
+                providers: ["msteams"],
+                audiences: ["api://allowed"],
+                scopes: ["allowed.scope"],
+                chatTypes: ["direct"],
+              },
+            },
+          },
+        },
+      },
+    };
+    installToolManifestSnapshot({
+      config: config as never,
+      plugin: {
+        id: "allowed",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: { tools: ["allowed_tool"] },
+      },
+    });
+
+    const channelTools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        auth: delegatedAuth,
+        messageChatType: "channel",
+        config,
+      } as never,
+    });
+
+    await expect(
+      executeToolDetails(channelTools[0], {
+        provider: "msteams",
+        audience: "api://allowed",
+        scopes: ["allowed.scope"],
+      }),
+    ).resolves.toEqual({ ok: false, reason: "not_configured" });
+    expect(delegatedAuth.getDelegatedAccessToken).not.toHaveBeenCalled();
+
+    pluginContext = undefined;
+    const unknownChatTools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        auth: delegatedAuth,
+        config,
+      } as never,
+    });
+
+    await expect(
+      executeToolDetails(unknownChatTools[0], {
+        provider: "msteams",
+        audience: "api://allowed",
+        scopes: ["allowed.scope"],
+      }),
+    ).resolves.toEqual({ ok: false, reason: "not_configured" });
+    expect(delegatedAuth.getDelegatedAccessToken).not.toHaveBeenCalled();
+
+    pluginContext = undefined;
+    const directTools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        auth: delegatedAuth,
+        messageChatType: "direct",
+        config,
+      } as never,
+    });
+
+    await expect(
+      executeToolDetails(directTools[0], {
+        provider: "msteams",
+        audience: "api://allowed",
+        scopes: ["allowed.scope"],
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      token: allowedToken,
+    });
+    expect(delegatedAuth.getDelegatedAccessToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts returned delegated tokens with extra granted scopes", async () => {
+    const extraScopedToken = createJwt({
+      aud: "api://allowed",
+      scp: "allowed.scope high.privilege.scope",
+    });
+    const delegatedAuth: OpenClawPluginAuthContext = {
+      getDelegatedAccessToken: vi.fn(async () => ({
+        ok: true as const,
+        token: extraScopedToken,
+      })),
+    };
+    let pluginContext: { auth?: OpenClawPluginAuthContext } | undefined;
+    setRegistry([
+      {
+        pluginId: "allowed",
+        optional: false,
+        source: "/tmp/allowed.js",
+        names: ["allowed_tool"],
+        factory: (ctx) => {
+          pluginContext = ctx as { auth?: OpenClawPluginAuthContext };
+          return {
+            ...makeTool("allowed_tool"),
+            async execute(_toolCallId: string, request: unknown) {
+              const result = await pluginContext?.auth?.getDelegatedAccessToken(
+                request as Parameters<OpenClawPluginAuthContext["getDelegatedAccessToken"]>[0],
+              );
+              return { content: [{ type: "text" as const, text: "ok" }], details: result };
+            },
+          };
+        },
+      },
+    ]);
+    const base = createContext();
+    const config = {
+      ...base.config,
+      plugins: {
+        ...base.config.plugins,
+        enabled: true,
+        allow: ["allowed"],
+        entries: {
+          allowed: {
+            auth: {
+              delegatedAccess: {
+                enabled: true,
+                providers: ["msteams"],
+                audiences: ["api://allowed"],
+                scopes: ["allowed.scope"],
+              },
+            },
+          },
+        },
+      },
+    };
+    installToolManifestSnapshot({
+      config: config as never,
+      plugin: {
+        id: "allowed",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: { tools: ["allowed_tool"] },
+      },
+    });
+
+    const tools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        auth: delegatedAuth,
+        config,
+      } as never,
+    });
+
+    await expect(
+      executeToolDetails(tools[0], {
+        provider: "msteams",
+        audience: "api://allowed",
+        scopes: ["allowed.scope"],
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      token: extraScopedToken,
+    });
+    expect(delegatedAuth.getDelegatedAccessToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects returned delegated tokens missing requested scopes or with disallowed audiences", async () => {
+    const missingRequestedScopeToken = createJwt({
+      aud: "api://allowed",
+      scp: "other.scope",
+    });
+    const overAudiencedToken = createJwt({
+      aud: ["api://allowed", "api://other"],
+      scp: "allowed.scope",
+    });
+    const delegatedAuth: OpenClawPluginAuthContext = {
+      getDelegatedAccessToken: vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true as const,
+          token: missingRequestedScopeToken,
+        })
+        .mockResolvedValueOnce({
+          ok: true as const,
+          token: overAudiencedToken,
+        }),
+    };
+    let pluginContext: { auth?: OpenClawPluginAuthContext } | undefined;
+    setRegistry([
+      {
+        pluginId: "allowed",
+        optional: false,
+        source: "/tmp/allowed.js",
+        names: ["allowed_tool"],
+        factory: (ctx) => {
+          pluginContext = ctx as { auth?: OpenClawPluginAuthContext };
+          return {
+            ...makeTool("allowed_tool"),
+            async execute(_toolCallId: string, request: unknown) {
+              const result = await pluginContext?.auth?.getDelegatedAccessToken(
+                request as Parameters<OpenClawPluginAuthContext["getDelegatedAccessToken"]>[0],
+              );
+              return { content: [{ type: "text" as const, text: "ok" }], details: result };
+            },
+          };
+        },
+      },
+    ]);
+    const base = createContext();
+    const config = {
+      ...base.config,
+      plugins: {
+        ...base.config.plugins,
+        enabled: true,
+        allow: ["allowed"],
+        entries: {
+          allowed: {
+            auth: {
+              delegatedAccess: {
+                enabled: true,
+                providers: ["msteams"],
+                audiences: ["api://allowed"],
+                scopes: ["allowed.scope"],
+              },
+            },
+          },
+        },
+      },
+    };
+    installToolManifestSnapshot({
+      config: config as never,
+      plugin: {
+        id: "allowed",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: { tools: ["allowed_tool"] },
+      },
+    });
+
+    const tools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        auth: delegatedAuth,
+        config,
+      } as never,
+    });
+
+    await expect(
+      executeToolDetails(tools[0], {
+        provider: "msteams",
+        audience: "api://allowed",
+        scopes: ["allowed.scope"],
+      }),
+    ).resolves.toEqual({ ok: false, reason: "unavailable" });
+    await expect(
+      executeToolDetails(tools[0], {
+        provider: "msteams",
+        audience: "api://allowed",
+        scopes: ["allowed.scope"],
+      }),
+    ).resolves.toEqual({ ok: false, reason: "unavailable" });
+    expect(delegatedAuth.getDelegatedAccessToken).toHaveBeenCalledTimes(2);
   });
 
   it("warns with plugin factory timing details when a factory is slow", () => {

@@ -282,6 +282,71 @@ Users enable optional tools in config:
 - Use `optional: true` for tools with side effects or extra binary requirements
 - Users can enable all tools from a plugin by adding the plugin id to `tools.allow`
 
+### Runtime delegated auth
+
+Trusted tool factories can receive a runtime-only `ctx.auth` resolver when the inbound channel supports delegated user auth. The resolver is intentionally execution-time only: raw bearer tokens are not serialized into prompts, transcripts, logs, or generic tool metadata.
+
+Delegated auth is default-deny per plugin. The operator must explicitly allow each plugin that can receive delegated user tokens:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "downstream-tools": {
+        auth: {
+          delegatedAccess: {
+            enabled: true,
+            providers: ["msteams"],
+            audiences: ["api://downstream-tools"],
+            scopes: ["downstream.access"],
+            chatTypes: ["direct"],
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Plugins without this opt-in do not receive `ctx.auth`, even if their tools are otherwise enabled through `tools.allow`.
+
+Provider ids are supplied by the active channel runtime. For example, Microsoft Teams uses `msteams`; future channels can expose their own provider ids without a core schema change.
+
+When `audiences` or `scopes` are configured, OpenClaw checks both the plugin request and the returned JWT claims before releasing the token. The plugin request may only ask for configured scopes, and the returned token must contain the requested scopes; extra granted scopes in the token are allowed because Microsoft Entra can include previously consented scopes for the same resource. Returned audiences stay strict: every `aud` value must match the configured audience allowlist. When `chatTypes` is configured, OpenClaw releases delegated tokens only for trusted inbound route types from `direct`, `group`, or `channel`; this decision uses runtime route context, not plugin-supplied tool arguments.
+
+Plugins should treat a failed delegated-auth result as an auth-required state and return a normal tool result. For Microsoft Teams, OpenClaw owns the OAuth card challenge when Bot Framework has no stored user token; plugin code should not send consent cards or handle `signin/tokenExchange` invokes.
+
+```typescript
+api.registerTool((ctx) => ({
+  name: "call_user_api",
+  description: "Call a downstream API as the signed-in user",
+  parameters: { type: "object", properties: {}, additionalProperties: false },
+  async execute() {
+    const auth = await ctx.auth?.getDelegatedAccessToken({
+      provider: "msteams",
+      audience: "api://downstream-tools",
+      scopes: ["downstream.access"],
+    });
+    if (!auth?.ok) {
+      return { content: [{ type: "text", text: `auth_required:${auth?.reason}` }] };
+    }
+    const response = await fetch("https://downstream.example.com/action", {
+      headers: { Authorization: `Bearer ${auth.token}` },
+    });
+    return { content: [{ type: "text", text: await response.text() }] };
+  },
+}));
+```
+
+The downstream service must validate issuer, audience, and scopes before using the token. If that service needs Microsoft Graph, it should perform its own Microsoft Entra on-behalf-of exchange using a token whose audience is the downstream service. For Teams, the Bot Framework OAuth connection may use the full scope URI, such as `api://<downstream-app-id>/downstream.access`, while plugin policy and tool requests should use the JWT `scp` claim value, such as `downstream.access`. Microsoft Entra may emit the delegated token `aud` as the downstream app client id even when the Application ID URI is `api://<downstream-app-id>`; OpenClaw treats `api://<uuid>` policy audiences as equivalent to the bare UUID claim.
+
+A minimal Microsoft Teams downstream/OBO PoC lives in
+`examples/plugins/msteams-graph-profile`. It registers an optional
+`msteams_whoami` tool, requests a delegated token for a configured downstream
+API audience, and calls the downstream `/api/me` endpoint. The sibling
+`examples/msteams-obo-downstream-api` package owns the local JWT validation and
+Graph OBO server for that PoC.
+
 ## Registering CLI commands
 
 Plugins can add root `openclaw` command groups with `api.registerCli`. Provide

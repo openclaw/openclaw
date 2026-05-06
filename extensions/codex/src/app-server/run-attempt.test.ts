@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
+import * as agentHarness from "openclaw/plugin-sdk/agent-harness";
 import {
   abortAgentHarnessRun,
   buildAgentRuntimePlan,
@@ -545,6 +546,45 @@ describe("runCodexAppServerAttempt", () => {
       sessionKey: "agent:main:main",
       runSessionKey: undefined,
     });
+  });
+
+  it("passes delegated auth context to Codex dynamic tools", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    const pluginAuth: NonNullable<EmbeddedRunAttemptParams["pluginAuth"]> = {
+      getDelegatedAccessToken: vi.fn(async () => ({
+        ok: false as const,
+        reason: "unavailable" as const,
+      })),
+    };
+    params.disableTools = false;
+    params.config = { tools: { profile: "coding" } };
+    params.runtimePlan = buildCodexRuntimePlan(params, workspaceDir);
+    params.messageChannel = "msteams";
+    params.messageProvider = "msteams";
+    params.messageChatType = "direct";
+    params.pluginAuth = pluginAuth;
+    const createToolsSpy = vi.spyOn(agentHarness, "createOpenClawCodingTools");
+
+    await __testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey: "agent:main:session-1",
+      sandbox: null,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+
+    expect(createToolsSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageProvider: "msteams",
+        messageChatType: "direct",
+        pluginAuth,
+      }),
+    );
   });
 
   it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {

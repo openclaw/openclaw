@@ -939,6 +939,7 @@ export async function runPreparedReply(
     normalizeOptionalString(preparedSessionState.sessionEntry?.modelOverride) ||
     normalizeOptionalString(preparedSessionState.sessionEntry?.providerOverride),
   );
+  const messageChatType = normalizeChatType(ctx.ChatType);
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
@@ -953,7 +954,7 @@ export async function runPreparedReply(
     originatingTo: ctx.OriginatingTo,
     originatingAccountId: sessionCtx.AccountId,
     originatingThreadId: ctx.MessageThreadId,
-    originatingChatType: ctx.ChatType,
+    originatingChatType: messageChatType,
     run: {
       agentId,
       agentDir,
@@ -967,6 +968,7 @@ export async function runPreparedReply(
         // still reflects the active channel that should own tool routing.
         provider: ctx.Provider ?? ctx.Surface ?? sessionCtx.Provider,
       }),
+      messageChatType,
       agentAccountId: sessionCtx.AccountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
       groupChannel:
@@ -1026,6 +1028,7 @@ export async function runPreparedReply(
       extraSystemPromptStatic: extraSystemPromptStaticParts.join("\n\n"),
       skipProviderRuntimeHints: useFastReplyRuntime,
       allowEmptyAssistantReplyAsSilent,
+      pluginAuth: opts?.pluginAuth,
       ...(!useFastReplyRuntime &&
       isReasoningTagProvider(provider, {
         config: cfg,

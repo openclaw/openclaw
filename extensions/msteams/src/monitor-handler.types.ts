@@ -3,6 +3,7 @@ import type { MSTeamsConversationStore } from "./conversation-store.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import type { MSTeamsPollStore } from "./polls.js";
+import type { MSTeamsTurnContext } from "./sdk-types.js";
 import type { MSTeamsSsoDeps } from "./sso.js";
 
 export type MSTeamsMessageHandlerDeps = {
@@ -24,4 +25,7 @@ export type MSTeamsMessageHandlerDeps = {
    * invokes, matching the pre-SSO behavior.
    */
   sso?: MSTeamsSsoDeps;
+  recordSsoSignInChallenge?: (activity: MSTeamsTurnContext["activity"]) => void;
+  hasSsoSignInChallenge?: (activity: MSTeamsTurnContext["activity"]) => boolean;
+  clearSsoSignInChallenge?: (activity: MSTeamsTurnContext["activity"]) => void;
 };

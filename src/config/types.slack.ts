@@ -1,3 +1,4 @@
+import type { ChatType } from "../channels/chat-type.js";
 import type {
   ContextVisibilityMode,
   DmPolicy,
@@ -181,7 +182,7 @@ export type SlackAccountConfig = {
    * Optional per-chat-type reply threading overrides.
    * Example: { direct: "all", group: "first", channel: "off" }.
    */
-  replyToModeByChatType?: Partial<Record<"direct" | "group" | "channel", ReplyToMode>>;
+  replyToModeByChatType?: Partial<Record<ChatType, ReplyToMode>>;
   /** Thread session behavior. */
   thread?: SlackThreadConfig;
   actions?: SlackActionConfig;

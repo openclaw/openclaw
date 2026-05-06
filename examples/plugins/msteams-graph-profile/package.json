@@ -1,0 +1,17 @@
+{
+  "name": "msteams-graph-profile",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "downstream": "pnpm --dir ../../msteams-obo-downstream-api start"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  }
+}

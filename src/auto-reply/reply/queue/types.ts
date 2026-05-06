@@ -2,9 +2,11 @@ import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
 import type { CurrentTurnPromptContext } from "../../../agents/pi-embedded-runner/run/params.js";
 import type { SkillSnapshot } from "../../../agents/skills.js";
 import type { SilentReplyPromptMode } from "../../../agents/system-prompt.types.js";
+import type { ChatType } from "../../../channels/chat-type.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
+import type { OpenClawPluginAuthContext } from "../../../plugins/tool-types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { SourceReplyDeliveryMode } from "../../get-reply-options.types.js";
 import type { OriginatingChannelType } from "../../templating.js";
@@ -51,7 +53,7 @@ export type FollowupRun = {
   /** Thread id for reply routing (Telegram topic id or Matrix thread event id). */
   originatingThreadId?: string | number;
   /** Chat type for context-aware threading (e.g., DM vs channel). */
-  originatingChatType?: string;
+  originatingChatType?: ChatType;
   run: {
     agentId: string;
     agentDir: string;
@@ -59,6 +61,7 @@ export type FollowupRun = {
     sessionKey?: string;
     runtimePolicySessionKey?: string;
     messageProvider?: string;
+    messageChatType?: ChatType;
     agentAccountId?: string;
     groupId?: string;
     groupChannel?: string;
@@ -101,6 +104,8 @@ export type FollowupRun = {
     skipProviderRuntimeHints?: boolean;
     silentExpected?: boolean;
     allowEmptyAssistantReplyAsSilent?: boolean;
+    /** Runtime-only delegated auth resolver for trusted plugin tools. */
+    pluginAuth?: OpenClawPluginAuthContext;
   };
 };
 
