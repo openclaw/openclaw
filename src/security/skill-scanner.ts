@@ -37,16 +37,11 @@ export type SkillScanOptions = {
 // Scannable extensions
 // ---------------------------------------------------------------------------
 
-const SCANNABLE_EXTENSIONS = new Set([
-  ".js",
-  ".ts",
-  ".mjs",
-  ".cjs",
-  ".mts",
-  ".cts",
-  ".jsx",
-  ".tsx",
-]);
+const CODE_EXTENSIONS = new Set([".js", ".ts", ".mjs", ".cjs", ".mts", ".cts", ".jsx", ".tsx"]);
+
+const MARKDOWN_EXTENSIONS = new Set([".md"]);
+
+const SCANNABLE_EXTENSIONS = new Set([...CODE_EXTENSIONS, ...MARKDOWN_EXTENSIONS]);
 
 const DEFAULT_MAX_SCAN_FILES = 500;
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
@@ -76,6 +71,22 @@ const DIR_ENTRY_CACHE = new Map<string, DirEntryCacheEntry>();
 
 export function isScannable(filePath: string): boolean {
   return SCANNABLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
+
+function isCode(filePath: string): boolean {
+  return CODE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
+
+function isMarkdown(filePath: string): boolean {
+  return MARKDOWN_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
+
+function isSkillMarkdown(filePath: string): boolean {
+  return path.basename(filePath).toLowerCase() === "skill.md";
+}
+
+function isNonSkillMarkdown(filePath: string): boolean {
+  return isMarkdown(filePath) && !isSkillMarkdown(filePath);
 }
 
 function getCachedFileScanResult(params: {
@@ -142,7 +153,12 @@ type SourceRule = {
   severity: SkillScanSeverity;
   message: string;
   /** Primary pattern tested against the full source. */
-  pattern: RegExp;
+  pattern?: RegExp;
+  /** Custom matcher for rules that need lightweight parsing instead of a single regex. */
+  match?: (params: {
+    source: string;
+    lines: string[];
+  }) => { line: number; evidence: string } | null;
   /** Secondary context pattern; both must match for the rule to fire. */
   requiresContext?: RegExp;
   /** If set, secondary context must be within this many lines of the primary match. */
@@ -208,6 +224,54 @@ const SOURCE_RULES: SourceRule[] = [
     pattern: /process\.env/,
     requiresContext: NETWORK_SEND_CONTEXT_PATTERN,
     requiresContextWindowLines: 8,
+  },
+];
+
+// ---------------------------------------------------------------------------
+// Markdown-specific rules (applied only to .md files)
+// ---------------------------------------------------------------------------
+
+/**
+ * Unicode codepoints that are invisible or alter text rendering.
+ * Used to hide malicious content from visual code review.
+ */
+const HIDDEN_UNICODE_RE =
+  /\u{200B}|\u{200C}|\u{200D}|\u{200E}|\u{200F}|\u{202A}|\u{202B}|\u{202C}|\u{202D}|\u{202E}|\u{2028}|\u{2029}|\u{2060}|\u{2061}|\u{2062}|\u{2063}|\u{2064}|\u{2066}|\u{2067}|\u{2068}|\u{2069}|\u{206A}|\u{206B}|\u{206C}|\u{206D}|\u{206E}|\u{206F}|\u{FEFF}|\u{FFF9}|\u{FFFA}|\u{FFFB}/u;
+
+const MARKDOWN_LINE_RULES: LineRule[] = [
+  {
+    ruleId: "hidden-unicode",
+    severity: "warn",
+    message: "Hidden Unicode characters detected (zero-width or text-direction override)",
+    pattern: HIDDEN_UNICODE_RE,
+  },
+  {
+    ruleId: "markdown-data-uri",
+    severity: "warn",
+    message: "Data URI with executable MIME type detected",
+    pattern:
+      /data:(?:text\/(?:html|javascript)|application\/(?:javascript|x-javascript|ecmascript))[;,]/i,
+  },
+];
+
+const MARKDOWN_SOURCE_RULES: SourceRule[] = [
+  {
+    ruleId: "markdown-download-exec",
+    severity: "critical",
+    message: "Download-and-execute pattern detected in markdown content",
+    match: findMarkdownDownloadExecMatch,
+  },
+  {
+    ruleId: "markdown-encoded-payload",
+    severity: "warn",
+    message: "Large base64 block detected in markdown (possible obfuscated payload)",
+    pattern: /```[^\n]*\n[A-Za-z0-9+/=\s]{400,}\n```/,
+  },
+  {
+    ruleId: "markdown-hex-payload",
+    severity: "warn",
+    message: "Hex-encoded payload detected in markdown content",
+    pattern: /(\\x[0-9a-fA-F]{2}){8,}/,
   },
 ];
 
@@ -298,11 +362,264 @@ function stripCommentsForHeuristics(source: string): string {
   return stripped;
 }
 
+function logicalMarkdownLines(lines: string[]): { line: number; text: string }[] {
+  const logicalLines: { line: number; text: string }[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const startLine = index + 1;
+    let text = lines[index] ?? "";
+    while (/\\\s*$/.test(text) && index + 1 < lines.length) {
+      text = `${text.replace(/\\\s*$/, " ")}${lines[index + 1] ?? ""}`;
+      index += 1;
+    }
+    logicalLines.push({ line: startLine, text });
+  }
+  return logicalLines;
+}
+
+function stripMarkdownCommandPrefix(segment: string): string {
+  let stripped = segment.trim();
+  for (;;) {
+    const next = stripped
+      .replace(/^(?:[-*]\s+|\d+[.)]\s+|\$\s*|>\s*)/, "")
+      .replace(/^(?:run|install|setup)\s*:\s*/i, "")
+      .trim();
+    if (next === stripped) {
+      return stripped;
+    }
+    stripped = next;
+  }
+}
+
+function splitShellPipeline(command: string): string[] {
+  const segments: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+
+  for (const char of command) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      current += char;
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      current += char;
+      if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      current += char;
+      quote = char;
+      continue;
+    }
+    if (char === "|") {
+      segments.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+
+  segments.push(current);
+  return segments;
+}
+
+function tokenizeShellWords(segment: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+
+  for (const char of segment.trim()) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+
+  if (current) {
+    tokens.push(current);
+  }
+  return tokens;
+}
+
+function isDownloaderToken(token: string): boolean {
+  return /^(?:curl|wget)$/i.test(path.basename(token));
+}
+
+function isDownloadCommandSegment(segment: string): boolean {
+  const tokens = tokenizeShellWords(stripMarkdownCommandPrefix(segment));
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index] ?? "";
+    if (token === "sudo" || token === "doas") {
+      while (tokens[index + 1]?.startsWith("-")) {
+        index += 1;
+      }
+      continue;
+    }
+    if (token === "env" || token === "/usr/bin/env") {
+      while (
+        tokens[index + 1]?.startsWith("-") ||
+        isEnvironmentAssignment(tokens[index + 1] ?? "")
+      ) {
+        index += 1;
+      }
+      continue;
+    }
+    return isDownloaderToken(token);
+  }
+  return false;
+}
+
+function isEnvironmentAssignment(token: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*=/.test(token);
+}
+
+function isInterpreterToken(token: string): boolean {
+  const command = path.basename(token);
+  return /^(?:sh|bash|zsh|fish|node(?:js)?|python(?:\d+(?:\.\d+)?)?|perl|ruby)(?:\d+(?:\.\d+)?)?$/i.test(
+    command,
+  );
+}
+
+function isExecutionSegment(segment: string): boolean {
+  const tokens = tokenizeShellWords(segment);
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index] ?? "";
+    if (token === "sudo" || token === "doas") {
+      while (tokens[index + 1]?.startsWith("-")) {
+        index += 1;
+      }
+      continue;
+    }
+    if (token === "env" || token === "/usr/bin/env") {
+      while (
+        tokens[index + 1]?.startsWith("-") ||
+        isEnvironmentAssignment(tokens[index + 1] ?? "")
+      ) {
+        index += 1;
+      }
+      continue;
+    }
+    return isInterpreterToken(token);
+  }
+  return false;
+}
+
+function markdownCommandCandidates(line: string): string[] {
+  const trimmed = line.trim();
+  const candidates = [trimmed];
+  for (const match of trimmed.matchAll(/`([^`\n]+)`/g)) {
+    const inlineCommand = match[1]?.trim();
+    if (inlineCommand) {
+      candidates.push(inlineCommand);
+    }
+  }
+  return candidates;
+}
+
+function isMarkdownTableSeparatorLine(line: string | undefined): boolean {
+  const trimmed = line?.trim() ?? "";
+  if (!trimmed.includes("|")) {
+    return false;
+  }
+  const cells = trimmed
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+  return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function isMarkdownTableRow(params: { lines: string[]; line: number; text: string }): boolean {
+  const trimmed = params.text.trim();
+  if (!trimmed.includes("|")) {
+    return false;
+  }
+  if (trimmed.startsWith("|")) {
+    return true;
+  }
+  return (
+    isMarkdownTableSeparatorLine(params.lines[params.line - 2]) ||
+    isMarkdownTableSeparatorLine(params.lines[params.line])
+  );
+}
+
+function findMarkdownDownloadExecMatch(params: {
+  lines: string[];
+}): { line: number; evidence: string } | null {
+  for (const logicalLine of logicalMarkdownLines(params.lines)) {
+    const trimmed = logicalLine.text.trim();
+    if (
+      !trimmed ||
+      isMarkdownTableRow({ lines: params.lines, line: logicalLine.line, text: logicalLine.text }) ||
+      !/\b(?:curl|wget)\b/i.test(trimmed)
+    ) {
+      continue;
+    }
+
+    for (const candidate of markdownCommandCandidates(trimmed)) {
+      const segments = splitShellPipeline(candidate);
+      for (let index = 0; index < segments.length - 1; index += 1) {
+        if (
+          isDownloadCommandSegment(segments[index] ?? "") &&
+          isExecutionSegment(segments[index + 1] ?? "")
+        ) {
+          return { line: logicalLine.line, evidence: trimmed };
+        }
+      }
+    }
+  }
+  return null;
+}
+
 function findSourceRuleMatch(params: {
   rule: SourceRule;
   source: string;
   lines: string[];
 }): { line: number; evidence: string } | null {
+  if (params.rule.match) {
+    return params.rule.match({
+      source: params.source,
+      lines: params.lines,
+    });
+  }
+
+  if (!params.rule.pattern) {
+    return null;
+  }
   if (!params.rule.pattern.test(params.source)) {
     return null;
   }
@@ -340,9 +657,15 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
   const heuristicSource = stripCommentsForHeuristics(source);
   const heuristicLines = heuristicSource.split("\n");
   const matchedLineRules = new Set<string>();
+  const markdown = isMarkdown(filePath);
+
+  const lineRules = markdown ? MARKDOWN_LINE_RULES : LINE_RULES;
+  const sourceRules = markdown ? MARKDOWN_SOURCE_RULES : SOURCE_RULES;
+  const sourceRuleSource = markdown ? source : heuristicSource;
+  const sourceRuleLines = markdown ? lines : heuristicLines;
 
   // --- Line rules ---
-  for (const rule of LINE_RULES) {
+  for (const rule of lineRules) {
     if (matchedLineRules.has(rule.ruleId)) {
       continue;
     }
@@ -386,7 +709,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
 
   // --- Source rules ---
   const matchedSourceRules = new Set<string>();
-  for (const rule of SOURCE_RULES) {
+  for (const rule of sourceRules) {
     // Allow multiple findings for different messages with the same ruleId
     // but deduplicate exact (ruleId+message) combos
     const ruleKey = `${rule.ruleId}::${rule.message}`;
@@ -396,8 +719,8 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
 
     const match = findSourceRuleMatch({
       rule,
-      source: heuristicSource,
-      lines: heuristicLines,
+      source: sourceRuleSource,
+      lines: sourceRuleLines,
     });
     if (!match) {
       continue;
@@ -438,10 +761,11 @@ function isExcludedTestFileName(name: string): boolean {
   return TEST_FILE_NAME_PATTERN.test(name);
 }
 
-async function walkDirWithLimit(
+async function walkDirMatchingLimit(
   dirPath: string,
   maxFiles: number,
   excludeTestFiles: boolean,
+  includeFile: (fileName: string) => boolean,
 ): Promise<string[]> {
   const files: string[] = [];
   const stack: string[] = [dirPath];
@@ -472,13 +796,45 @@ async function walkDirWithLimit(
       const fullPath = path.join(currentDir, entry.name);
       if (entry.kind === "dir") {
         stack.push(fullPath);
-      } else if (entry.kind === "file" && isScannable(entry.name)) {
+      } else if (entry.kind === "file" && includeFile(entry.name)) {
         files.push(fullPath);
       }
     }
   }
 
   return files;
+}
+
+async function walkDirWithLimit(
+  dirPath: string,
+  maxFiles: number,
+  excludeTestFiles: boolean,
+): Promise<string[]> {
+  const skillBudget = 1;
+  const skillFiles = await walkDirMatchingLimit(
+    dirPath,
+    skillBudget,
+    excludeTestFiles,
+    isSkillMarkdown,
+  );
+  const codeFiles = await walkDirMatchingLimit(
+    dirPath,
+    maxFiles - skillFiles.length,
+    excludeTestFiles,
+    isCode,
+  );
+  const remainingFiles = maxFiles - codeFiles.length - skillFiles.length;
+  if (remainingFiles <= 0) {
+    return [...codeFiles, ...skillFiles];
+  }
+
+  const markdownFiles = await walkDirMatchingLimit(
+    dirPath,
+    remainingFiles,
+    excludeTestFiles,
+    isNonSkillMarkdown,
+  );
+  return [...codeFiles, ...skillFiles, ...markdownFiles];
 }
 
 async function readDirEntriesWithCache(dirPath: string): Promise<CachedDirEntry[]> {
