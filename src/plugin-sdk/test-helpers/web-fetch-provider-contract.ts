@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { WebFetchProviderPlugin } from "../provider-web-fetch-contract.js";
 import {
   pluginRegistrationContractRegistry,
-  resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
   resolveWebFetchProviderContractEntriesForPluginId,
-} from "../testing.js";
+} from "../../plugins/contracts/registry.js";
+import { resolveBundledExplicitWebFetchProvidersFromPublicArtifacts } from "../../plugins/web-provider-public-artifacts.explicit.js";
+import type { WebFetchProviderPlugin } from "../provider-web-fetch-contract.js";
 import { installWebFetchProviderContractSuite } from "./provider-contract-suites.js";
 
 function resolveWebFetchCredentialValue(provider: WebFetchProviderPlugin): unknown {
