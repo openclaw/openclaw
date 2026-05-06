@@ -1151,4 +1151,102 @@ describe("GatewayClient connect auth payload", () => {
       failureDetails: { code: "AUTH_TOKEN_MISMATCH", canRetryWithDeviceToken: true },
     });
   });
+
+  it("stops reconnecting after MAX_RECONNECT_ATTEMPTS and fires onReconnectPaused", async () => {
+    vi.useFakeTimers();
+    try {
+      const onReconnectPaused = vi.fn();
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+        maxReconnectAttempts: 30,
+        onReconnectPaused,
+      });
+
+      client.start();
+      const maxAttempts = 30;
+
+      // Simulate repeated close events without a successful handshake.
+      // Each iteration: close current WS → scheduleReconnect increments counter →
+      // timer fires → start() creates next WS.
+      for (let i = 0; i < maxAttempts; i++) {
+        const ws = getLatestWs();
+        ws.emitClose(1006, "abnormal closure");
+        // Advance through the backoff delay (doubles each time, capped at 30s)
+        await vi.advanceTimersByTimeAsync(30_000);
+      }
+
+      // Close the WS created by the last reconnect attempt.
+      // This triggers scheduleReconnect with reconnectAttempts === MAX, which gives up.
+      getLatestWs().emitClose(1006, "abnormal closure");
+
+      // After MAX_RECONNECT_ATTEMPTS, the client should have stopped.
+      expect(onReconnectPaused).toHaveBeenCalledWith(
+        expect.objectContaining({
+          code: -1,
+          reason: expect.stringContaining("max reconnect attempts reached"),
+        }),
+      );
+
+      // No further reconnects should be scheduled.
+      const wsCountBefore = wsInstances.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(wsInstances.length).toBe(wsCountBefore);
+
+      client.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resets reconnect counter on successful connect", async () => {
+    vi.useFakeTimers();
+    try {
+      const onReconnectPaused = vi.fn();
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+        maxReconnectAttempts: 10,
+        onReconnectPaused,
+      });
+
+      client.start();
+
+      // Fail 5 times
+      for (let i = 0; i < 5; i++) {
+        getLatestWs().emitClose(1006, "abnormal closure");
+        await vi.advanceTimersByTimeAsync(30_000);
+      }
+      expect(wsInstances.length).toBe(6); // initial + 5 reconnects
+
+      // Now succeed — complete the handshake
+      const goodWs = getLatestWs();
+      goodWs.emitOpen();
+      // Find the connect frame the client sent so we can reply with its id
+      const lastSent = goodWs.sent.at(-1);
+      const connectFrameId = lastSent ? JSON.parse(lastSent).id : "unknown";
+      goodWs.emitMessage(
+        JSON.stringify({
+          type: "res",
+          id: connectFrameId,
+          ok: true,
+          payload: {
+            type: "hello-ok",
+            sessionId: "test-session",
+            protocol: 1,
+            policy: { tickIntervalMs: 30000 },
+          },
+        }),
+      );
+
+      // Fail 5 more times — should NOT hit the max
+      for (let i = 0; i < 5; i++) {
+        getLatestWs().emitClose(1006, "abnormal closure");
+        await vi.advanceTimersByTimeAsync(30_000);
+      }
+
+      expect(onReconnectPaused).not.toHaveBeenCalled();
+      client.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -151,6 +151,8 @@ export type GatewayClientOptions = {
   onConnectError?: (err: Error) => void;
   onReconnectPaused?: (info: GatewayReconnectPausedInfo) => void;
   onClose?: (code: number, reason: string) => void;
+  /** Maximum reconnect attempts before pausing. Undefined = unlimited (node-host default). */
+  maxReconnectAttempts?: number;
   onGap?: (info: { expected: number; received: number }) => void;
 };
 
@@ -211,6 +213,7 @@ export class GatewayClient {
   private opts: GatewayClientOptions;
   private pending = new Map<string, Pending>();
   private backoffMs = 1000;
+  private reconnectAttempts = 0;
   private closed = false;
   private lastSeq: number | null = null;
   private connectNonce: string | null = null;
@@ -425,6 +428,7 @@ export class GatewayClient {
     this.closed = true;
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
+    this.reconnectAttempts = 0;
     this.pendingStartupReconnectDelayMs = null;
     this.pendingConnectErrorDetailCode = null;
     this.clearReconnectTimer();
@@ -586,6 +590,7 @@ export class GatewayClient {
           });
         }
         this.backoffMs = 1000;
+        this.reconnectAttempts = 0;
         this.tickIntervalMs =
           typeof helloOk.policy?.tickIntervalMs === "number"
             ? helloOk.policy.tickIntervalMs
@@ -920,6 +925,17 @@ export class GatewayClient {
     if (this.closed) {
       return;
     }
+    const maxAttempts = this.opts.maxReconnectAttempts;
+    if (maxAttempts != null && this.reconnectAttempts >= maxAttempts) {
+      logDebug(`gateway reconnect giving up after ${this.reconnectAttempts} attempts`);
+      this.closed = true;
+      this.opts.onReconnectPaused?.({
+        code: -1,
+        reason: `max reconnect attempts reached (${maxAttempts})`,
+        detailCode: null,
+      });
+      return;
+    }
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
@@ -930,6 +946,7 @@ export class GatewayClient {
     const delay = startupDelay ?? this.backoffMs;
     if (startupDelay === null) {
       this.backoffMs = Math.min(this.backoffMs * 2, 30_000);
+      this.reconnectAttempts++;
     }
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
