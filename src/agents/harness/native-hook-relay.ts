@@ -1039,11 +1039,19 @@ function nativeHookRelayPermissionAllowAlwaysKey(params: {
   registration: NativeHookRelayRegistration;
   request: NativeHookRelayPermissionApprovalRequest;
 }): string {
-  return [
-    params.registration.relayId,
-    "allow-always",
-    permissionRequestContentFingerprint(params.request),
-  ].join(":");
+  const hash = createHash("sha256");
+  hash.update("openclaw:native-hook-relay:permission-allow-always:v2");
+  hash.update("\0");
+  hash.update(params.registration.relayId);
+  hash.update("\0");
+  hash.update(params.request.provider);
+  hash.update("\0");
+  hash.update(params.request.agentId ?? "");
+  hash.update("\0");
+  hash.update(params.request.sessionKey ?? params.request.sessionId);
+  hash.update("\0");
+  hash.update(permissionRequestContentFingerprint(params.request));
+  return hash.digest("hex");
 }
 
 function permissionRequestFallbackKey(request: NativeHookRelayPermissionApprovalRequest): string {
