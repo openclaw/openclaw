@@ -87,9 +87,10 @@ If your config uses `plugins.allow`, include `codex` there too:
 }
 ```
 
-Do not use `openai-codex/gpt-*` when you mean native Codex runtime. That prefix
-is the explicit "Codex OAuth through PI" route. Config changes apply to new or
-reset sessions; existing sessions keep their recorded runtime.
+Do not use `openai-codex/gpt-*` in config. That prefix is a legacy route that
+`openclaw doctor --fix` rewrites to `openai/gpt-*` across primary models,
+fallbacks, heartbeat/subagent/compaction overrides, hooks, channel overrides,
+and stale persisted session route pins.
 
 ## What this plugin changes
 
@@ -106,7 +107,9 @@ The bundled `codex` plugin contributes several separate capabilities:
 Enabling the plugin makes those capabilities available. It does **not**:
 
 - start using Codex for every OpenAI model
-- convert `openai-codex/*` model refs into the native runtime
+- convert `openai-codex/*` model refs into the native runtime without doctor
+  verifying that Codex is installed, enabled, contributes the `codex` harness,
+  and is OAuth-ready
 - make ACP/acpx the default Codex path
 - hot-switch existing sessions that already recorded a PI runtime
 - replace OpenClaw channel delivery, session files, auth-profile storage, or
@@ -139,15 +142,16 @@ For the plugin hook semantics themselves, see [Plugin hooks](/plugins/hooks)
 and [Plugin guard behavior](/tools/plugin).
 
 The harness is off by default. New configs should keep OpenAI model refs
-canonical as `openai/gpt-*` and use `agentRuntime.id: "auto"` when they want
-the Codex harness to claim eligible turns while PI remains the fallback. Use
-`agentRuntime.id: "codex"` only when you intentionally want Codex to fail closed
-if the harness is unavailable. Legacy `codex/*` model refs still auto-select the
-harness for compatibility, but runtime-backed legacy provider prefixes are not
-shown as normal model/provider choices.
+canonical as `openai/gpt-*` and explicitly force
+`agentRuntime.id: "codex"` or `OPENCLAW_AGENT_RUNTIME=codex` when they
+want native app-server execution. Legacy `codex/*` model refs still auto-select
+the harness for compatibility, but runtime-backed legacy provider prefixes are
+not shown as normal model/provider choices.
 
-If a primary model is still `openai-codex/*`, `openclaw doctor --fix` rewrites
-it to `openai/*` and sets the matching agent runtime to `auto`.
+If any configured model route is still `openai-codex/*`, `openclaw doctor --fix`
+rewrites it to `openai/*`. For matching agent routes, it sets the agent runtime
+to `codex` only when the Codex plugin is installed, enabled, contributes the
+`codex` harness, and has usable OAuth; otherwise it sets the runtime to `pi`.
 
 ## Route map
 
@@ -155,19 +159,20 @@ Use this table before changing config:
 
 | Desired behavior                                     | Model ref                  | Runtime config                         | Auth/profile route           | Expected status label          |
 | ---------------------------------------------------- | -------------------------- | -------------------------------------- | ---------------------------- | ------------------------------ |
-| ChatGPT/Codex subscription with native Codex runtime | `openai/gpt-*`             | `agentRuntime.id: "auto"`              | Codex OAuth or Codex account | `Runtime: OpenAI Codex`        |
+| ChatGPT/Codex subscription with native Codex runtime | `openai/gpt-*`             | `agentRuntime.id: "codex"`             | Codex OAuth or Codex account | `Runtime: OpenAI Codex`        |
 | OpenAI API through normal OpenClaw runner            | `openai/gpt-*`             | omitted or `runtime: "pi"`             | OpenAI API key               | `Runtime: OpenClaw Pi Default` |
-| Legacy ChatGPT/Codex subscription through PI         | `openai-codex/gpt-*`       | omitted or `runtime: "pi"`             | OpenAI Codex OAuth provider  | `Runtime: OpenClaw Pi Default` |
+| Legacy config that needs doctor repair               | `openai-codex/gpt-*`       | repaired to `codex` or `pi`            | Existing configured auth     | Recheck after `doctor --fix`   |
 | Mixed providers with conservative auto mode          | provider-specific refs     | `agentRuntime.id: "auto"`              | Per selected provider        | Depends on selected runtime    |
 | Explicit Codex ACP adapter session                   | ACP prompt/model dependent | `sessions_spawn` with `runtime: "acp"` | ACP backend auth             | ACP task/session status        |
 
 The important split is provider versus runtime:
 
-- `openai-codex/*` is a legacy PI Codex OAuth route that doctor can rewrite.
-- `agentRuntime.id: "auto"` lets a registered harness claim matching turns and
-  falls back to PI when no harness is available.
+- `openai-codex/*` is a legacy route that doctor rewrites.
 - `agentRuntime.id: "codex"` requires the Codex harness and fails closed if it
   is unavailable.
+- `agentRuntime.id: "auto"` lets registered harnesses claim matching provider
+  routes, but canonical OpenAI refs are still PI-owned unless a harness supports
+  that provider/model pair.
 - `/codex ...` answers "which native Codex conversation should this chat bind
   or control?"
 - ACP answers "which external harness process should acpx launch?"
@@ -175,14 +180,14 @@ The important split is provider versus runtime:
 ## Pick the right model prefix
 
 OpenAI-family routes are prefix-specific. For the common subscription plus
-native Codex runtime setup, use `openai/*` with `agentRuntime.id: "auto"`.
-Treat `openai-codex/*` as legacy PI Codex OAuth config:
+native Codex runtime setup, use `openai/*` with `agentRuntime.id: "codex"`.
+Treat `openai-codex/*` as legacy config that doctor should rewrite:
 
-| Model ref                                    | Runtime path                                 | Use when                                                                  |
-| -------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------- |
-| `openai/gpt-5.4`                             | OpenAI provider through OpenClaw/PI plumbing | You want current direct OpenAI Platform API access with `OPENAI_API_KEY`. |
-| `openai-codex/gpt-5.5`                       | Legacy OpenAI Codex OAuth through PI         | You are on old config; run `openclaw doctor --fix` to rewrite it.         |
-| `openai/gpt-5.5` + `agentRuntime.id: "auto"` | Codex app-server harness with PI fallback    | You want ChatGPT/Codex subscription auth with native Codex execution.     |
+| Model ref                                     | Runtime path                                 | Use when                                                                  |
+| --------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------- |
+| `openai/gpt-5.4`                              | OpenAI provider through OpenClaw/PI plumbing | You want current direct OpenAI Platform API access with `OPENAI_API_KEY`. |
+| `openai-codex/gpt-5.5`                        | Legacy route repaired by doctor              | You are on old config; run `openclaw doctor --fix` to rewrite it.         |
+| `openai/gpt-5.5` + `agentRuntime.id: "codex"` | Codex app-server harness                     | You want ChatGPT/Codex subscription auth with native Codex execution.     |
 
 GPT-5.5 can appear on both direct OpenAI API-key and Codex subscription routes
 when your account exposes them. Use `openai/gpt-5.5` with the Codex app-server
@@ -190,18 +195,16 @@ harness for native Codex runtime, or `openai/gpt-5.5` without a Codex runtime
 override for direct API-key traffic.
 
 Legacy `codex/gpt-*` refs remain accepted as compatibility aliases. Doctor
-compatibility migration rewrites legacy primary runtime refs to canonical model
-refs and records the runtime policy separately, while fallback-only legacy refs
-are left unchanged because runtime is configured for the whole agent container.
-New native app-server harness configs should use `openai/gpt-*` plus
-`agentRuntime.id: "auto"`.
+compatibility migration rewrites legacy runtime refs to canonical model refs
+and records the runtime policy separately. New native app-server harness configs
+should use `openai/gpt-*` plus `agentRuntime.id: "codex"`.
 
 `agents.defaults.imageModel` follows the same prefix split. Use
-`openai-codex/gpt-*` when image understanding should run through the OpenAI
-Codex OAuth provider path. Use `codex/gpt-*` when image understanding should run
-through a bounded Codex app-server turn. The Codex app-server model must
-advertise image input support; text-only Codex models fail before the media turn
-starts.
+`openai/gpt-*` for the normal OpenAI route and `codex/gpt-*` when image
+understanding should run through a bounded Codex app-server turn. Do not use
+`openai-codex/gpt-*`; doctor rewrites that legacy prefix to `openai/gpt-*`. The
+Codex app-server model must advertise image input support; text-only Codex
+models fail before the media turn starts.
 
 Use `/status` to confirm the effective harness for the current session. If the
 selection is surprising, enable debug logging for the `agents/harness` subsystem
@@ -211,16 +214,20 @@ in `auto` mode, each plugin candidate's support result.
 
 ### What doctor warnings mean
 
-`openclaw doctor` warns when an agent's primary model is `openai-codex/*`.
-`openclaw doctor --fix` rewrites that primary route to:
+`openclaw doctor` warns when configured model refs or persisted session route
+state still use `openai-codex/*`. `openclaw doctor --fix` rewrites those routes
+to:
 
 - `openai/<model>`
-- `agentRuntime.id: "auto"`
+- `agentRuntime.id: "codex"` when Codex is installed, enabled, contributes the
+  `codex` harness, and has usable OAuth
+- `agentRuntime.id: "pi"` otherwise
 
-That route lets the Codex harness claim the turn when it is installed and
-enabled, while PI remains the fallback when it is not. Existing sessions still
-need `/new` or `/reset` after a runtime change, because session runtime pins are
-sticky.
+The `codex` route forces the native Codex harness. The `pi` route keeps the
+agent on the default OpenClaw runner instead of enabling or installing Codex as
+a side effect of legacy-route cleanup.
+Doctor also repairs stale persisted session pins across discovered agent session
+stores so old conversations do not stay wedged on the removed route.
 
 Harness selection is not a live session control. When an embedded turn runs,
 OpenClaw records the selected harness id on that session and keeps using it for
@@ -343,7 +350,7 @@ Agents should route user requests by intent, not by the word "Codex" alone:
 | "File a support report for a bad Codex run"            | `/diagnostics [note]`                            |
 | "Only send Codex feedback for this attached thread"    | `/codex diagnostics [note]`                      |
 | "Use my ChatGPT/Codex subscription with Codex runtime" | `openai/*` plus `agentRuntime.id: "codex"`       |
-| "Use my ChatGPT/Codex subscription through PI"         | `openai-codex/*` model refs                      |
+| "Repair old `openai-codex/*` config/session pins"      | `openclaw doctor --fix`                          |
 | "Run Codex through ACP/acpx"                           | ACP `sessions_spawn({ runtime: "acp", ... })`    |
 | "Start Claude Code/Gemini/OpenCode/Cursor in a thread" | ACP/acpx, not `/codex` and not native sub-agents |
 

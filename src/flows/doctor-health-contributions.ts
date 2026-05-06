@@ -221,24 +221,6 @@ async function runClaudeCliHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   noteClaudeCliHealth(ctx.cfg);
 }
 
-async function runCodexRouteHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeRepairCodexRoutes } =
-    await import("../commands/doctor/shared/codex-route-warnings.js");
-  const { note } = await import("../terminal/note.js");
-  const result = maybeRepairCodexRoutes({
-    cfg: ctx.cfg,
-    env: ctx.env ?? process.env,
-    shouldRepair: ctx.prompter.shouldRepair,
-  });
-  if (result.warnings.length > 0) {
-    note(result.warnings.join("\n\n"), "Codex route");
-  }
-  if (result.changes.length > 0) {
-    note(result.changes.join("\n"), "Doctor changes");
-  }
-  ctx.cfg = result.cfg;
-}
-
 async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { detectLegacyStateMigrations, runLegacyStateMigrations } =
     await import("../commands/doctor-state-migrations.js");
@@ -329,6 +311,23 @@ async function runReleaseConfiguredPluginInstallsHealth(
 async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteStateIntegrity } = await import("../commands/doctor-state-integrity.js");
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath);
+}
+
+async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeRepairCodexSessionRoutes } =
+    await import("../commands/doctor/shared/codex-route-warnings.js");
+  const { note } = await import("../terminal/note.js");
+  const result = await maybeRepairCodexSessionRoutes({
+    cfg: ctx.cfg,
+    env: ctx.env ?? process.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
+  if (result.changes.length > 0) {
+    note(result.changes.join("\n"), "Doctor changes");
+  }
+  if (result.warnings.length > 0) {
+    note(result.warnings.join("\n"), "Doctor warnings");
+  }
 }
 
 async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -659,11 +658,6 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runClaudeCliHealth,
     }),
     createDoctorHealthContribution({
-      id: "doctor:codex-route",
-      label: "Codex route",
-      run: runCodexRouteHealth,
-    }),
-    createDoctorHealthContribution({
       id: "doctor:gateway-auth",
       label: "Gateway auth",
       run: runGatewayAuthHealth,
@@ -697,6 +691,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:state-integrity",
       label: "State integrity",
       run: runStateIntegrityHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:codex-session-routes",
+      label: "Codex session routes",
+      run: runCodexSessionRouteHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-locks",

@@ -108,7 +108,7 @@ cat ~/.openclaw/openclaw.json
     - Gateway runtime checks (service installed but not running; cached launchd label).
     - Channel status warnings (probed from the running gateway).
     - WhatsApp responsiveness checks for degraded Gateway event-loop health with local TUI clients still running; `--fix` stops only verified local TUI clients.
-    - Codex route repair for legacy `openai-codex/*` primary model refs; `--fix` rewrites them to `openai/*` with `agentRuntime.id: "auto"` so Codex claims the turn when available and PI remains the fallback.
+    - Codex route repair for legacy `openai-codex/*` model refs in primary models, fallbacks, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and session route pins; `--fix` rewrites them to `openai/*` and selects `agentRuntime.id: "codex"` only when the Codex plugin is installed, enabled, contributes the `codex` harness, and has usable OAuth. Otherwise it selects `agentRuntime.id: "pi"`.
     - Supervisor config audit (launchd/systemd/schtasks) with optional repair.
     - Embedded proxy environment cleanup for gateway services that captured shell `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` values during install or update.
     - Gateway runtime best-practice checks (Node vs Bun, version-manager paths).
@@ -262,19 +262,21 @@ That stages grounded durable candidates into the short-term dreaming store while
     If you previously added legacy OpenAI transport settings under `models.providers.openai-codex`, they can shadow the built-in Codex OAuth provider path that newer releases use automatically. Doctor warns when it sees those old transport settings alongside Codex OAuth so you can remove or rewrite the stale transport override and get the built-in routing/fallback behavior back. Custom proxies and header-only overrides are still supported and do not trigger this warning.
   </Accordion>
   <Accordion title="2f. Codex route repair">
-    Doctor checks for legacy `openai-codex/*` primary model refs. Native Codex harness routing now uses canonical `openai/*` model refs plus `agentRuntime.id: "auto"` so a configured Codex harness can claim the turn and OpenClaw PI remains the fallback when Codex is not installed or enabled.
+    Doctor checks for legacy `openai-codex/*` model refs. Native Codex harness routing uses canonical `openai/*` model refs plus `agentRuntime.id: "codex"` so the turn goes through the Codex app-server harness instead of the OpenClaw PI OpenAI path.
 
-    In `--fix` / `--repair` mode, doctor rewrites affected default-agent and per-agent primary refs:
+    In `--fix` / `--repair` mode, doctor rewrites affected default-agent and per-agent refs, including primary models, fallbacks, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and stale persisted session route state:
 
     - `openai-codex/gpt-*` becomes `openai/gpt-*`.
-    - The matching agent runtime becomes `agentRuntime.id: "auto"`.
-    - Existing model fallback lists and copied per-model settings are preserved.
+    - The matching agent runtime becomes `agentRuntime.id: "codex"` only when Codex is installed, enabled, contributes the `codex` harness, and has usable OAuth.
+    - Otherwise the matching agent runtime becomes `agentRuntime.id: "pi"`.
+    - Existing model fallback lists are preserved with their legacy entries rewritten; copied per-model settings move from the legacy key to the canonical `openai/*` key.
+    - Persisted session `modelProvider`/`providerOverride`, `model`/`modelOverride`, fallback notices, auth-profile pins, and Codex harness pins are repaired across all discovered agent session stores.
     - `/codex ...` means "control or bind a native Codex conversation from chat."
     - `/acp ...` or `runtime: "acp"` means "use the external ACP/acpx adapter."
 
   </Accordion>
   <Accordion title="2g. Session route cleanup">
-    Doctor also scans the active sessions store for stale auto-created route state after you move the configured default/fallback model or runtime away from a plugin-owned route such as Codex.
+    Doctor also scans discovered agent session stores for stale auto-created route state after you move configured models or runtime away from a plugin-owned route such as Codex.
 
     `openclaw doctor --fix` can clear auto-created stale state such as `modelOverrideSource: "auto"` model pins, runtime model metadata, pinned harness ids, CLI session bindings, and auto auth-profile overrides when their owning route is no longer configured. Explicit user or legacy session model choices are reported for manual review and left untouched; switch them with `/model ...`, `/new`, or reset the session when that route is no longer intended.
 
