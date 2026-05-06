@@ -13,6 +13,10 @@ const DEFAULT_LOCK_PROGRESS_MS = 15 * 1000;
 const DEFAULT_STALE_LOCK_MS = 30 * 1000;
 const DEFAULT_FAST_LOCAL_CHECK_MIN_MEMORY_BYTES = 48 * GIB;
 const DEFAULT_FAST_LOCAL_CHECK_MIN_CPUS = 12;
+const DEFAULT_MIN_AVAILABLE_MEMORY_BYTES = 1536 * 1024 ** 2;
+const DEFAULT_MIN_TMP_AVAILABLE_BYTES = 1024 * 1024 ** 2;
+const DEFAULT_MAX_TMP_USED_PERCENT = 80;
+const DEFAULT_LOCAL_HEAVY_CHECK_TMP_SUBDIR = path.join(".artifacts", "tmp", "local-heavy-checks");
 const SLEEP_BUFFER = new Int32Array(new SharedArrayBuffer(4));
 
 export function isLocalCheckEnabled(env) {
@@ -161,7 +165,89 @@ export function shouldAcquireLocalHeavyCheckLockForTsgo(args, env = process.env)
   );
 }
 
-function shouldThrottleLocalHeavyChecks(env, hostResources, defaultMode = "throttled") {
+export function resolveLocalHeavyCheckTmpDir({ cwd = process.cwd(), env = process.env } = {}) {
+  return path.resolve(
+    cwd,
+    env.OPENCLAW_LOCAL_HEAVY_CHECK_TMPDIR || DEFAULT_LOCAL_HEAVY_CHECK_TMP_SUBDIR,
+  );
+}
+
+export function prepareLocalHeavyCheckEnvironment({ cwd = process.cwd(), env = process.env } = {}) {
+  const nextEnv = { ...env };
+  if (!isLocalCheckEnabled(nextEnv)) {
+    return nextEnv;
+  }
+
+  const tmpDir = resolveLocalHeavyCheckTmpDir({ cwd, env: nextEnv });
+  fs.mkdirSync(tmpDir, { recursive: true });
+  nextEnv.TMPDIR = tmpDir;
+  nextEnv.TEMP = tmpDir;
+  nextEnv.TMP = tmpDir;
+  return nextEnv;
+}
+
+export function getLocalHeavyCheckPressureError({
+  cwd = process.cwd(),
+  env = process.env,
+  hostPressure,
+} = {}) {
+  if (!isLocalCheckEnabled(env) || env.OPENCLAW_HEAVY_CHECK_FORCE === "1") {
+    return null;
+  }
+
+  const pressure = hostPressure ?? readHostPressure(cwd, env);
+  const reasons = [];
+  const minMemAvailableBytes = readPositiveInt(
+    env.OPENCLAW_HEAVY_CHECK_MIN_MEM_AVAILABLE_BYTES,
+    DEFAULT_MIN_AVAILABLE_MEMORY_BYTES,
+  );
+  const minTmpAvailableBytes = readPositiveInt(
+    env.OPENCLAW_HEAVY_CHECK_MIN_TMP_AVAILABLE_BYTES,
+    DEFAULT_MIN_TMP_AVAILABLE_BYTES,
+  );
+  const maxTmpUsedPercent = readPositiveInt(
+    env.OPENCLAW_HEAVY_CHECK_MAX_TMP_USED_PERCENT,
+    DEFAULT_MAX_TMP_USED_PERCENT,
+  );
+
+  if (
+    typeof pressure.memAvailableBytes === "number" &&
+    pressure.memAvailableBytes < minMemAvailableBytes
+  ) {
+    reasons.push(
+      `MemAvailable ${formatBytes(pressure.memAvailableBytes)} is below ${formatBytes(
+        minMemAvailableBytes,
+      )}`,
+    );
+  }
+  if (
+    typeof pressure.tmpAvailableBytes === "number" &&
+    pressure.tmpAvailableBytes < minTmpAvailableBytes
+  ) {
+    reasons.push(
+      `temp directory available ${formatBytes(pressure.tmpAvailableBytes)} is below ${formatBytes(
+        minTmpAvailableBytes,
+      )}`,
+    );
+  }
+  if (typeof pressure.tmpUsedPercent === "number" && pressure.tmpUsedPercent >= maxTmpUsedPercent) {
+    reasons.push(
+      `temp directory is ${pressure.tmpUsedPercent}% used (limit ${maxTmpUsedPercent}%)`,
+    );
+  }
+
+  if (reasons.length === 0) {
+    return null;
+  }
+
+  return [
+    "Refusing to start a local heavy check because this host is already under pressure:",
+    ...reasons.map((reason) => `- ${reason}`),
+    "Wait for pressure to clear, free temp space, or rerun with OPENCLAW_HEAVY_CHECK_FORCE=1 if you really mean it.",
+  ].join("\n");
+}
+
+export function shouldThrottleLocalHeavyChecks(env, hostResources, defaultMode = "throttled") {
   if (!isLocalCheckEnabled(env)) {
     return false;
   }
@@ -335,6 +421,63 @@ function resolveHostResources(hostResources) {
     logicalCpuCount:
       typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length,
   };
+}
+
+function readHostPressure(cwd, env) {
+  return {
+    memAvailableBytes: readMemAvailableBytes(),
+    ...readTmpPressure(cwd, resolveLocalHeavyCheckTmpDir({ cwd, env })),
+  };
+}
+
+function readMemAvailableBytes() {
+  try {
+    const meminfo = fs.readFileSync("/proc/meminfo", "utf8");
+    const match = /^MemAvailable:\s+(\d+)\s+kB$/m.exec(meminfo);
+    return match ? Number.parseInt(match[1], 10) * 1024 : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readTmpPressure(cwd, tmpDir) {
+  try {
+    fs.mkdirSync(tmpDir, { recursive: true });
+  } catch {
+    return {};
+  }
+
+  const result = spawnSync("df", ["-Pk", tmpDir], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0 || !result.stdout) {
+    return {};
+  }
+
+  const [, dataLine] = result.stdout.trim().split(/\n/);
+  const columns = dataLine?.trim().split(/\s+/) ?? [];
+  const availableKib = Number.parseInt(columns[3] ?? "", 10);
+  const usedPercent = Number.parseInt((columns[4] ?? "").replace(/%$/, ""), 10);
+  return {
+    tmpAvailableBytes: Number.isFinite(availableKib) ? availableKib * 1024 : undefined,
+    tmpUsedPercent: Number.isFinite(usedPercent) ? usedPercent : undefined,
+  };
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) {
+    return "unknown";
+  }
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(value >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
 function readPositiveInt(rawValue, fallback) {
