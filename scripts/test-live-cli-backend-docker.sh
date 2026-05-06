@@ -42,6 +42,13 @@ if [[ -z "$CLI_USE_CI_SAFE_CODEX_CONFIG" ]]; then
   fi
 fi
 
+if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$PROFILE_FILE"
+  set +a
+fi
+
 case "$CLI_AUTH_MODE" in
   auto | api-key | subscription)
     ;;
