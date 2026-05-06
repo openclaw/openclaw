@@ -90,8 +90,19 @@ function parsePattern(raw: RedactPattern): RegExp | null {
 }
 
 function resolvePatterns(value?: RedactPattern[]): RegExp[] {
-  const source = value?.length ? value : DEFAULT_REDACT_PATTERNS;
+  const source = value ?? DEFAULT_REDACT_PATTERNS;
   return source.map(parsePattern).filter((re): re is RegExp => Boolean(re));
+}
+
+/**
+ * Merge user-configured redact patterns with the built-in defaults so custom
+ * patterns are additive — adding an email regex must not drop API-key detection.
+ */
+function mergeWithDefaults(userPatterns?: RedactPattern[]): RedactPattern[] {
+  if (!userPatterns?.length) {
+    return DEFAULT_REDACT_PATTERNS;
+  }
+  return [...DEFAULT_REDACT_PATTERNS, ...userPatterns];
 }
 
 function maskToken(token: string): string {
@@ -152,7 +163,7 @@ export function resolveRedactOptions(options?: RedactOptions): ResolvedRedactOpt
   }
   return {
     mode,
-    patterns: resolvePatterns(resolved.patterns),
+    patterns: resolvePatterns(options ? resolved.patterns : mergeWithDefaults(resolved.patterns)),
   };
 }
 
@@ -171,11 +182,7 @@ export function redactSensitiveText(text: string, options?: RedactOptions): stri
 }
 
 export function redactToolDetail(detail: string): string {
-  const resolved = resolveConfigRedaction();
-  if (normalizeMode(resolved.mode) !== "tools") {
-    return detail;
-  }
-  return redactSensitiveText(detail, resolved);
+  return redactSensitiveText(detail);
 }
 
 // Forces tools-mode regardless of `logging.redactSensitive` (which governs log
@@ -186,12 +193,10 @@ export function redactToolPayloadText(text: string): string {
     return text;
   }
   const cfg = readLoggingConfig();
-  const userPatterns = cfg?.redactPatterns;
-  const patterns =
-    userPatterns && userPatterns.length > 0
-      ? [...userPatterns, ...DEFAULT_REDACT_PATTERNS]
-      : undefined;
-  return redactSensitiveText(text, { mode: "tools", patterns });
+  return redactSensitiveText(text, {
+    mode: "tools",
+    patterns: mergeWithDefaults(cfg?.redactPatterns),
+  });
 }
 
 export function redactSensitiveFieldValue(key: string, value: string): string {
