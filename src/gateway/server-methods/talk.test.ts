@@ -718,9 +718,40 @@ describe("talk.session unified handlers", () => {
       },
     });
 
+    const joinRespond = vi.fn();
+    await talkHandlers["talk.session.join"]({
+      req: { type: "req", id: "2", method: "talk.session.join" },
+      params: { sessionId: session.sessionId, token: session.token },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: joinRespond as never,
+      context: {
+        broadcastToConnIds,
+      } as never,
+    });
+    expect(joinRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        id: session.sessionId,
+        room: expect.objectContaining({
+          activeClientId: "conn-1",
+        }),
+      }),
+      undefined,
+    );
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "talk.event",
+      expect.objectContaining({
+        handoffId: session.sessionId,
+        talkEvent: expect.objectContaining({ type: "session.ready" }),
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
+
     const startRespond = vi.fn();
     await talkHandlers["talk.session.startTurn"]({
-      req: { type: "req", id: "2", method: "talk.session.startTurn" },
+      req: { type: "req", id: "3", method: "talk.session.startTurn" },
       params: { sessionId: session.sessionId, turnId: "turn-1" },
       client: { connId: "conn-1" } as never,
       isWebchatConnect: () => false,
@@ -752,14 +783,162 @@ describe("talk.session unified handlers", () => {
 
     const closeRespond = vi.fn();
     await talkHandlers["talk.session.close"]({
-      req: { type: "req", id: "3", method: "talk.session.close" },
+      req: { type: "req", id: "4", method: "talk.session.close" },
       params: { sessionId: session.sessionId },
       client: { connId: "conn-1" } as never,
       isWebchatConnect: () => false,
       respond: closeRespond as never,
-      context: {} as never,
+      context: {
+        broadcastToConnIds,
+      } as never,
     });
     expect(closeRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "talk.event",
+      expect.objectContaining({
+        handoffId: session.sessionId,
+        talkEvent: expect.objectContaining({ type: "session.closed", final: true }),
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
+  });
+
+  it("requires managed-room ownership before turn control", async () => {
+    const broadcastToConnIds = vi.fn();
+    const createRespond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: {
+        mode: "stt-tts",
+        transport: "managed-room",
+        sessionKey: "session:main",
+      },
+      client: { connId: "creator" } as never,
+      isWebchatConnect: () => false,
+      respond: createRespond as never,
+      context: {
+        getRuntimeConfig: () => ({}) as OpenClawConfig,
+      } as never,
+    });
+    const session = createRespond.mock.calls[0]?.[1] as { sessionId: string; token: string };
+
+    const unjoinedStartRespond = vi.fn();
+    await talkHandlers["talk.session.startTurn"]({
+      req: { type: "req", id: "2", method: "talk.session.startTurn" },
+      params: { sessionId: session.sessionId, turnId: "turn-1" },
+      client: { connId: "creator" } as never,
+      isWebchatConnect: () => false,
+      respond: unjoinedStartRespond as never,
+      context: { broadcastToConnIds } as never,
+    });
+    expect(unjoinedStartRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "talk.session.startTurn requires the active managed-room connection",
+      }),
+    );
+
+    await talkHandlers["talk.session.join"]({
+      req: { type: "req", id: "3", method: "talk.session.join" },
+      params: { sessionId: session.sessionId, token: session.token },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: vi.fn() as never,
+      context: { broadcastToConnIds } as never,
+    });
+
+    const staleStartRespond = vi.fn();
+    await talkHandlers["talk.session.startTurn"]({
+      req: { type: "req", id: "4", method: "talk.session.startTurn" },
+      params: { sessionId: session.sessionId, turnId: "turn-1" },
+      client: { connId: "conn-2" } as never,
+      isWebchatConnect: () => false,
+      respond: staleStartRespond as never,
+      context: { broadcastToConnIds } as never,
+    });
+    expect(staleStartRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "talk.session.startTurn requires the active managed-room connection",
+      }),
+    );
+
+    await talkHandlers["talk.session.startTurn"]({
+      req: { type: "req", id: "5", method: "talk.session.startTurn" },
+      params: { sessionId: session.sessionId, turnId: "turn-1" },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: vi.fn() as never,
+      context: { broadcastToConnIds } as never,
+    });
+
+    const staleEndRespond = vi.fn();
+    await talkHandlers["talk.session.endTurn"]({
+      req: { type: "req", id: "6", method: "talk.session.endTurn" },
+      params: { sessionId: session.sessionId, turnId: "turn-1" },
+      client: { connId: "conn-2" } as never,
+      isWebchatConnect: () => false,
+      respond: staleEndRespond as never,
+      context: { broadcastToConnIds } as never,
+    });
+    expect(staleEndRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "talk.session.endTurn requires the active managed-room connection",
+      }),
+    );
+
+    const staleCancelRespond = vi.fn();
+    await talkHandlers["talk.session.cancelTurn"]({
+      req: { type: "req", id: "7", method: "talk.session.cancelTurn" },
+      params: { sessionId: session.sessionId, turnId: "turn-1" },
+      client: { connId: "conn-2" } as never,
+      isWebchatConnect: () => false,
+      respond: staleCancelRespond as never,
+      context: { broadcastToConnIds } as never,
+    });
+    expect(staleCancelRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "talk.session.cancelTurn requires the active managed-room connection",
+      }),
+    );
+
+    const staleCloseRespond = vi.fn();
+    await talkHandlers["talk.session.close"]({
+      req: { type: "req", id: "8", method: "talk.session.close" },
+      params: { sessionId: session.sessionId },
+      client: { connId: "conn-2" } as never,
+      isWebchatConnect: () => false,
+      respond: staleCloseRespond as never,
+      context: { broadcastToConnIds } as never,
+    });
+    expect(staleCloseRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "talk.session.close requires the active managed-room connection",
+      }),
+    );
+
+    await talkHandlers["talk.session.close"]({
+      req: { type: "req", id: "9", method: "talk.session.close" },
+      params: { sessionId: session.sessionId },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: vi.fn() as never,
+      context: { broadcastToConnIds } as never,
+    });
   });
 
   it("keeps direct-tools managed-room sessions behind admin scope", async () => {

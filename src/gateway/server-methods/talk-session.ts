@@ -24,6 +24,7 @@ import {
   cancelTalkHandoffTurn,
   createTalkHandoff,
   endTalkHandoffTurn,
+  getTalkHandoff,
   joinTalkHandoff,
   revokeTalkHandoff,
   startTalkHandoffTurn,
@@ -87,6 +88,32 @@ function normalizeTalkSessionBrain(params: { mode: TalkMode; brain?: string }): 
     return brain;
   }
   return params.mode === "transcription" ? "none" : "agent-consult";
+}
+
+function isActiveManagedRoomClient(
+  session: { handoffId: string },
+  connId: string | undefined,
+): boolean {
+  if (!connId) {
+    return false;
+  }
+  const handoff = getTalkHandoff(session.handoffId);
+  return handoff?.room.activeClientId === connId;
+}
+
+function canCloseManagedRoomSession(
+  session: { handoffId: string },
+  connId: string | undefined,
+): boolean {
+  const handoff = getTalkHandoff(session.handoffId);
+  return !handoff?.room.activeClientId || handoff.room.activeClientId === connId;
+}
+
+function managedRoomOwnershipError(action: string) {
+  return errorShape(
+    ErrorCodes.INVALID_REQUEST,
+    `talk.session.${action} requires the active managed-room connection`,
+  );
 }
 
 export const talkSessionHandlers: GatewayRequestHandlers = {
@@ -413,6 +440,10 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      if (!isActiveManagedRoomClient(session, client?.connId)) {
+        respond(false, undefined, managedRoomOwnershipError("startTurn"));
+        return;
+      }
       const result = startTalkHandoffTurn(session.handoffId, session.token, {
         turnId: params.turnId,
         clientId: client?.connId,
@@ -438,7 +469,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
-  "talk.session.endTurn": async ({ params, respond, context }) => {
+  "talk.session.endTurn": async ({ params, respond, client, context }) => {
     if (!validateTalkSessionTurnParams(params)) {
       respond(
         false,
@@ -458,6 +489,10 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           undefined,
           errorShape(ErrorCodes.INVALID_REQUEST, "talk.session.endTurn requires managed-room"),
         );
+        return;
+      }
+      if (!isActiveManagedRoomClient(session, client?.connId)) {
+        respond(false, undefined, managedRoomOwnershipError("endTurn"));
         return;
       }
       const result = endTalkHandoffTurn(session.handoffId, session.token, {
@@ -513,6 +548,10 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           reason: normalizeOptionalString(params.reason),
         });
         respond(true, { ok: true }, undefined);
+        return;
+      }
+      if (!isActiveManagedRoomClient(session, client?.connId)) {
+        respond(false, undefined, managedRoomOwnershipError("cancelTurn"));
         return;
       }
       const result = cancelTalkHandoffTurn(session.handoffId, session.token, {
@@ -613,7 +652,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
-  "talk.session.close": async ({ params, respond, client }) => {
+  "talk.session.close": async ({ params, respond, client, context }) => {
     if (!validateTalkSessionCloseParams(params)) {
       respond(
         false,
@@ -637,7 +676,16 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           connId,
         });
       } else {
-        revokeTalkHandoff(session.handoffId);
+        if (!canCloseManagedRoomSession(session, client?.connId)) {
+          respond(false, undefined, managedRoomOwnershipError("close"));
+          return;
+        }
+        const result = revokeTalkHandoff(session.handoffId);
+        broadcastTalkRoomEvents(context, result.activeClientId, {
+          handoffId: session.handoffId,
+          roomId: session.roomId,
+          events: result.events,
+        });
       }
       forgetUnifiedTalkSession(params.sessionId);
       respond(true, { ok: true }, undefined);
