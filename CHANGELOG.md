@@ -118,6 +118,7 @@ Docs: https://docs.openclaw.ai
 - Web fetch: bound guarded dispatcher cleanup after request timeouts so timed-out fetches return tool errors instead of leaving Gateway tool lanes active. (#78439) Thanks @obviyus.
 - Gate Slack startup user allowlist resolution [AI]. (#77898) Thanks @pgondhi987.
 - OpenAI/Codex: suppress stale `openai-codex` GPT-5.1/5.2/5.3 model refs that ChatGPT/Codex OAuth accounts now reject, keeping model lists, config validation, and forward-compat resolution on current 5.4/5.5 routes. Fixes #67158. Thanks @drpau.
+- CLI/update: keep pnpm package updates on the running custom global install root and pass pnpm's `--global-dir` so `openclaw update` does not create a second default-prefix install when `OPENCLAW_HOME` or the shell points at a custom OpenClaw directory. Fixes #78377. Thanks @amknight.
 - Google Meet/Voice Call: wait longer before playing PIN-derived Twilio DTMF for Meet dial-in prompts and retire stale delegated phone sessions instead of reusing completed calls.
 - PDF/Codex: include extraction-fallback instructions for `openai-codex/*` PDF tool requests so Codex Responses receives its required system prompt. Fixes #77872. Thanks @anyech.
 - Onboard/channels: recover externalized channel plugins from stale `channels.<id>` config by falling back to `ensureChannelSetupPluginInstalled` via the trusted catalog when the plugin is missing on disk, so leftover `appId`/token entries no longer dead-end onboard with "<channel> plugin not available." (#78328) Thanks @sliverp.

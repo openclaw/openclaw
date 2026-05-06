@@ -52,6 +52,7 @@ import {
   globalInstallArgs,
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
+  resolvePnpmGlobalDirFromGlobalRoot,
 } from "../../infra/update-global.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
@@ -1070,9 +1071,13 @@ async function runGitUpdate(params: {
       timeoutMs: effectiveTimeout,
       pkgRoot: params.root,
     });
+    const installLocation =
+      installTarget.manager === "pnpm"
+        ? resolvePnpmGlobalDirFromGlobalRoot(installTarget.globalRoot)
+        : null;
     const installStep = await runUpdateStep({
       name: "global install",
-      argv: globalInstallArgs(installTarget, updateRoot),
+      argv: globalInstallArgs(installTarget, updateRoot, undefined, installLocation),
       cwd: updateRoot,
       env: installEnv,
       timeoutMs: effectiveTimeout,
