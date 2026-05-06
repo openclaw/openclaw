@@ -1204,11 +1204,8 @@ export async function installPluginFromFile(params: {
 
   logger.info?.(`Installing to ${preparedTarget.targetPath}…`);
   try {
-    await runtime.writeFileFromPathWithinRoot({
-      rootDir: extensionsDir,
-      relativePath: path.basename(preparedTarget.targetPath),
-      sourcePath: filePath,
-    });
+    const root = await runtime.root(extensionsDir);
+    await root.copyIn(path.basename(preparedTarget.targetPath), filePath);
   } catch (err) {
     return { ok: false, error: String(err) };
   }

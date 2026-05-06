@@ -41,6 +41,10 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function buildTwilioVoiceCallSessionKey(meetingSessionId: string): string {
+  return `voice:google-meet:${meetingSessionId}`;
+}
+
 export function normalizeMeetUrl(input: unknown): string {
   const raw = normalizeOptionalString(input);
   if (!raw) {
@@ -478,6 +482,10 @@ export class GoogleMeetRuntime {
               dialInNumber,
               dtmfSequence,
               logger: this.params.logger,
+              ...(request.requesterSessionKey
+                ? { requesterSessionKey: request.requesterSessionKey }
+                : {}),
+              sessionKey: buildTwilioVoiceCallSessionKey(session.id),
               message: isGoogleMeetTalkBackMode(mode)
                 ? (request.message ??
                   this.params.config.voiceCall.introMessage ??
@@ -505,7 +513,7 @@ export class GoogleMeetRuntime {
         session.notes.push(
           this.params.config.voiceCall.enabled
             ? dtmfSequence
-              ? "Twilio transport delegated the phone leg to the voice-call plugin, then sent configured DTMF after connect before speaking."
+              ? "Twilio transport delegated the phone leg to the voice-call plugin, then queued configured DTMF before realtime connect."
               : "Twilio transport delegated the call to the voice-call plugin without configured DTMF."
             : "Twilio transport is an explicit dial plan; voice-call delegation is disabled.",
         );

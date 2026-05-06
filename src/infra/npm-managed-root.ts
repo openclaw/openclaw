@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { NpmSpecResolution } from "./install-source-utils.js";
+import { readJson, readJsonIfExists, writeJson } from "./json-files.js";
 import type { ParsedRegistryNpmSpec } from "./npm-registry-spec.js";
 
 type ManagedNpmRootManifest = {
@@ -37,15 +38,8 @@ function readDependencyRecord(value: unknown): Record<string, string> {
 }
 
 async function readManagedNpmRootManifest(filePath: string): Promise<ManagedNpmRootManifest> {
-  try {
-    const parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
-    return isRecord(parsed) ? { ...parsed } : {};
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return {};
-    }
-    throw err;
-  }
+  const parsed = await readJsonIfExists<unknown>(filePath);
+  return isRecord(parsed) ? { ...parsed } : {};
 }
 
 export function resolveManagedNpmRootDependencySpec(params: {
@@ -72,7 +66,7 @@ export async function upsertManagedNpmRootDependency(params: {
       [params.packageName]: params.dependencySpec,
     },
   };
-  await fs.writeFile(manifestPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  await writeJson(manifestPath, next, { trailingNewline: true });
 }
 
 export async function readManagedNpmRootInstalledDependency(params: {
@@ -80,7 +74,7 @@ export async function readManagedNpmRootInstalledDependency(params: {
   packageName: string;
 }): Promise<ManagedNpmRootInstalledDependency | null> {
   const lockPath = path.join(params.npmRoot, "package-lock.json");
-  const parsed = JSON.parse(await fs.readFile(lockPath, "utf8")) as unknown;
+  const parsed = await readJson<unknown>(lockPath);
   if (!isRecord(parsed) || !isRecord(parsed.packages)) {
     return null;
   }
@@ -111,5 +105,5 @@ export async function removeManagedNpmRootDependency(params: {
     private: true,
     dependencies: nextDependencies,
   };
-  await fs.writeFile(manifestPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  await writeJson(manifestPath, next, { trailingNewline: true });
 }

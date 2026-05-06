@@ -433,6 +433,30 @@ function resolveExternalRunFailureTextForConversation(params: {
   return SILENT_REPLY_TOKEN;
 }
 
+const CLI_BACKEND_NO_OUTPUT_STALL_RE =
+  /\bCLI produced no output for\s+(\d+)\s*s\s+and was terminated\b/iu;
+const CLI_BACKEND_OVERALL_TIMEOUT_RE =
+  /\bCLI exceeded timeout\s*\(\s*(\d+)\s*s\s*\)\s+and was terminated\b/iu;
+const CLI_BACKEND_ROUTING_REF_BEFORE_ERROR_RE = /\b([\w.-]+\/[A-Za-z][\w.-]*)\s*:\s*CLI\b/iu;
+
+function buildCliBackendTimeoutFailureText(message: string): string | null {
+  const normalizedMessage = collapseRepeatedFailureDetail(message);
+  const stall = normalizedMessage.match(CLI_BACKEND_NO_OUTPUT_STALL_RE);
+  const overall = normalizedMessage.match(CLI_BACKEND_OVERALL_TIMEOUT_RE);
+  const timeout = stall ?? overall;
+  const seconds = timeout?.[1];
+  if (!seconds) {
+    return null;
+  }
+  const routedModelRef = normalizedMessage.match(CLI_BACKEND_ROUTING_REF_BEFORE_ERROR_RE)?.[1];
+  const routingSuffix = routedModelRef ? ` (routing ${routedModelRef})` : "";
+  const modeLabel = stall ? "no-output stall" : "overall CLI turn budget";
+  return (
+    `⚠️ CLI subprocess${routingSuffix}: timed out after ${seconds}s (${modeLabel}). The gateway may still be healthy. Try \`/new\`, a lighter model, or raise ` +
+    "`agents.defaults.timeoutSeconds` and the watchdog `noOutputTimeoutMs` entries under `cliBackends.<your-runtime>`."
+  );
+}
+
 function buildMissingApiKeyFailureText(message: string): string | null {
   const normalizedMessage = collapseRepeatedFailureDetail(message);
   const providerMatch = normalizedMessage.match(/No API key found for provider "([^"]+)"/u);
@@ -493,6 +517,10 @@ function buildExternalRunFailureReply(
       text: `⚠️ Model login failed on the gateway${oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : ""}. Please try again. If this keeps happening, re-auth with \`${loginCommand}\`.`,
       isGenericRunnerFailure: false,
     };
+  }
+  const cliBackendTimeoutFailure = buildCliBackendTimeoutFailureText(normalizedMessage);
+  if (cliBackendTimeoutFailure) {
+    return { text: cliBackendTimeoutFailure, isGenericRunnerFailure: false };
   }
   return {
     text: options?.includeDetails
