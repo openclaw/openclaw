@@ -5,6 +5,8 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import { resolveBootstrapContextTargets } from "./attempt-bootstrap-routing.js";
 import {
+  buildAfterToolsResolvedSessionToolMetadata,
+  buildAfterToolsResolvedToolMetadata,
   buildContextEnginePromptCacheInfo,
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
@@ -29,6 +31,70 @@ import {
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
+
+describe("buildAfterToolsResolvedToolMetadata", () => {
+  it("snapshots parameters instead of sharing provider-facing schema objects", () => {
+    const parameters: {
+      type: string;
+      properties: { command: { type: string } };
+    } = {
+      type: "object",
+      properties: { command: { type: "string" } },
+    };
+    const tools = [{ name: "exec", parameters }];
+
+    const metadata = buildAfterToolsResolvedToolMetadata(tools);
+    const snapshot = metadata[0]?.parameters as typeof parameters | undefined;
+    expect(snapshot).toEqual(parameters);
+    expect(snapshot).not.toBe(parameters);
+    expect(snapshot?.properties.command).not.toBe(parameters.properties.command);
+    if (!snapshot) {
+      throw new Error("expected parameters snapshot");
+    }
+
+    snapshot.properties.command.type = "number";
+    expect(parameters.properties.command.type).toBe("string");
+  });
+
+  it("omits parameters when they cannot be snapshotted", () => {
+    const metadata = buildAfterToolsResolvedToolMetadata([
+      { name: "invalid_schema", parameters: () => undefined },
+    ]);
+    expect(metadata).toEqual([{ name: "invalid_schema" }]);
+  });
+
+  it("keeps tools with undefined parameters", () => {
+    const metadata = buildAfterToolsResolvedToolMetadata([{ name: "client_tool" }]);
+    expect(metadata).toHaveLength(1);
+    expect(metadata[0]).toMatchObject({ name: "client_tool" });
+    expect(metadata[0]?.parameters).toBeUndefined();
+  });
+});
+
+describe("buildAfterToolsResolvedSessionToolMetadata", () => {
+  it("mirrors Pi session tool registration order and duplicate last-wins semantics", () => {
+    const firstParameters = {
+      type: "object",
+      properties: { first: { type: "string" } },
+    };
+    const lastParameters = {
+      type: "object",
+      properties: { last: { type: "string" } },
+    };
+
+    const metadata = buildAfterToolsResolvedSessionToolMetadata([
+      { name: "z_tool", description: "first z", parameters: firstParameters },
+      { name: "a_tool", description: "a" },
+      { name: "z_tool", description: "last z", parameters: lastParameters },
+    ]);
+
+    expect(metadata).toEqual([
+      { name: "a_tool", description: "a" },
+      { name: "z_tool", description: "last z", parameters: lastParameters },
+    ]);
+    expect(metadata[1]?.parameters).not.toBe(lastParameters);
+  });
+});
 
 type FakeWrappedStream = {
   result: () => Promise<unknown>;

@@ -49,8 +49,10 @@ export default definePluginEntry({
 });
 ```
 
-Hook handlers run sequentially in descending `priority`. Same-priority hooks
-keep registration order.
+Decision hooks run sequentially in descending `priority`. Same-priority hooks
+keep registration order. Observation-only hooks such as `llm_input`,
+`llm_output`, and `after_tools_resolved` are fire-and-forget and may run
+handlers concurrently.
 
 `api.on(name, handler, opts?)` accepts:
 
@@ -118,6 +120,7 @@ observation-only.
 **Tools**
 
 - **`before_tool_call`** - rewrite tool params, block execution, or require approval
+- `after_tools_resolved` - observe the final post-policy tool list and schemas for a model attempt
 - `after_tool_call` - observe tool results, errors, and duration
 - **`tool_result_persist`** - rewrite the assistant message produced from a tool result
 - **`before_message_write`** - inspect or block an in-progress message write (rare)
@@ -197,6 +200,27 @@ with `api.registerTrustedToolPolicy(...)`. These run before ordinary
 for host-trusted gates such as workspace policy, budget enforcement, or
 reserved workflow safety. External plugins should use normal `before_tool_call`
 hooks.
+
+### Resolved tool observation
+
+`after_tools_resolved` runs after OpenClaw has applied runtime tool policy for
+a normal embedded model attempt and before the provider session is created. It
+is observation-only, fire-and-forget, and does not block or rewrite tool
+availability. It does not run for internal compaction sessions.
+
+The event includes:
+
+- `event.provider`
+- `event.model`
+- `event.tools[]` entries with `name`, optional `label`, optional
+  `description`, and optional JSON Schema `parameters`
+
+The hook context includes the standard agent fields such as `ctx.runId`,
+`ctx.jobId` (set on cron-driven runs), `ctx.agentId`, `ctx.sessionKey`,
+`ctx.sessionId`, `ctx.workspaceDir`, `ctx.modelProviderId`, `ctx.modelId`,
+`ctx.messageProvider`, `ctx.trigger`, and `ctx.channelId`. Tool `parameters`
+are deep-cloned schema snapshots; trusted hook handlers must treat them as
+read-only.
 
 ### Tool result persistence
 
