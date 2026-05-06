@@ -11,6 +11,7 @@ import {
 import type { ThemeTransitionContext } from "../theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../theme.ts";
 import type { ConfigUiHints } from "../types.ts";
+import { viDashboardText as uiText } from "../vi-dashboard-text.ts";
 import {
   countSensitiveConfigValues,
   hintForPath,
@@ -707,7 +708,10 @@ function computeRawDiff(original: string, current: string): ConfigDiffEntry[] {
 
 function truncateValue(value: unknown, maxLen = 40): string {
   if (Array.isArray(value)) {
-    return `[${value.length} item${value.length === 1 ? "" : "s"}]`;
+    return uiText(
+      `[${value.length} item${value.length === 1 ? "" : "s"}]`,
+      `[${value.length} mục]`,
+    );
   }
   let str: string;
   try {
@@ -1819,8 +1823,10 @@ export function renderConfig(props: ConfigProps) {
                           ${sensitiveCount > 0
                             ? html`
                                 <span class="pill pill--sm"
-                                  >${sensitiveCount} secret${sensitiveCount === 1 ? "" : "s"}
-                                  ${blurred ? "redacted" : "visible"}</span
+                                  >${uiText(
+                                    `${sensitiveCount} secret${sensitiveCount === 1 ? "" : "s"} ${blurred ? "redacted" : "visible"}`,
+                                    `${sensitiveCount} giá trị nhạy cảm ${blurred ? "đã che" : "đang hiển thị"}`,
+                                  )}</span
                                 >
                                 <button
                                   class="btn btn--icon config-raw-toggle ${blurred ? "" : "active"}"

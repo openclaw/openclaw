@@ -58,7 +58,7 @@ const EXEC_APPROVALS_DEFAULT_SCOPE = "__defaults__";
 
 const SECURITY_OPTIONS: Array<{ value: ExecSecurity; label: string }> = [
   { value: "deny", label: uiText("Deny", "Từ chối") },
-  { value: "allowlist", label: uiText("Allowlist", "Allowlist") },
+  { value: "allowlist", label: uiText("Allowlist", "Danh sách cho phép") },
   { value: "full", label: uiText("Full", "Đầy đủ") },
 ];
 
@@ -200,7 +200,10 @@ export function renderExecApprovals(state: ExecApprovalsState) {
         <div>
           <div class="card-title">${uiText("Exec approvals", "Phê duyệt exec")}</div>
           <div class="card-sub">
-            ${uiText("Allowlist and approval policy for", "Allowlist và chính sách phê duyệt cho")}
+            ${uiText(
+              "Allowlist and approval policy for",
+              "Danh sách cho phép và chính sách phê duyệt cho",
+            )}
             <span class="mono">exec host=gateway/node</span>.
           </div>
         </div>
@@ -544,7 +547,7 @@ function renderExecApprovalsAllowlist(state: ExecApprovalsState) {
   return html`
     <div class="row" style="margin-top: 18px; justify-content: space-between;">
       <div>
-        <div class="card-title">${uiText("Allowlist", "Allowlist")}</div>
+        <div class="card-title">${uiText("Allowlist", "Danh sách cho phép")}</div>
         <div class="card-sub">
           ${uiText("Case-insensitive glob patterns.", "Mẫu glob không phân biệt hoa thường.")}
         </div>
