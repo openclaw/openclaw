@@ -39,6 +39,7 @@ import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMaxActiveTranscriptBytes,
   resolveMemoryFlushContextWindowTokens,
+  resolvePreflightCompactionThresholdTokens,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
@@ -488,7 +489,20 @@ export async function runPreflightCompactionIfNeeded(params: {
     typeof maxActiveTranscriptBytes === "number" &&
     activeTranscriptBytes >= maxActiveTranscriptBytes;
   const shouldUseTranscriptFallback = entry.totalTokensFresh === false || !hasPersistedTotalTokens;
-  if (!shouldUseTranscriptFallback && !shouldCompactByTranscriptBytes) {
+  const shouldCompactByFreshPersistedTokens =
+    typeof freshPersistedTokens === "number" &&
+    shouldRunPreflightCompaction({
+      entry,
+      tokenCount: freshPersistedTokens,
+      contextWindowTokens,
+      reserveTokensFloor,
+      softThresholdTokens,
+    });
+  if (
+    !shouldUseTranscriptFallback &&
+    !shouldCompactByTranscriptBytes &&
+    !shouldCompactByFreshPersistedTokens
+  ) {
     return entry ?? params.sessionEntry;
   }
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
@@ -535,7 +549,11 @@ export async function runPreflightCompactionIfNeeded(params: {
       ? projectedTokenCount
       : undefined;
 
-  const threshold = contextWindowTokens - reserveTokensFloor - softThresholdTokens;
+  const threshold = resolvePreflightCompactionThresholdTokens({
+    contextWindowTokens,
+    reserveTokensFloor,
+    softThresholdTokens,
+  });
   logVerbose(
     `preflightCompaction check: sessionKey=${params.sessionKey} ` +
       `tokenCount=${tokenCountForCompaction ?? freshPersistedTokens ?? "undefined"} ` +

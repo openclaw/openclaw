@@ -204,6 +204,63 @@ describe("gateway server chat", () => {
     };
   };
 
+  test("chat.history appends pending WebChat user turns for canonical main aliases", async () => {
+    await withMainSessionStore(async () => {
+      const runId = "idem-pending-history-main-alias";
+      const releaseBlockedReply = mockBlockedChatReply();
+
+      try {
+        await sendChatAndExpectStarted(runId, "pending alias check");
+
+        const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+          sessionKey: "main",
+        });
+        expect(historyRes.ok).toBe(true);
+        const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
+        expect(historyTexts).toContain("pending alias check");
+
+        await abortChatRun(runId);
+      } finally {
+        releaseBlockedReply();
+      }
+    });
+  });
+
+  test("chat.history keeps a repeated pending WebChat prompt distinct from persisted text", async () => {
+    await withMainSessionStore(async (dir) => {
+      const repeatedPrompt = "repeat the status check";
+      await fs.writeFile(
+        path.join(dir, "sess-main.jsonl"),
+        `${JSON.stringify({
+          message: {
+            role: "user",
+            content: repeatedPrompt,
+            timestamp: Date.now() - 1_000,
+            idempotencyKey: "idem-previous-repeated-prompt",
+          },
+        })}\n`,
+        "utf-8",
+      );
+      const runId = "idem-pending-repeated-prompt";
+      const releaseBlockedReply = mockBlockedChatReply();
+
+      try {
+        await sendChatAndExpectStarted(runId, repeatedPrompt);
+
+        const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+          sessionKey: "main",
+        });
+        expect(historyRes.ok).toBe(true);
+        const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
+        expect(historyTexts.filter((text) => text === repeatedPrompt)).toHaveLength(2);
+
+        await abortChatRun(runId);
+      } finally {
+        releaseBlockedReply();
+      }
+    });
+  });
+
   test("sessions.send accepts dashboard messages for existing sessions", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");

@@ -206,6 +206,14 @@ Hello`;
 [Thu 2026-03-12 07:00 UTC] what time is it?`;
     expect(stripInboundMetadata(input)).toBe("what time is it?");
   });
+
+  it("preserves user-authored leading system-looking lines", () => {
+    const input = `System: compacted previous state
+System (untrusted): recovered runtime event
+
+what changed?`;
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
 });
 
 describe("extractInboundSenderLabel", () => {

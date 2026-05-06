@@ -1454,6 +1454,49 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.extraSystemPrompt ?? "").not.toContain("Runtime System Events");
   });
 
+  it("preserves queued generic system events for the main WebChat session", async () => {
+    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
+      "System: [t] Runtime node status changed.",
+    );
+
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "inspect the UI",
+          RawBody: "inspect the UI",
+          CommandBody: "inspect the UI",
+          OriginatingChannel: "webchat",
+          OriginatingTo: "session:main",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "inspect the UI",
+          BodyStripped: "inspect the UI",
+          Provider: "webchat",
+          ChatType: "direct",
+          OriginatingChannel: "webchat",
+          OriginatingTo: "session:main",
+        },
+        command: {
+          surface: "webchat",
+          channel: "webchat",
+          isAuthorizedSender: true,
+          abortKey: "agent:main:main",
+          ownerList: [],
+          senderIsOwner: true,
+          rawBodyNormalized: "inspect the UI",
+          commandBodyNormalized: "inspect the UI",
+        } as never,
+        sessionKey: "agent:main:main",
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.commandBody).toContain("System: [t] Runtime node status changed.");
+    expect(call?.commandBody).toContain("inspect the UI");
+    expect(call?.followupRun.transcriptPrompt).toBe("inspect the UI");
+  });
+
   it("downgrades sender ownership when drained system events include untrusted lines", async () => {
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
       "System (untrusted): [t] External webhook payload.",

@@ -31,6 +31,7 @@ type ToolStreamHost = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatStreamEphemeral?: boolean;
   chatStreamSegments: Array<{ text: string; ts: number }>;
   toolStreamById: Map<string, ToolStreamEntry>;
   toolStreamOrder: string[];
@@ -246,6 +247,7 @@ export function resetToolStream(host: ToolStreamHost) {
   host.toolStreamOrder = [];
   host.chatToolMessages = [];
   host.chatStreamSegments = [];
+  host.chatStreamEphemeral = false;
 }
 
 export type CompactionStatus = {
@@ -510,6 +512,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       host.chatStreamSegments = [...host.chatStreamSegments, { text: host.chatStream, ts: now }];
       host.chatStream = null;
       host.chatStreamStartedAt = null;
+      host.chatStreamEphemeral = false;
     }
     entry = {
       toolCallId,

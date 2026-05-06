@@ -73,6 +73,8 @@ export type FollowupRun = {
     workspaceDir: string;
     config: OpenClawConfig;
     skillsSnapshot?: SkillSnapshot;
+    /** Optional tool allow-list; when set, only these tools are sent to the model. */
+    toolsAllow?: string[];
     provider: string;
     model: string;
     hasSessionModelOverride?: boolean;

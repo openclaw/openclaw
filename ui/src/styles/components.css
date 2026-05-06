@@ -3516,8 +3516,18 @@ td.data-table-key-col {
 
 /* Reading indicator */
 .chat-bubble.chat-reading-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
   width: fit-content;
   padding: 10px 16px;
+}
+
+.chat-reading-indicator__label {
+  color: var(--chat-text);
+  font-size: 0.95rem;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .chat-reading-indicator__dots {

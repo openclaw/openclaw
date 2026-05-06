@@ -55,6 +55,8 @@ export type GetReplyOptions = {
   heartbeatModelOverride?: string;
   /** Controls bootstrap workspace context injection (default: full). */
   bootstrapContextMode?: "full" | "lightweight";
+  /** Optional tool allow-list; when set, only these tools are sent to the model. */
+  toolsAllow?: string[];
   /** If true, suppress tool error warning payloads for this run. */
   suppressToolErrorWarnings?: boolean;
   /** If true, run the model without OpenClaw tools for this turn. */

@@ -53,6 +53,40 @@ import {
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
 
+function shouldPreserveResetSessionFile(
+  entry: SessionEntry | undefined,
+  opts: Parameters<typeof resolveSessionFilePath>[2],
+): boolean {
+  const sessionFile = entry?.sessionFile?.trim();
+  if (!entry?.sessionId || !sessionFile) {
+    return false;
+  }
+  try {
+    const defaultPath = path.resolve(resolveSessionFilePath(entry.sessionId, undefined, opts));
+    const currentPath = path.resolve(
+      resolveSessionFilePath(entry.sessionId, { sessionFile }, opts),
+    );
+    return currentPath !== defaultPath;
+  } catch {
+    return false;
+  }
+}
+
+function resolveResetSessionFilePath(params: {
+  nextSessionId: string;
+  currentEntry: SessionEntry | undefined;
+  opts: Parameters<typeof resolveSessionFilePath>[2];
+}): string {
+  const preservedSessionFile = shouldPreserveResetSessionFile(params.currentEntry, params.opts)
+    ? params.currentEntry?.sessionFile
+    : undefined;
+  return resolveSessionFilePath(
+    params.nextSessionId,
+    preservedSessionFile ? { sessionFile: preservedSessionFile } : undefined,
+    params.opts,
+  );
+}
+
 function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined {
   if (!entry) {
     return entry;
@@ -558,14 +592,15 @@ export async function performGatewaySessionReset(params: {
     oldSessionFile = currentEntry?.sessionFile;
     const now = Date.now();
     const nextSessionId = randomUUID();
-    const sessionFile = resolveSessionFilePath(
+    const sessionFileOptions = resolveSessionFilePathOptions({
+      storePath,
+      agentId: sessionAgentId,
+    });
+    const sessionFile = resolveResetSessionFilePath({
       nextSessionId,
-      currentEntry?.sessionFile ? { sessionFile: currentEntry.sessionFile } : undefined,
-      resolveSessionFilePathOptions({
-        storePath,
-        agentId: sessionAgentId,
-      }),
-    );
+      currentEntry,
+      opts: sessionFileOptions,
+    });
     const nextEntry: SessionEntry = {
       sessionId: nextSessionId,
       sessionFile,

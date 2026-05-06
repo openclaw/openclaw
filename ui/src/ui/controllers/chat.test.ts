@@ -284,6 +284,72 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe("Alpha");
   });
 
+  it("shows preflight acknowledgement without persisting it on final", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "",
+      chatStreamStartedAt: 100,
+    });
+    const preflight: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "preflight",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Got it. I am inspecting that now." }],
+      },
+    };
+
+    expect(handleChatEvent(state, preflight)).toBe("preflight");
+    expect(state.chatStream).toBe("Got it. I am inspecting that now.");
+    expect(state.chatStreamEphemeral).toBe(true);
+
+    const final: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+    };
+    expect(handleChatEvent(state, final)).toBe("final");
+    expect(state.chatMessages).toEqual([]);
+    expect(state.chatStream).toBe(null);
+  });
+
+  it("persists real streamed text that replaces a preflight acknowledgement", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Got it. I am inspecting that now.",
+      chatStreamEphemeral: true,
+      chatStreamStartedAt: 100,
+    });
+    const delta: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Here is the actual reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, delta)).toBe("delta");
+    expect(state.chatStream).toBe("Here is the actual reply");
+    expect(state.chatStreamEphemeral).toBe(false);
+
+    const final: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+    };
+    expect(handleChatEvent(state, final)).toBe("final");
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.chatMessages[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Here is the actual reply" }],
+    });
+  });
+
   it("returns final for another run when payload has no message", () => {
     const state = createActiveStreamingState();
     const payload: ChatEventPayload = {

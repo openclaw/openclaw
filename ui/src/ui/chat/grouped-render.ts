@@ -329,8 +329,9 @@ export function renderReadingIndicatorGroup(
     <div class="chat-group assistant">
       ${renderChatAvatar("assistant", assistant, undefined, basePath, authToken)}
       <div class="chat-group-messages">
-        <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
-          <span class="chat-reading-indicator__dots">
+        <div class="chat-bubble chat-reading-indicator" role="status" aria-live="polite">
+          <span class="chat-reading-indicator__label">Got it. I'm on it.</span>
+          <span class="chat-reading-indicator__dots" aria-hidden="true">
             <span></span><span></span><span></span>
           </span>
         </div>
