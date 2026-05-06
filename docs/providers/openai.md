@@ -111,6 +111,36 @@ those as provider-specific `input_type` request fields: query embeddings use
 `queryInputType`; indexed memory chunks and batch indexing use
 `documentInputType`. See the [Memory configuration reference](/reference/memory-config#provider-specific-config) for the full example.
 
+### Local OpenAI-compatible servers (e.g. oMLX)
+
+The `openai` embedding adapter also works with local OpenAI-compatible
+inference servers. The most notable example on Apple Silicon is
+[oMLX](https://github.com/jundot/omlx), which serves MLX-native embedding
+models like `jina-embeddings-v5-text-small-retrieval-mlx` on
+`http://localhost:8000/v1`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      memorySearch: {
+        provider: "openai",
+        model: "jina-embeddings-v5-text-small-retrieval-mlx",
+        remote: {
+          baseUrl: "http://127.0.0.1:8000/v1",
+          apiKey: "<your-omlx-api-key>",
+        },
+      },
+    },
+  },
+}
+```
+
+Use `provider: "openai"` rather than a runtime-specific id — OpenClaw's
+OpenAI adapter handles any OpenAI-compatible `/v1/embeddings` endpoint. See
+the [Memory configuration reference](/reference/memory-config#remote-endpoint-config)
+for full `remote.*` options.
+
 ## Getting started
 
 Choose your preferred auth method and follow the setup steps.
