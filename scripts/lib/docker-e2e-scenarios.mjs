@@ -133,7 +133,7 @@ export const mainLanes = [
     "live-gateway",
     liveDockerScriptCommand(
       "test-live-gateway-models-docker.sh",
-      "OPENCLAW_IMAGE=openclaw:local-live-gateway OPENCLAW_DOCKER_BUILD_EXTENSIONS=matrix",
+      "OPENCLAW_IMAGE=openclaw:local-live-gateway OPENCLAW_DOCKER_BUILD_EXTENSIONS=matrix OPENCLAW_LIVE_GATEWAY_PROVIDERS=claude-cli,codex-cli,google-gemini-cli",
       { skipBuild: false },
     ),
     {

@@ -114,6 +114,12 @@ function parseFilter(raw?: string): Set<string> | null {
   return ids.length ? new Set(ids) : null;
 }
 
+function providerFilterList(): string[] | undefined {
+  return PROVIDERS
+    ? [...PROVIDERS].toSorted((left, right) => left.localeCompare(right))
+    : undefined;
+}
+
 function shouldSuppressGatewayLiveOllamaWarnings(): boolean {
   return PROVIDERS !== null && !PROVIDERS.has("ollama");
 }
@@ -2365,7 +2371,9 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         logProgress("[all-models] discover candidates");
         clearRuntimeConfigSnapshot();
         const cfg = getRuntimeConfig();
-        await ensureOpenClawModelsJson(cfg);
+        await ensureOpenClawModelsJson(cfg, undefined, {
+          providerDiscoveryProviderIds: providerFilterList(),
+        });
 
         const agentDir = resolveDefaultAgentDir(cfg);
         const authStorage = discoverAuthStorage(agentDir);
