@@ -1509,6 +1509,7 @@ export async function runEmbeddedAttempt(
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,
+        promptMode,
       });
       const resourceLoader = new DefaultResourceLoader({
         cwd: resolvedWorkspace,

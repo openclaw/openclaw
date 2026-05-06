@@ -978,6 +978,7 @@ async function compactEmbeddedPiSessionDirectOnce(
         provider,
         modelId,
         model,
+        promptMode,
       });
       const resourceLoader = new DefaultResourceLoader({
         cwd: resolvedWorkspace,
