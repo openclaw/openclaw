@@ -908,9 +908,10 @@ describe("model-selection", () => {
         agents: {
           defaults: {
             model: {
-              primary: "openai/gpt-5.5",
+              primary: "openai/gpt-4o",
             },
             models: {
+              "openai/gpt-4o": {},
               "gpt-5.5": {},
               "claude-cli/claude-opus-4-6": { alias: "gpt-5.5" },
             },
@@ -921,11 +922,12 @@ describe("model-selection", () => {
       const result = buildAllowedModelSet({
         cfg,
         catalog: [
+          { provider: "openai", id: "gpt-4o", name: "GPT-4o" },
           { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
           { provider: "claude-cli", id: "claude-opus-4-6", name: "Claude Opus 4.6 CLI" },
         ],
         defaultProvider: "openai",
-        defaultModel: "gpt-5.5",
+        defaultModel: "gpt-4o",
       });
 
       expect(result.allowedKeys.has("openai/gpt-5.5")).toBe(true);
