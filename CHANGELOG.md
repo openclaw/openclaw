@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Auto-reply: add `typingTtlSeconds` config for session and agent defaults, and raise the typing keepalive default to 300 seconds. (#72009) Thanks @suntp.
+- Plugin skills/Windows: publish plugin-provided skill directories as junctions on Windows so standard users without Developer Mode can register plugin skills without symlink EPERM failures. Fixes #77958. (#77971) Thanks @hclsys and @jarro.
 - MS Teams: surface blocked Bot Framework egress by logging JWKS fetch network failures and adding a Bot Connector send hint for transport-level reply failures. Fixes #77674. (#78081) Thanks @Beandon13.
 - PR triage: mark external pull requests with `proof: supplied` when Barnacle finds structured real behavior proof, keep stale negative proof labels in sync across CRLF-edited PR bodies, and let ClawSweeper own the stronger `proof: sufficient` judgement.
 - Sessions CLI: show the selected agent runtime in the `openclaw sessions` table so terminal output matches the runtime visibility already present in JSON/status surfaces. Thanks @vincentkoc.
@@ -100,10 +101,12 @@ Docs: https://docs.openclaw.ai
 - Contributor PRs: require external pull requests to include after-fix real behavior proof from a real OpenClaw setup, with terminal screenshots, console output, redacted runtime logs, linked artifacts, and copied live output treated as valid evidence while unit tests, mocks, lint, typechecks, snapshots, and CI remain supplemental only.
 - Plugins/catalog: add an `@tencent-weixin/openclaw-weixin` external entry pinned to `2.4.1` so onboarding and `openclaw channels add` can install the Tencent Weixin (personal WeChat) channel by default. (#77269) Thanks @pumpkinxing1.
 - Developer tooling: add checked-in VS Code Gateway debugging configs and an opt-in `OUTPUT_SOURCE_MAPS=1` source-map build path for breakpoints in TypeScript source. (#45710) Thanks @SwissArmyBud.
+- Managed proxy: add `proxy.loopbackMode` for Gateway loopback control-plane traffic, allowing operators to keep the default Gateway loopback bypass, force loopback Gateway traffic through the proxy, or block it. (#77018) Thanks @jesse-merhi.
 
 ### Fixes
 
 - Providers/xAI: stop sending OpenAI-style reasoning effort controls to native Grok Responses models, so `xai/grok-4.3` no longer fails live Docker/Gateway runs with `Invalid reasoning effort`.
+- Providers/xAI: clamp the bundled xAI thinking profile to `off` so live Gateway runs cannot send unsupported reasoning levels to native Grok Responses models.
 - Discord/gateway: measure heartbeat ACK timeouts from the actual heartbeat send, preventing late initial heartbeats from triggering false reconnect loops while the channel is still awaiting readiness. Fixes #77668. (#78087) Thanks @bryce-d-greybeard and @NikolaFC.
 - Discord/guilds: route plain text control commands such as `/steer` through the normal authorization and mention gate instead of silently dropping them before an agent session can see them. Fixes #78080. Thanks @ramitrkar-hash.
 - Control UI/Sessions: make the compaction count a compact `N Checkpoint(s)` disclosure and show expanded session-level details with modern checkpoint history cards across responsive table layouts. Thanks @BunsDev.
@@ -112,6 +115,7 @@ Docs: https://docs.openclaw.ai
 - Exec approvals: fall back to a guarded copy when Windows rejects rename-overwrite for `exec-approvals.json`, while preserving symlink, hard-link, and owner-only permission safeguards. Fixes #77785. (#77907) Thanks @Alex-Alaniz and @MilleniumGenAI.
 - Slack: preserve Socket Mode SDK error context and structured Slack API fields in reconnect logs, so startup failures no longer collapse to a bare `unknown error`.
 - iOS pairing: allow setup-code and manual `ws://` connects for private LAN and `.local` gateways while keeping Tailscale/public routes on `wss://`, and prefer explicit gateway passwords over stale bootstrap tokens in mixed-auth reconnects. Fixes #47887; carries forward #65185. Thanks @draix and @BunsDev.
+- Node/Windows: fall back to the Startup-folder launcher when Spanish-localized `schtasks` reports `Acceso denegado`, matching the existing access-denied fallback path. Fixes #77993. Thanks @jackonedev.
 - Plugins/diagnostics: make source-only TypeScript package warnings actionable by explaining that missing compiled runtime output is a publisher packaging issue and pointing users to update/reinstall or disable/uninstall the plugin. Fixes #77835. Thanks @googlerest.
 - Control UI/chat: keep persisted assistant progress text visible when the same transcript turn also contains tool-use metadata, so chat.history reloads no longer make those replies vanish after the next user message. Fixes #77374. Thanks @BunsDev.
 - TUI: skip the generic CLI respawn wrapper for interactive launches, exit cleanly on terminal loss, and refuse to restore heartbeat sessions as the remembered chat session, preventing stale heartbeat history and orphaned `openclaw-tui` processes on first boot. Thanks @vincentkoc.

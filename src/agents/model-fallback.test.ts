@@ -1,9 +1,14 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
+import {
+  clearCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot,
+} from "../plugins/current-plugin-metadata-snapshot.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { FailoverError } from "./failover-error.js";
@@ -25,10 +30,6 @@ vi.mock("../infra/file-lock.js", () => ({
 vi.mock("../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
   resolveExternalAuthProfilesWithPlugins: () => [],
-}));
-
-vi.mock("../plugins/manifest-model-id-normalization.js", () => ({
-  normalizeProviderModelIdWithManifest: () => undefined,
 }));
 
 const authSourceCheckMock = vi.hoisted(() => ({
@@ -144,6 +145,17 @@ vi.mock("./model-fallback-auth.runtime.js", () => authRuntimeMock.runtime);
 const makeCfg = makeModelFallbackCfg;
 let authTempRoot = "";
 let authTempCounter = 0;
+
+beforeAll(() => {
+  setCurrentPluginMetadataSnapshot(loadPluginMetadataSnapshot({ config: {}, env: process.env }), {
+    config: {},
+    env: process.env,
+  });
+});
+
+afterAll(() => {
+  clearCurrentPluginMetadataSnapshot();
+});
 
 function resetModelFallbackTestState(): void {
   authRuntimeMock.clear();
@@ -955,7 +967,7 @@ describe("runWithModelFallback", () => {
       }),
     ).toEqual([
       { provider: "anthropic", model: "claude-haiku-3-5" },
-      { provider: "openrouter", model: "deepseek-chat" },
+      { provider: "openrouter", model: "openrouter/deepseek-chat" },
       { provider: "openai", model: "gpt-4.1-mini" },
     ]);
   });

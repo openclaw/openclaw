@@ -906,7 +906,7 @@ describe("gateway server cron", () => {
       const autoRes = await rpcReq(ws, "cron.add", {
         name: "auto run test",
         enabled: true,
-        schedule: { kind: "at", at: new Date(Date.now() + 200).toISOString() },
+        schedule: { kind: "at", at: new Date(Date.now() - 1).toISOString() },
         sessionTarget: "main",
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "auto" },

@@ -16,6 +16,8 @@ import { CONFIG_DIR } from "../../utils.js";
 
 const log = createSubsystemLogger("skills");
 
+type PluginSkillLinkType = "dir" | "junction";
+
 export function resolvePluginSkillDirs(params: {
   workspaceDir: string | undefined;
   config?: OpenClawConfig;
@@ -109,6 +111,12 @@ export function resolvePluginSkillDirs(params: {
 
 function resolveDefaultPluginSkillsDir(): string {
   return path.join(CONFIG_DIR, "plugin-skills");
+}
+
+function resolvePluginSkillLinkType(
+  platform: NodeJS.Platform = process.platform,
+): PluginSkillLinkType {
+  return platform === "win32" ? "junction" : "dir";
 }
 
 /**
@@ -205,7 +213,7 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
       if (existingTarget === target) {
         continue;
       }
-      fs.unlinkSync(linkPath);
+      removeGeneratedPluginSkillEntry(linkPath);
     } catch (err) {
       if (!isNotFoundError(err)) {
         log.warn(`failed to inspect plugin skill symlink "${linkPath}": ${String(err)}`);
@@ -213,7 +221,7 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
       }
     }
     try {
-      fs.symlinkSync(target, linkPath, "dir");
+      fs.symlinkSync(target, linkPath, resolvePluginSkillLinkType());
     } catch (err) {
       log.warn(`failed to create plugin skill symlink "${linkPath}" → "${target}": ${String(err)}`);
     }
@@ -229,18 +237,26 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
     return;
   }
   for (const entry of existingEntries) {
-    if (!entry.isSymbolicLink()) {
+    if (!isGeneratedPluginSkillEntry(entry)) {
       continue;
     }
     if (managedTargets.has(entry.name)) {
       continue;
     }
     const linkPath = path.join(pluginSkillsDir, entry.name);
-    try {
-      fs.unlinkSync(linkPath);
-    } catch {
-      // best-effort cleanup
-    }
+    removeGeneratedPluginSkillEntry(linkPath);
+  }
+}
+
+function isGeneratedPluginSkillEntry(entry: fs.Dirent): boolean {
+  return entry.isSymbolicLink() || (process.platform === "win32" && entry.isDirectory());
+}
+
+function removeGeneratedPluginSkillEntry(linkPath: string): void {
+  try {
+    fs.rmSync(linkPath, { recursive: true, force: true });
+  } catch {
+    // best-effort cleanup
   }
 }
 
@@ -253,5 +269,7 @@ function isNotFoundError(err: unknown): boolean {
 }
 
 export const __testing = {
+  isGeneratedPluginSkillEntry,
   publishPluginSkills,
+  resolvePluginSkillLinkType,
 };
