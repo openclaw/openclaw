@@ -1,4 +1,4 @@
-import type { UsageEntry } from "./telemetry.js";
+import { isAgentCreated, type UsageEntry } from "./telemetry.js";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -74,6 +74,8 @@ export function daysSinceLastUse(entry: UsageEntry, now: Date = new Date()): num
 /**
  * Determine transitions for all entries in a usage file.
  * Returns only entries that require action (non-"none").
+ *
+ * Skipped: pinned, bundled, hub-installed, and non-agent-created skills.
  */
 export function determineAllTransitions(
   skills: Record<string, UsageEntry>,
@@ -84,6 +86,10 @@ export function determineAllTransitions(
   for (const [name, entry] of Object.entries(skills)) {
     // Skip bundled and hub-installed skills
     if (entry.source === "bundled" || entry.source === "hub") {
+      continue;
+    }
+    // Skip non-agent-created skills (hand-authored or unknown origin)
+    if (!isAgentCreated(entry)) {
       continue;
     }
     const result = determineTransition(entry, thresholds, now);

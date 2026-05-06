@@ -12,7 +12,7 @@ export default definePluginEntry({
     // Register CLI commands
     registerCuratorCli(api);
 
-    // Register runtime lifecycle hooks for activate/deactivate
+    // Register runtime lifecycle hooks
     api.registerRuntimeLifecycle({
       async activate() {
         api.logger.info("skill-curator: activated");
@@ -22,24 +22,42 @@ export default definePluginEntry({
       },
     });
 
-    // Hook into skill_view to increment telemetry
+    // Hook into prompt build — the curator doesn't inject guidance, but we
+    // could emit telemetry events here if the gateway prompt assembler fires them.
     api.on("before_prompt_build", async () => {
-      // The curator doesn't inject prompt guidance — it's a background service.
-      // Telemetry hooks will be wired when the skill tooling emits events.
       return undefined;
     });
 
-    // Register session scheduler job for periodic curator runs
+    // Register periodic scheduler job for curator runs
     api.registerSessionSchedulerJob({
       id: "skill-curator-periodic",
-      schedule: { intervalMs: 60 * 60 * 1000 }, // placeholder — config-driven in full impl
+      schedule: { intervalMs: 60 * 60 * 1000 }, // hourly tick; actual gating in run logic
       async run() {
         api.logger.debug("skill-curator: periodic tick");
+        // In full implementation, the gateway-side hook calls curatorRun()
+        // after checking idle time. The tick here is a heartbeat for the plugin.
       },
     });
   },
 });
 
-export { loadUsage } from "./telemetry.js";
-export { determineTransition } from "./transitions.js";
+// ── Public exports ──────────────────────────────────────────────────────────
+
+export { loadUsage, type UsageEntry, type UsageFile } from "./telemetry.js";
+export { stampAgentCreated, setCreatedBy, isAgentCreated } from "./telemetry.js";
+export { determineTransition, determineAllTransitions } from "./transitions.js";
+export type { TransitionThresholds, TransitionResult } from "./transitions.js";
 export { createSnapshot, rotateSnapshots } from "./snapshot.js";
+export type { SnapshotResult } from "./snapshot.js";
+export {
+  curatorRun,
+  decideRun,
+  pauseCurator,
+  resumeCurator,
+  pinSkill,
+  unpinSkill,
+  restoreSkill,
+  adoptSkill,
+  disownSkill,
+} from "./run.js";
+export type { CuratorConfig, RunDecision, CuratorRunResult } from "./run.js";

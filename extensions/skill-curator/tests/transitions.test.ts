@@ -23,6 +23,8 @@ function makeEntry(overrides: Partial<UsageEntry> = {}): UsageEntry {
     last_patched_at: null,
     pinned: false,
     created_at: "2026-01-01T00:00:00.000Z",
+    created_by: "agent",
+    created_at_ms: 1700000000000,
     source: "agent-created",
     state: "active",
     ...overrides,
@@ -197,6 +199,30 @@ describe("transitions", () => {
           name: "agent-skill",
           last_used_at: daysAgo(200),
           source: "agent-created",
+        }),
+      };
+
+      const results = determineAllTransitions(skills, DEFAULT_THRESHOLDS);
+      expect(results).toHaveLength(1);
+      expect(results[0].name).toBe("agent-skill");
+    });
+
+    it("skips skills not created_by agent", () => {
+      const skills: UsageFile["skills"] = {
+        "user-skill": makeEntry({
+          name: "user-skill",
+          last_used_at: daysAgo(200),
+          created_by: "user",
+        }),
+        "unknown-skill": makeEntry({
+          name: "unknown-skill",
+          last_used_at: daysAgo(200),
+          created_by: "unknown",
+        }),
+        "agent-skill": makeEntry({
+          name: "agent-skill",
+          last_used_at: daysAgo(200),
+          created_by: "agent",
         }),
       };
 
