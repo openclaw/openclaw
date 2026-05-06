@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.5.5",
+  "version": "2026.5.6",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -797,6 +797,14 @@
     "./plugin-sdk/channel-lifecycle": {
       "types": "./dist/plugin-sdk/channel-lifecycle.d.ts",
       "default": "./dist/plugin-sdk/channel-lifecycle.js"
+    },
+    "./plugin-sdk/channel-message": {
+      "types": "./dist/plugin-sdk/channel-message.d.ts",
+      "default": "./dist/plugin-sdk/channel-message.js"
+    },
+    "./plugin-sdk/channel-message-runtime": {
+      "types": "./dist/plugin-sdk/channel-message-runtime.d.ts",
+      "default": "./dist/plugin-sdk/channel-message-runtime.js"
     },
     "./plugin-sdk/channel-pairing": {
       "types": "./dist/plugin-sdk/channel-pairing.d.ts",
@@ -1674,6 +1682,7 @@
     "@aws-sdk/client-bedrock-runtime": "3.1042.0",
     "@aws-sdk/credential-provider-node": "3.972.39",
     "@aws/bedrock-token-generator": "^1.1.0",
+    "@clack/core": "^1.3.0",
     "@clack/prompts": "^1.3.0",
     "@google/genai": "^1.51.0",
     "@grammyjs/runner": "^2.0.3",
@@ -1686,6 +1695,7 @@
     "@mariozechner/pi-tui": "0.73.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "^0.6.0",
+    "@openclaw/fs-safe": "github:openclaw/fs-safe#3c508734af0b",
     "@slack/bolt": "^4.7.2",
     "@slack/types": "^2.21.0",
     "@slack/web-api": "^7.15.2",
@@ -1757,6 +1767,7 @@
     "@aws-sdk/client-bedrock-runtime": "$@aws-sdk/client-bedrock-runtime",
     "axios": "1.16.0",
     "follow-redirects": "1.16.0",
+    "ip-address": "10.2.0",
     "node-domexception": "npm:@nolyfill/domexception@1.0.28",
     "uuid": "14.0.0"
   },
@@ -1779,6 +1790,7 @@
       "basic-ftp": "5.3.0",
       "file-type": "22.0.1",
       "form-data": "2.5.4",
+      "ip-address": "10.2.0",
       "minimatch": "10.2.5",
       "path-to-regexp": "8.4.0",
       "qs": "6.14.2",
@@ -1791,6 +1803,7 @@
       "uuid": "14.0.0"
     },
     "onlyBuiltDependencies": [
+      "@openclaw/fs-safe",
       "@discordjs/opus",
       "@google/genai",
       "@lydell/node-pty",

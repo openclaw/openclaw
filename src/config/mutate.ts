@@ -1,8 +1,8 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { formatErrorMessage } from "../infra/errors.js";
+import { replaceFileAtomic } from "../infra/replace-file.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isRecord } from "../utils.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
@@ -15,6 +15,7 @@ import {
   type ConfigWriteOptions,
 } from "./io.js";
 import { applyUnsetPathsForWrite, resolveManagedUnsetPathsForWrite } from "./io.write-prepare.js";
+import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
 import {
   createRuntimeConfigWriteNotification,
   finalizeRuntimeSnapshotWrite,
@@ -102,31 +103,19 @@ function getSingleTopLevelIncludeTarget(params: {
 }
 
 async function writeJsonFileAtomic(filePath: string, value: unknown): Promise<void> {
-  const dir = path.dirname(filePath);
-  const tmp = path.join(
-    dir,
-    `${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`,
-  );
-  try {
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
-    await fs.access(filePath).then(
-      async () => await maintainConfigBackups(filePath, fs),
-      () => undefined,
-    );
-    await fs.rename(tmp, filePath);
-    await fs.chmod(filePath, 0o600).catch(() => {
-      // best-effort
-    });
-  } catch (err) {
-    await fs.unlink(tmp).catch(() => {
-      // best-effort
-    });
-    throw err;
-  }
+  await replaceFileAtomic({
+    filePath,
+    content: `${JSON.stringify(value, null, 2)}\n`,
+    dirMode: 0o700,
+    mode: 0o600,
+    tempPrefix: path.basename(filePath),
+    beforeRename: async () => {
+      await fs.access(filePath).then(
+        async () => await maintainConfigBackups(filePath, fs),
+        () => undefined,
+      );
+    },
+  });
 }
 
 async function tryWriteSingleTopLevelIncludeMutation(params: {
@@ -240,6 +229,7 @@ export async function replaceConfigFile(params: {
       ? { snapshot: params.snapshot, writeOptions: params.writeOptions }
       : await (params.io?.readConfigFileSnapshotForWrite ?? readConfigFileSnapshotForWrite)();
   const { snapshot, writeOptions } = prepared;
+  assertConfigWriteAllowedInCurrentMode({ configPath: snapshot.path });
   const previousHash = assertBaseHashMatches(snapshot, params.baseHash);
   const afterWrite = resolveConfigWriteAfterWrite(
     params.afterWrite ?? params.writeOptions?.afterWrite,
@@ -283,6 +273,7 @@ export async function mutateConfigFile<T = void>(params: {
   const { snapshot, writeOptions } = await (
     params.io?.readConfigFileSnapshotForWrite ?? readConfigFileSnapshotForWrite
   )();
+  assertConfigWriteAllowedInCurrentMode({ configPath: snapshot.path });
   const previousHash = assertBaseHashMatches(snapshot, params.baseHash);
   const baseConfig = params.base === "runtime" ? snapshot.runtimeConfig : snapshot.sourceConfig;
   const draft = structuredClone(baseConfig) as OpenClawConfig;

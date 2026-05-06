@@ -87,7 +87,11 @@ export {
 } from "../agents/pi-embedded-subscribe.tools.js";
 export { normalizeUsage } from "../agents/usage.js";
 export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
-export { resolveAgentDir, resolveSessionAgentIds } from "../agents/agent-scope.js";
+export {
+  resolveAgentDir,
+  resolveDefaultAgentDir,
+  resolveSessionAgentIds,
+} from "../agents/agent-scope.js";
 export { resolveModelAuthMode } from "../agents/model-auth.js";
 export { supportsModelTools } from "../agents/model-tool-support.js";
 export { resolveAttemptSpawnWorkspaceDir } from "../agents/pi-embedded-runner/run/attempt.thread-helpers.js";

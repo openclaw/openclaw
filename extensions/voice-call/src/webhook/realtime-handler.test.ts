@@ -422,6 +422,192 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
+  it("records common Talk events for realtime telephony sessions", async () => {
+    let callbacks:
+      | {
+          onAudio?: (audio: Buffer) => void;
+          onEvent?: (event: {
+            direction: "client" | "server";
+            type: string;
+            detail?: string;
+          }) => void;
+          onReady?: () => void;
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+    const sendAudio = vi.fn();
+    const call: CallRecord = {
+      callId: "call-1",
+      providerCallId: "CA-talk-events",
+      provider: "twilio",
+      direction: "inbound",
+      state: "ringing",
+      from: "+15550001234",
+      to: "+15550009999",
+      startedAt: Date.now(),
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    };
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks = request;
+        return makeBridge({ sendAudio });
+      },
+    );
+    const handler = makeHandler(undefined, {
+      manager: {
+        getCallByProviderCallId: vi.fn((): CallRecord => call),
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-talk-events", callSid: "CA-talk-events" },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+
+        callbacks?.onReady?.();
+        ws.send(
+          JSON.stringify({
+            event: "media",
+            media: { payload: Buffer.from([0xff, 0xff]).toString("base64") },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(sendAudio).toHaveBeenCalledWith(Buffer.from([0xff, 0xff]));
+        });
+        callbacks?.onTranscript?.("user", "hello", true);
+        callbacks?.onAudio?.(Buffer.from([1, 2, 3]));
+        callbacks?.onTranscript?.("assistant", "hi there", true);
+        callbacks?.onEvent?.({ direction: "server", type: "response.done" });
+
+        const recent = call.metadata?.recentTalkEvents as
+          | Array<{
+              brain: string;
+              provider: string;
+              sessionId: string;
+              transport: string;
+              type: string;
+            }>
+          | undefined;
+        expect(recent?.map((event) => event.type)).toEqual([
+          "session.started",
+          "session.ready",
+          "turn.started",
+          "input.audio.delta",
+          "transcript.done",
+          "input.audio.committed",
+          "output.audio.started",
+          "output.audio.delta",
+          "output.text.done",
+          "output.audio.done",
+          "turn.ended",
+        ]);
+        expect(recent?.[0]).toMatchObject({
+          provider: "openai",
+          sessionId: "voice-call:call-1:realtime",
+          transport: "gateway-relay",
+        });
+        expect(call.metadata?.lastTalkEventType).toBe("turn.ended");
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("emits barge-in cancellation with a turn before provider speech_started", async () => {
+    let callbacks:
+      | {
+          onAudio?: (audio: Buffer) => void;
+        }
+      | undefined;
+    const sendAudio = vi.fn();
+    const call: CallRecord = {
+      callId: "call-1",
+      providerCallId: "CA-barge-in",
+      provider: "twilio",
+      direction: "inbound",
+      state: "ringing",
+      from: "+15550001234",
+      to: "+15550009999",
+      startedAt: Date.now(),
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    };
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks = request;
+        return makeBridge({ sendAudio });
+      },
+    );
+    const handler = makeHandler(undefined, {
+      manager: {
+        getCallByProviderCallId: vi.fn((): CallRecord => call),
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-barge-in", callSid: "CA-barge-in" },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+
+        callbacks?.onAudio?.(Buffer.from([1, 2, 3]));
+        const speechPayload = Buffer.alloc(160, 0x00).toString("base64");
+        ws.send(JSON.stringify({ event: "media", media: { payload: speechPayload } }));
+        ws.send(JSON.stringify({ event: "media", media: { payload: speechPayload } }));
+
+        await vi.waitFor(() => {
+          expect(sendAudio).toHaveBeenCalledTimes(2);
+        });
+
+        const recent = call.metadata?.recentTalkEvents as
+          | Array<{
+              turnId?: string;
+              type: string;
+            }>
+          | undefined;
+        const cancelled = recent?.find((event) => event.type === "turn.cancelled");
+        expect(cancelled).toMatchObject({
+          turnId: expect.stringMatching(/^turn-\d+$/),
+        });
+        expect(recent?.findLast((event) => event.type === "input.audio.delta")?.turnId).not.toBe(
+          cancelled?.turnId,
+        );
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
   it("submits continuing responses only for realtime agent consult calls", async () => {
     let callbacks:
       | {

@@ -52,6 +52,10 @@ console verbosity and file log level are separate: Gateway `--verbose` affects
 terminal/WebSocket output, while file logs require `logging.level: "debug"` or
 `"trace"` in config. See [Gateway logging](/gateway/logging).
 
+<Note>
+In Nix mode (`OPENCLAW_NIX_MODE=1`), mutating `openclaw update` runs are disabled. Update the Nix source or flake input for this install instead; for nix-openclaw, use the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start). `openclaw update status` and `openclaw update --dry-run` remain read-only.
+</Note>
+
 <Warning>
 Downgrades require confirmation because older versions can break configuration.
 </Warning>
@@ -148,7 +152,7 @@ manually.
     Dev only.
   </Step>
   <Step title="Preflight build (dev only)">
-    Runs lint and TypeScript build in a temp worktree. If the tip fails, walks back up to 10 commits to find the newest clean build.
+    Runs the TypeScript build in a temp worktree. If the tip fails, walks back up to 10 commits to find the newest buildable commit. Set `OPENCLAW_UPDATE_PREFLIGHT_LINT=1` to also run lint during this preflight; lint runs in constrained serial mode because user update hosts are often smaller than CI runners.
   </Step>
   <Step title="Rebase">
     Rebases onto the selected commit (dev only).
