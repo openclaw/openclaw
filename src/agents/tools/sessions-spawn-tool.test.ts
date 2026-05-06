@@ -302,6 +302,23 @@ describe("sessions_spawn tool", () => {
     expect(tool.description).toContain("thread-bound");
   });
 
+  it("exposes toolsAllow as a native subagent tool allowlist", () => {
+    const tool = createSessionsSpawnTool();
+    const schema = tool.parameters as {
+      properties?: {
+        toolsAllow?: {
+          type?: string;
+          description?: string;
+          items?: { type?: string };
+        };
+      };
+    };
+
+    expect(schema.properties?.toolsAllow?.type).toBe("array");
+    expect(schema.properties?.toolsAllow?.items?.type).toBe("string");
+    expect(schema.properties?.toolsAllow?.description).toContain('runtime="subagent"');
+  });
+
   it("uses subagent runtime by default", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
@@ -371,6 +388,44 @@ describe("sessions_spawn tool", () => {
     expect(spawnContext.inheritedToolAllowlist).toEqual(["sessions_spawn", "read"]);
   });
 
+  it("normalizes and forwards toolsAllow to native subagent spawns", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-tools-allow", {
+      task: "build feature",
+      toolsAllow: [" read ", "exec", ""],
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "build feature",
+        toolsAllow: ["read", "exec"],
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("preserves an explicit empty toolsAllow list", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-tools-empty", {
+      task: "build feature",
+      toolsAllow: [],
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "build feature",
+        toolsAllow: [],
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("accepts taskName as a stable subagent handle", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
@@ -432,6 +487,29 @@ describe("sessions_spawn tool", () => {
       expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     },
   );
+
+  it("rejects malformed toolsAllow values before spawning", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await expect(
+      tool.execute("call-tools-scalar", {
+        task: "build feature",
+        toolsAllow: "read",
+      }),
+    ).rejects.toThrow("toolsAllow must be an array of strings.");
+
+    await expect(
+      tool.execute("call-tools-number", {
+        task: "build feature",
+        toolsAllow: ["read", 123],
+      }),
+    ).rejects.toThrow("toolsAllow[1] must be a string.");
+
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
 
   it.each(["last", "all"])("rejects reserved taskName %s before spawning", async (taskName) => {
     const tool = createSessionsSpawnTool({
@@ -547,6 +625,24 @@ describe("sessions_spawn tool", () => {
         lightContext: true,
       }),
     ).rejects.toThrow("lightContext is only supported for runtime='subagent'.");
+
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects toolsAllow when runtime is not "subagent"', async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await expect(
+      tool.execute("call-tools-acp", {
+        runtime: "acp",
+        task: "summarize this",
+        toolsAllow: ["read"],
+      }),
+    ).rejects.toThrow("toolsAllow is only supported for runtime='subagent'.");
 
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
