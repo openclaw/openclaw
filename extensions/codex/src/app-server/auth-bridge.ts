@@ -117,8 +117,8 @@ async function withAgentCodexHomeEnvironment(
   const realHome =
     startOptions.env?.[REAL_HOME_ENV_VAR]?.trim() ||
     startOptions.env?.[HOME_ENV_VAR]?.trim() ||
+    process.env.HOME?.trim() ||
     "";
-
   await fs.mkdir(codexHome, { recursive: true });
   await fs.mkdir(nativeHome, { recursive: true });
   const nextStartOptions: CodexAppServerStartOptions = {
