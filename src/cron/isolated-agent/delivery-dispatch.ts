@@ -17,6 +17,10 @@ import type { TtsAutoMode } from "../../config/types.tts.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
+import {
+  createOutboundPayloadPlan,
+  projectOutboundPayloadPlanForMirror,
+} from "../../infra/outbound/payloads.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
@@ -34,6 +38,15 @@ import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickLastNonEmptyTextFromPayloads, pickSummaryFromOutput } from "./helpers.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
+
+let transcriptRuntimePromise:
+  | Promise<typeof import("../../config/sessions/transcript.runtime.js")>
+  | undefined;
+
+async function loadTranscriptRuntime() {
+  transcriptRuntimePromise ??= import("../../config/sessions/transcript.runtime.js");
+  return await transcriptRuntimePromise;
+}
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
   const toTrimmed = to.trim();
@@ -642,11 +655,22 @@ export async function dispatchCronDelivery(
         delivered = true;
         return null;
       }
+      const deliverySessionKey = params.agentSessionKey;
       const deliverySession = buildOutboundSessionContext({
         cfg: params.cfgWithAgentDefaults,
         agentId: params.agentId,
-        sessionKey: params.agentSessionKey,
+        sessionKey: deliverySessionKey,
       });
+      const mirrorProjection = projectOutboundPayloadPlanForMirror(
+        createOutboundPayloadPlan(payloadsForDelivery),
+      );
+      const transcriptMirror = {
+        sessionKey: deliverySessionKey,
+        agentId: params.agentId,
+        text: mirrorProjection.text || undefined,
+        mediaUrls: mirrorProjection.mediaUrls.length ? mirrorProjection.mediaUrls : undefined,
+        idempotencyKey: deliveryIdempotencyKey,
+      };
 
       // Track bestEffort partial failures so we can log them and avoid
       // marking the job as delivered when payloads were silently dropped.
@@ -693,6 +717,10 @@ export async function dispatchCronDelivery(
       // Intentionally leave partial success uncached: replay may duplicate the
       // successful subset, but caching it here would permanently drop the
       // failed payloads by converting the replay into delivered=true.
+      if (delivered) {
+        const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();
+        await appendAssistantMessageToSessionTranscript(transcriptMirror);
+      }
       if (
         delivered &&
         shouldQueueCronAwareness({
