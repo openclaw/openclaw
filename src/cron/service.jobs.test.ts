@@ -861,6 +861,36 @@ describe("recomputeNextRuns", () => {
     expect(job.state.nextRunAtMs).toBe(retryAt);
   });
 
+  it("preserves cron retry backoff nextRunAtMs values from the run end time", () => {
+    const now = Date.parse("2025-12-13T04:10:00.000Z");
+    const retryAt = Date.parse("2025-12-13T04:20:30.000Z");
+    const job: CronJob = {
+      id: "backoff-from-ended-at",
+      name: "backoff from ended at",
+      enabled: true,
+      createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+      updatedAtMs: Date.parse("2025-12-13T04:05:30.000Z"),
+      schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "preserve run-end retry backoff" },
+      state: {
+        nextRunAtMs: retryAt,
+        lastRunAtMs: Date.parse("2025-12-13T04:01:30.000Z"),
+        lastDurationMs: 4 * 60_000,
+        lastStatus: "error",
+        consecutiveErrors: 4,
+      },
+    };
+    const state = {
+      ...createMockState(now),
+      store: { version: 1 as const, jobs: [job] },
+    } as CronServiceState;
+
+    expect(recomputeNextRunsForMaintenance(state)).toBe(false);
+    expect(job.state.nextRunAtMs).toBe(retryAt);
+  });
+
   it("repairs stale future cron nextRunAtMs values after error backoff has elapsed", () => {
     const now = Date.parse("2026-05-05T12:00:00.000Z");
     const badFuture = Date.parse("2026-05-12T16:00:00.000Z");
