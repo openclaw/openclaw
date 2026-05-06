@@ -52,6 +52,16 @@
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>OpenClaw can capture photos or short video clips when requested via the gateway.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.</string>
+	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
+	<string>OpenClaw uses your calendars to add events when you enable calendar access.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>OpenClaw uses your contacts so you can search and reference people while using the assistant.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>OpenClaw discovers and connects to your OpenClaw gateway on the local network.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
