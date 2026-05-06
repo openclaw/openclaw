@@ -471,7 +471,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid channels.start channel"),
+        errorShape(ErrorCodes.INVALID_REQUEST, `channel ${formatForLog(rawChannel)} is not a recognized chat channel; available channels: ${listChannelPlugins().map(p => p.id).join(", ")} `),
       );
       return;
     }
@@ -527,7 +527,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid channels.stop channel"),
+        errorShape(ErrorCodes.INVALID_REQUEST, `channel ${formatForLog(rawChannel)} is not a recognized chat channel; available channels: ${listChannelPlugins().map(p => p.id).join(", ")} `),
       );
       return;
     }
