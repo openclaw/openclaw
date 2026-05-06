@@ -83,11 +83,15 @@ Surfaces stale, lost, delivery-failed, or otherwise inconsistent task and Task F
 openclaw tasks maintenance [--apply] [--json]
 ```
 
-Previews or applies task and Task Flow reconciliation, cleanup stamping, and pruning.
+Previews or applies task and Task Flow reconciliation, cleanup stamping, pruning,
+and stale cron run session registry cleanup.
 For cron tasks, reconciliation uses persisted run logs/job state before marking an
 old active task `lost`, so completed cron runs do not become false audit errors
 just because the in-memory Gateway runtime state is gone. Offline CLI audit is
 not authoritative for the Gateway's process-local cron active-job set.
+When applied, maintenance also prunes `cron:<jobId>:run:<uuid>` session registry
+rows older than 7 days while preserving currently running cron jobs and leaving
+non-cron session rows untouched.
 
 ### `flow`
 
