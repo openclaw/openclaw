@@ -1,7 +1,22 @@
-import { chmodSync, existsSync, mkdirSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import {
+  chmodSync,
+  closeSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import path from "node:path";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { resolveTaskRegistryDir, resolveTaskRegistrySqlitePath } from "./task-registry.paths.js";
 import type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
@@ -65,9 +80,16 @@ type TaskRegistryDatabase = {
 };
 
 let cachedDatabase: TaskRegistryDatabase | null = null;
+const log = createSubsystemLogger("tasks/registry/sqlite");
 const TASK_REGISTRY_DIR_MODE = 0o700;
 const TASK_REGISTRY_FILE_MODE = 0o600;
-const TASK_REGISTRY_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
+const TASK_REGISTRY_SIDECAR_SUFFIXES = ["", "-wal", "-shm"] as const;
+const TASK_REGISTRY_CORRUPTION_MESSAGE_PATTERNS = [
+  "database disk image is malformed",
+  "file is not a database",
+  "database schema is corrupt",
+  "malformed database schema",
+] as const;
 
 function normalizeNumber(value: number | bigint | null): number | undefined {
   if (typeof value === "bigint") {
@@ -437,31 +459,302 @@ function ensureTaskRegistryPermissions(pathname: string) {
   }
 }
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function getErrorName(error: unknown): string | undefined {
+  return error instanceof Error ? error.name : undefined;
+}
+
+function getErrorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object" || !("code" in error)) {
+    return undefined;
+  }
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
+}
+
+export function isTaskRegistrySqliteCorruptionError(error: unknown): boolean {
+  const code = getErrorCode(error);
+  const message = getErrorMessage(error).toLowerCase();
+  const hasKnownCorruptionMessage = TASK_REGISTRY_CORRUPTION_MESSAGE_PATTERNS.some((pattern) =>
+    message.includes(pattern),
+  );
+  if (!hasKnownCorruptionMessage) {
+    return false;
+  }
+  return !code || code.startsWith("ERR_SQLITE") || code.startsWith("SQLITE");
+}
+
+function closeTaskRegistryDatabase(
+  database: TaskRegistryDatabase,
+  options: { checkpoint?: boolean } = {},
+) {
+  let closeError: unknown;
+  try {
+    database.walMaintenance.close({ checkpoint: options.checkpoint });
+  } catch (error) {
+    closeError ??= error;
+  }
+  try {
+    database.db.close();
+  } catch (error) {
+    closeError ??= error;
+  }
+  if (closeError) {
+    throw closeError;
+  }
+}
+
+function closeCachedTaskRegistryDatabase(options: { checkpoint?: boolean } = {}) {
+  if (!cachedDatabase) {
+    return;
+  }
+  const database = cachedDatabase;
+  cachedDatabase = null;
+  closeTaskRegistryDatabase(database, options);
+}
+
+function openInitializedTaskRegistryDatabase(pathname: string): TaskRegistryDatabase {
+  ensureTaskRegistryPermissions(pathname);
+  const { DatabaseSync } = requireNodeSqlite();
+  const db = new DatabaseSync(pathname);
+  let walMaintenance: SqliteWalMaintenance | null = null;
+  try {
+    walMaintenance = configureSqliteWalMaintenance(db);
+    db.exec(`PRAGMA synchronous = NORMAL;`);
+    db.exec(`PRAGMA busy_timeout = 5000;`);
+    ensureSchema(db);
+    ensureTaskRegistryPermissions(pathname);
+    return {
+      db,
+      path: pathname,
+      statements: createStatements(db),
+      walMaintenance,
+    };
+  } catch (error) {
+    let preservationError: unknown;
+    if (isTaskRegistrySqliteCorruptionError(error)) {
+      try {
+        attachTaskRegistryQuarantine(
+          error,
+          copyTaskRegistrySqliteFilesToQuarantine(pathname, error),
+        );
+      } catch (copyError) {
+        preservationError = copyError;
+      }
+    }
+    try {
+      walMaintenance?.close({ checkpoint: false });
+    } catch {
+      // Best effort: the setup path already failed, and corruption fallback must not checkpoint.
+    }
+    try {
+      db.close();
+    } catch {
+      // Best effort: preserve the original setup error.
+    }
+    if (preservationError) {
+      throw preservationError;
+    }
+    throw error;
+  }
+}
+
+type TaskRegistryQuarantinedFile = {
+  name: string;
+  originalPath: string;
+  quarantinedPath: string;
+  size: number;
+  sha256: string;
+};
+
+type TaskRegistryQuarantineResult = {
+  quarantineDir: string;
+  files: TaskRegistryQuarantinedFile[];
+};
+
+function createQuarantineTimestamp(): string {
+  return new Date().toISOString().replace(/[-:.]/gu, "");
+}
+
+function hashFile(pathname: string): string {
+  return createHash("sha256").update(readFileSync(pathname)).digest("hex");
+}
+
+function createTaskRegistrySqliteCorruptionError(message: string): Error & { code: string } {
+  const error = new Error(message) as Error & { code: string };
+  error.code = "ERR_SQLITE_ERROR";
+  return error;
+}
+
+function assertTaskRegistrySqliteHeaderIfPresent(pathname: string) {
+  if (!existsSync(pathname)) {
+    return;
+  }
+  const stat = statSync(pathname);
+  if (!stat.isFile() || stat.size === 0) {
+    return;
+  }
+  const header = Buffer.alloc(16);
+  const fd = openSync(pathname, "r");
+  try {
+    const bytesRead = readSync(fd, header, 0, header.length, 0);
+    if (bytesRead !== header.length || header.toString("binary") !== "SQLite format 3\0") {
+      throw createTaskRegistrySqliteCorruptionError("file is not a database");
+    }
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function createTaskRegistryQuarantineDir(pathname: string): string {
+  const quarantineBaseDir = path.join(resolveTaskRegistryDir(process.env), "quarantine");
+  mkdirSync(quarantineBaseDir, { recursive: true, mode: TASK_REGISTRY_DIR_MODE });
+  chmodSync(quarantineBaseDir, TASK_REGISTRY_DIR_MODE);
+
+  const quarantineDir = path.join(
+    quarantineBaseDir,
+    `${path.basename(pathname)}.${createQuarantineTimestamp()}-${randomBytes(4).toString("hex")}`,
+  );
+  mkdirSync(quarantineDir, { recursive: true, mode: TASK_REGISTRY_DIR_MODE });
+  chmodSync(quarantineDir, TASK_REGISTRY_DIR_MODE);
+  return quarantineDir;
+}
+
+function copyTaskRegistrySqliteFilesToQuarantine(
+  pathname: string,
+  error: unknown,
+): TaskRegistryQuarantineResult {
+  const quarantineDir = createTaskRegistryQuarantineDir(pathname);
+  const files: TaskRegistryQuarantinedFile[] = [];
+
+  for (const suffix of TASK_REGISTRY_SIDECAR_SUFFIXES) {
+    const originalPath = `${pathname}${suffix}`;
+    if (!existsSync(originalPath)) {
+      continue;
+    }
+    const stat = statSync(originalPath);
+    if (!stat.isFile()) {
+      continue;
+    }
+    const name = `${path.basename(pathname)}${suffix}`;
+    const quarantinedPath = path.join(quarantineDir, name);
+    copyFileSync(originalPath, quarantinedPath);
+    chmodSync(quarantinedPath, TASK_REGISTRY_FILE_MODE);
+    const quarantinedStat = statSync(quarantinedPath);
+    files.push({
+      name,
+      originalPath,
+      quarantinedPath,
+      size: quarantinedStat.size,
+      sha256: hashFile(quarantinedPath),
+    });
+  }
+
+  const manifest = {
+    createdAt: new Date().toISOString(),
+    originalPath: pathname,
+    quarantineDir,
+    reason: {
+      name: getErrorName(error),
+      code: getErrorCode(error),
+      message: getErrorMessage(error),
+    },
+    files,
+  };
+  const manifestPath = path.join(quarantineDir, "manifest.json");
+  writeFileSync(
+    manifestPath,
+    `${JSON.stringify(manifest, null, 2)}
+`,
+    "utf8",
+  );
+  chmodSync(manifestPath, TASK_REGISTRY_FILE_MODE);
+  return { quarantineDir, files };
+}
+
+function removeOriginalTaskRegistrySqliteFiles(pathname: string) {
+  for (const suffix of TASK_REGISTRY_SIDECAR_SUFFIXES) {
+    rmSync(`${pathname}${suffix}`, { force: true });
+  }
+}
+
+function attachTaskRegistryQuarantine(error: unknown, quarantine: TaskRegistryQuarantineResult) {
+  if (error && typeof error === "object") {
+    (error as { taskRegistryQuarantine?: TaskRegistryQuarantineResult }).taskRegistryQuarantine =
+      quarantine;
+  }
+}
+
+function getAttachedTaskRegistryQuarantine(
+  error: unknown,
+): TaskRegistryQuarantineResult | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  return (error as { taskRegistryQuarantine?: TaskRegistryQuarantineResult })
+    .taskRegistryQuarantine;
+}
+
+function quarantineTaskRegistrySqliteFiles(
+  pathname: string,
+  error: unknown,
+): TaskRegistryQuarantineResult {
+  const quarantine =
+    getAttachedTaskRegistryQuarantine(error) ??
+    copyTaskRegistrySqliteFilesToQuarantine(pathname, error);
+
+  try {
+    if (cachedDatabase?.path === pathname) {
+      closeCachedTaskRegistryDatabase({ checkpoint: false });
+    } else if (cachedDatabase) {
+      closeCachedTaskRegistryDatabase();
+    }
+  } finally {
+    removeOriginalTaskRegistrySqliteFiles(pathname);
+  }
+
+  return quarantine;
+}
+function logTaskRegistryQuarantine(result: TaskRegistryQuarantineResult, error: unknown) {
+  log.warn("Task registry SQLite store was corrupt; quarantined and recreated", {
+    errorCode: getErrorCode(error),
+    errorMessage: getErrorMessage(error),
+    quarantineDir: result.quarantineDir,
+    files: result.files.map((file) => file.name),
+  });
+}
+
+function emptyTaskRegistrySnapshot(): TaskRegistryStoreSnapshot {
+  return {
+    tasks: new Map(),
+    deliveryStates: new Map(),
+  };
+}
+
 function openTaskRegistryDatabase(): TaskRegistryDatabase {
   const pathname = resolveTaskRegistrySqlitePath(process.env);
   if (cachedDatabase && cachedDatabase.path === pathname) {
     return cachedDatabase;
   }
   if (cachedDatabase) {
-    cachedDatabase.walMaintenance.close();
-    cachedDatabase.db.close();
-    cachedDatabase = null;
+    closeCachedTaskRegistryDatabase();
   }
-  ensureTaskRegistryPermissions(pathname);
-  const { DatabaseSync } = requireNodeSqlite();
-  const db = new DatabaseSync(pathname);
-  const walMaintenance = configureSqliteWalMaintenance(db);
-  db.exec(`PRAGMA synchronous = NORMAL;`);
-  db.exec(`PRAGMA busy_timeout = 5000;`);
-  ensureSchema(db);
-  ensureTaskRegistryPermissions(pathname);
-  cachedDatabase = {
-    db,
-    path: pathname,
-    statements: createStatements(db),
-    walMaintenance,
-  };
-  return cachedDatabase;
+  try {
+    assertTaskRegistrySqliteHeaderIfPresent(pathname);
+    cachedDatabase = openInitializedTaskRegistryDatabase(pathname);
+    return cachedDatabase;
+  } catch (error) {
+    if (!isTaskRegistrySqliteCorruptionError(error)) {
+      throw error;
+    }
+    const quarantine = quarantineTaskRegistrySqliteFiles(pathname, error);
+    cachedDatabase = openInitializedTaskRegistryDatabase(pathname);
+    logTaskRegistryQuarantine(quarantine, error);
+    return cachedDatabase;
+  }
 }
 
 function withWriteTransaction(write: (statements: TaskRegistryStatements) => void) {
@@ -478,13 +771,26 @@ function withWriteTransaction(write: (statements: TaskRegistryStatements) => voi
 }
 
 export function loadTaskRegistryStateFromSqlite(): TaskRegistryStoreSnapshot {
-  const { statements } = openTaskRegistryDatabase();
-  const taskRows = statements.selectAll.all() as TaskRegistryRow[];
-  const deliveryRows = statements.selectAllDeliveryStates.all() as TaskDeliveryStateRow[];
-  return {
-    tasks: new Map(taskRows.map((row) => [row.task_id, rowToTaskRecord(row)])),
-    deliveryStates: new Map(deliveryRows.map((row) => [row.task_id, rowToTaskDeliveryState(row)])),
-  };
+  try {
+    const { statements } = openTaskRegistryDatabase();
+    const taskRows = statements.selectAll.all() as TaskRegistryRow[];
+    const deliveryRows = statements.selectAllDeliveryStates.all() as TaskDeliveryStateRow[];
+    return {
+      tasks: new Map(taskRows.map((row) => [row.task_id, rowToTaskRecord(row)])),
+      deliveryStates: new Map(
+        deliveryRows.map((row) => [row.task_id, rowToTaskDeliveryState(row)]),
+      ),
+    };
+  } catch (error) {
+    if (!isTaskRegistrySqliteCorruptionError(error)) {
+      throw error;
+    }
+    const pathname = resolveTaskRegistrySqlitePath(process.env);
+    const quarantine = quarantineTaskRegistrySqliteFiles(pathname, error);
+    cachedDatabase = openInitializedTaskRegistryDatabase(pathname);
+    logTaskRegistryQuarantine(quarantine, error);
+    return emptyTaskRegistrySnapshot();
+  }
 }
 
 export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapshot) {
@@ -543,10 +849,5 @@ export function deleteTaskDeliveryStateFromSqlite(taskId: string) {
 }
 
 export function closeTaskRegistrySqliteStore() {
-  if (!cachedDatabase) {
-    return;
-  }
-  cachedDatabase.walMaintenance.close();
-  cachedDatabase.db.close();
-  cachedDatabase = null;
+  closeCachedTaskRegistryDatabase();
 }

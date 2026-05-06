@@ -11,7 +11,7 @@ type SqliteWalCheckpointMode = "PASSIVE" | "FULL" | "RESTART" | "TRUNCATE";
 
 export type SqliteWalMaintenance = {
   checkpoint: () => boolean;
-  close: () => boolean;
+  close: (options?: { checkpoint?: boolean }) => boolean;
 };
 
 export type SqliteWalMaintenanceOptions = {
@@ -63,10 +63,13 @@ export function configureSqliteWalMaintenance(
 
   return {
     checkpoint,
-    close: () => {
+    close: (closeOptions = {}) => {
       if (timer) {
         clearInterval(timer);
         timer = null;
+      }
+      if (closeOptions.checkpoint === false) {
+        return true;
       }
       return checkpoint();
     },

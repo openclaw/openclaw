@@ -1,4 +1,4 @@
-import { mkdirSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -17,6 +17,10 @@ import {
   configureTaskRegistryRuntime,
   type TaskRegistryObserverEvent,
 } from "./task-registry.store.js";
+import {
+  isTaskRegistrySqliteCorruptionError,
+  loadTaskRegistryStateFromSqlite,
+} from "./task-registry.store.sqlite.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
@@ -38,6 +42,85 @@ function createStoredTask(): TaskRecord {
     createdAt: 100,
     lastEventAt: 100,
   };
+}
+
+type TaskRegistryQuarantineManifest = {
+  reason: {
+    code?: string;
+    message: string;
+  };
+  files: Array<{
+    name: string;
+    size: number;
+    sha256: string;
+  }>;
+};
+
+function readSingleTaskRegistryQuarantineManifest(): {
+  dir: string;
+  manifest: TaskRegistryQuarantineManifest;
+} {
+  const quarantineBaseDir = path.join(resolveTaskRegistryDir(process.env), "quarantine");
+  const entries = readdirSync(quarantineBaseDir).filter((entry) =>
+    entry.startsWith("runs.sqlite."),
+  );
+  expect(entries).toHaveLength(1);
+  const dir = path.join(quarantineBaseDir, entries[0] ?? "");
+  const manifest = JSON.parse(
+    readFileSync(path.join(dir, "manifest.json"), "utf8"),
+  ) as TaskRegistryQuarantineManifest;
+  return { dir, manifest };
+}
+
+function expectFreshTaskRegistrySqliteDatabase(sqlitePath: string, expectedTaskCount = 0) {
+  const { DatabaseSync } = requireNodeSqlite();
+  const db = new DatabaseSync(sqlitePath);
+  try {
+    const quickCheck = db.prepare("PRAGMA quick_check").get() as { quick_check: string };
+    expect(quickCheck.quick_check).toBe("ok");
+    const taskRuns = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'task_runs'")
+      .get() as { name: string };
+    expect(taskRuns.name).toBe("task_runs");
+    const count = db.prepare("SELECT COUNT(*) AS count FROM task_runs").get() as { count: number };
+    expect(count.count).toBe(expectedTaskCount);
+  } finally {
+    db.close();
+  }
+}
+
+function readRequiredNumberColumn(
+  row: Record<string, unknown> | undefined,
+  column: string,
+): number {
+  const value = row?.[column];
+  if (typeof value !== "number") {
+    throw new Error(`Expected numeric sqlite column ${column}`);
+  }
+  return value;
+}
+
+function corruptTaskRunsRootPage(sqlitePath: string) {
+  const { DatabaseSync } = requireNodeSqlite();
+  const db = new DatabaseSync(sqlitePath);
+  let pageSize = 4096;
+  let rootPage = 2;
+  try {
+    pageSize = readRequiredNumberColumn(db.prepare("PRAGMA page_size").get(), "page_size");
+    rootPage = readRequiredNumberColumn(
+      db
+        .prepare("SELECT rootpage FROM sqlite_master WHERE type = 'table' AND name = 'task_runs'")
+        .get(),
+      "rootpage",
+    );
+  } finally {
+    db.close();
+  }
+
+  const bytes = readFileSync(sqlitePath);
+  const offset = (rootPage - 1) * pageSize;
+  bytes.fill(0xff, offset, Math.min(offset + 32, bytes.length));
+  writeFileSync(sqlitePath, bytes);
 }
 
 describe("task-registry store runtime", () => {
@@ -304,6 +387,132 @@ describe("task-registry store runtime", () => {
         expect(statSync(sqlitePath).mode & 0o777).toBe(0o600);
       },
     );
+  });
+
+  it("quarantines a malformed sqlite store and sidecars before recreating a fresh database", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-corrupt-" },
+      async () => {
+        const sqlitePath = resolveTaskRegistrySqlitePath(process.env);
+        mkdirSync(path.dirname(sqlitePath), { recursive: true });
+        writeFileSync(sqlitePath, "not sqlite at all", "utf8");
+        writeFileSync(`${sqlitePath}-wal`, "wal bytes", "utf8");
+        writeFileSync(`${sqlitePath}-shm`, "shm bytes", "utf8");
+
+        expect(findTaskByRunId("missing-corrupt-run")).toBeUndefined();
+        resetTaskRegistryForTests({ persist: false });
+
+        const { dir, manifest } = readSingleTaskRegistryQuarantineManifest();
+        expect(manifest.reason.code).toBe("ERR_SQLITE_ERROR");
+        expect(manifest.reason.message).toContain("file is not a database");
+        expect(new Set(manifest.files.map((file) => file.name))).toEqual(
+          new Set(["runs.sqlite", "runs.sqlite-wal", "runs.sqlite-shm"]),
+        );
+        expect(readFileSync(path.join(dir, "runs.sqlite"), "utf8")).toBe("not sqlite at all");
+        expect(readFileSync(path.join(dir, "runs.sqlite-wal"), "utf8")).toBe("wal bytes");
+        expect(readFileSync(path.join(dir, "runs.sqlite-shm"), "utf8")).toBe("shm bytes");
+        expectFreshTaskRegistrySqliteDatabase(sqlitePath);
+        if (process.platform !== "win32") {
+          expect(statSync(dir).mode & 0o777).toBe(0o700);
+          expect(statSync(path.join(dir, "manifest.json")).mode & 0o777).toBe(0o600);
+          expect(statSync(path.join(dir, "runs.sqlite")).mode & 0o777).toBe(0o600);
+        }
+      },
+    );
+  });
+
+  it("preserves sidecars before closing a corrupt sqlite handle", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-valid-header-corrupt-" },
+      async () => {
+        const sqlitePath = resolveTaskRegistrySqlitePath(process.env);
+        mkdirSync(path.dirname(sqlitePath), { recursive: true });
+        const bytes = Buffer.alloc(4096, 0xff);
+        Buffer.from("SQLite format 3\0", "binary").copy(bytes, 0);
+        writeFileSync(sqlitePath, bytes);
+        writeFileSync(`${sqlitePath}-wal`, "wal bytes", "utf8");
+        writeFileSync(`${sqlitePath}-shm`, "shm bytes", "utf8");
+
+        expect(findTaskByRunId("missing-corrupt-run")).toBeUndefined();
+        resetTaskRegistryForTests({ persist: false });
+
+        const { dir, manifest } = readSingleTaskRegistryQuarantineManifest();
+        expect(manifest.reason.message).toContain("file is not a database");
+        expect(new Set(manifest.files.map((file) => file.name))).toEqual(
+          new Set(["runs.sqlite", "runs.sqlite-wal", "runs.sqlite-shm"]),
+        );
+        expect(readFileSync(path.join(dir, "runs.sqlite-wal"), "utf8")).toBe("wal bytes");
+        expect(statSync(path.join(dir, "runs.sqlite-shm")).size).toBeGreaterThan(0);
+        expectFreshTaskRegistrySqliteDatabase(sqlitePath);
+      },
+    );
+  });
+
+  it("closes a corrupt cached sqlite handle before recreating and writing to the fresh store", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-scan-corrupt-" },
+      async () => {
+        const sqlitePath = resolveTaskRegistrySqlitePath(process.env);
+        createTaskRecord({
+          runtime: "cron",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          sourceId: "job-corrupt-root",
+          runId: "run-before-corruption",
+          task: "Task before corruption",
+          status: "running",
+          deliveryStatus: "not_applicable",
+          notifyPolicy: "silent",
+        });
+        resetTaskRegistryForTests({ persist: false });
+        corruptTaskRunsRootPage(sqlitePath);
+
+        const snapshot = loadTaskRegistryStateFromSqlite();
+        expect(snapshot.tasks.size).toBe(0);
+        expect(snapshot.deliveryStates.size).toBe(0);
+
+        const { manifest } = readSingleTaskRegistryQuarantineManifest();
+        expect(manifest.files.some((file) => file.name === "runs.sqlite")).toBe(true);
+
+        const recreated = createTaskRecord({
+          runtime: "cron",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          sourceId: "job-after-corruption",
+          runId: "run-after-corruption",
+          task: "Task after corruption",
+          status: "running",
+          deliveryStatus: "not_applicable",
+          notifyPolicy: "silent",
+        });
+
+        expect(findTaskByRunId("run-before-corruption")).toBeUndefined();
+        expect(findTaskByRunId("run-after-corruption")).toMatchObject({
+          taskId: recreated.taskId,
+          task: "Task after corruption",
+        });
+        resetTaskRegistryForTests({ persist: false });
+        expectFreshTaskRegistrySqliteDatabase(sqlitePath, 1);
+      },
+    );
+  });
+
+  it("classifies only known sqlite corruption messages for quarantine fallback", () => {
+    const malformed = Object.assign(new Error("database disk image is malformed"), {
+      code: "ERR_SQLITE_ERROR",
+    });
+    const busy = Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_BUSY" });
+    const diskFull = Object.assign(new Error("database or disk is full"), {
+      code: "ERR_SQLITE_FULL",
+    });
+    const permission = Object.assign(new Error("unable to open database file"), {
+      code: "ERR_SQLITE_CANTOPEN",
+    });
+
+    expect(isTaskRegistrySqliteCorruptionError(malformed)).toBe(true);
+    expect(isTaskRegistrySqliteCorruptionError(busy)).toBe(false);
+    expect(isTaskRegistrySqliteCorruptionError(diskFull)).toBe(false);
+    expect(isTaskRegistrySqliteCorruptionError(permission)).toBe(false);
   });
 
   it("migrates legacy ownerless cron rows to system scope", async () => {
