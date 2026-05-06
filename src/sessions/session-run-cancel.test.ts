@@ -16,6 +16,7 @@ function target(sessionKey: string, runId: string): SessionRunCancelTarget {
 
 describe("session-run cancel fan-out seam", () => {
   afterEach(() => {
+    vi.useRealTimers();
     __testing.reset();
   });
 
@@ -87,6 +88,36 @@ describe("session-run cancel fan-out seam", () => {
 
       expect(handler).not.toHaveBeenCalled();
       expect(__testing.handlerCount(cancelTarget)).toBe(1);
+    });
+
+    it("prunes sticky terminal state after the replay TTL", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+      const cancelTarget = target("agent:main:main", "run-ttl");
+      emitSessionRunCancel(cancelTarget, { source: "chat-abort" });
+      vi.setSystemTime(Date.now() + __testing.terminalCancelTtlMs() + 1);
+      const handler = vi.fn();
+
+      onSessionRunCancel(cancelTarget, handler);
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(__testing.handlerCount(cancelTarget)).toBe(1);
+      expect(__testing.hasTerminalCancel(cancelTarget)).toBe(false);
+    });
+
+    it("bounds sticky terminal state to the newest max entries", () => {
+      const maxEntries = __testing.terminalCancelMaxEntries();
+      for (let i = 0; i < maxEntries + 3; i += 1) {
+        emitSessionRunCancel(target("agent:main:main", `run-${i}`), { source: "chat-abort" });
+      }
+
+      expect(__testing.terminalCancelCount()).toBe(maxEntries);
+      expect(__testing.hasTerminalCancel(target("agent:main:main", "run-0"))).toBe(false);
+      expect(__testing.hasTerminalCancel(target("agent:main:main", "run-1"))).toBe(false);
+      expect(__testing.hasTerminalCancel(target("agent:main:main", "run-2"))).toBe(false);
+      expect(__testing.hasTerminalCancel(target("agent:main:main", `run-${maxEntries + 2}`))).toBe(
+        true,
+      );
     });
 
     it("reports no live handlers when nothing is registered", () => {

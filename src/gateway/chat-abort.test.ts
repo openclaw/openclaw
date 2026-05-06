@@ -7,6 +7,7 @@ import {
 import {
   abortChatRunById,
   isChatStopCommandText,
+  registerChatAbortController,
   wireSessionRunCancelRequester,
   type ChatAbortOps,
   type ChatAbortControllerEntry,
@@ -143,6 +144,35 @@ describe("abortChatRunById", () => {
       { kind: "session_run", sessionKey, runId },
       { source: "chat-abort", message: "user" },
     );
+  });
+
+  it("clears sticky delegated-task cancel replay when the registered run is cleaned up", () => {
+    const runId = "run-1";
+    const sessionKey = "main";
+    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const activeRunAbort = registerChatAbortController({
+      chatAbortControllers,
+      runId,
+      sessionId: "sess-1",
+      sessionKey,
+      timeoutMs: 30_000,
+    });
+    expect(activeRunAbort.entry).toBeDefined();
+    const ops = createOps({ runId, entry: activeRunAbort.entry! });
+    ops.chatAbortControllers = chatAbortControllers;
+
+    abortChatRunById(ops, { runId, sessionKey, stopReason: "user" });
+    const lateBeforeCleanup = vi.fn();
+    onSessionRunCancel({ kind: "session_run", sessionKey, runId }, lateBeforeCleanup);
+    activeRunAbort.cleanup();
+    const lateAfterCleanup = vi.fn();
+    onSessionRunCancel({ kind: "session_run", sessionKey, runId }, lateAfterCleanup);
+
+    expect(lateBeforeCleanup).toHaveBeenCalledTimes(1);
+    expect(lateAfterCleanup).not.toHaveBeenCalled();
+    expect(
+      sessionRunCancelTesting.hasTerminalCancel({ kind: "session_run", sessionKey, runId }),
+    ).toBe(false);
   });
 
   it("does not fan out when the abort no-ops because no controller is tracked", () => {

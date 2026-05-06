@@ -1,6 +1,7 @@
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
+  clearSessionRunCancelTarget,
   emitSessionRunCancel,
   setSessionRunAbortRequester,
 } from "../sessions/session-run-cancel.js";
@@ -84,10 +85,14 @@ export function registerChatAbortController(params: {
   expiresAtMs?: number;
 }): RegisteredChatAbortController {
   const controller = new AbortController();
+  let cleanupTarget: { kind: "session_run"; sessionKey: string; runId: string } | undefined;
   const cleanup = () => {
     const entry = params.chatAbortControllers.get(params.runId);
     if (entry?.controller === controller) {
       params.chatAbortControllers.delete(params.runId);
+    }
+    if (cleanupTarget) {
+      clearSessionRunCancelTarget(cleanupTarget);
     }
   };
 
@@ -107,6 +112,7 @@ export function registerChatAbortController(params: {
     ownerDeviceId: params.ownerDeviceId,
     kind: params.kind,
   };
+  cleanupTarget = { kind: "session_run", sessionKey: params.sessionKey, runId: params.runId };
   params.chatAbortControllers.set(params.runId, entry);
   return { controller, registered: true, entry, cleanup };
 }

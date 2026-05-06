@@ -18,8 +18,9 @@
 //
 // Sticky cancellation: if core aborts before a handler registers,
 // `onSessionRunCancel` replays the terminal cancel to the late subscriber.
-// The terminal state lives until explicit cleanup (`clearSessionRunCancelTarget`)
-// or the test reset hook.
+// The terminal state is intentionally bounded: production run teardown should
+// clear it with `clearSessionRunCancelTarget`, and the module also prunes old
+// entries by TTL/max-size as a safety net for missed cleanup paths.
 
 export type SessionRunCancelTarget = {
   kind: "session_run";
@@ -50,12 +51,38 @@ export type RequestSessionRunCancelResult = {
 type HandlerKey = `${string}\u0000${string}`;
 
 const HANDLERS = new Map<HandlerKey, Set<SessionRunCancelHandler>>();
-const TERMINAL_CANCELS = new Map<HandlerKey, SessionRunCancelReason | undefined>();
+const TERMINAL_CANCEL_TTL_MS = 10 * 60_000;
+const TERMINAL_CANCEL_MAX_ENTRIES = 1_000;
+const TERMINAL_CANCELS = new Map<
+  HandlerKey,
+  { reason: SessionRunCancelReason | undefined; recordedAtMs: number }
+>();
 
 let abortRequester: SessionRunAbortRequester | undefined;
 
 function keyFor(target: SessionRunCancelTarget): HandlerKey {
   return `${target.sessionKey}\u0000${target.runId}`;
+}
+
+function pruneTerminalCancels(now = Date.now()): void {
+  for (const [key, entry] of TERMINAL_CANCELS) {
+    if (now - entry.recordedAtMs > TERMINAL_CANCEL_TTL_MS) {
+      TERMINAL_CANCELS.delete(key);
+    }
+  }
+
+  const excess = TERMINAL_CANCELS.size - TERMINAL_CANCEL_MAX_ENTRIES;
+  if (excess <= 0) {
+    return;
+  }
+  let removed = 0;
+  for (const key of TERMINAL_CANCELS.keys()) {
+    TERMINAL_CANCELS.delete(key);
+    removed += 1;
+    if (removed >= excess) {
+      break;
+    }
+  }
 }
 
 function invokeBestEffort(
@@ -80,9 +107,11 @@ export function onSessionRunCancel(
   handler: SessionRunCancelHandler,
 ): () => void {
   const key = keyFor(target);
+  pruneTerminalCancels();
 
-  if (TERMINAL_CANCELS.has(key)) {
-    invokeBestEffort(handler, target, TERMINAL_CANCELS.get(key));
+  const terminalCancel = TERMINAL_CANCELS.get(key);
+  if (terminalCancel) {
+    invokeBestEffort(handler, target, terminalCancel.reason);
     return () => {};
   }
 
@@ -117,8 +146,10 @@ export function emitSessionRunCancel(
   reason?: SessionRunCancelReason,
 ): { handlerCount: number } {
   const key = keyFor(target);
+  pruneTerminalCancels();
   if (!TERMINAL_CANCELS.has(key)) {
-    TERMINAL_CANCELS.set(key, reason);
+    TERMINAL_CANCELS.set(key, { reason, recordedAtMs: Date.now() });
+    pruneTerminalCancels();
   }
 
   const bucket = HANDLERS.get(key);
@@ -176,9 +207,17 @@ export const __testing = {
     return HANDLERS.get(keyFor(target))?.size ?? 0;
   },
   terminalCancelCount(): number {
+    pruneTerminalCancels();
     return TERMINAL_CANCELS.size;
   },
   hasTerminalCancel(target: SessionRunCancelTarget): boolean {
+    pruneTerminalCancels();
     return TERMINAL_CANCELS.has(keyFor(target));
+  },
+  terminalCancelMaxEntries(): number {
+    return TERMINAL_CANCEL_MAX_ENTRIES;
+  },
+  terminalCancelTtlMs(): number {
+    return TERMINAL_CANCEL_TTL_MS;
   },
 };

@@ -199,6 +199,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/reply-reference` | `createReplyReferencePlanner` |
     | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
     | `plugin-sdk/session-store-runtime` | Session store path, session-key, updated-at, and store mutation helpers |
+    | `plugin-sdk/session-run-cancel-runtime` | Delegated task/run cancellation seam for plugins: `onSessionRunCancel`, `requestSessionRunCancel`, and types `RequestSessionRunCancelResult`, `SessionRunCancelHandler`, `SessionRunCancelReason`, `SessionRunCancelTarget`. The core-owned `emitSessionRunCancel` emitter is intentionally not public. |
     | `plugin-sdk/cron-store-runtime` | Cron store path/load/save helpers |
     | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
     | `plugin-sdk/routing` | Route/session-key/account binding helpers such as `resolveAgentRoute`, `buildAgentSessionKey`, and `resolveDefaultAgentBoundAccountId` |
