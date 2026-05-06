@@ -61,3 +61,11 @@ export {
   disownSkill,
 } from "./run.js";
 export type { CuratorConfig, RunDecision, CuratorRunResult } from "./run.js";
+export { writeRunLog } from "./logs.js";
+export type { RunLogEntry } from "./logs.js";
+export {
+  buildReviewManifest,
+  parseReviewResponse,
+  validatePatchAction,
+  CURATOR_SYSTEM_PROMPT,
+} from "./reviewer.js";
