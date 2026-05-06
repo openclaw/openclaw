@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
+import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -114,6 +115,30 @@ export function applyProviderAuthConfigPatch(
         models: sanitizeConfigPatchValue(patchModels) as NonNullable<
           NonNullable<OpenClawConfig["agents"]>["defaults"]
         >["models"],
+      },
+    },
+  };
+}
+
+/**
+ * Restore `agents.defaults.model` after a provider auth config merge when the user did not pass
+ * `--set-default`, so `applyConfig` patches cannot replace the primary without an explicit opt-in.
+ */
+export function restorePriorAgentsDefaultsModelUnlessOptIn(params: {
+  cfg: OpenClawConfig;
+  priorAgentsDefaultsModel?: AgentModelConfig;
+  setDefault?: boolean;
+}): OpenClawConfig {
+  if (params.setDefault || params.priorAgentsDefaultsModel === undefined) {
+    return params.cfg;
+  }
+  return {
+    ...params.cfg,
+    agents: {
+      ...params.cfg.agents,
+      defaults: {
+        ...params.cfg.agents?.defaults,
+        model: params.priorAgentsDefaultsModel,
       },
     },
   };

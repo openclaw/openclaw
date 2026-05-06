@@ -29,6 +29,7 @@ import {
   applyProviderAuthConfigPatch,
   applyDefaultModel,
   pickAuthMethod,
+  restorePriorAgentsDefaultsModelUnlessOptIn,
   resolveProviderMatch,
 } from "../../plugins/provider-auth-choice-helpers.js";
 import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
@@ -259,6 +260,7 @@ async function persistProviderAuthResult(params: {
   }
 
   await updateConfig((cfg) => {
+    const priorAgentsDefaultsModel = cfg.agents?.defaults?.model;
     let next = cfg;
     if (params.result.configPatch) {
       next = applyProviderAuthConfigPatch(next, params.result.configPatch, {
@@ -272,6 +274,11 @@ async function persistProviderAuthResult(params: {
         mode: credentialMode(profile.credential),
       });
     }
+    next = restorePriorAgentsDefaultsModelUnlessOptIn({
+      cfg: next,
+      priorAgentsDefaultsModel,
+      setDefault: params.setDefault,
+    });
     if (params.setDefault && params.result.defaultModel) {
       next = applyDefaultModel(next, params.result.defaultModel);
     }
