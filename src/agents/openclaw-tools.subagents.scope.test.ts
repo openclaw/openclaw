@@ -91,6 +91,37 @@ describe("openclaw-tools: subagents scope isolation", () => {
     writeStore(storePath, {});
   });
 
+  it("lets the logical main alias list runs registered under the canonical main session", async () => {
+    const childKey = "agent:main:subagent:main-alias-child";
+
+    addSubagentRunForTests({
+      runId: "run-main-alias-child",
+      childSessionKey: childKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "main alias child",
+      cleanup: "keep",
+      createdAt: Date.now() - 30_000,
+      startedAt: Date.now() - 30_000,
+    });
+
+    const tool = createSubagentsTool({ agentSessionKey: "main" });
+    const result = await tool.execute("call-main-alias-list", { action: "list" });
+    const details = result.details as {
+      total?: number;
+      active?: Array<{ sessionKey?: string }>;
+    };
+
+    expect(details.total).toBe(1);
+    expect(details.active).toEqual([
+      expect.objectContaining({
+        sessionKey: childKey,
+      }),
+    ]);
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("leaf subagents do not inherit parent sibling control scope", async () => {
     const leafKey = "agent:main:subagent:leaf";
     const siblingKey = "agent:main:subagent:unsandboxed";

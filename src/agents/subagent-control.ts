@@ -6,6 +6,10 @@ import {
   sortSubagentRuns,
   type SubagentTargetResolution,
 } from "../auto-reply/reply/subagents-utils.js";
+import {
+  canonicalizeMainSessionAlias,
+  resolveMainSessionKey,
+} from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -102,10 +106,18 @@ export function resolveSubagentController(params: {
 }): ResolvedSubagentController {
   const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
   const callerRaw = params.agentSessionKey?.trim() || alias;
-  const callerSessionKey = resolveInternalSessionKey({
+  const resolvedCallerSessionKey = resolveInternalSessionKey({
     key: callerRaw,
     alias,
     mainKey,
+  });
+  const callerSessionKey = canonicalizeMainSessionAlias({
+    cfg: params.cfg,
+    agentId:
+      parseAgentSessionKey(resolvedCallerSessionKey)?.agentId ??
+      parseAgentSessionKey(resolveMainSessionKey(params.cfg))?.agentId ??
+      "main",
+    sessionKey: resolvedCallerSessionKey,
   });
   if (!isSubagentSessionKey(callerSessionKey)) {
     return {
