@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { collectTestTempCleanupFindings, main } from "../../scripts/check-test-temp-cleanup.mjs";
 
 describe("check-test-temp-cleanup", () => {
-  it("reports current test files that use mkdtemp without scoped cleanup", async () => {
+  it("reports current test files that use mkdtemp without obvious cleanup", async () => {
     const findings = await collectTestTempCleanupFindings();
 
     expect(findings.length).toBeGreaterThan(0);
@@ -19,6 +19,24 @@ describe("check-test-temp-cleanup", () => {
         expect.objectContaining({
           file: "extensions/msteams/src/polls.test.ts",
           severity: "error",
+        }),
+      ]),
+    );
+  });
+
+  it("keeps files with hooks but no cleanup call in the result set", async () => {
+    const findings = await collectTestTempCleanupFindings();
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          file: "src/gateway/hooks-mapping.test.ts",
+          severity: "error",
+          cleanup: expect.objectContaining({
+            hasAfterEach: false,
+            hasAfterAll: false,
+            hasFinally: false,
+            hasCleanupCall: false,
+          }),
         }),
       ]),
     );
