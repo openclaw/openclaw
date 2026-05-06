@@ -4,6 +4,7 @@ import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
@@ -36,7 +37,6 @@ import {
   resolveDefaultGoogleChatAccountId,
   resolveGoogleChatAccount,
   type ChannelMessageActionAdapter,
-  type ChannelMessageActionName,
   type ChannelStatusIssue,
   type ResolvedGoogleChatAccount,
 } from "./channel.deps.runtime.js";
