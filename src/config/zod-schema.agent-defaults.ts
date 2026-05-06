@@ -95,6 +95,12 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    promptMode: z
+      .union([z.literal("full"), z.literal("minimal")])
+      .optional()
+      .describe(
+        "System prompt verbosity for primary sessions. 'minimal' strips Documentation, Self-Update, Model Aliases, and other non-essential sections to reduce token overhead on local models. Subagent and cron sessions always use 'minimal' regardless of this setting. Default: 'full'.",
+      ),
     skipBootstrap: z.boolean().optional(),
     skipOptionalBootstrapFiles: z.array(OptionalBootstrapFileNameSchema).optional(),
     contextInjection: z
