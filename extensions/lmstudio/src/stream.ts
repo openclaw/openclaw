@@ -3,6 +3,7 @@ import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/p
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
+import { couldStillBePlainTextToolCallPrefix } from "openclaw/plugin-sdk/tool-payload";
 import { LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import { ensureLmstudioModelLoaded } from "./models.fetch.js";
 import { resolveLmstudioInferenceBase } from "./models.js";
@@ -151,12 +152,16 @@ function resolveContextToolNames(context: StreamContext): Set<string> {
   return new Set(names);
 }
 
+// Recognize both bracket-style (`[name]\n…`) and OpenAI Harmony-format
+// (`commentary to=…`, `<|channel|>commentary to=…`) tool-call prefixes so
+// streamed harmony text is held back for promotion at done instead of
+// leaking through to the visible stream before the parser ever runs.
 function couldStillBePlainTextToolCall(text: string): boolean {
-  if (text.length > 256_000) {
-    return false;
-  }
-  const trimmed = text.trimStart();
-  return trimmed.length === 0 || trimmed.startsWith("[");
+  return couldStillBePlainTextToolCallPrefix(text, { maxPayloadBytes: 256_000 });
+}
+
+export function __couldStillBePlainTextToolCallForTest(text: string): boolean {
+  return couldStillBePlainTextToolCall(text);
 }
 
 function createLmstudioToolCallBlock(parsed: {
