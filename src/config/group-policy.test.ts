@@ -48,6 +48,37 @@ describe("resolveChannelGroupPolicy", () => {
     expect(policy.allowed).toBe(true);
   });
 
+  it("allows configured groups matched by candidate id", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groupPolicy: "allowlist",
+          groups: {
+            "chat_guid:family": { requireMention: false },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const policy = resolveChannelGroupPolicy({
+      cfg,
+      channel: "whatsapp",
+      groupId: "123",
+      groupIdCandidates: ["chat_guid:family"],
+    });
+
+    expect(policy.allowed).toBe(true);
+    expect(policy.groupConfig?.requireMention).toBe(false);
+    expect(
+      resolveChannelGroupRequireMention({
+        cfg,
+        channel: "whatsapp",
+        groupId: "123",
+        groupIdCandidates: ["chat_guid:family"],
+      }),
+    ).toBe(false);
+  });
+
   it("blocks all groups when groupPolicy=disabled", () => {
     const cfg = {
       channels: {

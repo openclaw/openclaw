@@ -182,6 +182,29 @@ imsg send <handle> "test"
   </Tab>
 </Tabs>
 
+### Per-group system prompt
+
+Each entry under `channels.imessage.groups.*` accepts an optional `systemPrompt` string. The value is injected into the agent's system prompt on every turn that handles a message in that group, so you can set per-group persona or behavior rules without editing agent prompts:
+
+```json5
+{
+  channels: {
+    imessage: {
+      groups: {
+        "123": {
+          systemPrompt: "Keep responses under 3 sentences.",
+        },
+        "*": {
+          systemPrompt: "Default rule for other iMessage groups.",
+        },
+      },
+    },
+  },
+}
+```
+
+For inbound group messages, OpenClaw tries exact group keys before the `"*"` wildcard. Supported exact keys are the numeric `chat_id` string (`"123"`), `chat_id:<id>`, raw `chat_guid`, `chat_guid:<guid>`, raw `chat_identifier`, and `chat_identifier:<identifier>`. Exact matches win over the wildcard; an exact `systemPrompt: ""` suppresses the wildcard for that group. DMs ignore this field.
+
 ## ACP conversation bindings
 
 Legacy iMessage chats can also be bound to ACP sessions.

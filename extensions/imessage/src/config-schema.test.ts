@@ -42,6 +42,22 @@ describe("imessage config schema", () => {
     }
   });
 
+  it("accepts group-level systemPrompt", () => {
+    const res = IMessageConfigSchema.safeParse({
+      groups: {
+        "123": { systemPrompt: "Keep responses short." },
+        "chat_guid:iMessage;+;chat-family": { systemPrompt: "Use the family style." },
+        "*": { systemPrompt: "Default group prompt." },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.groups?.["123"]?.systemPrompt).toBe("Keep responses short.");
+      expect(res.data.groups?.["*"]?.systemPrompt).toBe("Default group prompt.");
+    }
+  });
+
   it("rejects unsafe executable config values", () => {
     const res = IMessageConfigSchema.safeParse({ cliPath: "imsg; rm -rf /" });
 
