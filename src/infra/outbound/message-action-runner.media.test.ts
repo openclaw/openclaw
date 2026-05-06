@@ -378,14 +378,9 @@ describe("runMessageAction media behavior", () => {
         expect.objectContaining({
           localRoots: expect.any(Array),
           readFile: expect.any(Function),
+          hostReadCapability: true,
         }),
       );
-      // hostReadCapability is NOT set on the sendAttachment path: the path-level
-      // guard (localRoots / assertLocalMediaAllowed) is the right boundary for
-      // explicit operator-initiated sends.
-      expect(
-        (call?.[1] as { hostReadCapability?: boolean } | undefined)?.hostReadCapability,
-      ).not.toBe(true);
       expect((call?.[1] as { sandboxValidated?: boolean } | undefined)?.sandboxValidated).not.toBe(
         true,
       );
@@ -424,7 +419,7 @@ describe("runMessageAction media behavior", () => {
       }
     });
 
-    it("allows host-local files of any MIME type when fs root expansion is enabled", async () => {
+    it("rejects host-local text attachments blocked by the MIME allowlist", async () => {
       await restoreRealMediaLoader();
 
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-attachment-text-"));
@@ -432,56 +427,51 @@ describe("runMessageAction media behavior", () => {
         const outsidePath = path.join(tempDir, "export.txt");
         await fs.writeFile(outsidePath, "data", "utf8");
 
-        // The MIME allowlist check is not applied to explicit sends; only the
-        // path-level guard (localRoots) governs what the agent may read and send.
-        const result = await runMessageAction({
-          cfg: {
-            ...cfg,
-            tools: { fs: { workspaceOnly: false } },
-          },
-          action: "sendAttachment",
-          params: {
-            channel: "attachmentchat",
-            target: "+15551234567",
-            media: outsidePath,
-            message: "caption",
-          },
-        });
-        expect(result.kind).toBe("action");
+        await expect(
+          runMessageAction({
+            cfg: {
+              ...cfg,
+              tools: { fs: { workspaceOnly: false } },
+            },
+            action: "sendAttachment",
+            params: {
+              channel: "attachmentchat",
+              target: "+15551234567",
+              media: outsidePath,
+              message: "caption",
+            },
+          }),
+        ).rejects.toThrow(/only allow buffer-verified/i);
       } finally {
         await fs.rm(tempDir, { recursive: true, force: true });
       }
     });
 
-    it("send action does not set hostReadCapability so all MIME types are allowed", async () => {
-      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-send-zip-"));
+    it("allows ZIP attachments when hostReadAllowedMimes includes application/zip", async () => {
+      await restoreRealMediaLoader();
+
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-attachment-zip-"));
       try {
-        // Minimal ZIP magic bytes — file-type will sniff this as application/zip.
+        // Minimal ZIP magic bytes — file-type sniffs this as application/zip.
         const minimalZip = Buffer.from("504b0304", "hex");
         const zipPath = path.join(tempDir, "archive.zip");
         await fs.writeFile(zipPath, minimalZip);
 
-        vi.mocked(loadWebMedia).mockClear();
-
-        await runMessageAction({
+        const result = await runMessageAction({
           cfg: {
             ...cfg,
             tools: { fs: { workspaceOnly: false } },
+            media: { hostReadAllowedMimes: ["application/zip"] },
           },
-          action: "send",
+          action: "sendAttachment",
           params: {
             channel: "attachmentchat",
             target: "+15551234567",
             media: zipPath,
+            message: "archive",
           },
         });
-
-        const call = vi.mocked(loadWebMedia).mock.calls[0];
-        // hostReadCapability must NOT be set on the send path — the path-level
-        // guard (localRoots) is the appropriate boundary here.
-        expect(
-          (call?.[1] as { hostReadCapability?: boolean } | undefined)?.hostReadCapability,
-        ).not.toBe(true);
+        expect(result.kind).toBe("action");
       } finally {
         await fs.rm(tempDir, { recursive: true, force: true });
       }
