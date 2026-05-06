@@ -17,6 +17,7 @@ tuning that applies everywhere.
 <CardGroup cols={2}>
   <Card title="Railway" href="/install/railway">One-click, browser setup</Card>
   <Card title="Northflank" href="/install/northflank">One-click, browser setup</Card>
+  <Card title="xCloud" href="/install/xcloud">Managed VPS, dashboard setup</Card>
   <Card title="DigitalOcean" href="/install/digitalocean">Simple paid VPS</Card>
   <Card title="Oracle Cloud" href="/install/oracle">Always Free ARM tier</Card>
   <Card title="Fly.io" href="/install/fly">Fly Machines</Card>
