@@ -234,6 +234,7 @@ function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]
 // content and, on Bedrock or strict OpenAI-compatible providers, can also
 // trigger turn-ordering rejections.
 const TRANSCRIPT_ONLY_OPENCLAW_MODELS = new Set<string>(["delivery-mirror", "gateway-injected"]);
+const MANAGED_OUTGOING_IMAGE_PATH_PREFIX = "/api/chat/media/outgoing/";
 
 function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
   if (!message || message.role !== "user") {
@@ -281,6 +282,25 @@ function isTranscriptOnlyOpenclawAssistant(message: AgentMessage): boolean {
   );
 }
 
+function isManagedOutgoingImageUrl(value: unknown): boolean {
+  if (typeof value !== "string" || !value.trim()) {
+    return false;
+  }
+  try {
+    const parsed = new URL(value, "http://localhost");
+    return parsed.pathname.startsWith(MANAGED_OUTGOING_IMAGE_PATH_PREFIX);
+  } catch {
+    return false;
+  }
+}
+
+function isManagedOutgoingAssistantImageBlock(block: Record<string, unknown>): boolean {
+  if (block.type !== "image") {
+    return false;
+  }
+  return isManagedOutgoingImageUrl(block.url) || isManagedOutgoingImageUrl(block.openUrl);
+}
+
 function normalizeAssistantReplayTextContent(message: AgentMessage, replayContent: string) {
   const strippedText = stripInboundMetadata(replayContent);
   if (!strippedText.trim()) {
@@ -298,6 +318,10 @@ function normalizeAssistantReplayBlockContent(message: AgentMessage, replayConte
   for (const block of replayContent) {
     if (!block || typeof block !== "object") {
       sanitizedContent.push(block);
+      continue;
+    }
+    if (isManagedOutgoingAssistantImageBlock(block as Record<string, unknown>)) {
+      touched = true;
       continue;
     }
     const text = (block as { text?: unknown }).text;
