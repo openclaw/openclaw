@@ -1263,6 +1263,11 @@ export function renderChat(props: ChatProps) {
             ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
             .value=${props.draft}
             dir=${detectTextDirection(props.draft)}
+            autocomplete="off"
+            autocorrect="off"
+            autocapitalize="off"
+            spellcheck="false"
+            inputmode="text"
             ?disabled=${!props.connected}
             aria-autocomplete="list"
             aria-controls=${ifDefined(slashMenuVisible ? SLASH_MENU_LISTBOX_ID : undefined)}

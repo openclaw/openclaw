@@ -643,6 +643,20 @@ describe("chat slash menu accessibility", () => {
   });
 });
 
+describe("chat composer input behavior", () => {
+  it("sets plain-text composer attributes to avoid browser numeric auto-formatting", () => {
+    const container = renderChatView({ draft: "123456789" });
+    const composer = container.querySelector<HTMLTextAreaElement>("textarea");
+
+    expect(composer).not.toBeNull();
+    expect(composer?.getAttribute("autocomplete")).toBe("off");
+    expect(composer?.getAttribute("autocorrect")).toBe("off");
+    expect(composer?.getAttribute("autocapitalize")).toBe("off");
+    expect(composer?.getAttribute("spellcheck")).toBe("false");
+    expect(composer?.getAttribute("inputmode")).toBe("text");
+  });
+});
+
 describe("chat attachment picker", () => {
   it("accepts and previews non-video file attachments", async () => {
     const onAttachmentsChange = vi.fn();
