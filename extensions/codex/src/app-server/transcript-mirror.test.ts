@@ -131,6 +131,73 @@ describe("mirrorCodexAppServerTranscript", () => {
     expect(records.slice(1)).toHaveLength(2);
   });
 
+  it("keeps previous turns on the active transcript branch when consecutive app-server turns mirror with different scopes", async () => {
+    const sessionFile = await createTempSessionFile();
+
+    await mirrorCodexAppServerTranscript({
+      sessionFile,
+      sessionKey: "session-1",
+      messages: [
+        makeAgentUserMessage({
+          content: [{ type: "text", text: "turn one user" }],
+          timestamp: 1000,
+        }),
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "turn one assistant" }],
+          timestamp: 1001,
+        }),
+      ],
+      idempotencyScope: "codex-app-server:thread-1:turn-1",
+    });
+
+    await mirrorCodexAppServerTranscript({
+      sessionFile,
+      sessionKey: "session-1",
+      messages: [
+        makeAgentUserMessage({
+          content: [{ type: "text", text: "turn two user" }],
+          timestamp: 2000,
+        }),
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "turn two assistant" }],
+          timestamp: 2001,
+        }),
+      ],
+      idempotencyScope: "codex-app-server:thread-1:turn-2",
+    });
+
+    const raw = await fs.readFile(sessionFile, "utf8");
+    const records = raw
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            type?: string;
+            id?: string;
+            parentId?: string | null;
+            message?: { content?: unknown; role?: string };
+          },
+      )
+      .filter((record) => record.type === "message");
+    expect(records.map((record) => record.message?.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+    ]);
+    expect(records.map((record) => JSON.stringify(record.message?.content))).toEqual([
+      '[{"type":"text","text":"turn one user"}]',
+      '[{"type":"text","text":"turn one assistant"}]',
+      '[{"type":"text","text":"turn two user"}]',
+      '[{"type":"text","text":"turn two assistant"}]',
+    ]);
+    for (let index = 1; index < records.length; index += 1) {
+      expect(records[index]?.parentId).toBe(records[index - 1]?.id);
+    }
+  });
+
   it("runs before_message_write before appending mirrored transcript messages", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([
