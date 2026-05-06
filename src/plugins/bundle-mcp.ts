@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readRootJsonObjectSync } from "../infra/root-json.js";
 import { isRecord } from "../utils.js";
 import {
   inspectBundleServerRuntimeSupport,
@@ -173,12 +173,11 @@ function loadBundleFileBackedMcpConfig(params: {
     relativePath: params.relativePath,
     boundaryLabel: "plugin root",
     rejectHardlinks: true,
-    requireFile: true,
   });
   if (!result.ok) {
     return { mcpServers: {} };
   }
-  const servers = extractMcpServerMap(result.raw);
+  const servers = extractMcpServerMap(result.value);
   const baseDir = normalizeBundlePath(path.dirname(absolutePath));
   return {
     mcpServers: Object.fromEntries(

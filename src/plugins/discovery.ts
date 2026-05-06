@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
-import { readRootJsonObjectSync } from "../infra/root-json.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -422,7 +422,7 @@ function readPackageManifest(
     boundaryLabel: "plugin package directory",
     rejectHardlinks,
   });
-  return result.ok ? (result.raw as PackageManifest) : null;
+  return result.ok ? (result.value as PackageManifest) : null;
 }
 
 function readTrustedPackageManifest(dir: string): PackageManifest | null {

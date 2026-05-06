@@ -1,7 +1,5 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import type { ChatType } from "../channels/chat-type.js";
-import { resolveStateDir } from "../config/paths.js";
 import {
   ackJsonDurableQueueEntry,
   ensureJsonDurableQueueDirs,
@@ -12,7 +10,9 @@ import {
   readJsonDurableQueueEntry,
   resolveJsonDurableQueueEntryPaths,
   writeJsonDurableQueueEntry,
-} from "./json-durable-queue.js";
+} from "@openclaw/fs-safe/store";
+import type { ChatType } from "../channels/chat-type.js";
+import { resolveStateDir } from "../config/paths.js";
 import { generateSecureUuid } from "./secure-random.js";
 
 const QUEUE_DIRNAME = "session-delivery-queue";

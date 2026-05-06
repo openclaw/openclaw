@@ -1,6 +1,6 @@
 import fsSync from "node:fs";
 import path from "node:path";
-import { readRootJsonObjectSync } from "./root-json.js";
+import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
 
 export function expectedIntegrityForUpdate(
   spec: string | undefined,
@@ -34,7 +34,7 @@ function readInstalledPackageManifest(dir: string): Record<string, unknown> | un
     relativePath: "package.json",
     boundaryLabel: "installed package directory",
   });
-  return result.ok ? result.raw : undefined;
+  return result.ok ? result.value : undefined;
 }
 
 export async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {

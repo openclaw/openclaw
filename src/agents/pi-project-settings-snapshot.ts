@@ -1,8 +1,8 @@
 import path from "node:path";
 import type { SettingsManager } from "@mariozechner/pi-coding-agent";
+import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readRootJsonObjectSync } from "../infra/root-json.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
 import {
@@ -55,7 +55,7 @@ function loadBundleSettingsFile(params: {
     log.warn(`${result.error}: ${absolutePath}`);
     return null;
   }
-  return sanitizePiSettingsSnapshot(result.raw as PiSettingsSnapshot);
+  return sanitizePiSettingsSnapshot(result.value as PiSettingsSnapshot);
 }
 
 export function loadEnabledBundlePiSettingsSnapshot(params: {

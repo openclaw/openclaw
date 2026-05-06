@@ -1,8 +1,4 @@
 import path from "node:path";
-import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { RenderedMessageBatchPlanItem } from "../../channels/message/types.js";
-import { resolveStateDir } from "../../config/paths.js";
-import type { ReplyToMode } from "../../config/types.js";
 import {
   ackJsonDurableQueueEntry,
   ensureJsonDurableQueueDirs,
@@ -12,7 +8,11 @@ import {
   readJsonDurableQueueEntry,
   resolveJsonDurableQueueEntryPaths,
   writeJsonDurableQueueEntry,
-} from "../json-durable-queue.js";
+} from "@openclaw/fs-safe/store";
+import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { RenderedMessageBatchPlanItem } from "../../channels/message/types.js";
+import { resolveStateDir } from "../../config/paths.js";
+import type { ReplyToMode } from "../../config/types.js";
 import { generateSecureUuid } from "../secure-random.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";

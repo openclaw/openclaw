@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readRootJsonObjectSync } from "../infra/root-json.js";
 import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import {
@@ -61,7 +61,7 @@ function readClaudeBundleManifest(rootDir: string): Record<string, unknown> {
     boundaryLabel: "plugin root",
     rejectHardlinks: true,
   });
-  return result.ok ? result.raw : {};
+  return result.ok ? result.value : {};
 }
 
 function resolveClaudeCommandRootDirs(rootDir: string): string[] {

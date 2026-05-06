@@ -1,7 +1,7 @@
+import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { matchRootFileOpenFailure, type RootFileOpenFailure } from "../infra/boundary-file-read.js";
-import { readRootJsonObjectSync } from "../infra/root-json.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
@@ -29,7 +29,7 @@ export function readBundleJsonObject(params: {
     rejectHardlinks: true,
   });
   if (result.ok) {
-    return { ok: true, raw: result.raw };
+    return { ok: true, raw: result.value };
   }
   if (result.reason === "open") {
     return params.onOpenFailure?.(result.failure) ?? { ok: true, raw: {} };
