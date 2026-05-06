@@ -74,6 +74,7 @@ import {
   shouldAttemptTtsPayload,
 } from "../../tts/tts-config.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import { isControlCommandMessage } from "../command-detection.js";
 import type { BlockReplyContext } from "../get-reply-options.types.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -977,10 +978,18 @@ export async function dispatchReplyFromConfig(
       return attachSourceReplyDeliveryMode({ queuedFinal, counts });
     }
 
-    const isSlackNonDirectSurface =
-      (ctx.Surface === "slack" || ctx.Provider === "slack") && ctx.ChatType !== "direct";
+    const normalizedSurface = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider);
+    const isSlackNonDirectSurface = normalizedSurface === "slack" && ctx.ChatType !== "direct";
+    const shouldSendToolUpdatesForAuthorizedGroupCommand =
+      ctx.ChatType === "group" &&
+      ctx.IsForum !== true &&
+      ctx.CommandAuthorized &&
+      isControlCommandMessage(hookContext.content, cfg);
     const shouldSendVerboseProgressMessages =
-      !isSlackNonDirectSurface && (ctx.ChatType !== "group" || ctx.IsForum === true);
+      !isSlackNonDirectSurface &&
+      (ctx.ChatType !== "group" ||
+        ctx.IsForum === true ||
+        shouldSendToolUpdatesForAuthorizedGroupCommand);
     const shouldSendToolSummaries = shouldSendVerboseProgressMessages;
     const shouldSendToolStartStatuses = shouldSendVerboseProgressMessages;
     const sendFinalPayload = async (

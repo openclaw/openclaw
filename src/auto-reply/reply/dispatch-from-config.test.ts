@@ -1381,6 +1381,145 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("delivers verbose progress for authorized non-forum group control commands", async () => {
+    setNoAbort();
+    const cfg = {
+      ...automaticGroupReplyConfig,
+      agents: {
+        defaults: {
+          verboseDefault: "on",
+        },
+      },
+    } satisfies OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+      BodyForCommands: '<at user_id="ou_bot"></at> /status',
+      CommandAuthorized: true,
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onPlanUpdate?.({
+        phase: "update",
+        explanation: "Check status.",
+        steps: ["Inspect runtime"],
+      });
+      await opts?.onToolResult?.({ text: "🔧 exec: openclaw status" });
+      await opts?.onPatchSummary?.({
+        phase: "end",
+        title: "status",
+        summary: "status collected",
+      });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: "Check status.\n\n1. Inspect runtime" }),
+    );
+    expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: "🔧 exec: openclaw status" }),
+    );
+    expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ text: "Working: status collected" }),
+    );
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(3);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+  });
+
+  it("keeps unauthorized non-forum group control commands quiet", async () => {
+    setNoAbort();
+    const cfg = {
+      ...automaticGroupReplyConfig,
+      agents: {
+        defaults: {
+          verboseDefault: "on",
+        },
+      },
+    } satisfies OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+      BodyForCommands: "/status",
+      CommandAuthorized: false,
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onPlanUpdate?.({
+        phase: "update",
+        explanation: "Check status.",
+        steps: ["Inspect runtime"],
+      });
+      await opts?.onToolResult?.({ text: "🔧 exec: openclaw status" });
+      await opts?.onPatchSummary?.({
+        phase: "end",
+        title: "status",
+        summary: "status collected",
+      });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+  });
+
+  it("keeps authorized path-like slash text from enabling group progress", async () => {
+    setNoAbort();
+    const cfg = {
+      ...automaticGroupReplyConfig,
+      agents: {
+        defaults: {
+          verboseDefault: "on",
+        },
+      },
+    } satisfies OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+      BodyForCommands: "@OpenClaw /tmp/openclaw.log",
+      CommandAuthorized: true,
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onToolResult?.({ text: "🔧 exec: cat /tmp/openclaw.log" });
+      await opts?.onPatchSummary?.({
+        phase: "end",
+        title: "status",
+        summary: "status collected",
+      });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+  });
+
   it("normalizes tool-result media before delivery and drops blocked file URLs", async () => {
     setNoAbort();
     replyMediaPathMocks.createReplyMediaPathNormalizer.mockReturnValue(
@@ -1662,6 +1801,8 @@ describe("dispatchReplyFromConfig", () => {
       Provider: "slack",
       Surface: "slack",
       ChatType: "channel",
+      BodyForCommands: "/status",
+      CommandAuthorized: true,
     });
 
     const replyResolver = async (
