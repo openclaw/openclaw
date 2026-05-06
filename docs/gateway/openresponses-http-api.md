@@ -88,6 +88,42 @@ Supported:
 
 - `previous_response_id`: OpenClaw reuses the earlier response session when the request stays within the same agent/user/requested-session scope.
 
+## OpenClaw extension metadata
+
+When an agent reply payload includes channel-agnostic OpenClaw presentation metadata, the endpoint preserves it under `x_openclaw` on the response resource. This is an OpenClaw extension to the OpenAI Responses API-compatible surface; clients that only need plain text can ignore it.
+
+Current fields:
+
+- `x_openclaw.presentation`: the first semantic `MessagePresentation` payload from the agent response.
+- `x_openclaw.presentations`: all semantic presentation payloads when a response contains more than one.
+- `x_openclaw.suggestedTopics`: the first suggested-topic payload from the agent response, when present.
+- `x_openclaw.suggestedTopicSets`: all suggested-topic payloads when a response contains more than one.
+
+Use `presentation.blocks[type="buttons"]` as the canonical channel-agnostic action contract. Channel or web clients should render the buttons natively when possible and send the hidden button `value` back as the selected action.
+
+Example response fragment:
+
+```json
+{
+  "x_openclaw": {
+    "presentation": {
+      "title": "Suggested next steps",
+      "blocks": [
+        {
+          "type": "buttons",
+          "buttons": [
+            {
+              "label": "Create social media content",
+              "value": "work_topic.open:social_media_content"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
+```
+
 ## Items (input)
 
 ### `message`
@@ -285,6 +321,7 @@ Event types currently emitted:
 - `response.output_text.done`
 - `response.content_part.done`
 - `response.output_item.done`
+- `response.openclaw_metadata.done` (OpenClaw extension; emitted when `x_openclaw` metadata is present)
 - `response.completed`
 - `response.failed` (on error)
 

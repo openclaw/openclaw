@@ -651,6 +651,36 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(content[0]?.text).toBe("hello");
       await ensureResponseConsumed(resShape);
 
+      agentCommand.mockClear();
+      const presentation = {
+        title: "Suggested next steps",
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Create social post", value: "work_topic.open:social_media" }],
+          },
+        ],
+      };
+      const suggestedTopics = {
+        version: 1,
+        topics: [{ id: "social_media", value: "work_topic.open:social_media" }],
+      };
+      agentCommand.mockResolvedValueOnce({
+        payloads: [{ text: "hello", presentation, suggestedTopics }],
+      } as never);
+
+      const resOpenClawMetadata = await postResponses(port, {
+        stream: false,
+        model: "openclaw",
+        input: "hi",
+      });
+      expect(resOpenClawMetadata.status).toBe(200);
+      const metadataJson = (await resOpenClawMetadata.json()) as {
+        x_openclaw?: { presentation?: unknown; suggestedTopics?: unknown };
+      };
+      expect(metadataJson.x_openclaw?.presentation).toEqual(presentation);
+      expect(metadataJson.x_openclaw?.suggestedTopics).toEqual(suggestedTopics);
+
       const resNoUser = await postResponses(port, {
         model: "openclaw",
         input: [{ type: "message", role: "system", content: "yo" }],
@@ -731,6 +761,44 @@ describe("OpenResponses HTTP API (e2e)", () => {
       const fallbackText = await resFallback.text();
       expect(fallbackText).toContain("[DONE]");
       expect(fallbackText).toContain("hello");
+
+      agentCommand.mockClear();
+      const streamPresentation = {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Improve KB", value: "work_topic.open:kb" }],
+          },
+        ],
+      };
+      agentCommand.mockResolvedValueOnce({
+        payloads: [{ text: "hello", presentation: streamPresentation }],
+      } as never);
+
+      const resMetadataStream = await postResponses(port, {
+        stream: true,
+        model: "openclaw",
+        input: "hi",
+      });
+      expect(resMetadataStream.status).toBe(200);
+      const metadataStreamEvents = parseSseEvents(await resMetadataStream.text());
+      const metadataDone = metadataStreamEvents.find(
+        (event) => event.event === "response.openclaw_metadata.done",
+      );
+      expect(metadataDone).toBeDefined();
+      const parsedMetadata = JSON.parse(metadataDone?.data ?? "{}") as {
+        x_openclaw?: { presentation?: unknown };
+      };
+      expect(parsedMetadata.x_openclaw?.presentation).toEqual(streamPresentation);
+      const completedWithMetadata = metadataStreamEvents.find(
+        (event) => event.event === "response.completed",
+      );
+      const completedWithMetadataData = JSON.parse(completedWithMetadata?.data ?? "{}") as {
+        response?: { x_openclaw?: { presentation?: unknown } };
+      };
+      expect(completedWithMetadataData.response?.x_openclaw?.presentation).toEqual(
+        streamPresentation,
+      );
 
       agentCommand.mockClear();
       agentCommand.mockResolvedValueOnce({

@@ -50,6 +50,7 @@ import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import {
   CreateResponseBodySchema,
   type CreateResponseBody,
+  type OpenClawResponseExtensions,
   type OutputItem,
   type ResponseResource,
   type StreamingEvent,
@@ -377,6 +378,7 @@ function createResponseResource(params: {
   output: OutputItem[];
   usage?: Usage;
   error?: { code: string; message: string };
+  xOpenClaw?: OpenClawResponseExtensions;
 }): ResponseResource {
   return {
     id: params.id,
@@ -387,7 +389,64 @@ function createResponseResource(params: {
     output: params.output,
     usage: params.usage ?? createEmptyUsage(),
     error: params.error,
+    ...(params.xOpenClaw ? { x_openclaw: params.xOpenClaw } : {}),
   };
+}
+
+function isNonNullObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function firstDefined<T>(values: T[]): T | undefined {
+  return values.length > 0 ? values[0] : undefined;
+}
+
+function collectOpenClawResponseExtensions(
+  payloads: unknown,
+): OpenClawResponseExtensions | undefined {
+  if (!Array.isArray(payloads)) {
+    return undefined;
+  }
+
+  const presentations: unknown[] = [];
+  const suggestedTopicSets: unknown[] = [];
+  for (const payload of payloads) {
+    if (!isNonNullObject(payload)) {
+      continue;
+    }
+    if (payload.presentation !== undefined) {
+      presentations.push(payload.presentation);
+    }
+    const suggestedTopics = payload.suggestedTopics ?? payload.suggested_topics;
+    if (suggestedTopics !== undefined) {
+      suggestedTopicSets.push(suggestedTopics);
+    }
+  }
+
+  if (presentations.length === 0 && suggestedTopicSets.length === 0) {
+    return undefined;
+  }
+
+  return {
+    ...(firstDefined(presentations) !== undefined
+      ? { presentation: firstDefined(presentations) }
+      : {}),
+    ...(presentations.length > 1 ? { presentations } : {}),
+    ...(firstDefined(suggestedTopicSets) !== undefined
+      ? { suggestedTopics: firstDefined(suggestedTopicSets) }
+      : {}),
+    ...(suggestedTopicSets.length > 1 ? { suggestedTopicSets } : {}),
+  };
+}
+
+function writeOpenClawMetadataSseEvent(
+  res: ServerResponse,
+  xOpenClaw: OpenClawResponseExtensions | undefined,
+) {
+  if (!xOpenClaw) {
+    return;
+  }
+  writeSseEvent(res, { type: "response.openclaw_metadata.done", x_openclaw: xOpenClaw });
 }
 
 async function runResponsesAgentCommand(params: {
@@ -701,6 +760,7 @@ export async function handleOpenResponsesHttpRequest(
       }
 
       const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
+      const xOpenClaw = collectOpenClawResponseExtensions(payloads);
       const usage = extractUsageFromResult(result);
       const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
@@ -747,6 +807,7 @@ export async function handleOpenResponsesHttpRequest(
           status: "incomplete",
           output,
           usage,
+          xOpenClaw,
         });
         rememberResponseSession();
         sendJson(res, 200, response);
@@ -774,6 +835,7 @@ export async function handleOpenResponsesHttpRequest(
           }),
         ],
         usage,
+        xOpenClaw,
       });
 
       rememberResponseSession();
@@ -821,6 +883,7 @@ export async function handleOpenResponsesHttpRequest(
   let unsubscribe = () => {};
   let stopWatchingDisconnect = () => {};
   let finalUsage: Usage | undefined;
+  let finalXOpenClaw: OpenClawResponseExtensions | undefined;
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
 
   const maybeFinalize = () => {
@@ -874,9 +937,11 @@ export async function handleOpenResponsesHttpRequest(
       status: finalizeRequested.status,
       output: [completedItem],
       usage,
+      xOpenClaw: finalXOpenClaw,
     });
 
     rememberResponseSession();
+    writeOpenClawMetadataSseEvent(res, finalXOpenClaw);
     writeSseEvent(res, { type: "response.completed", response: finalResponse });
     writeDone(res);
     res.end();
@@ -992,6 +1057,7 @@ export async function handleOpenResponsesHttpRequest(
       // Check for pending client tool calls BEFORE maybeFinalize() because the
       // lifecycle:end event may already have requested finalization.
       const resultAny = result as { payloads?: Array<{ text?: string }>; meta?: unknown };
+      finalXOpenClaw = collectOpenClawResponseExtensions(resultAny.payloads);
       const meta = resultAny.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
@@ -1082,11 +1148,13 @@ export async function handleOpenResponsesHttpRequest(
           status: "incomplete",
           output: [completedItem, ...functionCallItems],
           usage,
+          xOpenClaw: finalXOpenClaw,
         });
         closed = true;
         stopWatchingDisconnect();
         unsubscribe();
         rememberResponseSession();
+        writeOpenClawMetadataSseEvent(res, finalXOpenClaw);
         writeSseEvent(res, { type: "response.completed", response: incompleteResponse });
         writeDone(res);
         res.end();

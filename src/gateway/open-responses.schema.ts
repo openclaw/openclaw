@@ -274,6 +274,17 @@ export const UsageSchema = z.object({
 
 export type Usage = z.infer<typeof UsageSchema>;
 
+export const OpenClawResponseExtensionsSchema = z
+  .object({
+    presentation: z.unknown().optional(),
+    presentations: z.array(z.unknown()).optional(),
+    suggestedTopics: z.unknown().optional(),
+    suggestedTopicSets: z.array(z.unknown()).optional(),
+  })
+  .passthrough();
+
+export type OpenClawResponseExtensions = z.infer<typeof OpenClawResponseExtensionsSchema>;
+
 export const ResponseResourceSchema = z.object({
   id: z.string(),
   object: z.literal("response"),
@@ -289,6 +300,7 @@ export const ResponseResourceSchema = z.object({
       message: z.string(),
     })
     .optional(),
+  x_openclaw: OpenClawResponseExtensionsSchema.optional(),
 });
 
 export type ResponseResource = z.infer<typeof ResponseResourceSchema>;
@@ -361,6 +373,11 @@ export const OutputTextDoneEventSchema = z.object({
   text: z.string(),
 });
 
+export const OpenClawMetadataDoneEventSchema = z.object({
+  type: z.literal("response.openclaw_metadata.done"),
+  x_openclaw: OpenClawResponseExtensionsSchema,
+});
+
 export type StreamingEvent =
   | z.infer<typeof ResponseCreatedEventSchema>
   | z.infer<typeof ResponseInProgressEventSchema>
@@ -371,4 +388,5 @@ export type StreamingEvent =
   | z.infer<typeof ContentPartAddedEventSchema>
   | z.infer<typeof ContentPartDoneEventSchema>
   | z.infer<typeof OutputTextDeltaEventSchema>
-  | z.infer<typeof OutputTextDoneEventSchema>;
+  | z.infer<typeof OutputTextDoneEventSchema>
+  | z.infer<typeof OpenClawMetadataDoneEventSchema>;
