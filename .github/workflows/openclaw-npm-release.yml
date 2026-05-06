@@ -30,6 +30,8 @@ concurrency:
   group: openclaw-npm-release-${{ github.event_name == 'workflow_dispatch' && format('{0}-{1}', inputs.tag, inputs.npm_dist_tag) || github.ref }}
   cancel-in-progress: false
 
+permissions: {}
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
