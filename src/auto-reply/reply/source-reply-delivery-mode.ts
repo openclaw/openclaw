@@ -5,6 +5,7 @@ import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 
 export type SourceReplyDeliveryModeContext = {
   ChatType?: string;
+  CommandAuthorized?: boolean;
   CommandSource?: "text" | "native";
 };
 
@@ -20,7 +21,10 @@ export function resolveSourceReplyDeliveryMode(params: {
       ? "automatic"
       : params.requested;
   }
-  if (params.ctx.CommandSource === "native" || params.ctx.CommandSource === "text") {
+  if (
+    params.ctx.CommandSource === "native" ||
+    (params.ctx.CommandSource === "text" && params.ctx.CommandAuthorized === true)
+  ) {
     return "automatic";
   }
   const chatType = normalizeChatType(params.ctx.ChatType);
