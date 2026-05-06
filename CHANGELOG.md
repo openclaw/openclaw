@@ -792,6 +792,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/onboarding: allow install-on-demand provider setup entries to persist ClawHub artifact metadata after explicit ClawHub installs while retaining npm/local fallback paths. Thanks @vincentkoc.
 - Plugins/Crestodian: add ClawHub plugin search plus Crestodian plugin list/search/install/uninstall operations, with approval and audit coverage for install and uninstall.
 - Channels/thread bindings: replace split subagent/ACP thread-spawn toggles with `threadBindings.spawnSessions`, default thread-bound spawns on, and let `openclaw doctor --fix` migrate the legacy keys. (#75943)
+- Commands/messages: add `/messaging_window` for viewing and updating inbound message batching windows globally or per channel, with Telegram quick-pick presets and the `/messaging-window` alias. Thanks @zarruk.
 - Providers/OpenAI: add `extraBody`/`extra_body` passthrough for OpenAI-compatible TTS endpoints, so custom speech servers can receive fields such as `lang` in `/audio/speech` requests. Fixes #39900. Thanks @R3NK0R.
 - Dependencies: refresh workspace dependency pins, including TypeBox 1.1.37, AWS SDK 3.1041.0, Microsoft Teams 2.0.9, and Marked 18.0.3. Thanks @mariozechner, @aws, and @microsoft.
 - Discord/channels: add reusable message-channel access groups plus Discord channel-audience DM authorization, so allowlists can reference `accessGroup:<name>` across channel auth paths. (#75813)

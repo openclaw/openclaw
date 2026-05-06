@@ -144,6 +144,7 @@ Current source-of-truth:
     - `/exec host=<auto|sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>` shows or sets exec defaults.
     - `/model [name|#|status]` shows or sets the model.
     - `/models [provider] [page] [limit=<n>|size=<n>|all]` lists configured/auth-available providers or models for a provider; add `all` to browse that provider's full catalog.
+    - `/messaging_window status|global <duration|off>|channel <name|current> <duration|off>|reset global|reset channel <name|current>` manages inbound message batching via `messages.inbound`.
     - `/queue <mode>` manages queue behavior (`steer`, legacy `queue`, `followup`, `collect`, `steer-backlog`, `interrupt`) plus options like `debounce:0.5s cap:25 drop:summarize`; `/queue default` or `/queue reset` clears the session override. See [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-steering).
     - `/steer <message>` injects guidance into the active run for the current session, independent of `/queue` mode. It does not start a new run when the session is idle. Alias: `/tell`. See [Steer](/tools/steer).
 
@@ -396,6 +397,35 @@ Examples:
 <Note>
 Config is validated before write; invalid changes are rejected. `/config` updates persist across restarts.
 </Note>
+
+## Messaging window
+
+`/messaging_window` manages the inbound batching window for rapid same-sender
+messages. It writes the same `messages.inbound` config keys you can edit
+manually, but keeps the common operations short. `/messaging-window` is also
+accepted as an alias.
+
+Examples:
+
+```
+/messaging_window status
+/messaging-window status
+/messaging_window 3s
+/messaging_window off
+/messaging_window global 2s
+/messaging_window current 5s
+/messaging_window telegram 5s
+/messaging_window current off
+/messaging_window channel current 5s
+/messaging_window channel whatsapp off
+/messaging_window reset current
+/messaging_window reset channel whatsapp
+```
+
+On Telegram, opening `/messaging_window` as a native command shows quick-pick
+buttons for common global windows and current-channel overrides. Writes are
+owner-only, require `commands.config: true`, and honor channel `configWrites`
+policy.
 
 ## MCP updates
 

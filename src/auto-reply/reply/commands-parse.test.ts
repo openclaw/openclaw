@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseConfigCommand } from "./config-commands.js";
 import { parseDebugCommand } from "./debug-commands.js";
+import { parseMessagingWindowCommand } from "./messaging-window-command.js";
 
 describe("config/debug command parsing", () => {
   it("parses config/debug command actions and JSON payloads", () => {
@@ -47,6 +48,61 @@ describe("config/debug command parsing", () => {
         parse: parseDebugCommand,
         input: '/debug set foo={"a":1}',
         expected: { action: "set", path: "foo", value: { a: 1 } },
+      },
+      {
+        parse: parseMessagingWindowCommand,
+        input: "/messaging_window",
+        expected: { action: "status" },
+      },
+      {
+        parse: parseMessagingWindowCommand,
+        input: "/messaging-window global 3s",
+        expected: { action: "set", scope: "global", debounceMs: 3000 },
+      },
+      {
+        parse: parseMessagingWindowCommand,
+        input: "/messaging_window 3s",
+        expected: { action: "set", scope: "global", debounceMs: 3000 },
+      },
+      {
+        parse: parseMessagingWindowCommand,
+        input: "/messaging_window off",
+        expected: { action: "set", scope: "global", debounceMs: 0 },
+      },
+      {
+        parse: parseMessagingWindowCommand,
+        input: "/messaging_window channel whatsapp 2500ms",
+        expected: { action: "set", scope: "channel", channel: "whatsapp", debounceMs: 2500 },
+      },
+      {
+        parse: parseMessagingWindowCommand,
+        input: "/messaging_window whatsapp 2500ms",
+        expected: { action: "set", scope: "channel", channel: "whatsapp", debounceMs: 2500 },
+      },
+      {
+        parse: parseMessagingWindowCommand,
+        input: "/messaging_window current 5s",
+        expected: { action: "set", scope: "channel", channel: "current", debounceMs: 5000 },
+      },
+      {
+        parse: parseMessagingWindowCommand,
+        input: "/messaging_window current off",
+        expected: { action: "set", scope: "channel", channel: "current", debounceMs: 0 },
+      },
+      {
+        parse: parseMessagingWindowCommand,
+        input: "/messaging_window reset channel current",
+        expected: { action: "reset", scope: "channel", channel: "current" },
+      },
+      {
+        parse: parseMessagingWindowCommand,
+        input: "/messaging_window reset current",
+        expected: { action: "reset", scope: "channel", channel: "current" },
+      },
+      {
+        parse: parseMessagingWindowCommand,
+        input: "/messaging_window off global",
+        expected: { action: "set", scope: "global", debounceMs: 0 },
       },
     ];
 
