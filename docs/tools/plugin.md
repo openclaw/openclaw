@@ -162,6 +162,9 @@ managed npm root. After npm finishes, OpenClaw verifies the installed
 `package-lock.json` entry still matches the resolved version and integrity. If
 npm writes different package metadata, the install fails and the managed package
 is rolled back instead of accepting a different plugin artifact.
+Managed npm roots also inherit OpenClaw's package-level npm `overrides`, so
+security pins that protect the packaged host also apply to hoisted external
+plugin dependencies.
 
 Source checkouts are pnpm workspaces. If you clone OpenClaw to hack on bundled
 plugins, run `pnpm install`; OpenClaw then loads bundled plugins from

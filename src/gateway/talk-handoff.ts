@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { recordTalkDiagnosticEvent } from "../talk/diagnostics.js";
+import { recordTalkObservabilityEvent } from "../talk/observability.js";
 import {
   createTalkSessionController,
   type TalkBrain,
@@ -328,7 +328,7 @@ function createTalkHandoffRoom(params: {
         brain: params.brain,
         provider: params.provider,
       },
-      { onEvent: recordTalkDiagnosticEvent },
+      { onEvent: recordTalkObservabilityEvent },
     ),
   };
 }
