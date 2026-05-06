@@ -14,6 +14,7 @@ import { hydrateResolvedSkills } from "../../agents/skills/snapshot-hydration.js
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
+  rewriteSessionFileForNewSessionId,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
@@ -359,36 +360,4 @@ function canonicalizeAbsoluteSessionFilePath(filePath: string): string {
       cursor = parent;
     }
   }
-}
-
-function rewriteSessionFileForNewSessionId(params: {
-  sessionFile?: string;
-  previousSessionId: string;
-  nextSessionId: string;
-}): string | undefined {
-  const trimmed = normalizeOptionalString(params.sessionFile);
-  if (!trimmed) {
-    return undefined;
-  }
-  const base = path.basename(trimmed);
-  if (!base.endsWith(".jsonl")) {
-    return undefined;
-  }
-  const withoutExt = base.slice(0, -".jsonl".length);
-  if (withoutExt === params.previousSessionId) {
-    return path.join(path.dirname(trimmed), `${params.nextSessionId}.jsonl`);
-  }
-  if (withoutExt.startsWith(`${params.previousSessionId}-topic-`)) {
-    return path.join(
-      path.dirname(trimmed),
-      `${params.nextSessionId}${base.slice(params.previousSessionId.length)}`,
-    );
-  }
-  const forkMatch = withoutExt.match(
-    /^(\d{4}-\d{2}-\d{2}T[\w-]+(?:Z|[+-]\d{2}(?:-\d{2})?)?)_(.+)$/,
-  );
-  if (forkMatch?.[2] === params.previousSessionId) {
-    return path.join(path.dirname(trimmed), `${forkMatch[1]}_${params.nextSessionId}.jsonl`);
-  }
-  return undefined;
 }

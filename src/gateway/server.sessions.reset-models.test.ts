@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { expect, test } from "vitest";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -48,6 +49,136 @@ test("sessions.reset recomputes model from defaults instead of stale runtime mod
   expect(reset.payload?.entry.model).toBe("gpt-test-a");
   expect(reset.payload?.entry.contextTokens).toBeUndefined();
   await expect(fs.stat(reset.payload?.entry.sessionFile as string)).resolves.toBeTruthy();
+});
+
+test("sessions.reset rotates generated transcript path to the new session id", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionsDir = await fs.realpath(path.dirname(storePath));
+  const oldSessionId = "11111111-1111-4111-8111-111111111111";
+  const oldTranscriptPath = path.join(sessionsDir, `${oldSessionId}.jsonl`);
+  await fs.writeFile(
+    oldTranscriptPath,
+    `${JSON.stringify({
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: oldSessionId,
+      timestamp: "2026-05-05T00:00:00.000Z",
+      cwd: process.cwd(),
+    })}\n`,
+    "utf-8",
+  );
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(oldSessionId, {
+        sessionFile: oldTranscriptPath,
+      }),
+    },
+  });
+
+  const reset = await directSessionReq<{
+    ok: true;
+    entry: {
+      sessionId: string;
+      sessionFile?: string;
+    };
+  }>("sessions.reset", { key: "main" });
+
+  expect(reset.ok).toBe(true);
+  const nextSessionId = reset.payload?.entry.sessionId;
+  const nextSessionFile = reset.payload?.entry.sessionFile;
+  expect(nextSessionId).toBeTruthy();
+  expect(nextSessionId).not.toBe(oldSessionId);
+  expect(nextSessionFile).toBe(path.join(sessionsDir, `${nextSessionId}.jsonl`));
+
+  const archived = await fs.readdir(sessionsDir);
+  expect(archived.some((name) => name.startsWith(`${oldSessionId}.jsonl.reset.`))).toBe(true);
+
+  const nextRaw = await fs.readFile(nextSessionFile as string, "utf-8");
+  const nextHeader = JSON.parse(nextRaw.trim()) as { id?: string };
+  expect(nextHeader.id).toBe(nextSessionId);
+});
+
+test("sessions.reset rotates relative generated transcript path to the new session id", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionsDir = await fs.realpath(path.dirname(storePath));
+  const oldSessionId = "33333333-3333-4333-8333-333333333333";
+  const relativeTranscriptPath = `${oldSessionId}.jsonl`;
+  const oldTranscriptPath = path.join(sessionsDir, relativeTranscriptPath);
+  await fs.writeFile(
+    oldTranscriptPath,
+    `${JSON.stringify({
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: oldSessionId,
+      timestamp: "2026-05-05T00:00:00.000Z",
+      cwd: process.cwd(),
+    })}\n`,
+    "utf-8",
+  );
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(oldSessionId, {
+        sessionFile: relativeTranscriptPath,
+      }),
+    },
+  });
+
+  const reset = await directSessionReq<{
+    ok: true;
+    entry: {
+      sessionId: string;
+      sessionFile?: string;
+    };
+  }>("sessions.reset", { key: "main" });
+
+  expect(reset.ok).toBe(true);
+  const nextSessionId = reset.payload?.entry.sessionId;
+  expect(nextSessionId).toBeTruthy();
+  expect(nextSessionId).not.toBe(oldSessionId);
+  expect(reset.payload?.entry.sessionFile).toBe(path.join(sessionsDir, `${nextSessionId}.jsonl`));
+});
+
+test("sessions.reset preserves custom subdirectory transcript path named after old session id", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionsDir = await fs.realpath(path.dirname(storePath));
+  const oldSessionId = "22222222-2222-4222-8222-222222222222";
+  const customTranscriptDir = path.join(sessionsDir, "custom");
+  const customTranscriptPath = path.join(customTranscriptDir, `${oldSessionId}.jsonl`);
+  await fs.mkdir(customTranscriptDir, { recursive: true });
+  await fs.writeFile(
+    customTranscriptPath,
+    `${JSON.stringify({
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: oldSessionId,
+      timestamp: "2026-05-05T00:00:00.000Z",
+      cwd: process.cwd(),
+    })}\n`,
+    "utf-8",
+  );
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(oldSessionId, {
+        sessionFile: customTranscriptPath,
+      }),
+    },
+  });
+
+  const reset = await directSessionReq<{
+    ok: true;
+    entry: {
+      sessionId: string;
+      sessionFile?: string;
+    };
+  }>("sessions.reset", { key: "main" });
+
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry.sessionId).toBeTruthy();
+  expect(reset.payload?.entry.sessionId).not.toBe(oldSessionId);
+  expect(reset.payload?.entry.sessionFile).toBe(customTranscriptPath);
 });
 
 test("sessions.reset preserves legacy explicit model overrides without modelOverrideSource", async () => {
