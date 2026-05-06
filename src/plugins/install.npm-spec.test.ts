@@ -141,6 +141,7 @@ type MockNpmPackage = {
   versions?: string[];
   installedVersion?: string;
   installedIntegrity?: string;
+  materializesRootOpenClaw?: boolean;
   skipLockfileEntry?: boolean;
 };
 
@@ -162,12 +163,43 @@ function writeNpmRootPackageLock(params: {
       version: pkg.installedVersion ?? pkg.version,
       integrity: pkg.installedIntegrity ?? pkg.integrity ?? "sha512-plugin-test",
     };
+    if (pkg.materializesRootOpenClaw) {
+      lockPackages["node_modules/openclaw"] = {
+        peer: true,
+        version: "2026.5.3",
+      };
+    }
   }
   fs.writeFileSync(
     path.join(params.npmRoot, "package-lock.json"),
     `${JSON.stringify({ lockfileVersion: 3, packages: lockPackages }, null, 2)}\n`,
     "utf-8",
   );
+}
+
+function prunePluginLocalOpenClawPeerLinks(npmRoot: string) {
+  const nodeModulesDir = path.join(npmRoot, "node_modules");
+  if (!fs.existsSync(nodeModulesDir)) {
+    return;
+  }
+  for (const entry of fs.readdirSync(nodeModulesDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const entryPath = path.join(nodeModulesDir, entry.name);
+    const packageDirs = entry.name.startsWith("@")
+      ? fs
+          .readdirSync(entryPath, { withFileTypes: true })
+          .filter((scopedEntry) => scopedEntry.isDirectory())
+          .map((scopedEntry) => path.join(entryPath, scopedEntry.name))
+      : [entryPath];
+    for (const packageDir of packageDirs) {
+      fs.rmSync(path.join(packageDir, "node_modules", "openclaw"), {
+        recursive: true,
+        force: true,
+      });
+    }
+  }
 }
 
 function mockNpmViewAndInstall(params: {
@@ -186,6 +218,7 @@ function mockNpmViewAndInstall(params: {
   versions?: string[];
   installedVersion?: string;
   installedIntegrity?: string;
+  materializesRootOpenClaw?: boolean;
   skipLockfileEntry?: boolean;
 }) {
   mockNpmViewAndInstallMany([params]);
@@ -231,6 +264,7 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
           dependencies?: Record<string, string>;
         };
         const installedPackages: MockNpmPackage[] = [];
+        prunePluginLocalOpenClawPeerLinks(npmRoot);
         for (const packageName of Object.keys(manifest.dependencies ?? {})) {
           const pkg = packagesByName.get(packageName);
           if (!pkg) {
@@ -246,6 +280,15 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
             ...pkg,
             version: pkg.installedVersion ?? pkg.version,
           });
+          if (pkg.materializesRootOpenClaw) {
+            const openclawRoot = path.join(npmRoot, "node_modules", "openclaw");
+            fs.mkdirSync(openclawRoot, { recursive: true });
+            fs.writeFileSync(
+              path.join(openclawRoot, "package.json"),
+              JSON.stringify({ name: "openclaw", version: "2026.5.3" }),
+              "utf8",
+            );
+          }
           installedPackages.push(pkg);
         }
         writeNpmRootPackageLock({
@@ -257,6 +300,19 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
       }
       if (argv[0] === "npm" && argv[1] === "uninstall") {
         const packageName = argv.at(-1);
+        if (packageName === "openclaw") {
+          const prefixIndex = argv.indexOf("--prefix");
+          const prefixValue = prefixIndex >= 0 ? argv[prefixIndex + 1] : undefined;
+          const npmRoot = prefixValue === "." ? options?.cwd : prefixValue;
+          if (!npmRoot) {
+            throw new Error(`unexpected npm uninstall command: ${argv.join(" ")}`);
+          }
+          fs.rmSync(path.join(npmRoot, "node_modules", "openclaw"), {
+            recursive: true,
+            force: true,
+          });
+          return successfulSpawn();
+        }
         const pkg = packageName ? packagesByName.get(packageName) : undefined;
         if (!pkg) {
           throw new Error(`unexpected npm uninstall package: ${packageName ?? ""}`);
@@ -504,8 +560,141 @@ describe("installPluginFromNpmSpec", () => {
       if (!second.ok) {
         expect(second.error).not.toContain("peer-plugin/node_modules/openclaw");
       }
+      expect(
+        fs
+          .lstatSync(path.join(npmRoot, "node_modules", "peer-plugin", "node_modules", "openclaw"))
+          .isSymbolicLink(),
+      ).toBe(true);
     },
   );
+
+  it.runIf(process.platform !== "win32")(
+    "repairs root openclaw materialized by npm peer handling",
+    async () => {
+      const stateDir = suiteTempRootTracker.makeTempDir();
+      const npmRoot = path.join(stateDir, "npm");
+
+      mockNpmViewAndInstall({
+        spec: "required-peer-plugin@1.0.0",
+        packageName: "required-peer-plugin",
+        version: "1.0.0",
+        pluginId: "required-peer-plugin",
+        npmRoot,
+        peerDependencies: { openclaw: "^2026.0.0" },
+        materializesRootOpenClaw: true,
+      });
+
+      const result = await installPluginFromNpmSpec({
+        spec: "required-peer-plugin@1.0.0",
+        npmDir: npmRoot,
+        logger: { info: () => {}, warn: () => {} },
+      });
+
+      expect(result.ok).toBe(true);
+      expect(fs.existsSync(path.join(npmRoot, "node_modules", "openclaw"))).toBe(false);
+      const lockfile = JSON.parse(
+        fs.readFileSync(path.join(npmRoot, "package-lock.json"), "utf8"),
+      ) as {
+        packages?: Record<string, unknown>;
+      };
+      expect(lockfile.packages?.["node_modules/openclaw"]).toBeUndefined();
+      expect(
+        fs
+          .lstatSync(
+            path.join(npmRoot, "node_modules", "required-peer-plugin", "node_modules", "openclaw"),
+          )
+          .isSymbolicLink(),
+      ).toBe(true);
+    },
+  );
+
+  it("repairs stale managed openclaw root packages before npm plugin installs", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(stateDir, "npm");
+    fs.mkdirSync(path.join(npmRoot, "node_modules", "openclaw"), { recursive: true });
+    fs.writeFileSync(
+      path.join(npmRoot, "package.json"),
+      JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            openclaw: "2026.5.4",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(npmRoot, "package-lock.json"),
+      `${JSON.stringify(
+        {
+          lockfileVersion: 3,
+          packages: {
+            "": {
+              dependencies: {
+                openclaw: "2026.5.4",
+              },
+            },
+            "node_modules/openclaw": {
+              version: "2026.5.4",
+              resolved: "https://registry.npmjs.org/openclaw/-/openclaw-2026.5.4.tgz",
+            },
+          },
+          dependencies: {
+            openclaw: {
+              version: "2026.5.4",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(npmRoot, "node_modules", "openclaw", "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.5.4",
+      }),
+      "utf-8",
+    );
+
+    mockNpmViewAndInstall({
+      spec: "@openclaw/discord@beta",
+      packageName: "@openclaw/discord",
+      version: "2026.5.5-beta.1",
+      pluginId: "discord",
+      npmRoot,
+      peerDependencies: { openclaw: ">=2026.5.5-beta.1" },
+      expectedDependencySpec: "2026.5.5-beta.1",
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/discord@beta",
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(true);
+    const manifest = JSON.parse(fs.readFileSync(path.join(npmRoot, "package.json"), "utf8")) as {
+      dependencies?: Record<string, string>;
+    };
+    expect(manifest.dependencies).not.toHaveProperty("openclaw");
+    expect(manifest.dependencies).toMatchObject({
+      "@openclaw/discord": "2026.5.5-beta.1",
+    });
+    const lockfile = JSON.parse(
+      fs.readFileSync(path.join(npmRoot, "package-lock.json"), "utf8"),
+    ) as {
+      packages?: Record<string, unknown>;
+      dependencies?: Record<string, unknown>;
+    };
+    expect(lockfile.packages?.["node_modules/openclaw"]).toBeUndefined();
+    expect(lockfile.dependencies?.openclaw).toBeUndefined();
+  });
 
   it("allows npm-spec installs with dangerous code patterns when forced unsafe install is set", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
@@ -545,6 +734,19 @@ describe("installPluginFromNpmSpec", () => {
 
   it("rolls back the managed npm root when npm install fails", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const peerPluginDir = path.join(npmRoot, "node_modules", "peer-plugin");
+    const peerLink = path.join(peerPluginDir, "node_modules", "openclaw");
+    fs.mkdirSync(path.dirname(peerLink), { recursive: true });
+    fs.writeFileSync(
+      path.join(peerPluginDir, "package.json"),
+      JSON.stringify({
+        name: "peer-plugin",
+        version: "1.0.0",
+        peerDependencies: { openclaw: ">=2026.0.0" },
+      }),
+      "utf8",
+    );
+    fs.symlinkSync(suiteTempRootTracker.makeTempDir(), peerLink, "junction");
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       if (JSON.stringify(argv) === JSON.stringify(npmViewArgv("@openclaw/voice-call@0.0.1"))) {
         return successfulSpawn(
@@ -559,6 +761,7 @@ describe("installPluginFromNpmSpec", () => {
         );
       }
       if (argv[0] === "npm" && argv[1] === "install") {
+        fs.rmSync(peerLink, { recursive: true, force: true });
         return {
           code: 1,
           stdout: "",
@@ -567,6 +770,9 @@ describe("installPluginFromNpmSpec", () => {
           killed: false,
           termination: "exit" as const,
         };
+      }
+      if (argv[0] === "npm" && argv[1] === "uninstall") {
+        return successfulSpawn("");
       }
       throw new Error(`unexpected command: ${argv.join(" ")}`);
     });
@@ -588,6 +794,7 @@ describe("installPluginFromNpmSpec", () => {
     ).resolves.toMatchObject({
       dependencies: {},
     });
+    expect(fs.lstatSync(peerLink).isSymbolicLink()).toBe(true);
   });
 
   it("rolls back installed npm package debris when security scan blocks the plugin", async () => {
