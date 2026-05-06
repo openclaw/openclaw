@@ -116,7 +116,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .option("--json", "Output JSON", false)
     .option(
       "--disable",
-      "Persistently disable KeepAlive auto-recovery (launchd only); use --disable to prevent respawn until next `gateway start`",
+      "Persistently suppress KeepAlive/RunAtLoad so the gateway does not respawn until next start (launchd only)",
       false,
     )
     .action(async (cmdOpts) => {
