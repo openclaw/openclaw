@@ -118,6 +118,32 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
     );
   });
 
+  it("does not treat constrained hook session key overrides as aggregate dangerous flags", () => {
+    expect(
+      collectEnabledInsecureOrDangerousFlagsFromContracts(
+        asConfig({
+          hooks: {
+            allowRequestSessionKey: true,
+            allowedSessionKeyPrefixes: ["hook:gmail:"],
+          },
+        }),
+      ),
+    ).not.toContain("hooks.allowRequestSessionKey=true");
+  });
+
+  it("treats blank hook session key prefixes as aggregate dangerous flags", () => {
+    expect(
+      collectEnabledInsecureOrDangerousFlagsFromContracts(
+        asConfig({
+          hooks: {
+            allowRequestSessionKey: true,
+            allowedSessionKeyPrefixes: ["   "],
+          },
+        }),
+      ),
+    ).toContain("hooks.allowRequestSessionKey=true");
+  });
+
   it("uses stable agent ids for per-agent dangerous sandbox flags", () => {
     expect(
       collectEnabledInsecureOrDangerousFlagsFromContracts(
