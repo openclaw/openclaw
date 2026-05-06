@@ -102,30 +102,39 @@ export async function sendTelegramPayloadMessages(params: {
     ...(params.payload.audioAsVoice === true ? { asVoice: true } : {}),
   };
 
-  // Telegram allows reply_markup on media; attach buttons only to the first send.
-  const result = await sendPayloadMediaSequenceOrFallback({
-    text,
-    mediaUrls,
-    fallbackResult: { messageId: "unknown", chatId: params.to },
-    sendNoMedia: async () =>
-      await params.send(params.to, text, {
-        ...payloadOpts,
-        buttons,
-      }),
-    send: async ({ text, mediaUrl, isFirst }) =>
-      await params.send(params.to, text, {
-        ...payloadOpts,
-        mediaUrl,
-        ...(isFirst ? { buttons } : {}),
-      }),
-  });
-  return {
+  const markProviderAccepted = (
+    result: Awaited<ReturnType<TelegramSendFn>>,
+  ): Awaited<ReturnType<TelegramSendFn>> => ({
     ...result,
     delivery: {
       ...result.delivery,
       providerAccepted: true,
     },
-  };
+  });
+
+  // Telegram allows reply_markup on media; attach buttons only to the first send.
+  // Annotate only results returned by a real Telegram send. The fallback result
+  // is local-only and must not be reported as provider-accepted.
+  return await sendPayloadMediaSequenceOrFallback<Awaited<ReturnType<TelegramSendFn>>>({
+    text,
+    mediaUrls,
+    fallbackResult: { messageId: "unknown", chatId: params.to },
+    sendNoMedia: async () =>
+      markProviderAccepted(
+        await params.send(params.to, text, {
+          ...payloadOpts,
+          buttons,
+        }),
+      ),
+    send: async ({ text, mediaUrl, isFirst }) =>
+      markProviderAccepted(
+        await params.send(params.to, text, {
+          ...payloadOpts,
+          mediaUrl,
+          ...(isFirst ? { buttons } : {}),
+        }),
+      ),
+  });
 }
 
 export const telegramOutbound: ChannelOutboundAdapter = {

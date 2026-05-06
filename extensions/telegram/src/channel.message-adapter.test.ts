@@ -148,6 +148,26 @@ describe("telegram channel message adapter", () => {
     });
   });
 
+  it("does not mark unsent payload fallbacks as provider accepted through message sends", async () => {
+    const adapter = telegramPlugin.message;
+    expect(adapter).toBeDefined();
+
+    const result = await adapter!.send!.payload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: {
+        text: "fallback only",
+        mediaUrls: ["", ""],
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+    expect(result.messageId).toBe("unknown");
+    expect(result.delivery).toBeUndefined();
+  });
+
   it("backs declared live capabilities with adapter proofs", async () => {
     const adapter = telegramPlugin.message;
     expect(adapter).toBeDefined();

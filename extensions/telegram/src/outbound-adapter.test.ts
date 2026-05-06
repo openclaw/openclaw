@@ -126,6 +126,26 @@ describe("telegramOutbound", () => {
     });
   });
 
+  it("does not mark unsent payload fallbacks as provider accepted", async () => {
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: {
+        text: "fallback only",
+        mediaUrls: ["", ""],
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "unknown",
+      chatId: "12345",
+    });
+  });
+
   it("uses interactive button labels as fallback text for button-only payloads", async () => {
     sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-buttons", chatId: "12345" });
 
