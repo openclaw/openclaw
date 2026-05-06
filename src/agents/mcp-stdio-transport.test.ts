@@ -159,9 +159,9 @@ describe("OpenClawStdioClientTransport", () => {
     child.emit("spawn");
     await started;
 
-    await expect(
-      transport.send({ jsonrpc: "2.0", id: 2, method: "ping" }),
-    ).rejects.toThrow("EPIPE");
+    await expect(transport.send({ jsonrpc: "2.0", id: 2, method: "ping" })).rejects.toThrow(
+      "EPIPE",
+    );
   });
 
   it("rejects send() when stdin.write throws synchronously (#75438)", async () => {
@@ -179,8 +179,8 @@ describe("OpenClawStdioClientTransport", () => {
     child.emit("spawn");
     await started;
 
-    await expect(
-      transport.send({ jsonrpc: "2.0", id: 3, method: "ping" }),
-    ).rejects.toThrow("write after end");
+    await expect(transport.send({ jsonrpc: "2.0", id: 3, method: "ping" })).rejects.toThrow(
+      "write after end",
+    );
   });
 });

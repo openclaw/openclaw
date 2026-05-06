@@ -204,13 +204,10 @@ describe("runCommandWithTimeout", () => {
     { timeout: 5_000 },
     async () => {
       await loadExecModules();
-      const result = await runCommandWithTimeout(
-        [process.execPath, "-e", "process.exit(0)"],
-        {
-          timeoutMs: 3_000,
-          input: "this input will EPIPE because the child ignores stdin\n",
-        },
-      );
+      const result = await runCommandWithTimeout([process.execPath, "-e", "process.exit(0)"], {
+        timeoutMs: 3_000,
+        input: "this input will EPIPE because the child ignores stdin\n",
+      });
       expect(result.code).toBe(0);
     },
   );
