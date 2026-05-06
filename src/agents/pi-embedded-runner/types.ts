@@ -3,6 +3,7 @@ import type { CliSessionBinding, SessionSystemPromptReport } from "../../config/
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { MessagingToolSend } from "../pi-embedded-messaging.types.js";
+import type { EmbeddedRunStageSummary } from "./run/attempt-stage-timing.js";
 
 export type EmbeddedPiAgentMeta = {
   sessionId: string;
@@ -123,6 +124,7 @@ export type EmbeddedRunFailureSignal = {
 
 export type EmbeddedPiRunMeta = {
   durationMs: number;
+  prepStages?: EmbeddedRunStageSummary;
   agentMeta?: EmbeddedPiAgentMeta;
   aborted?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
