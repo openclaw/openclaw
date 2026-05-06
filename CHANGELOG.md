@@ -114,6 +114,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Memory-core/dreaming: raise the Dream Diary narrative subagent timeout default from 60s to 240s and accept `OPENCLAW_DREAMING_NARRATIVE_TIMEOUT_MS` for operator overrides so multi-workspace and slower-host setups stop losing every dreaming phase to a hard 60-second budget. Fixes #76333. (#76342) Thanks @ottodeng.
+- CLI/sessions: prune old unreferenced transcript, compaction checkpoint, and trajectory artifacts during normal `sessions cleanup`, so gateway restart or crash orphans do not accumulate indefinitely outside `sessions.json`. Fixes #77608. Thanks @slideshow-dingo.
 - Telegram/Codex: generate DM topic labels with Codex-compatible simple-completion requests so auto-created private topics can be renamed instead of staying `New Chat`.
 - Web fetch: bound guarded dispatcher cleanup after request timeouts so timed-out fetches return tool errors instead of leaving Gateway tool lanes active. (#78439) Thanks @obviyus.
 - Gate Slack startup user allowlist resolution [AI]. (#77898) Thanks @pgondhi987.
