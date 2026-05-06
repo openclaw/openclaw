@@ -74,6 +74,8 @@ export class RealtimeTalkSession {
       client: this.client,
       sessionKey: this.sessionKey,
       callbacks: this.callbacks,
+      consultThinkingLevel: session.consultThinkingLevel,
+      consultFastMode: session.consultFastMode,
     });
     await this.transport.start();
   }
