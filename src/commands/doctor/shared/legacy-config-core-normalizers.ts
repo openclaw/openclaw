@@ -1,8 +1,12 @@
+import { pickSandboxToolPolicy } from "../../../agents/sandbox-tool-policy.js";
+import { isToolAllowedByPolicies } from "../../../agents/tool-policy-match.js";
+import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/tool-policy.js";
 import { migrateLegacyRuntimeModelRef } from "../../../agents/model-runtime-aliases.js";
 import { normalizeProviderId } from "../../../agents/provider-id.js";
 import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { AgentToolsConfig, ToolsConfig } from "../../../config/types.tools.js";
 import { DEFAULT_GOOGLE_API_BASE_URL } from "../../../infra/google-api-base-url.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../routing/session-key.js";
 import {
@@ -13,6 +17,37 @@ import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { isRecord } from "./legacy-config-record-shared.js";
 import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
 export { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
+
+function resolveMessageToolAvailable(params: {
+  globalTools?: ToolsConfig;
+  agentTools?: AgentToolsConfig;
+}): boolean {
+  const profile = params.agentTools?.profile ?? params.globalTools?.profile;
+  const profileAlsoAllow = Array.isArray(params.agentTools?.alsoAllow)
+    ? params.agentTools.alsoAllow
+    : Array.isArray(params.globalTools?.alsoAllow)
+      ? params.globalTools.alsoAllow
+      : undefined;
+  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), profileAlsoAllow);
+  return isToolAllowedByPolicies("message", [
+    profilePolicy,
+    pickSandboxToolPolicy(params.globalTools),
+    pickSandboxToolPolicy(params.agentTools),
+  ]);
+}
+
+function hasMessageToolAvailableForAgents(cfg: OpenClawConfig): boolean {
+  const agents = cfg.agents?.list ?? [];
+  if (agents.length === 0) {
+    return resolveMessageToolAvailable({ globalTools: cfg.tools });
+  }
+  return agents.every((agent) =>
+    resolveMessageToolAvailable({
+      globalTools: cfg.tools,
+      agentTools: agent.tools as AgentToolsConfig | undefined,
+    }),
+  );
+}
 
 function hasConfiguredChannels(cfg: OpenClawConfig): boolean {
   const channels = cfg.channels;
@@ -32,6 +67,10 @@ export function normalizeMissingGroupVisibleRepliesDefault(
     messages?.visibleReplies !== undefined ||
     messages?.groupChat?.visibleReplies !== undefined
   ) {
+    return cfg;
+  }
+
+  if (!hasMessageToolAvailableForAgents(cfg)) {
     return cfg;
   }
 
