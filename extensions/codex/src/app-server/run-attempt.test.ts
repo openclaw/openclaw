@@ -4,16 +4,14 @@ import path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   abortAgentHarnessRun,
-  queueAgentHarnessMessage,
-  type EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness";
-import {
   buildAgentRuntimePlan,
   embeddedAgentLog,
   nativeHookRelayTesting,
   onAgentEvent,
+  queueAgentHarnessMessage,
   resetAgentEventsForTest,
   type AgentEventPayload,
+  type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   initializeGlobalHookRunner,
