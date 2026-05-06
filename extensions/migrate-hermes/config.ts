@@ -200,32 +200,14 @@ export function buildConfigItems(params: {
   }
 
   if (memoryProvider === "honcho") {
-    const value = {
-      honcho: {
-        enabled: true,
-        config: childRecord(memory, "honcho"),
-      },
-    };
-    items.push(
-      createMigrationConfigPatchItem({
-        id: "config:memory-plugin:honcho",
-        target: "plugins.entries.honcho",
-        path: ["plugins", "entries"],
-        value,
-        message: "Preserve Hermes Honcho memory settings as a plugin entry for manual activation.",
-        conflict:
-          !params.ctx.overwrite &&
-          hasMigrationConfigPatchConflict(params.ctx.config, ["plugins", "entries"], value),
-      }),
-    );
     items.push(
       createMigrationManualItem({
         id: "manual:memory-provider:honcho",
         source: "config.yaml:memory.provider",
         message:
-          "Hermes used Honcho memory. OpenClaw keeps built-in memory selected until the matching plugin is installed and reviewed.",
+          "Hermes used Honcho memory. OpenClaw keeps built-in memory selected and does not import Honcho plugin config automatically.",
         recommendation:
-          "Install or review the Honcho memory plugin before selecting it for plugins.slots.memory.",
+          "Install or review an OpenClaw Honcho memory plugin before manually adding plugins.entries.honcho or selecting it for plugins.slots.memory.",
       }),
     );
   } else if (memoryProvider && !["builtin", "file", "files"].includes(memoryProvider)) {

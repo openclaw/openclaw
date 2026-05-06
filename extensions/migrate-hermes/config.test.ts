@@ -15,7 +15,7 @@ describe("Hermes migration config mapping", () => {
     await cleanupTempRoots();
   });
 
-  it("plans provider, MCP, skill, and memory plugin config as plugin-owned items", async () => {
+  it("plans provider, MCP, skill, and memory follow-up without importing Honcho plugin config", async () => {
     const root = await makeTempRoot();
     const source = path.join(root, "hermes");
     const workspaceDir = path.join(root, "workspace");
@@ -58,15 +58,10 @@ describe("Hermes migration config mapping", () => {
     expect(plan.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: "config:memory-plugin:honcho",
-          kind: "config",
-          action: "merge",
-          target: "plugins.entries.honcho",
-        }),
-        expect.objectContaining({
           id: "manual:memory-provider:honcho",
           kind: "manual",
           status: "skipped",
+          reason: expect.stringContaining("manually adding plugins.entries.honcho"),
         }),
         expect.objectContaining({
           id: "config:model-providers",
@@ -107,9 +102,52 @@ describe("Hermes migration config mapping", () => {
         }),
       ]),
     );
+    expect(plan.items).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          target: "plugins.entries.honcho",
+        }),
+      ]),
+    );
     expect(plan.warnings).toEqual(
       expect.arrayContaining([expect.stringContaining("manual review")]),
     );
+  });
+
+  it("does not write Honcho plugin entries during apply", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    const workspaceDir = path.join(root, "workspace");
+    const stateDir = path.join(root, "state");
+    const config = {
+      agents: { defaults: { workspace: workspaceDir } },
+    } as OpenClawConfig;
+    await writeFile(
+      path.join(source, "config.yaml"),
+      ["memory:", "  provider: honcho", "  honcho:", "    project: hermes", ""].join("\n"),
+    );
+
+    const provider = buildHermesMigrationProvider();
+    const result = await provider.apply(
+      makeContext({
+        source,
+        stateDir,
+        workspaceDir,
+        runtime: makeConfigRuntime(config),
+      }),
+    );
+
+    expect(result.summary.errors).toBe(0);
+    expect(result.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "manual:memory-provider:honcho",
+          status: "skipped",
+        }),
+      ]),
+    );
+    expect(config.plugins?.entries?.honcho).toBeUndefined();
+    expect(config.plugins?.slots).toMatchObject({ memory: "memory-core" });
   });
 
   it("applies mapped config items through the migration runtime config writer", async () => {
