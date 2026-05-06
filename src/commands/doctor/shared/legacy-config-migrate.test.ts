@@ -227,7 +227,7 @@ describe("legacy session parent fork migrate", () => {
     );
     expect(res.changes).toContain(
       "Removed session.parentForkMaxTokens; parent fork sizing is automatic.",
-    ]);
+    );
   });
 });
 
