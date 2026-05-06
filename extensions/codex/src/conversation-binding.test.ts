@@ -511,4 +511,124 @@ describe("codex conversation binding", () => {
       { type: "text", text: "use the fallback prompt" },
     ]);
   });
+
+  it("notifies when a bound Codex turn leaves the thread goal terminal", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-1",
+        cwd: tempDir,
+        authProfileId: "openai-codex:work",
+      }),
+    );
+    let notificationHandler:
+      | ((notification: { method: string; params?: Record<string, unknown> }) => void)
+      | undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method === "turn/start") {
+        queueMicrotask(() =>
+          notificationHandler?.({
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                items: [{ type: "agentMessage", id: "msg-1", text: "finished" }],
+              },
+            },
+          }),
+        );
+        return { turn: { id: "turn-1", status: "running" } };
+      }
+      if (method === "thread/goal/get") {
+        return {
+          goal: {
+            threadId: "thread-1",
+            objective: "Ship native goal bridge",
+            status: "complete",
+            tokensUsed: 42,
+            tokenBudget: 100,
+            timeUsedSeconds: 61,
+            updatedAt: 123,
+          },
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request,
+      addNotificationHandler: vi.fn((handler) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+    const onTerminalGoal = vi.fn();
+
+    await expect(
+      handleCodexConversationInboundClaim(
+        {
+          content: "continue",
+          bodyForAgent: "continue",
+          channel: "discord",
+          conversationId: "channel-1",
+          accountId: "default",
+          threadId: "message-thread-1",
+          sessionKey: "agent:main:discord:channel:1",
+          runId: "run-1",
+          isGroup: true,
+          commandAuthorized: true,
+        },
+        {
+          channelId: "discord",
+          sessionKey: "agent:main:discord:channel:1",
+          runId: "run-1",
+          pluginBinding: {
+            bindingId: "binding-1",
+            pluginId: "codex",
+            pluginRoot: tempDir,
+            channel: "discord",
+            accountId: "default",
+            conversationId: "channel-1",
+            boundAt: Date.now(),
+            data: {
+              kind: "codex-app-server-session",
+              version: 1,
+              sessionFile,
+              workspaceDir: tempDir,
+            },
+          },
+        },
+        { timeoutMs: 1_000, goalCompletion: { onTerminalGoal } },
+      ),
+    ).resolves.toEqual({ handled: true, reply: { text: "finished" } });
+
+    expect(request).toHaveBeenCalledWith(
+      "thread/goal/get",
+      { threadId: "thread-1" },
+      expect.objectContaining({ timeoutMs: expect.any(Number) }),
+    );
+    expect(onTerminalGoal).toHaveBeenCalledWith({
+      sessionFile,
+      workspaceDir: tempDir,
+      threadId: "thread-1",
+      sessionKey: "agent:main:discord:channel:1",
+      runId: "run-1",
+      channel: "discord",
+      accountId: "default",
+      conversationId: "channel-1",
+      messageThreadId: "message-thread-1",
+      status: "complete",
+      objective: "Ship native goal bridge",
+      tokensUsed: 42,
+      tokenBudget: 100,
+      timeUsedSeconds: 61,
+      updatedAt: 123,
+      replyText: "finished",
+    });
+  });
 });

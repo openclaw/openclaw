@@ -242,6 +242,7 @@ export function buildHelp(): string {
     "- /codex model [model]",
     "- /codex fast [on|off|status]",
     "- /codex permissions [default|yolo|status]",
+    "- /codex goal [status|clear|pause|resume|complete|set <objective>] (also /goal ...)",
     "- /codex detach",
     "- /codex compact",
     "- /codex review",

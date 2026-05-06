@@ -7,6 +7,7 @@ import type {
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
+import type { CodexAppServerClient } from "./app-server/client.js";
 import {
   codexSandboxPolicyForTurn,
   resolveCodexAppServerRuntimeOptions,
@@ -18,6 +19,8 @@ import {
   type CodexThreadResumeResponse,
   type CodexThreadStartResponse,
   type CodexTurnStartResponse,
+  isJsonObject,
+  type JsonObject,
   type JsonValue,
 } from "./app-server/protocol.js";
 import {
@@ -51,6 +54,32 @@ export {
 type CodexConversationRunOptions = {
   pluginConfig?: unknown;
   timeoutMs?: number;
+  goalCompletion?: CodexConversationGoalCompletionCallbacks;
+};
+
+export type CodexConversationGoalTerminalStatus = "budgetLimited" | "complete";
+
+export type CodexConversationGoalTerminalEvent = {
+  sessionFile: string;
+  workspaceDir: string;
+  threadId: string;
+  sessionKey?: string;
+  runId?: string;
+  channel?: string;
+  accountId?: string;
+  conversationId?: string;
+  messageThreadId?: string | number;
+  status: CodexConversationGoalTerminalStatus;
+  objective?: string;
+  tokensUsed?: number;
+  tokenBudget?: number | null;
+  timeUsedSeconds?: number;
+  updatedAt?: number | string;
+  replyText: string;
+};
+
+type CodexConversationGoalCompletionCallbacks = {
+  onTerminalGoal?: (event: CodexConversationGoalTerminalEvent) => void | Promise<void>;
 };
 
 type CodexConversationStartParams = {
@@ -155,6 +184,11 @@ export async function handleCodexConversationInboundClaim(
         event,
         pluginConfig: options.pluginConfig,
         timeoutMs: options.timeoutMs,
+        ...((event.sessionKey ?? ctx.sessionKey)
+          ? { sessionKey: event.sessionKey ?? ctx.sessionKey }
+          : {}),
+        ...((event.runId ?? ctx.runId) ? { runId: event.runId ?? ctx.runId } : {}),
+        ...(options.goalCompletion ? { goalCompletion: options.goalCompletion } : {}),
       }),
     );
     return { handled: true, reply: result.reply };
@@ -316,8 +350,11 @@ async function runBoundTurn(params: {
   data: CodexConversationBindingData;
   prompt: string;
   event: PluginHookInboundClaimEvent;
+  sessionKey?: string;
+  runId?: string;
   pluginConfig?: unknown;
   timeoutMs?: number;
+  goalCompletion?: CodexConversationGoalCompletionCallbacks;
 }): Promise<BoundTurnResult> {
   const runtime = resolveCodexAppServerRuntimeOptions({
     pluginConfig: params.pluginConfig,
@@ -409,6 +446,17 @@ async function runBoundTurn(params: {
       })
       .finally(activeCleanup);
     const replyText = completion.replyText.trim();
+    await notifyTerminalCodexGoalBestEffort({
+      client,
+      runtimeRequestTimeoutMs: runtime.requestTimeoutMs,
+      data: params.data,
+      event: params.event,
+      threadId,
+      replyText,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(params.runId ? { runId: params.runId } : {}),
+      ...(params.goalCompletion ? { goalCompletion: params.goalCompletion } : {}),
+    });
     return {
       reply: {
         text: replyText || "Codex completed without a text reply.",
@@ -426,6 +474,9 @@ async function runBoundTurnWithMissingThreadRecovery(params: {
   event: PluginHookInboundClaimEvent;
   pluginConfig?: unknown;
   timeoutMs?: number;
+  goalCompletion?: CodexConversationGoalCompletionCallbacks;
+  sessionKey?: string;
+  runId?: string;
 }): Promise<BoundTurnResult> {
   try {
     return await runBoundTurn(params);
@@ -451,6 +502,106 @@ async function runBoundTurnWithMissingThreadRecovery(params: {
 
 function isCodexThreadNotFoundError(error: unknown): boolean {
   return /\bthread not found:/iu.test(formatErrorMessage(error));
+}
+
+async function notifyTerminalCodexGoalBestEffort(params: {
+  client: { request: CodexAppServerClient["request"] };
+  runtimeRequestTimeoutMs: number;
+  data: CodexConversationBindingData;
+  event: PluginHookInboundClaimEvent;
+  sessionKey?: string;
+  runId?: string;
+  threadId: string;
+  replyText: string;
+  goalCompletion?: CodexConversationGoalCompletionCallbacks;
+}): Promise<void> {
+  const onTerminalGoal = params.goalCompletion?.onTerminalGoal;
+  if (!onTerminalGoal) {
+    return;
+  }
+  try {
+    const response = await params.client.request(
+      CODEX_CONTROL_METHODS.goalGet,
+      { threadId: params.threadId },
+      { timeoutMs: params.runtimeRequestTimeoutMs },
+    );
+    const goal = readCodexGoalRecord(response);
+    const status = readGoalTerminalStatus(goal);
+    if (!goal || !status) {
+      return;
+    }
+    await onTerminalGoal({
+      sessionFile: params.data.sessionFile,
+      workspaceDir: params.data.workspaceDir,
+      threadId: params.threadId,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(params.runId ? { runId: params.runId } : {}),
+      channel: params.event.channel,
+      ...(params.event.accountId ? { accountId: params.event.accountId } : {}),
+      ...(params.event.conversationId ? { conversationId: params.event.conversationId } : {}),
+      ...(params.event.threadId != null ? { messageThreadId: params.event.threadId } : {}),
+      status,
+      ...(readString(goal, "objective") ? { objective: readString(goal, "objective") } : {}),
+      ...(readNumber(goal, "tokensUsed") != null
+        ? { tokensUsed: readNumber(goal, "tokensUsed") }
+        : {}),
+      ...(readNullableNumber(goal, "tokenBudget") !== undefined
+        ? { tokenBudget: readNullableNumber(goal, "tokenBudget") }
+        : {}),
+      ...(readNumber(goal, "timeUsedSeconds") != null
+        ? { timeUsedSeconds: readNumber(goal, "timeUsedSeconds") }
+        : {}),
+      ...(readUpdatedAt(goal) !== undefined ? { updatedAt: readUpdatedAt(goal) } : {}),
+      replyText: params.replyText,
+    });
+  } catch {
+    // Goal completion delivery is observational. Never fail the user-visible
+    // bound Codex reply because the completion bridge could not inspect goal
+    // state or wake the owning OpenClaw session.
+  }
+}
+
+function readCodexGoalRecord(response: JsonValue | undefined): JsonObject | undefined {
+  if (!isJsonObject(response)) {
+    return undefined;
+  }
+  if (isJsonObject(response.goal)) {
+    return response.goal;
+  }
+  return readString(response, "objective") ? response : undefined;
+}
+
+function readGoalTerminalStatus(
+  goal: JsonObject | undefined,
+): CodexConversationGoalTerminalStatus | undefined {
+  const status = readString(goal, "status");
+  return status === "budgetLimited" || status === "complete" ? status : undefined;
+}
+
+function readString(record: JsonObject | undefined, key: string): string | undefined {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readNumber(record: JsonObject | undefined, key: string): number | undefined {
+  const value = record?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readNullableNumber(
+  record: JsonObject | undefined,
+  key: string,
+): number | null | undefined {
+  const value = record?.[key];
+  if (value === null) {
+    return null;
+  }
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readUpdatedAt(record: JsonObject | undefined): number | string | undefined {
+  const value = record?.updatedAt;
+  return typeof value === "number" || typeof value === "string" ? value : undefined;
 }
 
 function enqueueBoundTurn<T>(key: string, run: () => Promise<T>): Promise<T> {

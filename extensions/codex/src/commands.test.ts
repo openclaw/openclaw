@@ -15,7 +15,7 @@ import {
   resetCodexDiagnosticsFeedbackStateForTests,
   type CodexCommandDeps,
 } from "./command-handlers.js";
-import { handleCodexCommand } from "./commands.js";
+import { handleCodexCommand, handleCodexGoalCommand } from "./commands.js";
 
 let tempDir: string;
 
@@ -2310,6 +2310,139 @@ describe("codex command", () => {
       sessionFile,
       pluginConfig: undefined,
       message: "focus tests first",
+    });
+  });
+
+  it("sets and reads the bound Codex thread goal", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const readCodexAppServerBinding = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      sessionFile,
+      threadId: "thread-123",
+      cwd: "/repo",
+      createdAt: "2026-05-04T00:00:00.000Z",
+      updatedAt: "2026-05-04T00:00:00.000Z",
+    }));
+    const codexControlRequest = vi.fn(async (_pluginConfig, method) => {
+      if (method === CODEX_CONTROL_METHODS.goalGet) {
+        return {
+          goal: {
+            threadId: "thread-123",
+            objective: "Ship native /goal bridge",
+            status: "active",
+            tokenBudget: 5000,
+            tokensUsed: 250,
+            timeUsedSeconds: 90,
+            createdAt: 1,
+            updatedAt: 2,
+          },
+        };
+      }
+      return {
+        goal: {
+          threadId: "thread-123",
+          objective: "Ship native /goal bridge",
+          status: "active",
+          tokenBudget: 5000,
+          tokensUsed: 0,
+          timeUsedSeconds: 0,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      };
+    });
+    const deps = createDeps({ readCodexAppServerBinding, codexControlRequest });
+
+    await expect(
+      handleCodexCommand(
+        createContext("goal set --budget 5000 Ship native /goal bridge", sessionFile),
+        { deps },
+      ),
+    ).resolves.toEqual({
+      text: [
+        "Codex goal updated.",
+        "Codex goal for thread thread-123:",
+        "- Objective: Ship native /goal bridge",
+        "- Status: active",
+        "- Tokens: 0/5000",
+        "- Time used: 0s",
+      ].join("\n"),
+    });
+    await expect(handleCodexGoalCommand(createContext("", sessionFile), { deps })).resolves.toEqual(
+      {
+        text: [
+          "Codex goal for thread thread-123:",
+          "- Objective: Ship native /goal bridge",
+          "- Status: active",
+          "- Tokens: 250/5000",
+          "- Time used: 1m 30s",
+        ].join("\n"),
+      },
+    );
+
+    expect(codexControlRequest).toHaveBeenCalledWith(undefined, CODEX_CONTROL_METHODS.goalSet, {
+      threadId: "thread-123",
+      objective: "Ship native /goal bridge",
+      status: "active",
+      tokenBudget: 5000,
+    });
+    expect(codexControlRequest).toHaveBeenCalledWith(undefined, CODEX_CONTROL_METHODS.goalGet, {
+      threadId: "thread-123",
+    });
+  });
+
+  it("clears and pauses the bound Codex thread goal", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const readCodexAppServerBinding = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      sessionFile,
+      threadId: "thread-123",
+      cwd: "/repo",
+      createdAt: "2026-05-04T00:00:00.000Z",
+      updatedAt: "2026-05-04T00:00:00.000Z",
+    }));
+    const codexControlRequest = vi.fn(async (_pluginConfig, method) =>
+      method === CODEX_CONTROL_METHODS.goalClear
+        ? { cleared: true }
+        : {
+            goal: {
+              threadId: "thread-123",
+              objective: "Existing goal",
+              status: "paused",
+              tokenBudget: null,
+              tokensUsed: 10,
+              timeUsedSeconds: 4,
+              createdAt: 1,
+              updatedAt: 2,
+            },
+          },
+    );
+    const deps = createDeps({ readCodexAppServerBinding, codexControlRequest });
+
+    await expect(
+      handleCodexGoalCommand(createContext("clear", sessionFile), { deps }),
+    ).resolves.toEqual({
+      text: "Cleared Codex goal for thread thread-123.",
+    });
+    await expect(
+      handleCodexGoalCommand(createContext("pause", sessionFile), { deps }),
+    ).resolves.toEqual({
+      text: [
+        "Codex goal updated.",
+        "Codex goal for thread thread-123:",
+        "- Objective: Existing goal",
+        "- Status: paused",
+        "- Tokens: 10/unlimited",
+        "- Time used: 4s",
+      ].join("\n"),
+    });
+
+    expect(codexControlRequest).toHaveBeenCalledWith(undefined, CODEX_CONTROL_METHODS.goalClear, {
+      threadId: "thread-123",
+    });
+    expect(codexControlRequest).toHaveBeenCalledWith(undefined, CODEX_CONTROL_METHODS.goalSet, {
+      threadId: "thread-123",
+      status: "paused",
     });
   });
 

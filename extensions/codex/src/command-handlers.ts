@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
-import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
+import {
+  CODEX_CONTROL_METHODS,
+  describeControlFailure,
+  type CodexControlMethod,
+} from "./app-server/capabilities.js";
 import {
   installCodexComputerUse,
   readCodexComputerUseStatus,
@@ -125,6 +129,14 @@ type ParsedDiagnosticsArgs =
   | { action: "cancel"; token: string }
   | { action: "usage" };
 
+type CodexGoalStatus = "active" | "paused" | "budgetLimited" | "complete";
+
+type ParsedCodexGoalArgs =
+  | { action: "help" }
+  | { action: "get" }
+  | { action: "clear" }
+  | { action: "set"; objective?: string; status?: CodexGoalStatus; tokenBudget?: number | null };
+
 type CodexDiagnosticsTarget = {
   threadId: string;
   sessionFile: string;
@@ -246,6 +258,9 @@ export async function handleCodexSubcommand(
   if (normalized === "permissions") {
     return { text: await setConversationPermissions(deps, ctx, options.pluginConfig, rest) };
   }
+  if (normalized === "goal") {
+    return { text: await handleCodexGoal(deps, ctx, options.pluginConfig, rest) };
+  }
   if (normalized === "compact") {
     return {
       text: await startThreadAction(
@@ -328,6 +343,14 @@ export async function handleCodexSubcommand(
     return { text: formatAccount(account, limits) };
   }
   return { text: `Unknown Codex command: ${formatCodexDisplayText(subcommand)}\n\n${buildHelp()}` };
+}
+
+export async function handleCodexGoalSubcommand(
+  ctx: PluginCommandContext,
+  options: { pluginConfig?: unknown; deps?: Partial<CodexCommandDeps> },
+): Promise<PluginCommandResult> {
+  const deps: CodexCommandDeps = { ...defaultCodexCommandDeps, ...options.deps };
+  return { text: await handleCodexGoal(deps, ctx, options.pluginConfig, splitArgs(ctx.args)) };
 }
 
 async function handleComputerUseCommand(
@@ -1498,6 +1521,231 @@ async function startThreadAction(
     await deps.codexControlRequest(pluginConfig, method, { threadId: binding.threadId });
   }
   return `Started Codex ${label} for thread ${formatCodexDisplayText(binding.threadId)}.`;
+}
+
+async function handleCodexGoal(
+  deps: CodexCommandDeps,
+  ctx: PluginCommandContext,
+  pluginConfig: unknown,
+  args: string[],
+): Promise<string> {
+  const parsed = parseCodexGoalArgs(args);
+  if (parsed.action === "help") {
+    return codexGoalUsage();
+  }
+  const sessionFile = await resolveControlSessionFile(ctx);
+  if (!sessionFile) {
+    return "Cannot control Codex goal because this command did not include an OpenClaw session file.";
+  }
+  const binding = await deps.readCodexAppServerBinding(sessionFile);
+  if (!binding?.threadId) {
+    return "No Codex thread is attached to this OpenClaw session yet. Use /codex bind first.";
+  }
+  if (parsed.action === "get") {
+    try {
+      const response = await deps.codexControlRequest(pluginConfig, CODEX_CONTROL_METHODS.goalGet, {
+        threadId: binding.threadId,
+      });
+      return formatCodexGoalResponse(
+        response,
+        `No Codex goal is set for thread ${binding.threadId}.`,
+      );
+    } catch (error) {
+      return `Codex goal unavailable: ${describeControlFailure(error)}.`;
+    }
+  }
+  if (parsed.action === "clear") {
+    try {
+      const response = await deps.codexControlRequest(
+        pluginConfig,
+        CODEX_CONTROL_METHODS.goalClear,
+        {
+          threadId: binding.threadId,
+        },
+      );
+      const cleared = isJsonObject(response) ? response.cleared === true : false;
+      return cleared
+        ? `Cleared Codex goal for thread ${binding.threadId}.`
+        : `No Codex goal was set for thread ${binding.threadId}.`;
+    } catch (error) {
+      return `Codex goal unavailable: ${describeControlFailure(error)}.`;
+    }
+  }
+
+  const params = {
+    threadId: binding.threadId,
+    ...(parsed.objective != null ? { objective: parsed.objective } : {}),
+    ...(parsed.status != null ? { status: parsed.status } : {}),
+    ...("tokenBudget" in parsed ? { tokenBudget: parsed.tokenBudget } : {}),
+  };
+  try {
+    const response = await deps.codexControlRequest(
+      pluginConfig,
+      CODEX_CONTROL_METHODS.goalSet,
+      params,
+    );
+    return ["Codex goal updated.", formatCodexGoalResponse(response, "No goal returned.")].join(
+      "\n",
+    );
+  } catch (error) {
+    return `Codex goal unavailable: ${describeControlFailure(error)}.`;
+  }
+}
+
+function codexGoalUsage(): string {
+  return [
+    "Usage:",
+    "- /goal",
+    "- /goal <objective>",
+    "- /goal set [--budget <tokens|none>] <objective>",
+    "- /goal budget <tokens|none>",
+    "- /goal pause|resume|complete|clear",
+    "Also available as /codex goal ... after /codex bind.",
+  ].join("\n");
+}
+
+function parseCodexGoalArgs(args: string[]): ParsedCodexGoalArgs {
+  const [firstRaw = "", ...rest] = args;
+  const first = firstRaw.toLowerCase();
+  if (!first || first === "status" || first === "get") {
+    return { action: "get" };
+  }
+  if (first === "--help" || first === "-h" || first === "help") {
+    return { action: "help" };
+  }
+  if (first === "clear") {
+    return { action: "clear" };
+  }
+  if (first === "pause") {
+    return { action: "set", status: "paused" };
+  }
+  if (first === "resume") {
+    return { action: "set", status: "active" };
+  }
+  if (first === "complete" || first === "done") {
+    return { action: "set", status: "complete" };
+  }
+  if (first === "budget" || first === "limit") {
+    const tokenBudget = parseCodexGoalBudget(rest[0]);
+    return tokenBudget === undefined ? { action: "help" } : { action: "set", tokenBudget };
+  }
+
+  const setArgs = first === "set" ? rest : args;
+  let tokenBudget: number | null | undefined;
+  const objectiveParts: string[] = [];
+  for (let index = 0; index < setArgs.length; index += 1) {
+    const arg = setArgs[index];
+    if (arg === "--budget" || arg === "--token-budget" || arg === "--tokens") {
+      const parsedBudget = parseCodexGoalBudget(setArgs[index + 1]);
+      if (parsedBudget === undefined) {
+        return { action: "help" };
+      }
+      tokenBudget = parsedBudget;
+      index += 1;
+      continue;
+    }
+    objectiveParts.push(arg);
+  }
+  const objective = normalizeOptionalString(objectiveParts.join(" "));
+  if (!objective && tokenBudget === undefined) {
+    return { action: "help" };
+  }
+  return {
+    action: "set",
+    ...(objective ? { objective, status: "active" as const } : {}),
+    ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+  };
+}
+
+function parseCodexGoalBudget(value: string | undefined): number | null | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (
+    normalized === "none" ||
+    normalized === "clear" ||
+    normalized === "off" ||
+    normalized === "null"
+  ) {
+    return null;
+  }
+  const parsed = Number(normalized.replace(/_/g, ""));
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    return undefined;
+  }
+  return parsed;
+}
+
+function formatCodexGoalResponse(response: JsonValue | undefined, emptyMessage: string): string {
+  const goal = readCodexGoalRecord(response);
+  if (!goal) {
+    return emptyMessage;
+  }
+  const threadId = readString(goal, "threadId") ?? "unknown";
+  const objective = readString(goal, "objective") ?? "(empty)";
+  const status = readString(goal, "status") ?? "unknown";
+  const tokensUsed = readNumber(goal, "tokensUsed");
+  const tokenBudget = readNullableNumber(goal, "tokenBudget");
+  const timeUsedSeconds = readNumber(goal, "timeUsedSeconds");
+  return [
+    `Codex goal for thread ${threadId}:`,
+    `- Objective: ${objective}`,
+    `- Status: ${status}`,
+    `- Tokens: ${formatGoalTokens(tokensUsed, tokenBudget)}`,
+    `- Time used: ${formatDurationSeconds(timeUsedSeconds)}`,
+  ].join("\n");
+}
+
+function readCodexGoalRecord(
+  response: JsonValue | undefined,
+): Record<string, JsonValue> | undefined {
+  if (!isJsonObject(response)) {
+    return undefined;
+  }
+  if (isJsonObject(response.goal)) {
+    return response.goal;
+  }
+  return readString(response, "objective") ? response : undefined;
+}
+
+function readNumber(record: Record<string, JsonValue>, key: string): number | undefined {
+  const value = record[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readNullableNumber(
+  record: Record<string, JsonValue>,
+  key: string,
+): number | null | undefined {
+  const value = record[key];
+  if (value === null) {
+    return null;
+  }
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function formatGoalTokens(
+  tokensUsed: number | undefined,
+  tokenBudget: number | null | undefined,
+): string {
+  const used = tokensUsed == null ? "unknown" : String(tokensUsed);
+  if (tokenBudget == null) {
+    return tokenBudget === null ? `${used}/unlimited` : used;
+  }
+  return `${used}/${tokenBudget}`;
+}
+
+function formatDurationSeconds(seconds: number | undefined): string {
+  if (seconds == null) {
+    return "unknown";
+  }
+  if (seconds < 60) {
+    return `${Math.round(seconds)}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainder = Math.round(seconds % 60);
+  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
 }
 
 function splitArgs(value: string | undefined): string[] {
