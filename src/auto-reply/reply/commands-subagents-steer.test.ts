@@ -39,4 +39,42 @@ describe("subagents steer action", () => {
       reply: { text: "send failed: dispatch failed" },
     });
   });
+
+  it("auto-selects sole active subagent when target is not a valid id", async () => {
+    subagentControlMocks.steerControlledSubagentRun.mockResolvedValue({
+      status: "accepted",
+      runId: "run-auto-1",
+    });
+    const ctx = buildSubagentsDispatchContext({
+      handledPrefix: "/steer",
+      restTokens: ["please", "check", "the", "logs"],
+    });
+    const result = await handleSubagentsSendAction(ctx, true);
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "steered do thing (run run-auto)." },
+    });
+    expect(subagentControlMocks.steerControlledSubagentRun).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "please check the logs" }),
+    );
+  });
+
+  it("auto-selects sole active subagent when only one token (no explicit message)", async () => {
+    subagentControlMocks.steerControlledSubagentRun.mockResolvedValue({
+      status: "accepted",
+      runId: "run-auto-2",
+    });
+    const ctx = buildSubagentsDispatchContext({
+      handledPrefix: "/steer",
+      restTokens: ["hurry"],
+    });
+    const result = await handleSubagentsSendAction(ctx, true);
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "steered do thing (run run-auto)." },
+    });
+    expect(subagentControlMocks.steerControlledSubagentRun).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "hurry" }),
+    );
+  });
 });
