@@ -648,6 +648,15 @@ describe("skill-workshop", () => {
     });
 
     expect(result?.details).toMatchObject({ status: "pending" });
+    const proposalId =
+      (result?.details as { proposal?: { id?: string } } | undefined)?.proposal?.id ?? "";
+    expect(proposalId).toBeTruthy();
+    await expect(
+      tool?.execute?.("call-2", {
+        action: "apply",
+        id: proposalId,
+      }),
+    ).rejects.toThrow("tool apply requires auto approval policy");
     await expect(
       fs.access(path.join(workspaceDir, "skills", "screenshot-asset-workflow", "SKILL.md")),
     ).rejects.toMatchObject({ code: "ENOENT" });
