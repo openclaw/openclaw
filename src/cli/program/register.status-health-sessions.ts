@@ -3,6 +3,7 @@ import { commitmentsDismissCommand, commitmentsListCommand } from "../../command
 import { exportTrajectoryCommand } from "../../commands/export-trajectory.js";
 import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "../../commands/flows.js";
 import { healthCommand } from "../../commands/health.js";
+import { sessionsAbortCommand } from "../../commands/sessions-abort.js";
 import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
 import { sessionsCommand } from "../../commands/sessions.js";
 import { statusCommand } from "../../commands/status.js";
@@ -168,6 +169,54 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       );
     });
   sessionsCmd.enablePositionalOptions();
+
+  sessionsCmd
+    .command("abort")
+    .description("Abort any session by key through the admin Gateway endpoint")
+    .argument("<session-key>", "Session key to abort")
+    .option(
+      "--force",
+      "Also try to cancel a matching active subagent run when the runtime exposes one",
+      false,
+    )
+    .option("--reason <text>", "Abort reason stored in the session record (default: manual)")
+    .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
+    .option("--token <token>", "Gateway token (if required)")
+    .option("--timeout <ms>", "HTTP request timeout in milliseconds", "30000")
+    .option("--json", "Output JSON", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          [
+            "openclaw sessions abort agent:main:subagent:worker",
+            "Abort a cross-requester session.",
+          ],
+          [
+            "openclaw sessions abort agent:main:subagent:worker --force",
+            "Abort and try the registered subagent cancel hook.",
+          ],
+        ])}\n\n${theme.muted(
+          "Admin-scoped: this can abort sessions created by other requesters. --force only cancels child work when the active runtime exposes a matching subagent control hook; otherwise the session tracker and persisted record are still aborted.",
+        )}`,
+    )
+    .action(async (sessionKey, opts, command) => {
+      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await sessionsAbortCommand(
+          {
+            sessionKey: sessionKey as string,
+            force: Boolean(opts.force),
+            reason: opts.reason as string | undefined,
+            url: opts.url as string | undefined,
+            token: opts.token as string | undefined,
+            timeout: opts.timeout as string | undefined,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
 
   sessionsCmd
     .command("cleanup")

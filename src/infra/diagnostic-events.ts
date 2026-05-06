@@ -212,6 +212,17 @@ export type DiagnosticSessionRecoveryCompletedEvent = DiagnosticSessionRecoveryB
   stale?: boolean;
 };
 
+export type DiagnosticSessionAbortedByAdminEvent = DiagnosticBaseEvent & {
+  type: "session.aborted_by_admin";
+  sessionKey: string;
+  sessionId?: string;
+  previousStatus?: string;
+  wasInMemory: boolean;
+  force?: boolean;
+  forceKilled?: boolean;
+  reason?: string;
+};
+
 export type DiagnosticLaneEnqueueEvent = DiagnosticBaseEvent & {
   type: "queue.lane.enqueue";
   lane: string;
@@ -572,6 +583,7 @@ export type DiagnosticEventPayload =
   | DiagnosticSessionStuckEvent
   | DiagnosticSessionRecoveryRequestedEvent
   | DiagnosticSessionRecoveryCompletedEvent
+  | DiagnosticSessionAbortedByAdminEvent
   | DiagnosticLaneEnqueueEvent
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent
