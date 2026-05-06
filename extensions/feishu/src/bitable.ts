@@ -190,12 +190,20 @@ async function listRecords(
   tableId: string,
   pageSize?: number,
   pageToken?: string,
+  filter?: string,
+  sort?: string,
+  fieldNames?: string,
+  automaticFields?: boolean,
 ) {
   const res = await client.bitable.appTableRecord.list({
     path: { app_token: appToken, table_id: tableId },
     params: {
       page_size: pageSize ?? 100,
       ...(pageToken && { page_token: pageToken }),
+      ...(filter && { filter }),
+      ...(sort && { sort }),
+      ...(fieldNames && { field_names: fieldNames }),
+      ...(automaticFields != null && { automatic_fields: automaticFields }),
     },
   });
   ensureLarkSuccess(res, "bitable.appTableRecord.list", { appToken, tableId, pageSize });
@@ -506,6 +514,30 @@ const ListRecordsSchema = Type.Object({
   page_token: Type.Optional(
     Type.String({ description: "Pagination token from previous response" }),
   ),
+  filter: Type.Optional(
+    Type.String({
+      description:
+        'Server-side filter expression. Examples: \'CurrentValue.[Status]="Done"\', \'AND(CurrentValue.[Status]="Open",CurrentValue.[Priority]="High")\'',
+    }),
+  ),
+  sort: Type.Optional(
+    Type.String({
+      description:
+        'JSON array of sort objects. Example: \'[{"field_name":"Created Time","desc":true}]\' for newest first',
+    }),
+  ),
+  field_names: Type.Optional(
+    Type.String({
+      description:
+        'JSON array of field names to return (reduces payload). Example: \'["Title","Status","URL"]\'',
+    }),
+  ),
+  automatic_fields: Type.Optional(
+    Type.Boolean({
+      description:
+        "If true, include system fields (created_time, last_modified_time, created_by, last_modified_by) in response",
+    }),
+  ),
 });
 
 const GetRecordSchema = Type.Object({
@@ -644,11 +676,16 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     table_id: string;
     page_size?: number;
     page_token?: string;
+    filter?: string;
+    sort?: string;
+    field_names?: string;
+    automatic_fields?: boolean;
     accountId?: string;
   }>({
     name: "feishu_bitable_list_records",
     label: "Feishu Bitable List Records",
-    description: "List records (rows) from a Bitable table with pagination support",
+    description:
+      "List records (rows) from a Bitable table with pagination, server-side filtering, and sorting",
     parameters: ListRecordsSchema,
     async execute({ params, defaultAccountId }) {
       return listRecords(
@@ -657,6 +694,10 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
         params.table_id,
         params.page_size,
         params.page_token,
+        params.filter,
+        params.sort,
+        params.field_names,
+        params.automatic_fields,
       );
     },
   });
