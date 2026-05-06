@@ -1515,6 +1515,17 @@ type DynamicToolBuildParams = {
   onYieldDetected: () => void;
 };
 
+function resolveOpenClawCodingToolsSessionKeys(
+  params: EmbeddedRunAttemptParams,
+  sandboxSessionKey: string,
+): Pick<OpenClawCodingToolsOptions, "sessionKey" | "runSessionKey"> {
+  return {
+    sessionKey: sandboxSessionKey,
+    runSessionKey:
+      params.sessionKey && params.sessionKey !== sandboxSessionKey ? params.sessionKey : undefined,
+  };
+}
+
 async function buildDynamicTools(input: DynamicToolBuildParams) {
   const { params } = input;
   if (params.disableTools || !supportsModelTools(params.model)) {
@@ -1525,6 +1536,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
   const createOpenClawCodingTools =
     openClawCodingToolsFactoryForTests ??
     (await import("openclaw/plugin-sdk/agent-harness")).createOpenClawCodingTools;
+  const sessionKeys = resolveOpenClawCodingToolsSessionKeys(params, input.sandboxSessionKey);
   const allTools = createOpenClawCodingTools({
     agentId: input.sessionAgentId,
     ...buildEmbeddedAttemptToolRunContext(params),
@@ -1547,11 +1559,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     senderE164: params.senderE164,
     senderIsOwner: params.senderIsOwner,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-    sessionKey: input.sandboxSessionKey,
-    runSessionKey:
-      params.sessionKey && params.sessionKey !== input.sandboxSessionKey
-        ? params.sessionKey
-        : undefined,
+    ...sessionKeys,
     sessionId: params.sessionId,
     runId: params.runId,
     agentDir,
@@ -1987,6 +1995,7 @@ export const __testing = {
   buildDynamicTools,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
+  resolveOpenClawCodingToolsSessionKeys,
   shouldForceMessageTool,
   setOpenClawCodingToolsFactoryForTests(factory: OpenClawCodingToolsFactory): void {
     openClawCodingToolsFactoryForTests = factory;
