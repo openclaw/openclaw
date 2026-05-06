@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { storeDeviceAuthToken } from "../infra/device-auth-store.js";
+import {
+  loadDeviceAuthStore,
+  storeDeviceAuthStore,
+  storeDeviceAuthToken,
+} from "../infra/device-auth-store.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -104,7 +108,7 @@ describe("noteDevicePairingHealth", () => {
     });
   });
 
-  it("warns when local pairing state is corrupt instead of treating it as empty", async () => {
+  it("ignores corrupt legacy local pairing files during runtime health", async () => {
     await withTempDir("openclaw-doctor-device-pairing-", async (stateDir) => {
       await withEnvAsync(
         {
@@ -121,11 +125,7 @@ describe("noteDevicePairingHealth", () => {
             healthOk: false,
           });
 
-          expect(noteMock).toHaveBeenCalledTimes(1);
-          const message = String(noteMock.mock.calls[0]?.[0] ?? "");
-          expect(noteMock.mock.calls[0]?.[1]).toBe("Device pairing");
-          expect(message).toContain("paired.json");
-          expect(message).toContain("refused to treat it as empty");
+          expect(noteMock).not.toHaveBeenCalled();
           expect(await fs.readFile(pairedPath, "utf8")).toBe("{not-json}");
         },
       );
@@ -140,17 +140,13 @@ describe("noteDevicePairingHealth", () => {
         token: "stale-local-token",
         scopes: ["operator.read"],
       });
-      const deviceAuthPath = path.join(stateDir, "identity", "device-auth.json");
-      const store = JSON.parse(await fs.readFile(deviceAuthPath, "utf8")) as {
-        version: 1;
-        deviceId: string;
-        tokens: Record<
-          string,
-          { token: string; role: string; scopes: string[]; updatedAtMs: number }
-        >;
-      };
+      const store = loadDeviceAuthStore();
+      expect(store).not.toBeNull();
+      if (!store) {
+        throw new Error("expected local device auth store");
+      }
       store.tokens.operator.updatedAtMs = 1;
-      await fs.writeFile(deviceAuthPath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+      storeDeviceAuthStore({ store });
 
       const rotated = await rotateDeviceToken({
         deviceId: identity.deviceId,

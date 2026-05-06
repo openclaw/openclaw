@@ -351,6 +351,14 @@ async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> 
   });
 }
 
+async function runSqliteStateMigrationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeRepairLegacyRuntimeStateFiles } = await import("../commands/doctor-sqlite-state.js");
+  await maybeRepairLegacyRuntimeStateFiles({
+    prompter: ctx.prompter,
+    env: ctx.env ?? process.env,
+  });
+}
+
 async function runSandboxHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairSandboxImages, maybeRepairSandboxRegistryFiles, noteSandboxScopeWarnings } =
     await import("../commands/doctor-sandbox.js");
@@ -711,6 +719,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:legacy-cron",
       label: "Legacy cron",
       run: runLegacyCronHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:sqlite-state",
+      label: "SQLite state",
+      run: runSqliteStateMigrationHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:sandbox",

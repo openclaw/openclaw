@@ -2,15 +2,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { loadOrCreateDeviceIdentity } from "./device-identity.js";
+import {
+  importLegacyDeviceIdentityFileToSqlite,
+  loadDeviceIdentityIfPresent,
+  loadOrCreateDeviceIdentity,
+} from "./device-identity.js";
 
 describe("device identity state dir defaults", () => {
-  it("writes the default identity file under OPENCLAW_STATE_DIR", async () => {
+  it("stores the default identity under OPENCLAW_STATE_DIR", async () => {
     await withStateDirEnv("openclaw-identity-state-", async ({ stateDir }) => {
       const identity = loadOrCreateDeviceIdentity();
       const identityPath = path.join(stateDir, "identity", "device.json");
-      const raw = JSON.parse(await fs.readFile(identityPath, "utf8")) as { deviceId?: string };
-      expect(raw.deviceId).toBe(identity.deviceId);
+      expect(loadDeviceIdentityIfPresent(identityPath)?.deviceId).toBe(identity.deviceId);
     });
   });
 
@@ -19,14 +22,9 @@ describe("device identity state dir defaults", () => {
       const first = loadOrCreateDeviceIdentity();
       const second = loadOrCreateDeviceIdentity();
       const identityPath = path.join(stateDir, "identity", "device.json");
-      const raw = JSON.parse(await fs.readFile(identityPath, "utf8")) as {
-        deviceId?: string;
-        publicKeyPem?: string;
-      };
 
       expect(second).toEqual(first);
-      expect(raw.deviceId).toBe(first.deviceId);
-      expect(raw.publicKeyPem).toBe(first.publicKeyPem);
+      expect(loadDeviceIdentityIfPresent(identityPath)).toEqual(first);
     });
   });
 
@@ -34,19 +32,26 @@ describe("device identity state dir defaults", () => {
     await withStateDirEnv("openclaw-identity-state-", async ({ stateDir }) => {
       const original = loadOrCreateDeviceIdentity();
       const identityPath = path.join(stateDir, "identity", "device.json");
-      const raw = JSON.parse(await fs.readFile(identityPath, "utf8")) as Record<string, unknown>;
+      const raw = {
+        version: 1,
+        deviceId: original.deviceId,
+        publicKeyPem: original.publicKeyPem,
+        privateKeyPem: original.privateKeyPem,
+        createdAtMs: Date.now(),
+      };
 
+      await fs.mkdir(path.dirname(identityPath), { recursive: true });
       await fs.writeFile(
         identityPath,
         `${JSON.stringify({ ...raw, deviceId: "stale-device-id" }, null, 2)}\n`,
         "utf8",
       );
+      expect(importLegacyDeviceIdentityFileToSqlite()).toEqual({ imported: true });
 
       const repaired = loadOrCreateDeviceIdentity();
-      const stored = JSON.parse(await fs.readFile(identityPath, "utf8")) as { deviceId?: string };
 
       expect(repaired.deviceId).toBe(original.deviceId);
-      expect(stored.deviceId).toBe(original.deviceId);
+      expect(loadDeviceIdentityIfPresent(identityPath)?.deviceId).toBe(original.deviceId);
     });
   });
 
@@ -57,17 +62,9 @@ describe("device identity state dir defaults", () => {
       await fs.writeFile(identityPath, '{"version":1,"deviceId":"broken"}\n', "utf8");
 
       const regenerated = loadOrCreateDeviceIdentity();
-      const stored = JSON.parse(await fs.readFile(identityPath, "utf8")) as {
-        version?: number;
-        deviceId?: string;
-        publicKeyPem?: string;
-        privateKeyPem?: string;
-      };
+      const stored = loadDeviceIdentityIfPresent(identityPath);
 
-      expect(stored.version).toBe(1);
-      expect(stored.deviceId).toBe(regenerated.deviceId);
-      expect(stored.publicKeyPem).toBe(regenerated.publicKeyPem);
-      expect(stored.privateKeyPem).toBe(regenerated.privateKeyPem);
+      expect(stored).toEqual(regenerated);
     });
   });
 });

@@ -6,9 +6,15 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import {
+  readOpenClawStateKvJson,
+  writeOpenClawStateKvJson,
+  type OpenClawStateJsonValue,
+} from "../state/openclaw-state-kv.js";
 import type { DeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage } from "./errors.js";
-import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
+import { createAsyncLock } from "./json-files.js";
 import { APNS_HTTP2_CANCEL_CODE, connectApnsHttp2Session } from "./push-apns-http2.js";
 import {
   type ApnsRelayConfig,
@@ -115,7 +121,9 @@ type RegisterRelayApnsParams = {
 
 type RegisterApnsParams = RegisterDirectApnsParams | RegisterRelayApnsParams;
 
-const APNS_STATE_FILENAME = "push/apns-registrations.json";
+const APNS_STATE_SCOPE = "push.apns";
+const APNS_REGISTRATIONS_KEY = "registrations";
+const LEGACY_APNS_STATE_FILENAME = "push/apns-registrations.json";
 const APNS_JWT_TTL_MS = 50 * 60 * 1000;
 const DEFAULT_APNS_TIMEOUT_MS = 10_000;
 const MAX_NODE_ID_LENGTH = 256;
@@ -127,9 +135,12 @@ const withLock = createAsyncLock();
 
 let cachedJwt: { cacheKey: string; token: string; expiresAtMs: number } | null = null;
 
-function resolveApnsRegistrationPath(baseDir?: string): string {
-  const root = baseDir ?? resolveStateDir();
-  return path.join(root, APNS_STATE_FILENAME);
+function sqliteOptionsForBaseDir(baseDir: string | undefined): OpenClawStateDatabaseOptions {
+  return baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {};
+}
+
+function resolveLegacyApnsRegistrationPath(baseDir?: string): string {
+  return path.join(baseDir ?? resolveStateDir(), LEGACY_APNS_STATE_FILENAME);
 }
 
 function normalizeNodeId(value: string): string {
@@ -354,8 +365,11 @@ function normalizeStoredRegistration(record: unknown): ApnsRegistration | null {
 }
 
 async function loadRegistrationsState(baseDir?: string): Promise<ApnsRegistrationState> {
-  const filePath = resolveApnsRegistrationPath(baseDir);
-  const existing = await tryReadJson<ApnsRegistrationState>(filePath);
+  const existing = readOpenClawStateKvJson(
+    APNS_STATE_SCOPE,
+    APNS_REGISTRATIONS_KEY,
+    sqliteOptionsForBaseDir(baseDir),
+  ) as ApnsRegistrationState | undefined;
   if (!existing || typeof existing !== "object") {
     return { registrationsByNodeId: {} };
   }
@@ -381,12 +395,55 @@ async function persistRegistrationsState(
   state: ApnsRegistrationState,
   baseDir?: string,
 ): Promise<void> {
-  const filePath = resolveApnsRegistrationPath(baseDir);
-  await writeJson(filePath, state, {
-    mode: 0o600,
-    dirMode: 0o700,
-    trailingNewline: true,
-  });
+  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
+    APNS_STATE_SCOPE,
+    APNS_REGISTRATIONS_KEY,
+    state as unknown as OpenClawStateJsonValue,
+    sqliteOptionsForBaseDir(baseDir),
+  );
+}
+
+export async function legacyApnsRegistrationFileExists(baseDir?: string): Promise<boolean> {
+  return await fs
+    .access(resolveLegacyApnsRegistrationPath(baseDir))
+    .then(() => true)
+    .catch(() => false);
+}
+
+export async function importLegacyApnsRegistrationFileToSqlite(baseDir?: string): Promise<{
+  imported: boolean;
+  registrations: number;
+}> {
+  const filePath = resolveLegacyApnsRegistrationPath(baseDir);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await fs.readFile(filePath, "utf8"));
+  } catch (error) {
+    if ((error as { code?: unknown })?.code === "ENOENT") {
+      return { imported: false, registrations: 0 };
+    }
+    throw error;
+  }
+  if (!parsed || typeof parsed !== "object") {
+    return { imported: false, registrations: 0 };
+  }
+  const registrations =
+    "registrationsByNodeId" in parsed &&
+    typeof parsed.registrationsByNodeId === "object" &&
+    parsed.registrationsByNodeId !== null &&
+    !Array.isArray(parsed.registrationsByNodeId)
+      ? (parsed.registrationsByNodeId as Record<string, unknown>)
+      : {};
+  const normalized: Record<string, ApnsRegistration> = {};
+  for (const [nodeId, record] of Object.entries(registrations)) {
+    const registration = normalizeStoredRegistration(record);
+    if (registration) {
+      normalized[nodeId] = registration;
+    }
+  }
+  await persistRegistrationsState({ registrationsByNodeId: normalized }, baseDir);
+  await fs.rm(filePath, { force: true }).catch(() => undefined);
+  return { imported: true, registrations: Object.keys(normalized).length };
 }
 
 export function normalizeApnsEnvironment(value: unknown): ApnsEnvironment | null {

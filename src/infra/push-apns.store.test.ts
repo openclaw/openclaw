@@ -5,6 +5,7 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   clearApnsRegistration,
   clearApnsRegistrationIfCurrent,
+  importLegacyApnsRegistrationFileToSqlite,
   loadApnsRegistration,
   registerApnsRegistration,
   registerApnsToken,
@@ -116,6 +117,10 @@ describe("push APNs registration store", () => {
       "utf8",
     );
 
+    await expect(importLegacyApnsRegistrationFileToSqlite(baseDir)).resolves.toEqual({
+      imported: true,
+      registrations: 2,
+    });
     await expect(loadApnsRegistration("ios-node-legacy", baseDir)).resolves.toMatchObject({
       nodeId: "ios-node-legacy",
       transport: "direct",
@@ -249,7 +254,7 @@ describe("push APNs registration store", () => {
     ).rejects.toThrow("sendGrant too long");
   });
 
-  it("persists with a trailing newline and clears registrations", async () => {
+  it("persists and clears registrations", async () => {
     const baseDir = await makeTempDir();
     await registerApnsToken({
       nodeId: "ios-node-1",
@@ -258,8 +263,6 @@ describe("push APNs registration store", () => {
       baseDir,
     });
 
-    const statePath = path.join(baseDir, "push", "apns-registrations.json");
-    await expect(fs.readFile(statePath, "utf8")).resolves.toMatch(/\n$/);
     await expect(clearApnsRegistration("ios-node-1", baseDir)).resolves.toBe(true);
     await expect(loadApnsRegistration("ios-node-1", baseDir)).resolves.toBeNull();
   });

@@ -13,14 +13,31 @@ import {
   restoreDeviceBootstrapToken,
   revokeDeviceBootstrapToken,
   verifyDeviceBootstrapToken,
+  type DeviceBootstrapTokenRecord,
 } from "./device-bootstrap.js";
 import { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } from "./device-identity.js";
+import { readPairingStateRecord, writePairingStateRecord } from "./pairing-files.js";
 
 const tempDirs = createTrackedTempDirs();
 const createTempDir = () => tempDirs.make("openclaw-device-bootstrap-test-");
 
 function resolveBootstrapPath(baseDir: string): string {
   return path.join(baseDir, "devices", "bootstrap.json");
+}
+
+function readBootstrapState(baseDir: string): Record<string, DeviceBootstrapTokenRecord> {
+  return readPairingStateRecord<DeviceBootstrapTokenRecord>({
+    baseDir,
+    subdir: "devices",
+    key: "bootstrap",
+  });
+}
+
+function writeBootstrapState(
+  baseDir: string,
+  value: Record<string, DeviceBootstrapTokenRecord>,
+): void {
+  writePairingStateRecord({ baseDir, subdir: "devices", key: "bootstrap", value });
 }
 
 async function verifyBootstrapToken(
@@ -57,16 +74,7 @@ describe("device bootstrap tokens", () => {
     expect(issued.token).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(issued.expiresAtMs).toBe(Date.now() + DEVICE_BOOTSTRAP_TOKEN_TTL_MS);
 
-    const raw = await fs.readFile(resolveBootstrapPath(baseDir), "utf8");
-    const parsed = JSON.parse(raw) as Record<
-      string,
-      {
-        token: string;
-        ts: number;
-        issuedAtMs: number;
-        profile: { roles: string[]; scopes: string[] };
-      }
-    >;
+    const parsed = readBootstrapState(baseDir);
     expect(parsed[issued.token]).toMatchObject({
       token: issued.token,
       ts: Date.now(),
@@ -85,15 +93,7 @@ describe("device bootstrap tokens", () => {
     await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({ ok: true });
     await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({ ok: true });
 
-    const raw = await fs.readFile(resolveBootstrapPath(baseDir), "utf8");
-    const parsed = JSON.parse(raw) as Record<
-      string,
-      {
-        token: string;
-        deviceId?: string;
-        publicKey?: string;
-      }
-    >;
+    const parsed = readBootstrapState(baseDir);
     expect(parsed[issued.token]).toMatchObject({
       token: issued.token,
       deviceId: "device-123",
@@ -156,7 +156,7 @@ describe("device bootstrap tokens", () => {
     const second = await issueDeviceBootstrapToken({ baseDir });
 
     await expect(clearDeviceBootstrapTokens({ baseDir })).resolves.toEqual({ removed: 2 });
-    await expect(fs.readFile(resolveBootstrapPath(baseDir), "utf8")).resolves.toBe("{}");
+    expect(readBootstrapState(baseDir)).toEqual({});
 
     await expect(verifyBootstrapToken(baseDir, first.token)).resolves.toEqual({
       ok: false,
@@ -208,39 +208,26 @@ describe("device bootstrap tokens", () => {
     const baseDir = await createTempDir();
     const issued = await issueDeviceBootstrapToken({ baseDir });
     const issuedAtMs = Date.now();
-    const bootstrapPath = path.join(baseDir, "devices", "bootstrap.json");
-    await fs.writeFile(
-      bootstrapPath,
-      JSON.stringify(
-        {
-          "legacy-key": {
-            token: issued.token,
-            ts: issuedAtMs,
-            issuedAtMs,
-            profile: {
-              roles: ["node", "operator"],
-              scopes: [
-                "operator.approvals",
-                "operator.read",
-                "operator.talk.secrets",
-                "operator.write",
-              ],
-            },
-          },
+    writeBootstrapState(baseDir, {
+      "legacy-key": {
+        token: issued.token,
+        ts: issuedAtMs,
+        issuedAtMs,
+        profile: {
+          roles: ["node", "operator"],
+          scopes: [
+            "operator.approvals",
+            "operator.read",
+            "operator.talk.secrets",
+            "operator.write",
+          ],
         },
-        null,
-        2,
-      ),
-      "utf8",
-    );
+      },
+    });
 
     await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({ ok: true });
 
-    const raw = await fs.readFile(bootstrapPath, "utf8");
-    const parsed = JSON.parse(raw) as Record<
-      string,
-      { token: string; deviceId?: string; publicKey?: string }
-    >;
+    const parsed = readBootstrapState(baseDir);
     expect(parsed["legacy-key"]).toMatchObject({
       token: issued.token,
       deviceId: "device-123",
@@ -258,8 +245,7 @@ describe("device bootstrap tokens", () => {
       }),
     ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
 
-    const raw = await fs.readFile(resolveBootstrapPath(baseDir), "utf8");
-    expect(raw).toContain(issued.token);
+    expect(readBootstrapState(baseDir)[issued.token]).toBeDefined();
   });
 
   it("rejects bootstrap verification when role or scopes exceed the issued profile", async () => {
@@ -273,8 +259,7 @@ describe("device bootstrap tokens", () => {
       }),
     ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
 
-    const raw = await fs.readFile(resolveBootstrapPath(baseDir), "utf8");
-    expect(raw).toContain(issued.token);
+    expect(readBootstrapState(baseDir)[issued.token]).toBeDefined();
   });
 
   it("allows operator scope subsets within the issued bootstrap profile", async () => {
@@ -300,8 +285,7 @@ describe("device bootstrap tokens", () => {
       }),
     ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
 
-    const raw = await fs.readFile(resolveBootstrapPath(baseDir), "utf8");
-    expect(raw).toContain(issued.token);
+    expect(readBootstrapState(baseDir)[issued.token]).toBeDefined();
   });
 
   it("supports explicitly bound bootstrap profiles", async () => {
@@ -314,11 +298,7 @@ describe("device bootstrap tokens", () => {
       },
     });
 
-    const raw = await fs.readFile(resolveBootstrapPath(baseDir), "utf8");
-    const parsed = JSON.parse(raw) as Record<
-      string,
-      { profile: { roles: string[]; scopes: string[] } }
-    >;
+    const parsed = readBootstrapState(baseDir);
     expect(parsed[issued.token]?.profile).toEqual({
       roles: ["operator"],
       scopes: ["operator.read"],
@@ -410,11 +390,7 @@ describe("device bootstrap tokens", () => {
       }),
     ).resolves.toEqual({ recorded: true, fullyRedeemed: true });
 
-    const raw = await fs.readFile(resolveBootstrapPath(baseDir), "utf8");
-    const parsed = JSON.parse(raw) as Record<
-      string,
-      { redeemedProfile?: { roles?: string[]; scopes?: string[] } }
-    >;
+    const parsed = readBootstrapState(baseDir);
     expect(parsed[issued.token]?.redeemedProfile).toEqual({
       roles: ["operator"],
       scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
@@ -429,8 +405,7 @@ describe("device bootstrap tokens", () => {
       ok: true,
     });
 
-    const raw = await fs.readFile(resolveBootstrapPath(baseDir), "utf8");
-    const parsed = JSON.parse(raw) as Record<string, { deviceId?: string }>;
+    const parsed = readBootstrapState(baseDir);
     expect(parsed[issued.token]?.deviceId).toBe("device-123");
   });
 
@@ -465,8 +440,7 @@ describe("device bootstrap tokens", () => {
     await fs.writeFile(bootstrapPath, "[1,2,3]\n", "utf8");
 
     const issued = await issueDeviceBootstrapToken({ baseDir });
-    const raw = await fs.readFile(bootstrapPath, "utf8");
-    const parsed = JSON.parse(raw) as Record<string, { token: string }>;
+    const parsed = readBootstrapState(baseDir);
 
     expect(Object.keys(parsed)).toEqual([issued.token]);
     expect(parsed[issued.token]?.token).toBe(issued.token);

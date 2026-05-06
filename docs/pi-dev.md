@@ -65,7 +65,7 @@ To reset everything:
 - `openclaw.json` for config
 - `agents/<agentId>/agent/auth-profiles.json` for model auth profiles (API keys + OAuth)
 - `credentials/` for provider/channel state that still lives outside the auth profile store
-- `state/openclaw.sqlite` for canonical session metadata and shared agent state
+- `state/openclaw.sqlite` for canonical session metadata, shared agent state, device/pairing state, and push registration state
 - `agents/<agentId>/sessions/` for agent session history
 - `agents/<agentId>/sessions/sessions.json` if legacy/custom JSON session stores exist
 - `sessions/` if legacy paths exist

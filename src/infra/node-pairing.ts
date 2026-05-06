@@ -5,11 +5,9 @@ import { type NodeApprovalScope, resolveNodePairApprovalScopes } from "./node-pa
 import {
   createAsyncLock,
   pruneExpiredPending,
-  readJsonIfExists,
   reconcilePendingPairingRequests,
-  coercePairingStateRecord,
-  resolvePairingPaths,
-  writeJson,
+  readPairingStateRecord,
+  writePairingStateRecord,
 } from "./pairing-files.js";
 import { rejectPendingPairingRequest } from "./pairing-pending.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
@@ -135,25 +133,35 @@ type ForbiddenNodePairingResult = { status: "forbidden"; missingScope: string };
 type ApproveNodePairingResult = ApprovedNodePairingResult | ForbiddenNodePairingResult | null;
 
 async function loadState(baseDir?: string): Promise<NodePairingStateFile> {
-  const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "nodes");
-  const [pending, paired] = await Promise.all([
-    readJsonIfExists<unknown>(pendingPath),
-    readJsonIfExists<unknown>(pairedPath),
-  ]);
   const state: NodePairingStateFile = {
-    pendingById: coercePairingStateRecord<NodePairingPendingRequest>(pending),
-    pairedByNodeId: coercePairingStateRecord<NodePairingPairedNode>(paired),
+    pendingById: readPairingStateRecord<NodePairingPendingRequest>({
+      baseDir,
+      subdir: "nodes",
+      key: "pending",
+    }),
+    pairedByNodeId: readPairingStateRecord<NodePairingPairedNode>({
+      baseDir,
+      subdir: "nodes",
+      key: "paired",
+    }),
   };
   pruneExpiredPending(state.pendingById, Date.now(), PENDING_TTL_MS);
   return state;
 }
 
 async function persistState(state: NodePairingStateFile, baseDir?: string) {
-  const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "nodes");
-  await Promise.all([
-    writeJson(pendingPath, state.pendingById),
-    writeJson(pairedPath, state.pairedByNodeId),
-  ]);
+  writePairingStateRecord({
+    baseDir,
+    subdir: "nodes",
+    key: "pending",
+    value: state.pendingById,
+  });
+  writePairingStateRecord({
+    baseDir,
+    subdir: "nodes",
+    key: "paired",
+    value: state.pairedByNodeId,
+  });
 }
 
 function normalizeNodeId(nodeId: string) {

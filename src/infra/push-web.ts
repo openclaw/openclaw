@@ -1,7 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import {
+  readOpenClawStateKvJson,
+  writeOpenClawStateKvJson,
+  type OpenClawStateJsonValue,
+} from "../state/openclaw-state-kv.js";
+import { createAsyncLock } from "./json-files.js";
 
 // --- Types ---
 
@@ -32,8 +39,11 @@ type WebPushSendResult = {
 
 // --- Constants ---
 
-const WEB_PUSH_STATE_FILENAME = "push/web-push-subscriptions.json";
-const VAPID_KEYS_FILENAME = "push/vapid-keys.json";
+const WEB_PUSH_SCOPE = "push.web";
+const WEB_PUSH_SUBSCRIPTIONS_KEY = "subscriptions";
+const WEB_PUSH_VAPID_KEY = "vapid-keys";
+const LEGACY_WEB_PUSH_STATE_FILENAME = "push/web-push-subscriptions.json";
+const LEGACY_VAPID_KEYS_FILENAME = "push/vapid-keys.json";
 const MAX_ENDPOINT_LENGTH = 2048;
 const MAX_KEY_LENGTH = 512;
 const DEFAULT_VAPID_SUBJECT = "mailto:openclaw@localhost";
@@ -54,14 +64,16 @@ async function loadWebPushRuntime(): Promise<WebPushRuntime> {
 
 // --- Helpers ---
 
-function resolveWebPushStatePath(baseDir?: string): string {
-  const root = baseDir ?? resolveStateDir();
-  return path.join(root, WEB_PUSH_STATE_FILENAME);
+function sqliteOptionsForBaseDir(baseDir: string | undefined): OpenClawStateDatabaseOptions {
+  return baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {};
 }
 
-function resolveVapidKeysPath(baseDir?: string): string {
-  const root = baseDir ?? resolveStateDir();
-  return path.join(root, VAPID_KEYS_FILENAME);
+function resolveLegacyWebPushStatePath(baseDir?: string): string {
+  return path.join(baseDir ?? resolveStateDir(), LEGACY_WEB_PUSH_STATE_FILENAME);
+}
+
+function resolveLegacyVapidKeysPath(baseDir?: string): string {
+  return path.join(baseDir ?? resolveStateDir(), LEGACY_VAPID_KEYS_FILENAME);
 }
 
 function hashEndpoint(endpoint: string): string {
@@ -87,14 +99,80 @@ function isValidKey(key: string): boolean {
 // --- State persistence ---
 
 async function loadState(baseDir?: string): Promise<WebPushRegistrationState> {
-  const filePath = resolveWebPushStatePath(baseDir);
-  const state = await tryReadJson<WebPushRegistrationState>(filePath);
+  const state = readOpenClawStateKvJson(
+    WEB_PUSH_SCOPE,
+    WEB_PUSH_SUBSCRIPTIONS_KEY,
+    sqliteOptionsForBaseDir(baseDir),
+  ) as WebPushRegistrationState | undefined;
   return state ?? { subscriptionsByEndpointHash: {} };
 }
 
 async function persistState(state: WebPushRegistrationState, baseDir?: string): Promise<void> {
-  const filePath = resolveWebPushStatePath(baseDir);
-  await writeJson(filePath, state, { trailingNewline: true });
+  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
+    WEB_PUSH_SCOPE,
+    WEB_PUSH_SUBSCRIPTIONS_KEY,
+    state as unknown as OpenClawStateJsonValue,
+    sqliteOptionsForBaseDir(baseDir),
+  );
+}
+
+export async function legacyWebPushFilesExist(baseDir?: string): Promise<boolean> {
+  const [stateExists, vapidExists] = await Promise.all([
+    fs
+      .access(resolveLegacyWebPushStatePath(baseDir))
+      .then(() => true)
+      .catch(() => false),
+    fs
+      .access(resolveLegacyVapidKeysPath(baseDir))
+      .then(() => true)
+      .catch(() => false),
+  ]);
+  return stateExists || vapidExists;
+}
+
+export async function importLegacyWebPushFilesToSqlite(baseDir?: string): Promise<{
+  subscriptions: number;
+  importedVapidKeys: boolean;
+  files: number;
+}> {
+  let files = 0;
+  let subscriptions = 0;
+  let importedVapidKeys = false;
+  const statePath = resolveLegacyWebPushStatePath(baseDir);
+  try {
+    const state = JSON.parse(await fs.readFile(statePath, "utf8")) as WebPushRegistrationState;
+    if (state && typeof state === "object") {
+      await persistState(state, baseDir);
+      subscriptions = Object.keys(state.subscriptionsByEndpointHash ?? {}).length;
+      await fs.rm(statePath, { force: true }).catch(() => undefined);
+      files += 1;
+    }
+  } catch (error) {
+    if ((error as { code?: unknown })?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  const vapidPath = resolveLegacyVapidKeysPath(baseDir);
+  try {
+    const keys = JSON.parse(await fs.readFile(vapidPath, "utf8")) as VapidKeyPair;
+    if (keys?.publicKey && keys.privateKey) {
+      writeOpenClawStateKvJson<OpenClawStateJsonValue>(
+        WEB_PUSH_SCOPE,
+        WEB_PUSH_VAPID_KEY,
+        keys as unknown as OpenClawStateJsonValue,
+        sqliteOptionsForBaseDir(baseDir),
+      );
+      await fs.rm(vapidPath, { force: true }).catch(() => undefined);
+      importedVapidKeys = true;
+      files += 1;
+    }
+  } catch (error) {
+    if ((error as { code?: unknown })?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+  return { subscriptions, importedVapidKeys, files };
 }
 
 // --- VAPID keys ---
@@ -115,8 +193,11 @@ export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> 
   // Fall back to persisted keys, generating on first use under a lock to
   // prevent concurrent bootstraps from writing different keypairs.
   return await withLock(async () => {
-    const filePath = resolveVapidKeysPath(baseDir);
-    const existing = await tryReadJson<VapidKeyPair>(filePath);
+    const existing = readOpenClawStateKvJson(
+      WEB_PUSH_SCOPE,
+      WEB_PUSH_VAPID_KEY,
+      sqliteOptionsForBaseDir(baseDir),
+    ) as VapidKeyPair | undefined;
     if (existing?.publicKey && existing?.privateKey) {
       return {
         publicKey: existing.publicKey,
@@ -133,7 +214,12 @@ export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> 
       privateKey: keys.privateKey,
       subject: resolveVapidSubjectFromEnv(),
     };
-    await writeJson(filePath, pair, { trailingNewline: true });
+    writeOpenClawStateKvJson<OpenClawStateJsonValue>(
+      WEB_PUSH_SCOPE,
+      WEB_PUSH_VAPID_KEY,
+      pair as unknown as OpenClawStateJsonValue,
+      sqliteOptionsForBaseDir(baseDir),
+    );
     return pair;
   });
 }
