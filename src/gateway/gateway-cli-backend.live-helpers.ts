@@ -40,7 +40,7 @@ export type CliBackendLiveModelSelection = {
   cliModelKey: string;
   configModelKey: string;
   configModelSwitchTarget: string | undefined;
-  agentRuntime: { id: string; fallback: "pi" | "none" };
+  agentRuntime: { id: string };
 };
 
 export type CliBackendLiveEnvSnapshot = {
@@ -80,7 +80,7 @@ export function resolveCliBackendLiveModelSelection(params: {
       configModelSwitchTarget: params.modelSwitchTarget
         ? (migrateLegacyRuntimeModelRef(params.modelSwitchTarget)?.ref ?? params.modelSwitchTarget)
         : undefined,
-      agentRuntime: { id: migrated.runtime, fallback: "none" },
+      agentRuntime: { id: migrated.runtime },
     };
   }
 
@@ -90,7 +90,7 @@ export function resolveCliBackendLiveModelSelection(params: {
     cliModelKey: modelKey,
     configModelKey: modelKey,
     configModelSwitchTarget: params.modelSwitchTarget,
-    agentRuntime: { id: "pi", fallback: "pi" },
+    agentRuntime: { id: "pi" },
   };
 }
 

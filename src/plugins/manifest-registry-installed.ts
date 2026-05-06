@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import type { PluginCandidate } from "./discovery.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
@@ -76,6 +77,9 @@ function buildInstalledManifestRegistryIndexKey(index: InstalledPluginIndex) {
         origin: record.origin,
         enabled: record.enabled,
         enabledByDefault: record.enabledByDefault,
+        enabledByDefaultOnPlatforms: record.enabledByDefaultOnPlatforms
+          ? [...record.enabledByDefaultOnPlatforms]
+          : undefined,
         syntheticAuthRefs: record.syntheticAuthRefs,
         startup: record.startup,
         compat: record.compat,
@@ -126,8 +130,8 @@ function resolveInstalledPackageMetadata(record: InstalledPluginIndexRecord): {
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     return fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {};
   }
-  try {
-    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as PackageManifest;
+  const packageJson = tryReadJsonSync<PackageManifest>(packageJsonPath);
+  if (packageJson) {
     const packageManifest = getPackageManifestMetadata(packageJson);
     const dependencies = normalizePluginDependencySpecs({
       dependencies: packageJson.dependencies,
@@ -155,9 +159,8 @@ function resolveInstalledPackageMetadata(record: InstalledPluginIndexRecord): {
       packageDependencies: dependencies.dependencies,
       packageOptionalDependencies: dependencies.optionalDependencies,
     };
-  } catch {
-    return fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {};
   }
+  return fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {};
 }
 
 function toPluginCandidate(record: InstalledPluginIndexRecord): PluginCandidate {

@@ -18,11 +18,12 @@ import {
 } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
+import { isPathInside, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import {
   resolveSessionStoreEntry,
   updateSessionStore,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_AGENT_ID = "main";
@@ -41,11 +42,13 @@ const DEFAULT_QMD_SEARCH_MODE = "search" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
 const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
+const ACTIVE_MEMORY_TOOL_ALLOWLIST = ["memory_recall", "memory_search", "memory_get"] as const;
 const TOGGLE_STATE_FILE = "session-toggles.json";
 const DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS = 32_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_LINES = 2_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_BYTES = 50 * 1024 * 1024;
-const TIMEOUT_PARTIAL_DATA_GRACE_MS = 50;
+const TIMEOUT_PARTIAL_DATA_GRACE_MS = 500;
+const MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS = 480;
 const TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS = 25;
 
 const NO_RECALL_VALUES = new Set([
@@ -246,6 +249,7 @@ const toggleStoreLocks = new Map<string, AsyncLock>();
 let lastActiveRecallCacheSweepAt = 0;
 let minimumTimeoutMs = DEFAULT_MIN_TIMEOUT_MS;
 let setupGraceTimeoutMs = DEFAULT_SETUP_GRACE_TIMEOUT_MS;
+let timeoutPartialDataGraceMs = TIMEOUT_PARTIAL_DATA_GRACE_MS;
 
 function createAsyncLock(): AsyncLock {
   let lock: Promise<void> = Promise.resolve();
@@ -419,7 +423,7 @@ function resolveSafeTranscriptDir(baseSessionsDir: string, transcriptDir: string
   }
   const resolvedBase = path.resolve(baseSessionsDir);
   const candidate = path.resolve(resolvedBase, normalized);
-  if (candidate !== resolvedBase && !candidate.startsWith(resolvedBase + path.sep)) {
+  if (!isPathInside(resolvedBase, candidate)) {
     return path.resolve(resolvedBase, DEFAULT_TRANSCRIPT_DIR);
   }
   return candidate;
@@ -457,7 +461,7 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
         agentId: params.agentId,
       },
     );
-    const store = params.api.runtime.agent.session.loadSessionStore(storePath);
+    const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
     let bestMatch:
       | {
           sessionKey: string;
@@ -493,6 +497,38 @@ function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function isMissingRegisteredMemoryToolsError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.trim();
+  const prefix = "No callable tools remain after resolving explicit tool allowlist (";
+  const suffix =
+    "); no registered tools matched. Fix the allowlist or enable the plugin that registers the requested tool.";
+  if (!message.startsWith(prefix) || !message.endsWith(suffix)) {
+    return false;
+  }
+  const sources = message.slice(prefix.length, -suffix.length);
+  const runtimeSource = `runtime toolsAllow: ${ACTIVE_MEMORY_TOOL_ALLOWLIST.join(", ")}`;
+  const sourceParts = sources
+    .split(";")
+    .map((source) => source.trim())
+    .filter(Boolean);
+  if (!sourceParts.includes(runtimeSource)) {
+    return false;
+  }
+  return sourceParts.every((source) => {
+    if (source === runtimeSource) {
+      return true;
+    }
+    const entries = source
+      .slice(source.indexOf(":") + 1)
+      .split(",")
+      .map((entry) => entry.trim());
+    return entries.includes("*");
+  });
+}
+
 function resolveRecallRunChannelContext(params: {
   api: OpenClawPluginApi;
   agentId: string;
@@ -506,8 +542,16 @@ function resolveRecallRunChannelContext(params: {
 } {
   const explicitChannel = normalizeOptionalString(params.channelId);
   const explicitProvider = normalizeOptionalString(params.messageProvider);
+  // A channelId that contains ":" is a scoped conversation id (e.g. Telegram
+  // forum-topic "-100123:topic:77"), not a runnable channel name. Using it as
+  // the embedded recall run's channel causes bundled-plugin dirName validation
+  // to throw because ":" is not allowed in directory names (#76704).
+  const runnableExplicitChannel =
+    explicitChannel && !explicitChannel.includes(":") ? explicitChannel : undefined;
   const trustedExplicitChannel =
-    explicitChannel && explicitChannel !== explicitProvider ? explicitChannel : undefined;
+    runnableExplicitChannel && runnableExplicitChannel !== explicitProvider
+      ? runnableExplicitChannel
+      : undefined;
   const resolveReturnValue = (params: {
     resolvedChannel?: string;
     resolvedChannelStrength?: "strong" | "weak";
@@ -518,13 +562,14 @@ function resolveRecallRunChannelContext(params: {
       messageChannel:
         trustedExplicitChannel ??
         trustedResolvedChannel ??
-        explicitChannel ??
+        runnableExplicitChannel ??
+        explicitProvider ??
         params.resolvedChannel,
       messageProvider:
         trustedExplicitChannel ??
         trustedResolvedChannel ??
         explicitProvider ??
-        explicitChannel ??
+        runnableExplicitChannel ??
         params.resolvedChannel,
     };
   };
@@ -546,14 +591,22 @@ function resolveRecallRunChannelContext(params: {
         agentId: params.agentId,
       },
     );
-    const store = params.api.runtime.agent.session.loadSessionStore(storePath);
+    const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
     const sessionEntry = resolveSessionStoreEntry({
       store,
       sessionKey: resolvedSessionKey,
     }).existing;
-    const strongEntryChannel =
+    const rawStrongEntryChannel =
       normalizeOptionalString(sessionEntry?.lastChannel) ??
       normalizeOptionalString(sessionEntry?.channel);
+    // Channel IDs containing ":" are scoped conversation IDs (e.g. QQ c2c
+    // "c2c:10D4F7C2..."), not runnable channel names. The same guard that
+    // applies to explicit channelId (#76704) must also apply to channels
+    // read from the session store (#77396).
+    const strongEntryChannel =
+      rawStrongEntryChannel && !rawStrongEntryChannel.includes(":")
+        ? rawStrongEntryChannel
+        : undefined;
     const weakEntryChannel = normalizeOptionalString(sessionEntry?.origin?.provider);
     return resolveReturnValue({
       resolvedChannel: strongEntryChannel ?? weakEntryChannel,
@@ -612,14 +665,11 @@ async function readToggleStore(statePath: string): Promise<ActiveMemoryToggleSto
 }
 
 async function writeToggleStore(statePath: string, store: ActiveMemoryToggleStore): Promise<void> {
-  await fs.mkdir(path.dirname(statePath), { recursive: true });
-  const tempPath = `${statePath}.${process.pid}.${Date.now()}.${crypto.randomUUID()}.tmp`;
-  try {
-    await fs.writeFile(tempPath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
-    await fs.rename(tempPath, statePath);
-  } finally {
-    await fs.rm(tempPath, { force: true }).catch(() => undefined);
-  }
+  await replaceFileAtomic({
+    filePath: statePath,
+    content: `${JSON.stringify(store, null, 2)}\n`,
+    tempPrefix: ".active-memory",
+  });
 }
 
 async function isSessionActiveMemoryDisabled(params: {
@@ -923,13 +973,16 @@ function buildPromptStyleLines(style: ActiveMemoryPromptStyle): string[] {
 function buildRecallPrompt(params: {
   config: ResolvedActiveRecallPluginConfig;
   query: string;
+  searchQuery: string;
 }): string {
   const defaultInstructions = [
     "You are a memory search agent.",
     "Another model is preparing the final user-facing answer.",
     "Your job is to search memory and return only the most relevant memory context for that model.",
-    "You receive conversation context, including the user's latest message.",
+    "You receive a bounded search query plus conversation context, including the user's latest message.",
     "Use only the available memory tools.",
+    "Use the bounded search query as the memory_search or memory_recall query.",
+    "Do not use channel metadata, provider metadata, debug output, or the full conversation context as the memory tool query.",
     "Prefer memory_recall when available.",
     "If memory_recall is unavailable, use memory_search and memory_get.",
     "When searching for preference or habit recall, use a permissive recall limit or memory_search threshold before deciding that no useful memory exists.",
@@ -981,7 +1034,11 @@ function buildRecallPrompt(params: {
   ]
     .filter((section) => section.length > 0)
     .join("\n\n");
-  return `${instructionBlock}\n\nConversation context:\n${params.query}`;
+  return [
+    instructionBlock,
+    `Bounded memory search query:\n${params.searchQuery}`,
+    `Conversation context:\n${params.query}`,
+  ].join("\n\n");
 }
 
 function isEnabledForAgent(
@@ -1404,7 +1461,7 @@ async function persistPluginStatusLines(params: {
       agentId ? { agentId } : undefined,
     );
     if (!params.statusLine && !debugLine) {
-      const store = params.api.runtime.agent.session.loadSessionStore(storePath);
+      const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
       const existingEntry = resolveSessionStoreEntry({ store, sessionKey }).existing;
       const hasActiveMemoryEntry = Array.isArray(existingEntry?.pluginDebugEntries)
         ? existingEntry.pluginDebugEntries.some((entry) => entry?.pluginId === "active-memory")
@@ -1848,7 +1905,7 @@ async function waitForSubagentPartialTimeoutData(
   }
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<undefined>((resolve) => {
-    timeoutId = setTimeout(() => resolve(undefined), TIMEOUT_PARTIAL_DATA_GRACE_MS);
+    timeoutId = setTimeout(() => resolve(undefined), timeoutPartialDataGraceMs);
     timeoutId.unref?.();
   });
   try {
@@ -2039,6 +2096,83 @@ function buildQuery(params: {
   ].join("\n");
 }
 
+function stripExternalUntrustedBlocks(text: string): string {
+  return text.replace(
+    /<<<EXTERNAL_UNTRUSTED_CONTENT\b[^>]*>>>[\s\S]*?<<<END_EXTERNAL_UNTRUSTED_CONTENT\b[^>]*>>>/g,
+    " ",
+  );
+}
+
+function stripJsonFences(text: string): string {
+  return text.replace(/```(?:json)?\s*[\s\S]*?```/gi, " ");
+}
+
+function stripActiveMemoryXmlBlocks(text: string): string {
+  return text.replace(/<active_memory_plugin>[\s\S]*?<\/active_memory_plugin>/gi, " ");
+}
+
+function normalizeSearchQueryText(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => {
+      if (!line) {
+        return false;
+      }
+      if (/^(conversation info|sender|untrusted context)\b/i.test(line)) {
+        return false;
+      }
+      if (/^(source: external|---|untrusted discord message body)$/i.test(line)) {
+        return false;
+      }
+      if (/^⚠️?\s*Agent couldn't generate a response/i.test(line)) {
+        return false;
+      }
+      if (/^Please try again\.?$/i.test(line)) {
+        return false;
+      }
+      return true;
+    })
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function clampSearchQuery(text: string): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized.length > MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS
+    ? normalized.slice(0, MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS).trim()
+    : normalized;
+}
+
+function buildSearchQuery(params: {
+  latestUserMessage: string;
+  recentTurns?: ActiveRecallRecentTurn[];
+}): string {
+  const latest = clampSearchQuery(
+    normalizeSearchQueryText(
+      stripActiveMemoryXmlBlocks(
+        stripJsonFences(stripExternalUntrustedBlocks(params.latestUserMessage)),
+      ),
+    ),
+  );
+  if (latest.length >= 12 || !params.recentTurns?.length) {
+    return latest || clampSearchQuery(params.latestUserMessage);
+  }
+  const previousUser = [...params.recentTurns]
+    .toReversed()
+    .find((turn) => turn.role === "user" && turn.text.trim() !== params.latestUserMessage.trim());
+  if (!previousUser) {
+    return latest || clampSearchQuery(params.latestUserMessage);
+  }
+  const context = clampSearchQuery(
+    normalizeSearchQueryText(stripRecalledContextNoise(previousUser.text)),
+  )
+    .slice(0, 120)
+    .trim();
+  return clampSearchQuery(context ? `${context} ${latest}` : latest);
+}
+
 function extractTextContent(content: unknown): string {
   if (typeof content === "string") {
     return content;
@@ -2207,6 +2341,7 @@ async function runRecallSubagent(params: {
   messageProvider?: string;
   channelId?: string;
   query: string;
+  searchQuery: string;
   currentModelProviderId?: string;
   currentModelId?: string;
   modelRef?: { provider: string; model: string };
@@ -2241,9 +2376,13 @@ async function runRecallSubagent(params: {
   const subagentSessionKey = parentSessionKey
     ? `${parentSessionKey}:${subagentSuffix}`
     : `agent:${params.agentId}:${subagentSuffix}`;
-  const tempDir = params.config.persistTranscripts
+  const transientWorkspace = params.config.persistTranscripts
     ? undefined
-    : await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-active-memory-"));
+    : await tempWorkspace({
+        rootDir: resolvePreferredOpenClawTmpDir(),
+        prefix: "openclaw-active-memory-",
+      });
+  const tempDir = transientWorkspace?.dir;
   const persistedDir = params.config.persistTranscripts
     ? resolveSafeTranscriptDir(
         resolvePersistentTranscriptBaseDir(params.api, params.agentId),
@@ -2261,6 +2400,7 @@ async function runRecallSubagent(params: {
   const prompt = buildRecallPrompt({
     config: params.config,
     query: params.query,
+    searchQuery: params.searchQuery,
   });
   const { messageChannel, messageProvider } = resolveRecallRunChannelContext({
     api: params.api,
@@ -2273,6 +2413,7 @@ async function runRecallSubagent(params: {
 
   try {
     const embeddedConfig = applyActiveMemoryRuntimeConfigSnapshot(params.api.config, params.config);
+    const embeddedTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
     const result = await params.api.runtime.agent.runEmbeddedPiAgent({
       sessionId: subagentSessionId,
       sessionKey: subagentSessionKey,
@@ -2286,10 +2427,10 @@ async function runRecallSubagent(params: {
       prompt,
       provider: modelRef.provider,
       model: modelRef.model,
-      timeoutMs: params.config.timeoutMs,
+      timeoutMs: embeddedTimeoutMs,
       runId: subagentSessionId,
       trigger: "manual",
-      toolsAllow: ["memory_recall", "memory_search", "memory_get"],
+      toolsAllow: [...ACTIVE_MEMORY_TOOL_ALLOWLIST],
       disableMessageTool: true,
       allowGatewaySubagentBinding: true,
       bootstrapContextMode: "lightweight",
@@ -2332,11 +2473,15 @@ async function runRecallSubagent(params: {
       const searchDebug = partialReply ? await readActiveMemorySearchDebug(sessionFile) : undefined;
       attachPartialTimeoutData(error, partialReply, searchDebug);
     }
+    if (!params.abortSignal?.aborted && isMissingRegisteredMemoryToolsError(error)) {
+      params.api.logger.debug?.(
+        `active-memory: no memory tools registered (memory-core or memory-lancedb required); skipping sub-agent`,
+      );
+      return { rawReply: "NONE" };
+    }
     throw error;
   } finally {
-    if (tempDir) {
-      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
-    }
+    await transientWorkspace?.cleanup();
   }
 }
 
@@ -2349,6 +2494,7 @@ async function maybeResolveActiveRecall(params: {
   messageProvider?: string;
   channelId?: string;
   query: string;
+  searchQuery: string;
   currentModelProviderId?: string;
   currentModelId?: string;
 }): Promise<ActiveRecallResult> {
@@ -2426,7 +2572,9 @@ async function maybeResolveActiveRecall(params: {
 
   if (params.config.logging) {
     params.api.logger.info?.(
-      `${logPrefix} start timeoutMs=${String(params.config.timeoutMs)} queryChars=${String(params.query.length)}`,
+      `${logPrefix} start timeoutMs=${String(params.config.timeoutMs)} queryChars=${String(
+        params.query.length,
+      )} searchQueryChars=${String(params.searchQuery.length)}`,
     );
   }
 
@@ -2795,10 +2943,15 @@ export default definePluginEntry({
             });
             return undefined;
           }
+          const recentTurns = extractRecentTurns(event.messages);
           const query = buildQuery({
             latestUserMessage: event.prompt,
-            recentTurns: extractRecentTurns(event.messages),
+            recentTurns,
             config,
+          });
+          const searchQuery = buildSearchQuery({
+            latestUserMessage: event.prompt,
+            recentTurns,
           });
           const result = await maybeResolveActiveRecall({
             api,
@@ -2809,6 +2962,7 @@ export default definePluginEntry({
             messageProvider: ctx.messageProvider,
             channelId: ctx.channelId,
             query,
+            searchQuery,
             currentModelProviderId: ctx.modelProviderId,
             currentModelId: ctx.modelId,
           });
@@ -2845,6 +2999,7 @@ const testing = {
   buildPromptPrefix,
   getCachedResult,
   isCircuitBreakerOpen,
+  isMissingRegisteredMemoryToolsError,
   normalizePluginConfig,
   readActiveMemorySearchDebug,
   readPartialAssistantText,
@@ -2855,12 +3010,16 @@ const testing = {
     lastActiveRecallCacheSweepAt = 0;
     minimumTimeoutMs = DEFAULT_MIN_TIMEOUT_MS;
     setupGraceTimeoutMs = DEFAULT_SETUP_GRACE_TIMEOUT_MS;
+    timeoutPartialDataGraceMs = TIMEOUT_PARTIAL_DATA_GRACE_MS;
   },
   setMinimumTimeoutMsForTests(value: number) {
     minimumTimeoutMs = value;
   },
   setSetupGraceTimeoutMsForTests(value: number) {
     setupGraceTimeoutMs = Math.max(0, Math.floor(value));
+  },
+  setTimeoutPartialDataGraceMsForTests(value: number) {
+    timeoutPartialDataGraceMs = Math.max(0, Math.floor(value));
   },
   setCachedResult,
   getCircuitBreakerEntry(key: string) {

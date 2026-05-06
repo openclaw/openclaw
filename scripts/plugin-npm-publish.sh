@@ -75,6 +75,15 @@ log "Resolved mirror dist-tags: ${mirror_dist_tags_csv:-<none>}"
 log "Mirror dist-tag auth source: ${mirror_auth_source}"
 log "Mirror dist-tag auth requirement: ${mirror_auth_requirement}"
 
+build_package_runtime() {
+  if [[ "${OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD:-1}" == "0" || "${OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD:-1}" == "false" ]]; then
+    log "Package-local runtime build: skipped"
+    return
+  fi
+  log "Package-local runtime build: ${package_dir}"
+  node scripts/lib/plugin-npm-runtime-build.mjs "${package_dir}" >&2
+}
+
 mirror_auth_token=""
 case "${mirror_auth_source}" in
   node-auth-token)
@@ -122,6 +131,8 @@ if [[ "${mode}" == "--dry-run" ]]; then
   exit 0
 fi
 
+build_package_runtime
+
 if [[ "${mode}" == "--pack-dry-run" ]]; then
   node scripts/lib/plugin-npm-package-manifest.mjs --run "${package_dir}" -- \
     npm pack --dry-run --json --ignore-scripts
@@ -155,8 +166,13 @@ fi
     for dist_tag in "${mirror_dist_tags[@]}"; do
       [[ -n "${dist_tag}" ]] || continue
       echo "Mirroring ${package_name}@${package_version} onto dist-tag ${dist_tag}"
-      NPM_CONFIG_USERCONFIG="${mirror_userconfig}" \
-        npm dist-tag add "${package_name}@${package_version}" "${dist_tag}"
+      if ! NPM_CONFIG_USERCONFIG="${mirror_userconfig}" \
+        npm dist-tag add "${package_name}@${package_version}" "${dist_tag}"; then
+        if [[ "${mirror_auth_requirement}" == "required" ]]; then
+          exit 1
+        fi
+        echo "Warning: optional npm dist-tag mirror failed for ${package_name}@${package_version} -> ${dist_tag}; published package remains live." >&2
+      fi
     done
   fi
 )

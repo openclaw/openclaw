@@ -32,6 +32,8 @@ import { asNullableObjectRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
+import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
+import { runPluginSessionStateDoctorRepairs } from "./doctor-session-state-providers.js";
 
 type DoctorPrompterLike = {
   confirmRuntimeRepair: (params: {
@@ -919,6 +921,27 @@ export async function noteStateIntegrity(
         warnings.push(wedgedReasons.map((reason) => `  Reason: ${reason}`).join("\n"));
       }
     }
+
+    await runPluginSessionStateDoctorRepairs({
+      cfg,
+      store,
+      absoluteStorePath,
+      prompter,
+      env,
+      warnings,
+      changes,
+    });
+
+    await repairHeartbeatPoisonedMainSession({
+      cfg,
+      store,
+      absoluteStorePath,
+      stateDir,
+      sessionPathOpts,
+      prompter,
+      warnings,
+      changes,
+    });
 
     const mainKey = resolveMainSessionKey(cfg);
     const mainEntry = store[mainKey];

@@ -281,7 +281,11 @@ describe("scripts/docker/setup.sh", () => {
 
   it("forces BuildKit for local and sandbox docker builds", async () => {
     const activeSandbox = requireSandbox(sandbox);
-    await writeFile(join(activeSandbox.rootDir, "Dockerfile.sandbox"), "FROM scratch\n");
+    await mkdir(join(activeSandbox.rootDir, "scripts", "docker", "sandbox"), { recursive: true });
+    await writeFile(
+      join(activeSandbox.rootDir, "scripts", "docker", "sandbox", "Dockerfile"),
+      "FROM scratch\n",
+    );
     await resetDockerLog(activeSandbox);
 
     const result = runDockerSetup(activeSandbox, {
@@ -610,8 +614,25 @@ describe("scripts/docker/setup.sh", () => {
     );
   });
 
+  it("keeps docker-compose optional env files aligned across services", async () => {
+    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
+    expect(compose.match(/env_file:\n {6}- path: \.env\n {8}required: false/g)).toHaveLength(2);
+  });
+
   it("keeps docker-compose timezone env defaults aligned across services", async () => {
     const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
     expect(compose.match(/TZ: \$\{OPENCLAW_TZ:-UTC\}/g)).toHaveLength(2);
+  });
+
+  it("pins container-side workspace and config dirs on both services so host .env paths cannot leak (#77436)", async () => {
+    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
+    // Both gateway and CLI services must override the env_file values with the
+    // canonical container paths so a host-style OPENCLAW_WORKSPACE_DIR like
+    // `/Users/<you>/.openclaw/workspace` written to `.env` by docker-setup.sh
+    // cannot reach runtime code inside Linux Docker.
+    expect(compose.match(/OPENCLAW_CONFIG_DIR: \/home\/node\/\.openclaw$/gm)).toHaveLength(2);
+    expect(
+      compose.match(/OPENCLAW_WORKSPACE_DIR: \/home\/node\/\.openclaw\/workspace$/gm),
+    ).toHaveLength(2);
   });
 });

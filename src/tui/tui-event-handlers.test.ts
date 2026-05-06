@@ -529,6 +529,26 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(loadHistory).not.toHaveBeenCalled();
   });
 
+  it("clears pendingChatRunId when an event for that runId arrives", () => {
+    const { state, handleChatEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: null,
+        pendingOptimisticUserMessage: true,
+        pendingChatRunId: "run-pending",
+      },
+    });
+
+    handleChatEvent({
+      runId: "run-pending",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hi" },
+    });
+
+    expect(state.pendingChatRunId).toBeNull();
+    expect(state.activeChatRunId).toBe("run-pending");
+  });
+
   function createConcurrentRunHarness(localContent = "partial") {
     const { state, chatLog, setActivityStatus, loadHistory, handleChatEvent } =
       createHandlersHarness({
@@ -894,6 +914,9 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 });
 
 describe("tui-event-handlers: streaming watchdog", () => {
+  const expectedTimeoutMessage =
+    "This response is taking longer than expected. Send another message to continue.";
+
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -971,7 +994,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
 
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
     expect(state.activeChatRunId).toBeNull();
-    expect(chatLog.addSystem).toHaveBeenCalledWith(expect.stringContaining("streaming watchdog"));
+    expect(chatLog.addSystem).toHaveBeenCalledWith(expectedTimeoutMessage);
 
     handlers.dispose?.();
   });
@@ -1177,9 +1200,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
     expect(state.activeChatRunId).toBeNull();
     expect(loadHistory).toHaveBeenCalledTimes(1);
-    expect(chatLog.addSystem).not.toHaveBeenCalledWith(
-      expect.stringContaining("streaming watchdog"),
-    );
+    expect(chatLog.addSystem).not.toHaveBeenCalledWith(expectedTimeoutMessage);
 
     handlers.dispose?.();
   });
@@ -1206,9 +1227,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
 
     const statusCalls = setActivityStatus.mock.calls.map((c) => c[0]);
     expect(statusCalls.filter((s) => s === "idle").length).toBe(1);
-    expect(chatLog.addSystem).not.toHaveBeenCalledWith(
-      expect.stringContaining("streaming watchdog"),
-    );
+    expect(chatLog.addSystem).not.toHaveBeenCalledWith(expectedTimeoutMessage);
     expect(state.activeChatRunId).toBeNull();
 
     handlers.dispose?.();

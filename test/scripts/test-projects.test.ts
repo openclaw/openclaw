@@ -9,6 +9,7 @@ import {
   buildFullSuiteVitestRunPlans,
   buildVitestRunPlans,
   listFullExtensionVitestProjectConfigs,
+  orderFullSuiteSpecsForParallelRun,
   shouldAcquireLocalHeavyCheckLock,
   resolveChangedTestTargetPlan,
   resolveChangedTargetArgs,
@@ -933,6 +934,24 @@ describe("scripts/test-projects local heavy-check lock", () => {
 });
 
 describe("scripts/test-projects full-suite sharding", () => {
+  it("interleaves heavy and light configs for cold parallel full-suite runs", () => {
+    const specs = [
+      "test/vitest/vitest.gateway.config.ts",
+      "test/vitest/vitest.gateway-server.config.ts",
+      "test/vitest/vitest.commands.config.ts",
+      "test/vitest/vitest.extension-memory.config.ts",
+      "test/vitest/vitest.extension-msteams.config.ts",
+    ].map((config) => ({ config }));
+
+    expect(orderFullSuiteSpecsForParallelRun(specs).map((spec) => spec.config)).toEqual([
+      "test/vitest/vitest.gateway-server.config.ts",
+      "test/vitest/vitest.extension-msteams.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+      "test/vitest/vitest.extension-memory.config.ts",
+      "test/vitest/vitest.commands.config.ts",
+    ]);
+  });
+
   it("covers each normal full-suite test file exactly once", async () => {
     const matches = await listFullSuiteTestFileMatches();
     const e2eNamedIntegrationTests = new Set([
@@ -1142,6 +1161,7 @@ describe("scripts/test-projects full-suite sharding", () => {
 
   it("can expand full-suite shards to project configs for perf experiments", () => {
     const previous = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    const gatewayServerConfig = "test/vitest/vitest.gateway-server.config.ts";
     process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = "1";
     let plans: ReturnType<typeof buildFullSuiteVitestRunPlans>;
     try {
@@ -1187,7 +1207,10 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.gateway-core.config.ts",
       "test/vitest/vitest.gateway-client.config.ts",
       "test/vitest/vitest.gateway-methods.config.ts",
-      "test/vitest/vitest.gateway-server.config.ts",
+      gatewayServerConfig,
+      gatewayServerConfig,
+      gatewayServerConfig,
+      gatewayServerConfig,
       "test/vitest/vitest.cli.config.ts",
       "test/vitest/vitest.commands-light.config.ts",
       "test/vitest/vitest.commands.config.ts",
@@ -1230,13 +1253,25 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.extensions.config.ts",
       "test/vitest/vitest.extension-misc.config.ts",
     ]);
-    expect(plans).toEqual(
-      plans.map((plan) => ({
-        config: plan.config,
-        forwardedArgs: [],
-        includePatterns: null,
-        watchMode: false,
-      })),
+
+    const gatewayPlans = plans.filter((plan) => plan.config === gatewayServerConfig);
+    const gatewayTargets = gatewayPlans.flatMap((plan) => plan.forwardedArgs);
+    const gatewayChunkSizes = gatewayPlans.map((plan) => plan.forwardedArgs.length);
+    expect(gatewayPlans).toHaveLength(4);
+    expect(gatewayTargets.length).toBeGreaterThan(90);
+    expect(new Set(gatewayTargets).size).toBe(gatewayTargets.length);
+    expect(gatewayTargets).toContain("src/gateway/server-network-runtime.e2e.test.ts");
+    expect(gatewayTargets).not.toContain("src/gateway/gateway.test.ts");
+    expect(Math.max(...gatewayChunkSizes) - Math.min(...gatewayChunkSizes)).toBeLessThanOrEqual(1);
+    expect(plans.filter((plan) => plan.config !== gatewayServerConfig)).toEqual(
+      plans
+        .filter((plan) => plan.config !== gatewayServerConfig)
+        .map((plan) => ({
+          config: plan.config,
+          forwardedArgs: [],
+          includePatterns: null,
+          watchMode: false,
+        })),
     );
   });
 
