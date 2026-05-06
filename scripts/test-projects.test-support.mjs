@@ -1705,13 +1705,7 @@ export function shouldAcquireLocalHeavyCheckLock(runSpecs, env = process.env) {
     return true;
   }
 
-  return !(
-    runSpecs.length === 1 &&
-    runSpecs[0]?.config === TOOLING_VITEST_CONFIG &&
-    runSpecs[0]?.watchMode === false &&
-    Array.isArray(runSpecs[0]?.includePatterns) &&
-    runSpecs[0].includePatterns.length > 0
-  );
+  return true;
 }
 
 export function writeVitestIncludeFile(filePath, includePatterns) {

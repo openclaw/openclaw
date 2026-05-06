@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createLocalInstallPressureRefusalMessage,
   createPackageManagerWarningMessage,
   detectLifecyclePackageManager,
+  shouldRefuseLocalInstallForPressure,
   warnIfNonPnpmLifecycle,
 } from "../../scripts/preinstall-package-manager-warning.mjs";
 
@@ -68,5 +70,56 @@ describe("warnIfNonPnpmLifecycle", () => {
       ),
     ).toBe(false);
     expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("local install pressure guard", () => {
+  const pressuredHost = {
+    isSourceCheckout: true,
+    memAvailableBytes: 1536 * 1024 * 1024,
+    swapFreeBytes: 768 * 1024 * 1024,
+    load1: 12,
+  };
+
+  it("refuses source-checkout installs when the host is already pressured", () => {
+    expect(
+      shouldRefuseLocalInstallForPressure(
+        {
+          npm_config_user_agent: "pnpm/10.32.1 npm/? node/v22.20.0 linux arm64",
+        },
+        pressuredHost,
+      ),
+    ).toEqual({
+      refuse: true,
+      reasons: ["MemAvailable below 2GiB", "SwapFree below 1GiB", "load1 above 10"],
+    });
+  });
+
+  it("allows CI and explicit pressure-guard opt-out installs", () => {
+    expect(shouldRefuseLocalInstallForPressure({ CI: "true" }, pressuredHost).refuse).toBe(false);
+    expect(
+      shouldRefuseLocalInstallForPressure({ OPENCLAW_INSTALL_PRESSURE_GUARD: "0" }, pressuredHost)
+        .refuse,
+    ).toBe(false);
+  });
+
+  it("stays quiet outside source checkouts", () => {
+    expect(
+      shouldRefuseLocalInstallForPressure(
+        {},
+        {
+          ...pressuredHost,
+          isSourceCheckout: false,
+        },
+      ).refuse,
+    ).toBe(false);
+  });
+
+  it("formats an actionable refusal message", () => {
+    expect(
+      createLocalInstallPressureRefusalMessage({
+        reasons: ["MemAvailable below 2GiB", "load1 above 10"],
+      }),
+    ).toContain("refusing local package install under host pressure");
   });
 });

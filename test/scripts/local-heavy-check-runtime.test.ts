@@ -290,14 +290,22 @@ describe("local-heavy-check-runtime", () => {
     ]);
   });
 
-  it("skips the heavy-check lock for explicit oxlint file targets", () => {
-    const cwd = createTempDir("openclaw-oxlint-lock-skip-");
+  it("keeps the heavy-check lock for type-aware oxlint even with explicit file targets", () => {
+    const cwd = createTempDir("openclaw-oxlint-lock-type-aware-file-");
     const target = path.join(cwd, "sample.ts");
     fs.writeFileSync(target, "export const ok = true;\n", "utf8");
 
     expect(
       shouldAcquireLocalHeavyCheckLockForOxlint(["--type-aware", "--", "sample.ts"], { cwd }),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it("skips the heavy-check lock for non-type-aware explicit oxlint file targets", () => {
+    const cwd = createTempDir("openclaw-oxlint-lock-skip-file-");
+    const target = path.join(cwd, "sample.ts");
+    fs.writeFileSync(target, "export const ok = true;\n", "utf8");
+
+    expect(shouldAcquireLocalHeavyCheckLockForOxlint(["--", "sample.ts"], { cwd })).toBe(false);
   });
 
   it("skips the heavy-check lock for oxlint metadata commands", () => {

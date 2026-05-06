@@ -123,6 +123,10 @@ export function shouldAcquireLocalHeavyCheckLockForOxlint(
     return false;
   }
 
+  if (args.some((arg) => arg === "--type-aware" || arg.startsWith("--type-aware="))) {
+    return true;
+  }
+
   const separatorIndex = args.indexOf("--");
   const candidateArgs = (() => {
     if (separatorIndex !== -1) {
