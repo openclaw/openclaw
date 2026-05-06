@@ -34,11 +34,19 @@
 ## Real behavior proof (required for external PRs)
 
 - Behavior or issue addressed: config-set dry-run channel validation now follows live plugin-owned channel schema metadata.
-- Real environment tested: local checkout.
-- Exact steps or command run after this patch: `git diff --check`
-- Evidence after fix (screenshot, recording, terminal capture, console output, redacted runtime log, linked artifact, or copied live output): `git diff --check` completed with no output.
-- Observed result after fix: whitespace sanity passed.
-- What was not tested: targeted Vitest/pnpm validation was not run because this environment has no `pnpm`, Node, npm, or Corepack on PATH.
+- Real environment tested: local Linux checkout with Node 22.16.0 and pnpm 10.33.2, using an isolated `OPENCLAW_CONFIG_PATH`.
+- Exact steps or command run after this patch: `OPENCLAW_CONFIG_PATH=/tmp/openclaw-69361-proof-MB14z7/openclaw.json pnpm openclaw config set channels.bluebubbles.sendTimeoutMs 45000 --strict-json --dry-run`
+- Evidence after fix (screenshot, recording, terminal capture, console output, redacted runtime log, linked artifact, or copied live output): copied terminal output:
+
+```text
+> openclaw@2026.5.6 openclaw /home/ubuntu/Timon/openclaw
+> node scripts/run-node.mjs config set channels.bluebubbles.sendTimeoutMs 45000 --strict-json --dry-run
+
+Dry run successful: 1 update(s) validated against /tmp/openclaw-69361-proof-MB14z7/openclaw.json.
+```
+
+- Observed result after fix: the BlueBubbles `sendTimeoutMs` config-set dry run succeeded instead of rejecting the plugin-owned channel key as stale generated metadata.
+- What was not tested: broad full-suite validation was not run locally.
 - Before evidence (optional but encouraged): issue #69361 documents the original `channels.bluebubbles.sendTimeoutMs` rejection.
 
 ## Root Cause (if applicable)
