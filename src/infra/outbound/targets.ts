@@ -65,6 +65,7 @@ export function resolveOutboundTarget(params: {
       plugin: resolveOutboundChannelPlugin({
         channel: params.channel,
         cfg: params.cfg,
+        allowBootstrap: true,
       }),
       target: params,
       onMissingPlugin: () =>
