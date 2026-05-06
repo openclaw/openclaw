@@ -443,6 +443,59 @@ describe("mattermostPlugin", () => {
         }),
       );
     });
+
+    it("uses explicit threadId for send actions when replyToId is absent", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.(
+        createMattermostActionContext({
+          action: "send",
+          params: {
+            to: "channel:CHAN1",
+            message: "hello",
+            threadId: " thread-root ",
+          },
+          cfg,
+          accountId: "default",
+        }),
+      );
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "hello",
+        expect.objectContaining({
+          accountId: "default",
+          replyToId: "thread-root",
+        }),
+      );
+    });
+
+    it("prefers explicit replyToId over threadId for send actions", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.(
+        createMattermostActionContext({
+          action: "send",
+          params: {
+            to: "channel:CHAN1",
+            message: "hello",
+            replyToId: "specific-reply",
+            threadId: "thread-root",
+          },
+          cfg,
+          accountId: "default",
+        }),
+      );
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "hello",
+        expect.objectContaining({
+          accountId: "default",
+          replyToId: "specific-reply",
+        }),
+      );
+    });
   });
 
   describe("outbound", () => {
