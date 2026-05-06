@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HealthSummary } from "./health.js";
 import {
+  buildStatusMemoryValue,
   buildStatusFooterLines,
   buildStatusHealthRows,
   buildStatusPairingRecoveryLines,
@@ -13,6 +14,45 @@ import {
 } from "./status.command-sections.ts";
 
 describe("status.command-sections", () => {
+  it("surfaces gateway memory status when the local memory runtime is unavailable", () => {
+    expect(
+      buildStatusMemoryValue({
+        memory: null,
+        memoryPlugin: { enabled: true, slot: "openclaw-mem0" },
+        gatewayMemoryStatus: {
+          provider: "mem0",
+          runtime: { ok: true },
+          embedding: { ok: false },
+        },
+        ok: (value) => `ok(${value})`,
+        warn: (value) => `warn(${value})`,
+        muted: (value) => `muted(${value})`,
+        resolveMemoryVectorState: () => ({ state: "ready", tone: "ok" }),
+        resolveMemoryFtsState: () => ({ state: "ready", tone: "ok" }),
+        resolveMemoryCacheSummary: () => ({ text: "cache warm", tone: "ok" }),
+      }),
+    ).toBe("muted(enabled (plugin openclaw-mem0)) · ok(gateway active) · provider mem0");
+  });
+
+  it("trusts provider-only legacy gateway memory status when embeddings were skipped", () => {
+    expect(
+      buildStatusMemoryValue({
+        memory: null,
+        memoryPlugin: { enabled: true, slot: "openclaw-mem0" },
+        gatewayMemoryStatus: {
+          provider: "mem0",
+          embedding: { ok: false },
+        },
+        ok: (value) => `ok(${value})`,
+        warn: (value) => `warn(${value})`,
+        muted: (value) => `muted(${value})`,
+        resolveMemoryVectorState: () => ({ state: "ready", tone: "ok" }),
+        resolveMemoryFtsState: () => ({ state: "ready", tone: "ok" }),
+        resolveMemoryCacheSummary: () => ({ text: "cache warm", tone: "ok" }),
+      }),
+    ).toBe("muted(enabled (plugin openclaw-mem0)) · ok(gateway active) · provider mem0");
+  });
+
   it("formats security audit lines with finding caps and follow-up commands", () => {
     const lines = buildStatusSecurityAuditLines({
       securityAudit: {

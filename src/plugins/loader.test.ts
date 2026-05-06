@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { listAgentHarnessIds } from "../agents/harness/registry.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import {
@@ -62,6 +63,7 @@ import {
 } from "./loader.test-fixtures.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import {
+  getMemoryEmbeddingProvider,
   listMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
 } from "./memory-embedding-providers.js";
@@ -75,7 +77,10 @@ import {
   listMemoryPromptSupplements,
   registerMemoryCapability,
   registerMemoryCorpusSupplement,
+  registerMemoryFlushPlanResolver,
+  registerMemoryPromptSection,
   registerMemoryPromptSupplement,
+  registerMemoryRuntime,
   resolveMemoryFlushPlan,
 } from "./memory-state.js";
 import { ensureOpenClawPluginSdkAlias } from "./plugin-sdk-dist-alias.js";
@@ -6815,6 +6820,299 @@ export const runtimeValue = helperValue;`,
 
     const record = registry.plugins.find((entry) => entry.id === "source-runtime-shim");
     expect(record?.status).toBe("loaded");
+  });
+
+});
+
+describe("getCompatibleActivePluginRegistry", () => {
+  it("reuses the active registry only when the load context cache key matches", () => {
+    const registry = createEmptyPluginRegistry();
+    const loadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+          load: { paths: ["/tmp/demo.js"] },
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    setActivePluginRegistry(registry, cacheKey);
+
+    expect(__testing.getCompatibleActivePluginRegistry(loadOptions)).toBe(registry);
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        ...loadOptions,
+        workspaceDir: "/tmp/workspace-b",
+      }),
+    ).toBeUndefined();
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        ...loadOptions,
+        onlyPluginIds: ["demo"],
+      }),
+    ).toBeUndefined();
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        ...loadOptions,
+        runtimeOptions: undefined,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not embed activation secrets in the loader cache key", () => {
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext({
+      config: {
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      activationSourceConfig: {
+        plugins: {
+          allow: ["telegram"],
+        },
+        channels: {
+          telegram: {
+            enabled: true,
+            botToken: "secret-token",
+          },
+        },
+      },
+      autoEnabledReasons: {
+        telegram: ["telegram configured"],
+      },
+    });
+
+    expect(cacheKey).not.toContain("secret-token");
+    expect(cacheKey).not.toContain("botToken");
+    expect(cacheKey).not.toContain("telegram configured");
+  });
+
+  it("falls back to the current active runtime when no compatibility-shaping inputs are supplied", () => {
+    const registry = createEmptyPluginRegistry();
+    setActivePluginRegistry(registry, "startup-registry");
+
+    expect(__testing.getCompatibleActivePluginRegistry()).toBe(registry);
+  });
+
+  it("does not reuse the active registry when core gateway method names differ", () => {
+    const registry = createEmptyPluginRegistry();
+    const loadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+          load: { paths: ["/tmp/demo.js"] },
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      coreGatewayHandlers: {
+        "sessions.get": () => undefined,
+      },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    setActivePluginRegistry(registry, cacheKey);
+
+    expect(__testing.getCompatibleActivePluginRegistry(loadOptions)).toBe(registry);
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        ...loadOptions,
+        coreGatewayHandlers: {
+          "sessions.get": () => undefined,
+          "sessions.list": () => undefined,
+        },
+      }),
+    ).toBeUndefined();
+  });
+});
+
+describe("resolveRuntimePluginRegistry", () => {
+  it("reuses the compatible active registry before attempting a fresh load", () => {
+    const registry = createEmptyPluginRegistry();
+    const loadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    setActivePluginRegistry(registry, cacheKey);
+
+    expect(resolveRuntimePluginRegistry(loadOptions)).toBe(registry);
+  });
+
+  it("restores memory runtime side effects when reusing the active registry", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "runtime-memory",
+      filename: "runtime-memory.cjs",
+      body: `module.exports = {
+  id: "runtime-memory",
+  kind: "memory",
+  register(api) {
+    api.registerMemoryRuntime({
+      async getMemorySearchManager() {
+        return { manager: null };
+      },
+      resolveMemoryBackendConfig() {
+        return { backend: "builtin" };
+      },
+    });
+  },
+};`,
+    });
+    const loadOptions = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["runtime-memory"],
+          slots: {
+            memory: "runtime-memory",
+          },
+        },
+      },
+    };
+
+    const registry = loadOpenClawPlugins(loadOptions);
+    expect(getMemoryRuntime()).toBeDefined();
+
+    clearMemoryPluginState();
+    expect(getMemoryRuntime()).toBeUndefined();
+
+    expect(resolveRuntimePluginRegistry(loadOptions)).toBe(registry);
+    expect(getMemoryRuntime()).toBeDefined();
+  });
+
+  it("restores memory capability side effects when reusing the active registry", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "runtime-memory-capability",
+      filename: "runtime-memory-capability.cjs",
+      body: `module.exports = {
+  id: "runtime-memory-capability",
+  kind: "memory",
+  register(api) {
+    api.registerMemoryCapability({
+      publicArtifacts: {
+        async listArtifacts() {
+          return [
+            {
+              kind: "notes",
+              workspaceDir: "/tmp/workspace-a",
+              relativePath: "memory/notes.md",
+              absolutePath: "/tmp/workspace-a/memory/notes.md",
+              agentIds: ["main"],
+              contentType: "markdown",
+            },
+          ];
+        },
+      },
+    });
+  },
+};`,
+    });
+    const loadOptions = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["runtime-memory-capability"],
+          slots: {
+            memory: "runtime-memory-capability",
+          },
+        },
+      },
+    };
+
+    const registry = loadOpenClawPlugins(loadOptions);
+    await expect(
+      listActiveMemoryPublicArtifacts({
+        cfg: loadOptions.config as OpenClawConfig,
+      }),
+    ).resolves.toEqual([
+      {
+        kind: "notes",
+        workspaceDir: "/tmp/workspace-a",
+        relativePath: "memory/notes.md",
+        absolutePath: "/tmp/workspace-a/memory/notes.md",
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+
+    clearMemoryPluginState();
+    await expect(
+      listActiveMemoryPublicArtifacts({
+        cfg: loadOptions.config as OpenClawConfig,
+      }),
+    ).resolves.toEqual([]);
+
+    expect(resolveRuntimePluginRegistry(loadOptions)).toBe(registry);
+    await expect(
+      listActiveMemoryPublicArtifacts({
+        cfg: loadOptions.config as OpenClawConfig,
+      }),
+    ).resolves.toEqual([
+      {
+        kind: "notes",
+        workspaceDir: "/tmp/workspace-a",
+        relativePath: "memory/notes.md",
+        absolutePath: "/tmp/workspace-a/memory/notes.md",
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+  });
+
+  it("falls back to the current active runtime when no explicit load context is provided", () => {
+    const registry = createEmptyPluginRegistry();
+    setActivePluginRegistry(registry, "startup-registry");
+
+    expect(resolveRuntimePluginRegistry()).toBe(registry);
+  });
+});
+
+describe("clearPluginLoaderCache", () => {
+  it("resets registered memory plugin registries", () => {
+    registerMemoryEmbeddingProvider({
+      id: "stale",
+      create: async () => ({ provider: null }),
+    });
+    registerMemoryPromptSection(() => ["stale memory section"]);
+    registerMemoryFlushPlanResolver(() => ({
+      softThresholdTokens: 1,
+      forceFlushTranscriptBytes: 2,
+      reserveTokensFloor: 3,
+      prompt: "stale",
+      systemPrompt: "stale",
+      relativePath: "memory/stale.md",
+    }));
+    registerMemoryRuntime({
+      async getMemorySearchManager() {
+        return { manager: null };
+      },
+      resolveMemoryBackendConfig() {
+        return { backend: "builtin" as const };
+      },
+    });
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
+      "stale memory section",
+    ]);
+    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/stale.md");
+    expect(getMemoryRuntime()).toBeDefined();
+    expect(getMemoryEmbeddingProvider("stale")).toBeDefined();
+
+    clearPluginLoaderCache();
+
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
+    expect(resolveMemoryFlushPlan({})).toBeNull();
+    expect(getMemoryRuntime()).toBeUndefined();
+    expect(getMemoryEmbeddingProvider("stale")).toBeUndefined();
   });
 
   it("converts Windows absolute import specifiers to file URLs only for module loading", () => {

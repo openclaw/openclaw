@@ -122,6 +122,24 @@ const invokeDoctorMemoryResetGroundedShortTerm = async (respond: ReturnType<type
   });
 };
 
+const expectMemoryUnavailableResponse = (respond: ReturnType<typeof vi.fn>, error: string) => {
+  expect(respond).toHaveBeenCalledWith(
+    true,
+    expect.objectContaining({
+      agentId: "main",
+      runtime: {
+        ok: false,
+        error,
+      },
+      embedding: {
+        ok: false,
+        error,
+      },
+    }),
+    undefined,
+  );
+};
+
 const invokeDoctorMemoryRepairDreamingArtifacts = async (respond: ReturnType<typeof vi.fn>) => {
   await doctorHandlers["doctor.memory.repairDreamingArtifacts"]({
     req: {} as never,
@@ -158,11 +176,15 @@ const invokeDoctorMemoryRemHarness = async (
   });
 };
 
-const expectEmbeddingErrorResponse = (respond: ReturnType<typeof vi.fn>, error: string) => {
+const expectEmbeddingProbeFailureResponse = (respond: ReturnType<typeof vi.fn>, error: string) => {
   expect(respond).toHaveBeenCalledWith(
     true,
     expect.objectContaining({
       agentId: "main",
+      provider: "openai",
+      runtime: {
+        ok: true,
+      },
       embedding: {
         ok: false,
         error,
@@ -210,6 +232,7 @@ describe("doctor.memory.status", () => {
       expect.objectContaining({
         agentId: "main",
         provider: "gemini",
+        runtime: { ok: true },
         embedding: { ok: true },
         dreaming: expect.objectContaining({
           enabled: false,
@@ -299,10 +322,10 @@ describe("doctor.memory.status", () => {
 
     await invokeDoctorMemoryStatus(respond, { params: { probe: true } });
 
-    expectEmbeddingErrorResponse(respond, "memory search unavailable");
+    expectMemoryUnavailableResponse(respond, "memory search unavailable");
   });
 
-  it("returns probe failure when manager probe throws", async () => {
+  it("keeps runtime healthy when only the embedding probe throws", async () => {
     const close = vi.fn().mockResolvedValue(undefined);
     getMemorySearchManager.mockResolvedValue({
       manager: {
@@ -315,7 +338,26 @@ describe("doctor.memory.status", () => {
 
     await invokeDoctorMemoryStatus(respond, { params: { probe: true } });
 
-    expectEmbeddingErrorResponse(respond, "gateway memory probe failed: timeout");
+    expectEmbeddingProbeFailureResponse(respond, "gateway memory probe failed: timeout");
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("returns unavailable when manager status throws", async () => {
+    const close = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: vi.fn(() => {
+          throw new Error("status failed");
+        }),
+        probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
+        close,
+      },
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryStatus(respond);
+
+    expectMemoryUnavailableResponse(respond, "gateway memory probe failed: status failed");
     expect(close).toHaveBeenCalled();
   });
 

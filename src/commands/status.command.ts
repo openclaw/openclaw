@@ -13,6 +13,7 @@ import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts
 import {
   loadStatusProviderUsageModule,
   resolveStatusGatewayHealth,
+  resolveStatusGatewayMemoryStatus,
   resolveStatusSecurityAudit,
   resolveStatusRuntimeSnapshot,
   resolveStatusUsageSummary,
@@ -196,6 +197,14 @@ export async function statusCommand(
         async () => await resolveStatusGatewayHealth(input),
       ),
   });
+  const gatewayMemoryStatus = await resolveStatusGatewayMemoryStatus({
+    config: scan.cfg,
+    timeoutMs: opts.timeoutMs,
+    deep: opts.deep,
+    gatewayReachable,
+    memoryPluginEnabled: memoryPlugin.enabled,
+    memoryAvailable: Boolean(memory),
+  });
 
   const rich = true;
   const {
@@ -298,6 +307,7 @@ export async function statusCommand(
       channelIssues,
       memory,
       memoryPlugin,
+      gatewayMemoryStatus,
       pluginCompatibility,
       pairingRecovery,
       tableWidth,

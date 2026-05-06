@@ -45,6 +45,11 @@ export function buildStatusCommandOverviewRows(
     };
     memory: MemoryStatusSnapshot | null;
     memoryPlugin: MemoryPluginStatus;
+    gatewayMemoryStatus?: {
+      provider?: string;
+      runtime?: { ok?: boolean } | null;
+      embedding?: { ok?: boolean } | null;
+    } | null;
     pluginCompatibility: PluginCompatibilityNotice[];
     ok: (value: string) => string;
     warn: (value: string) => string;
@@ -83,6 +88,7 @@ export function buildStatusCommandOverviewRows(
   const memoryValue = buildStatusMemoryValue({
     memory: params.memory,
     memoryPlugin: params.memoryPlugin,
+    gatewayMemoryStatus: params.gatewayMemoryStatus,
     ok: params.ok,
     warn: params.warn,
     muted: params.muted,
