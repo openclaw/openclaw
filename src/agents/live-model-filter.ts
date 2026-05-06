@@ -194,6 +194,11 @@ export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
   return isHighSignalClaudeModelId(id);
 }
 
+export function isPrioritizedHighSignalLiveModelRef(ref: ModelRef): boolean {
+  const key = toCanonicalHighSignalLiveModelKey(ref);
+  return key !== null && HIGH_SIGNAL_LIVE_MODEL_PRIORITY_INDEX.has(key);
+}
+
 export function shouldExcludeProviderFromDefaultHighSignalLiveSweep(params: {
   provider?: string | null;
   useExplicitModels: boolean;

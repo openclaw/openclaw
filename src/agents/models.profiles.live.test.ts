@@ -1,3 +1,4 @@
+import { writeSync } from "node:fs";
 import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
@@ -14,6 +15,7 @@ import {
 import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 import {
   isHighSignalLiveModelRef,
+  isPrioritizedHighSignalLiveModelRef,
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
   shouldExcludeProviderFromDefaultHighSignalLiveSweep,
@@ -87,7 +89,7 @@ function parseModelFilter(raw?: string): Set<string> | null {
 }
 
 function logProgress(message: string): void {
-  process.stderr.write(`[live] ${message}\n`);
+  writeSync(2, `[live] ${message}\n`);
 }
 
 function formatElapsedSeconds(ms: number): string {
@@ -778,6 +780,7 @@ describeLive("live models (profile keys)", () => {
       const useModern = rawModels === "modern" || rawModels === "all";
       const useExplicit = Boolean(rawModels) && !useModern;
       const filter = useExplicit ? parseModelFilter(rawModels) : null;
+      const useDefaultPriorityOnly = !filter && useModern && !providers;
       const allowNotFoundSkip = useModern;
       const perModelTimeoutMs = toInt(process.env.OPENCLAW_LIVE_MODEL_TIMEOUT_MS, 30_000);
       const maxModels = resolveHighSignalLiveModelLimit({
@@ -810,6 +813,12 @@ describeLive("live models (profile keys)", () => {
           continue;
         }
         if (!filter && useModern) {
+          if (
+            useDefaultPriorityOnly &&
+            !isPrioritizedHighSignalLiveModelRef({ provider: model.provider, id: model.id })
+          ) {
+            continue;
+          }
           if (
             shouldExcludeProviderFromDefaultHighSignalLiveSweep({
               provider: model.provider,

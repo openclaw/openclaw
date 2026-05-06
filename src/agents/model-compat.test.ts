@@ -16,6 +16,7 @@ import {
   DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
   isHighSignalLiveModelRef,
   isModernModelRef,
+  isPrioritizedHighSignalLiveModelRef,
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
 } from "./live-model-filter.js";
@@ -631,6 +632,24 @@ describe("isHighSignalLiveModelRef", () => {
     expect(isHighSignalLiveModelRef({ provider: "deepseek", id: "deepseek-v4-flash" })).toBe(true);
     expect(isHighSignalLiveModelRef({ provider: "deepseek", id: "deepseek-v4-pro" })).toBe(true);
     expect(isHighSignalLiveModelRef({ provider: "deepseek", id: "deepseek-chat" })).toBe(false);
+  });
+});
+
+describe("isPrioritizedHighSignalLiveModelRef", () => {
+  it("matches only curated priority entries without invoking provider runtime checks", () => {
+    expect(
+      isPrioritizedHighSignalLiveModelRef({
+        provider: "anthropic",
+        id: "claude-sonnet-4-6",
+      }),
+    ).toBe(true);
+    expect(
+      isPrioritizedHighSignalLiveModelRef({
+        provider: "openrouter",
+        id: "amazon/nova-lite-v1",
+      }),
+    ).toBe(false);
+    expect(providerRuntimeMocks.resolveProviderModernModelRef).not.toHaveBeenCalled();
   });
 });
 
