@@ -1,6 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { estimateTokens } from "@mariozechner/pi-coding-agent";
-import { SAFETY_MARGIN, estimateMessagesTokens } from "../../compaction.js";
+import { SAFETY_MARGIN, estimateMessagesTokens, estimateTokensCjkAware } from "../../compaction.js";
 import {
   MIN_PROMPT_BUDGET_RATIO,
   MIN_PROMPT_BUDGET_TOKENS,
@@ -34,7 +33,7 @@ export function estimatePrePromptTokens(params: {
 
   const estimated =
     estimateMessagesTokens(messages) +
-    syntheticMessages.reduce((sum, message) => sum + estimateTokens(message), 0);
+    syntheticMessages.reduce((sum, message) => sum + estimateTokensCjkAware(message), 0);
   return Math.max(0, Math.ceil(estimated * SAFETY_MARGIN));
 }
 
@@ -89,19 +88,20 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     contextWindowTokens: params.contextTokenBudget,
     maxCharsOverride: params.toolResultMaxChars,
   });
-  const overflowChars = overflowTokens * ESTIMATED_CHARS_PER_TOKEN;
-  const truncationBufferChars = TRUNCATION_ROUTE_BUFFER_TOKENS * ESTIMATED_CHARS_PER_TOKEN;
-  const truncateOnlyThresholdChars = Math.max(
-    overflowChars + truncationBufferChars,
-    Math.ceil(overflowChars * 1.5),
+  const truncateOnlyThresholdTokens = Math.max(
+    overflowTokens + TRUNCATION_ROUTE_BUFFER_TOKENS,
+    Math.ceil(overflowTokens * 1.5),
   );
   const toolResultReducibleChars = toolResultPotential.maxReducibleChars;
+  const toolResultReducibleTokens = Math.ceil(
+    toolResultReducibleChars / ESTIMATED_CHARS_PER_TOKEN,
+  );
 
   let route: PreemptiveCompactionRoute = "fits";
   if (overflowTokens > 0) {
     if (toolResultReducibleChars <= 0) {
       route = "compact_only";
-    } else if (toolResultReducibleChars >= truncateOnlyThresholdChars) {
+    } else if (toolResultReducibleTokens >= truncateOnlyThresholdTokens) {
       route = "truncate_tool_results_only";
     } else {
       route = "compact_then_truncate";
