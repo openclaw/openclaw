@@ -46,6 +46,13 @@ npm installs run in the npm root with:
 npm install --prefix ~/.openclaw/npm <spec> --omit=dev --ignore-scripts --no-audit --no-fund
 ```
 
+`openclaw plugins install npm-pack:<path.tgz>` uses that same managed npm root
+for a local npm-pack tarball. OpenClaw reads the tarball's npm metadata, adds it
+to the managed root as a copied `file:` dependency, runs the normal npm install,
+and then verifies the installed lockfile metadata before trusting the plugin.
+This is intended for package-acceptance and release-candidate proof where a
+local pack artifact should behave like the registry artifact it simulates.
+
 npm may hoist transitive dependencies to `~/.openclaw/npm/node_modules` beside
 the plugin package. OpenClaw scans the managed npm root before trusting the
 install and uses npm to remove npm-managed packages during uninstall, so hoisted
