@@ -1248,7 +1248,7 @@ export async function rankShortTermPromotionCandidates(
     if (signalCount <= 0) {
       continue;
     }
-    if (signalCount < minRecallCount) {
+    if (recallCount < minRecallCount) {
       continue;
     }
 
@@ -1582,16 +1582,9 @@ export async function applyShortTermPromotions(
         if (candidate.score < minScore) {
           return false;
         }
-        const candidateSignalCount = Math.max(
-          0,
-          candidate.signalCount ??
-            totalSignalCountForEntry({
-              recallCount: candidate.recallCount,
-              dailyCount: candidate.dailyCount,
-              groundedCount: candidate.groundedCount,
-            }),
-        );
-        if (candidateSignalCount < minRecallCount) {
+        // Gate on real recallCount, not combined signalCount
+        const candidateRecallCount = Math.max(0, Math.floor(candidate.recallCount ?? 0));
+        if (candidateRecallCount < minRecallCount) {
           return false;
         }
         if (Math.max(candidate.uniqueQueries, candidate.recallDays.length) < minUniqueQueries) {
