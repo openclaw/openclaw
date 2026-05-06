@@ -668,7 +668,10 @@ describe("runCliAgent reliability", () => {
       });
 
       expect(result.payloads).toEqual([
-        { text: "The agent cannot read this message.", isError: true },
+        {
+          text: "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+          isError: true,
+        },
       ]);
       expect(result.meta.livenessState).toBe("blocked");
       expect(supervisorSpawnMock).not.toHaveBeenCalled();
@@ -692,11 +695,13 @@ describe("runCliAgent reliability", () => {
       expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
         expect.objectContaining({
           success: false,
-          error: "The agent cannot read this message.",
+          error:
+            "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
           messages: expect.arrayContaining([
             expect.objectContaining({
               role: "user",
-              content: "The agent cannot read this message.",
+              content:
+                "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
             }),
           ]),
         }),
@@ -706,7 +711,9 @@ describe("runCliAgent reliability", () => {
 
       const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
       const blockedLine = JSON.parse(lines[lines.length - 1]);
-      expect(blockedLine.message.content[0].text).toBe("The agent cannot read this message.");
+      expect(blockedLine.message.content[0].text).toBe(
+        "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+      );
       expect(JSON.stringify(blockedLine)).not.toContain("secret prompt");
       expect(JSON.stringify(blockedLine)).not.toContain("matched secret prompt");
       expect(blockedLine.message.__openclaw.beforeAgentRunBlocked).toMatchObject({

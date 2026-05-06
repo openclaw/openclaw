@@ -155,7 +155,12 @@ describe("normalizeMessagesForLlmBoundary", () => {
     const input = [
       {
         role: "user",
-        content: [{ type: "text", text: "The agent cannot read this message." }],
+        content: [
+          {
+            type: "text",
+            text: "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+          },
+        ],
         timestamp: 1,
         __openclaw: {
           beforeAgentRunBlocked: {
@@ -171,7 +176,10 @@ describe("normalizeMessagesForLlmBoundary", () => {
     ) as Array<Record<string, unknown>>;
 
     expect(output[0]?.content).toEqual([
-      { type: "text", text: "The agent cannot read this message." },
+      {
+        type: "text",
+        text: "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+      },
     ]);
     expect(output[0]).toHaveProperty("__openclaw.beforeAgentRunBlocked");
     expect(output[0]).not.toHaveProperty("__openclaw.beforeAgentRunBlocked.reason");

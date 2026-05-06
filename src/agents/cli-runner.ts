@@ -4,7 +4,7 @@ import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
-import { DEFAULT_BLOCK_MESSAGE, resolveBlockMessage } from "../plugins/hook-decision-types.js";
+import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
@@ -417,7 +417,10 @@ export async function runPreparedCliAgent(
           buildAgentHookContext(hookContext),
         );
       } catch (err) {
-        const blockMessage = `${DEFAULT_BLOCK_MESSAGE} by before_agent_run`;
+        const blockMessage = resolveBlockMessage(
+          { outcome: "block", reason: "before_agent_run hook failed" },
+          { blockedBy: "before_agent_run" },
+        );
         await persistBlockedBeforeAgentRun({
           message: blockMessage,
           pluginId: "before_agent_run",

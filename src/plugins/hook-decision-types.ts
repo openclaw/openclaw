@@ -10,8 +10,8 @@ export type HookDecisionPass = {
   outcome: "pass";
 };
 
-/** Default user-facing replacement message when a `block` decision omits one. */
-export const DEFAULT_BLOCK_MESSAGE = "This request was blocked by policy";
+/** Prefix for user-facing replacement messages when a `block` decision stops a request. */
+export const BLOCK_MESSAGE_PREFIX = "Your message could not be sent";
 
 /**
  * Content is blocked. `reason` is internal; `message` is user-facing.
@@ -20,7 +20,7 @@ export type HookDecisionBlock = {
   outcome: "block";
   /** Internal reason for logging/observability. Never shown to user. */
   reason: string;
-  /** Optional user-facing replacement text. Defaults to `DEFAULT_BLOCK_MESSAGE`. */
+  /** Optional user-facing detail included in the block response envelope. */
   message?: string;
   /** Plugin-defined category for analytics (e.g. "violence", "pii", "cost_limit"). */
   category?: string;
@@ -32,11 +32,16 @@ export function resolveBlockMessage(
   decision: HookDecisionBlock,
   params: { blockedBy?: string } = {},
 ): string {
-  if (typeof decision.message === "string" && decision.message.trim()) {
-    return decision.message;
-  }
+  const message = typeof decision.message === "string" ? decision.message.trim() : "";
   const blockedBy = params.blockedBy?.trim();
-  return blockedBy ? `${DEFAULT_BLOCK_MESSAGE} by ${blockedBy}` : DEFAULT_BLOCK_MESSAGE;
+  if (message) {
+    return blockedBy
+      ? `${BLOCK_MESSAGE_PREFIX}: ${message} (blocked by ${blockedBy})`
+      : `${BLOCK_MESSAGE_PREFIX}: ${message}`;
+  }
+  return blockedBy
+    ? `${BLOCK_MESSAGE_PREFIX}: blocked by ${blockedBy}`
+    : `${BLOCK_MESSAGE_PREFIX}: blocked`;
 }
 
 /** Outcome severity for most-restrictive-wins merging. Higher = more restrictive. */

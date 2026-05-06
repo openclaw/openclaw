@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  BLOCK_MESSAGE_PREFIX,
   type HookDecision,
   type HookDecisionBlock,
   mergeHookDecisions,
   isHookDecision,
-  DEFAULT_BLOCK_MESSAGE,
   resolveBlockMessage,
 } from "./hook-decision-types.js";
 
@@ -63,12 +63,19 @@ describe("HookDecision helpers", () => {
         reason: "policy",
       };
 
-      expect(resolveBlockMessage(explicit)).toBe("Please rephrase your request.");
-      expect(resolveBlockMessage(fallback)).toBe(DEFAULT_BLOCK_MESSAGE);
-      expect(resolveBlockMessage(fallback, { blockedBy: "policy-plugin" })).toBe(
-        `${DEFAULT_BLOCK_MESSAGE} by policy-plugin`,
+      expect(resolveBlockMessage(explicit)).toBe(
+        `${BLOCK_MESSAGE_PREFIX}: Please rephrase your request.`,
       );
-      expect(resolveBlockMessage({ ...explicit, message: "   " })).toBe(DEFAULT_BLOCK_MESSAGE);
+      expect(resolveBlockMessage(fallback)).toBe(`${BLOCK_MESSAGE_PREFIX}: blocked`);
+      expect(resolveBlockMessage(fallback, { blockedBy: "policy-plugin" })).toBe(
+        `${BLOCK_MESSAGE_PREFIX}: blocked by policy-plugin`,
+      );
+      expect(resolveBlockMessage(explicit, { blockedBy: "policy-plugin" })).toBe(
+        `${BLOCK_MESSAGE_PREFIX}: Please rephrase your request. (blocked by policy-plugin)`,
+      );
+      expect(resolveBlockMessage({ ...explicit, message: "   " })).toBe(
+        `${BLOCK_MESSAGE_PREFIX}: blocked`,
+      );
     });
   });
 });

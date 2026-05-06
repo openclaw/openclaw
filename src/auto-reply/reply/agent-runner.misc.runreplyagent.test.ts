@@ -1692,9 +1692,18 @@ describe("runReplyAgent claude-cli routing", () => {
 
   it("does not leak hook-blocked CLI input in raw trace payloads", async () => {
     runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "The agent cannot read this message.", isError: true }],
+      payloads: [
+        {
+          text: "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+          isError: true,
+        },
+      ],
       meta: {
-        error: { kind: "hook_block", message: "The agent cannot read this message." },
+        error: {
+          kind: "hook_block",
+          message:
+            "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+        },
         agentMeta: {
           provider: "claude-cli",
           model: "opus-4.5",
@@ -1773,7 +1782,9 @@ describe("runReplyAgent claude-cli routing", () => {
     const texts = Array.isArray(result)
       ? result.map((payload) => payload.text ?? "").join("\n")
       : (result?.text ?? "");
-    expect(texts).toContain("The agent cannot read this message.");
+    expect(texts).toContain(
+      "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+    );
     expect(texts).not.toContain("secret hitl prompt");
   });
 
