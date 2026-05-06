@@ -46,11 +46,23 @@ const state = vi.hoisted(() => ({
   authProfileStoreMock: { profiles: {} } as { profiles: Record<string, unknown> },
   sessionEntryMock: undefined as unknown,
   sessionStoreMock: undefined as unknown,
+  storePathMock: undefined as string | undefined,
 }));
 
 vi.mock("./model-fallback.js", () => ({
   runWithModelFallback: (params: unknown) => state.runWithModelFallbackMock(params),
 }));
+
+vi.mock("./command/attempt-execution.shared.js", async () => {
+  const actual = await vi.importActual<typeof import("./command/attempt-execution.shared.js")>(
+    "./command/attempt-execution.shared.js",
+  );
+  return {
+    ...actual,
+    // Replace only the file-I/O operation so tests without a real store path don't fail.
+    persistSessionEntry: vi.fn(async () => undefined),
+  };
+});
 
 vi.mock("./command/attempt-execution.runtime.js", () => ({
   buildAcpResult: (...args: unknown[]) => state.buildAcpResultMock(...args),
@@ -99,7 +111,7 @@ vi.mock("./command/session.js", () => ({
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
     },
     sessionStore: state.sessionStoreMock,
-    storePath: undefined,
+    storePath: state.storePathMock,
     isNewSession: false,
     persistedThinking: undefined,
     persistedVerbose: undefined,
@@ -572,6 +584,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.authProfileStoreMock = { profiles: {} };
     state.sessionEntryMock = undefined;
     state.sessionStoreMock = undefined;
+    state.storePathMock = undefined;
     state.buildWorkspaceSkillSnapshotMock.mockReturnValue({
       prompt: "",
       skills: [],
@@ -1144,5 +1157,47 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await runBasicAgentCommand();
 
     expectFallbackOverrideCalls(false, true);
+  });
+
+  it("persists the live-switch target model when the switch target differs from the configured primary", async () => {
+    // Primary is "anthropic/claude". User switches to "openai/gpt-5.4" (different
+    // provider AND model). The retry succeeds on gpt-5.4 without further fallback.
+    // isFromFallback must be false so that setSessionRuntimeModel is called with
+    // the user's chosen model and the switch is durably persisted.
+    setupModelSwitchRetry({
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+
+    // Provide a real session store and store path so the updateSessionStoreAfterAgentRun
+    // path is reached (the call is gated on `sessionStore && sessionKey`).
+    state.storePathMock = "/tmp/test-session-store.json";
+    state.sessionStoreMock = {
+      "agent:main": {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        skillsSnapshot: { prompt: "", skills: [], version: 0 },
+      },
+    };
+
+    // Capture what isFromFallback value is forwarded to updateSessionStoreAfterAgentRun.
+    let capturedIsFromFallback: boolean | undefined;
+    state.updateSessionStoreAfterAgentRunMock.mockImplementation(
+      async (params: { isFromFallback?: boolean }) => {
+        capturedIsFromFallback = params.isFromFallback;
+      },
+    );
+
+    await runBasicAgentCommand();
+
+    // The run used the user's switch target; this is not an automatic fallback.
+    expect(capturedIsFromFallback).toBe(false);
+    expect(state.updateSessionStoreAfterAgentRunMock).toHaveBeenCalledTimes(1);
+    expect(state.updateSessionStoreAfterAgentRunMock.mock.calls[0]?.[0]).toMatchObject({
+      fallbackProvider: "openai",
+      fallbackModel: "gpt-5.4",
+      isFromFallback: false,
+    });
   });
 });

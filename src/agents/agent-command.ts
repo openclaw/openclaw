@@ -945,6 +945,12 @@ async function agentCommandInternal(
     let result: AgentAttemptResult;
     let fallbackProvider = provider;
     let fallbackModel = model;
+    // Track the user-initiated live-switch target separately from fallbackModel so
+    // isFromFallback can distinguish "automatic fallback" (transient, don't persist)
+    // from "user asked to switch" (intentional, DO persist even if it differs from
+    // the original configured primary model).
+    let liveSwitchTargetProvider: string | undefined;
+    let liveSwitchTargetModel: string | undefined;
     const MAX_LIVE_SWITCH_RETRIES = 5;
     let liveSwitchRetries = 0;
     const fallbackTrajectoryRecorder = createTrajectoryRuntimeRecorder({
@@ -1131,6 +1137,10 @@ async function agentCommandInternal(
           model = err.model;
           fallbackProvider = err.provider;
           fallbackModel = err.model;
+          // Record the user's intended target so the post-run isFromFallback
+          // check can distinguish this explicit switch from automatic fallback.
+          liveSwitchTargetProvider = err.provider;
+          liveSwitchTargetModel = err.model;
           providerForAuthProfileValidation = err.provider;
           if (sessionEntry) {
             sessionEntry = { ...sessionEntry };
@@ -1186,6 +1196,15 @@ async function agentCommandInternal(
         defaultModel: model,
         fallbackProvider,
         fallbackModel,
+        // An automatic fallback (transient, should not be persisted) is when the
+        // model actually used differs from both the configured primary AND the
+        // user's explicit live-switch target (if any). A user-initiated switch
+        // that ran cleanly on the target model must be persisted even though it
+        // differs from the original configured primary.
+        isFromFallback:
+          (fallbackModel !== model || fallbackProvider !== provider) &&
+          (fallbackModel !== liveSwitchTargetModel ||
+            fallbackProvider !== liveSwitchTargetProvider),
         result,
         touchInteraction:
           opts.bootstrapContextRunKind !== "cron" &&
