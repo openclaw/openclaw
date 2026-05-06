@@ -56,9 +56,7 @@ const ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE = /\.(?:c|m)?js$/u;
 const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
   "@discordjs/opus",
   "@lancedb/lancedb",
-  "@matrix-org/matrix-sdk-crypto-nodejs",
   "link-preview-js",
-  "matrix-js-sdk",
   // Discord voice decoder fallback. The root chunk catches missing decoders and the owning
   // Discord plugin remains externalized from the root package.
   "opusscript",

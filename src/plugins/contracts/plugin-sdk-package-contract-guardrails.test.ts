@@ -648,7 +648,12 @@ describe("plugin-sdk package contract guardrails", () => {
     expect(failures).toEqual([]);
   });
 
-  it("keeps Matrix dependencies local to the Matrix plugin", () => {
+  it("declares Matrix runtime dependencies in both the Matrix plugin and the root package", () => {
+    // Matrix is bundled into the root npm tarball (no `!dist/extensions/matrix/**`
+    // exclusion), and the published package omits bundled `node_modules`. The
+    // plugin manifest keeps the runtime versions for plugin-local installs;
+    // the root manifest must repeat them so npm-installed `openclaw` can
+    // resolve `matrix-js-sdk` and the Matrix crypto bindings on startup.
     const rootRuntimeDeps = collectRuntimeDependencySpecs(readRootPackageJson());
     const matrixPackageJson = readMatrixPackageJson();
     const matrixRuntimeDeps = collectRuntimeDependencySpecs(matrixPackageJson);
@@ -660,7 +665,7 @@ describe("plugin-sdk package contract guardrails", () => {
       "matrix-js-sdk",
     ]) {
       expect(matrixRuntimeDeps.get(dep)).toBeDefined();
-      expect(rootRuntimeDeps.has(dep)).toBe(false);
+      expect(rootRuntimeDeps.has(dep)).toBe(true);
     }
     expect(rootRuntimeDeps.has("@openclaw/plugin-package-contract")).toBe(false);
   });
