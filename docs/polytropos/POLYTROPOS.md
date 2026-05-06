@@ -75,7 +75,7 @@ If a change doesn’t fit one of those buckets, it doesn’t belong in the fork.
 1) Implement the capability in `polytropos-plugins` (new plugin or change an existing plugin).
 2) If the plugin cannot do the job with existing hooks/config/logs:
    - add the smallest possible core change (prefer a **single-line event emission** or a **single log line**)
-   - document the event/hook in `POLYTROPOS-EVENTS.md`
+   - document the event/hook in `docs/polytropos/POLYTROPOS-EVENTS.md`
 3) Verify in runtime.
 
 ### Plugin migration completion gates
@@ -91,7 +91,7 @@ A plugin migration is considered complete only when:
 
 ## Where to put things
 
-- Long-lived fork docs: **root-level** docs like this file + `docs/`
+- Long-lived fork docs: `docs/polytropos/`
 - Work-in-progress plans: `planning/polytropos/`
 - Plugins: **do not** land in this repo; they live in `polytropos-plugins`
 
