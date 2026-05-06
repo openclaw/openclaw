@@ -1835,6 +1835,131 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile");
     });
 
+    it("primary probe does not consume transient probe slot for same-provider fallbacks", async () => {
+      // Scenario: sub2api/opus (primary) is in cooldown near expiry, probed but
+      // fails. sub2api/sonnet (fallback) should still get its own probe attempt
+      // rather than being skipped due to the primary's probe.
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+      const now = Date.now();
+      const store: AuthProfileStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "sub2api:default": { type: "api_key", provider: "sub2api", key: "test-key" },
+          "zenmux:default": { type: "api_key", provider: "zenmux", key: "test-key" },
+          "openrouter:default": { type: "api_key", provider: "openrouter", key: "test-key" },
+        },
+        usageStats: {
+          "sub2api:default": {
+            // Near expiry so primary WILL be probed
+            cooldownUntil: now + 60000, // 1 min from now, within PROBE_MARGIN_MS
+            failureCounts: { rate_limit: 1 },
+          },
+          "zenmux:default": {
+            cooldownUntil: now + 300000,
+            failureCounts: { rate_limit: 2 },
+          },
+          // openrouter not in cooldown
+        },
+      };
+      saveAuthProfileStore(store, tmpDir);
+
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "sub2api/claude-opus-4-6",
+              fallbacks: [
+                "zenmux/claude-opus-4.6",
+                "zenmux/claude-sonnet-4.6",
+                "sub2api/claude-sonnet-4-6",
+                "openrouter/claude-opus-4.6",
+              ],
+            },
+          },
+        },
+      });
+
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("sub2api opus timeout")) // primary probe fails
+        .mockRejectedValueOnce(new Error("zenmux 402 quota")) // zenmux opus probe fails
+        // zenmux/sonnet skipped (same provider, probe already used)
+        .mockRejectedValueOnce(new Error("sub2api sonnet also down")) // sub2api/sonnet gets its own probe!
+        .mockResolvedValueOnce("openrouter success"); // cross-provider works
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "sub2api",
+        model: "claude-opus-4-6",
+        run,
+        agentDir: tmpDir,
+      });
+
+      expect(result.result).toBe("openrouter success");
+      // sub2api/opus (primary probe) + zenmux/opus (probe) + sub2api/sonnet (own probe) + openrouter
+      expect(run).toHaveBeenCalledTimes(4);
+      expect(run).toHaveBeenNthCalledWith(4, "openrouter", "openrouter/claude-opus-4.6");
+    });
+
+    it("non-primary fallbacks still deduplicate among themselves on the same provider", async () => {
+      // After primary probe, two same-provider non-primary fallbacks:
+      // the first should probe, the second should be skipped.
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+      const now = Date.now();
+      const store: AuthProfileStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "sub2api:default": { type: "api_key", provider: "sub2api", key: "test-key" },
+          "groq:default": { type: "api_key", provider: "groq", key: "test-key" },
+        },
+        usageStats: {
+          "sub2api:default": {
+            cooldownUntil: now + 60000,
+            failureCounts: { rate_limit: 1 },
+          },
+        },
+      };
+      saveAuthProfileStore(store, tmpDir);
+
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "sub2api/claude-opus-4-6",
+              fallbacks: [
+                "sub2api/claude-sonnet-4-6",
+                "sub2api/claude-haiku-3-5",
+                "groq/llama-3.3-70b-versatile",
+              ],
+            },
+          },
+        },
+      });
+
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("sub2api opus timeout")) // primary probe
+        .mockRejectedValueOnce(new Error("sub2api sonnet also down")) // first non-primary probe
+        // sub2api/haiku skipped (non-primary slot already consumed for sub2api)
+        .mockResolvedValueOnce("groq success");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "sub2api",
+        model: "claude-opus-4-6",
+        run,
+        agentDir: tmpDir,
+      });
+
+      expect(result.result).toBe("groq success");
+      // primary + sonnet (first non-primary probe) + groq; haiku skipped
+      expect(run).toHaveBeenCalledTimes(3);
+      expect(run).toHaveBeenNthCalledWith(2, "sub2api", "claude-sonnet-4-6", {
+        allowTransientCooldownProbe: true,
+      });
+      expect(run).toHaveBeenNthCalledWith(3, "groq", "llama-3.3-70b-versatile");
+    });
+
     it("does not consume transient probe slot when first same-provider probe fails with model_not_found", async () => {
       const { dir } = await makeAuthStoreWithCooldown("anthropic", "rate_limit");
       const cfg = makeCfg({

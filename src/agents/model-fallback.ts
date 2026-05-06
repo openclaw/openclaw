@@ -932,8 +932,22 @@ export async function runWithModelFallback<T>(params: {
           // Probe at most once per provider per fallback run when all profiles
           // are cooldowned. Re-probing every same-provider candidate can stall
           // cross-provider fallback on providers with long internal retries.
+          //
+          // However, primary probe failures should NOT consume the transient
+          // probe slot. The primary is always probed (near cooldown expiry) as
+          // a recovery mechanism, and that attempt is fundamentally different
+          // from a fallback candidate probe. If the primary's provider also
+          // appears later in the fallback chain (e.g. same provider, different
+          // model), that fallback candidate deserves its own probe attempt.
           const isTransientCooldownReason = shouldUseTransientCooldownProbeSlot(decision.reason);
-          if (isTransientCooldownReason && cooldownProbeUsedProviders.has(candidate.provider)) {
+          // Primary probes must not consume a shared-provider slot — the
+          // primary is always probed near cooldown expiry as a recovery
+          // mechanism, and blocking same-provider fallbacks would stall the chain.
+          if (
+            isTransientCooldownReason &&
+            !isPrimary &&
+            cooldownProbeUsedProviders.has(candidate.provider)
+          ) {
             const error = `Provider ${candidate.provider} is in cooldown (probe already attempted this run)`;
             attempts.push({
               provider: candidate.provider,
@@ -962,7 +976,8 @@ export async function runWithModelFallback<T>(params: {
             continue;
           }
           runOptions = { allowTransientCooldownProbe: true };
-          if (isTransientCooldownReason) {
+          if (isTransientCooldownReason && !isPrimary) {
+            // Only non-primary probes mark the provider slot as consumed.
             transientProbeProviderForAttempt = candidate.provider;
           }
         }
