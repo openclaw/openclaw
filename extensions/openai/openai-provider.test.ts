@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
@@ -365,7 +365,7 @@ describe("buildOpenAIProvider", () => {
     );
   });
 
-  it("keeps modern live selection on OpenAI 5.2+ and Codex 5.2+", () => {
+  it("keeps modern live selection on OpenAI 5.2+ and Codex 5.4+", () => {
     const provider = buildOpenAIProvider();
     const codexProvider = buildOpenAICodexProviderPlugin();
 
@@ -411,7 +411,7 @@ describe("buildOpenAIProvider", () => {
         provider: "openai-codex",
         modelId: "gpt-5.2-codex",
       } as never),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       codexProvider.isModernModelRef?.({
         provider: "openai-codex",

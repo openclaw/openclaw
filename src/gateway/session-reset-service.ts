@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { readAcpSessionEntry, upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
@@ -9,6 +8,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { retireSessionMcpRuntime } from "../agents/pi-bundle-mcp-tools.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../agents/pi-embedded.js";
+import { CURRENT_SESSION_VERSION } from "../agents/transcript/session-transcript-contract.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import {
   buildSessionEndHookPayload,
@@ -23,6 +23,10 @@ import {
 } from "../config/sessions.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
+import {
+  hasSqliteSessionTranscriptEvents,
+  loadSqliteSessionTranscriptEvents,
+} from "../config/sessions/transcript-store.sqlite.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
@@ -454,9 +458,11 @@ export async function emitGatewayBeforeResetPluginHook(params: {
   let messages: unknown[] = [];
   try {
     if (typeof sessionId === "string" && sessionId.trim().length > 0) {
-      messages = await readSessionMessagesAsync(sessionId, params.storePath, sessionFile, {
-        mode: "full",
-        reason: "before_reset hook payload",
+      messages = await readGatewayBeforeResetMessages({
+        agentId,
+        sessionFile,
+        sessionId,
+        storePath: params.storePath,
       });
     }
   } catch (err) {
@@ -482,6 +488,39 @@ export async function emitGatewayBeforeResetPluginHook(params: {
     .catch((err) => {
       logVerbose(`before_reset hook failed: ${String(err)}`);
     });
+}
+
+async function readGatewayBeforeResetMessages(params: {
+  agentId: string;
+  sessionFile?: string;
+  sessionId: string;
+  storePath: string;
+}): Promise<unknown[]> {
+  const scopedMessages = loadScopedGatewayBeforeResetMessages(params);
+  if (scopedMessages) {
+    return scopedMessages;
+  }
+  return await readSessionMessagesAsync(params.sessionId, params.storePath, params.sessionFile, {
+    mode: "full",
+    reason: "before_reset hook payload",
+  });
+}
+
+function loadScopedGatewayBeforeResetMessages(params: {
+  agentId: string;
+  sessionId: string;
+}): unknown[] | undefined {
+  try {
+    if (!hasSqliteSessionTranscriptEvents(params)) {
+      return undefined;
+    }
+    return loadSqliteSessionTranscriptEvents(params).flatMap((entry) => {
+      const event = entry.event as { message?: unknown } | undefined;
+      return event && typeof event === "object" && "message" in event ? [event.message] : [];
+    });
+  } catch {
+    return undefined;
+  }
 }
 
 export async function performGatewaySessionReset(params: {

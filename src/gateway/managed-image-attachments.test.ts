@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
 import { setMediaStoreNetworkDepsForTest } from "../media/store.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 
 const authorizeGatewayHttpRequestOrReplyMock = vi.fn();
 const resolveOpenAiCompatibleHttpOperatorScopesMock = vi.fn();
@@ -218,6 +219,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
   });
 
   afterEach(async () => {
+    closeOpenClawStateDatabaseForTest();
     setMediaStoreNetworkDepsForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
@@ -235,6 +237,30 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.headers["content-type"]).toBe("image/png");
     expect(result.headers["content-disposition"]).toContain("inline");
     expect(result.body.toString("utf-8")).toBe("original-image");
+  });
+
+  it("serves records from SQLite when the compatibility JSON record is missing", async () => {
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [`data:image/png;base64,${TINY_PNG_BASE64}`],
+      stateDir,
+      messageId: "msg-1",
+    });
+    const pathName = String(blocks[0]?.url);
+    const attachmentId = pathName.split("/").at(-2) ?? "";
+    expect(attachmentId).toBeTruthy();
+    await fs.rm(path.join(stateDir, "media", "outgoing", "records", `${attachmentId}.json`), {
+      force: true,
+    });
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName,
+      headers: { "x-openclaw-requester-session-key": "agent:main:main" },
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.headers["content-type"]).toBe("image/png");
   });
 
   it("rejects unauthenticated requests before serving bytes", async () => {
@@ -364,6 +390,7 @@ describe("createManagedOutgoingImageBlocks", () => {
   });
 
   afterEach(async () => {
+    closeOpenClawStateDatabaseForTest();
     setMediaStoreNetworkDepsForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
@@ -829,6 +856,7 @@ describe("attachManagedOutgoingImagesToMessage", () => {
   });
 
   afterEach(async () => {
+    closeOpenClawStateDatabaseForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
@@ -867,6 +895,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
   });
 
   afterEach(async () => {
+    closeOpenClawStateDatabaseForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 

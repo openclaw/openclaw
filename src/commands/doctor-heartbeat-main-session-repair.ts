@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { formatSessionArchiveTimestamp } from "../config/sessions/artifacts.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
@@ -13,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { asNullableObjectRecord } from "../shared/record-coerce.js";
 import type { note } from "../terminal/note.js";
+import { clearTuiLastSessionPointers as clearTuiLastSessionPointersFromState } from "../tui/tui-last-session.js";
 
 type DoctorPrompterLike = {
   confirmRuntimeRepair: (params: {
@@ -190,10 +190,6 @@ export function moveHeartbeatMainSessionEntry(params: {
   return true;
 }
 
-function resolveTuiLastSessionPath(stateDir: string): string {
-  return path.join(stateDir, "tui", "last-session.json");
-}
-
 export function clearTuiLastSessionPointers(params: {
   filePath: string;
   sessionKeys: ReadonlySet<string>;
@@ -308,8 +304,8 @@ export async function repairHeartbeatPoisonedMainSession(params: {
   }
   params.store[recoveredKey] = movedEntry;
   delete params.store[mainKey];
-  const clearedPointers = clearTuiLastSessionPointers({
-    filePath: resolveTuiLastSessionPath(params.stateDir),
+  const clearedPointers = await clearTuiLastSessionPointersFromState({
+    stateDir: params.stateDir,
     sessionKeys: new Set([mainKey]),
   });
   params.changes.push(`- Moved heartbeat-owned main session ${mainKey} to ${recoveredKey}.`);

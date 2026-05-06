@@ -1,4 +1,4 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "../agents/pi-ai-contract.js";
 
 /**
  * Fully-resolved runtime model shape used after provider/plugin-owned

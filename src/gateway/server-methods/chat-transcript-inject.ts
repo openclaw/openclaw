@@ -1,5 +1,5 @@
-import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { SessionWriteLockAcquireTimeoutConfig } from "../../agents/session-write-lock.js";
+import type { SessionManager } from "../../agents/transcript/session-transcript-contract.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -46,6 +46,8 @@ function resolveInjectedAssistantContent(params: {
 export async function appendInjectedAssistantMessageToTranscript(params: {
   transcriptPath: string;
   message: string;
+  agentId?: string;
+  sessionId?: string;
   label?: string;
   /** When set, used as the assistant `content` array (e.g. text + embedded audio blocks). */
   content?: Array<Record<string, unknown>>;
@@ -105,6 +107,8 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   try {
     const { messageId } = await appendSessionTranscriptMessage({
       transcriptPath: params.transcriptPath,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
       message: messageBody,
       now,
       useRawWhenLinear: true,

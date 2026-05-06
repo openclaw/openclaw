@@ -1,3 +1,10 @@
+import { Type } from "typebox";
+import { formatErrorMessage } from "../infra/errors.js";
+import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import {
   type Context,
   complete,
@@ -6,14 +13,7 @@ import {
   type Model,
   type OpenAICompletionsOptions,
   type Tool,
-} from "@mariozechner/pi-ai";
-import { Type } from "typebox";
-import { formatErrorMessage } from "../infra/errors.js";
-import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "./pi-ai-contract.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";

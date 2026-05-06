@@ -1,13 +1,13 @@
-import type { Component } from "@mariozechner/pi-tui";
+import chalk from "chalk";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import type { Component } from "../pi-tui-contract.js";
 import {
   Input,
   matchesKey,
   type SelectItem,
   SelectList,
   type SelectListTheme,
-} from "@mariozechner/pi-tui";
-import chalk from "chalk";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+} from "../pi-tui-contract.js";
 import { fuzzyFilterLower, prepareSearchItems } from "./fuzzy-filter.js";
 
 export interface FilterableSelectItem extends SelectItem {

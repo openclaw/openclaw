@@ -189,7 +189,7 @@ describe("openrouter provider hooks", () => {
   it("injects provider routing into compat before applying stream wrappers", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const baseStreamFn = vi.fn(
-      (..._args: Parameters<import("@mariozechner/pi-agent-core").StreamFn>) =>
+      (..._args: Parameters<import("openclaw/plugin-sdk/agent-core").StreamFn>) =>
         ({ async *[Symbol.asyncIterator]() {} }) as never,
     );
 
@@ -233,8 +233,8 @@ describe("openrouter provider hooks", () => {
     let capturedPayload: Record<string, unknown> | undefined;
     const baseStreamFn = vi.fn(
       (
-        ...args: Parameters<import("@mariozechner/pi-agent-core").StreamFn>
-      ): ReturnType<import("@mariozechner/pi-agent-core").StreamFn> => {
+        ...args: Parameters<import("openclaw/plugin-sdk/agent-core").StreamFn>
+      ): ReturnType<import("openclaw/plugin-sdk/agent-core").StreamFn> => {
         void args[2]?.onPayload?.({}, args[0]);
         return { async *[Symbol.asyncIterator]() {} } as never;
       },
@@ -272,8 +272,8 @@ describe("openrouter provider hooks", () => {
     let capturedPayload: Record<string, unknown> | undefined;
     const baseStreamFn = vi.fn(
       (
-        ...args: Parameters<import("@mariozechner/pi-agent-core").StreamFn>
-      ): ReturnType<import("@mariozechner/pi-agent-core").StreamFn> => {
+        ...args: Parameters<import("openclaw/plugin-sdk/agent-core").StreamFn>
+      ): ReturnType<import("openclaw/plugin-sdk/agent-core").StreamFn> => {
         const payload = {
           messages: [
             { role: "user", content: "read file" },
@@ -329,8 +329,8 @@ describe("openrouter provider hooks", () => {
     const payloads: Array<Record<string, unknown>> = [];
     const baseStreamFn = vi.fn(
       (
-        ...args: Parameters<import("@mariozechner/pi-agent-core").StreamFn>
-      ): ReturnType<import("@mariozechner/pi-agent-core").StreamFn> => {
+        ...args: Parameters<import("openclaw/plugin-sdk/agent-core").StreamFn>
+      ): ReturnType<import("openclaw/plugin-sdk/agent-core").StreamFn> => {
         const payload = { messages: [] };
         void args[2]?.onPayload?.(payload, args[0]);
         payloads.push(payload);
@@ -373,8 +373,8 @@ describe("openrouter provider hooks", () => {
     const payloads: Array<Record<string, unknown>> = [];
     const baseStreamFn = vi.fn(
       (
-        ...args: Parameters<import("@mariozechner/pi-agent-core").StreamFn>
-      ): ReturnType<import("@mariozechner/pi-agent-core").StreamFn> => {
+        ...args: Parameters<import("openclaw/plugin-sdk/agent-core").StreamFn>
+      ): ReturnType<import("openclaw/plugin-sdk/agent-core").StreamFn> => {
         const payload = {
           messages: [{ role: "assistant", tool_calls: [{ id: "call_1", type: "function" }] }],
         };
@@ -437,8 +437,8 @@ describe("openrouter provider hooks", () => {
     let capturedPayload: Record<string, unknown> | undefined;
     const baseStreamFn = vi.fn(
       (
-        ...args: Parameters<import("@mariozechner/pi-agent-core").StreamFn>
-      ): ReturnType<import("@mariozechner/pi-agent-core").StreamFn> => {
+        ...args: Parameters<import("openclaw/plugin-sdk/agent-core").StreamFn>
+      ): ReturnType<import("openclaw/plugin-sdk/agent-core").StreamFn> => {
         const payload = {
           messages: [
             { role: "user", content: "Return JSON." },
@@ -482,8 +482,8 @@ describe("openrouter provider hooks", () => {
     const payloads: Array<Record<string, unknown>> = [];
     const baseStreamFn = vi.fn(
       (
-        ...args: Parameters<import("@mariozechner/pi-agent-core").StreamFn>
-      ): ReturnType<import("@mariozechner/pi-agent-core").StreamFn> => {
+        ...args: Parameters<import("openclaw/plugin-sdk/agent-core").StreamFn>
+      ): ReturnType<import("openclaw/plugin-sdk/agent-core").StreamFn> => {
         const payload = {
           messages: [
             { role: "user", content: "Return JSON." },

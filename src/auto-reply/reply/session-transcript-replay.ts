@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
+import { CURRENT_SESSION_VERSION } from "../../agents/transcript/session-transcript-contract.js";
+import {
+  exportSqliteSessionTranscriptJsonl,
+  hasSqliteSessionTranscriptEvents,
+} from "../../config/sessions/transcript-store.sqlite.js";
 
 /** Tail kept so DM continuity survives silent session rotations. */
 export const DEFAULT_REPLAY_MAX_MESSAGES = 6;
@@ -18,19 +22,24 @@ type KeptRecord = { role: "user" | "assistant"; line: string };
  * the event loop. Returns 0 on any error.
  */
 export async function replayRecentUserAssistantMessages(params: {
+  sourceAgentId?: string;
+  sourceSessionId?: string;
   sourceTranscript?: string;
   targetTranscript: string;
   newSessionId: string;
   maxMessages?: number;
 }): Promise<number> {
   const max = Math.max(0, params.maxMessages ?? DEFAULT_REPLAY_MAX_MESSAGES);
-  const src = params.sourceTranscript;
-  if (max === 0 || !src || !fs.existsSync(src)) {
+  if (max === 0) {
     return 0;
   }
   try {
+    const sourceLines = await loadReplaySourceLines(params);
+    if (!sourceLines) {
+      return 0;
+    }
     const kept: KeptRecord[] = [];
-    for (const line of (await fsp.readFile(src, "utf-8")).split(/\r?\n/)) {
+    for (const line of sourceLines) {
       if (!line.trim()) {
         continue;
       }
@@ -74,6 +83,42 @@ export async function replayRecentUserAssistantMessages(params: {
     return tail.length;
   } catch {
     return 0;
+  }
+}
+
+async function loadReplaySourceLines(params: {
+  sourceAgentId?: string;
+  sourceSessionId?: string;
+  sourceTranscript?: string;
+}): Promise<string[] | undefined> {
+  const scopedJsonl = loadScopedReplaySourceJsonl(params);
+  if (scopedJsonl !== undefined) {
+    return scopedJsonl.split(/\r?\n/);
+  }
+  const src = params.sourceTranscript;
+  if (!src || !fs.existsSync(src)) {
+    return undefined;
+  }
+  return (await fsp.readFile(src, "utf-8")).split(/\r?\n/);
+}
+
+function loadScopedReplaySourceJsonl(params: {
+  sourceAgentId?: string;
+  sourceSessionId?: string;
+}): string | undefined {
+  if (!params.sourceAgentId?.trim() || !params.sourceSessionId?.trim()) {
+    return undefined;
+  }
+  try {
+    const scope = {
+      agentId: params.sourceAgentId,
+      sessionId: params.sourceSessionId,
+    };
+    return hasSqliteSessionTranscriptEvents(scope)
+      ? exportSqliteSessionTranscriptJsonl(scope)
+      : undefined;
+  } catch {
+    return undefined;
   }
 }
 

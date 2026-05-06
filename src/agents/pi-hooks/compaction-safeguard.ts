@@ -1,7 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ExtensionAPI, ExtensionContext, FileOperations } from "@mariozechner/pi-coding-agent";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
 import { openRootFile } from "../../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -11,6 +9,12 @@ import {
   getCompactionProvider,
   type CompactionProvider,
 } from "../../plugins/compaction-provider.js";
+import type { AgentMessage } from "../agent-core-contract.js";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  FileOperations,
+} from "../agent-extension-contract.js";
 import {
   hasMeaningfulConversationContent,
   isRealConversationMessage,

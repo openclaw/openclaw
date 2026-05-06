@@ -1,12 +1,8 @@
-import type {
-  AgentTool,
-  AgentToolResult,
-  AgentToolUpdateCallback,
-} from "@mariozechner/pi-agent-core";
-import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { logDebug, logError } from "../logger.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { isPlainObject } from "../utils.js";
+import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "./agent-core-contract.js";
+import type { ToolDefinition } from "./agent-extension-contract.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
 import type { HookContext } from "./pi-tools.before-tool-call.js";
@@ -25,13 +21,13 @@ type ToolExecuteArgsCurrent = [
   string,
   unknown,
   AbortSignal | undefined,
-  AgentToolUpdateCallback<unknown> | undefined,
+  AgentToolUpdateCallback | undefined,
   unknown,
 ];
 type ToolExecuteArgsLegacy = [
   string,
   unknown,
-  AgentToolUpdateCallback<unknown> | undefined,
+  AgentToolUpdateCallback | undefined,
   unknown,
   AbortSignal | undefined,
 ];
@@ -128,12 +124,12 @@ function describeToolFailureInputs(params: {
 function normalizeToolExecutionResult(params: {
   toolName: string;
   result: unknown;
-}): AgentToolResult<unknown> {
+}): AgentToolResult {
   const { toolName, result } = params;
   if (result && typeof result === "object") {
     const record = result as Record<string, unknown>;
     if (Array.isArray(record.content)) {
-      return result as AgentToolResult<unknown>;
+      return result as AgentToolResult;
     }
     logDebug(`tools: ${toolName} returned non-standard result (missing content[]); coercing`);
     const details = "details" in record ? record.details : record;
@@ -147,7 +143,7 @@ function normalizeToolExecutionResult(params: {
 function buildToolExecutionErrorResult(params: {
   toolName: string;
   message: string;
-}): AgentToolResult<unknown> {
+}): AgentToolResult {
   return jsonResult({
     status: "error",
     tool: params.toolName,
@@ -158,7 +154,7 @@ function buildToolExecutionErrorResult(params: {
 function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   toolCallId: string;
   params: unknown;
-  onUpdate: AgentToolUpdateCallback<unknown> | undefined;
+  onUpdate: AgentToolUpdateCallback | undefined;
   signal: AbortSignal | undefined;
 } {
   if (isLegacyToolExecuteArgs(args)) {
@@ -233,7 +229,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
       label: tool.label ?? name,
       description: tool.description ?? "",
       parameters: tool.parameters,
-      execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
+      execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
         let executeParams = params;
         try {
@@ -336,7 +332,7 @@ export function toClientToolDefinitions(
       label: func.name,
       description: func.description ?? "",
       parameters: func.parameters as ToolDefinition["parameters"],
-      execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
+      execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult> => {
         const { toolCallId, params } = splitToolExecuteArgs(args);
         if (onClientToolCall && typeof onClientToolCall !== "function") {
           onClientToolCall.reserve?.(toolCallId, func.name);

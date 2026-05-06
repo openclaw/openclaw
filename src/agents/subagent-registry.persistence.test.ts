@@ -10,6 +10,7 @@ import {
 } from "../config/sessions/store.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, withEnv } from "../test-utils/env.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import {
@@ -32,6 +33,7 @@ import {
 import {
   loadSubagentRegistryFromDisk,
   resolveSubagentRegistryPath,
+  saveSubagentRegistryToDisk,
 } from "./subagent-registry.store.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -209,6 +211,7 @@ describe("subagent registry persistence", () => {
     resetSubagentRegistryForTests({ persist: false });
     await drainSessionStoreWriterQueuesForTest();
     clearSessionStoreCacheForTest();
+    closeOpenClawStateDatabaseForTest();
     if (tempStateDir) {
       await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       tempStateDir = null;
@@ -326,6 +329,34 @@ describe("subagent registry persistence", () => {
 
     const after = JSON.parse(await fs.readFile(registryPath, "utf8")) as { version?: number };
     expect(after.version).toBe(2);
+  });
+
+  it("restores persisted runs from SQLite when the compatibility JSON registry is missing", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    const registryPath = path.join(tempStateDir, "subagents", "runs.json");
+    const record: SubagentRunRecord = {
+      runId: "run-sqlite",
+      childSessionKey: "agent:main:subagent:sqlite",
+      requesterSessionKey: "agent:main:main",
+      controllerSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "sqlite primary subagent registry",
+      cleanup: "keep",
+      createdAt: 1,
+      startedAt: 2,
+      spawnMode: "run",
+    };
+
+    saveSubagentRegistryToDisk(new Map([[record.runId, record]]));
+    await fs.rm(registryPath, { force: true });
+
+    expect(loadSubagentRegistryFromDisk().get("run-sqlite")).toMatchObject({
+      runId: "run-sqlite",
+      childSessionKey: "agent:main:subagent:sqlite",
+      requesterSessionKey: "agent:main:main",
+      spawnMode: "run",
+    });
   });
 
   it("returns isolated clones for unchanged persisted registry snapshots", async () => {

@@ -29,6 +29,7 @@ type SessionHistorySnapshot = {
 };
 
 type SessionHistoryTranscriptTarget = {
+  agentId?: string;
   sessionId: string;
   storePath?: string;
   sessionFile?: string;
@@ -275,7 +276,10 @@ export class SessionHistorySseState {
         this.target.sessionId,
         this.target.storePath,
         this.target.sessionFile,
-        resolveSessionHistoryTailReadOptions(this.limit),
+        {
+          ...resolveSessionHistoryTailReadOptions(this.limit),
+          agentId: this.target.agentId,
+        },
       );
       return {
         rawMessages: snapshot.messages,
@@ -289,6 +293,7 @@ export class SessionHistorySseState {
         this.target.storePath,
         this.target.sessionFile,
         {
+          agentId: this.target.agentId,
           mode: "full",
           reason: "session history cursor pagination",
         },

@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { Context, Message, StopReason } from "@mariozechner/pi-ai";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
 import {
   encodeAssistantTextSignature,
   normalizeAssistantPhase,
@@ -18,6 +16,8 @@ import type {
   OpenAIResponsesAssistantPhase,
   ResponseObject,
 } from "./openai-ws-connection.js";
+import type { Context, Message, StopReason } from "./pi-ai-contract.js";
+import type { AssistantMessage } from "./pi-ai-contract.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "./stream-message-shared.js";
 import { normalizeUsage } from "./usage.js";
 

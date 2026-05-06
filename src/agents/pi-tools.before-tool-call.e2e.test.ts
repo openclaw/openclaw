@@ -8,6 +8,12 @@ import {
 } from "../infra/diagnostic-events.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type {
+  AgentToolArtifact,
+  AgentToolArtifactExport,
+  AgentToolArtifactStore,
+  AgentToolArtifactWriteOptions,
+} from "./filesystem/agent-filesystem.js";
 import {
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
@@ -68,6 +74,36 @@ describe("before_tool_call loop detection behavior", () => {
       { name, execute } as unknown as AnyAgentTool,
       loopDetectionContext,
     );
+  }
+
+  function createArtifactStoreRecorder(): {
+    writes: AgentToolArtifactWriteOptions[];
+    store: AgentToolArtifactStore;
+  } {
+    const writes: AgentToolArtifactWriteOptions[] = [];
+    return {
+      writes,
+      store: {
+        write: (options) => {
+          writes.push(options);
+          return {
+            agentId: "main",
+            runId: "run-1",
+            artifactId: options.artifactId ?? "generated",
+            kind: options.kind,
+            metadata: options.metadata ?? {},
+            size: Buffer.byteLength(
+              Buffer.isBuffer(options.blob) ? options.blob : (options.blob ?? ""),
+            ),
+            createdAt: 1,
+          };
+        },
+        list: () => [] satisfies AgentToolArtifact[],
+        read: () => null satisfies AgentToolArtifactExport | null,
+        export: () => [] satisfies AgentToolArtifactExport[],
+        deleteAll: () => 0,
+      },
+    };
   }
 
   async function withToolLoopEvents(
@@ -216,6 +252,47 @@ describe("before_tool_call loop detection behavior", () => {
     for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
       await expect(tool.execute(`poll-${i}`, params, undefined, undefined)).resolves.toBeDefined();
     }
+  });
+
+  it("records tool media result manifests in the run artifact store", async () => {
+    const artifacts = createArtifactStoreRecorder();
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "saved media" }],
+      details: {
+        media: {
+          mediaUrls: ["/tmp/generated.png", "/tmp/generated.png", "https://example.com/a.png"],
+        },
+      },
+    });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "image_generate", execute } as any, {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "session-1",
+      runId: "run-1",
+      loopDetection: { enabled: true },
+      artifactStore: artifacts.store,
+    });
+
+    await tool.execute("call-1", { prompt: "draw" }, undefined, undefined);
+
+    expect(artifacts.writes).toHaveLength(1);
+    expect(artifacts.writes[0]).toMatchObject({
+      artifactId: "image_generate-call-1",
+      kind: "tool/media-manifest",
+      metadata: {
+        traceSchema: "openclaw-tool-artifact",
+        schemaVersion: 1,
+        toolName: "image_generate",
+        toolCallId: "call-1",
+        sessionKey: "agent:main:main",
+        sessionId: "session-1",
+        runId: "run-1",
+        mediaUrls: ["/tmp/generated.png", "https://example.com/a.png"],
+        mediaUrlCount: 2,
+        truncated: false,
+      },
+    });
+    expect(String(artifacts.writes[0]?.blob)).toContain("/tmp/generated.png");
   });
 
   it("does not block known poll loops when output progresses", async () => {

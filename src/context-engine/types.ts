@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "../agents/agent-core-contract.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 
 // Result types

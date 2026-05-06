@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { resolveAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
@@ -10,6 +9,7 @@ import {
   waitForEmbeddedPiRunEnd,
 } from "../../agents/pi-embedded-runner/runs.js";
 import { compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
+import { CURRENT_SESSION_VERSION } from "../../agents/transcript/session-transcript-contract.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import {
@@ -1824,6 +1824,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       storePath,
       entry.sessionFile,
       {
+        agentId: target.agentId,
         maxMessages: limit,
         maxLines: limit * 20 + 20,
       },

@@ -1,10 +1,10 @@
-import { completeSimple, type Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   createSingleUserPromptMessage,
   extractNonEmptyAssistantText,
   isLiveTestEnabled,
 } from "./live-test-helpers.js";
+import { completeSimple, type Model } from "./pi-ai-contract.js";
 
 const MOONSHOT_KEY = process.env.MOONSHOT_API_KEY ?? "";
 const MOONSHOT_BASE_URL = process.env.MOONSHOT_BASE_URL?.trim() || "https://api.moonshot.ai/v1";

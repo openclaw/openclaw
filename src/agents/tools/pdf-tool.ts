@@ -1,4 +1,3 @@
-import { type Context, complete } from "@mariozechner/pi-ai";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -13,6 +12,7 @@ import {
 } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { type Context, complete } from "../pi-ai-contract.js";
 import { ToolInputError } from "./common.js";
 import { coerceImageModelConfig, type ImageModelConfig } from "./image-tool.helpers.js";
 import {

@@ -1,6 +1,6 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
+import { createAssistantMessageEventStream } from "../pi-ai-contract.js";
 import { castAgentMessage, castAgentMessages } from "../test-helpers/agent-message-fixtures.js";
 import {
   OMITTED_ASSISTANT_REASONING_TEXT,

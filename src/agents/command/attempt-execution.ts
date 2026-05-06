@@ -1,4 +1,3 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
@@ -14,6 +13,7 @@ import { annotateInterSessionPromptText } from "../../sessions/input-provenance.
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
+import type { AgentMessage } from "../agent-core-contract.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
@@ -213,6 +213,7 @@ async function persistTextTurnTranscript(
     if (promptText) {
       await appendSessionTranscriptMessage({
         transcriptPath: sessionFile,
+        agentId: params.sessionAgentId,
         sessionId: params.sessionId,
         cwd: params.sessionCwd,
         config: params.config,
@@ -227,7 +228,10 @@ async function persistTextTurnTranscript(
     if (replyText) {
       let appendAssistant = true;
       if (params.embeddedAssistantGapFill) {
-        const latest = await readTailAssistantTextFromSessionTranscript(sessionFile);
+        const latest = await readTailAssistantTextFromSessionTranscript(sessionFile, {
+          agentId: params.sessionAgentId,
+          sessionId: params.sessionId,
+        });
         const normalizedReply = normalizeTranscriptMirrorText(replyText);
         const normalizedLatest = latest?.text ? normalizeTranscriptMirrorText(latest.text) : "";
         if (normalizedLatest && normalizedLatest === normalizedReply) {
@@ -237,6 +241,7 @@ async function persistTextTurnTranscript(
       if (appendAssistant) {
         await appendSessionTranscriptMessage({
           transcriptPath: sessionFile,
+          agentId: params.sessionAgentId,
           sessionId: params.sessionId,
           cwd: params.sessionCwd,
           config: params.config,

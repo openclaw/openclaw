@@ -1,4 +1,3 @@
-import { complete, type Api, type Model } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
@@ -15,6 +14,7 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "./model-selection.js";
+import { complete, type Api, type Model } from "./pi-ai-contract.js";
 import { resolveModel, resolveModelAsync } from "./pi-embedded-runner/model.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 

@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import { z } from "zod";
 import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";
+import {
+  loadSqliteSessionStore,
+  resolveSqliteSessionStoreOptionsForPath,
+} from "./store-backend.sqlite.js";
 import type { SessionEntry } from "./types.js";
 
 const SessionStoreSchema = z.record(z.string(), z.unknown()) as z.ZodType<
@@ -10,6 +14,10 @@ const SessionStoreSchema = z.record(z.string(), z.unknown()) as z.ZodType<
 export function readSessionStoreReadOnly(
   storePath: string,
 ): Record<string, SessionEntry | undefined> {
+  const sqliteOptions = resolveSqliteSessionStoreOptionsForPath(storePath);
+  if (sqliteOptions) {
+    return loadSqliteSessionStore(sqliteOptions);
+  }
   try {
     const raw = fs.readFileSync(storePath, "utf-8");
     if (!raw.trim()) {

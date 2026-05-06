@@ -12,6 +12,7 @@ import {
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
+import type { VirtualAgentFs, VirtualAgentFsEntry } from "./filesystem/agent-filesystem.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
@@ -90,6 +91,52 @@ function expectNoSubagentControlTools(tools: ReturnType<typeof createOpenClawCod
 function applyRuntimeToolsAllow<T extends { name: string }>(tools: T[], toolsAllow: string[]) {
   const allowSet = new Set(toolsAllow.map((name) => normalizeToolName(name)));
   return tools.filter((tool) => allowSet.has(normalizeToolName(tool.name)));
+}
+
+function createMemoryVirtualFs(): VirtualAgentFs {
+  const files = new Map<string, Buffer>();
+  const normalize = (filePath: string) => (filePath.startsWith("/") ? filePath : `/${filePath}`);
+  const entry = (filePath: string, kind: "directory" | "file", size = 0): VirtualAgentFsEntry => ({
+    path: normalize(filePath),
+    kind,
+    size,
+    metadata: {},
+    updatedAt: 1,
+  });
+  return {
+    stat: (filePath) => {
+      const normalized = normalize(filePath);
+      const file = files.get(normalized);
+      if (file) {
+        return entry(normalized, "file", file.byteLength);
+      }
+      return null;
+    },
+    readFile: (filePath) => {
+      const file = files.get(normalize(filePath));
+      if (!file) {
+        throw new Error(`missing ${filePath}`);
+      }
+      return file;
+    },
+    writeFile: (filePath, content) => {
+      files.set(normalize(filePath), Buffer.isBuffer(content) ? content : Buffer.from(content));
+    },
+    mkdir: () => {},
+    readdir: () => [],
+    list: () => [],
+    export: () => [],
+    remove: (filePath) => {
+      files.delete(normalize(filePath));
+    },
+    rename: (fromPath, toPath) => {
+      const file = files.get(normalize(fromPath));
+      if (file) {
+        files.set(normalize(toPath), file);
+        files.delete(normalize(fromPath));
+      }
+    },
+  };
 }
 
 describe("createOpenClawCodingTools", () => {
@@ -204,6 +251,101 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("process")).toBe(false);
     expect(names.has("apply_patch")).toBe(false);
     expect(names.has("message")).toBe(false);
+  });
+
+  it("uses VFS-backed read/write/edit tools when runtime filesystem has no workspace capability", async () => {
+    const scratch = createMemoryVirtualFs();
+    const tools = createOpenClawCodingTools({
+      workspaceDir: "/tmp/workspace",
+      agentFilesystem: { scratch },
+      toolConstructionPlan: {
+        includeBaseCodingTools: true,
+        includeShellTools: true,
+        includeChannelTools: false,
+        includeOpenClawTools: false,
+        includePluginTools: false,
+      },
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+
+    expect(names.has("read")).toBe(true);
+    expect(names.has("write")).toBe(true);
+    expect(names.has("edit")).toBe(true);
+    expect(names.has("apply_patch")).toBe(false);
+    expect(names.has("exec")).toBe(true);
+    expect(names.has("process")).toBe(false);
+
+    await tools
+      .find((tool) => tool.name === "write")
+      ?.execute("call-write", {
+        path: "notes/a.txt",
+        content: "hello vfs",
+      });
+    expect(scratch.readFile("/notes/a.txt").toString("utf8")).toBe("hello vfs");
+
+    const readResult = await tools
+      .find((tool) => tool.name === "read")
+      ?.execute("call-read", {
+        path: "notes/a.txt",
+      });
+    expect(JSON.stringify(readResult)).toContain("hello vfs");
+
+    await tools
+      .find((tool) => tool.name === "edit")
+      ?.execute("call-edit", {
+        path: "notes/a.txt",
+        edits: [{ oldText: "hello vfs", newText: "edited vfs" }],
+      });
+    expect(scratch.readFile("/notes/a.txt").toString("utf8")).toBe("edited vfs");
+  });
+
+  it("uses VFS-backed apply_patch when runtime filesystem has no workspace capability", async () => {
+    const scratch = createMemoryVirtualFs();
+    scratch.writeFile("/notes/a.txt", "hello vfs\n");
+    const tools = createOpenClawCodingTools({
+      workspaceDir: "/tmp/workspace",
+      agentFilesystem: { scratch },
+      modelProvider: "openai",
+      modelId: "gpt-5.4",
+      toolConstructionPlan: {
+        includeBaseCodingTools: true,
+        includeShellTools: true,
+        includeChannelTools: false,
+        includeOpenClawTools: false,
+        includePluginTools: false,
+      },
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+
+    expect(names.has("apply_patch")).toBe(true);
+    expect(names.has("exec")).toBe(true);
+    expect(names.has("process")).toBe(false);
+
+    await tools
+      .find((tool) => tool.name === "apply_patch")
+      ?.execute("call-patch", {
+        input: [
+          "*** Begin Patch",
+          "*** Update File: notes/a.txt",
+          "@@",
+          "-hello vfs",
+          "+patched vfs",
+          "*** End Patch",
+        ].join("\n"),
+      });
+    expect(scratch.readFile("/notes/a.txt").toString("utf8")).toBe("patched vfs\n");
+
+    await tools
+      .find((tool) => tool.name === "apply_patch")
+      ?.execute("call-patch-add", {
+        input: [
+          "*** Begin Patch",
+          "*** Add File: notes/b.txt",
+          "+created in vfs",
+          "*** End Patch",
+        ].join("\n"),
+      });
+    expect(scratch.readFile("/notes/b.txt").toString("utf8")).toBe("created in vfs\n");
   });
 
   it("passes plugin suppression into OpenClaw tool construction plans", () => {

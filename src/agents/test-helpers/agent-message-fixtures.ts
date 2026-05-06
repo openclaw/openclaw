@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, UserMessage } from "@mariozechner/pi-ai";
+import type { AgentMessage } from "../agent-core-contract.js";
+import type { AssistantMessage, UserMessage } from "../pi-ai-contract.js";
 import { ZERO_USAGE_FIXTURE } from "./usage-fixtures.js";
 
 export function castAgentMessage(message: unknown): AgentMessage {

@@ -12,6 +12,11 @@ const hookRunnerMocks = vi.hoisted(() => ({
   runBeforeReset: vi.fn<HookRunner["runBeforeReset"]>(),
 }));
 
+const sqliteTranscriptMocks = vi.hoisted(() => ({
+  exportSqliteSessionTranscriptJsonl: vi.fn(() => ""),
+  hasSqliteSessionTranscriptEvents: vi.fn(() => false),
+}));
+
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
   return {
@@ -25,6 +30,11 @@ vi.mock("node:fs/promises", async () => {
     readdir: fsMocks.readdir,
   };
 });
+
+vi.mock("../../config/sessions/transcript-store.sqlite.js", () => ({
+  exportSqliteSessionTranscriptJsonl: sqliteTranscriptMocks.exportSqliteSessionTranscriptJsonl,
+  hasSqliteSessionTranscriptEvents: sqliteTranscriptMocks.hasSqliteSessionTranscriptEvents,
+}));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () =>
@@ -73,6 +83,8 @@ describe("emitResetCommandHooks", () => {
     hookRunnerMocks.runBeforeReset.mockResolvedValue(undefined);
     fsMocks.readFile.mockResolvedValue("");
     fsMocks.readdir.mockResolvedValue([]);
+    sqliteTranscriptMocks.exportSqliteSessionTranscriptJsonl.mockReturnValue("");
+    sqliteTranscriptMocks.hasSqliteSessionTranscriptEvents.mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -149,6 +161,64 @@ describe("emitResetCommandHooks", () => {
         reason: "new",
       }),
       expect.objectContaining({
+        sessionId: "prev-session",
+      }),
+    );
+  });
+
+  it("uses scoped SQLite transcript events for before_reset when JSONL is missing", async () => {
+    sqliteTranscriptMocks.hasSqliteSessionTranscriptEvents.mockReturnValue(true);
+    sqliteTranscriptMocks.exportSqliteSessionTranscriptJsonl.mockReturnValue(
+      `${JSON.stringify({
+        type: "session",
+        id: "prev-session",
+        timestamp: "2026-05-06T12:00:00.000Z",
+      })}\n${JSON.stringify({
+        type: "message",
+        id: "m1",
+        message: { role: "assistant", content: "Recovered from SQLite" },
+      })}\n`,
+    );
+    const command = {
+      surface: "discord",
+      senderId: "vac",
+      channel: "discord",
+      from: "discord:vac",
+      to: "discord:bot",
+      resetHookTriggered: false,
+    } as HandleCommandsParams["command"];
+
+    await emitResetCommandHooks({
+      action: "reset",
+      ctx: {} as HandleCommandsParams["ctx"],
+      cfg: {} as HandleCommandsParams["cfg"],
+      command,
+      sessionKey: "agent:target:main",
+      previousSessionEntry: {
+        sessionId: "prev-session",
+        sessionFile: "/tmp/prev-session.jsonl",
+      } as HandleCommandsParams["previousSessionEntry"],
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    await vi.waitFor(() => expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1));
+    expect(sqliteTranscriptMocks.hasSqliteSessionTranscriptEvents).toHaveBeenCalledWith({
+      agentId: "target",
+      sessionId: "prev-session",
+    });
+    expect(sqliteTranscriptMocks.exportSqliteSessionTranscriptJsonl).toHaveBeenCalledWith({
+      agentId: "target",
+      sessionId: "prev-session",
+    });
+    expect(fsMocks.readFile).not.toHaveBeenCalled();
+    expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: "/tmp/prev-session.jsonl",
+        messages: [{ role: "assistant", content: "Recovered from SQLite" }],
+        reason: "reset",
+      }),
+      expect.objectContaining({
+        agentId: "target",
         sessionId: "prev-session",
       }),
     );

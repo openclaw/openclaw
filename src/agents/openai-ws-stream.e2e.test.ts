@@ -14,16 +14,16 @@
  * This now runs only in the keyed live/release lanes.
  */
 
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isLiveTestEnabled } from "./live-test-helpers.js";
+import type { OutputItem, ResponseObject } from "./openai-ws-connection.js";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
   AssistantMessageEventStream,
   Context,
-} from "@mariozechner/pi-ai";
-import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isLiveTestEnabled } from "./live-test-helpers.js";
-import type { OutputItem, ResponseObject } from "./openai-ws-connection.js";
+} from "./pi-ai-contract.js";
+import { createAssistantMessageEventStream } from "./pi-ai-contract.js";
 
 const API_KEY = process.env.OPENAI_API_KEY;
 const LIVE = isLiveTestEnabled(["OPENAI_LIVE_TEST"]) && !!API_KEY;
@@ -254,9 +254,9 @@ function freshSession(name: string): string {
 describe("OpenAI WebSocket e2e", () => {
   beforeEach(async () => {
     vi.resetModules();
-    vi.doMock("@mariozechner/pi-ai", async () => {
+    vi.doMock("./pi-ai-contract.js", async () => {
       const actual =
-        await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
+        await vi.importActual<typeof import("./pi-ai-contract.js")>("./pi-ai-contract.js");
       return {
         ...actual,
         createAssistantMessageEventStream: actual.createAssistantMessageEventStream,

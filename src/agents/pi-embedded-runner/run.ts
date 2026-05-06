@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
@@ -45,6 +46,8 @@ import {
   FailoverError,
   resolveFailoverStatus,
 } from "../failover-error.js";
+import { decidePiRunWorkerLaunch } from "../harness/pi-run-worker-policy.js";
+import { runPiRunInWorker } from "../harness/pi-worker-runner.js";
 import { selectAgentHarness } from "../harness/selection.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../live-model-switch.js";
@@ -82,6 +85,7 @@ import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
+import type { AgentWorkerPermissionMode } from "../runtime-worker-permissions.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -180,6 +184,98 @@ const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
+type PiRunWorkerOptions = NonNullable<Parameters<typeof runPiRunInWorker>[1]>;
+
+function resolvePiRunWorkerFilesystemMode(value: string | undefined): "disk" | "vfs-only" {
+  switch ((value ?? "").trim().toLowerCase()) {
+    case "vfs":
+    case "vfs-only":
+      return "vfs-only";
+    default:
+      return "disk";
+  }
+}
+
+function resolvePiRunWorkerPermissionMode(params: {
+  envValue: string | undefined;
+  filesystemMode: "disk" | "vfs-only";
+}): AgentWorkerPermissionMode | undefined {
+  switch ((params.envValue ?? "").trim().toLowerCase()) {
+    case "audit":
+      return "audit";
+    case "enforce":
+    case "on":
+    case "true":
+    case "1":
+      return "enforce";
+    case "off":
+    case "false":
+    case "0":
+      return "off";
+    default:
+      return params.filesystemMode === "vfs-only" ? "enforce" : undefined;
+  }
+}
+
+async function runPiRunInWorkerWithParentReplyOperation(
+  params: RunEmbeddedPiAgentParams,
+  options: PiRunWorkerOptions,
+): Promise<EmbeddedPiRunResult> {
+  if (!params.replyOperation) {
+    return runPiRunInWorker(params, options);
+  }
+
+  const abortController = new AbortController();
+  let running = true;
+  let controlChannel:
+    | Parameters<NonNullable<PiRunWorkerOptions["onControlChannel"]>>[0]
+    | undefined;
+  const forwardParentAbort = () => {
+    if (!abortController.signal.aborted) {
+      abortController.abort(params.abortSignal?.reason);
+    }
+  };
+  if (params.abortSignal?.aborted) {
+    forwardParentAbort();
+  } else {
+    params.abortSignal?.addEventListener("abort", forwardParentAbort, { once: true });
+  }
+  const backendHandle: ReplyBackendHandle = {
+    kind: "embedded",
+    cancel: (reason) => {
+      controlChannel?.send({ type: "cancel", reason });
+      if (!abortController.signal.aborted) {
+        abortController.abort(new Error(`Reply operation cancelled worker run: ${reason}`));
+      }
+    },
+    isStreaming: () => running,
+    isCompacting: () => false,
+    queueMessage: async (text) => {
+      controlChannel?.send({ type: "queue_message", text });
+    },
+  };
+  params.replyOperation.attachBackend(backendHandle);
+  try {
+    return await runPiRunInWorker(
+      {
+        ...params,
+        abortSignal: abortController.signal,
+        replyOperation: undefined,
+      },
+      {
+        ...options,
+        onControlChannel: (channel) => {
+          controlChannel = channel;
+          options.onControlChannel?.(channel);
+        },
+      },
+    );
+  } finally {
+    running = false;
+    params.abortSignal?.removeEventListener?.("abort", forwardParentAbort);
+    params.replyOperation.detachBackend(backendHandle);
+  }
+}
 
 function resolveHarnessContextConfigProvider(params: {
   provider: string;
@@ -385,6 +481,31 @@ export async function runEmbeddedPiAgent(
   };
 
   throwIfAborted();
+
+  const workerDecision = decidePiRunWorkerLaunch({
+    runParams: params,
+    mode: process.env.OPENCLAW_AGENT_WORKER_MODE,
+    workerChild: process.env.OPENCLAW_AGENT_WORKER_CHILD === "1",
+  });
+  if (workerDecision.mode === "worker") {
+    return enqueueSession(() => {
+      throwIfAborted();
+      return enqueueGlobal(async () => {
+        throwIfAborted();
+        const filesystemMode = resolvePiRunWorkerFilesystemMode(
+          process.env.OPENCLAW_AGENT_WORKER_FILESYSTEM_MODE,
+        );
+        return runPiRunInWorkerWithParentReplyOperation(params, {
+          runtimeId: "pi",
+          filesystemMode,
+          permissionMode: resolvePiRunWorkerPermissionMode({
+            envValue: process.env.OPENCLAW_AGENT_WORKER_PERMISSION_MODE,
+            filesystemMode,
+          }),
+        });
+      });
+    });
+  }
 
   return enqueueSession(() => {
     throwIfAborted();
@@ -1170,6 +1291,7 @@ export async function runEmbeddedPiAgent(
             imageOrder: params.imageOrder,
             clientTools: params.clientTools,
             disableTools: params.disableTools,
+            agentFilesystem: params.agentFilesystem,
             provider,
             modelId,
             // Use the harness selected before model/auth setup for the actual

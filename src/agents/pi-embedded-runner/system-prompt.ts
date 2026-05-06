@@ -1,7 +1,7 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
+import type { AgentTool } from "../agent-core-contract.js";
+import type { AgentSession } from "../agent-extension-contract.js";
 import type { BootstrapMode } from "../bootstrap-mode.js";
 import type { ResolvedTimeFormat } from "../date-time.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";

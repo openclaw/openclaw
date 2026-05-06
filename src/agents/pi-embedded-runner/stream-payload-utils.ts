@@ -1,4 +1,4 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "../agent-core-contract.js";
 
 export function streamWithPayloadPatch(
   underlying: StreamFn,

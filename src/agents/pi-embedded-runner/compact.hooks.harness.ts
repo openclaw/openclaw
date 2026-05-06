@@ -239,9 +239,9 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  vi.doMock("@mariozechner/pi-ai/oauth", async () => {
-    const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
-      "@mariozechner/pi-ai/oauth",
+  vi.doMock("../pi-ai-oauth-contract.js", async () => {
+    const actual = await vi.importActual<typeof import("../pi-ai-oauth-contract.js")>(
+      "../pi-ai-oauth-contract.js",
     );
     return {
       ...actual,
@@ -250,7 +250,7 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  vi.doMock("@mariozechner/pi-coding-agent", () => ({
+  vi.doMock("../pi-coding-agent-contract.js", () => ({
     AuthStorage: function AuthStorage() {},
     ModelRegistry: function ModelRegistry() {},
     createAgentSession: vi.fn(async () => {

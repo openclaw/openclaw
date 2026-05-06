@@ -1,4 +1,3 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import {
   createHeartbeatToolResponsePayload,
@@ -15,6 +14,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../../shared/string-coerce.js";
+import type { AssistantMessage } from "../../pi-ai-contract.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,

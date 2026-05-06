@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { parseSlackBlocksInput } from "./blocks-input.js";
@@ -149,7 +149,7 @@ export async function handleSlackAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
   context?: SlackActionContext,
-): Promise<AgentToolResult<unknown>> {
+): Promise<AgentToolResult> {
   const resolveChannelId = () =>
     resolveSlackChannelId(
       readStringParam(params, "channelId", {

@@ -1,9 +1,7 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
-import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
+import type { StreamFn } from "../agent-core-contract.js";
 import {
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
@@ -16,6 +14,8 @@ import {
 } from "../openai-responses-payload-policy.js";
 import { resolveOpenAITextVerbosity, type OpenAITextVerbosity } from "../openai-text-verbosity.js";
 import { createOpenAIResponsesTransportStreamFn } from "../openai-transport-stream.js";
+import type { SimpleStreamOptions } from "../pi-ai-contract.js";
+import { streamSimple } from "../pi-ai-contract.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
 import { log } from "./logger.js";
 import { mapThinkingLevelToReasoningEffort } from "./reasoning-effort-utils.js";

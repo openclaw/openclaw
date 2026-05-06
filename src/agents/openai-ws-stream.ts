@@ -1,12 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type {
-  AssistantMessage,
-  AssistantMessageEvent,
-  AssistantMessageEventStream,
-  StopReason,
-} from "@mariozechner/pi-ai";
-import * as piAi from "@mariozechner/pi-ai";
 /**
  * OpenAI WebSocket StreamFn Integration
  *
@@ -40,6 +32,7 @@ import {
   encodeAssistantTextSignature,
   normalizeAssistantPhase,
 } from "../shared/chat-message-content.js";
+import type { StreamFn } from "./agent-core-contract.js";
 import { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
 import {
   getOpenAIWebSocketErrorDetails,
@@ -60,6 +53,13 @@ import {
   planOpenAIWebSocketRequestPayload,
 } from "./openai-ws-request.js";
 import type { ResponseCreateEvent } from "./openai-ws-types.js";
+import type {
+  AssistantMessage,
+  AssistantMessageEvent,
+  AssistantMessageEventStream,
+  StopReason,
+} from "./pi-ai-contract.js";
+import * as piAi from "./pi-ai-contract.js";
 import { log } from "./pi-embedded-runner/logger.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { normalizeProviderId } from "./provider-id.js";

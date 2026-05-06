@@ -1,4 +1,3 @@
-import { completeSimple, getModel, streamSimple } from "@mariozechner/pi-ai";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import {
@@ -6,6 +5,7 @@ import {
   extractNonEmptyAssistantText,
   isLiveTestEnabled,
 } from "./live-test-helpers.js";
+import { completeSimple, getModel, streamSimple } from "./pi-ai-contract.js";
 import { isBillingErrorMessage } from "./pi-embedded-helpers/failover-matches.js";
 import { applyExtraParamsToAgent } from "./pi-embedded-runner.js";
 import { createWebSearchTool } from "./tools/web-search.js";

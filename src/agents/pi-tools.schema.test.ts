@@ -1,7 +1,7 @@
-import { runAgentLoop, type AgentEvent, type StreamFn } from "@mariozechner/pi-agent-core";
-import { createAssistantMessageEventStream, validateToolArguments } from "@mariozechner/pi-ai";
+import { runAgentLoop, type AgentEvent, type StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { Type, type TSchema } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { createAssistantMessageEventStream, validateToolArguments } from "./pi-ai-contract.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import {
   cleanToolSchemaForGemini,

@@ -1,4 +1,5 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "../../agent-core-contract.js";
+import { removeSessionManagerTailEntries } from "../../transcript/session-manager-tail.js";
 import { log } from "../logger.js";
 
 const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
@@ -173,49 +174,18 @@ export function stripSessionsYieldArtifacts(activeSession: {
     activeSession.agent.state.messages = strippedMessages;
   }
 
-  const sessionManager = activeSession.sessionManager as
-    | {
-        fileEntries?: Array<{
-          type?: string;
-          id?: string;
-          parentId?: string | null;
-          message?: { role?: string; stopReason?: string };
-          customType?: string;
-        }>;
-        byId?: Map<string, { id: string }>;
-        leafId?: string | null;
-        _rewriteFile?: () => void;
-      }
-    | undefined;
-  const fileEntries = sessionManager?.fileEntries;
-  const byId = sessionManager?.byId;
-  if (!fileEntries || !byId) {
-    return;
-  }
-
-  let changed = false;
-  while (fileEntries.length > 1) {
-    const last = fileEntries.at(-1);
-    if (!last || last.type === "session") {
-      break;
-    }
-    const isYieldAbortAssistant =
-      last.type === "message" &&
-      last.message?.role === "assistant" &&
-      last.message?.stopReason === "aborted";
-    const isYieldInterruptMessage =
-      last.type === "custom_message" && last.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE;
-    if (!isYieldAbortAssistant && !isYieldInterruptMessage) {
-      break;
-    }
-    fileEntries.pop();
-    if (last.id) {
-      byId.delete(last.id);
-    }
-    sessionManager.leafId = last.parentId ?? null;
-    changed = true;
-  }
-  if (changed) {
-    sessionManager._rewriteFile?.();
-  }
+  removeSessionManagerTailEntries(
+    activeSession.sessionManager,
+    (entry) => {
+      const message = entry.message as { role?: string; stopReason?: string } | undefined;
+      return (
+        (entry.type === "message" &&
+          message?.role === "assistant" &&
+          message.stopReason === "aborted") ||
+        (entry.type === "custom_message" &&
+          entry.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE)
+      );
+    },
+    { minEntries: 1 },
+  );
 }

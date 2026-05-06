@@ -8,7 +8,7 @@ import {
   type FileEntry,
   type SessionEntry as PiSessionEntry,
   type SessionHeader,
-} from "@mariozechner/pi-coding-agent";
+} from "../../agents/transcript/session-transcript-contract.js";
 import { derivePromptTokens } from "../../agents/usage.js";
 import {
   resolveSessionFilePath,

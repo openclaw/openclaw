@@ -1,5 +1,5 @@
-import type { Model } from "@mariozechner/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Model } from "./pi-ai-contract.js";
 
 const hoisted = vi.hoisted(() => ({
   resolveModelMock: vi.fn(),
@@ -13,7 +13,7 @@ const hoisted = vi.hoisted(() => ({
   completeMock: vi.fn(),
 }));
 
-vi.mock("@mariozechner/pi-ai", () => ({
+vi.mock("./pi-ai-contract.js", () => ({
   complete: hoisted.completeMock,
 }));
 

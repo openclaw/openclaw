@@ -113,19 +113,24 @@ Events are written as JSON Lines with this schema marker:
 
 An exported bundle can contain:
 
-| File                  | Contents                                                                                       |
-| --------------------- | ---------------------------------------------------------------------------------------------- |
-| `manifest.json`       | Bundle schema, source files, event counts, and generated file list                             |
-| `events.jsonl`        | Ordered runtime and transcript timeline                                                        |
-| `session-branch.json` | Redacted active transcript branch and session header                                           |
-| `metadata.json`       | OpenClaw version, OS/runtime, model, config snapshot, plugins, skills, and prompt metadata     |
-| `artifacts.json`      | Final status, errors, usage, prompt cache, compaction count, assistant text, and tool metadata |
-| `prompts.json`        | Submitted prompts and selected prompt-building details                                         |
-| `system-prompt.txt`   | Latest compiled system prompt, when captured                                                   |
-| `tools.json`          | Tool definitions sent to the model, when captured                                              |
+| File                  | Contents                                                                                                                      |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `manifest.json`       | Bundle schema, source files, event counts, and generated file list                                                            |
+| `events.jsonl`        | Ordered runtime and transcript timeline                                                                                       |
+| `session-branch.json` | Redacted active transcript branch and session header                                                                          |
+| `metadata.json`       | OpenClaw version, OS/runtime, model, config snapshot, plugins, skills, and prompt metadata                                    |
+| `artifacts.json`      | Final status, errors, usage, prompt cache, compaction count, assistant text, tool metadata, and SQLite tool-artifact metadata |
+| `prompts.json`        | Submitted prompts and selected prompt-building details                                                                        |
+| `system-prompt.txt`   | Latest compiled system prompt, when captured                                                                                  |
+| `tools.json`          | Tool definitions sent to the model, when captured                                                                             |
 
 `manifest.json` lists the files present in that bundle. Some files are omitted
 when the session did not capture the corresponding runtime data.
+
+`artifacts.json` may include `toolArtifacts` entries for run-scoped SQLite
+artifacts such as runtime trajectory mirrors or tool media manifests. These
+entries are metadata-only: the export omits artifact blobs and `blobBase64`
+payloads so large generated media is not duplicated into the support bundle.
 
 ## Capture location
 

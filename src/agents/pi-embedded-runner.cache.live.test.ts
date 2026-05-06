@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AssistantMessage, Message, Tool } from "@mariozechner/pi-ai";
 import { Type } from "typebox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -16,6 +15,7 @@ import {
   resolveLiveDirectModel,
   withLiveCacheHeartbeat,
 } from "./live-cache-test-support.js";
+import type { AssistantMessage, Message, Tool } from "./pi-ai-contract.js";
 import { runEmbeddedPiAgent } from "./pi-embedded-runner.js";
 import { compactEmbeddedPiSessionDirect } from "./pi-embedded-runner/compact.runtime.js";
 import { buildZeroUsage } from "./stream-message-shared.js";

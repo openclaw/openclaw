@@ -1,12 +1,12 @@
+import chalk from "chalk";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import type { SearchableSelectListTheme } from "../components/searchable-select-list.js";
 import type {
   EditorTheme,
   MarkdownTheme,
   SelectListTheme,
   SettingsListTheme,
-} from "@mariozechner/pi-tui";
-import chalk from "chalk";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
-import type { SearchableSelectListTheme } from "../components/searchable-select-list.js";
+} from "../pi-tui-contract.js";
 
 const DARK_TEXT = "#E8E3D5";
 const LIGHT_TEXT = "#1E1E1E";

@@ -8,9 +8,9 @@ const mocks = vi.hoisted(() => ({
   formatOpenAIOAuthTlsPreflightFix: vi.fn(),
 }));
 
-vi.mock("@mariozechner/pi-ai/oauth", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
-    "@mariozechner/pi-ai/oauth",
+vi.mock("../agents/pi-ai-oauth-contract.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/pi-ai-oauth-contract.js")>(
+    "../agents/pi-ai-oauth-contract.js",
   );
   return {
     ...actual,

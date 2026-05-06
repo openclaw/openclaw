@@ -1,4 +1,3 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   createEmptyPluginRegistry,
@@ -8,6 +7,7 @@ import {
 import type { ResolvedTtsConfig, SpeechProviderPlugin } from "openclaw/plugin-sdk/speech-core";
 import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AssistantMessage } from "../../agents/pi-ai-contract.js";
 import { resolveWorkspacePackagePublicModuleUrl } from "../../plugin-sdk/test-helpers/public-surface-loader.js";
 
 type TtsRuntimeModule = typeof import("openclaw/plugin-sdk/tts-runtime");
@@ -23,7 +23,7 @@ let ttsRuntime: TtsRuntimeModule;
 let ttsRuntimePromise: Promise<TtsRuntimeModule> | null = null;
 let ttsRuntimeInitialized = false;
 let ttsCorePromise: Promise<TtsCoreModule> | null = null;
-let completeSimple: typeof import("@mariozechner/pi-ai").completeSimple;
+let completeSimple: typeof import("../../agents/pi-ai-contract.js").completeSimple;
 let getApiKeyForModelMock: SummarizeTextDeps["getApiKeyForModel"];
 let requireApiKeyMock: SummarizeTextDeps["requireApiKey"];
 let resolveModelAsyncMock: SummarizeTextDeps["resolveModelAsync"];
@@ -70,7 +70,7 @@ async function withIsolatedSpeechProviderEnvAsync<T>(
   return await withEnvAsync(isolatedSpeechProviderEnv(overrides), fn);
 }
 
-vi.mock("@mariozechner/pi-ai", () => {
+vi.mock("../../agents/pi-ai-contract.js", () => {
   const getApiProvider = vi.fn(() => undefined);
   return {
     completeSimple: vi.fn(),
@@ -84,7 +84,7 @@ vi.mock("@mariozechner/pi-ai", () => {
   };
 });
 
-vi.mock("@mariozechner/pi-ai/oauth", () => {
+vi.mock("../../agents/pi-ai-oauth-contract.js", () => {
   return {
     getOAuthProviders: () => [],
     getOAuthApiKey: vi.fn(async () => null),
@@ -496,7 +496,7 @@ function createResolvedSummarizationConfig(cfg: OpenClawConfig): ResolvedTtsConf
 
 async function setupSummarizationMocks() {
   ({ summarizeText: summarizeTextCore } = await loadTtsCore());
-  ({ completeSimple } = await import("@mariozechner/pi-ai"));
+  ({ completeSimple } = await import("../../agents/pi-ai-contract.js"));
   getApiKeyForModelMock = vi.fn() as SummarizeTextDeps["getApiKeyForModel"];
   requireApiKeyMock = vi.fn() as SummarizeTextDeps["requireApiKey"];
   resolveModelAsyncMock = vi.fn() as SummarizeTextDeps["resolveModelAsync"];

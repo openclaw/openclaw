@@ -24,9 +24,9 @@ const piCodingAgentTokenMocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("@mariozechner/pi-coding-agent", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
-    "@mariozechner/pi-coding-agent",
+vi.mock("../pi-coding-agent-contract.js", async () => {
+  const actual = await vi.importActual<typeof import("../pi-coding-agent-contract.js")>(
+    "../pi-coding-agent-contract.js",
   );
   return {
     ...actual,

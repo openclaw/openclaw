@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentTool, AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createOpenClawReadTool, createSandboxedReadTool } from "./pi-tools.read.js";
@@ -94,7 +94,7 @@ describe("createOpenClawCodingTools read behavior", () => {
   });
 
   it("strips truncation.content details from read results while preserving other fields", async () => {
-    const readResult: AgentToolResult<unknown> = {
+    const readResult: AgentToolResult = {
       content: [{ type: "text" as const, text: "line-0001" }],
       details: {
         truncation: {

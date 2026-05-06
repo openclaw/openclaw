@@ -11,6 +11,7 @@ import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 export interface ExportCommandSessionTarget {
+  agentId: string;
   entry: SessionEntry;
   sessionFile: string;
 }
@@ -43,7 +44,7 @@ export function parseExportCommandOutputPath(
 export function resolveExportCommandSessionTarget(
   params: HandleCommandsParams,
 ): ExportCommandSessionTarget | ReplyPayload {
-  const targetAgentId = resolveAgentIdFromSessionKey(params.sessionKey) || params.agentId;
+  const targetAgentId = resolveAgentIdFromSessionKey(params.sessionKey) || params.agentId || "main";
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(targetAgentId);
   const store = loadSessionStore(storePath, { skipCache: true });
   const entry = store[params.sessionKey] as SessionEntry | undefined;
@@ -57,7 +58,7 @@ export function resolveExportCommandSessionTarget(
       entry,
       resolveSessionFilePathOptions({ agentId: targetAgentId, storePath }),
     );
-    return { entry, sessionFile };
+    return { agentId: targetAgentId, entry, sessionFile };
   } catch (err) {
     return {
       text: `❌ Failed to resolve session file: ${formatErrorMessage(err)}`,

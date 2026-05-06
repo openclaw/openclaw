@@ -1,6 +1,6 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ImageContent } from "@mariozechner/pi-ai";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
+import type { ImageContent } from "../../pi-ai-contract.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
   PRUNED_HISTORY_IMAGE_MARKER,

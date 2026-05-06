@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "../../agents/agent-core-contract.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
@@ -57,7 +57,7 @@ export type OutboundSendContext = {
 type PluginHandledResult = {
   handledBy: "plugin";
   payload: unknown;
-  toolResult: AgentToolResult<unknown>;
+  toolResult: AgentToolResult;
 };
 
 function collectActionMediaSources(params: Record<string, unknown>): string[] {
@@ -196,7 +196,7 @@ export async function executeSendAction(params: {
 }): Promise<{
   handledBy: "plugin" | "core";
   payload: unknown;
-  toolResult?: AgentToolResult<unknown>;
+  toolResult?: AgentToolResult;
   sendResult?: MessageSendResult;
 }> {
   throwIfAborted(params.ctx.abortSignal);
@@ -335,7 +335,7 @@ export async function executePollAction(params: {
 }): Promise<{
   handledBy: "plugin" | "core";
   payload: unknown;
-  toolResult?: AgentToolResult<unknown>;
+  toolResult?: AgentToolResult;
   pollResult?: MessagePollResult;
 }> {
   const pluginHandled = await tryHandleWithPluginAction({

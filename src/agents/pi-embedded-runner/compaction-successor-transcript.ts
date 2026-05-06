@@ -1,18 +1,18 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   CURRENT_SESSION_VERSION,
   type CompactionEntry,
   type SessionEntry,
   type SessionHeader,
-} from "@mariozechner/pi-coding-agent";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { collectDuplicateUserMessageEntryIdsForCompaction } from "./compaction-duplicate-user-messages.js";
+} from "../transcript/session-transcript-contract.js";
 import {
   readTranscriptFileState,
   TranscriptFileState,
   writeTranscriptFileAtomic,
-} from "./transcript-file-state.js";
+} from "../transcript/transcript-file-state.js";
+import { collectDuplicateUserMessageEntryIdsForCompaction } from "./compaction-duplicate-user-messages.js";
 
 type ReadonlySessionManagerForRotation = Pick<
   TranscriptFileState,

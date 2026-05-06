@@ -1,9 +1,9 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   readStringValue,
 } from "../shared/string-coerce.js";
+import type { AgentMessage } from "./agent-core-contract.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 import {
   REDACTED_SESSIONS_SPAWN_ATTACHMENT_CONTENT,

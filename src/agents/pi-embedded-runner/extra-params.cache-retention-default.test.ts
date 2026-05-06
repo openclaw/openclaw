@@ -1,4 +1,4 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPiAiStreamSimpleMock } from "../../../test/helpers/agents/pi-ai-stream-simple-mock.js";
 import { isOpenRouterAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
@@ -37,7 +37,7 @@ vi.mock("./logger.js", () => ({
   },
 }));
 
-vi.mock("@mariozechner/pi-ai", () => createPiAiStreamSimpleMock());
+vi.mock("../pi-ai-contract.js", () => createPiAiStreamSimpleMock());
 
 beforeEach(() => {
   extraParamsTesting.setProviderRuntimeDepsForTest({

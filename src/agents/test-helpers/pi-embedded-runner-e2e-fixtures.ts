@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AssistantMessage } from "../pi-ai-contract.js";
 import { buildAttemptReplayMetadata } from "../pi-embedded-runner/run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "../pi-embedded-runner/run/types.js";
 

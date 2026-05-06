@@ -9,7 +9,8 @@ import { truncateUtf16Safe } from "../utils.js";
 
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
 
-export type { AgentMessage } from "@mariozechner/pi-agent-core";
+export type { AgentMessage } from "../agents/agent-core-contract.js";
+export type { ModelRegistry } from "../agents/model-registry-contract.js";
 export type {
   AgentHarness,
   AgentHarnessAttemptParams,
@@ -119,6 +120,17 @@ export {
 } from "../agents/session-write-lock.js";
 export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+export {
+  buildSessionContext,
+  CURRENT_SESSION_VERSION,
+  migrateSessionEntries,
+  parseSessionEntries,
+  SessionManager,
+  type AgentSession,
+  type ExtensionAPI,
+  type ExtensionContext,
+  type SessionEntry,
+} from "../agents/transcript/session-transcript-contract.js";
 export {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,

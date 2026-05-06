@@ -137,7 +137,7 @@ vi.mock("../plugins/tools.js", () => ({
   getPluginToolMeta: () => undefined,
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("./pi-coding-agent-contract.js", () => ({
   AuthStorage: vi.fn(),
   CURRENT_SESSION_VERSION: 1,
   ModelRegistry: vi.fn(),

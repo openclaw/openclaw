@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { ActionGate, DiscordActionConfig, OpenClawConfig } from "../runtime-api.js";
 import { handleDiscordMessageManagementAction } from "./runtime.messaging.messages.js";
 import { handleDiscordReactionMessagingAction } from "./runtime.messaging.reactions.js";
@@ -15,7 +15,7 @@ export async function handleDiscordMessagingAction(
   isActionEnabled: ActionGate<DiscordActionConfig>,
   cfg: OpenClawConfig,
   options?: DiscordMessagingActionOptions,
-): Promise<AgentToolResult<unknown>> {
+): Promise<AgentToolResult> {
   if (!cfg) {
     throw new Error("Discord messaging actions require a resolved runtime config.");
   }

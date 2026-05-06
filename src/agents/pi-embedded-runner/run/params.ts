@@ -1,5 +1,3 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ImageContent } from "@mariozechner/pi-ai";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
@@ -8,9 +6,12 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
+import type { AgentMessage } from "../../agent-core-contract.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
+import type { AgentFilesystem } from "../../filesystem/agent-filesystem.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
+import type { ImageContent } from "../../pi-ai-contract.js";
 import type { BlockReplyPayload } from "../../pi-embedded-payloads.js";
 import type {
   BlockReplyChunking,
@@ -117,6 +118,12 @@ export type RunEmbeddedPiAgentParams = {
   clientTools?: ClientToolDefinition[];
   /** Disable built-in tools for this run (LLM-only mode). */
   disableTools?: boolean;
+  /**
+   * OpenClaw-owned filesystem capabilities for this run. Worker-backed runs
+   * inject this from the runtime context; inline runs can omit it and use the
+   * legacy disk-backed compatibility paths.
+   */
+  agentFilesystem?: AgentFilesystem;
   provider?: string;
   model?: string;
   /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */

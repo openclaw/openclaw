@@ -1,6 +1,6 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { estimateTokens } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "../../agent-core-contract.js";
 import { SAFETY_MARGIN, estimateMessagesTokens } from "../../compaction.js";
+import { estimateTokens } from "../../pi-coding-agent-contract.js";
 import {
   MIN_PROMPT_BUDGET_RATIO,
   MIN_PROMPT_BUDGET_TOKENS,

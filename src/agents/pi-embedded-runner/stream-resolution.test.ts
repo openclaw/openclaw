@@ -1,6 +1,6 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
+import { streamSimple } from "../pi-ai-contract.js";
 import * as providerTransportStream from "../provider-transport-stream.js";
 import {
   describeEmbeddedAgentStreamStrategy,

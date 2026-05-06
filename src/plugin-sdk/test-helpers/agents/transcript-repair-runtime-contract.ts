@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "../../../agents/agent-core-contract.js";
 
 export const QUEUED_USER_MESSAGE_MARKER =
   "[Queued user message that arrived while the previous turn was still active]";

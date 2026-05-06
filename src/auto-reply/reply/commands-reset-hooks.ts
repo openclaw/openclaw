@@ -1,5 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  exportSqliteSessionTranscriptJsonl,
+  hasSqliteSessionTranscriptEvents,
+} from "../../config/sessions/transcript-store.sqlite.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -48,9 +52,59 @@ async function findLatestArchivedTranscript(sessionFile: string): Promise<string
   }
 }
 
-async function loadBeforeResetTranscript(params: {
+type BeforeResetTranscriptScope = {
+  agentId?: string;
   sessionFile?: string;
+  sessionId?: string;
+};
+
+function hasScopedSqliteTranscriptEvents(
+  params: BeforeResetTranscriptScope,
+): params is BeforeResetTranscriptScope & { agentId: string; sessionId: string } {
+  if (!params.agentId?.trim() || !params.sessionId?.trim()) {
+    return false;
+  }
+  try {
+    return hasSqliteSessionTranscriptEvents({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+    });
+  } catch {
+    return false;
+  }
+}
+
+function loadScopedBeforeResetTranscript(
+  params: BeforeResetTranscriptScope,
+): { sessionFile?: string; messages: unknown[] } | undefined {
+  if (!hasScopedSqliteTranscriptEvents(params)) {
+    return undefined;
+  }
+  try {
+    return {
+      sessionFile: params.sessionFile,
+      messages: parseTranscriptMessages(
+        exportSqliteSessionTranscriptJsonl({
+          agentId: params.agentId,
+          sessionId: params.sessionId,
+        }),
+      ),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function loadBeforeResetTranscript(params: {
+  agentId?: string;
+  sessionFile?: string;
+  sessionId?: string;
 }): Promise<{ sessionFile?: string; messages: unknown[] }> {
+  const scopedTranscript = loadScopedBeforeResetTranscript(params);
+  if (scopedTranscript) {
+    return scopedTranscript;
+  }
+
   const sessionFile = params.sessionFile;
   if (!sessionFile) {
     logVerbose("before_reset: no session file available, firing hook with empty messages");
@@ -142,16 +196,19 @@ export async function emitResetCommandHooks(params: {
   const hookRunner = getGlobalHookRunner();
   if (hookRunner?.hasHooks("before_reset")) {
     const prevEntry = params.previousSessionEntry;
+    const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
     void (async () => {
       const { sessionFile, messages } = await loadBeforeResetTranscript({
+        agentId,
         sessionFile: prevEntry?.sessionFile,
+        sessionId: prevEntry?.sessionId,
       });
 
       try {
         await hookRunner.runBeforeReset(
           { sessionFile, messages, reason: params.action },
           {
-            agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+            agentId,
             sessionKey: params.sessionKey,
             sessionId: prevEntry?.sessionId,
             workspaceDir: params.workspaceDir,

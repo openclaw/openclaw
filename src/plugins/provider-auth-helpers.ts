@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { buildAuthProfileId } from "../agents/auth-profiles/identity.js";
 import { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
+import type { OAuthCredentials } from "../agents/pi-ai-contract.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

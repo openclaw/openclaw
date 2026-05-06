@@ -1,7 +1,7 @@
-import { completeSimple, getModel } from "@mariozechner/pi-ai";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
+import { completeSimple, getModel } from "./pi-ai-contract.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 const GEMINI_KEY = process.env.GEMINI_API_KEY ?? "";

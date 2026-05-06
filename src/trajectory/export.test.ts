@@ -1,14 +1,17 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { Message, Usage } from "@mariozechner/pi-ai";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { writeSqliteToolArtifact } from "../agents/filesystem/tool-artifact-store.sqlite.js";
+import type { Message, Usage } from "../agents/pi-ai-contract.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
 import { TRAJECTORY_RUNTIME_FILE_MAX_BYTES, resolveTrajectoryPointerFilePath } from "./paths.js";
 import type { TrajectoryEvent } from "./types.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trajectory-"));
 let tempDirId = 0;
+const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
 
 function makeTempDir(): string {
   const dir = path.join(tempRoot, `case-${tempDirId++}`);
@@ -184,6 +187,15 @@ afterAll(() => {
   fs.rmSync(tempRoot, { recursive: true, force: true });
 });
 
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+  if (originalOpenClawStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
+  }
+});
+
 describe("exportTrajectoryBundle", () => {
   it("sanitizes session ids in default export directory names", async () => {
     const outputDir = resolveDefaultTrajectoryExportDir({
@@ -263,6 +275,66 @@ describe("exportTrajectoryBundle", () => {
     expect(exportedEvents.find((event) => event.type === "user.message")?.ts).toBe(
       "2026-04-01T05:46:40.000Z",
     );
+  });
+
+  it("includes run-scoped SQLite tool artifact metadata without embedding blobs", async () => {
+    const tmpDir = makeTempDir();
+    process.env.OPENCLAW_STATE_DIR = path.join(tmpDir, "state");
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    writeSimpleSessionFile(sessionFile);
+    const event: TrajectoryEvent = {
+      traceSchema: "openclaw-trajectory",
+      schemaVersion: 1,
+      traceId: "session-1",
+      source: "runtime",
+      type: "trace.artifacts",
+      ts: "2026-04-01T05:46:42.000Z",
+      seq: 1,
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      runId: "run-1",
+      data: { finalStatus: "success" },
+    };
+    fs.writeFileSync(runtimeFile, `${JSON.stringify(event)}\n`, "utf8");
+    writeSqliteToolArtifact({
+      agentId: "main",
+      runId: "run-1",
+      artifactId: "image_generate-call-1",
+      kind: "tool/media-manifest",
+      metadata: {
+        toolName: "image_generate",
+        mediaUrls: [path.join(tmpDir, "generated.png")],
+      },
+      blob: "large duplicated payload",
+    });
+
+    await exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      runtimeFile,
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      workspaceDir: tmpDir,
+    });
+
+    const artifacts = JSON.parse(fs.readFileSync(path.join(outputDir, "artifacts.json"), "utf8"));
+    expect(artifacts.toolArtifacts).toEqual([
+      expect.objectContaining({
+        agentId: "main",
+        runId: "run-1",
+        artifactId: "image_generate-call-1",
+        kind: "tool/media-manifest",
+        metadata: {
+          toolName: "image_generate",
+          mediaUrls: ["$WORKSPACE_DIR/generated.png"],
+        },
+        size: "large duplicated payload".length,
+      }),
+    ]);
+    expect(JSON.stringify(artifacts)).not.toContain("large duplicated payload");
+    expect(JSON.stringify(artifacts)).not.toContain("blobBase64");
   });
 
   it("rejects oversized runtime trajectory files", async () => {

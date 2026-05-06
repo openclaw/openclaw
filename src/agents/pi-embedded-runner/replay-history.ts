@@ -1,5 +1,3 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
@@ -16,6 +14,7 @@ import {
   hasInterSessionUserProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
+import type { AgentMessage } from "../agent-core-contract.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
@@ -37,6 +36,7 @@ import {
   resolveTranscriptPolicy,
   shouldAllowProviderOwnedThinkingReplay,
 } from "../transcript-policy.js";
+import type { SessionManager } from "../transcript/session-manager-contract.js";
 import {
   makeZeroUsageSnapshot,
   normalizeUsage,

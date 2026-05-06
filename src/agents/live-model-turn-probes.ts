@@ -1,4 +1,4 @@
-import type { Api, AssistantMessage, Context, Model } from "@mariozechner/pi-ai";
+import type { Api, AssistantMessage, Context, Model } from "./pi-ai-contract.js";
 
 export const LIVE_MODEL_FILE_PROBE_TOKEN = "opal";
 

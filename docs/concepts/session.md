@@ -92,10 +92,10 @@ sessions should expire on a timer.
 All session state is owned by the **gateway**. UI clients query the gateway for
 session data.
 
-- **Store:** `~/.openclaw/agents/<agentId>/sessions/sessions.json`
+- **Store:** `~/.openclaw/state/openclaw.sqlite` by default; legacy/custom JSON stores use `~/.openclaw/agents/<agentId>/sessions/sessions.json`
 - **Transcripts:** `~/.openclaw/agents/<agentId>/sessions/<sessionId>.jsonl`
 
-`sessions.json` keeps separate lifecycle timestamps:
+The session store keeps separate lifecycle timestamps:
 
 - `sessionStartedAt`: when the current `sessionId` began; daily reset uses this.
 - `lastInteractionAt`: last user/channel interaction that extends idle lifetime.

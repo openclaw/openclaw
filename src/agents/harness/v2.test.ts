@@ -1,4 +1,3 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -6,6 +5,7 @@ import {
   type DiagnosticEventMetadata,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
+import type { Api, Model } from "../pi-ai-contract.js";
 import type { EmbeddedRunAttemptResult } from "../pi-embedded-runner/run/types.js";
 import type { AgentHarness, AgentHarnessAttemptParams } from "./types.js";
 import type { AgentHarnessV2 } from "./v2.js";

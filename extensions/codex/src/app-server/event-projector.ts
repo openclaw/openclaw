@@ -1,4 +1,3 @@
-import type { AssistantMessage, Usage } from "@mariozechner/pi-ai";
 import {
   classifyAgentHarnessTerminalOutcome,
   embeddedAgentLog,
@@ -18,6 +17,7 @@ import {
   type MessagingToolSend,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/provider-ai";
 import { readCodexTurn } from "./protocol-validators.js";
 import {
   isJsonObject,

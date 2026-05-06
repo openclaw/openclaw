@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { CURRENT_SESSION_VERSION } from "../transcript/session-transcript-contract.js";
 import {
   resetCliCompactionTestDeps,
   runCliTurnCompactionLifecycle,
@@ -55,15 +55,21 @@ async function writeSessionFile(params: { sessionFile: string; sessionId: string
       }),
       JSON.stringify({
         type: "message",
+        id: "user-1",
+        parentId: null,
         message: { role: "user", content: "old ask", timestamp: 1 },
+        timestamp: new Date(1).toISOString(),
       }),
       JSON.stringify({
         type: "message",
+        id: "assistant-1",
+        parentId: "user-1",
         message: {
           role: "assistant",
           content: [{ type: "text", text: "old answer" }],
           timestamp: 2,
         },
+        timestamp: new Date(2).toISOString(),
       }),
       "",
     ].join("\n"),

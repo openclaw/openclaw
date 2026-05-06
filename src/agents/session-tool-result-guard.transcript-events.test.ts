@@ -1,11 +1,11 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   onSessionTranscriptUpdate,
   type SessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
+import { SessionManager } from "./transcript/session-transcript-contract.js";
 
 const listeners: Array<() => void> = [];
 

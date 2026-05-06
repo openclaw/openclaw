@@ -110,6 +110,14 @@
       "types": "./dist/plugin-sdk/provider-setup.d.ts",
       "default": "./dist/plugin-sdk/provider-setup.js"
     },
+    "./plugin-sdk/provider-ai": {
+      "types": "./dist/plugin-sdk/provider-ai.d.ts",
+      "default": "./dist/plugin-sdk/provider-ai.js"
+    },
+    "./plugin-sdk/provider-ai-oauth": {
+      "types": "./dist/plugin-sdk/provider-ai-oauth.d.ts",
+      "default": "./dist/plugin-sdk/provider-ai-oauth.js"
+    },
     "./plugin-sdk/sandbox": {
       "types": "./dist/plugin-sdk/sandbox.d.ts",
       "default": "./dist/plugin-sdk/sandbox.js"
@@ -413,6 +421,10 @@
     "./plugin-sdk/text-chunking": {
       "types": "./dist/plugin-sdk/text-chunking.d.ts",
       "default": "./dist/plugin-sdk/text-chunking.js"
+    },
+    "./plugin-sdk/agent-core": {
+      "types": "./dist/plugin-sdk/agent-core.d.ts",
+      "default": "./dist/plugin-sdk/agent-core.js"
     },
     "./plugin-sdk/agent-runtime": {
       "types": "./dist/plugin-sdk/agent-runtime.d.ts",

@@ -41,8 +41,10 @@ type ResolveModelWithRegistryTestParams = {
   modelId: string;
 };
 
-vi.mock("@mariozechner/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
+vi.mock("../agents/pi-ai-contract.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/pi-ai-contract.js")>(
+    "../agents/pi-ai-contract.js",
+  );
   return {
     ...actual,
     complete: completeMock,

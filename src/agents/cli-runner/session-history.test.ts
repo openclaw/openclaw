@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CURRENT_SESSION_VERSION } from "../transcript/session-transcript-contract.js";
 import {
   buildCliSessionHistoryPrompt,
   loadCliSessionHistoryMessages,

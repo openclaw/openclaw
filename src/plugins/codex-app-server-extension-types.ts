@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "../agents/agent-core-contract.js";
 
 export type CodexAppServerToolResultEvent = {
   threadId: string;
@@ -6,7 +6,7 @@ export type CodexAppServerToolResultEvent = {
   toolCallId: string;
   toolName: string;
   args: Record<string, unknown>;
-  result: AgentToolResult<unknown>;
+  result: AgentToolResult;
 };
 
 export type CodexAppServerExtensionContext = {
@@ -17,7 +17,7 @@ export type CodexAppServerExtensionContext = {
 };
 
 export type CodexAppServerToolResultHandlerResult = {
-  result: AgentToolResult<unknown>;
+  result: AgentToolResult;
 };
 
 export type CodexAppServerExtensionRuntime = {

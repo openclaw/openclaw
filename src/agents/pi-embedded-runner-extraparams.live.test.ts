@@ -1,8 +1,8 @@
-import type { Model } from "@mariozechner/pi-ai";
-import { getModel, streamSimple } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
+import type { Model } from "./pi-ai-contract.js";
+import { getModel, streamSimple } from "./pi-ai-contract.js";
 import { applyExtraParamsToAgent } from "./pi-embedded-runner.js";
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";

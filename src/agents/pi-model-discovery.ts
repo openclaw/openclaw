@@ -1,10 +1,4 @@
 import path from "node:path";
-import type { Api, Model } from "@mariozechner/pi-ai";
-import * as PiCodingAgent from "@mariozechner/pi-coding-agent";
-import type {
-  AuthStorage as PiAuthStorage,
-  ModelRegistry as PiModelRegistry,
-} from "@mariozechner/pi-coding-agent";
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import {
   applyProviderResolvedModelCompatWithPlugins,
@@ -12,12 +6,18 @@ import {
   normalizeProviderResolvedModelWithPlugin,
 } from "../plugins/provider-runtime.js";
 import { isRecord } from "../utils.js";
+import type { Api, Model } from "./pi-ai-contract.js";
 import type { PiCredentialMap } from "./pi-auth-credentials.js";
 import {
   resolvePiCredentialsForDiscovery,
   scrubLegacyStaticAuthJsonEntriesForDiscovery,
   type DiscoverAuthStorageOptions,
 } from "./pi-auth-discovery.js";
+import type {
+  AuthStorage as PiAuthStorage,
+  ModelRegistry as PiModelRegistry,
+} from "./pi-coding-agent-contract.js";
+import * as PiCodingAgent from "./pi-coding-agent-contract.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 const PiAuthStorageClass = PiCodingAgent.AuthStorage;
@@ -182,9 +182,9 @@ function createAuthStorage(AuthStorageLike: unknown, path: string, creds: PiCred
     fromStorage?: (storage: unknown) => unknown;
   };
   if (typeof withFromStorage.fromStorage === "function") {
-    const backendCtor = (
-      PiCodingAgent as { InMemoryAuthStorageBackend?: new () => InMemoryAuthStorageBackendLike }
-    ).InMemoryAuthStorageBackend;
+    const backendCtor = Reflect.get(PiCodingAgent, "InMemoryAuthStorageBackend") as
+      | (new () => InMemoryAuthStorageBackendLike)
+      | undefined;
     const backend =
       typeof backendCtor === "function"
         ? new backendCtor()

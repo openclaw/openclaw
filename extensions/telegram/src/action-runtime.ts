@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import {
   jsonResult,
@@ -229,7 +229,7 @@ export async function handleTelegramAction(
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
   },
-): Promise<AgentToolResult<unknown>> {
+): Promise<AgentToolResult> {
   const { action, accountId } = {
     action: normalizeTelegramActionName(readStringParam(params, "action", { required: true })),
     accountId: readStringParam(params, "accountId"),

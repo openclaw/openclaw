@@ -193,6 +193,8 @@ describe("registerStatusHealthSessionsCommands", () => {
       "120",
       "--limit",
       "25",
+      "--export-store",
+      "/tmp/exported-sessions.json",
     ]);
 
     expect(setVerbose).toHaveBeenCalledWith(true);
@@ -202,6 +204,7 @@ describe("registerStatusHealthSessionsCommands", () => {
         store: "/tmp/sessions.json",
         active: "120",
         limit: "25",
+        exportStore: "/tmp/exported-sessions.json",
       }),
       runtime,
     );

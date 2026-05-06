@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "../agent-core-contract.js";
 import type { ClientToolDefinition } from "./run/params.js";
 
 /**

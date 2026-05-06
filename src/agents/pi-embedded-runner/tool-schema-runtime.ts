@@ -1,4 +1,3 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
@@ -7,6 +6,7 @@ import {
   normalizeProviderToolSchemasWithPlugin,
 } from "../../plugins/provider-runtime.js";
 import type { ProviderToolSchemaDiagnostic } from "../../plugins/types.js";
+import type { AgentTool } from "../agent-core-contract.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { log } from "./logger.js";
 

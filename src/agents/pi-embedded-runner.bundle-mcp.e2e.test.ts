@@ -76,8 +76,8 @@ vi.mock("./pi-bundle-mcp-tools.js", () => ({
   },
 }));
 
-vi.mock("@mariozechner/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
+vi.mock("./pi-ai-contract.js", async () => {
+  const actual = await vi.importActual<typeof import("./pi-ai-contract.js")>("./pi-ai-contract.js");
 
   const buildToolUseMessage = (model: { api: string; provider: string; id: string }) => ({
     role: "assistant" as const,

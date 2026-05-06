@@ -1,6 +1,6 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
+import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
 
 type SessionStore = Record<string, Record<string, unknown>>;
 
@@ -10,11 +10,7 @@ function resolveSubagentSessionStorePath(stateDir: string, agentId: string): str
 
 export async function readSubagentSessionStore(storePath: string): Promise<SessionStore> {
   try {
-    const raw = await fs.readFile(storePath, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as SessionStore;
-    }
+    return loadSessionStore(storePath) as SessionStore;
   } catch {
     // ignore
   }
@@ -31,17 +27,20 @@ export async function writeSubagentSessionEntry(params: {
   defaultSessionId: string;
 }): Promise<string> {
   const storePath = resolveSubagentSessionStorePath(params.stateDir, params.agentId);
-  const store = await readSubagentSessionStore(storePath);
-  store[params.sessionKey] = {
-    ...store[params.sessionKey],
-    sessionId: params.sessionId ?? params.defaultSessionId,
-    updatedAt: params.updatedAt ?? Date.now(),
-    ...(typeof params.abortedLastRun === "boolean"
-      ? { abortedLastRun: params.abortedLastRun }
-      : {}),
-  };
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, `${JSON.stringify(store)}\n`, "utf8");
+  await updateSessionStore(
+    storePath,
+    (store) => {
+      store[params.sessionKey] = {
+        ...store[params.sessionKey],
+        sessionId: params.sessionId ?? params.defaultSessionId,
+        updatedAt: params.updatedAt ?? Date.now(),
+        ...(typeof params.abortedLastRun === "boolean"
+          ? { abortedLastRun: params.abortedLastRun }
+          : {}),
+      };
+    },
+    { skipMaintenance: true },
+  );
   return storePath;
 }
 
@@ -51,10 +50,13 @@ export async function removeSubagentSessionEntry(params: {
   agentId: string;
 }): Promise<string> {
   const storePath = resolveSubagentSessionStorePath(params.stateDir, params.agentId);
-  const store = await readSubagentSessionStore(storePath);
-  delete store[params.sessionKey];
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, `${JSON.stringify(store)}\n`, "utf8");
+  await updateSessionStore(
+    storePath,
+    (store) => {
+      delete store[params.sessionKey];
+    },
+    { skipMaintenance: true },
+  );
   return storePath;
 }
 

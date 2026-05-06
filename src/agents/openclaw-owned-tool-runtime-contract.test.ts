@@ -1,5 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import {
   installOpenClawOwnedToolHooks,
   resetOpenClawOwnedToolHooks,
@@ -18,6 +17,7 @@ import type {
 import { toToolDefinitions } from "./pi-tool-definition-adapter.js";
 import { createBaseToolHandlerState } from "./pi-tool-handler-state.test-helpers.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
+import type { ExtensionContext } from "./transcript/session-transcript-contract.js";
 
 function createContractTool(name: string, execute: AgentTool["execute"]): AgentTool {
   return {

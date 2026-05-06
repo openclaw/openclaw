@@ -1,11 +1,11 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
 import {
   createHtmlEntityToolCallArgumentDecodingWrapper,
   decodeHtmlEntitiesInObject,
 } from "../../../plugin-sdk/provider-stream-shared.js";
 import { extractBalancedJsonPrefix } from "../../../shared/balanced-json.js";
+import type { StreamFn } from "../../agent-core-contract.js";
 import { normalizeProviderId } from "../../model-selection.js";
+import { streamSimple } from "../../pi-ai-contract.js";
 import { log } from "../logger.js";
 import { wrapStreamObjectEvents } from "./stream-wrapper.js";
 

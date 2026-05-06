@@ -1,6 +1,6 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import type { ModelRegistry } from "../../agents/model-registry-contract.js";
 import { parseModelRef } from "../../agents/model-selection.js";
+import type { Api, Model } from "../../agents/pi-ai-contract.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";

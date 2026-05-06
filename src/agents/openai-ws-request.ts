@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { readStringValue } from "../shared/string-coerce.js";
+import type { StreamFn } from "./agent-core-contract.js";
 import { mapOpenAIReasoningEffortForModel } from "./openai-reasoning-compat.js";
 import { normalizeOpenAIReasoningEffort } from "./openai-reasoning-effort.js";
 import { resolveOpenAITextVerbosity } from "./openai-text-verbosity.js";
