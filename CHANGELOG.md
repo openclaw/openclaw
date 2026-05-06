@@ -116,6 +116,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Telegram/network: add opt-in `OPENCLAW_TELEGRAM_FORCE_IPV4` env override that pins every Telegram dispatcher to IPv4 from startup (`forceIpv4: true`, `autoSelectFamily: false`, `dnsResultOrder: ipv4first`) instead of waiting for the sticky-fallback path to engage after eligible failures. Useful on hosts where IPv6 is broken or partially routed and the dual-stack happy-eyeballs attempt sits long enough to wedge the long-poll dispatcher pool. Default behavior unchanged. (#78438) Thanks @glasswings-lang.
 - Doctor/OpenAI Codex: revert the 2026.5.5 `doctor --fix` repair that rewrote valid `openai-codex/*` ChatGPT/Codex OAuth routes to `openai/*`, which could break OAuth-only GPT-5.5 setups or accidentally move users onto the OpenAI API-key route. If 2026.5.5 already changed your default model, run `openclaw models set openai-codex/gpt-5.5 && openclaw config validate` to switch the default agent back to the Codex OAuth PI route. Fixes #78407.
 - Telegram/Codex: generate DM topic labels with Codex-compatible simple-completion requests so auto-created private topics can be renamed instead of staying `New Chat`.
 - Plugins/runtime fetch: drop third-party symbol metadata from plain request header dictionaries before passing them into native `fetch` or `Headers`, so SDK and guarded/proxy fetch paths do not reject otherwise valid plugin requests. Fixes #77846. Thanks @shakkernerd.
