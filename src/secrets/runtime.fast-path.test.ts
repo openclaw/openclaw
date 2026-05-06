@@ -6,8 +6,18 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshot } from "./runtime.js";
 import { asConfig } from "./runtime.test-support.js";
 
+type ResolveRuntimeWebToolsTestParams = {
+  sourceConfig: {
+    tools?: {
+      web?: {
+        search?: { provider?: string };
+      };
+    };
+  };
+};
+
 const { resolveRuntimeWebToolsMock, runtimePrepareImportMock } = vi.hoisted(() => ({
-  resolveRuntimeWebToolsMock: vi.fn(async () => ({
+  resolveRuntimeWebToolsMock: vi.fn(async (_params?: ResolveRuntimeWebToolsTestParams) => ({
     search: { providerSource: "none", diagnostics: [] },
     fetch: { providerSource: "none", diagnostics: [] },
     diagnostics: [],
@@ -125,6 +135,58 @@ describe("secrets runtime fast path", () => {
     });
 
     expect(runtimePrepareImportMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves active web tool source surface when refresh source omits it", async () => {
+    resolveRuntimeWebToolsMock.mockImplementation(async (params) => {
+      const provider = params?.sourceConfig.tools?.web?.search?.provider;
+      return {
+        search: {
+          providerConfigured: provider,
+          providerSource: provider ? "configured" : "none",
+          selectedProvider: provider,
+          diagnostics: [],
+        },
+        fetch: { providerSource: "none", diagnostics: [] },
+        diagnostics: [],
+      };
+    });
+    const {
+      activateSecretsRuntimeSnapshot,
+      getActiveSecretsRuntimeSnapshot,
+      prepareSecretsRuntimeSnapshot,
+    } = await import("./runtime.js");
+    const { getRuntimeConfigSnapshotRefreshHandler } =
+      await import("../config/runtime-snapshot.js");
+
+    const initial = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            search: { provider: "brave" },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: emptyAuthStore,
+    });
+    activateSecretsRuntimeSnapshot(initial);
+    resolveRuntimeWebToolsMock.mockClear();
+
+    const refreshed = await getRuntimeConfigSnapshotRefreshHandler()?.refresh({
+      sourceConfig: asConfig({
+        gateway: {
+          auth: { mode: "token", token: "rewritten-token" },
+        },
+      }),
+    });
+
+    expect(refreshed).toBe(true);
+    expect(resolveRuntimeWebToolsMock).toHaveBeenCalledTimes(1);
+    const refreshCall = resolveRuntimeWebToolsMock.mock.calls[0]?.[0];
+    expect(refreshCall?.sourceConfig.tools?.web?.search).toEqual({ provider: "brave" });
+    expect(getActiveSecretsRuntimeSnapshot()?.webTools.search.providerConfigured).toBe("brave");
   });
 
   it("uses the resolver path when an auth profile store contains a SecretRef", async () => {
