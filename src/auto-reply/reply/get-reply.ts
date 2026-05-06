@@ -642,13 +642,20 @@ export async function getReplyFromConfig(
     hasSessionModelOverride && !staleHeartbeatAutoFallbackOverride;
   if (
     !hasResolvedHeartbeatModelOverride &&
-    !hasAppliedImageModelOverride &&
     !hasEffectiveSessionModelOverride &&
     resolvedChannelModelOverride
   ) {
-    provider = resolvedChannelModelOverride.ref.provider;
-    model = resolvedChannelModelOverride.ref.model;
-  }
+    if (hasAppliedImageModelOverride) {
+      // Channel model override is blocked to preserve the vision-capable model
+      // selected for image processing. This prevents a user-configured text-only
+      // model from silently clobbering the image model override.
+      defaultRuntime.log?.(
+        `[image-model-switch] Channel model override for ${resolvedChannelModelOverride.ref.provider}/${resolvedChannelModelOverride.ref.model} blocked to preserve image model ${provider}/${model}`,
+      );
+    } else {
+      provider = resolvedChannelModelOverride.ref.provider;
+      model = resolvedChannelModelOverride.ref.model;
+    }
   }
 
   if (

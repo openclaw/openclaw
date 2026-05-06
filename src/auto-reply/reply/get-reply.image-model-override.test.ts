@@ -22,6 +22,13 @@ vi.mock("./message-preprocess-hooks.js", () => ({
   emitPreAgentMessageHooks: vi.fn(() => undefined),
 }));
 
+const channelOverrideMocks = vi.hoisted(() => ({
+  resolveChannelModelOverride: vi.fn(() => undefined),
+}));
+vi.mock("../../channels/model-overrides.js", () => ({
+  resolveChannelModelOverride: channelOverrideMocks.resolveChannelModelOverride,
+}));
+
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
 let defaultRuntime: typeof import("../../runtime.js").defaultRuntime;
 
@@ -101,6 +108,7 @@ describe("getReplyFromConfig image model override", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    defaultRuntime.log.mockClear();
   });
 
   it("applies modelOverride when no allowlist is configured", async () => {
@@ -301,5 +309,103 @@ describe("getReplyFromConfig image model override", () => {
         hasAppliedImageModelOverride: true,
       }),
     );
+  });
+
+  it("does not let stored session override clobber image model override", async () => {
+    modelSelectionMockFns.resolveModelRefFromString.mockImplementation(
+      (params: { raw: string }) => {
+        if (params.raw === "openai/gpt-4o") {
+          return { ref: { provider: "openai", model: "gpt-4o" }, alias: false };
+        }
+        return null;
+      },
+    );
+
+    // Simulate a session with a previously stored model override
+    mocks.initSessionState.mockReset();
+    mocks.initSessionState.mockResolvedValue({
+      sessionCtx: {},
+      sessionEntry: {
+        modelOverride: "anthropic/claude-sonnet-4-6",
+      },
+      previousSessionEntry: {},
+      sessionStore: {},
+      sessionKey: "agent:main:telegram:123",
+      sessionId: "session-1",
+      isNewSession: false,
+      resetTriggered: false,
+      systemSent: false,
+      abortedLastRun: false,
+      storePath: "/tmp/sessions.json",
+      sessionScope: "per-chat",
+      groupResolution: undefined,
+      isGroup: false,
+      triggerBodyNormalized: "",
+      bodyStripped: "",
+    });
+
+    await getReplyFromConfig(buildCtx(), {
+      modelOverride: "openai/gpt-4o",
+    });
+
+    // Image model override should NOT be clobbered by stored session override
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-4o",
+        hasAppliedImageModelOverride: true,
+      }),
+    );
+  });
+
+  it("keeps image model override when channel model override is configured", async () => {
+    modelSelectionMockFns.resolveModelRefFromString.mockImplementation(
+      (params: { raw: string }) => {
+        if (params.raw === "openai/gpt-4o") {
+          return { ref: { provider: "openai", model: "gpt-4o" }, alias: false };
+        }
+        if (params.raw === "anthropic/claude-sonnet-4-6") {
+          return { ref: { provider: "anthropic", model: "claude-sonnet-4-6" }, alias: false };
+        }
+        return null;
+      },
+    );
+
+    // Set up channel override mock to return a channel model
+    channelOverrideMocks.resolveChannelModelOverride.mockReturnValue({
+      channel: "telegram",
+      model: "anthropic/claude-sonnet-4-6",
+      matchKey: "telegram",
+    });
+
+    // Pass a config that has channels.modelByChannel so the code path is triggered.
+    // The configOverride is merged with the runtime config via applyMergePatch.
+    const cfgWithChannel = {
+      channels: {
+        modelByChannel: {
+          telegram: { model: "anthropic/claude-sonnet-4-6" },
+        },
+      },
+    } as OpenClawConfig;
+
+    await getReplyFromConfig(
+      buildCtx(),
+      {
+        modelOverride: "openai/gpt-4o",
+      },
+      cfgWithChannel,
+    );
+
+    // Image model override should NOT be clobbered by channel model override
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-4o",
+        hasAppliedImageModelOverride: true,
+      }),
+    );
+
+    // Reset mock for other tests
+    channelOverrideMocks.resolveChannelModelOverride.mockReturnValue(undefined);
   });
 });
