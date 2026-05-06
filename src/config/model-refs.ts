@@ -17,7 +17,10 @@ export const AGENT_MODEL_CONFIG_KEYS = [
 
 export function collectConfiguredModelRefs(
   config: unknown,
-  options: { includeChannelModelOverrides?: boolean } = {},
+  options: {
+    includeAgentModelCatalogEntries?: boolean;
+    includeChannelModelOverrides?: boolean;
+  } = {},
 ): ConfiguredModelRef[] {
   const refs: ConfiguredModelRef[] = [];
   const pushModelRef = (path: string, value: unknown) => {
@@ -62,7 +65,7 @@ export function collectConfiguredModelRefs(
         isRecord(agent.compaction.memoryFlush) ? agent.compaction.memoryFlush.model : undefined,
       );
     }
-    if (isRecord(agent.models)) {
+    if (options.includeAgentModelCatalogEntries !== false && isRecord(agent.models)) {
       for (const modelRef of Object.keys(agent.models)) {
         pushModelRef(`${path}.models.${modelRef}`, modelRef);
       }
