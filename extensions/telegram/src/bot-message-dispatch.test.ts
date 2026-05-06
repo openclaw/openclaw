@@ -934,7 +934,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Working…\n• `command: pnpm test extensions/telegram`\n• `reasoning`",
+      "Cracking...\n`🛠️ Bash: pnpm test extensions/telegram`\n• `Reasoning`",
     );
     expect(draftStream.update).toHaveBeenCalledTimes(2);
   });

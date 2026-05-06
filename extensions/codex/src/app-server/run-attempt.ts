@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   assembleHarnessContextEngine,
+  appendSessionTranscriptCustomEntry,
   bootstrapHarnessContextEngine,
   buildHarnessContextEngineRuntimeContext,
   buildHarnessContextEngineRuntimeContextFromUsage,
@@ -12,6 +13,8 @@ import {
   emitAgentEvent as emitGlobalAgentEvent,
   finalizeHarnessContextEngineTurn,
   formatErrorMessage,
+  FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+  hasCompletedBootstrapTurn,
   isActiveHarnessContextEngine,
   isSubagentSessionKey,
   normalizeAgentRuntimeTools,
@@ -20,6 +23,7 @@ import {
   resolveModelAuthMode,
   resolveOpenClawAgentDir,
   resolveSandboxContext,
+  resolveContextInjectionMode,
   resolveSessionAgentIds,
   resolveUserPath,
   runAgentHarnessAgentEndHook,
@@ -525,7 +529,7 @@ export async function runCodexAppServerAttempt(
     messages: historyMessages,
     ctx: hookContext,
   });
-  const workspaceBootstrapInstructions = await buildCodexWorkspaceBootstrapInstructions({
+  const workspaceBootstrap = await buildCodexWorkspaceBootstrapInstructions({
     params,
     resolvedWorkspace,
     effectiveWorkspace,
@@ -569,7 +573,7 @@ export async function runCodexAppServerAttempt(
         : undefined;
     const threadConfig = mergeCodexConfigInstructions(
       nativeHookRelayConfig,
-      workspaceBootstrapInstructions,
+      workspaceBootstrap.instructions,
     );
     ({ client, thread } = await withCodexStartupTimeout({
       timeoutMs: params.timeoutMs,
@@ -1202,6 +1206,21 @@ export async function runCodexAppServerAttempt(
       threadId: thread.threadId,
       turnId: activeTurnId,
     });
+    if (
+      shouldPersistCodexCompletedBootstrapTurn({
+        shouldRecordCompletedBootstrapTurn: workspaceBootstrap.shouldRecordCompletedBootstrapTurn,
+        promptError: finalPromptError,
+        aborted: finalAborted,
+        compactionOccurredThisAttempt: didCodexAttemptCompact(result),
+      })
+    ) {
+      await persistCodexCompletedBootstrapTurn({
+        sessionFile: params.sessionFile,
+        config: params.config,
+        runId: params.runId,
+        sessionId: params.sessionId,
+      });
+    }
     const terminalAssistantText = collectTerminalAssistantText(result);
     if (terminalAssistantText && !finalAborted && !finalPromptError) {
       emitCodexAppServerEvent(params, {
@@ -1770,8 +1789,22 @@ async function buildCodexWorkspaceBootstrapInstructions(params: {
   effectiveWorkspace: string;
   sessionKey: string;
   sessionAgentId: string;
-}): Promise<string | undefined> {
+}): Promise<{
+  instructions?: string;
+  shouldRecordCompletedBootstrapTurn: boolean;
+}> {
   try {
+    const contextInjectionMode = resolveContextInjectionMode(params.params.config);
+    if (contextInjectionMode === "never") {
+      return { shouldRecordCompletedBootstrapTurn: false };
+    }
+    if (
+      contextInjectionMode === "continuation-skip" &&
+      params.params.bootstrapContextRunKind !== "heartbeat" &&
+      (await hasCompletedBootstrapTurn(params.params.sessionFile))
+    ) {
+      return { shouldRecordCompletedBootstrapTurn: false };
+    }
     const { contextFiles } = await resolveBootstrapContextForRun({
       workspaceDir: params.resolvedWorkspace,
       config: params.params.config,
@@ -1782,18 +1815,68 @@ async function buildCodexWorkspaceBootstrapInstructions(params: {
       contextMode: params.params.bootstrapContextMode,
       runKind: params.params.bootstrapContextRunKind,
     });
-    return renderCodexWorkspaceBootstrapInstructions(
-      contextFiles.map((file) =>
-        remapCodexContextFilePath({
-          file,
-          sourceWorkspaceDir: params.resolvedWorkspace,
-          targetWorkspaceDir: params.effectiveWorkspace,
-        }),
+    const shouldRecordCompletedBootstrapTurn =
+      contextFiles.length > 0 &&
+      params.params.bootstrapContextMode !== "lightweight" &&
+      params.params.bootstrapContextRunKind !== "heartbeat";
+    return {
+      instructions: renderCodexWorkspaceBootstrapInstructions(
+        contextFiles.map((file) =>
+          remapCodexContextFilePath({
+            file,
+            sourceWorkspaceDir: params.resolvedWorkspace,
+            targetWorkspaceDir: params.effectiveWorkspace,
+          }),
+        ),
       ),
-    );
+      shouldRecordCompletedBootstrapTurn,
+    };
   } catch (error) {
     embeddedAgentLog.warn("failed to load codex workspace bootstrap instructions", { error });
-    return undefined;
+    return { shouldRecordCompletedBootstrapTurn: false };
+  }
+}
+
+function shouldPersistCodexCompletedBootstrapTurn(params: {
+  shouldRecordCompletedBootstrapTurn: boolean;
+  promptError: unknown;
+  aborted: boolean;
+  compactionOccurredThisAttempt: boolean;
+}): boolean {
+  return (
+    params.shouldRecordCompletedBootstrapTurn &&
+    !params.promptError &&
+    !params.aborted &&
+    !params.compactionOccurredThisAttempt
+  );
+}
+
+function didCodexAttemptCompact(result: EmbeddedRunAttemptResult): boolean {
+  const compactionCount = (result.itemLifecycle as { compactionCount?: unknown }).compactionCount;
+  return typeof compactionCount === "number" && compactionCount > 0;
+}
+
+async function persistCodexCompletedBootstrapTurn(params: {
+  sessionFile: string;
+  config: EmbeddedRunAttemptParams["config"];
+  runId: string;
+  sessionId: string;
+}): Promise<void> {
+  try {
+    await appendSessionTranscriptCustomEntry({
+      transcriptPath: params.sessionFile,
+      customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+      data: {
+        timestamp: Date.now(),
+        runId: params.runId,
+        sessionId: params.sessionId,
+      },
+      config: params.config,
+    });
+  } catch (entryErr) {
+    embeddedAgentLog.warn("failed to persist codex bootstrap completion entry", {
+      error: formatErrorMessage(entryErr),
+    });
   }
 }
 

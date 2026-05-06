@@ -62,6 +62,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Codex harness/Telegram: make Codex workspace bootstrap forwarding honor `agents.defaults.contextInjection: "continuation-skip"` and restore structured Telegram tool/reasoning draft progress after gateway rebuilds. (#75119)
 - Media/Windows: open saved attachment temp files read/write before fsync so Windows WebChat and `chat.send` media offloads no longer fail with EPERM during durability flush. (#76593) Thanks @qq230849622-a11y.
 - Codex plugin: mirror the experimental upstream app-server protocol and format generated TypeScript before drift checks, keeping OpenClaw's `experimentalApi` bridge compatible with latest Codex while preserving formatter gates.
 - Telegram/media: derive no-caption inbound media placeholders from saved MIME metadata instead of the Telegram `photo` shape, so non-image and mixed attachments no longer reach the model as `<media:image>`. Fixes #69793. Thanks @aspalagin.

@@ -38,6 +38,7 @@ import {
 } from "../format.js";
 import { resolveTelegramInteractiveTextFallback } from "../interactive-fallback.js";
 import { buildInlineKeyboard } from "../send.js";
+import { recordSentMessage } from "../sent-message-cache.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
   buildTelegramSendParams,
@@ -872,6 +873,9 @@ export async function deliverReplies(params: {
         runtime: params.runtime,
         firstDeliveredMessageId,
       });
+      if (firstDeliveredMessageId != null && progress.deliveredCount > deliveredCountBeforeReply) {
+        recordSentMessage(params.chatId, firstDeliveredMessageId, params.cfg, contentForSentHook);
+      }
 
       emitMessageSentHooks({
         hookRunner,

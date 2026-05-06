@@ -6,8 +6,14 @@ import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
 const TELEGRAM_SENT_MESSAGES_STATE_KEY = Symbol.for("openclaw.telegramSentMessagesState");
+const MAX_SENT_MESSAGE_BODY_CHARS = 4_000;
 
-type SentMessageStore = Map<string, Map<string, number>>;
+export type SentMessageMeta = {
+  timestamp: number;
+  body?: string;
+};
+
+type SentMessageStore = Map<string, Map<string, SentMessageMeta>>;
 
 type SentMessageBucket = {
   persistedPath: string;
@@ -32,7 +38,7 @@ function getSentMessageState(): SentMessageState {
 }
 
 function createSentMessageStore(): SentMessageStore {
-  return new Map<string, Map<string, number>>();
+  return new Map<string, Map<string, SentMessageMeta>>();
 }
 
 function resolveSentMessageStorePath(cfg?: Pick<OpenClawConfig, "session">): string {
@@ -42,11 +48,11 @@ function resolveSentMessageStorePath(cfg?: Pick<OpenClawConfig, "session">): str
 function cleanupExpired(
   store: SentMessageStore,
   scopeKey: string,
-  entry: Map<string, number>,
+  entry: Map<string, SentMessageMeta>,
   now: number,
 ): void {
-  for (const [id, timestamp] of entry) {
-    if (now - timestamp > TTL_MS) {
+  for (const [id, meta] of entry) {
+    if (now - meta.timestamp > TTL_MS) {
       entry.delete(id);
     }
   }
@@ -61,18 +67,29 @@ function readPersistedSentMessages(filePath: string): SentMessageStore {
   }
   try {
     const raw = fs.readFileSync(filePath, "utf-8");
-    const parsed = JSON.parse(raw) as Record<string, Record<string, number>>;
+    const parsed = JSON.parse(raw) as Record<
+      string,
+      Record<string, number | { timestamp?: unknown; body?: unknown }>
+    >;
     const now = Date.now();
     const store = createSentMessageStore();
     for (const [chatId, entry] of Object.entries(parsed)) {
-      const messages = new Map<string, number>();
-      for (const [messageId, timestamp] of Object.entries(entry)) {
+      const messages = new Map<string, SentMessageMeta>();
+      for (const [messageId, rawMeta] of Object.entries(entry)) {
+        const timestamp = typeof rawMeta === "number" ? rawMeta : rawMeta.timestamp;
+        const body =
+          typeof rawMeta === "object" && rawMeta && typeof rawMeta.body === "string"
+            ? rawMeta.body
+            : undefined;
         if (
           typeof timestamp === "number" &&
           Number.isFinite(timestamp) &&
           now - timestamp <= TTL_MS
         ) {
-          messages.set(messageId, timestamp);
+          messages.set(messageId, {
+            timestamp,
+            ...(body ? { body } : {}),
+          });
         }
       }
       if (messages.size > 0) {
@@ -108,7 +125,7 @@ function getSentMessages(cfg?: Pick<OpenClawConfig, "session">): SentMessageStor
 function persistSentMessages(bucket: SentMessageBucket): void {
   const { store, persistedPath } = bucket;
   const now = Date.now();
-  const serialized: Record<string, Record<string, number>> = {};
+  const serialized: Record<string, Record<string, SentMessageMeta>> = {};
   for (const [chatId, entry] of store) {
     cleanupExpired(store, chatId, entry, now);
     if (entry.size > 0) {
@@ -129,6 +146,7 @@ export function recordSentMessage(
   chatId: number | string,
   messageId: number,
   cfg?: Pick<OpenClawConfig, "session">,
+  body?: string,
 ): void {
   const scopeKey = String(chatId);
   const idKey = String(messageId);
@@ -137,10 +155,19 @@ export function recordSentMessage(
   const { store } = bucket;
   let entry = store.get(scopeKey);
   if (!entry) {
-    entry = new Map<string, number>();
+    entry = new Map<string, SentMessageMeta>();
     store.set(scopeKey, entry);
   }
-  entry.set(idKey, now);
+  const normalizedBody =
+    typeof body === "string" && body.trim()
+      ? body.length > MAX_SENT_MESSAGE_BODY_CHARS
+        ? body.slice(0, MAX_SENT_MESSAGE_BODY_CHARS)
+        : body
+      : undefined;
+  entry.set(idKey, {
+    timestamp: now,
+    ...(normalizedBody ? { body: normalizedBody } : {}),
+  });
   if (entry.size > 100) {
     cleanupExpired(store, scopeKey, entry, now);
   }
@@ -156,15 +183,26 @@ export function wasSentByBot(
   messageId: number,
   cfg?: Pick<OpenClawConfig, "session">,
 ): boolean {
+  return lookupSentMessage(chatId, messageId, cfg) != null;
+}
+
+export function lookupSentMessage(
+  chatId: number | string,
+  messageId: number | string | undefined,
+  cfg?: Pick<OpenClawConfig, "session">,
+): SentMessageMeta | undefined {
+  if (messageId == null) {
+    return undefined;
+  }
   const scopeKey = String(chatId);
   const idKey = String(messageId);
   const store = getSentMessages(cfg);
   const entry = store.get(scopeKey);
   if (!entry) {
-    return false;
+    return undefined;
   }
   cleanupExpired(store, scopeKey, entry, Date.now());
-  return entry.has(idKey);
+  return entry.get(idKey);
 }
 
 export function clearSentMessageCache(): void {

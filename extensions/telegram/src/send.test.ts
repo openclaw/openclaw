@@ -9,6 +9,7 @@ import {
 } from "./send.test-harness.js";
 import {
   clearSentMessageCache,
+  lookupSentMessage,
   recordSentMessage,
   resetSentMessageCacheForTest,
   wasSentByBot,
@@ -126,6 +127,12 @@ describe("sent-message-cache", () => {
     expect(wasSentByBot(123, 1)).toBe(true);
   });
 
+  it("records sent message body for reply-context fallback", () => {
+    recordSentMessage(123, 1, undefined, "Mortgage document center notification");
+
+    expect(lookupSentMessage(123, 1)?.body).toBe("Mortgage document center notification");
+  });
+
   it("clears cache", () => {
     recordSentMessage(123, 1);
     expect(wasSentByBot(123, 1)).toBe(true);
@@ -138,7 +145,7 @@ describe("sent-message-cache", () => {
     const persistedStorePath = `/tmp/openclaw-telegram-send-tests-${process.pid}-restart.json`;
     const sentMessageCfg = { session: { store: persistedStorePath } };
 
-    recordSentMessage(123, 1, sentMessageCfg);
+    recordSentMessage(123, 1, sentMessageCfg, "persisted body");
     expect(wasSentByBot(123, 1, sentMessageCfg)).toBe(true);
 
     resetSentMessageCacheForTest();
@@ -150,6 +157,7 @@ describe("sent-message-cache", () => {
 
     try {
       expect(restartedCache.wasSentByBot(123, 1, sentMessageCfg)).toBe(true);
+      expect(restartedCache.lookupSentMessage(123, 1, sentMessageCfg)?.body).toBe("persisted body");
     } finally {
       restartedCache.clearSentMessageCache();
     }

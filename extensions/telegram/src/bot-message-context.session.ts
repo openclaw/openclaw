@@ -39,6 +39,7 @@ import {
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
+import { lookupSentMessage } from "./sent-message-cache.js";
 
 type FinalizedTelegramInboundContext = ReturnType<
   typeof import("./bot-message-context.session.runtime.js").finalizeInboundContext
@@ -166,7 +167,19 @@ export async function buildTelegramInboundContextPayload(params: {
     topicName,
     sessionRuntime: sessionRuntimeOverride,
   } = params;
-  const replyTarget = describeReplyTarget(msg);
+  let replyTarget = describeReplyTarget(msg);
+  const cachedReplyBody = lookupSentMessage(chatId, msg.reply_to_message?.message_id, cfg)?.body;
+  if (cachedReplyBody && msg.reply_to_message?.message_id != null) {
+    replyTarget = replyTarget
+      ? { ...replyTarget, body: replyTarget.body ?? cachedReplyBody }
+      : {
+          id: String(msg.reply_to_message.message_id),
+          sender: "Vanta bot",
+          body: cachedReplyBody,
+          kind: "reply",
+          source: "reply_to_message",
+        };
+  }
   const forwardOrigin = normalizeForwardedContext(msg);
   const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg,

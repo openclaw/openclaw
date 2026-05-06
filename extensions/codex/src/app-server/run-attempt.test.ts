@@ -10,6 +10,8 @@ import {
 import {
   buildAgentRuntimePlan,
   embeddedAgentLog,
+  appendSessionTranscriptCustomEntry,
+  FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
   nativeHookRelayTesting,
   onAgentEvent,
   resetAgentEventsForTest,
@@ -830,6 +832,34 @@ describe("runCodexAppServerAttempt", () => {
     );
     expect(config?.instructions).toContain("Codex loads AGENTS.md natively");
     expect(config?.instructions).not.toContain("Follow AGENTS guidance.");
+
+    const transcript = await fs.readFile(sessionFile, "utf8");
+    expect(transcript).toContain(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE);
+  });
+
+  it("skips Codex bootstrap instructions after a completed continuation bootstrap", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Soul voice goes here.");
+    await appendSessionTranscriptCustomEntry({
+      transcriptPath: sessionFile,
+      customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+      data: { timestamp: Date.now() },
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.config = { agents: { defaults: { contextInjection: "continuation-skip" } } };
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    const config = (threadStart?.params as { config?: { instructions?: string } }).config;
+    expect(config?.instructions ?? "").not.toContain("Soul voice goes here.");
   });
 
   it("fires llm_input, llm_output, and agent_end hooks for codex turns", async () => {

@@ -194,6 +194,51 @@ export async function appendSessionTranscriptMessage(params: {
   useRawWhenLinear?: boolean;
   config?: SessionWriteLockAcquireTimeoutConfig;
 }): Promise<{ messageId: string }> {
+  const { entryId } = await appendSessionTranscriptEntry({
+    ...params,
+    createEntry: ({ entryId, now, parentId }) => ({
+      type: "message",
+      id: entryId,
+      ...(parentId === undefined ? {} : { parentId }),
+      timestamp: new Date(now).toISOString(),
+      message: params.message,
+    }),
+  });
+  return { messageId: entryId };
+}
+
+export async function appendSessionTranscriptCustomEntry(params: {
+  transcriptPath: string;
+  customType: string;
+  data?: unknown;
+  now?: number;
+  sessionId?: string;
+  cwd?: string;
+  useRawWhenLinear?: boolean;
+  config?: SessionWriteLockAcquireTimeoutConfig;
+}): Promise<{ entryId: string }> {
+  return appendSessionTranscriptEntry({
+    ...params,
+    createEntry: ({ entryId, now, parentId }) => ({
+      type: "custom",
+      customType: params.customType,
+      data: params.data,
+      id: entryId,
+      ...(parentId === undefined ? {} : { parentId }),
+      timestamp: new Date(now).toISOString(),
+    }),
+  });
+}
+
+async function appendSessionTranscriptEntry(params: {
+  transcriptPath: string;
+  now?: number;
+  sessionId?: string;
+  cwd?: string;
+  useRawWhenLinear?: boolean;
+  config?: SessionWriteLockAcquireTimeoutConfig;
+  createEntry(input: { entryId: string; now: number; parentId?: string | null }): unknown;
+}): Promise<{ entryId: string }> {
   const lock = await acquireSessionWriteLock({
     sessionFile: params.transcriptPath,
     timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
@@ -201,7 +246,7 @@ export async function appendSessionTranscriptMessage(params: {
   });
   try {
     const now = params.now ?? Date.now();
-    const messageId = randomUUID();
+    const entryId = randomUUID();
     await ensureTranscriptHeader(params.transcriptPath, {
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
       ...(params.cwd ? { cwd: params.cwd } : {}),
@@ -227,15 +272,13 @@ export async function appendSessionTranscriptMessage(params: {
         nonSessionEntryCount: leafInfo.nonSessionEntryCount,
       };
     }
-    const entry = {
-      type: "message",
-      id: messageId,
+    const entry = params.createEntry({
+      entryId,
+      now,
       ...(shouldRawAppend ? {} : { parentId: leafInfo.leafId ?? null }),
-      timestamp: new Date(now).toISOString(),
-      message: params.message,
-    };
+    });
     await fs.appendFile(params.transcriptPath, `${JSON.stringify(entry)}\n`, "utf-8");
-    return { messageId };
+    return { entryId };
   } finally {
     await lock.release();
   }

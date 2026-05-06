@@ -712,7 +712,7 @@ export async function sendMessageTelegram(
       }
       const res = await sendTelegramTextChunk(chunk, buildTextParams(index === chunks.length - 1));
       const messageId = resolveTelegramMessageIdOrThrow(res, context);
-      recordSentMessage(chatId, messageId, cfg);
+      recordSentMessage(chatId, messageId, cfg, chunk.plainText);
       lastMessageId = String(messageId);
       lastChatId = String(res?.chat?.id ?? chatId);
     }
@@ -942,7 +942,7 @@ export async function sendMessageTelegram(
     const result = await sendMedia(mediaSender.label, mediaSender.sender);
     const mediaMessageId = resolveTelegramMessageIdOrThrow(result, "media send");
     const resolvedChatId = String(result?.chat?.id ?? chatId);
-    recordSentMessage(chatId, mediaMessageId, cfg);
+    recordSentMessage(chatId, mediaMessageId, cfg, text);
     recordChannelActivity({
       channel: "telegram",
       accountId: account.accountId,

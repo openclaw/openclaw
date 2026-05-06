@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearSentMessageCache, recordSentMessage } from "./sent-message-cache.js";
 import { resetTopicNameCacheForTest } from "./topic-name-cache.js";
 
 type SessionRuntimeModule = typeof import("./bot-message-context.session.runtime.js");
@@ -53,6 +54,7 @@ beforeEach(() => {
 afterEach(() => {
   clearRuntimeConfigSnapshot();
   resetTopicNameCacheForTest();
+  clearSentMessageCache();
   recordInboundSessionMock.mockClear();
   resolveStorePathMock.mockReset();
   resolveStorePathMock.mockReturnValue("/tmp/openclaw-session-store.json");
@@ -190,6 +192,28 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
     expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.MessageThreadId).toBeUndefined();
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main");
+  });
+
+  it("uses cached bot-sent text when Telegram reply context omits the original body", async () => {
+    recordSentMessage(1234, 77, undefined, "Gmail — UWM document center notification");
+
+    const ctx = await buildContext({
+      message_id: 3,
+      chat: { id: 1234, type: "private" },
+      date: 1700000002,
+      text: "read the doc",
+      from: { id: 42, first_name: "Alice" },
+      reply_to_message: {
+        message_id: 77,
+        date: 1700000001,
+        chat: { id: 1234, type: "private" },
+      },
+    });
+
+    expect(ctx).not.toBeNull();
+    expect(ctx?.ctxPayload?.ReplyToId).toBe("77");
+    expect(ctx?.ctxPayload?.ReplyToBody).toBe("Gmail — UWM document center notification");
+    expect(ctx?.ctxPayload?.Body).toContain("Gmail — UWM document center notification");
   });
 });
 

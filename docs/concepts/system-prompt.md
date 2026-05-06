@@ -154,19 +154,24 @@ Bootstrap files are trimmed and appended under **Project Context** so the model 
 - `BOOTSTRAP.md` (only on brand-new workspaces)
 - `MEMORY.md` when present
 
-All of these files are **injected into the context window** on every turn unless
-a file-specific gate applies. `HEARTBEAT.md` is omitted on normal runs when
-heartbeats are disabled for the default agent or
-`agents.defaults.heartbeat.includeSystemPromptSection` is false. Keep injected
-files concise — especially `MEMORY.md`, which can grow over time and lead to
-unexpectedly high context usage and more frequent compaction.
+All of these files are **injected into the context window** on every turn by
+default unless a file-specific gate applies. Set
+`agents.defaults.contextInjection` to `continuation-skip` to inject full
+bootstrap context once at the start of a session and skip it on later
+continuation turns. Set it to `never` to disable bootstrap injection entirely.
+`HEARTBEAT.md` is omitted on normal runs when heartbeats are disabled for the
+default agent or `agents.defaults.heartbeat.includeSystemPromptSection` is
+false. Keep injected files concise, especially `MEMORY.md`, which can grow over
+time and lead to unexpectedly high context usage and more frequent compaction.
 
 When a session runs on the native Codex harness, Codex loads `AGENTS.md`
 through its own project-doc discovery. OpenClaw still resolves the remaining
 bootstrap files and forwards them as Codex config instructions, so `SOUL.md`,
 `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, and
 `MEMORY.md` keep the same workspace-context role without duplicating
-`AGENTS.md`.
+`AGENTS.md`. The Codex harness follows the same `contextInjection` setting, so
+`continuation-skip` also avoids forwarding those config instructions after the
+first completed bootstrap turn.
 
 <Note>
 `memory/*.md` daily files are **not** part of the normal bootstrap Project Context. On ordinary turns they are accessed on demand via the `memory_search` and `memory_get` tools, so they do not count against the context window unless the model explicitly reads them. Bare `/new` and `/reset` turns are the exception: the runtime can prepend recent daily memory as a one-shot startup-context block for that first turn.
