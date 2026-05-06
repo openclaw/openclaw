@@ -897,6 +897,8 @@ Docs: https://docs.openclaw.ai
 - Plugin SDK: re-export `isPrivateIpAddress` from `plugin-sdk/ssrf-runtime`, restoring source-checkout builds for SearXNG and Firecrawl private-network guards. Thanks @vincentkoc.
 - Discord/message actions: advertise `upload-file` and route it through Discord's send runtime with agent-scoped media reads, so agents can discover and send file attachments. Fixes #60652 and supersedes #60808, #61087, and #61100. Thanks @claw-io, @efe-arv, @joelnishanth, and @sjhddh.
 - Sessions: suppress exact inter-session control replies such as `NO_REPLY` and keep agent-to-agent announce bookkeeping out of visible transcripts. Fixes #53145. Thanks @TarahAssistant.
+- Cron/Control UI: quarantine malformed persisted cron jobs from runtime/dashboard reads while preserving the raw rows for explicit repair. Fixes #51871.
+
 - CLI/directory: report unsupported directory operations for installed channel plugins instead of prompting to reinstall the plugin when it lacks a directory adapter. Fixes #75770. Thanks @lawong888.
 - Web search/SearXNG: show the JSON API `search.formats` prerequisite during SearXNG setup before prompting for the base URL. Supersedes #65592. Thanks @evanpaul14.
 - Web search/SearXNG: pass through `img_src` image URLs from SearXNG image-category results. Supersedes #61416. Thanks @sghael.

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
+import { coerceFiniteScheduleNumber } from "../schedule.js";
 import { isInvalidCronSessionTargetIdError } from "../session-target.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
@@ -29,6 +30,55 @@ async function getFileMtimeMs(path: string): Promise<number | null> {
   }
 }
 
+function isSupportedSchedule(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const schedule = value as {
+    kind?: unknown;
+    at?: unknown;
+    everyMs?: unknown;
+    expr?: unknown;
+  };
+  if (schedule.kind === "at") {
+    return typeof schedule.at === "string" && schedule.at.trim().length > 0;
+  }
+  if (schedule.kind === "every") {
+    return coerceFiniteScheduleNumber(schedule.everyMs) !== undefined;
+  }
+  if (schedule.kind === "cron") {
+    return typeof schedule.expr === "string" && schedule.expr.trim().length > 0;
+  }
+  return false;
+}
+
+function isSupportedPayload(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const payload = value as { kind?: unknown; text?: unknown; message?: unknown };
+  if (payload.kind === "systemEvent") {
+    return typeof payload.text === "string";
+  }
+  if (payload.kind === "agentTurn") {
+    return typeof payload.message === "string";
+  }
+  return false;
+}
+
+function isHydratableCronJob(value: unknown): value is CronJob {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const job = value as { id?: unknown; schedule?: unknown; payload?: unknown };
+  return (
+    typeof job.id === "string" &&
+    job.id.trim().length > 0 &&
+    isSupportedSchedule(job.schedule) &&
+    isSupportedPayload(job.payload)
+  );
+}
+
 export async function ensureLoaded(
   state: CronServiceState,
   opts?: {
@@ -52,9 +102,11 @@ export async function ensureLoaded(
 
   const fileMtimeMs = await getFileMtimeMs(state.deps.storePath);
   const loaded = await loadCronStore(state.deps.storePath);
-  const jobs = (loaded.jobs ?? []) as unknown as CronJob[];
-  for (const [index, job] of jobs.entries()) {
-    const raw = job as unknown as Record<string, unknown>;
+  const jobs: CronJob[] = [];
+  const quarantinedPersistedJobs: unknown[] = [];
+  const loadedJobs = (loaded.jobs ?? []) as unknown[];
+  for (const [index, job] of loadedJobs.entries()) {
+    const raw = job as Record<string, unknown>;
     const { legacyJobIdIssue } = normalizeCronJobIdentityFields(raw);
     let normalized: Record<string, unknown> | null;
     try {
@@ -71,7 +123,19 @@ export async function ensureLoaded(
     }
     const hydrated =
       normalized && typeof normalized === "object" ? (normalized as unknown as CronJob) : job;
-    jobs[index] = hydrated;
+    if (!isHydratableCronJob(hydrated)) {
+      quarantinedPersistedJobs.push(job);
+      state.deps.log.warn(
+        {
+          storePath: state.deps.storePath,
+          jobId: typeof raw.id === "string" ? raw.id : undefined,
+          index,
+        },
+        "cron: ignoring malformed persisted job; run openclaw doctor --fix or edit jobs.json to repair",
+      );
+      continue;
+    }
+    jobs.push(hydrated);
     if (legacyJobIdIssue) {
       const resolvedId = typeof hydrated.id === "string" ? hydrated.id : undefined;
       state.deps.log.warn(
@@ -127,6 +191,7 @@ export async function ensureLoaded(
     version: 1,
     jobs,
   };
+  state.quarantinedPersistedJobs = quarantinedPersistedJobs;
   state.storeLoadedAtMs = state.deps.nowMs();
   state.storeFileMtimeMs = fileMtimeMs;
 
@@ -156,7 +221,10 @@ export async function persist(
   if (!state.store) {
     return;
   }
-  await saveCronStore(state.deps.storePath, state.store, opts);
+  await saveCronStore(state.deps.storePath, state.store, {
+    ...opts,
+    preserveConfigJobs: state.quarantinedPersistedJobs,
+  });
   // Update file mtime after save to prevent immediate reload
   state.storeFileMtimeMs = await getFileMtimeMs(state.deps.storePath);
 }
