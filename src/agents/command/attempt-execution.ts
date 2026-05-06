@@ -389,7 +389,9 @@ export async function persistEmbeddedTurnTranscript(params: {
   config: OpenClawConfig;
 }): Promise<SessionEntry | undefined> {
   const replyText = resolveCliTranscriptReplyText(params.result);
-  if (!replyText) return params.sessionEntry;
+  if (!replyText) {
+    return params.sessionEntry;
+  }
 
   const { sessionFile, sessionEntry } = await resolveSessionTranscriptFile({
     sessionId: params.sessionId,
