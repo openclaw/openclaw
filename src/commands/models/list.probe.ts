@@ -523,7 +523,6 @@ async function runTargetsWithConcurrency(params: {
 }): Promise<AuthProbeResult[]> {
   const { cfg, targets, timeoutMs, maxTokens, onProgress } = params;
   const concurrency = Math.max(1, Math.min(targets.length || 1, params.concurrency));
-
   const agentId = params.agentId ?? resolveDefaultAgentId(cfg);
   const agentDir = params.agentDir ?? resolveAgentDir(cfg, agentId);
   const workspaceDir =

@@ -7,6 +7,9 @@ let mockStore: AuthProfileStore;
 let mockAgentStore: AuthProfileStore | undefined;
 let mockAllowedProfiles: string[];
 const loadModelCatalogMock = vi.fn<() => Promise<ModelCatalogEntry[]>>(async () => []);
+const ensureAuthProfileStoreMock = vi.fn<
+  (agentDir?: string, options?: unknown) => AuthProfileStore
+>((agentDir) => (agentDir === "/tmp/coder-agent" && mockAgentStore ? mockAgentStore : mockStore));
 
 const resolveAuthProfileOrderMock = vi.fn(() => mockAllowedProfiles);
 const resolveAuthProfileEligibilityMock = vi.fn(() => ({
@@ -78,8 +81,7 @@ vi.mock("../../agents/auth-profiles.js", () => ({
     mode: "scoped",
     ...params,
   }),
-  ensureAuthProfileStore: (agentDir?: string) =>
-    agentDir === "/tmp/coder-agent" && mockAgentStore ? mockAgentStore : mockStore,
+  ensureAuthProfileStore: ensureAuthProfileStoreMock,
   listProfilesForProvider: (store: AuthProfileStore, provider: string) =>
     Object.entries(store.profiles)
       .filter(
@@ -211,6 +213,7 @@ describe("buildProbeTargets reason codes", () => {
     resolveAuthProfileOrderMock.mockClear();
     resolveAuthProfileEligibilityMock.mockClear();
     resolveSecretRefStringMock.mockReset();
+    ensureAuthProfileStoreMock.mockClear();
     resolveSecretRefStringMock.mockResolvedValue("resolved-secret");
     resolveAuthProfileEligibilityMock.mockReturnValue({
       eligible: false,
@@ -436,6 +439,20 @@ describe("buildProbeTargets reason codes", () => {
         provider: "anthropic",
         profileId: "anthropic:coder",
         source: "profile",
+      }),
+    );
+    expect(ensureAuthProfileStoreMock).toHaveBeenNthCalledWith(
+      1,
+      undefined,
+      expect.objectContaining({
+        externalCli: expect.objectContaining({ mode: "scoped", providerIds: ["anthropic"] }),
+      }),
+    );
+    expect(ensureAuthProfileStoreMock).toHaveBeenNthCalledWith(
+      2,
+      "/tmp/coder-agent",
+      expect.objectContaining({
+        externalCli: expect.objectContaining({ mode: "scoped", providerIds: ["anthropic"] }),
       }),
     );
   });

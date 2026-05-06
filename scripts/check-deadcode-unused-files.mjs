@@ -55,9 +55,12 @@ export function parseKnipCompactUnusedFiles(output) {
       continue;
     }
     const file = line.slice(separatorIndex + 2).trim();
-    if (isLikelyRepoFilePath(file)) {
-      files.push(file);
+    const reportedPath = normalizeRepoPath(line.slice(0, separatorIndex).trim());
+    const normalizedFile = normalizeRepoPath(file);
+    if (!file || reportedPath !== normalizedFile || !isLikelyRepoFilePath(file)) {
+      continue;
     }
+    files.push(file);
   }
 
   return uniqueSorted(files);
