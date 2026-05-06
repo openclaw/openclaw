@@ -77,6 +77,8 @@ const RUNTIME_PLUGIN_INSTALL_CANDIDATES: readonly DownloadableInstallCandidate[]
 
 const MISSING_CHANNEL_CONFIG_DESCRIPTOR_DIAGNOSTIC = "without channelConfigs metadata";
 const UPDATE_IN_PROGRESS_ENV = "OPENCLAW_UPDATE_IN_PROGRESS";
+const UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV =
+  "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE";
 
 function shouldFallbackClawHubToNpm(result: { ok: false; code?: string }): boolean {
   return (
@@ -427,7 +429,10 @@ function isInstalledRecordMissingOnDisk(
 }
 
 function isUpdatePackageDoctorPass(env: NodeJS.ProcessEnv): boolean {
-  return env[UPDATE_IN_PROGRESS_ENV] === "1";
+  return (
+    env[UPDATE_IN_PROGRESS_ENV] === "1" &&
+    env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] !== "1"
+  );
 }
 
 function recordMatchesBundledPackage(
