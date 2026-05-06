@@ -157,6 +157,13 @@ export const AgentParamsSchema = Type.Object(
     // Backward-compatible no-op. Older CLI clients sent this field on gateway
     // agent requests; the gateway accepts but intentionally ignores it.
     cleanupBundleMcpOnRunEnd: Type.Optional(Type.Boolean()),
+    // Tolerated plugin metadata. The Paperclip agent (and other external
+    // agents that adopt the same pattern) injects a root-level property
+    // when invoking agents via the openclaw_gateway adapter. The gateway
+    // accepts the value as opaque metadata so heartbeats and other agent
+    // calls aren't rejected by `additionalProperties: false`; it's
+    // consumed by the agent itself, not by the gateway. See #74635.
+    paperclip: Type.Optional(Type.Unknown()),
     modelRun: Type.Optional(Type.Boolean()),
     promptMode: Type.Optional(
       Type.Union([Type.Literal("full"), Type.Literal("minimal"), Type.Literal("none")]),
