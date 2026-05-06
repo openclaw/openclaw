@@ -3,6 +3,7 @@ import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import { type ModelScanResult, scanOpenRouterModels } from "../../agents/model-scan.js";
 import { getEnvApiKey } from "../../agents/pi-ai-contract.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { getEnvApiKey } from "../../agents/pi-ai-contract.js";
 import { withProgressTotals } from "../../cli/progress.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { toAgentModelListLike } from "../../config/model-input.js";
