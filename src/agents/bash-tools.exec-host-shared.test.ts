@@ -33,6 +33,8 @@ let enforceStrictInlineEvalApprovalBoundary: typeof import("./bash-tools.exec-ho
 let resolveExecHostApprovalContext: typeof import("./bash-tools.exec-host-shared.js").resolveExecHostApprovalContext;
 let resolveExecApprovalUnavailableState: typeof import("./bash-tools.exec-host-shared.js").resolveExecApprovalUnavailableState;
 let buildExecApprovalPendingToolResult: typeof import("./bash-tools.exec-host-shared.js").buildExecApprovalPendingToolResult;
+let consumeExecApprovalFollowupElevatedDefaults: typeof import("./bash-tools.exec-approval-followup-state.js").consumeExecApprovalFollowupElevatedDefaults;
+let resetExecApprovalFollowupElevatedDefaultsForTests: typeof import("./bash-tools.exec-approval-followup-state.js").resetExecApprovalFollowupElevatedDefaultsForTests;
 
 beforeAll(async () => {
   ({
@@ -43,6 +45,10 @@ beforeAll(async () => {
     resolveExecApprovalUnavailableState,
     buildExecApprovalPendingToolResult,
   } = await import("./bash-tools.exec-host-shared.js"));
+  ({
+    consumeExecApprovalFollowupElevatedDefaults,
+    resetExecApprovalFollowupElevatedDefaultsForTests,
+  } = await import("./bash-tools.exec-approval-followup-state.js"));
 });
 
 describe("sendExecApprovalFollowupResult", () => {
@@ -69,6 +75,7 @@ describe("sendExecApprovalFollowupResult", () => {
       allowlist: [],
       file: { version: 1, agents: {} },
     });
+    resetExecApprovalFollowupElevatedDefaultsForTests();
   });
 
   it("logs repeated followup dispatch failures once per approval id and error message", async () => {
@@ -115,6 +122,44 @@ describe("sendExecApprovalFollowupResult", () => {
     expect(logWarn).toHaveBeenLastCalledWith(
       "exec approval followup dispatch failed (id=approval-0): Channel is required",
     );
+  });
+
+  it("registers elevated defaults behind an internal token for agent followups", async () => {
+    sendExecApprovalFollowup.mockResolvedValue(true);
+    const bashElevated = {
+      enabled: true,
+      allowed: true,
+      defaultLevel: "on" as const,
+    };
+
+    await sendExecApprovalFollowupResult(
+      {
+        approvalId: "approval-elevated-75832",
+        sessionKey: "agent:main:telegram:direct:123",
+        turnSourceChannel: "telegram",
+        bashElevated,
+      },
+      "Exec finished",
+      { sendExecApprovalFollowup, logWarn },
+    );
+
+    const call = sendExecApprovalFollowup.mock.calls[0]?.[0] as
+      | { execApprovalFollowupToken?: string; bashElevated?: unknown }
+      | undefined;
+    expect(call?.execApprovalFollowupToken).toEqual(expect.any(String));
+    expect(call).not.toHaveProperty("bashElevated");
+    expect(
+      consumeExecApprovalFollowupElevatedDefaults({
+        token: call?.execApprovalFollowupToken ?? "",
+        sessionKey: "agent:main:telegram:direct:wrong",
+      }),
+    ).toBeUndefined();
+    expect(
+      consumeExecApprovalFollowupElevatedDefaults({
+        token: call?.execApprovalFollowupToken ?? "",
+        sessionKey: "agent:main:telegram:direct:123",
+      }),
+    ).toEqual(bashElevated);
   });
 });
 
