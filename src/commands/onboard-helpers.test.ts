@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   })),
   pickPrimaryTailnetIPv4: vi.fn<() => string | undefined>(() => undefined),
   probeGateway: vi.fn(),
+  detectBinary: vi.fn<(name: string) => Promise<boolean>>(async () => true),
 }));
 
 vi.mock("../process/exec.js", () => ({
@@ -40,6 +41,10 @@ vi.mock("../infra/tailnet.js", () => ({
 
 vi.mock("../gateway/probe.js", () => ({
   probeGateway: mocks.probeGateway,
+}));
+
+vi.mock("../infra/detect-binary.js", () => ({
+  detectBinary: mocks.detectBinary,
 }));
 
 afterEach(() => {
@@ -133,6 +138,73 @@ describe("resolveBrowserOpenCommand", () => {
     const resolved = await resolveBrowserOpenCommand();
     expect(resolved.argv).toEqual([rundll32, "url.dll,FileProtocolHandler"]);
     expect(resolved.command).toBe(rundll32);
+    platformSpy.mockRestore();
+  });
+
+  it("skips ssh-no-display guard on darwin even with stale SSH env vars", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    vi.stubEnv("SSH_CLIENT", "10.0.0.1 12345 22");
+    vi.stubEnv("SSH_TTY", "/dev/ttys000");
+    // No DISPLAY or WAYLAND_DISPLAY
+
+    const resolved = await resolveBrowserOpenCommand();
+    // darwin should skip the ssh-no-display guard and fall through to `open`
+    expect(resolved.argv).toEqual(["open"]);
+    expect(resolved.command).toBe("open");
+    expect(resolved.reason).toBeUndefined();
+
+    platformSpy.mockRestore();
+  });
+
+  it("skips ssh-no-display guard on darwin with SSH_CONNECTION", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    vi.stubEnv("SSH_CONNECTION", "10.0.0.1 12345 10.0.0.2 22");
+    // No DISPLAY or WAYLAND_DISPLAY
+
+    const resolved = await resolveBrowserOpenCommand();
+    expect(resolved.argv).toEqual(["open"]);
+    expect(resolved.command).toBe("open");
+    expect(resolved.reason).toBeUndefined();
+
+    platformSpy.mockRestore();
+  });
+
+  it("returns ssh-no-display on linux with SSH vars and no display", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.stubEnv("SSH_CLIENT", "10.0.0.1 12345 22");
+    vi.stubEnv("DISPLAY", "");
+    vi.stubEnv("WAYLAND_DISPLAY", "");
+
+    const resolved = await resolveBrowserOpenCommand();
+    expect(resolved.argv).toBeNull();
+    expect(resolved.reason).toBe("ssh-no-display");
+
+    platformSpy.mockRestore();
+  });
+
+  it("returns ssh-no-display on linux with SSH_TTY and no display", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.stubEnv("SSH_TTY", "/dev/ttys000");
+    vi.stubEnv("DISPLAY", "");
+    vi.stubEnv("WAYLAND_DISPLAY", "");
+
+    const resolved = await resolveBrowserOpenCommand();
+    expect(resolved.argv).toBeNull();
+    expect(resolved.reason).toBe("ssh-no-display");
+
+    platformSpy.mockRestore();
+  });
+
+  it("skips ssh-no-display guard on win32 even with SSH vars and no display", async () => {
+    vi.stubEnv("SystemRoot", "C:\\Windows");
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.stubEnv("SSH_CLIENT", "10.0.0.1 12345 22");
+    const rundll32 = path.win32.join("C:\\Windows", "System32", "rundll32.exe");
+
+    const resolved = await resolveBrowserOpenCommand();
+    expect(resolved.argv).toEqual([rundll32, "url.dll,FileProtocolHandler"]);
+    expect(resolved.command).toBe(rundll32);
+
     platformSpy.mockRestore();
   });
 });
