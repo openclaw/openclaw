@@ -342,4 +342,28 @@ describe("fetchRemoteMedia", () => {
       }),
     );
   });
+
+  it("strips invisible / bidi characters from Content-Disposition filenames", async () => {
+    // Headers can only carry ByteString values, so the bidi RLO (U+202E) and
+    // zero-width space (U+200B) ride in via the RFC 5987 `filename*` form as
+    // UTF-8 percent-escapes (%E2%80%AE / %E2%80%8B).
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(makeStream([new Uint8Array([1, 2, 3])]), {
+          status: 200,
+          headers: {
+            "content-disposition": "attachment; filename*=UTF-8''report%E2%80%AEgpj%E2%80%8B.exe",
+          },
+        }),
+    );
+
+    const result = await fetchRemoteMedia({
+      url: "https://example.com/file.bin",
+      fetchImpl,
+      lookupFn: makeLookupFn(),
+      maxBytes: 1024,
+    });
+
+    expect(result.fileName).toBe("reportgpj.exe");
+  });
 });
