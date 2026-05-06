@@ -484,17 +484,31 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("narrows default-lane changed source files to affected tests", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "packages/sdk/src/index.ts",
+      "packages/plugin-sdk/src/provider-web-search-config-contract.ts",
     ]);
 
-    expect(plans).toEqual([
-      {
+    expect(plans).toHaveLength(1);
+    const plan = plans[0];
+    expect(plan?.config).toBe("test/vitest/vitest.unit.config.ts");
+    expect(plan?.watchMode).toBe(false);
+
+    // Full graph: import-aware routing targets the SDK unit test. Sparse/partial trees:
+    // fall back to narrowed default-lane globs under packages/plugin-sdk.
+    if (plan?.includePatterns?.length) {
+      expect(plan).toEqual({
+        config: "test/vitest/vitest.unit.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["packages/plugin-sdk/src/**/*.test.ts"],
+        watchMode: false,
+      });
+    } else {
+      expect(plan).toEqual({
         config: "test/vitest/vitest.unit.config.ts",
         forwardedArgs: ["packages/sdk/src/index.test.ts"],
         includePatterns: null,
         watchMode: false,
-      },
-    ]);
+      });
+    }
   });
 
   it("routes changed source files to sibling tests when present", () => {
