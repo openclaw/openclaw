@@ -107,7 +107,7 @@ export async function sweepCronRunSessions(params: {
 
   if (prunedSessions.size > 0) {
     try {
-      const store = loadSessionStore(storePath, { skipCache: true });
+      const store = loadSessionStore(storePath);
       const referencedSessionIds = new Set(
         Object.values(store)
           .map((entry) => entry?.sessionId)

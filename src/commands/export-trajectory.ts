@@ -97,7 +97,7 @@ export async function exportTrajectoryCommand(
   const storePath = resolvedOpts.store
     ? path.resolve(resolvedOpts.store)
     : resolveDefaultSessionStorePath(targetAgentId);
-  const store = loadSessionStore(storePath, { skipCache: true });
+  const store = loadSessionStore(storePath);
   const entry = store[sessionKey] as SessionEntry | undefined;
   if (!entry?.sessionId) {
     runtime.error(

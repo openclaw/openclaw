@@ -30,7 +30,7 @@ export async function persistAcpDispatchTranscript(params: {
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: sessionAgentId,
   });
-  const sessionStore = loadSessionStore(storePath, { skipCache: true });
+  const sessionStore = loadSessionStore(storePath);
   const sessionEntry = resolveSessionStoreEntry({
     store: sessionStore,
     sessionKey: params.sessionKey,

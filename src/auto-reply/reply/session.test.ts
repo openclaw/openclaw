@@ -8,7 +8,7 @@ import {
   getOrCreateSessionMcpRuntime,
 } from "../../agents/pi-bundle-mcp-tools.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { saveSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import {
   __testing as sessionBindingTesting,
@@ -1229,8 +1229,7 @@ describe("initSessionState RawBody", () => {
 
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     try {
-      await fs.mkdir(path.dirname(storePath), { recursive: true });
-      await writeSessionStoreFast(storePath, {
+      await saveSessionStore(storePath, {
         [sessionKey]: {
           sessionId,
           sessionFile,

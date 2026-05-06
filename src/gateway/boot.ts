@@ -81,7 +81,7 @@ function snapshotMainSessionMapping(params: {
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
   try {
-    const store = loadSessionStore(storePath, { skipCache: true });
+    const store = loadSessionStore(storePath);
     const entry = store[params.sessionKey];
     if (!entry) {
       return {
