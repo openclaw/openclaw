@@ -19,5 +19,7 @@ export {
   releaseSharedClientInstance,
   resolveSharedMatrixClient,
   stopSharedClientForAccount,
+  stopSharedClientForAccountAsync,
   stopSharedClientInstance,
+  stopSharedClientInstanceAsync,
 } from "./client/shared.js";

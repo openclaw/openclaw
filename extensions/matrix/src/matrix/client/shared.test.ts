@@ -20,8 +20,11 @@ let acquireSharedMatrixClient: typeof import("./shared.js").acquireSharedMatrixC
 let releaseSharedClientInstance: typeof import("./shared.js").releaseSharedClientInstance;
 let resolveSharedMatrixClient: typeof import("./shared.js").resolveSharedMatrixClient;
 let stopSharedClient: typeof import("./shared.js").stopSharedClient;
+let stopSharedClientAsync: typeof import("./shared.js").stopSharedClientAsync;
 let stopSharedClientForAccount: typeof import("./shared.js").stopSharedClientForAccount;
+let stopSharedClientForAccountAsync: typeof import("./shared.js").stopSharedClientForAccountAsync;
 let stopSharedClientInstance: typeof import("./shared.js").stopSharedClientInstance;
+let stopSharedClientInstanceAsync: typeof import("./shared.js").stopSharedClientInstanceAsync;
 
 function authFor(accountId: string): MatrixAuth {
   return {
@@ -42,6 +45,7 @@ function createMockClient(name: string) {
     name,
     start: vi.fn(async () => undefined),
     stop: vi.fn(() => undefined),
+    stopAndPersist: vi.fn(async () => undefined),
     getJoinedRooms: vi.fn(async () => [] as string[]),
     crypto: undefined,
   };
@@ -97,8 +101,11 @@ describe("resolveSharedMatrixClient", () => {
       releaseSharedClientInstance,
       resolveSharedMatrixClient,
       stopSharedClient,
+      stopSharedClientAsync,
       stopSharedClientForAccount,
+      stopSharedClientForAccountAsync,
       stopSharedClientInstance,
+      stopSharedClientInstanceAsync,
     } = await import("./shared.js"));
   });
 
@@ -158,6 +165,53 @@ describe("resolveSharedMatrixClient", () => {
     stopSharedClient();
 
     expect(opsClient.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("awaits final persist for every shared client when stopped via the async helper", async () => {
+    const { mainClient, opsClient } = primeAccountClientMocks();
+
+    await resolveSharedMatrixClient({ cfg: TEST_CFG, accountId: "main", startClient: false });
+    await resolveSharedMatrixClient({ cfg: TEST_CFG, accountId: "ops", startClient: false });
+
+    await stopSharedClientAsync();
+
+    expect(mainClient.stopAndPersist).toHaveBeenCalledTimes(1);
+    expect(opsClient.stopAndPersist).toHaveBeenCalledTimes(1);
+    expect(mainClient.stop).not.toHaveBeenCalled();
+    expect(opsClient.stop).not.toHaveBeenCalled();
+  });
+
+  it("awaits final persist for the targeted account when stopped via the async helper", async () => {
+    const { mainAuth, mainClient, opsClient } = primeAccountClientMocks();
+
+    await resolveSharedMatrixClient({ cfg: TEST_CFG, accountId: "main", startClient: false });
+    await resolveSharedMatrixClient({ cfg: TEST_CFG, accountId: "ops", startClient: false });
+
+    await stopSharedClientForAccountAsync(mainAuth);
+
+    expect(mainClient.stopAndPersist).toHaveBeenCalledTimes(1);
+    expect(mainClient.stop).not.toHaveBeenCalled();
+    expect(opsClient.stopAndPersist).not.toHaveBeenCalled();
+    expect(opsClient.stop).not.toHaveBeenCalled();
+  });
+
+  it("awaits final persist when an instance is stopped via the async helper", async () => {
+    const mainAuth = authFor("main");
+    const mainClient = createMockClient("main");
+
+    resolveMatrixAuthMock.mockResolvedValue(mainAuth);
+    createMatrixClientMock.mockResolvedValue(mainClient);
+
+    const resolved = await resolveSharedMatrixClient({
+      cfg: TEST_CFG,
+      accountId: "main",
+      startClient: false,
+    });
+
+    await stopSharedClientInstanceAsync(resolved as unknown as import("../sdk.js").MatrixClient);
+
+    expect(mainClient.stopAndPersist).toHaveBeenCalledTimes(1);
+    expect(mainClient.stop).not.toHaveBeenCalled();
   });
 
   it("drops stopped shared clients by instance so the next resolve recreates them", async () => {
