@@ -40,6 +40,7 @@ async function jsonlFileHasAssistantMessage(filePath: string | undefined): Promi
     try {
       const rl = readline.createInterface({ input: fh.createReadStream({ encoding: "utf-8" }) });
       let recordCount = 0;
+      let hasAssistantAfterLatestUser = false;
       for await (const line of rl) {
         if (!line.trim()) {
           continue;
@@ -55,11 +56,22 @@ async function jsonlFileHasAssistantMessage(filePath: string | undefined): Promi
           continue;
         }
         const rec = obj as Record<string, unknown> | null;
-        if ((rec?.message as Record<string, unknown> | undefined)?.role === "assistant") {
-          return true;
+        const messageRole = (rec?.message as Record<string, unknown> | undefined)?.role;
+        const role =
+          rec?.type === "message"
+            ? messageRole
+            : rec?.type === "user" || rec?.type === "assistant"
+              ? rec.type
+              : undefined;
+        if (role === "user") {
+          hasAssistantAfterLatestUser = false;
+          continue;
+        }
+        if (role === "assistant") {
+          hasAssistantAfterLatestUser = true;
         }
       }
-      return false;
+      return hasAssistantAfterLatestUser;
     } finally {
       await fh.close();
     }

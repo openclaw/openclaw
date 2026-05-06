@@ -324,6 +324,20 @@ describe("sessionFileHasContent", () => {
     expect(await sessionFileHasContent(file)).toBe(true);
   });
 
+  it("returns false when a fresh user message appears after an earlier assistant response", async () => {
+    const file = path.join(tmpDir, "fresh-user-after-assistant.jsonl");
+    await fs.writeFile(
+      file,
+      [
+        '{"type":"message","message":{"role":"user","content":"old"}}',
+        '{"type":"message","message":{"role":"assistant","content":"answered"}}',
+        '{"type":"message","message":{"role":"user","content":"fresh unanswered"}}',
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    expect(await sessionFileHasContent(file)).toBe(false);
+  });
+
   it("returns true when session file has spaced JSON (role : assistant)", async () => {
     const file = path.join(tmpDir, "spaced.jsonl");
     await fs.writeFile(
