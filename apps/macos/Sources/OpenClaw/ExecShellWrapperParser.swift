@@ -6,9 +6,10 @@ enum ExecShellWrapperParser {
         let command: String?
 
         static let notWrapper = ParsedShellWrapper(isWrapper: false, command: nil)
+        static let blockedWrapper = ParsedShellWrapper(isWrapper: true, command: nil)
     }
 
-    private enum Kind {
+    private enum Kind: Equatable {
         case posix
         case cmd
         case powershell
@@ -53,6 +54,13 @@ enum ExecShellWrapperParser {
         guard let spec = self.wrapperSpecs.first(where: { $0.names.contains(base0) }) else {
             return .notWrapper
         }
+        if spec.kind == .posix,
+           ExecInlineCommandParser.hasPosixInteractiveStartupBeforeInlineCommand(
+               command,
+               flags: self.posixInlineFlags)
+        {
+            return .blockedWrapper
+        }
         guard let payload = self.extractPayload(command: command, spec: spec) else {
             return .notWrapper
         }
@@ -72,12 +80,10 @@ enum ExecShellWrapperParser {
     }
 
     private static func extractPosixInlineCommand(_ command: [String]) -> String? {
-        let flag = command.count > 1 ? command[1].trimmingCharacters(in: .whitespacesAndNewlines) : ""
-        guard self.posixInlineFlags.contains(flag.lowercased()) else {
-            return nil
-        }
-        let payload = command.count > 2 ? command[2].trimmingCharacters(in: .whitespacesAndNewlines) : ""
-        return payload.isEmpty ? nil : payload
+        ExecInlineCommandParser.extractInlineCommand(
+            command,
+            flags: self.posixInlineFlags,
+            allowCombinedC: true)
     }
 
     private static func extractCmdInlineCommand(_ command: [String]) -> String? {
@@ -97,10 +103,10 @@ enum ExecShellWrapperParser {
             if token.isEmpty { continue }
             if token == "--" { break }
             if self.powershellInlineFlags.contains(token) {
-                let payload = idx + 1 < command.count
-                    ? command[idx + 1].trimmingCharacters(in: .whitespacesAndNewlines)
-                    : ""
-                return payload.isEmpty ? nil : payload
+                return ExecInlineCommandParser.extractInlineCommand(
+                    command,
+                    flags: self.powershellInlineFlags,
+                    allowCombinedC: false)
             }
         }
         return nil
