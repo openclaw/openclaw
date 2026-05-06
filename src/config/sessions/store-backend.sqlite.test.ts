@@ -6,7 +6,6 @@ import { writeTextAtomic } from "../../infra/json-files.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveStorePath } from "./paths.js";
 import {
-  exportSqliteSessionStore,
   importJsonSessionStoreToSqlite,
   loadSqliteSessionStore,
   saveSqliteSessionStore,
@@ -15,7 +14,6 @@ import { loadSessionStore } from "./store-load.js";
 import { saveSessionStore, updateSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
-const ORIGINAL_SESSION_STORE_BACKEND = process.env.OPENCLAW_SESSION_STORE_BACKEND;
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
 function createTempDir(): string {
@@ -24,11 +22,6 @@ function createTempDir(): string {
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
-  if (ORIGINAL_SESSION_STORE_BACKEND === undefined) {
-    delete process.env.OPENCLAW_SESSION_STORE_BACKEND;
-  } else {
-    process.env.OPENCLAW_SESSION_STORE_BACKEND = ORIGINAL_SESSION_STORE_BACKEND;
-  }
   if (ORIGINAL_STATE_DIR === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
   } else {
@@ -68,7 +61,7 @@ describe("SQLite session store backend", () => {
     });
   });
 
-  it("imports legacy sessions.json and exports the SQLite snapshot", async () => {
+  it("imports legacy sessions.json into SQLite and removes the JSON source", async () => {
     const stateDir = createTempDir();
     const dbPath = path.join(stateDir, "state", "openclaw.sqlite");
     const legacyStorePath = path.join(stateDir, "sessions.json");
@@ -96,9 +89,10 @@ describe("SQLite session store backend", () => {
         sourcePath: legacyStorePath,
         dbPath,
       }),
-    ).toEqual({ imported: 1, sourcePath: legacyStorePath });
+    ).toEqual({ imported: 1, sourcePath: legacyStorePath, removedSource: true });
 
-    expect(exportSqliteSessionStore({ agentId: "main", path: dbPath })).toEqual({
+    expect(fs.existsSync(legacyStorePath)).toBe(false);
+    expect(loadSqliteSessionStore({ agentId: "main", path: dbPath })).toEqual({
       "discord:user-1": {
         ...entry,
         deliveryContext: {
@@ -109,10 +103,9 @@ describe("SQLite session store backend", () => {
     });
   });
 
-  it("routes the production session store API through SQLite behind the opt-in flag", async () => {
+  it("routes the production session store API through SQLite", async () => {
     const stateDir = createTempDir();
     process.env.OPENCLAW_STATE_DIR = stateDir;
-    process.env.OPENCLAW_SESSION_STORE_BACKEND = "sqlite";
     const storePath = resolveStorePath(undefined, { agentId: "ops", env: process.env });
     const entry: SessionEntry = {
       sessionId: "sqlite-primary",
@@ -146,7 +139,6 @@ describe("SQLite session store backend", () => {
   it("uses SQLite by default for canonical per-agent session stores", async () => {
     const stateDir = createTempDir();
     process.env.OPENCLAW_STATE_DIR = stateDir;
-    delete process.env.OPENCLAW_SESSION_STORE_BACKEND;
     const storePath = resolveStorePath(undefined, { agentId: "ops", env: process.env });
     const entry: SessionEntry = {
       sessionId: "sqlite-default",
@@ -162,29 +154,9 @@ describe("SQLite session store backend", () => {
     });
   });
 
-  it("keeps canonical per-agent session stores file-backed when the JSON backend is forced", async () => {
+  it("does not import a legacy canonical sessions.json on first SQLite open", async () => {
     const stateDir = createTempDir();
     process.env.OPENCLAW_STATE_DIR = stateDir;
-    process.env.OPENCLAW_SESSION_STORE_BACKEND = "json";
-    const storePath = resolveStorePath(undefined, { agentId: "ops", env: process.env });
-    const entry: SessionEntry = {
-      sessionId: "json-forced",
-      sessionFile: "json-forced.jsonl",
-      updatedAt: 100,
-    };
-
-    await saveSessionStore(storePath, { "discord:ops": entry }, { skipMaintenance: true });
-
-    expect(fs.existsSync(storePath)).toBe(true);
-    expect(loadSessionStore(storePath, { skipCache: true })).toEqual({
-      "discord:ops": entry,
-    });
-  });
-
-  it("imports a legacy canonical sessions.json once on first SQLite open", async () => {
-    const stateDir = createTempDir();
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    process.env.OPENCLAW_SESSION_STORE_BACKEND = "sqlite";
     const storePath = resolveStorePath(undefined, { agentId: "ops", env: process.env });
     const legacyEntry: SessionEntry = {
       sessionId: "legacy-session",
@@ -202,9 +174,7 @@ describe("SQLite session store backend", () => {
       ),
     );
 
-    expect(loadSessionStore(storePath, { skipCache: true })).toEqual({
-      "discord:ops": legacyEntry,
-    });
+    expect(loadSessionStore(storePath, { skipCache: true })).toEqual({});
 
     await saveSessionStore(
       storePath,
@@ -217,21 +187,6 @@ describe("SQLite session store backend", () => {
       },
       { skipMaintenance: true },
     );
-    await writeTextAtomic(
-      storePath,
-      JSON.stringify(
-        {
-          "discord:ops": {
-            ...legacyEntry,
-            sessionId: "stale-json-session",
-            updatedAt: 300,
-          },
-        },
-        null,
-        2,
-      ),
-    );
-
     expect(loadSessionStore(storePath, { skipCache: true })).toEqual({
       "discord:ops": {
         ...legacyEntry,

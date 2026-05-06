@@ -7,7 +7,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
-import { resolveAgentIdFromSessionStorePath, resolveStorePath } from "./paths.js";
+import { resolveAgentIdFromSessionStorePath } from "./paths.js";
 import { applySessionStoreMigrations } from "./store-migrations.js";
 import { normalizeSessionStore } from "./store-normalize.js";
 import type { SessionEntry } from "./types.js";
@@ -21,6 +21,7 @@ export type SqliteSessionStoreOptions = OpenClawStateDatabaseOptions & {
 export type SessionStoreBackendImportResult = {
   imported: number;
   sourcePath: string;
+  removedSource: boolean;
 };
 
 type SessionEntryRow = {
@@ -28,49 +29,19 @@ type SessionEntryRow = {
   entry_json: string;
 };
 
-export type SqliteSessionStoreBackendMode = "auto" | "json" | "sqlite";
-
-export function resolveSqliteSessionStoreBackendMode(
-  env: NodeJS.ProcessEnv = process.env,
-): SqliteSessionStoreBackendMode {
-  const raw = env.OPENCLAW_SESSION_STORE_BACKEND?.trim().toLowerCase();
-  if (raw === "json" || raw === "file" || raw === "files" || raw === "disabled") {
-    return "json";
-  }
-  if (raw === "sqlite") {
-    return "sqlite";
-  }
-  return "auto";
-}
-
-export function isSqliteSessionStoreBackendEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return resolveSqliteSessionStoreBackendMode(env) !== "json";
-}
-
-function isCanonicalAgentSessionStorePath(params: {
-  storePath: string;
-  agentId: string;
-  env: NodeJS.ProcessEnv;
-}): boolean {
-  return (
-    path.resolve(params.storePath) ===
-    path.resolve(resolveStorePath(undefined, { agentId: params.agentId, env: params.env }))
-  );
+export function isSqliteSessionStoreBackendEnabled(_env: NodeJS.ProcessEnv = process.env): boolean {
+  return true;
 }
 
 export function resolveSqliteSessionStoreOptionsForPath(
   storePath: string,
   env: NodeJS.ProcessEnv = process.env,
 ): SqliteSessionStoreOptions | null {
-  const mode = resolveSqliteSessionStoreBackendMode(env);
-  if (mode === "json") {
+  if (!isSqliteSessionStoreBackendEnabled(env)) {
     return null;
   }
   const agentId = resolveAgentIdFromSessionStorePath(storePath);
   if (!agentId) {
-    return null;
-  }
-  if (mode === "auto" && !isCanonicalAgentSessionStorePath({ storePath, agentId, env })) {
     return null;
   }
   return { agentId, env, sourcePath: storePath };
@@ -110,63 +81,6 @@ function prepareReplaceStatement(statement: StatementSync, params: Record<string
   statement.run(params);
 }
 
-function resolveImportMarkerKey(options: SqliteSessionStoreOptions): string | null {
-  const sourcePath = options.sourcePath?.trim();
-  return sourcePath ? `${options.agentId}:${path.resolve(sourcePath)}` : null;
-}
-
-function readImportMarker(
-  database: OpenClawStateDatabase,
-  options: SqliteSessionStoreOptions,
-): string | null {
-  const markerKey = resolveImportMarkerKey(options);
-  if (!markerKey) {
-    return null;
-  }
-  const row = database.db
-    .prepare("SELECT value_json FROM kv WHERE scope = ? AND key = ?")
-    .get("session-store-import", markerKey) as { value_json?: unknown } | undefined;
-  return typeof row?.value_json === "string" ? row.value_json : null;
-}
-
-function writeImportMarker(params: {
-  database: OpenClawStateDatabase;
-  options: SqliteSessionStoreOptions;
-  imported: number;
-  sourceExists: boolean;
-}): void {
-  const markerKey = resolveImportMarkerKey(params.options);
-  if (!markerKey) {
-    return;
-  }
-  params.database.db
-    .prepare(
-      `
-        INSERT OR REPLACE INTO kv (
-          scope,
-          key,
-          value_json,
-          updated_at
-        ) VALUES (
-          @scope,
-          @key,
-          @value_json,
-          @updated_at
-        )
-      `,
-    )
-    .run({
-      scope: "session-store-import",
-      key: markerKey,
-      value_json: JSON.stringify({
-        imported: params.imported,
-        sourceExists: params.sourceExists,
-        sourcePath: path.resolve(params.options.sourcePath ?? ""),
-      }),
-      updated_at: resolveNow(params.options),
-    });
-}
-
 function countSqliteSessionEntries(
   database: OpenClawStateDatabase,
   options: SqliteSessionStoreOptions,
@@ -176,6 +90,11 @@ function countSqliteSessionEntries(
     .get(options.agentId) as { count?: number | bigint } | undefined;
   const count = row?.count ?? 0;
   return typeof count === "bigint" ? Number(count) : count;
+}
+
+export function countSqliteSessionStoreEntries(options: SqliteSessionStoreOptions): number {
+  const database = openOpenClawStateDatabase(options);
+  return countSqliteSessionEntries(database, options);
 }
 
 function parseJsonSessionStoreFromPath(sourcePath: string): Record<string, SessionEntry> {
@@ -228,35 +147,9 @@ function replaceSqliteSessionStore(params: {
   }
 }
 
-function importLegacyJsonSessionStoreIfNeeded(options: SqliteSessionStoreOptions): void {
-  const sourcePath = options.sourcePath?.trim();
-  if (!sourcePath || !fs.existsSync(sourcePath)) {
-    return;
-  }
-  runOpenClawStateWriteTransaction((database) => {
-    if (readImportMarker(database, options)) {
-      return;
-    }
-    const existingRows = countSqliteSessionEntries(database, options);
-    if (existingRows > 0) {
-      writeImportMarker({ database, options, imported: 0, sourceExists: true });
-      return;
-    }
-    const store = parseJsonSessionStoreFromPath(sourcePath);
-    replaceSqliteSessionStore({ database, options, store });
-    writeImportMarker({
-      database,
-      options,
-      imported: Object.keys(store).length,
-      sourceExists: true,
-    });
-  }, options);
-}
-
 export function loadSqliteSessionStore(
   options: SqliteSessionStoreOptions,
 ): Record<string, SessionEntry> {
-  importLegacyJsonSessionStoreIfNeeded(options);
   const database = openOpenClawStateDatabase(options);
   const rows = database.db
     .prepare(
@@ -286,38 +179,59 @@ export function saveSqliteSessionStore(
   normalizeSessionStore(store);
   runOpenClawStateWriteTransaction((database) => {
     replaceSqliteSessionStore({ database, options, store });
-    writeImportMarker({
-      database,
-      options,
-      imported: Object.keys(store).length,
-      sourceExists: Boolean(options.sourcePath && fs.existsSync(options.sourcePath)),
-    });
   }, options);
+}
+
+function resolveSessionEntryUpdatedAt(entry: SessionEntry): number {
+  return typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
+    ? entry.updatedAt
+    : 0;
+}
+
+function mergeSessionStoresByUpdatedAt(
+  existing: Record<string, SessionEntry>,
+  incoming: Record<string, SessionEntry>,
+): Record<string, SessionEntry> {
+  const merged: Record<string, SessionEntry> = { ...existing };
+  for (const [key, entry] of Object.entries(incoming)) {
+    const current = merged[key];
+    if (!current || resolveSessionEntryUpdatedAt(entry) >= resolveSessionEntryUpdatedAt(current)) {
+      merged[key] = entry;
+    }
+  }
+  normalizeSessionStore(merged);
+  return merged;
 }
 
 export function importJsonSessionStoreToSqlite(params: {
   agentId: string;
   sourcePath: string;
   dbPath?: string;
+  env?: NodeJS.ProcessEnv;
   now?: () => number;
 }): SessionStoreBackendImportResult {
-  const store = parseJsonSessionStoreFromPath(params.sourcePath);
-  saveSqliteSessionStore(
-    {
-      agentId: params.agentId,
-      sourcePath: params.sourcePath,
-      ...(params.dbPath ? { path: params.dbPath } : {}),
-      ...(params.now ? { now: params.now } : {}),
-    },
-    store,
-  );
-  return { imported: Object.keys(store).length, sourcePath: params.sourcePath };
-}
-
-export function exportSqliteSessionStore(
-  options: SqliteSessionStoreOptions,
-): Record<string, SessionEntry> {
-  return loadSqliteSessionStore(options);
+  const options = {
+    agentId: params.agentId,
+    sourcePath: params.sourcePath,
+    ...(params.env ? { env: params.env } : {}),
+    ...(params.dbPath ? { path: params.dbPath } : {}),
+    ...(params.now ? { now: params.now } : {}),
+  };
+  const importedStore = parseJsonSessionStoreFromPath(params.sourcePath);
+  const mergedStore = mergeSessionStoresByUpdatedAt(loadSqliteSessionStore(options), importedStore);
+  saveSqliteSessionStore(options, mergedStore);
+  let removedSource = false;
+  try {
+    fs.rmSync(params.sourcePath, { force: true });
+    removedSource = true;
+  } catch {
+    removedSource = false;
+  }
+  return {
+    imported: Object.keys(importedStore).length,
+    sourcePath: params.sourcePath,
+    removedSource,
+  };
 }
 
 export function readJsonSessionStoreRawForImport(pathname: string): string {

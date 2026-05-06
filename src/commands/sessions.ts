@@ -1,4 +1,3 @@
-import path from "node:path";
 import { resolveAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { selectAgentHarness } from "../agents/harness/selection.js";
@@ -7,7 +6,6 @@ import { loadSessionStore, resolveSessionTotalTokens } from "../config/sessions.
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { info } from "../globals.js";
-import { writeTextAtomic } from "../infra/json-files.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
@@ -223,44 +221,6 @@ function formatRuntimeCell(runtimeLabel: string, rich: boolean): string {
   return rich ? theme.info(label) : label;
 }
 
-async function exportRawSessionStores(params: {
-  targets: NonNullable<ReturnType<typeof resolveSessionStoreTargetsOrExit>>;
-  outputPath: string;
-}): Promise<{
-  outputPath: string;
-  count: number;
-  stores: Array<{ agentId: string; path: string }>;
-}> {
-  const stores = params.targets.map((target) => {
-    const sessions = loadSessionStore(target.storePath);
-    return {
-      agentId: target.agentId,
-      path: target.storePath,
-      sessions,
-      count: Object.keys(sessions).length,
-    };
-  });
-  const single = stores.length === 1 ? stores[0]?.sessions : undefined;
-  const payload =
-    single !== undefined
-      ? single
-      : {
-          stores: stores.map((store) => ({
-            agentId: store.agentId,
-            path: store.path,
-            count: store.count,
-            sessions: store.sessions,
-          })),
-        };
-  const outputPath = path.resolve(params.outputPath);
-  await writeTextAtomic(outputPath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
-  return {
-    outputPath,
-    count: stores.reduce((sum, store) => sum + store.count, 0),
-    stores: stores.map((store) => ({ agentId: store.agentId, path: store.path })),
-  };
-}
-
 function toJsonSessionRow(row: SessionRow): Omit<SessionRow, "runtimeLabel"> {
   const { runtimeLabel, ...jsonRow } = row;
   void runtimeLabel;
@@ -275,7 +235,6 @@ export async function sessionsCommand(
     agent?: string;
     allAgents?: boolean;
     limit?: string | number;
-    exportStore?: string;
   },
   runtime: RuntimeEnv,
 ) {
@@ -297,23 +256,6 @@ export async function sessionsCommand(
     runtime,
   });
   if (!targets) {
-    return;
-  }
-
-  if (opts.exportStore) {
-    const exported = await exportRawSessionStores({
-      targets,
-      outputPath: opts.exportStore,
-    });
-    if (opts.json) {
-      writeRuntimeJson(runtime, {
-        exportedPath: exported.outputPath,
-        count: exported.count,
-        stores: exported.stores,
-      });
-    } else {
-      runtime.log(info(`Exported ${exported.count} session(s) to ${exported.outputPath}`));
-    }
     return;
   }
 
