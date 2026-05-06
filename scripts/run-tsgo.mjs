@@ -28,21 +28,18 @@ if (tsBuildInfoFile) {
 }
 const sparseGuardError = getSparseTsgoGuardError(finalArgs, { cwd: process.cwd() });
 const shouldRunHeavyCheck = shouldAcquireLocalHeavyCheckLockForTsgo(finalArgs, env);
-const pressureGuardError =
-  sparseGuardError || !shouldRunHeavyCheck
-    ? null
-    : getLocalHeavyCheckPressureError({ cwd: process.cwd(), env });
 const releaseLock =
-  sparseGuardError ||
-  pressureGuardError ||
-  env.OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD === "1" ||
-  !shouldRunHeavyCheck
+  sparseGuardError || env.OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD === "1" || !shouldRunHeavyCheck
     ? () => {}
     : acquireLocalHeavyCheckLockSync({
         cwd: process.cwd(),
         env,
         toolName: "tsgo",
       });
+const pressureGuardError =
+  sparseGuardError || !shouldRunHeavyCheck
+    ? null
+    : getLocalHeavyCheckPressureError({ cwd: process.cwd(), env });
 
 try {
   if (sparseGuardError) {
