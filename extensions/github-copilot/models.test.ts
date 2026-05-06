@@ -80,6 +80,14 @@ describe("github-copilot model defaults", () => {
       expect(getDefaultCopilotModelIds()).toContain("claude-sonnet-4.5");
     });
 
+    it("includes gpt-5.5", () => {
+      expect(getDefaultCopilotModelIds()).toContain("gpt-5.5");
+    });
+
+    it("includes claude-opus-4.7-1m-internal", () => {
+      expect(getDefaultCopilotModelIds()).toContain("claude-opus-4.7-1m-internal");
+    });
+
     it("returns a mutable copy", () => {
       const a = getDefaultCopilotModelIds();
       const b = getDefaultCopilotModelIds();
@@ -104,6 +112,21 @@ describe("github-copilot model defaults", () => {
     it("throws on empty model id", () => {
       expect(() => buildCopilotModelDefinition("")).toThrow("Model id required");
       expect(() => buildCopilotModelDefinition("  ")).toThrow("Model id required");
+    });
+
+    it("uses 1M context window for -1m-internal model ids", () => {
+      const def = buildCopilotModelDefinition("claude-opus-4.7-1m-internal");
+      expect(def.contextWindow).toBe(1_000_000);
+    });
+
+    it("uses 1M context window for plain -1m model ids", () => {
+      const def = buildCopilotModelDefinition("some-future-model-1m");
+      expect(def.contextWindow).toBe(1_000_000);
+    });
+
+    it("uses default 128k context window for non-1m model ids", () => {
+      const def = buildCopilotModelDefinition("claude-opus-4.7");
+      expect(def.contextWindow).toBe(128_000);
     });
   });
 });
@@ -196,6 +219,24 @@ describe("resolveCopilotForwardCompatModel", () => {
     expect(result.name).toBe("gpt-5.4-mini");
     expect((result as unknown as Record<string, unknown>).api).toBe("openai-responses");
     expect((result as unknown as Record<string, unknown>).input).toEqual(["text", "image"]);
+  });
+
+  it("synthetic catch-all uses 1M context window for -1m-internal model ids", () => {
+    const ctx = createMockCtx("future-claude-opus-1m-internal");
+    const result = requireResolvedModel(ctx);
+    expect((result as unknown as Record<string, unknown>).contextWindow).toBe(1_000_000);
+  });
+
+  it("synthetic catch-all uses 1M context window for plain -1m model ids", () => {
+    const ctx = createMockCtx("future-model-1m");
+    const result = requireResolvedModel(ctx);
+    expect((result as unknown as Record<string, unknown>).contextWindow).toBe(1_000_000);
+  });
+
+  it("synthetic catch-all keeps 128k context window for non-1m model ids", () => {
+    const ctx = createMockCtx("gpt-5.4-mini");
+    const result = requireResolvedModel(ctx);
+    expect((result as unknown as Record<string, unknown>).contextWindow).toBe(128_000);
   });
 
   it("infers reasoning=true for o1/o3 model IDs", () => {
