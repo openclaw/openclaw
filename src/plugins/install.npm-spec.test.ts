@@ -507,6 +507,94 @@ describe("installPluginFromNpmSpec", () => {
     },
   );
 
+  it("repairs stale managed openclaw root packages before npm plugin installs", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(stateDir, "npm");
+    fs.mkdirSync(path.join(npmRoot, "node_modules", "openclaw"), { recursive: true });
+    fs.writeFileSync(
+      path.join(npmRoot, "package.json"),
+      JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            openclaw: "2026.5.4",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(npmRoot, "package-lock.json"),
+      `${JSON.stringify(
+        {
+          lockfileVersion: 3,
+          packages: {
+            "": {
+              dependencies: {
+                openclaw: "2026.5.4",
+              },
+            },
+            "node_modules/openclaw": {
+              version: "2026.5.4",
+              resolved: "https://registry.npmjs.org/openclaw/-/openclaw-2026.5.4.tgz",
+            },
+          },
+          dependencies: {
+            openclaw: {
+              version: "2026.5.4",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(npmRoot, "node_modules", "openclaw", "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.5.4",
+      }),
+      "utf-8",
+    );
+
+    mockNpmViewAndInstall({
+      spec: "@openclaw/discord@beta",
+      packageName: "@openclaw/discord",
+      version: "2026.5.5-beta.1",
+      pluginId: "discord",
+      npmRoot,
+      peerDependencies: { openclaw: ">=2026.5.5-beta.1" },
+      expectedDependencySpec: "2026.5.5-beta.1",
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/discord@beta",
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(true);
+    const manifest = JSON.parse(fs.readFileSync(path.join(npmRoot, "package.json"), "utf8")) as {
+      dependencies?: Record<string, string>;
+    };
+    expect(manifest.dependencies).not.toHaveProperty("openclaw");
+    expect(manifest.dependencies).toMatchObject({
+      "@openclaw/discord": "2026.5.5-beta.1",
+    });
+    const lockfile = JSON.parse(
+      fs.readFileSync(path.join(npmRoot, "package-lock.json"), "utf8"),
+    ) as {
+      packages?: Record<string, unknown>;
+      dependencies?: Record<string, unknown>;
+    };
+    expect(lockfile.packages?.["node_modules/openclaw"]).toBeUndefined();
+    expect(lockfile.dependencies?.openclaw).toBeUndefined();
+  });
+
   it("allows npm-spec installs with dangerous code patterns when forced unsafe install is set", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const warnings: string[] = [];

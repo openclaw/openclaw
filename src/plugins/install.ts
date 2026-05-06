@@ -9,6 +9,7 @@ import {
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import {
   readManagedNpmRootInstalledDependency,
+  repairManagedNpmRootOpenClawPeer,
   removeManagedNpmRootDependency,
   resolveManagedNpmRootDependencySpec,
   upsertManagedNpmRootDependency,
@@ -1335,6 +1336,12 @@ export async function installPluginFromNpmSpec(
   }
 
   logger.info?.(`Installing ${spec} into ${npmRoot}…`);
+  if (parsedSpec.name !== "openclaw") {
+    const repairedOpenClawPeer = await repairManagedNpmRootOpenClawPeer({ npmRoot });
+    if (repairedOpenClawPeer) {
+      logger.info?.(`Repaired stale openclaw peer dependency in ${npmRoot}`);
+    }
+  }
   await upsertManagedNpmRootDependency({
     npmRoot,
     packageName: parsedSpec.name,
