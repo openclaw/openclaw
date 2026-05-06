@@ -6,6 +6,7 @@ import { backupVerifyCommand } from "../commands/backup-verify.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
+  __test as backupCreateInternals,
   buildExtensionsNodeModulesFilter,
   createBackupArchive,
   formatBackupCreateSummary,
@@ -23,6 +24,7 @@ function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateRe
     verified: false,
     assets: [],
     skipped: [],
+    skippedVolatileCount: 0,
     ...overrides,
   };
 }
@@ -105,6 +107,159 @@ describe("formatBackupCreateSummary", () => {
     },
   ])("$name", ({ result, expected }) => {
     expect(formatBackupCreateSummary(result)).toEqual(expected);
+  });
+
+  it("surfaces the volatile skip count in the summary", () => {
+    expect(
+      formatBackupCreateSummary(
+        makeResult({
+          assets: [
+            {
+              kind: "state",
+              sourcePath: "/state",
+              archivePath: "archive/state",
+              displayPath: "~/.openclaw",
+            },
+          ],
+          skippedVolatileCount: 3,
+        }),
+      ),
+    ).toEqual([
+      "Backup archive: /tmp/openclaw-backup.tar.gz",
+      "Included 1 path:",
+      "- state: ~/.openclaw",
+      "Created /tmp/openclaw-backup.tar.gz",
+      "Skipped 3 volatile files (live session/cron logs, sockets, pid/lock/tmp).",
+    ]);
+  });
+});
+
+describe("isTarEofRaceError", () => {
+  const { isTarEofRaceError } = backupCreateInternals;
+
+  it.each([
+    "did not encounter expected EOF",
+    "encountered unexpected EOF",
+    "TAR_BAD_ARCHIVE: Unrecognized archive format",
+    "Truncated input (needed 512 more bytes, only 0 available) (TAR_BAD_ARCHIVE)",
+  ])("matches tar-specific EOF-class error: %s", (message) => {
+    expect(isTarEofRaceError(new Error(message))).toBe(true);
+  });
+
+  it("matches errors by code even when the message is empty", () => {
+    expect(isTarEofRaceError(Object.assign(new Error(""), { code: "EOF" }))).toBe(true);
+  });
+
+  it.each([
+    "EOF occurred in violation of protocol",
+    "unexpected eof while reading",
+    "ran out of EOF markers",
+    "permission denied",
+    "",
+  ])("does not match unrelated errors: %s", (message) => {
+    expect(isTarEofRaceError(new Error(message))).toBe(false);
+  });
+
+  it("rejects non-object inputs", () => {
+    expect(isTarEofRaceError(null)).toBe(false);
+    expect(isTarEofRaceError(undefined)).toBe(false);
+    expect(isTarEofRaceError("did not encounter expected EOF")).toBe(false);
+  });
+});
+
+describe("writeTarArchiveWithRetry", () => {
+  it("retries on EOF-class errors and eventually succeeds", async () => {
+    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
+      path: "/state/sessions/s-abc/transcript.jsonl",
+    });
+    const runTar = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(eofErr)
+      .mockRejectedValueOnce(eofErr)
+      .mockResolvedValueOnce(undefined);
+    const log = vi.fn();
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    await backupCreateInternals.writeTarArchiveWithRetry({
+      tempArchivePath: "/tmp/backup.tar.gz.tmp",
+      runTar,
+      log,
+      sleepMs: sleep,
+    });
+
+    expect(runTar).toHaveBeenCalledTimes(3);
+    expect(sleep).toHaveBeenNthCalledWith(1, 10_000);
+    expect(sleep).toHaveBeenNthCalledWith(2, 20_000);
+    expect(log).toHaveBeenCalledTimes(2);
+  });
+
+  it("surfaces the offending path and attempt count after exhausting retries", async () => {
+    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
+      path: "/state/logs/gateway.jsonl",
+    });
+    const runTar = vi.fn<() => Promise<void>>().mockRejectedValue(eofErr);
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    await expect(
+      backupCreateInternals.writeTarArchiveWithRetry({
+        tempArchivePath: "/tmp/backup.tar.gz.tmp",
+        runTar,
+        sleepMs: sleep,
+      }),
+    ).rejects.toThrow(/last offending path: \/state\/logs\/gateway\.jsonl, after 3 attempts/);
+    expect(runTar).toHaveBeenCalledTimes(3);
+  });
+
+  it("lets callers reset per-attempt counters so retries report the final attempt's count, not a running sum", async () => {
+    // Simulate the caller's pattern: a closure counter populated by a filter
+    // that tar.c invokes while walking the tree. Each attempt re-walks the
+    // same tree, so the runTar closure must reset the counter before calling
+    // tar.c -- otherwise the reported count accumulates across attempts.
+    let skippedVolatileCount = 0;
+    const volatileFilesSeenPerAttempt = 5;
+    let attempt = 0;
+
+    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
+      path: "/state/sessions/s-abc/transcript.jsonl",
+    });
+
+    const runTar = vi.fn<() => Promise<void>>().mockImplementation(async () => {
+      attempt += 1;
+      skippedVolatileCount = 0;
+      for (let i = 0; i < volatileFilesSeenPerAttempt; i += 1) {
+        skippedVolatileCount += 1;
+      }
+      if (attempt < 3) {
+        throw eofErr;
+      }
+    });
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    await backupCreateInternals.writeTarArchiveWithRetry({
+      tempArchivePath: "/tmp/backup.tar.gz.tmp",
+      runTar,
+      sleepMs: sleep,
+    });
+
+    expect(runTar).toHaveBeenCalledTimes(3);
+    // Without the reset, this would be 15 (5 * 3 attempts). With the reset,
+    // it equals the count from the final (successful) attempt.
+    expect(skippedVolatileCount).toBe(volatileFilesSeenPerAttempt);
+  });
+
+  it("does not retry on non-EOF errors", async () => {
+    const runTar = vi.fn<() => Promise<void>>().mockRejectedValue(new Error("permission denied"));
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    await expect(
+      backupCreateInternals.writeTarArchiveWithRetry({
+        tempArchivePath: "/tmp/backup.tar.gz.tmp",
+        runTar,
+        sleepMs: sleep,
+      }),
+    ).rejects.toThrow(/permission denied/);
+    expect(runTar).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
   });
 });
 
