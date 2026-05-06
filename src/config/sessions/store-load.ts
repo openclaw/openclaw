@@ -1,4 +1,6 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
@@ -17,6 +19,7 @@ import {
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
 import { applySessionStoreMigrations } from "./store-migrations.js";
+import { isSessionStoreRecord, isValidSessionEntry } from "./store-validation.js";
 import { normalizeSessionRuntimeModelFields, type SessionEntry } from "./types.js";
 
 export type LoadSessionStoreOptions = {
@@ -28,8 +31,204 @@ export type LoadSessionStoreOptions = {
 
 const log = createSubsystemLogger("sessions/store");
 
-function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
+// --- Recovery logic for OOM/crash-corrupted session stores ---
+
+const SESSION_STORE_RECOVERY_STALE_MS = 5000;
+const SESSION_STORE_MAX_RECOVERY_CANDIDATES = 50;
+
+interface RecoveryCandidate {
+  path: string;
+  mtimeMs: number;
+  source: "bak" | "tmp";
+  sourceRank: number;
+  store?: Record<string, SessionEntry>;
+  validEntryCount?: number;
+}
+
+function collectSessionStoreRecoveryCandidates(storePath: string): {
+  candidates: RecoveryCandidate[];
+  totalCandidateCount: number;
+  freshTmpCount: number;
+} {
+  const storeDir = path.dirname(storePath);
+  const storeBase = path.basename(storePath);
+  const now = Date.now();
+  const candidates: RecoveryCandidate[] = [];
+  let freshTmpCount = 0;
+
+  // Always check .bak first, not subject to tmp count limit
+  const bakPath = `${storePath}.bak`;
+  try {
+    const stat = fs.statSync(bakPath);
+    if (stat.size > 0) {
+      candidates.push({
+        path: bakPath,
+        mtimeMs: stat.mtimeMs,
+        source: "bak",
+        sourceRank: 3,
+      });
+    }
+  } catch {
+    // No .bak file — that's fine
+  }
+
+  // Collect all tmp candidates before capping
+  const rawTmpCandidates: RecoveryCandidate[] = [];
+  try {
+    const entries = fs.readdirSync(storeDir);
+    for (const entry of entries) {
+      const isSessionTmp = entry.startsWith(`${storeBase}.`) && entry.endsWith(".tmp");
+      const isFsSafeReplaceTmp = entry.startsWith(".fs-safe-replace.") && entry.endsWith(".tmp");
+      if (!isSessionTmp && !isFsSafeReplaceTmp) continue;
+      const tmpPath = path.join(storeDir, entry);
+      try {
+        const stat = fs.statSync(tmpPath);
+        if (stat.size <= 0) continue;
+        const ageMs = now - stat.mtimeMs;
+        const isFresh = ageMs < SESSION_STORE_RECOVERY_STALE_MS;
+        if (isFresh) {
+          freshTmpCount++;
+        }
+        rawTmpCandidates.push({
+          path: tmpPath,
+          mtimeMs: stat.mtimeMs,
+          source: "tmp",
+          sourceRank: isFresh ? 1 : 2,
+        });
+      } catch {
+        // stat failed — skip
+      }
+    }
+  } catch {
+    // readdir failed — skip
+  }
+
+  // Sort by sourceRank desc (stale=2 > fresh=1), then mtime desc, then apply cap
+  rawTmpCandidates.sort((a, b) => {
+    if (b.sourceRank !== a.sourceRank) return b.sourceRank - a.sourceRank;
+    return b.mtimeMs - a.mtimeMs;
+  });
+  const cappedTmp = rawTmpCandidates.slice(0, SESSION_STORE_MAX_RECOVERY_CANDIDATES);
+
+  // .bak always included (prepended); then capped stale tmp
+  const allCandidates = candidates.concat(cappedTmp);
+
+  return {
+    candidates: allCandidates,
+    totalCandidateCount: allCandidates.length,
+    freshTmpCount,
+  };
+}
+
+function evaluateRecoveryCandidate(candidate: RecoveryCandidate): RecoveryCandidate | null {
+  try {
+    const raw = fs.readFileSync(candidate.path, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (!isSessionStoreRecord(parsed)) {
+      return null;
+    }
+    let validEntryCount = 0;
+    for (const key of Object.keys(parsed)) {
+      if (isValidSessionEntry(parsed[key])) {
+        validEntryCount++;
+      }
+    }
+    if (validEntryCount <= 0) {
+      return null;
+    }
+    return { ...candidate, store: parsed, validEntryCount };
+  } catch {
+    return null;
+  }
+}
+
+function tryRecoverSessionStore(storePath: string): RecoveryCandidate | null {
+  const { candidates, totalCandidateCount, freshTmpCount } =
+    collectSessionStoreRecoveryCandidates(storePath);
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  let invalidCount = 0;
+  const invalidReasons: string[] = [];
+
+  for (const candidate of candidates) {
+    const evaluated = evaluateRecoveryCandidate(candidate);
+    if (evaluated) {
+      return evaluated;
+    }
+    invalidCount++;
+    if (invalidReasons.length < 3) {
+      invalidReasons.push(`${candidate.source}:${candidate.path}`);
+    }
+  }
+
+  if (totalCandidateCount > 0) {
+    log.debug("no valid recovery candidate found", {
+      storePath,
+      totalCandidateCount,
+      invalidCandidateCount: invalidCount,
+      freshTmpCount,
+      sampleInvalidReasons: invalidReasons,
+    });
+  }
+
+  return null;
+}
+
+function selfHealWriteback(
+  storePath: string,
+  store: Record<string, SessionEntry>,
+  recoveryPath: string,
+  recoverySource: string,
+  entryCount: number | undefined,
+): void {
+  const tmpPath = `${storePath}.${crypto.randomUUID()}.tmp`;
+  try {
+    const json = JSON.stringify(store, null, 2);
+    const fd = fs.openSync(tmpPath, "w", 0o600);
+    try {
+      fs.writeFileSync(fd, json, "utf-8");
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tmpPath, storePath);
+    try {
+      fs.chmodSync(storePath, 0o600);
+    } catch {
+      // chmod best-effort
+    }
+    try {
+      const dirFd = fs.openSync(path.dirname(storePath), "r");
+      try {
+        fs.fsyncSync(dirFd);
+      } finally {
+        fs.closeSync(dirFd);
+      }
+    } catch {
+      // dir fsync best-effort
+    }
+    log.info("self-healed session store from backup/tmp", {
+      storePath,
+      recoverySource,
+      recoveryPath,
+      entryCount,
+    });
+  } catch (writeError: unknown) {
+    log.warn("failed to self-heal session store after recovery", {
+      storePath,
+      recoverySource,
+      recoveryPath,
+      entryCount,
+      error: writeError instanceof Error ? writeError.message : String(writeError),
+    });
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {
+      // cleanup best-effort
+    }
+  }
 }
 
 function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
@@ -145,6 +344,34 @@ export function loadSessionStore(
     }
   }
 
+  // Recovery: if main file exists but is corrupted/empty/non-object, try .bak/.tmp
+  const mainFileExists = (() => {
+    try {
+      fs.accessSync(storePath);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  const mainFileCorruptedOrEmpty =
+    mainFileExists && serializedFromDisk === undefined && Object.keys(store).length === 0;
+  if (mainFileCorruptedOrEmpty) {
+    const recovered = tryRecoverSessionStore(storePath);
+    if (recovered?.store) {
+      store = recovered.store;
+      serializedFromDisk = undefined; // cache miss → subsequent save proceeds
+
+      // Self-heal: atomically write recovered store back to main file
+      selfHealWriteback(
+        storePath,
+        store,
+        recovered.path,
+        recovered.source,
+        recovered.validEntryCount,
+      );
+    }
+  }
+
   const migrated = applySessionStoreMigrations(store);
   const normalized = normalizeSessionStore(store);
   if (migrated || normalized) {
@@ -154,7 +381,9 @@ export function loadSessionStore(
     const maintenance = opts.maintenanceConfig ?? resolveMaintenanceConfig();
     const beforeCount = Object.keys(store).length;
     if (maintenance.mode === "enforce" && beforeCount > maintenance.maxEntries) {
-      const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, { log: false });
+      const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
+        log: false,
+      });
       const countAfterPrune = Object.keys(store).length;
       const capped = shouldRunSessionEntryMaintenance({
         entryCount: countAfterPrune,
