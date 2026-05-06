@@ -1384,12 +1384,24 @@ Defaults for Talk mode (macOS/iOS/Android).
     speechLocale: "ru-RU",
     silenceTimeoutMs: 1500,
     interruptOnSpeech: true,
+    realtime: {
+      provider: "openai",
+      providers: {
+        openai: {
+          model: "gpt-realtime",
+          voice: "alloy",
+        },
+      },
+      mode: "realtime",
+      transport: "webrtc",
+      brain: "agent-consult",
+    },
   },
 }
 ```
 
 - `talk.provider` must match a key in `talk.providers` when multiple Talk providers are configured.
-- Legacy flat Talk keys (`talk.voiceId`, `talk.voiceAliases`, `talk.modelId`, `talk.outputFormat`, `talk.apiKey`) are compatibility-only and are auto-migrated into `talk.providers.<provider>`.
+- Legacy flat Talk keys (`talk.voiceId`, `talk.voiceAliases`, `talk.modelId`, `talk.outputFormat`, `talk.apiKey`) are compatibility-only. Run `openclaw doctor --fix` to rewrite persisted config into `talk.providers.<provider>`.
 - Voice IDs fall back to `ELEVENLABS_VOICE_ID` or `SAG_VOICE_ID`.
 - `providers.*.apiKey` accepts plaintext strings or SecretRef objects.
 - `ELEVENLABS_API_KEY` fallback applies only when no Talk API key is configured.
