@@ -115,7 +115,8 @@ export async function registerChannelsCli(
 
   channels
     .command("list")
-    .description("List configured channels + auth profiles")
+    .description("List chat channels (configured by default; pass --all for installable catalog)")
+    .option("--all", "Include bundled and installable catalog channels", false)
     .option("--no-usage", "Skip model provider usage/quota snapshots")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
