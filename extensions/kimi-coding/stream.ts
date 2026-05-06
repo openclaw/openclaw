@@ -197,6 +197,38 @@ export function createKimiToolCallMarkupWrapper(baseStreamFn: StreamFn | undefin
   };
 }
 
+function messageHasKimiToolCall(message: Record<string, unknown>): boolean {
+  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+    return true;
+  }
+  if (!Array.isArray(message.content)) {
+    return false;
+  }
+  return message.content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const type = (block as { type?: unknown }).type;
+    return type === "toolCall" || type === "tool_use";
+  });
+}
+
+function ensureKimiToolCallReasoningContent(payload: Record<string, unknown>): void {
+  if (!Array.isArray(payload.messages)) {
+    return;
+  }
+  for (const message of payload.messages) {
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const record = message as Record<string, unknown>;
+    if (record.role !== "assistant" || !messageHasKimiToolCall(record)) {
+      continue;
+    }
+    record.reasoning_content ??= "";
+  }
+}
+
 export function createKimiThinkingWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingType: KimiThinkingType,
@@ -208,6 +240,9 @@ export function createKimiThinkingWrapper(
       delete payloadObj.reasoning;
       delete payloadObj.reasoning_effort;
       delete payloadObj.reasoningEffort;
+      if (thinkingType === "enabled") {
+        ensureKimiToolCallReasoningContent(payloadObj);
+      }
     });
 }
 
