@@ -266,6 +266,99 @@ describe("sendMessageMattermost", () => {
     );
   });
 
+  it("resolves child replyToId to the Mattermost thread root before posting", async () => {
+    const client = {
+      request: vi.fn().mockResolvedValue({
+        id: "child-post",
+        channel_id: "town-square",
+        root_id: "root-post",
+      }),
+    };
+    mockState.createMattermostClient.mockReturnValue(client);
+
+    await sendMessageMattermost("channel:town-square", "threaded", {
+      cfg: TEST_CFG,
+      replyToId: "child-post",
+    });
+
+    expect(client.request).toHaveBeenCalledWith("/posts/child-post");
+    expect(mockState.createMattermostPost).toHaveBeenCalledWith(
+      client,
+      expect.objectContaining({
+        channelId: "town-square",
+        rootId: "root-post",
+      }),
+    );
+  });
+
+  it("preserves top-level replyToId as the Mattermost root when the post is in channel", async () => {
+    const client = {
+      request: vi.fn().mockResolvedValue({
+        id: "root-post",
+        channel_id: "town-square",
+        root_id: "",
+      }),
+    };
+    mockState.createMattermostClient.mockReturnValue(client);
+
+    await sendMessageMattermost("channel:town-square", "threaded", {
+      cfg: TEST_CFG,
+      replyToId: "root-post",
+    });
+
+    expect(mockState.createMattermostPost).toHaveBeenCalledWith(
+      client,
+      expect.objectContaining({
+        channelId: "town-square",
+        rootId: "root-post",
+      }),
+    );
+  });
+
+  it("drops replyToId when the referenced Mattermost post is in another channel", async () => {
+    const client = {
+      request: vi.fn().mockResolvedValue({
+        id: "other-child",
+        channel_id: "other-channel",
+        root_id: "other-root",
+      }),
+    };
+    mockState.createMattermostClient.mockReturnValue(client);
+
+    await sendMessageMattermost("channel:town-square", "not cross threaded", {
+      cfg: TEST_CFG,
+      replyToId: "other-child",
+    });
+
+    expect(mockState.createMattermostPost).toHaveBeenCalledWith(
+      client,
+      expect.objectContaining({
+        channelId: "town-square",
+        rootId: undefined,
+      }),
+    );
+  });
+
+  it("drops replyToId when Mattermost cannot resolve the referenced post", async () => {
+    const client = {
+      request: vi.fn().mockRejectedValue(new Error("Mattermost API 404: post not found")),
+    };
+    mockState.createMattermostClient.mockReturnValue(client);
+
+    await sendMessageMattermost("channel:town-square", "top level fallback", {
+      cfg: TEST_CFG,
+      replyToId: "missing-post",
+    });
+
+    expect(mockState.createMattermostPost).toHaveBeenCalledWith(
+      client,
+      expect.objectContaining({
+        channelId: "town-square",
+        rootId: undefined,
+      }),
+    );
+  });
+
   it("builds interactive button props when buttons are provided", async () => {
     mockState.resolveMattermostAccount.mockReturnValue({
       accountId: "default",

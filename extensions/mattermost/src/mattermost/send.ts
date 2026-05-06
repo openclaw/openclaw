@@ -24,6 +24,7 @@ import {
   normalizeMattermostBaseUrl,
   uploadMattermostFile,
   type MattermostUser,
+  type MattermostClient,
   type CreateDmChannelRetryOptions,
 } from "./client.js";
 import {
@@ -432,6 +433,31 @@ export async function resolveMattermostSendChannelId(
   return (await resolveMattermostSendContext(to, opts)).channelId;
 }
 
+async function resolveMattermostPostRootIdForSend(
+  client: MattermostClient,
+  channelId: string,
+  replyToId?: string,
+): Promise<string | undefined> {
+  const trimmed = normalizeOptionalString(replyToId);
+  if (!trimmed) {
+    return undefined;
+  }
+
+  try {
+    const post = await client.request<{
+      id?: string | null;
+      channel_id?: string | null;
+      root_id?: string | null;
+    }>(`/posts/${encodeURIComponent(trimmed)}`);
+    if (post.channel_id && post.channel_id !== channelId) {
+      return undefined;
+    }
+    return normalizeOptionalString(post.root_id) ?? normalizeOptionalString(post.id);
+  } catch {
+    return undefined;
+  }
+}
+
 export async function sendMessageMattermost(
   to: string,
   text: string,
@@ -504,10 +530,12 @@ export async function sendMessageMattermost(
     throw new Error("Mattermost message is empty");
   }
 
+  const rootId = await resolveMattermostPostRootIdForSend(client, channelId, opts.replyToId);
+
   const post = await createMattermostPost(client, {
     channelId,
     message,
-    rootId: opts.replyToId,
+    rootId,
     fileIds,
     props,
   });
