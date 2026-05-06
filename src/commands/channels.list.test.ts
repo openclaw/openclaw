@@ -324,4 +324,47 @@ describe("channels list", () => {
     expect(payload.chat.discord).toMatchObject({ origin: "available", installed: true });
     expect(payload.chat.qqbot).toMatchObject({ origin: "installable", installed: false });
   });
+
+  it(
+    "--all still surfaces catalog channels that are installed on disk but have no " +
+      "plugin object loaded and no config entry (regression: WeCom-like channels " +
+      "disappearing when the read-only loader only surfaces configured channels)",
+    async () => {
+      const runtime = createTestRuntime();
+      // Read-only loader returns nothing for wecom because the user has no
+      // configured wecom channel, so the loader never activates it.
+      mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
+      // But catalog knows about wecom, and isCatalogChannelInstalled sees
+      // the wecom npm package on disk.
+      mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
+        createCatalogEntry("wecom", "WeCom"),
+      ]);
+      mocks.isCatalogChannelInstalled.mockReturnValue(true);
+      mocks.readConfigFileSnapshot.mockResolvedValue({
+        ...baseConfigSnapshot,
+        config: {},
+      });
+
+      await channelsListCommand({ usage: false, all: true }, runtime);
+
+      const output = stripAnsi(runtime.log.mock.calls[0]?.[0] as string);
+      expect(output).toContain("WeCom");
+      expect(output).toContain("installed");
+      expect(output).not.toContain("not installed");
+      expect(output).toContain("not configured");
+      expect(output).toContain("disabled");
+
+      // JSON side: origin should be "available" (installed, but user has
+      // not written a config entry for it).
+      runtime.log.mockClear();
+      await channelsListCommand({ json: true, usage: false, all: true }, runtime);
+      const payload = JSON.parse(runtime.log.mock.calls[0]?.[0] as string) as {
+        chat: Record<string, { origin: string; installed: boolean }>;
+      };
+      expect(payload.chat.wecom).toMatchObject({
+        origin: "available",
+        installed: true,
+      });
+    },
+  );
 });
