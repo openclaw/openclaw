@@ -8,6 +8,7 @@ import {
 } from "../channels/plugins/native-approval-prompt.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
+import { findCodeRegions } from "../shared/text/code-regions.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -112,7 +113,32 @@ function sanitizeContextFileContentForPrompt(content: string): string {
   // Claude Code subscription mode rejects this exact prompt-policy quote when it
   // appears in system context. The live heartbeat user turn still carries the
   // actual instruction, and the generated heartbeat section below covers behavior.
-  return content.replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "").replace(/\n{3,}/g, "\n\n");
+  let result = content.replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "");
+
+  // Mask code regions so literal ~~examples~~ inside fences/inline code survive.
+  const regions = findCodeRegions(result);
+  const saved: string[] = [];
+  let masked = "";
+  let cursor = 0;
+  for (const { start, end } of regions) {
+    masked += result.slice(cursor, start);
+    saved.push(result.slice(start, end));
+    masked += `\x00${saved.length - 1}\x00`;
+    cursor = end;
+  }
+  masked += result.slice(cursor);
+
+  // Remove deprecated/struck-through text entirely — strikethrough in bootstrap
+  // files signals content that has been removed, so it must not be forwarded to
+  // the model (it wastes tokens and can confuse the model with stale instructions).
+  masked = masked.replace(/(?<![~])~~(?![~])[\s\S]+?(?<![~])~~(?![~])/g, "");
+  masked = masked.replace(/<s(?:\s[^>]*)?>[\s\S]+?<\/s>/gi, "");
+  masked = masked.replace(/<del(?:\s[^>]*)?>[\s\S]+?<\/del>/gi, "");
+  masked = masked.replace(/<strike(?:\s[^>]*)?>[\s\S]+?<\/strike>/gi, "");
+
+  result = masked.replace(/\x00(\d+)\x00/g, (_, i) => saved[+i]!);
+
+  return result.replace(/\n{3,}/g, "\n\n");
 }
 
 function sortContextFilesForPrompt(contextFiles: EmbeddedContextFile[]): EmbeddedContextFile[] {
