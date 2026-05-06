@@ -152,6 +152,7 @@ Docs: https://docs.openclaw.ai
 - Agents/TTS: send media-bearing block replies directly when block streaming is off, so agent `tts` tool audio attached to a final text reply is delivered instead of being consumed before final Telegram/media delivery. Thanks @Conan-Scott.
 - Agents/generated media: treat attachment-style message tool actions as completed chat sends, preventing duplicate fallback media posts when generated files were already uploaded.
 - Control UI/sessions: show each session's agent runtime in the Sessions table and allow filtering by runtime labels, matching the Agents panel runtime wording. Thanks @vincentkoc.
+- Providers/self-hosted: read llama.cpp runtime context from `/props.default_generation_settings.n_ctx` while keeping top-level `n_ctx` as a fallback, so session budgeting reflects the loaded context window. Fixes #73664. Thanks @brokemac79.
 - Discord/streaming: show live reasoning text in progress drafts instead of a bare `Reasoning` status line.
 - Gateway/status: avoid marking fast repeated health/status samples as event-loop degraded from CPU/utilization alone until the Gateway has accumulated a sustained sampling window. Thanks @shakkernerd.
 - Gateway/performance: reuse the current compatible plugin metadata snapshot across hot read-only status, channel, auth, skills, and embedded agent settings paths, avoiding repeated synchronous plugin metadata scans during Gateway activity. Fixes #77983. Thanks @shakkernerd.
