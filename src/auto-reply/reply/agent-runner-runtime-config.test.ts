@@ -23,6 +23,7 @@ function makeRun(config: OpenClawConfig): FollowupRun["run"] {
     enforceFinalTag: false,
     skipProviderRuntimeHints: true,
     thinkLevel: "medium",
+    fastMode: true,
     verboseLevel: "off",
     reasoningLevel: "none",
     execOverrides: {},
@@ -74,5 +75,17 @@ describe("buildEmbeddedRunBaseParams runtime config", () => {
     });
 
     expect(resolved.config).toBe(resolvedRunConfig);
+  });
+
+  it("forwards fast mode to embedded runner params", () => {
+    const resolved = buildEmbeddedRunBaseParams({
+      run: makeRun({}),
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+      authProfile: {},
+    });
+
+    expect(resolved.fastMode).toBe(true);
   });
 });

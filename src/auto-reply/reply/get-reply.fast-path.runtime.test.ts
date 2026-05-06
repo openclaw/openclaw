@@ -64,54 +64,57 @@ describe("getReplyFromConfig fast-path runtime", () => {
     });
   });
 
-  it("preserves session fast mode in the fast-path runtime", async () => {
-    await withTempHome(async (home) => {
-      const sessionKey = "agent:main:whatsapp:+2000";
-      const sessionFile = path.join(
-        home,
-        ".openclaw",
-        "agents",
-        "main",
-        "sessions",
-        "session-fast-mode.jsonl",
-      );
-      await fs.writeFile(
-        path.join(home, "sessions.json"),
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId: "session-fast-mode",
-            sessionFile,
-            fastMode: true,
-            updatedAt: Date.now(),
+  it.each([true, false])(
+    "preserves session fast mode=%s in the fast-path runtime",
+    async (fastMode) => {
+      await withTempHome(async (home) => {
+        const sessionKey = "agent:main:whatsapp:+2000";
+        const sessionFile = path.join(
+          home,
+          ".openclaw",
+          "agents",
+          "main",
+          "sessions",
+          "session-fast-mode.jsonl",
+        );
+        await fs.writeFile(
+          path.join(home, "sessions.json"),
+          JSON.stringify({
+            [sessionKey]: {
+              sessionId: "session-fast-mode",
+              sessionFile,
+              fastMode,
+              updatedAt: Date.now(),
+            },
+          }),
+          "utf8",
+        );
+
+        let seenFastMode: unknown;
+        agentMocks.runEmbeddedPiAgent.mockImplementation(async (params) => {
+          seenFastMode = params.fastMode;
+          return makeEmbeddedTextResult("ok");
+        });
+
+        await getReplyFromConfig(
+          {
+            Body: "hello",
+            BodyForAgent: "hello",
+            RawBody: "hello",
+            CommandBody: "hello",
+            From: "+1001",
+            To: "+2000",
+            SessionKey: sessionKey,
+            Provider: "whatsapp",
+            Surface: "whatsapp",
+            ChatType: "direct",
           },
-        }),
-        "utf8",
-      );
+          {},
+          makeReplyConfig(home) as OpenClawConfig,
+        );
 
-      let seenFastMode: unknown;
-      agentMocks.runEmbeddedPiAgent.mockImplementation(async (params) => {
-        seenFastMode = params.fastMode;
-        return makeEmbeddedTextResult("ok");
+        expect(seenFastMode).toBe(fastMode);
       });
-
-      await getReplyFromConfig(
-        {
-          Body: "hello",
-          BodyForAgent: "hello",
-          RawBody: "hello",
-          CommandBody: "hello",
-          From: "+1001",
-          To: "+2000",
-          SessionKey: sessionKey,
-          Provider: "whatsapp",
-          Surface: "whatsapp",
-          ChatType: "direct",
-        },
-        {},
-        makeReplyConfig(home) as OpenClawConfig,
-      );
-
-      expect(seenFastMode).toBe(true);
-    });
-  });
+    },
+  );
 });
