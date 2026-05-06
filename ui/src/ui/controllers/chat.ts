@@ -647,10 +647,16 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
   }
   const runId = state.chatRunId;
   try {
-    await state.client.request(
+    const result = await state.client.request<{ aborted?: boolean }>(
       "chat.abort",
       runId ? { sessionKey: state.sessionKey, runId } : { sessionKey: state.sessionKey },
     );
+    if (result?.aborted !== true) {
+      state.chatSending = false;
+      state.chatStream = null;
+      state.chatRunId = null;
+      state.chatStreamStartedAt = null;
+    }
     return true;
   } catch (err) {
     state.lastError = formatConnectError(err);
