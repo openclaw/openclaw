@@ -13,13 +13,45 @@ import {
 import type { BundleMcpToolRuntime, SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
+// Normalize MCP `EmbeddedResource` blocks (`type: "resource"`) into text blocks at the
+// bundle-MCP boundary so downstream provider transports — which only recognize text/image —
+// surface the resource payload instead of falling back to a `(see attached image)` placeholder.
+// See https://github.com/openclaw/openclaw/issues/75674.
+function normalizeMcpContent(
+  content: readonly unknown[],
+): AgentToolResult<unknown>["content"] {
+  const out: AgentToolResult<unknown>["content"] = [];
+  for (const part of content) {
+    if (!part || typeof part !== "object") {
+      continue;
+    }
+    const block = part as Record<string, unknown>;
+    if (block.type === "resource" && block.resource && typeof block.resource === "object") {
+      const resource = block.resource as Record<string, unknown>;
+      if (typeof resource.text === "string") {
+        out.push({ type: "text", text: resource.text });
+        continue;
+      }
+      // Binary/blob resource: preserve uri+mimeType metadata as a text marker so
+      // tool results stay informative instead of disappearing into a placeholder.
+      const uri = typeof resource.uri === "string" ? resource.uri : "";
+      const mimeType = typeof resource.mimeType === "string" ? resource.mimeType : "";
+      const marker = mimeType ? `[Resource: ${uri} (${mimeType})]` : `[Resource: ${uri}]`;
+      out.push({ type: "text", text: marker });
+      continue;
+    }
+    out.push(block as unknown as AgentToolResult<unknown>["content"][number]);
+  }
+  return out;
+}
+
 function toAgentToolResult(params: {
   serverName: string;
   toolName: string;
   result: CallToolResult;
 }): AgentToolResult<unknown> {
   const content = Array.isArray(params.result.content)
-    ? (params.result.content as AgentToolResult<unknown>["content"])
+    ? normalizeMcpContent(params.result.content)
     : [];
   const normalizedContent: AgentToolResult<unknown>["content"] =
     content.length > 0

@@ -1045,6 +1045,7 @@ Docs: https://docs.openclaw.ai
 - Cron: retry recurring wake-now main-session jobs through temporary heartbeat busy skips before recording success, so queued cron events no longer appear as ok ghost runs while the main lane is still busy. Fixes #75964. (#76083) Thanks @kshetrajna12 and @xuruiray.
 - Providers/Google: keep Gemini thinking-signature-only stream chunks active during reasoning, so Gemini 3.1 Pro Preview replies no longer hit idle timeouts before visible text. Fixes #76071. (#76080) Thanks @marcoschierhorn and @zhangguiping-xydt.
 - CLI/skills: show per-agent model and command visibility in `openclaw skills check --agent`, and let doctor report or disable unavailable skills allowed for the default agent. (#75983) Thanks @mbelinky.
+- MCP/tool results: normalize `EmbeddedResource` content blocks into text at the bundle-MCP boundary so plugin tools that return `type: "resource"` (with `resource.text` or a binary `uri`/`mimeType`) reach providers as readable content instead of falling through to a `(see attached image)` placeholder. Fixes #75674. Thanks @Jedi-Pz.
 
 ## 2026.4.29
 
