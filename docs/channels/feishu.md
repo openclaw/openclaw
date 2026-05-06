@@ -479,9 +479,10 @@ conversion fails, OpenClaw falls back to a file attachment and logs the reason.
 
 For `groupSessionScope: "group_topic"` and `"group_topic_sender"`, native
 Feishu/Lark topic groups use the event `thread_id` (`omt_*`) as the canonical
-topic session key. Normal group replies that OpenClaw turns into threads keep
-using the reply root message ID (`om_*`) so the first turn and follow-up turn
-stay in the same session.
+topic session key. If a native topic starter event omits `thread_id`, OpenClaw
+hydrates it from Feishu before routing the turn. Normal group replies that
+OpenClaw turns into threads keep using the reply root message ID (`om_*`) so the
+first turn and follow-up turn stay in the same session.
 
 ---
 
