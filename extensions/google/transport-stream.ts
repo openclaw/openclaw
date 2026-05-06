@@ -375,9 +375,93 @@ function normalizeGoogleThinkingConfig(
   return Object.keys(thinkingConfig).length > 0 ? thinkingConfig : undefined;
 }
 
+function isGoogleRuntimeContextMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const candidate = message as { role?: unknown; customType?: unknown };
+  return candidate.role === "custom" && candidate.customType === "openclaw.runtime-context";
+}
+
+function isZeroUsageEmptyStopAssistantTurn(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const candidate = message as {
+    role?: unknown;
+    stopReason?: unknown;
+    content?: unknown;
+    usage?: {
+      input?: unknown;
+      output?: unknown;
+      cacheRead?: unknown;
+      cacheWrite?: unknown;
+      total?: unknown;
+    };
+  };
+  if (candidate.role !== "assistant" || candidate.stopReason !== "stop") {
+    return false;
+  }
+  if (!Array.isArray(candidate.content) || candidate.content.length > 0) {
+    return false;
+  }
+  const usage = candidate.usage;
+  const totals = [usage?.input, usage?.output, usage?.cacheRead, usage?.cacheWrite, usage?.total];
+  return totals.every((value) => value == null || value === 0);
+}
+
+const STREAM_ERROR_FALLBACK_TEXT = "[assistant turn failed before producing content]";
+
+function hasOnlyStreamErrorFallbackContent(content: unknown): boolean {
+  if (!Array.isArray(content) || content.length !== 1) {
+    return false;
+  }
+  const [block] = content;
+  return (
+    !!block &&
+    typeof block === "object" &&
+    (block as { type?: unknown }).type === "text" &&
+    (block as { text?: unknown }).text === STREAM_ERROR_FALLBACK_TEXT
+  );
+}
+
+function isGooglePoisonAssistantTurn(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const candidate = message as { role?: unknown; stopReason?: unknown; content?: unknown };
+  if (candidate.role !== "assistant") {
+    return false;
+  }
+  if (candidate.stopReason === "error") {
+    return (
+      hasOnlyStreamErrorFallbackContent(candidate.content) ||
+      (Array.isArray(candidate.content) && candidate.content.length === 0)
+    );
+  }
+  if (!Array.isArray(candidate.content) || candidate.content.length > 0) {
+    return false;
+  }
+  return isZeroUsageEmptyStopAssistantTurn(candidate);
+}
+
+function sanitizeGoogleContext(_model: GoogleTransportModel, context: Context): Context {
+  const messages = context.messages.filter(
+    (message) => !isGoogleRuntimeContextMessage(message) && !isGooglePoisonAssistantTurn(message),
+  );
+  if (messages.length === context.messages.length) {
+    return context;
+  }
+  return {
+    ...context,
+    messages,
+  };
+}
+
 function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
   const contents: Array<Record<string, unknown>> = [];
-  const transformedMessages = transformTransportMessages(context.messages, model, (id) =>
+  const sanitizedContext = sanitizeGoogleContext(model, context);
+  const transformedMessages = transformTransportMessages(sanitizedContext.messages, model, (id) =>
     requiresToolCallId(model.id) ? normalizeToolCallId(id) : id,
   );
   for (const msg of transformedMessages) {
