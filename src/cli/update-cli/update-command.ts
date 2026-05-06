@@ -58,6 +58,8 @@ import {
   withPluginInstallRecords,
 } from "../../plugins/installed-plugin-index-records.js";
 import {
+  resolveTrustedSourceLinkedOfficialClawHubSpec,
+  resolveTrustedSourceLinkedOfficialNpmSpec,
   syncPluginsForUpdateChannel,
   updateNpmInstalledPlugins,
   type PluginUpdateIntegrityDriftParams,
@@ -190,6 +192,7 @@ export async function collectMissingPluginInstallPayloads(params: {
   records: Record<string, PluginInstallRecord>;
   config?: OpenClawConfig;
   skipDisabledPlugins?: boolean;
+  syncOfficialPluginInstalls?: boolean;
   env?: NodeJS.ProcessEnv;
 }): Promise<MissingPluginInstallPayload[]> {
   const env = params.env ?? process.env;
@@ -204,6 +207,12 @@ export async function collectMissingPluginInstallPayloads(params: {
     if (!isTrackedPackageInstallRecord(record)) {
       continue;
     }
+    const officialNpmSpec = params.syncOfficialPluginInstalls
+      ? resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId, record })
+      : undefined;
+    const officialClawHubSpec = params.syncOfficialPluginInstalls
+      ? resolveTrustedSourceLinkedOfficialClawHubSpec({ pluginId, record })
+      : undefined;
     if (normalizedPluginConfig && params.config) {
       const enableState = resolveEffectiveEnableState({
         id: pluginId,
@@ -211,7 +220,7 @@ export async function collectMissingPluginInstallPayloads(params: {
         config: normalizedPluginConfig,
         rootConfig: params.config,
       });
-      if (!enableState.enabled) {
+      if (!enableState.enabled && !officialNpmSpec && !officialClawHubSpec) {
         continue;
       }
     }
@@ -1168,6 +1177,7 @@ async function updatePluginsAfterCoreUpdate(params: {
       records,
       config: pluginConfig,
       skipDisabledPlugins: true,
+      syncOfficialPluginInstalls: true,
     });
     if (missing.length === 0) {
       return [];
@@ -1188,6 +1198,21 @@ async function updatePluginsAfterCoreUpdate(params: {
         defaultRuntime.log(theme.warn(warning.message));
       }
     }
+    const repairResult = await updateNpmInstalledPlugins({
+      config: pluginConfig,
+      pluginIds: missingIds,
+      timeoutMs: params.timeoutMs,
+      updateChannel: params.channel,
+      skipDisabledPlugins: true,
+      syncOfficialPluginInstalls: true,
+      disableOnFailure: true,
+      logger: pluginLogger,
+      onIntegrityDrift: onPluginIntegrityDrift,
+    });
+    pluginConfig = repairResult.config;
+    pluginsChanged ||= repairResult.changed;
+    npmPluginsChanged ||= repairResult.changed;
+    pluginUpdateOutcomes.push(...repairResult.outcomes);
     return missingIds;
   };
 
@@ -1199,6 +1224,8 @@ async function updatePluginsAfterCoreUpdate(params: {
     updateChannel: params.channel,
     skipIds: new Set([...syncResult.summary.switchedToNpm, ...missingPayloadIds]),
     skipDisabledPlugins: true,
+    syncOfficialPluginInstalls: true,
+    disableOnFailure: true,
     logger: pluginLogger,
     onIntegrityDrift: onPluginIntegrityDrift,
   });
@@ -1217,6 +1244,7 @@ async function updatePluginsAfterCoreUpdate(params: {
     records: pluginConfig.plugins?.installs ?? {},
     config: pluginConfig,
     skipDisabledPlugins: true,
+    syncOfficialPluginInstalls: true,
   });
   pluginUpdateOutcomes.push(
     ...remainingMissingPayloads
