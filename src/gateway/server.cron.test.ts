@@ -192,6 +192,9 @@ function createCronEventCollector() {
   const flush = (payload: Record<string, unknown>) => {
     for (let index = waiters.length - 1; index >= 0; index -= 1) {
       const waiter = waiters[index];
+      if (!waiter) {
+        continue;
+      }
       if (!waiter.check(payload)) {
         continue;
       }
