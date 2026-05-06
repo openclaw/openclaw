@@ -20,6 +20,7 @@ type ChannelGroupConfig = {
   ingest?: boolean;
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
+  systemPrompt?: string;
 };
 
 export type ChannelGroupPolicy = {
@@ -333,6 +334,7 @@ export function resolveChannelGroupPolicy(params: {
   cfg: OpenClawConfig;
   channel: GroupPolicyChannel;
   groupId?: string | null;
+  groupIdCandidates?: Array<string | null | undefined>;
   accountId?: string | null;
   groupIdCaseInsensitive?: boolean;
   /** When true, sender-level filtering (groupAllowFrom) is configured upstream. */
@@ -343,10 +345,21 @@ export function resolveChannelGroupPolicy(params: {
   const groupPolicy = resolveChannelGroupPolicyMode(cfg, channel, params.accountId);
   const hasGroups = Boolean(groups && Object.keys(groups).length > 0);
   const allowlistEnabled = groupPolicy === "allowlist" || hasGroups;
-  const normalizedId = params.groupId?.trim();
-  const groupConfig = normalizedId
-    ? resolveChannelGroupConfig(groups, normalizedId, params.groupIdCaseInsensitive)
-    : undefined;
+  const groupIds = [
+    params.groupId,
+    ...(Array.isArray(params.groupIdCandidates) ? params.groupIdCandidates : []),
+  ];
+  let groupConfig: ChannelGroupConfig | undefined;
+  for (const rawGroupId of groupIds) {
+    const groupId = rawGroupId?.trim();
+    if (!groupId) {
+      continue;
+    }
+    groupConfig = resolveChannelGroupConfig(groups, groupId, params.groupIdCaseInsensitive);
+    if (groupConfig) {
+      break;
+    }
+  }
   const defaultConfig = groups?.["*"];
   const allowAll = allowlistEnabled && Boolean(groups && Object.hasOwn(groups, "*"));
   // When groupPolicy is "allowlist" with groupAllowFrom but no explicit groups,
@@ -369,6 +382,7 @@ export function resolveChannelGroupRequireMention(params: {
   cfg: OpenClawConfig;
   channel: GroupPolicyChannel;
   groupId?: string | null;
+  groupIdCandidates?: Array<string | null | undefined>;
   accountId?: string | null;
   groupIdCaseInsensitive?: boolean;
   requireMentionOverride?: boolean;

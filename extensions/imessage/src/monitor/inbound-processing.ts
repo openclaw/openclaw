@@ -28,8 +28,12 @@ import {
   resolveDmGroupAccessWithLists,
   evaluateSupplementalContextVisibility,
 } from "openclaw/plugin-sdk/security-runtime";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeOptionalString,
+  sanitizeTerminalText,
+  truncateUtf16Safe,
+} from "openclaw/plugin-sdk/text-runtime";
+import { resolveIMessageAccount } from "../accounts.js";
 import { resolveIMessageConversationRoute } from "../conversation-route.js";
 import {
   formatIMessageChatTarget,
@@ -65,6 +69,64 @@ function describeReplyContext(message: IMessagePayload): IMessageReplyContext | 
   const id = normalizeReplyField(message.reply_to_id);
   const sender = normalizeReplyField(message.reply_to_sender);
   return { body, id, sender };
+}
+
+function addGroupIdCandidate(candidates: string[], value: string | undefined): void {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized || candidates.includes(normalized)) {
+    return;
+  }
+  candidates.push(normalized);
+}
+
+function addPrefixedGroupIdCandidates(
+  candidates: string[],
+  prefix: "chat_guid" | "chat_identifier",
+  value: string | undefined,
+): void {
+  const raw = normalizeOptionalString(value);
+  if (!raw) {
+    return;
+  }
+  addGroupIdCandidate(candidates, raw);
+  const normalized = normalizeIMessageHandle(raw);
+  addGroupIdCandidate(candidates, normalized);
+  if (!normalized.toLowerCase().startsWith(`${prefix}:`)) {
+    addGroupIdCandidate(candidates, `${prefix}:${normalized}`);
+  }
+}
+
+function buildIMessageGroupIdCandidates(params: {
+  chatId?: number;
+  chatGuid?: string;
+  chatIdentifier?: string;
+}): string[] {
+  const candidates: string[] = [];
+  if (params.chatId !== undefined) {
+    addGroupIdCandidate(candidates, String(params.chatId));
+    addGroupIdCandidate(candidates, formatIMessageChatTarget(params.chatId));
+  }
+  addPrefixedGroupIdCandidates(candidates, "chat_guid", params.chatGuid);
+  addPrefixedGroupIdCandidates(candidates, "chat_identifier", params.chatIdentifier);
+  return candidates;
+}
+
+function resolveIMessageGroupSystemPrompt(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  groupIdCandidates: string[];
+}): string | undefined {
+  const groups = resolveIMessageAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  }).config.groups;
+  for (const groupId of params.groupIdCandidates) {
+    const groupConfig = groups?.[groupId];
+    if (groupConfig?.systemPrompt != null) {
+      return normalizeOptionalString(groupConfig.systemPrompt);
+    }
+  }
+  return normalizeOptionalString(groups?.["*"]?.systemPrompt);
 }
 
 function resolveInboundEchoMessageIds(message: IMessagePayload): string[] {
@@ -175,13 +237,19 @@ export function resolveIMessageInboundDecision(params: {
   const messageText = params.messageText.trim();
   const bodyText = params.bodyText.trim();
 
-  const groupIdCandidate = chatId !== undefined ? String(chatId) : undefined;
+  const groupIdCandidates = buildIMessageGroupIdCandidates({
+    chatId,
+    chatGuid,
+    chatIdentifier,
+  });
+  const groupIdCandidate = groupIdCandidates[0];
   const groupListPolicy = groupIdCandidate
     ? resolveChannelGroupPolicy({
         cfg: params.cfg,
         channel: "imessage",
         accountId: params.accountId,
         groupId: groupIdCandidate,
+        groupIdCandidates: groupIdCandidates.slice(1),
       })
     : {
         allowlistEnabled: false,
@@ -190,8 +258,9 @@ export function resolveIMessageInboundDecision(params: {
         defaultConfig: undefined,
       };
 
-  // If the owner explicitly configures a chat_id under imessage.groups, treat that thread as a
-  // "group" for permission gating + session isolation, even when is_group=false.
+  // If the owner explicitly configures a recognized group id under imessage.groups,
+  // treat that thread as a "group" for permission gating + session isolation,
+  // even when is_group=false.
   const treatAsGroupByConfig = Boolean(
     groupIdCandidate && groupListPolicy.allowlistEnabled && groupListPolicy.groupConfig,
   );
@@ -420,6 +489,7 @@ export function resolveIMessageInboundDecision(params: {
     channel: "imessage",
     accountId: params.accountId,
     groupId,
+    groupIdCandidates: groupIdCandidates.slice(1),
     requireMentionOverride: params.opts?.requireMention,
     overrideOrder: "before-config",
   });
@@ -606,6 +676,17 @@ export function buildIMessageInboundContext(params: {
           timestamp: entry.timestamp,
         }))
       : undefined;
+  const groupSystemPrompt = decision.isGroup
+    ? resolveIMessageGroupSystemPrompt({
+        cfg: params.cfg,
+        accountId: decision.route.accountId,
+        groupIdCandidates: buildIMessageGroupIdCandidates({
+          chatId: decision.chatId,
+          chatGuid: decision.chatGuid,
+          chatIdentifier: decision.chatIdentifier,
+        }),
+      })
+    : undefined;
 
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
@@ -625,6 +706,7 @@ export function buildIMessageInboundContext(params: {
     GroupMembers: decision.isGroup
       ? (params.message.participants ?? []).filter(Boolean).join(", ")
       : undefined,
+    GroupSystemPrompt: groupSystemPrompt,
     SenderName: decision.senderNormalized,
     SenderId: decision.sender,
     Provider: "imessage",

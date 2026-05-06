@@ -159,6 +159,80 @@ describe("imessage monitor gating + envelope builders", () => {
     expect(ctxPayload.To).toBe("chat_id:42");
   });
 
+  it("threads chat_id group systemPrompt into group context", () => {
+    const cfg = baseCfg();
+    cfg.channels ??= {};
+    cfg.channels.imessage ??= {};
+    cfg.channels.imessage.groups = {
+      "42": { requireMention: true, systemPrompt: "Keep responses under 3 sentences." },
+    };
+    const message: IMessagePayload = {
+      id: 4,
+      chat_id: 42,
+      sender: "+15550002222",
+      is_from_me: false,
+      text: "@openclaw ping",
+      is_group: true,
+    };
+
+    const ctxPayload = buildDispatchContextPayload({ cfg, message });
+
+    expect(ctxPayload.GroupSystemPrompt).toBe("Keep responses under 3 sentences.");
+  });
+
+  it("matches group systemPrompt by chat_guid and admits the group", () => {
+    const cfg = baseCfg();
+    cfg.channels ??= {};
+    cfg.channels.imessage ??= {};
+    cfg.channels.imessage.groups = {
+      "iMessage;+;chat-family": { systemPrompt: "Use the family group style." },
+    };
+    const message: IMessagePayload = {
+      id: 8,
+      chat_id: 42,
+      chat_guid: "iMessage;+;chat-family",
+      sender: "+15550002222",
+      is_from_me: false,
+      text: "@openclaw ping",
+      is_group: true,
+    };
+
+    const ctxPayload = buildDispatchContextPayload({ cfg, message });
+
+    expect(ctxPayload.GroupSystemPrompt).toBe("Use the family group style.");
+  });
+
+  it("falls back to wildcard group systemPrompt and omits it for DMs", () => {
+    const cfg = baseCfg();
+    cfg.channels ??= {};
+    cfg.channels.imessage ??= {};
+    cfg.channels.imessage.groups = {
+      "*": { requireMention: true, systemPrompt: "Default group prompt." },
+    };
+    const groupMessage: IMessagePayload = {
+      id: 9,
+      chat_id: 43,
+      sender: "+15550002222",
+      is_from_me: false,
+      text: "@openclaw ping",
+      is_group: true,
+    };
+    const dmMessage: IMessagePayload = {
+      id: 10,
+      sender: "+15550002222",
+      is_from_me: false,
+      text: "hello",
+      is_group: false,
+    };
+
+    expect(buildDispatchContextPayload({ cfg, message: groupMessage }).GroupSystemPrompt).toBe(
+      "Default group prompt.",
+    );
+    expect(
+      buildDispatchContextPayload({ cfg, message: dmMessage }).GroupSystemPrompt,
+    ).toBeUndefined();
+  });
+
   it("includes reply-to context fields + suffix", () => {
     const cfg = baseCfg();
     const message: IMessagePayload = {
