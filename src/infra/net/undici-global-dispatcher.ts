@@ -49,9 +49,17 @@ function resolveDispatcherKey(params: {
   return `${params.kind}:${params.timeoutMs}:${autoSelectToken}`;
 }
 
+function resolveStreamTimeoutMs(opts?: { timeoutMs?: number }): number | null {
+  const timeoutMsRaw = opts?.timeoutMs ?? DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
+  if (!Number.isFinite(timeoutMsRaw)) {
+    return null;
+  }
+  return Math.max(DEFAULT_UNDICI_STREAM_TIMEOUT_MS, Math.floor(timeoutMsRaw));
+}
+
 function resolveCurrentDispatcherKind(
   runtime: Pick<UndiciGlobalDispatcherDeps, "getGlobalDispatcher">,
-): DispatcherKind | null {
+): Exclude<DispatcherKind, "unsupported"> | null {
   let dispatcher: unknown;
   try {
     dispatcher = runtime.getGlobalDispatcher();
@@ -92,27 +100,12 @@ export function ensureGlobalUndiciEnvProxyDispatcher(): void {
   }
 }
 
-export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }): void {
-  const timeoutMsRaw = opts?.timeoutMs ?? DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
-  if (!Number.isFinite(timeoutMsRaw)) {
-    return;
-  }
-  const timeoutMs = Math.max(DEFAULT_UNDICI_STREAM_TIMEOUT_MS, Math.floor(timeoutMsRaw));
-  _globalUndiciStreamTimeoutMs = timeoutMs;
-  if (!hasEnvHttpProxyAgentConfigured()) {
-    lastAppliedTimeoutKey = null;
-    return;
-  }
-  const runtime = loadUndiciGlobalDispatcherDeps();
-  const { EnvHttpProxyAgent, setGlobalDispatcher } = runtime;
-  const kind = resolveCurrentDispatcherKind(runtime);
-  if (kind === null) {
-    return;
-  }
-  if (kind !== "env-proxy") {
-    return;
-  }
-
+function applyGlobalDispatcherStreamTimeouts(params: {
+  runtime: UndiciGlobalDispatcherDeps;
+  kind: Exclude<DispatcherKind, "unsupported">;
+  timeoutMs: number;
+}): void {
+  const { runtime, kind, timeoutMs } = params;
   const autoSelectFamily = resolveUndiciAutoSelectFamily();
   const nextKey = resolveDispatcherKey({ kind, timeoutMs, autoSelectFamily });
   if (lastAppliedTimeoutKey === nextKey) {
@@ -121,17 +114,63 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
 
   const connect = createUndiciAutoSelectFamilyConnectOptions(autoSelectFamily);
   try {
-    const proxyOptions = {
-      ...resolveEnvHttpProxyAgentOptions(),
-      bodyTimeout: timeoutMs,
-      headersTimeout: timeoutMs,
-      ...(connect ? { connect } : {}),
-    } as ConstructorParameters<UndiciGlobalDispatcherDeps["EnvHttpProxyAgent"]>[0];
-    setGlobalDispatcher(new EnvHttpProxyAgent(proxyOptions));
+    if (kind === "env-proxy") {
+      const proxyOptions = {
+        ...resolveEnvHttpProxyAgentOptions(),
+        bodyTimeout: timeoutMs,
+        headersTimeout: timeoutMs,
+        ...(connect ? { connect } : {}),
+      } as ConstructorParameters<UndiciGlobalDispatcherDeps["EnvHttpProxyAgent"]>[0];
+      runtime.setGlobalDispatcher(new runtime.EnvHttpProxyAgent(proxyOptions));
+    } else {
+      runtime.setGlobalDispatcher(
+        new runtime.Agent({
+          bodyTimeout: timeoutMs,
+          headersTimeout: timeoutMs,
+          ...(connect ? { connect } : {}),
+        }),
+      );
+    }
     lastAppliedTimeoutKey = nextKey;
   } catch {
     // Best-effort hardening only.
   }
+}
+
+export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }): void {
+  const timeoutMs = resolveStreamTimeoutMs(opts);
+  if (timeoutMs === null) {
+    return;
+  }
+  _globalUndiciStreamTimeoutMs = timeoutMs;
+  if (!hasEnvHttpProxyAgentConfigured()) {
+    lastAppliedTimeoutKey = null;
+    return;
+  }
+  const runtime = loadUndiciGlobalDispatcherDeps();
+  const kind = resolveCurrentDispatcherKind(runtime);
+  if (kind === null) {
+    return;
+  }
+  if (kind !== "env-proxy") {
+    return;
+  }
+
+  applyGlobalDispatcherStreamTimeouts({ runtime, kind, timeoutMs });
+}
+
+export function ensureGlobalUndiciDispatcherStreamTimeouts(opts?: { timeoutMs?: number }): void {
+  const timeoutMs = resolveStreamTimeoutMs(opts);
+  if (timeoutMs === null) {
+    return;
+  }
+  _globalUndiciStreamTimeoutMs = timeoutMs;
+  const runtime = loadUndiciGlobalDispatcherDeps();
+  const kind = resolveCurrentDispatcherKind(runtime);
+  if (kind === null) {
+    return;
+  }
+  applyGlobalDispatcherStreamTimeouts({ runtime, kind, timeoutMs });
 }
 
 export function resetGlobalUndiciStreamTimeoutsForTests(): void {

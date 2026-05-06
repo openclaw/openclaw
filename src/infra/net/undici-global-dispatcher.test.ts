@@ -79,6 +79,7 @@ vi.mock("../wsl.js", () => ({
 import { isWSL2Sync } from "../wsl.js";
 import { hasEnvHttpProxyAgentConfigured, resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
 let DEFAULT_UNDICI_STREAM_TIMEOUT_MS: typeof import("./undici-global-dispatcher.js").DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
+let ensureGlobalUndiciDispatcherStreamTimeouts: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciDispatcherStreamTimeouts;
 let ensureGlobalUndiciEnvProxyDispatcher: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciEnvProxyDispatcher;
 let ensureGlobalUndiciStreamTimeouts: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciStreamTimeouts;
 let forceResetGlobalDispatcher: typeof import("./undici-global-dispatcher.js").forceResetGlobalDispatcher;
@@ -90,6 +91,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     undiciGlobalDispatcherModule = await import("./undici-global-dispatcher.js");
     ({
       DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
+      ensureGlobalUndiciDispatcherStreamTimeouts,
       ensureGlobalUndiciEnvProxyDispatcher,
       ensureGlobalUndiciStreamTimeouts,
       forceResetGlobalDispatcher,
@@ -148,6 +150,26 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     );
 
     expect(output.trim()).toBe("ok");
+  });
+
+  it("explicitly tunes the global dispatcher when requested for embedded attempts", () => {
+    getDefaultAutoSelectFamily.mockReturnValue(false);
+
+    ensureGlobalUndiciDispatcherStreamTimeouts({ timeoutMs: 1_900_000 });
+
+    expect(loadUndiciGlobalDispatcherDeps).toHaveBeenCalledTimes(1);
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    expect(next).toBeInstanceOf(Agent);
+    expect(next.options).toEqual({
+      bodyTimeout: 1_900_000,
+      headersTimeout: 1_900_000,
+      connect: {
+        autoSelectFamily: false,
+        autoSelectFamilyAttemptTimeout: 300,
+      },
+    });
+    expect(undiciGlobalDispatcherModule._globalUndiciStreamTimeoutMs).toBe(1_900_000);
   });
 
   it("replaces EnvHttpProxyAgent dispatcher while preserving env-proxy mode", () => {
