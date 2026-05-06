@@ -441,6 +441,10 @@ CDP URL shapes and picks the right connection strategy automatically:
   upgrades on the specific per-target path from `/json/version`, while hosted
   providers can still use their root WebSocket endpoint when their discovery
   endpoint advertises a short-lived URL that is not suitable for Playwright CDP.
+  `openclaw browser doctor` readiness checks use the same
+  discovery-first-then-WebSocket fallback as the runtime, so a bare-root URL
+  that connects successfully will not be reported as unreachable by the
+  diagnostics.
 
 ### Browserbase
 
