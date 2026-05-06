@@ -4,6 +4,7 @@ import {
   sanitizeAssistantVisibleTextWithProfile,
   stripAssistantInternalScaffolding,
   stripMinimaxToolCallXml,
+  stripStructuralContamination,
   stripToolCallXmlTags,
 } from "./assistant-visible-text.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
@@ -652,6 +653,215 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
 
     expect(sanitizeAssistantVisibleTextWithProfile(input, "internal-scaffolding")).toContain(
       "[Tool Call: read (ID: toolu_1)]",
+    );
+  });
+});
+
+describe("stripLeakedReasoningPreamble (via sanitizeAssistantVisibleText)", () => {
+  function expectVisibleText(input: string, expected: string) {
+    expect(sanitizeAssistantVisibleText(input)).toBe(expected);
+  }
+  function expectLiteralVisibleText(input: string) {
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  }
+
+  it.each([
+    {
+      name: "strips planning preamble",
+      input: [
+        "Let me keep this short.",
+        "I need to answer directly.",
+        "",
+        "You're right. We should add the outbound cleaner.",
+      ].join("\n"),
+      expected: "You're right. We should add the outbound cleaner.",
+    },
+    {
+      name: "strips cjk reasoning lead-in before visible reply",
+      input: [
+        "我先想一下这个问题。",
+        "I need to analyze this carefully.",
+        "Let me think through the approach.",
+        "You're right. We should patch the send path.",
+      ].join("\n"),
+      expected: "You're right. We should patch the send path.",
+    },
+    {
+      name: "keeps legitimate self-referential reply text",
+      input: "I'm frustrated, but I can still help.",
+      expected: undefined,
+    },
+    {
+      name: "keeps ordinary multi-paragraph replies with mild meta phrasing",
+      input: [
+        "For the record, the quick patch helped.",
+        "",
+        "We should still harden the outbound cleaner before send.",
+      ].join("\n"),
+      expected: undefined,
+    },
+    {
+      name: "keeps conversational multi-paragraph reply with actually and let me",
+      input: [
+        "Actually, I think you're right.",
+        "Let me break down why.",
+        "",
+        "Here's the detailed explanation you asked for.",
+      ].join("\n"),
+      expected: undefined,
+    },
+    {
+      name: "keeps ordinary cjk multi-paragraph replies",
+      input: ["这是正常的第一段回复。", "", "这是正常的第二段回复。"].join("\n"),
+      expected: undefined,
+    },
+    {
+      name: "ignores suspicious-looking text inside fenced code blocks",
+      input: [
+        "```txt",
+        "Let me keep this short.",
+        "I need to answer directly.",
+        "```",
+        "",
+        "Visible user-facing reply.",
+      ].join("\n"),
+      expected: undefined,
+    },
+    {
+      name: "preserves fenced code blocks after suspicious preamble lines",
+      input: [
+        "Let me think about this.",
+        "I need to plan carefully.",
+        "```js",
+        "const x = 1;",
+        "```",
+        "Real answer.",
+      ].join("\n"),
+      expected: undefined,
+    },
+  ] as const)("$name", ({ input, expected }) => {
+    if (expected === undefined) {
+      expectLiteralVisibleText(input);
+      return;
+    }
+    expectVisibleText(input, expected);
+  });
+});
+
+describe("stripStructuralContamination", () => {
+  function expectClean(input: string, expected: string) {
+    expect(stripStructuralContamination(input)).toBe(expected);
+  }
+
+  it("strips duplicated metadata JSON envelopes with schema key", () => {
+    const input = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      "{",
+      '  "schema": "openclaw.inbound_meta.v1",',
+      '  "message_id": "9052",',
+      '  "sender_id": "1782981446"',
+      "}",
+      "```",
+      "{json}",
+      "{",
+      '  "message_id": "9053",',
+      '  "sender_id": "1782981446"',
+      "}",
+      "```stripStructuralContamination()stripStructuralContamination()```",
+      "The actual answer starts here.",
+    ].join("\n");
+    expectClean(input, "The actual answer starts here.");
+  });
+
+  it("strips leaked CSS font-family blocks", () => {
+    const input = [
+      "p {",
+      "color:#000;",
+      "font-family: Geist,-apple-system,system-ui,BlinkMacSystemFont;",
+      "}",
+      "Clean text remains.",
+    ].join("\n");
+    expectClean(input, "Clean text remains.");
+  });
+
+  it("strips leaked copyright footer lines", () => {
+    const input = [
+      "Some real text.",
+      "",
+      "Copyright © 2026 Vercel Inc. All rights reserved.",
+      "440 N Barranca Ave #4133 Covina, CA 91723",
+      "Manage your notification settings",
+    ].join("\n");
+    expectClean(input, "Some real text.");
+  });
+
+  it("strips repeated code debris", () => {
+    const input = ["Real reply here.", "", ".copyOf(randID));", "", "More real content."].join(
+      "\n",
+    );
+    expectClean(input, "Real reply here.\n\nMore real content.");
+  });
+
+  it("preserves legitimate code fences", () => {
+    const input = ["```js", "const x = 1;", "const y = 2;", "```", "", "Explanation text."].join(
+      "\n",
+    );
+    expectClean(input, input);
+  });
+
+  it("preserves manifest schema lines in legitimate JSON examples", () => {
+    const input = [
+      "Use this manifest snippet:",
+      "{",
+      '  "schema": "openclaw.plugin_manifest.v1",',
+      '  "name": "demo-plugin"',
+      "}",
+    ].join("\n");
+    expectClean(input, input);
+  });
+
+  it("preserves legitimate all-rights-reserved sentences", () => {
+    const input = [
+      'In legal text, the sentence "All rights reserved." can be required.',
+      "Keep it exactly as written.",
+    ].join("\n");
+    expectClean(input, input);
+  });
+
+  it("preserves copyright lines inside code fences", () => {
+    const input = [
+      "```",
+      "Copyright © 2026 Example Inc. All rights reserved.",
+      "```",
+      "Explanation.",
+    ].join("\n");
+    expectClean(input, input);
+  });
+
+  it("preserves adjacent JSON records without schema marker", () => {
+    const input = [
+      "Here are two records:",
+      '{ "message_id": "1", "sender_id": "2" }',
+      '{ "message_id": "3", "sender_id": "4" }',
+      "Both should be kept.",
+    ].join("\n");
+    expectClean(input, input);
+  });
+
+  it("returns short text unchanged", () => {
+    expect(stripStructuralContamination("Hi")).toBe("Hi");
+  });
+
+  it("does not collapse excessive blank lines (that is a delivery concern)", () => {
+    const input =
+      "Some real text that is long enough to pass the guard." +
+      "\n".repeat(5) +
+      "More text after the gap.";
+    expect(stripStructuralContamination(input)).toBe(
+      "Some real text that is long enough to pass the guard." +
+        "\n".repeat(5) +
+        "More text after the gap.",
     );
   });
 });
