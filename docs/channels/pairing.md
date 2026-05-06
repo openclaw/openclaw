@@ -78,17 +78,20 @@ Access groups are documented in detail here: [Access groups](/channels/access-gr
 
 ### Where the state lives
 
-Stored under `~/.openclaw/credentials/`:
+Stored in `~/.openclaw/state/openclaw.sqlite`:
 
-- Pending requests: `<channel>-pairing.json`
-- Approved allowlist store:
-  - Default account: `<channel>-allowFrom.json`
-  - Non-default account: `<channel>-<accountId>-allowFrom.json`
+- Pending requests: SQLite `kv` scope `pairing.channel`
+- Approved allowlist store: same SQLite record, account-scoped by channel account ID
 
 Account scoping behavior:
 
-- Non-default accounts read/write only their scoped allowlist file.
-- Default account uses the channel-scoped unscoped allowlist file.
+- Non-default accounts read/write only their scoped allowlist entry.
+- Default account uses the `default` account entry.
+
+Older `~/.openclaw/credentials/<channel>-pairing.json`,
+`<channel>-allowFrom.json`, and `<channel>-<accountId>-allowFrom.json` files
+are legacy import sources only. Run `openclaw doctor --fix` to import them into
+SQLite and remove the JSON files.
 
 Treat these as sensitive (they gate access to your assistant).
 

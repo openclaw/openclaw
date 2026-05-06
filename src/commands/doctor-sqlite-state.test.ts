@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveOAuthDir } from "../config/paths.js";
 import { loadDeviceAuthStore } from "../infra/device-auth-store.js";
 import { listDevicePairing } from "../infra/device-pairing.js";
 import { loadApnsRegistration } from "../infra/push-apns.js";
 import { listWebPushSubscriptions } from "../infra/push-web.js";
+import { listChannelPairingRequests, readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 
@@ -86,6 +88,29 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
           })}\n`,
           "utf8",
         );
+        const oauthDir = resolveOAuthDir(env, stateDir);
+        await fs.mkdir(oauthDir, { recursive: true });
+        await fs.writeFile(
+          path.join(oauthDir, "telegram-pairing.json"),
+          `${JSON.stringify({
+            version: 1,
+            requests: [
+              {
+                id: "sender-1",
+                code: "ABCD1234",
+                createdAt: new Date().toISOString(),
+                lastSeenAt: new Date().toISOString(),
+                meta: { accountId: "default" },
+              },
+            ],
+          })}\n`,
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(oauthDir, "telegram-default-allowFrom.json"),
+          `${JSON.stringify({ version: 1, allowFrom: ["sender-2"] })}\n`,
+          "utf8",
+        );
         await fs.mkdir(path.join(stateDir, "push"), { recursive: true });
         await fs.writeFile(
           path.join(stateDir, "push", "web-push-subscriptions.json"),
@@ -132,6 +157,18 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
           paired: [expect.objectContaining({ deviceId: "device-2" })],
         });
         expect(loadDeviceAuthStore({ env })?.tokens.operator?.token).toBe("local-token");
+        await expect(listChannelPairingRequests("telegram", env, "default")).resolves.toEqual([
+          expect.objectContaining({ id: "sender-1", code: "ABCD1234" }),
+        ]);
+        await expect(readChannelAllowFromStore("telegram", env, "default")).resolves.toEqual([
+          "sender-2",
+        ]);
+        await expect(fs.stat(path.join(oauthDir, "telegram-pairing.json"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(
+          fs.stat(path.join(oauthDir, "telegram-default-allowFrom.json")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
         await expect(listWebPushSubscriptions(stateDir)).resolves.toEqual([
           expect.objectContaining({ subscriptionId: "sub-1" }),
         ]);

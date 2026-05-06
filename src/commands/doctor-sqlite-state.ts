@@ -22,6 +22,10 @@ import {
   legacyApnsRegistrationFileExists,
 } from "../infra/push-apns.js";
 import { importLegacyWebPushFilesToSqlite, legacyWebPushFilesExist } from "../infra/push-web.js";
+import {
+  importLegacyChannelPairingFilesToSqlite,
+  legacyChannelPairingFilesExist,
+} from "../pairing/pairing-store.js";
 import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
@@ -31,6 +35,7 @@ type LegacyStateProbe = {
   deviceBootstrap: boolean;
   devicePairing: boolean;
   nodePairing: boolean;
+  channelPairing: boolean;
   webPush: boolean;
   apns: boolean;
 };
@@ -43,6 +48,7 @@ async function probeLegacyRuntimeStateFiles(env: NodeJS.ProcessEnv): Promise<Leg
     deviceBootstrap: await legacyDeviceBootstrapFileExists(baseDir),
     devicePairing: await legacyPairingStateFilesExist({ baseDir, subdir: "devices" }),
     nodePairing: await legacyPairingStateFilesExist({ baseDir, subdir: "nodes" }),
+    channelPairing: await legacyChannelPairingFilesExist(env),
     webPush: await legacyWebPushFilesExist(baseDir),
     apns: await legacyApnsRegistrationFileExists(baseDir),
   };
@@ -64,7 +70,7 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
   }
   if (!params.prompter.shouldRepair) {
     note(
-      "Legacy runtime JSON state files detected. Run `openclaw doctor --fix` to import device, bootstrap, pairing, and push state into SQLite.",
+      "Legacy runtime JSON state files detected. Run `openclaw doctor --fix` to import device, bootstrap, channel pairing, node pairing, and push state into SQLite.",
       "SQLite state",
     );
     return;
@@ -126,6 +132,16 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
       if (result.files > 0) {
         changes.push(
           `- Imported ${result.pending} pending node pairing request(s) and ${result.paired} paired node record(s) into SQLite.`,
+        );
+      }
+    });
+  }
+  if (probe.channelPairing) {
+    await runImport("Channel pairing", async () => {
+      const result = await importLegacyChannelPairingFilesToSqlite(env);
+      if (result.files > 0) {
+        changes.push(
+          `- Imported ${result.requests} channel pairing request(s) and ${result.allowFrom} channel allowlist entr${result.allowFrom === 1 ? "y" : "ies"} into SQLite.`,
         );
       }
     });
