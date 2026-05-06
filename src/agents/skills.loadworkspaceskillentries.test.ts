@@ -58,6 +58,10 @@ async function createTempWorkspaceDir() {
   return workspaceDir;
 }
 
+async function symlinkDir(targetDir: string, linkPath: string) {
+  await fs.symlink(targetDir, linkPath, process.platform === "win32" ? "junction" : "dir");
+}
+
 function captureWarningLogger() {
   setLoggerOverride({ level: "silent", consoleLevel: "warn" });
   const warn = vi.fn();
@@ -361,6 +365,30 @@ describe("loadWorkspaceSkillEntries", () => {
     },
   );
 
+  it("skips workspace skill directories that resolve outside the workspace root", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const outsideDir = await createTempWorkspaceDir();
+    const escapedSkillDir = path.join(outsideDir, "outside-skill");
+    await writeSkill({
+      dir: escapedSkillDir,
+      name: "outside-skill",
+      description: "Outside",
+    });
+    await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
+    const requestedPath = path.join(workspaceDir, "skills", "escaped-skill");
+    await symlinkDir(escapedSkillDir, requestedPath);
+    const warn = captureWarningLogger();
+
+    const entries = loadTestWorkspaceSkillEntries(workspaceDir);
+
+    expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-skill");
+    const [line] = warn.mock.calls[0] ?? [];
+    const warningLine = String(line);
+    expect(warningLine).toContain("Skipping escaped skill path outside its configured root:");
+    expect(warningLine).toContain("reason=symlink-escape");
+    expect(warningLine).toContain("source=openclaw-workspace");
+  });
+
   it.runIf(process.platform !== "win32")(
     "calls out bundled symlink escapes with compact home-relative paths",
     async () => {
@@ -401,6 +429,66 @@ describe("loadWorkspaceSkillEntries", () => {
       expect(warningLine).toContain("root=~/workspace/.bundled");
       expect(warningLine).toContain("requested=~/workspace/.bundled/escaped-bundled-skill");
       expect(warningLine).toContain("resolved=~/outside/outside-bundled-skill");
+    },
+  );
+
+  it("allows managed skill directories that resolve outside the managed root", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const managedDir = path.join(workspaceDir, ".managed");
+    const outsideDir = await createTempWorkspaceDir();
+    const externalSkillDir = path.join(outsideDir, "outside-skill");
+    await writeSkill({
+      dir: externalSkillDir,
+      name: "outside-skill",
+      description: "Outside managed root",
+    });
+    await fs.mkdir(managedDir, { recursive: true });
+    await symlinkDir(externalSkillDir, path.join(managedDir, "outside-skill"));
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+    });
+    const loaded = entries.find((entry) => entry.skill.name === "outside-skill");
+
+    expect(loaded).toBeDefined();
+    expect(loaded?.skill.baseDir).toBe(await fs.realpath(externalSkillDir));
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "skips managed skill files that resolve outside the managed skill root",
+    async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const managedDir = path.join(workspaceDir, ".managed");
+      const outsideDir = await createTempWorkspaceDir();
+      const escapedTargetDir = path.join(outsideDir, "outside-file-skill");
+      await writeSkill({
+        dir: escapedTargetDir,
+        name: "outside-file-skill",
+        description: "Outside file",
+      });
+
+      const externalManagedSkillDir = path.join(outsideDir, "managed-skill");
+      await writeSkill({
+        dir: externalManagedSkillDir,
+        name: "managed-skill",
+        description: "Managed skill",
+      });
+      await fs.rm(path.join(externalManagedSkillDir, "SKILL.md"));
+      await fs.symlink(
+        path.join(escapedTargetDir, "SKILL.md"),
+        path.join(externalManagedSkillDir, "SKILL.md"),
+      );
+      await fs.mkdir(managedDir, { recursive: true });
+      await symlinkDir(externalManagedSkillDir, path.join(managedDir, "managed-skill"));
+
+      const entries = loadWorkspaceSkillEntries(workspaceDir, {
+        managedSkillsDir: managedDir,
+        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      });
+
+      expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-file-skill");
+      expect(entries.map((entry) => entry.skill.name)).not.toContain("managed-skill");
     },
   );
 

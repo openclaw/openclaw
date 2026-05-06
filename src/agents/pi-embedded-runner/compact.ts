@@ -444,7 +444,9 @@ async function compactEmbeddedPiSessionDirectOnce(
   ensureRuntimePluginsLoaded({
     config: params.config,
     workspaceDir: resolvedWorkspace,
-    allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+    ...(params.allowGatewaySubagentBinding === undefined
+      ? {}
+      : { allowGatewaySubagentBinding: params.allowGatewaySubagentBinding }),
   });
   const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
