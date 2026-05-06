@@ -342,7 +342,7 @@ describe("matrixApprovalNativeRuntime", () => {
       .mockResolvedValue({
         messageId: "$approval",
         primaryMessageId: "$approval",
-        messageIds: ["$approval"],
+        receipt: buildMatrixReceipt(["$approval"]),
         roomId: "!room:example.org",
       });
     const reactMessage = vi.fn().mockResolvedValue(undefined);
@@ -373,7 +373,7 @@ describe("matrixApprovalNativeRuntime", () => {
     expect(sendSingleTextMessage).toHaveBeenCalledTimes(2);
     expect(entry).toMatchObject({
       roomId: "!room:example.org",
-      messageIds: ["$approval"],
+      platformMessageIds: ["$approval"],
     });
   });
 
