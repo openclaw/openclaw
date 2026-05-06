@@ -264,6 +264,20 @@ describe("OpenResponses HTTP API (e2e)", () => {
       );
       await ensureResponseConsumed(resHeader);
 
+      agentCommand.mockClear();
+      const resInternalSession = await postResponses(
+        port,
+        { model: "openclaw", input: "hi" },
+        { "x-openclaw-session-key": "agent:main:subagent:worker" },
+      );
+      expect(resInternalSession.status).toBe(400);
+      const internalSessionJson = (await resInternalSession.json()) as {
+        error?: { type?: string; message?: string };
+      };
+      expect(internalSessionJson.error?.type).toBe("invalid_request_error");
+      expect(internalSessionJson.error?.message).toContain("internal session namespace subagent:");
+      expect(agentCommand).toHaveBeenCalledTimes(0);
+
       mockAgentOnce([{ text: "hello" }]);
       const resModel = await postResponses(port, { model: "openclaw/beta", input: "hi" });
       expect(resModel.status).toBe(200);
