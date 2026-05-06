@@ -112,6 +112,33 @@ function resolveRawAssistantAnswerText(lastAssistant: AssistantMessage | undefin
   );
 }
 
+const MAX_TURNS_EXCEEDED_SENTINEL_RE = /^\[\s*max\s+turns\s+exceeded\s*\]$/iu;
+
+function isMaxTurnsExceededSentinel(text: string): boolean {
+  return MAX_TURNS_EXCEEDED_SENTINEL_RE.test(text.trim());
+}
+
+function formatMaxTurnsExceededDiagnostic(params: {
+  sessionKey: string;
+  sessionId?: string;
+  runId?: string;
+  provider?: string;
+  model?: string;
+}): string {
+  const lines = [
+    "Run stopped: max turns exceeded.",
+    `Session: ${params.sessionKey}.`,
+    params.sessionId && params.sessionId !== params.sessionKey
+      ? `Session ID: ${params.sessionId}.`
+      : undefined,
+    params.runId ? `Run: ${params.runId}.` : undefined,
+    params.provider && params.model ? `Model: ${params.provider}/${params.model}.` : undefined,
+    "State: the runtime guard aborted this turn; no new background work is implied by this message.",
+    "Recovery: inspect the session transcript/logs, then retry with a narrower task or a higher turn budget if configured.",
+  ];
+  return lines.filter((line): line is string => Boolean(line)).join("\n");
+}
+
 function shouldIncludeToolErrorDetails(params: {
   lastToolError: ToolErrorSummary;
   isCronTrigger?: boolean;
@@ -178,6 +205,8 @@ export function buildEmbeddedRunPayloads(params: {
   config?: OpenClawConfig;
   isCronTrigger?: boolean;
   sessionKey: string;
+  sessionId?: string;
+  runId?: string;
   provider?: string;
   model?: string;
   verboseLevel?: VerboseLevel;
@@ -362,16 +391,29 @@ export function buildEmbeddedRunPayloads(params: {
         normalizedAssistantTexts.length > 0 &&
         normalizedAssistantTexts === normalizedRawAnswerText));
   const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;
-  const answerTexts = suppressAssistantArtifacts
+  const rawAnswerTexts = suppressAssistantArtifacts
     ? []
-    : (shouldPreferRawAnswerText && fallbackRawAnswerText
-        ? [fallbackRawAnswerText]
-        : hasAssistantTextPayload
-          ? nonEmptyAssistantTexts
-          : fallbackAnswerText
-            ? [fallbackAnswerText]
-            : []
-      ).filter((text) => !shouldSuppressRawErrorText(text));
+    : shouldPreferRawAnswerText && fallbackRawAnswerText
+      ? [fallbackRawAnswerText]
+      : hasAssistantTextPayload
+        ? nonEmptyAssistantTexts
+        : fallbackAnswerText
+          ? [fallbackAnswerText]
+          : [];
+  const hasMaxTurnsExceededSentinel = rawAnswerTexts.some(isMaxTurnsExceededSentinel);
+  const answerTexts = (
+    hasMaxTurnsExceededSentinel
+      ? [
+          formatMaxTurnsExceededDiagnostic({
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+            runId: params.runId,
+            provider: params.provider,
+            model: params.model,
+          }),
+        ]
+      : rawAnswerTexts
+  ).filter((text) => !shouldSuppressRawErrorText(text));
 
   let hasUserFacingAssistantReply = false;
   const hasUserFacingErrorReply = replyItems.some((item) => item.isError === true);

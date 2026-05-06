@@ -2236,6 +2236,8 @@ export async function runEmbeddedPiAgent(
             config: params.config,
             isCronTrigger: params.trigger === "cron",
             sessionKey: params.sessionKey ?? params.sessionId,
+            sessionId: params.sessionId,
+            runId: params.runId,
             provider: activeErrorContext.provider,
             model: activeErrorContext.model,
             verboseLevel: params.verboseLevel,
