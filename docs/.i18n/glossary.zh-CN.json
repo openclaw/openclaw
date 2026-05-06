@@ -694,5 +694,9 @@
   {
     "source": "/cli/config",
     "target": "/cli/config"
+  },
+  {
+    "source": "Experimental Features",
+    "target": "实验性功能"
   }
 ]
