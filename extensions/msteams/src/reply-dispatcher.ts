@@ -152,6 +152,12 @@ export function createMSTeamsReplyDispatcher(params: {
     conversationType,
     context: params.context,
     feedbackLoopEnabled,
+    log: params.log,
+    msteamsConfig: msteamsCfg,
+    // Stable seed so the same conversation gets a consistent rotating
+    // "Thinking..." flavor across reconnects. accountId scopes per-bot,
+    // conversation.id scopes per-chat.
+    progressSeed: `${params.accountId ?? "default"}:${params.conversationRef.conversation?.id ?? ""}`,
   });
   // Wire the forward-declared gates used by sendTypingIndicator.
   streamActiveRef.current = () => streamController.isStreamActive();
