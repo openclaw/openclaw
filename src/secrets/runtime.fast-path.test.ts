@@ -7,11 +7,13 @@ import { clearSecretsRuntimeSnapshot } from "./runtime.js";
 import { asConfig } from "./runtime.test-support.js";
 
 const { resolveRuntimeWebToolsMock, runtimePrepareImportMock } = vi.hoisted(() => ({
-  resolveRuntimeWebToolsMock: vi.fn(async () => ({
-    search: { providerSource: "none", diagnostics: [] },
-    fetch: { providerSource: "none", diagnostics: [] },
-    diagnostics: [],
-  })),
+  resolveRuntimeWebToolsMock: vi.fn(
+    async (): Promise<import("./runtime-web-tools.js").RuntimeWebToolsMetadata> => ({
+      search: { providerSource: "none", diagnostics: [] },
+      fetch: { providerSource: "none", diagnostics: [] },
+      diagnostics: [],
+    }),
+  ),
   runtimePrepareImportMock: vi.fn(),
 }));
 
@@ -168,5 +170,112 @@ describe("secrets runtime fast path", () => {
     });
 
     expect(resolveRuntimeWebToolsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves resolved web tools when an active refresh receives a stripped config view", async () => {
+    resolveRuntimeWebToolsMock.mockResolvedValueOnce({
+      search: {
+        providerConfigured: "brave",
+        providerSource: "configured",
+        selectedProvider: "brave",
+        selectedProviderKeySource: "env",
+        diagnostics: [],
+      },
+      fetch: { providerSource: "none", diagnostics: [] },
+      diagnostics: [],
+    });
+    const {
+      activateSecretsRuntimeSnapshot,
+      getActiveRuntimeWebToolsMetadata,
+      prepareSecretsRuntimeSnapshot,
+    } = await import("./runtime.js");
+    const { getRuntimeConfigSnapshotRefreshHandler } =
+      await import("../config/runtime-snapshot.js");
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+            },
+          },
+        },
+      }),
+      env: {
+        BRAVE_API_KEY: "test-brave-key",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: emptyAuthStore,
+    });
+    activateSecretsRuntimeSnapshot(snapshot);
+
+    await getRuntimeConfigSnapshotRefreshHandler()?.refresh({
+      sourceConfig: asConfig({
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "plain-refreshed-token",
+          },
+        },
+      }),
+    });
+
+    expect(resolveRuntimeWebToolsMock).toHaveBeenCalledTimes(1);
+    expect(getActiveRuntimeWebToolsMetadata()?.search).toMatchObject({
+      providerConfigured: "brave",
+      providerSource: "configured",
+      selectedProvider: "brave",
+    });
+  });
+
+  it("does not preserve web tools when refresh explicitly includes an empty web config", async () => {
+    resolveRuntimeWebToolsMock.mockResolvedValueOnce({
+      search: {
+        providerConfigured: "brave",
+        providerSource: "configured",
+        selectedProvider: "brave",
+        selectedProviderKeySource: "env",
+        diagnostics: [],
+      },
+      fetch: { providerSource: "none", diagnostics: [] },
+      diagnostics: [],
+    });
+    const {
+      activateSecretsRuntimeSnapshot,
+      getActiveRuntimeWebToolsMetadata,
+      prepareSecretsRuntimeSnapshot,
+    } = await import("./runtime.js");
+    const { getRuntimeConfigSnapshotRefreshHandler } =
+      await import("../config/runtime-snapshot.js");
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+            },
+          },
+        },
+      }),
+      env: {
+        BRAVE_API_KEY: "test-brave-key",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: emptyAuthStore,
+    });
+    activateSecretsRuntimeSnapshot(snapshot);
+
+    await getRuntimeConfigSnapshotRefreshHandler()?.refresh({
+      sourceConfig: asConfig({
+        tools: {
+          web: {},
+        },
+      }),
+    });
+
+    expect(resolveRuntimeWebToolsMock).toHaveBeenCalledTimes(1);
+    expect(getActiveRuntimeWebToolsMetadata()?.search.providerSource).toBe("none");
   });
 });

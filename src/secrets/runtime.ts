@@ -285,6 +285,52 @@ function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
   });
 }
 
+function hasRuntimeWebToolConfigContainers(config: OpenClawConfig): boolean {
+  const web = config.tools?.web;
+  if (web && typeof web === "object" && !Array.isArray(web)) {
+    return true;
+  }
+  const entries = config.plugins?.entries;
+  return !!entries && typeof entries === "object" && !Array.isArray(entries);
+}
+
+function hasResolvedRuntimeWebToolSurface(metadata: RuntimeWebToolsMetadata): boolean {
+  return (
+    metadata.search.providerSource !== "none" ||
+    metadata.search.selectedProvider !== undefined ||
+    metadata.search.providerConfigured !== undefined ||
+    metadata.fetch.providerSource !== "none" ||
+    metadata.fetch.selectedProvider !== undefined ||
+    metadata.fetch.providerConfigured !== undefined
+  );
+}
+
+function preserveRuntimeWebToolsForStrippedRefresh(params: {
+  previous: PreparedSecretsRuntimeSnapshot;
+  nextSourceConfig: OpenClawConfig;
+  refreshed: PreparedSecretsRuntimeSnapshot;
+}): PreparedSecretsRuntimeSnapshot {
+  if (!hasRuntimeWebToolConfigSurface(params.previous.sourceConfig)) {
+    return params.refreshed;
+  }
+  if (!hasResolvedRuntimeWebToolSurface(params.previous.webTools)) {
+    return params.refreshed;
+  }
+  if (hasRuntimeWebToolConfigSurface(params.nextSourceConfig)) {
+    return params.refreshed;
+  }
+  if (hasRuntimeWebToolConfigContainers(params.nextSourceConfig)) {
+    return params.refreshed;
+  }
+  if (hasResolvedRuntimeWebToolSurface(params.refreshed.webTools)) {
+    return params.refreshed;
+  }
+  return {
+    ...params.refreshed,
+    webTools: structuredClone(params.previous.webTools),
+  };
+}
+
 function hasSecretRefCandidate(
   value: unknown,
   defaults: Parameters<typeof coerceSecretRef>[1],
@@ -460,6 +506,7 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
       if (!activeSnapshot || !activeRefreshContext) {
         return false;
       }
+      const previousSnapshot = activeSnapshot;
       const refreshed = await prepareSecretsRuntimeSnapshot({
         config: sourceConfig,
         env: activeRefreshContext.env,
@@ -467,7 +514,13 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
         loadAuthStore: activeRefreshContext.loadAuthStore,
         loadablePluginOrigins: activeRefreshContext.loadablePluginOrigins,
       });
-      activateSecretsRuntimeSnapshot(refreshed);
+      activateSecretsRuntimeSnapshot(
+        preserveRuntimeWebToolsForStrippedRefresh({
+          previous: previousSnapshot,
+          nextSourceConfig: sourceConfig,
+          refreshed,
+        }),
+      );
       return true;
     },
   });
