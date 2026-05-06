@@ -119,7 +119,13 @@ function readRecentEntries(): PersistedEchoEntry[] {
   return mirror?.entries ?? [];
 }
 
-function rewriteRecentEntries(entries: PersistedEchoEntry[]): void {
+// Trigger compaction once the on-disk file grows past 2x the cap or holds
+// stale entries beyond the TTL window. Until then, every remember is an
+// O(1) append rather than a full rewrite — group-chat bursts that send 5+
+// outbound messages back-to-back used to write the entire file 5+ times.
+const COMPACT_AT_ENTRY_COUNT = MAX_PERSISTED_ECHO_ENTRIES * 2;
+
+function compactRecentEntries(entries: PersistedEchoEntry[]): void {
   const filePath = resolvePersistedEchoPath();
   try {
     fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: PERSISTED_ECHO_DIR_MODE });
@@ -130,7 +136,7 @@ function rewriteRecentEntries(entries: PersistedEchoEntry[]): void {
     );
     clampPersistedEchoModes(filePath);
   } catch (err) {
-    reportFailure("write", err);
+    reportFailure("compact", err);
     // Persistence failed; don't update the in-memory mirror so the next
     // read still reflects what's actually on disk.
     return;
@@ -144,6 +150,38 @@ function rewriteRecentEntries(entries: PersistedEchoEntry[]): void {
     // ignore — stale mirror will refresh on next access
   }
   mirror = { entries: [...entries], mtimeMs };
+}
+
+function appendEntry(entry: PersistedEchoEntry): void {
+  const filePath = resolvePersistedEchoPath();
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: PERSISTED_ECHO_DIR_MODE });
+    fs.appendFileSync(filePath, `${JSON.stringify(entry)}\n`, {
+      encoding: "utf8",
+      mode: PERSISTED_ECHO_FILE_MODE,
+    });
+    // Always clamp — appendFileSync's `mode` only applies on creation, and
+    // an older gateway version may have left an existing 0644 file behind.
+    // chmod is microseconds; doing it every append keeps the security
+    // guarantee monotonic instead of conditional on creation order.
+    clampPersistedEchoModes(filePath);
+  } catch (err) {
+    reportFailure("append", err);
+    return;
+  }
+  // Mirror stays in sync without re-reading the file: append our entry to
+  // the in-memory copy and bump the mtime to whatever the FS reports now.
+  let mtimeMs = 0;
+  try {
+    mtimeMs = fs.statSync(filePath).mtimeMs;
+  } catch {
+    // ignore
+  }
+  if (mirror) {
+    mirror = { entries: [...mirror.entries, entry], mtimeMs };
+  } else {
+    mirror = { entries: [entry], mtimeMs };
+  }
 }
 
 export function rememberPersistedIMessageEcho(params: {
@@ -160,8 +198,17 @@ export function rememberPersistedIMessageEcho(params: {
   if (!entry.text && !entry.messageId) {
     return;
   }
-  const entries = [...readRecentEntries(), entry].slice(-MAX_PERSISTED_ECHO_ENTRIES);
-  rewriteRecentEntries(entries);
+  // Make sure the mirror reflects whatever's on disk before we decide
+  // whether a compaction is due.
+  loadMirrorIfStale();
+  appendEntry(entry);
+  const total = mirror?.entries.length ?? 0;
+  const cutoff = Date.now() - PERSISTED_ECHO_TTL_MS;
+  const oldestStale = mirror?.entries[0] && mirror.entries[0].timestamp < cutoff;
+  if (total > COMPACT_AT_ENTRY_COUNT || oldestStale) {
+    const fresh = (mirror?.entries ?? []).filter((e) => e.timestamp >= cutoff);
+    compactRecentEntries(fresh.slice(-MAX_PERSISTED_ECHO_ENTRIES));
+  }
 }
 
 export function hasPersistedIMessageEcho(params: {

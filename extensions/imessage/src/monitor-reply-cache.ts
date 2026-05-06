@@ -165,18 +165,20 @@ function appendPersistedEntry(entry: IMessageReplyCacheEntry): void {
   const filePath = resolveReplyCachePath();
   try {
     fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: REPLY_CACHE_DIR_MODE });
-    const fileExisted = fs.existsSync(filePath);
     fs.appendFileSync(filePath, `${JSON.stringify(entry)}\n`, {
       encoding: "utf8",
       mode: REPLY_CACHE_FILE_MODE,
     });
-    if (!fileExisted) {
-      try {
-        fs.chmodSync(path.dirname(filePath), REPLY_CACHE_DIR_MODE);
-        fs.chmodSync(filePath, REPLY_CACHE_FILE_MODE);
-      } catch {
-        // best-effort
-      }
+    // Always clamp — appendFileSync's `mode` only applies on creation, so
+    // an existing 0644 file from an older gateway version would otherwise
+    // never get tightened. chmod is microseconds; doing it every append
+    // keeps the security guarantee monotonic instead of conditional on
+    // creation order.
+    try {
+      fs.chmodSync(path.dirname(filePath), REPLY_CACHE_DIR_MODE);
+      fs.chmodSync(filePath, REPLY_CACHE_FILE_MODE);
+    } catch {
+      // best-effort
     }
   } catch (err) {
     reportPersistenceFailure("append", err);

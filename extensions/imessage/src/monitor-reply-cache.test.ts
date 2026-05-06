@@ -296,6 +296,31 @@ describe("findLatestIMessageEntryForChat", () => {
 });
 
 describe("reply cache disk permissions", () => {
+  it("clamps pre-existing reply-cache.jsonl from older 0644/0755 to 0600/0700", () => {
+    // Older gateway versions wrote with default modes. Every append must
+    // clamp existing files back to owner-only — appendFileSync's `mode`
+    // only applies on creation, so a chmod-on-create-only path would leave
+    // the upgrade case world-readable forever.
+    const imsgDir = path.join(tempStateDir, "imessage");
+    fs.mkdirSync(imsgDir, { recursive: true, mode: 0o755 });
+    const cacheFile = path.join(imsgDir, "reply-cache.jsonl");
+    fs.writeFileSync(cacheFile, "", { mode: 0o644 });
+    fs.chmodSync(imsgDir, 0o755);
+    fs.chmodSync(cacheFile, 0o644);
+
+    rememberIMessageReplyCache({
+      accountId: "default",
+      messageId: "clamp-test-guid",
+      chatIdentifier: "+12069106512",
+      timestamp: Date.now(),
+    });
+
+    const fileMode = fs.statSync(cacheFile).mode & 0o777;
+    const dirMode = fs.statSync(imsgDir).mode & 0o777;
+    expect(fileMode).toBe(0o600);
+    expect(dirMode).toBe(0o700);
+  });
+
   it("writes the cache file 0600 and parent dir 0700", () => {
     // Map gateway-allocated short-ids to message guids; a hostile same-UID
     // process reading or writing this file could (a) enumerate active
