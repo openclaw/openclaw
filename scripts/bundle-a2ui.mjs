@@ -2,19 +2,21 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(import.meta.url);
 const hashFile = path.join(rootDir, "src", "canvas-host", "a2ui", ".bundle.hash");
 const outputFile = path.join(rootDir, "src", "canvas-host", "a2ui", "a2ui.bundle.js");
-const a2uiRendererDir = path.join(rootDir, "vendor", "a2ui", "renderers", "lit");
 const a2uiAppDir = path.join(rootDir, "apps", "shared", "OpenClawKit", "Tools", "CanvasA2UI");
-const uiPackageFile = path.join(rootDir, "ui", "package.json");
-const repoInputPaths = [uiPackageFile, a2uiRendererDir, a2uiAppDir];
-const ignoredBundleHashInputPrefixes = ["vendor/a2ui/renderers/lit/dist"];
+const rootPackageFile = path.join(rootDir, "package.json");
+const lockFile = path.join(rootDir, "pnpm-lock.yaml");
+const repoInputPaths = [rootPackageFile, lockFile, a2uiAppDir];
 const relativeRepoInputPaths = repoInputPaths.map((inputPath) =>
   normalizePath(path.relative(rootDir, inputPath)),
 );
@@ -40,10 +42,7 @@ function normalizePath(filePath) {
 }
 
 export function isBundleHashInputPath(filePath, repoRoot = rootDir) {
-  const relativePath = normalizePath(path.relative(repoRoot, filePath));
-  return !ignoredBundleHashInputPrefixes.some(
-    (ignoredPath) => relativePath === ignoredPath || relativePath.startsWith(`${ignoredPath}/`),
-  );
+  return Boolean(filePath && repoRoot);
 }
 
 export function getLocalRolldownCliCandidates(repoRoot = rootDir) {
@@ -65,8 +64,8 @@ export function getLocalRolldownCliCandidates(repoRoot = rootDir) {
 
 export function getBundleHashRepoInputPaths(repoRoot = rootDir) {
   return [
-    path.join(repoRoot, "ui", "package.json"),
-    path.join(repoRoot, "vendor", "a2ui", "renderers", "lit"),
+    path.join(repoRoot, "package.json"),
+    path.join(repoRoot, "pnpm-lock.yaml"),
     path.join(repoRoot, "apps", "shared", "OpenClawKit", "Tools", "CanvasA2UI"),
   ];
 }
@@ -115,6 +114,7 @@ function listTrackedInputFiles() {
     .split("\n")
     .filter(Boolean)
     .map((filePath) => path.join(rootDir, filePath))
+    .filter((filePath) => existsSync(filePath))
     .filter((filePath) => isBundleHashInputPath(filePath));
   return trackedFiles;
 }
@@ -166,21 +166,27 @@ function runPnpm(pnpmArgs) {
 }
 
 async function main() {
-  const hasRendererDir = await pathExists(a2uiRendererDir);
   const hasAppDir = await pathExists(a2uiAppDir);
   const hasOutputFile = await pathExists(outputFile);
-  if (!hasRendererDir || !hasAppDir) {
+  let hasA2uiPackage = true;
+  try {
+    require.resolve("@a2ui/lit");
+    require.resolve("@a2ui/lit/ui");
+  } catch {
+    hasA2uiPackage = false;
+  }
+  if (!hasA2uiPackage || !hasAppDir) {
     if (hasOutputFile) {
-      console.log("A2UI sources missing; keeping prebuilt bundle.");
+      console.log("A2UI package missing; keeping prebuilt bundle.");
       return;
     }
     if (process.env.OPENCLAW_SPARSE_PROFILE || process.env.OPENCLAW_A2UI_SKIP_MISSING === "1") {
       console.error(
-        "A2UI sources missing; skipping bundle because OPENCLAW_A2UI_SKIP_MISSING=1 or OPENCLAW_SPARSE_PROFILE is set.",
+        "A2UI package missing; skipping bundle because OPENCLAW_A2UI_SKIP_MISSING=1 or OPENCLAW_SPARSE_PROFILE is set.",
       );
       return;
     }
-    fail(`A2UI sources missing and no prebuilt bundle found at: ${outputFile}`);
+    fail(`A2UI package missing and no prebuilt bundle found at: ${outputFile}`);
   }
 
   const currentHash = await computeHash();
@@ -191,8 +197,6 @@ async function main() {
       return;
     }
   }
-
-  runPnpm(["-s", "exec", "tsgo", "-p", path.join(a2uiRendererDir, "tsconfig.json")]);
 
   const localRolldownCliCandidates = getLocalRolldownCliCandidates(rootDir);
   const localRolldownCli = (

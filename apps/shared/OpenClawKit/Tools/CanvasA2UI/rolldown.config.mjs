@@ -1,9 +1,11 @@
 import path from "node:path";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../../../../..");
+const require = createRequire(import.meta.url);
 const uiRoot = path.resolve(repoRoot, "ui");
 const fromHere = (p) => path.resolve(here, p);
 const outputFile = path.resolve(
@@ -15,8 +17,9 @@ const outputFile = path.resolve(
   "a2ui.bundle.js",
 );
 
-const a2uiLitDist = path.resolve(repoRoot, "vendor/a2ui/renderers/lit/dist/src");
-const a2uiThemeContext = path.resolve(a2uiLitDist, "0.8/ui/context/theme.js");
+const a2uiLitIndex = require.resolve("@a2ui/lit");
+const a2uiLitUi = require.resolve("@a2ui/lit/ui");
+const a2uiThemeContext = path.resolve(path.dirname(a2uiLitUi), "context/theme.js");
 const uiNodeModules = path.resolve(uiRoot, "node_modules");
 const repoNodeModules = path.resolve(repoRoot, "node_modules");
 
@@ -46,8 +49,8 @@ export default {
   treeshake: false,
   resolve: {
     alias: {
-      "@a2ui/lit": path.resolve(a2uiLitDist, "index.js"),
-      "@a2ui/lit/ui": path.resolve(a2uiLitDist, "0.8/ui/ui.js"),
+      "@a2ui/lit": a2uiLitIndex,
+      "@a2ui/lit/ui": a2uiLitUi,
       "@openclaw/a2ui-theme-context": a2uiThemeContext,
       "@lit/context": resolveUiDependency("@lit/context"),
       "@lit/context/": resolveUiDependency("@lit/context/"),

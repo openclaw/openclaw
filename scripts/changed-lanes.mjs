@@ -13,6 +13,7 @@ const TOOLING_PATH_RE =
 const ROOT_GLOBAL_PATH_RE =
   /^(?:package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsdown\.config\.ts$|vitest\.config\.ts$)/u;
 const LEGACY_ROOT_ASSET_PATH_RE = /^assets\//u;
+const CANVAS_A2UI_BUNDLE_INPUT_RE = /^apps\/shared\/OpenClawKit\/Tools\/CanvasA2UI\//u;
 const LIVE_DOCKER_TOOLING_PATH_RE =
   /^(?:scripts\/test-docker-all\.mjs|scripts\/test-docker-all\.sh|scripts\/lib\/live-docker-auth\.sh|scripts\/test-live-(?:acp-bind|cli-backend|codex-harness|gateway-models|models)-docker\.sh|src\/gateway\/gateway-acp-bind\.live\.test\.ts|src\/gateway\/live-agent-probes\.test\.ts)$/u;
 const LIVE_DOCKER_PACKAGE_SCRIPT_RE = /^test:docker:live-[\w:-]+$/u;
@@ -168,6 +169,14 @@ export function detectChangedLanes(changedPaths, options = {}) {
         lanes.coreTests = true;
         reasons.push(`${changedPath}: core production`);
       }
+      continue;
+    }
+
+    if (CANVAS_A2UI_BUNDLE_INPUT_RE.test(changedPath)) {
+      lanes.core = true;
+      lanes.coreTests = true;
+      lanes.tooling = true;
+      reasons.push(`${changedPath}: CanvasA2UI bundle input`);
       continue;
     }
 

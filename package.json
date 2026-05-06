@@ -1737,6 +1737,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@a2ui/lit": "0.8.1",
     "@copilotkit/aimock": "1.17.0",
     "@grammyjs/types": "^3.26.0",
     "@lit-labs/signals": "^0.2.0",
