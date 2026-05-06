@@ -384,10 +384,7 @@ function hasAnyConfiguredStringSetting(params: {
 function hasElevenLabsVoiceSettings(value: Record<string, unknown> | undefined): boolean {
   const voiceSettings = asObjectRecord(value?.voiceSettings);
   return Boolean(
-    voiceSettings &&
-    (voiceSettings.style !== undefined ||
-      voiceSettings.stability !== undefined ||
-      voiceSettings.similarityBoost !== undefined),
+    voiceSettings && (voiceSettings.style !== undefined || voiceSettings.stability !== undefined),
   );
 }
 

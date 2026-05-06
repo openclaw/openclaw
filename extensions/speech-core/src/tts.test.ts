@@ -673,6 +673,45 @@ describe("speech-core native voice-note routing", () => {
     );
   });
 
+  it("keeps ElevenLabs auto emotion when only similarityBoost is configured", async () => {
+    installSpeechProviders([createMockSpeechProvider("elevenlabs")]);
+
+    await synthesizeSpeech({
+      text: "Great news, the deployment succeeded!",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "elevenlabs",
+            providers: {
+              elevenlabs: {
+                voiceSettings: {
+                  similarityBoost: 0.75,
+                },
+              },
+            },
+            autoEmotion: {
+              enabled: true,
+              allowed: ["happy", "calm", "neutral"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      disableFallback: true,
+    });
+
+    expect(synthesizeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerOverrides: {
+          voiceSettings: {
+            style: 0.45,
+            stability: 0.35,
+          },
+        },
+      }),
+    );
+  });
+
   it("does not treat provider default ElevenLabs voice settings as explicit overrides", async () => {
     installSpeechProviders([
       createMockSpeechProvider("elevenlabs", {
