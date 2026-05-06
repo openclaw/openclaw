@@ -501,6 +501,44 @@ function isMidTurnPrecheckAssistantError(message: AgentMessage | undefined): boo
   return record.stopReason === "error" && record.errorMessage === MID_TURN_PRECHECK_ERROR_MESSAGE;
 }
 
+export function removeSessionManagerLeafEntry(params: {
+  sessionManager: {
+    branch: (branchFromId: string) => void;
+    resetLeaf: () => void;
+  };
+  leafEntry: { id?: string; parentId?: string | null };
+}): void {
+  const mutableSessionManager = params.sessionManager as unknown as {
+    fileEntries?: Array<{ id?: string; type?: string }>;
+    byId?: Map<string, unknown>;
+    leafId?: string | null;
+    _rewriteFile?: () => void;
+  };
+  const leafId = params.leafEntry.id;
+  const fileEntries = mutableSessionManager.fileEntries;
+  const leafIndex = leafId ? fileEntries?.findIndex((entry) => entry.id === leafId) : -1;
+
+  if (
+    leafId &&
+    fileEntries &&
+    leafIndex !== undefined &&
+    leafIndex >= 0 &&
+    typeof mutableSessionManager._rewriteFile === "function"
+  ) {
+    fileEntries.splice(leafIndex, 1);
+    mutableSessionManager.byId?.delete(leafId);
+    mutableSessionManager.leafId = params.leafEntry.parentId ?? null;
+    mutableSessionManager._rewriteFile();
+    return;
+  }
+
+  if (params.leafEntry.parentId) {
+    params.sessionManager.branch(params.leafEntry.parentId);
+  } else {
+    params.sessionManager.resetLeaf();
+  }
+}
+
 function removeTrailingMidTurnPrecheckAssistantError(params: {
   activeSession: { agent: { state: { messages: AgentMessage[] } } };
   sessionManager: ReturnType<typeof guardSessionManager>;
@@ -2704,11 +2742,7 @@ export async function runEmbeddedAttempt(
           });
           effectivePrompt = orphanPromptMerge.prompt;
           if (orphanPromptMerge.removeLeaf) {
-            if (leafEntry.parentId) {
-              sessionManager.branch(leafEntry.parentId);
-            } else {
-              sessionManager.resetLeaf();
-            }
+            removeSessionManagerLeafEntry({ sessionManager, leafEntry });
             const sessionContext = sessionManager.buildSessionContext();
             activeSession.agent.state.messages = sessionContext.messages;
           }
