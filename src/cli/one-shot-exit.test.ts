@@ -28,4 +28,29 @@ describe("one-shot CLI exit", () => {
     expect(shouldForceExitAfterOneShotOutput(runtime, {} as NodeJS.ProcessEnv)).toBe(false);
     expect(shouldForceExitAfterOneShotOutput(defaultRuntime, {} as NodeJS.ProcessEnv)).toBe(true);
   });
+
+  it("drains stdout and stderr before forcing default runtime exit", () => {
+    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
+    vi.spyOn(process.stdout, "writableLength", "get").mockReturnValue(4);
+    vi.spyOn(process.stderr, "writableLength", "get").mockReturnValue(4);
+
+    let flushStdout: (() => void) | undefined;
+    let flushStderr: (() => void) | undefined;
+    vi.spyOn(process.stdout, "write").mockImplementation(((...args: unknown[]) => {
+      flushStdout = args.find((arg): arg is () => void => typeof arg === "function");
+      return true;
+    }) as typeof process.stdout.write);
+    vi.spyOn(process.stderr, "write").mockImplementation(((...args: unknown[]) => {
+      flushStderr = args.find((arg): arg is () => void => typeof arg === "function");
+      return true;
+    }) as typeof process.stderr.write);
+
+    exitAfterOneShotOutput(defaultRuntime, {} as NodeJS.ProcessEnv);
+
+    expect(exit).not.toHaveBeenCalled();
+    flushStdout?.();
+    expect(exit).not.toHaveBeenCalled();
+    flushStderr?.();
+    expect(exit).toHaveBeenCalledWith(0);
+  });
 });

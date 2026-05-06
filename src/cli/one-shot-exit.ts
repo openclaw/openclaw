@@ -26,8 +26,25 @@ export function exitAfterOneShotOutput(
   }
 
   const exit = () => runtime.exit(0);
-  if (process.stdout.writableLength > 0) {
-    process.stdout.write("", exit);
+  let pendingStreams = 0;
+
+  const maybeDrain = (stream: NodeJS.WriteStream) => {
+    if (stream.writableLength <= 0) {
+      return;
+    }
+    pendingStreams += 1;
+    stream.write("", () => {
+      pendingStreams -= 1;
+      if (pendingStreams === 0) {
+        exit();
+      }
+    });
+  };
+
+  maybeDrain(process.stdout);
+  maybeDrain(process.stderr);
+
+  if (pendingStreams > 0) {
     return;
   }
   setImmediate(exit);
