@@ -2037,6 +2037,53 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(result).toEqual({ cancel: true });
   });
 
+  it("does not write boundary when visible custom turn-prefix content is real conversation", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [
+          {
+            role: "custom" as const,
+            customType: "cron-request",
+            content: "prepare the daily report",
+            display: true,
+            timestamp: 1,
+          },
+          {
+            role: "assistant" as const,
+            content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+            timestamp: 2,
+          },
+          {
+            role: "toolResult" as const,
+            toolCallId: "call-1",
+            toolName: "read",
+            content: [{ type: "text", text: "report source data" }],
+            timestamp: 3,
+          },
+        ] as AgentMessage[],
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 38085,
+        fileOps: { read: [], edited: [], written: [] },
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: null,
+    });
+
+    expect(result).toEqual({ cancel: true });
+    expect(getApiKeyAndHeadersMock).toHaveBeenCalled();
+  });
+
   it("continues when messages include real conversation content", async () => {
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
