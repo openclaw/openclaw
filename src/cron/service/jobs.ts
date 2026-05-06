@@ -504,7 +504,11 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
     );
     job.state.runningAtMs = undefined;
     changed = true;
-    return { changed, skip: true };
+    const nextRun = job.state.nextRunAtMs;
+    const lastRun = job.state.lastRunAtMs;
+    const alreadyExecutedSlot =
+      hasScheduledNextRunAtMs(nextRun) && isFiniteTimestamp(lastRun) && lastRun >= nextRun;
+    return { changed, skip: !alreadyExecutedSlot };
   }
 
   return { changed, skip: false };
