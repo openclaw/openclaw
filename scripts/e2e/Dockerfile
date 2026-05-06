@@ -46,9 +46,7 @@ COPY --from=openclaw_package --chown=appuser:appuser openclaw-current.tgz /tmp/o
 # Preserve package self-reference imports such as openclaw/plugin-sdk/* after
 # copying the installed package out of npm's global node_modules tree.
 RUN npm install -g --prefix /tmp/openclaw-prefix /tmp/openclaw-current.tgz --no-fund --no-audit \
- && mkdir -p /app/node_modules \
- && cp -a /tmp/openclaw-prefix/lib/node_modules/. /app/node_modules/ \
- && find /tmp/openclaw-prefix/lib/node_modules/openclaw -mindepth 1 -maxdepth 1 ! -name node_modules -exec cp -a {} /app/ \; \
+ && cp -a /tmp/openclaw-prefix/lib/node_modules/openclaw/. /app/ \
  && mkdir -p "$HOME/.local/bin" \
  && ln -sf /app/openclaw.mjs "$HOME/.local/bin/openclaw" \
  && rm -rf /app/node_modules/openclaw \
