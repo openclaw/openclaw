@@ -182,6 +182,28 @@ The route is protected by Gateway authentication. Do not expose a separate
 public `/metrics` port or unauthenticated reverse-proxy path. See
 [Prometheus metrics](/gateway/prometheus).
 
+### Proxy configuration
+
+If your host routes outbound traffic through a local proxy (such as Clash Verge, v2ray, or Shadowsocks), you can enable proxying for the gateway container by setting the following environment variables in your `docker-compose.yml`:
+
+```yaml
+# In openclaw-gateway.environment:
+# HTTP_PROXY: "http://host.docker.internal:7897"
+# HTTPS_PROXY: "http://host.docker.internal:7897"
+# NO_PROXY: "localhost,127.0.0.1,.local,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+```
+
+> **Note:**
+> Replace `7897` with the port your proxy is actually listening on your host machine.
+> For Linux, ensure you add the following to the `openclaw-gateway` service to make `host.docker.internal` resolve inside the container:
+>
+> ```yaml
+> extra_hosts:
+>   - "host.docker.internal:host-gateway"
+> ```
+
+This ensures all outbound requests from the gateway container are routed through your local proxy.
+
 ### Health checks
 
 Container probe endpoints (no auth required):
