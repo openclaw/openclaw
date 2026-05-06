@@ -397,7 +397,11 @@ export function buildAfterToolsResolvedToolMetadata(
       }
 
       if (tool.parameters !== undefined) {
-        meta.parameters = tool.parameters;
+        try {
+          meta.parameters = structuredClone(tool.parameters);
+        } catch {
+          // Non-cloneable schemas stay out of the observation event.
+        }
       }
 
       return meta;

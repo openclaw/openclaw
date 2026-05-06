@@ -33,15 +33,34 @@ import {
 import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
 
 describe("buildAfterToolsResolvedToolMetadata", () => {
-  it("passes parameters by reference", () => {
-    const parameters = {
+  it("snapshots parameters instead of sharing provider-facing schema objects", () => {
+    const parameters: {
+      type: string;
+      properties: { command: { type: string } };
+    } = {
       type: "object",
       properties: { command: { type: "string" } },
     };
     const tools = [{ name: "exec", parameters }];
 
     const metadata = buildAfterToolsResolvedToolMetadata(tools);
-    expect(metadata[0]?.parameters).toBe(parameters);
+    const snapshot = metadata[0]?.parameters as typeof parameters | undefined;
+    expect(snapshot).toEqual(parameters);
+    expect(snapshot).not.toBe(parameters);
+    expect(snapshot?.properties.command).not.toBe(parameters.properties.command);
+    if (!snapshot) {
+      throw new Error("expected parameters snapshot");
+    }
+
+    snapshot.properties.command.type = "number";
+    expect(parameters.properties.command.type).toBe("string");
+  });
+
+  it("omits parameters when they cannot be snapshotted", () => {
+    const metadata = buildAfterToolsResolvedToolMetadata([
+      { name: "invalid_schema", parameters: () => undefined },
+    ]);
+    expect(metadata).toEqual([{ name: "invalid_schema" }]);
   });
 
   it("keeps tools with undefined parameters", () => {
@@ -73,7 +92,7 @@ describe("buildAfterToolsResolvedSessionToolMetadata", () => {
       { name: "a_tool", description: "a" },
       { name: "z_tool", description: "last z", parameters: lastParameters },
     ]);
-    expect(metadata[1]?.parameters).toBe(lastParameters);
+    expect(metadata[1]?.parameters).not.toBe(lastParameters);
   });
 });
 
