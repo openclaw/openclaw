@@ -10,7 +10,9 @@ export type RequiredParamGroup = {
 const RETRY_GUIDANCE_SUFFIX = " Supply correct parameters before retrying.";
 
 function parameterValidationError(message: string): Error {
-  return new Error(`${message}.${RETRY_GUIDANCE_SUFFIX}`);
+  const err = new Error(`${message}.${RETRY_GUIDANCE_SUFFIX}`);
+  (err as Error & { retryable: boolean }).retryable = false;
+  return err;
 }
 
 function describeReceivedParamValue(value: unknown, allowEmpty = false): string | undefined {
