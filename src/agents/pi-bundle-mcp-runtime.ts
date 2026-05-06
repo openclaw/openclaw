@@ -33,6 +33,19 @@ type BundleMcpSession = {
   client: Client;
   transport: Transport;
   transportType: "stdio" | "sse" | "streamable-http";
+  /**
+   * Per-call request timeout passed to `client.callTool({...}, { timeout })`.
+   * When the operator explicitly sets `mcp.servers.<name>.connectionTimeoutMs`,
+   * that value applies to both the initial handshake and individual tool
+   * calls — so any tool that legitimately runs longer than the MCP SDK's
+   * hardcoded `DEFAULT_REQUEST_TIMEOUT_MSEC = 60_000` (e.g. multi-iteration
+   * LLM loops) no longer fails with `MCP error -32001: Request timed out`.
+   * When the operator has *not* configured a value, the request timeout
+   * falls back to the SDK's 60s default rather than OpenClaw's 30s
+   * connection default, so unconfigured servers keep the prior per-call
+   * budget. (#60967)
+   */
+  requestTimeoutMs: number;
   detachStderr?: () => void;
 };
 
@@ -252,6 +265,7 @@ export function createSessionMcpRuntime(params: {
             client,
             transport: resolved.transport,
             transportType: resolved.transportType,
+            requestTimeoutMs: resolved.requestTimeoutMs,
             detachStderr: resolved.detachStderr,
           };
           sessions.set(serverName, session);
@@ -355,10 +369,17 @@ export function createSessionMcpRuntime(params: {
       if (!session) {
         throw new Error(`bundle-mcp server "${serverName}" is not connected`);
       }
-      return (await session.client.callTool({
-        name: toolName,
-        arguments: isMcpConfigRecord(input) ? input : {},
-      })) as CallToolResult;
+      return (await session.client.callTool(
+        {
+          name: toolName,
+          arguments: isMcpConfigRecord(input) ? input : {},
+        },
+        // RequestOptions: pass the configured timeout so long-running MCP
+        // tools no longer hit the SDK's hardcoded 60s default (#60967).
+        // Schema literal omitted so the SDK uses its default validation.
+        undefined,
+        { timeout: session.requestTimeoutMs },
+      )) as CallToolResult;
     },
     async dispose() {
       if (disposed) {

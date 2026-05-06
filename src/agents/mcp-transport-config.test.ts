@@ -55,6 +55,7 @@ describe("resolveMcpTransportConfig", () => {
       cwd: undefined,
       description: "node",
       connectionTimeoutMs: 30_000,
+      requestTimeoutMs: 60_000,
     });
     expect(logWarn).toHaveBeenCalledWith(
       'bundle-mcp: server "probe": env "NODE_OPTIONS" is blocked for stdio startup safety and was ignored.',
@@ -115,6 +116,7 @@ describe("resolveMcpTransportConfig", () => {
       },
       description: "https://mcp.example.com/sse",
       connectionTimeoutMs: 30_000,
+      requestTimeoutMs: 60_000,
     });
   });
 
@@ -135,6 +137,7 @@ describe("resolveMcpTransportConfig", () => {
       },
       description: "https://mcp.example.com/sse",
       connectionTimeoutMs: 30_000,
+      requestTimeoutMs: 60_000,
     });
   });
 
@@ -161,6 +164,52 @@ describe("resolveMcpTransportConfig", () => {
       kind: "http",
       transportType: "streamable-http",
       url: "https://mcp.example.com/http",
+    });
+  });
+
+  describe("requestTimeoutMs (#60967)", () => {
+    it("falls back to the MCP SDK's 60s default when connectionTimeoutMs is not configured", () => {
+      const resolved = resolveMcpTransportConfig("probe", {
+        command: "node",
+      });
+
+      expect(resolved?.connectionTimeoutMs).toBe(30_000);
+      expect(resolved?.requestTimeoutMs).toBe(60_000);
+    });
+
+    it("uses an explicit connectionTimeoutMs for both connection and per-call request budgets", () => {
+      const resolved = resolveMcpTransportConfig("probe", {
+        command: "node",
+        connectionTimeoutMs: 5 * 60_000,
+      });
+
+      expect(resolved?.connectionTimeoutMs).toBe(5 * 60_000);
+      expect(resolved?.requestTimeoutMs).toBe(5 * 60_000);
+    });
+
+    it("ignores zero or negative connectionTimeoutMs and keeps the SDK 60s request default", () => {
+      for (const invalid of [0, -1]) {
+        const resolved = resolveMcpTransportConfig("probe", {
+          command: "node",
+          connectionTimeoutMs: invalid,
+        });
+        expect(resolved?.connectionTimeoutMs).toBe(30_000);
+        expect(resolved?.requestTimeoutMs).toBe(60_000);
+      }
+    });
+
+    it("propagates request timeout through HTTP transports too", () => {
+      const explicit = resolveMcpTransportConfig("probe", {
+        url: "https://mcp.example.com/sse",
+        connectionTimeoutMs: 90_000,
+      });
+      expect(explicit?.requestTimeoutMs).toBe(90_000);
+
+      const implicit = resolveMcpTransportConfig("probe", {
+        url: "https://mcp.example.com/sse",
+      });
+      expect(implicit?.connectionTimeoutMs).toBe(30_000);
+      expect(implicit?.requestTimeoutMs).toBe(60_000);
     });
   });
 });

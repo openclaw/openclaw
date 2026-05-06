@@ -15,6 +15,8 @@ import {
 type ResolvedBaseMcpTransportConfig = {
   description: string;
   connectionTimeoutMs: number;
+  /** Per-call request timeout. See `getRequestTimeoutMs` for the fallback rules. */
+  requestTimeoutMs: number;
 };
 
 type ResolvedStdioMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
@@ -36,8 +38,14 @@ type ResolvedHttpMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
 type ResolvedMcpTransportConfig = ResolvedStdioMcpTransportConfig | ResolvedHttpMcpTransportConfig;
 
 const DEFAULT_CONNECTION_TIMEOUT_MS = 30_000;
+// MCP SDK's `DEFAULT_REQUEST_TIMEOUT_MSEC` (60s, see @modelcontextprotocol/sdk
+// `protocol.ts`). When the operator has not explicitly set
+// `connectionTimeoutMs`, fall back to this value for per-call request
+// timeouts so unconfigured servers keep the SDK's existing 60s budget for
+// tools that legitimately run 30–60s.
+const MCP_SDK_DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
-function getConnectionTimeoutMs(rawServer: unknown): number {
+function readExplicitConnectionTimeoutMs(rawServer: unknown): number | undefined {
   if (
     rawServer &&
     typeof rawServer === "object" &&
@@ -46,7 +54,22 @@ function getConnectionTimeoutMs(rawServer: unknown): number {
   ) {
     return (rawServer as { connectionTimeoutMs: number }).connectionTimeoutMs;
   }
-  return DEFAULT_CONNECTION_TIMEOUT_MS;
+  return undefined;
+}
+
+function getConnectionTimeoutMs(rawServer: unknown): number {
+  return readExplicitConnectionTimeoutMs(rawServer) ?? DEFAULT_CONNECTION_TIMEOUT_MS;
+}
+
+/**
+ * Per-call MCP request timeout. When `connectionTimeoutMs` is explicitly
+ * configured, the operator's value applies to both the initial handshake and
+ * individual tool calls. When it is unset, request timeouts fall back to the
+ * MCP SDK's 60s default (rather than OpenClaw's 30s connection default), so
+ * existing unconfigured servers keep the prior per-call budget. (#60967)
+ */
+function getRequestTimeoutMs(rawServer: unknown): number {
+  return readExplicitConnectionTimeoutMs(rawServer) ?? MCP_SDK_DEFAULT_REQUEST_TIMEOUT_MS;
 }
 
 function getRequestedTransport(rawServer: unknown): string {
@@ -99,6 +122,7 @@ function resolveHttpTransportConfig(
     headers: launch.config.headers,
     description: describeHttpMcpServerLaunchConfig(launch.config),
     connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
+    requestTimeoutMs: getRequestTimeoutMs(rawServer),
   };
 }
 
@@ -127,6 +151,7 @@ export function resolveMcpTransportConfig(
       cwd: stdioLaunch.config.cwd,
       description: describeStdioMcpServerLaunchConfig(stdioLaunch.config),
       connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
+      requestTimeoutMs: getRequestTimeoutMs(rawServer),
     };
   }
 
