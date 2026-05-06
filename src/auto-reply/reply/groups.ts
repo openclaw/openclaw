@@ -245,6 +245,7 @@ export function buildGroupChatContext(params: {
   lines.push(
     "Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.",
   );
+  lines.push("If addressed to someone else, stay silent unless invited or correcting key facts.");
   if (normalizeOptionalLowercaseString(params.sessionCtx.Provider) === "discord") {
     lines.push("Discord: wrap bare URLs like <https://example.com> to suppress embeds.");
   }

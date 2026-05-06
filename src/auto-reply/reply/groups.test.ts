@@ -32,6 +32,8 @@ describe("group runtime loading", () => {
     );
     expect(groupChatContext).toContain("Minimize empty lines and use normal chat conventions");
     expect(groupChatContext).not.toContain("wrap bare URLs");
+    expect(groupChatContext).toContain("If addressed to someone else");
+    expect(groupChatContext).toContain("stay silent unless invited or correcting key facts");
     expect(groupChatContext).toContain("prefer delegating bounded side investigations early");
     expect(groupChatContext).toContain("Keep the critical path local");
     expect(groupChatContext).toContain('reply with exactly "NO_REPLY"');
