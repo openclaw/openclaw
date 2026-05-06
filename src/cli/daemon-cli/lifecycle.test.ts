@@ -4,7 +4,7 @@ import { captureEnv } from "../../test-utils/env.js";
 type RestartHealthSnapshot = {
   healthy: boolean;
   staleGatewayPids: number[];
-  runtime: { status?: string };
+  runtime: { status?: string; pid?: number };
   portUsage: { port: number; status: string; listeners: []; hints: []; errors?: string[] };
   waitOutcome?: string;
   elapsedMs?: number;
@@ -345,6 +345,50 @@ describe("runDaemonRestart health checks", () => {
     expect(terminateStaleGatewayPids).toHaveBeenCalledWith([1993]);
     expect(service.restart).toHaveBeenCalledTimes(1);
     expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not kill the current running gateway pid when stale detection includes self", async () => {
+    const unhealthy: RestartHealthSnapshot = {
+      healthy: false,
+      staleGatewayPids: [1993, 2111],
+      runtime: { status: "running", pid: 1993 },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    };
+    const healthy: RestartHealthSnapshot = {
+      healthy: true,
+      staleGatewayPids: [],
+      runtime: { status: "running", pid: 1993 },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    };
+    waitForGatewayHealthyRestart.mockResolvedValueOnce(unhealthy).mockResolvedValueOnce(healthy);
+    terminateStaleGatewayPids.mockResolvedValue([2111]);
+
+    const result = await runDaemonRestart({ json: true });
+
+    expect(result).toBe(true);
+    expect(terminateStaleGatewayPids).toHaveBeenCalledWith([2111]);
+    expect(service.restart).toHaveBeenCalledTimes(1);
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails without killing the current runtime pid when stale detection only includes self", async () => {
+    const unhealthy: RestartHealthSnapshot = {
+      healthy: false,
+      staleGatewayPids: [1993],
+      runtime: { status: "running", pid: 1993 },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    };
+    waitForGatewayHealthyRestart.mockResolvedValue(unhealthy);
+
+    await expect(runDaemonRestart({ json: true })).rejects.toMatchObject({
+      message: "Gateway restart timed out after 60s waiting for health checks.",
+      hints: ["openclaw gateway status --deep", "openclaw doctor"],
+    });
+
+    expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(1);
+    expect(renderRestartDiagnostics).toHaveBeenCalledTimes(1);
   });
 
   it("skips stale-pid retry health checks when the retry restart is only scheduled", async () => {
