@@ -227,6 +227,23 @@ describe("resolveSessionKeyFromResolveParams", () => {
     expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalled();
   });
 
+  it('rejects key="current" with a clear alias-context error (not a misleading "No session found")', async () => {
+    const result = await resolveSessionKeyFromResolveParams({
+      cfg: {},
+      p: { key: "current" },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: ErrorCodes.INVALID_REQUEST,
+        message:
+          '"current" is a context alias resolved by the agent tool layer; pass the real session key instead',
+      },
+    });
+    expect(hoisted.resolveGatewaySessionStoreTargetMock).not.toHaveBeenCalled();
+  });
+
   it("rejects sessions belonging to a deleted agent (label-based lookup)", async () => {
     const deletedAgentKey = "agent:deleted-agent:main";
     hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
