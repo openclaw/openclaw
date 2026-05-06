@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { URL } from "node:url";
+import { sanitizeHeadersInit } from "../infra/net/redirect-headers.js";
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
 import {
   closeDebugProxyCaptureStore,
@@ -174,6 +175,9 @@ function installDebugProxyGlobalFetchPatch(
   fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY] = { originalFetch };
   fetchTarget.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = resolveUrlString(input);
+    if (init && init.headers) {
+      init.headers = sanitizeHeadersInit(init.headers);
+    }
     try {
       const response = await originalFetch(input, init);
       if (url && /^https?:/i.test(url)) {
