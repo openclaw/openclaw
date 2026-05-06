@@ -44,7 +44,7 @@ export class GatewayHeartbeatTimers {
 
   stop(): void {
     if (this.heartbeatInterval) {
-      clearInterval(this.heartbeatInterval);
+      clearTimeout(this.heartbeatInterval);
       this.heartbeatInterval = undefined;
     }
     if (this.firstHeartbeatTimeout) {
