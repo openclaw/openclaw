@@ -155,6 +155,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/sessions: persist a new generated transcript file when daily gateway-agent session rollover changes the session id, while preserving custom transcript paths. Fixes #78607. Thanks @nailujac, @zerone0x, and @sallyom.
 - Doctor/OpenAI Codex: revert the 2026.5.5 `doctor --fix` repair that rewrote valid `openai-codex/*` ChatGPT/Codex OAuth routes to `openai/*`, which could break OAuth-only GPT-5.5 setups or accidentally move users onto the OpenAI API-key route. If 2026.5.5 already changed your default model, run `openclaw models set openai-codex/gpt-5.5 && openclaw config validate` to switch the default agent back to the Codex OAuth PI route. Fixes #78407.
 - Telegram: keep the polling watchdog tied to `getUpdates` liveness so unrelated outbound Bot API calls cannot mask a wedged inbound poller. Fixes #78422. Thanks @ai-hpc.
+- Hooks/cron: log returned `/hooks/agent` isolated-run errors and failed cron jobs with cron diagnostic summaries, so rejected `payload.model` values are visible instead of looking like accepted-but-missing runs. Fixes #78597.
 - Discord/groups: instruct group-chat agents to stay silent when a message is addressed to someone else, replying only when invited or correcting key facts. (#78615)
 - Discord/groups: tell Discord-channel agents to wrap bare URLs as `<https://example.com>` so link previews do not expand into uninvited embeds. (#78614)
 - Agents/fallback: fail fast on session write-lock timeouts instead of trying fallback models for local file contention. Fixes #66646. Thanks @sallyom.

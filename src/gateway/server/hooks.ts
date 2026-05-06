@@ -37,6 +37,15 @@ function shouldAnnounceHookRunResult(params: {
   );
 }
 
+function resolveHookRunSummary(result: RunCronAgentTurnResult): string {
+  return (
+    normalizeOptionalString(result.diagnostics?.summary) ||
+    normalizeOptionalString(result.summary) ||
+    normalizeOptionalString(result.error) ||
+    result.status
+  );
+}
+
 export function createGatewayHooksRequestHandler(params: {
   deps: CliDeps;
   getHooksConfig: () => HooksConfigResolved | null;
@@ -108,13 +117,23 @@ export function createGatewayHooksRequestHandler(params: {
           sessionKey,
           lane: "cron",
         });
-        const summary =
-          normalizeOptionalString(result.summary) ||
-          normalizeOptionalString(result.error) ||
-          result.status;
+        const summary = resolveHookRunSummary(result);
         const prefix =
           result.status === "ok" ? `Hook ${safeName}` : `Hook ${safeName} (${result.status})`;
         const shouldAnnounce = shouldAnnounceHookRunResult({ deliver: value.deliver, result });
+        if (result.status !== "ok") {
+          logHooks.warn("hook agent run returned non-ok status", {
+            sourcePath: value.sourcePath,
+            name: safeName,
+            runId,
+            jobId,
+            agentId: value.agentId,
+            sessionKey,
+            status: result.status,
+            model: value.model,
+            summary,
+          });
+        }
         if (shouldAnnounce) {
           const eventSessionKey = hookEventSessionKey ?? resolveMainSessionKeyFromConfig();
           enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
