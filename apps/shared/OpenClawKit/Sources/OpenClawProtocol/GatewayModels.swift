@@ -1910,6 +1910,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let label: String?
     public let model: String?
     public let parentsessionkey: String?
+    public let emitcommandhooks: Bool?
     public let task: String?
     public let message: String?
 
@@ -1919,6 +1920,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         label: String?,
         model: String?,
         parentsessionkey: String?,
+        emitcommandhooks: Bool?,
         task: String?,
         message: String?)
     {
@@ -1927,6 +1929,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.label = label
         self.model = model
         self.parentsessionkey = parentsessionkey
+        self.emitcommandhooks = emitcommandhooks
         self.task = task
         self.message = message
     }
@@ -1937,6 +1940,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case label
         case model
         case parentsessionkey = "parentSessionKey"
+        case emitcommandhooks = "emitCommandHooks"
         case task
         case message
     }
