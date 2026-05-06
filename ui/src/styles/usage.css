@@ -89,11 +89,6 @@
   gap: 10px;
 }
 
-.usage-header-heading {
-  display: grid;
-  gap: 2px;
-}
-
 .usage-section-subtitle {
   margin: 0;
 }
