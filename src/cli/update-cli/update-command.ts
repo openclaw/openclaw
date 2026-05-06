@@ -52,6 +52,7 @@ import {
 } from "../../infra/update-global.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
+import { clearPluginInstallRuntimeCache } from "../../plugins/install.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   withoutPluginInstallRecords,
@@ -2287,6 +2288,9 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         requestedChannel,
       });
     }
+    // After a gateway update rebuild, the dist chunks may have new hashes. Clear
+    // the lazy-loaded runtime promise cache so plugin updates use fresh imports.
+    clearPluginInstallRuntimeCache();
     postCorePluginUpdate = await runPostCorePluginUpdate({
       root: postUpdateRoot,
       channel,
