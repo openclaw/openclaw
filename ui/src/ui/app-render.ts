@@ -592,6 +592,14 @@ function extractQuickSettingsSecurity(state: AppViewState): {
       }
     }
   }
+  const tools = cfg.tools;
+  if (tools && typeof tools === "object") {
+    const t = tools as Record<string, unknown>;
+    const exec = t.exec && typeof t.exec === "object" ? (t.exec as Record<string, unknown>) : null;
+    if (exec && typeof exec.security === "string") {
+      execPolicy = exec.security;
+    }
+  }
   let deviceAuth = true;
   if (gateway) {
     const controlUi =
