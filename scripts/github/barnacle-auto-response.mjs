@@ -804,9 +804,15 @@ async function applyPullRequestCandidateLabels(github, context, core, pullReques
   ) {
     staleProofLabels.push(PROOF_SUFFICIENT_LABEL);
   }
+
+  const staleCandidateLabels = candidateLabelValues.filter(
+    (label) => labelSet.has(label) && !classifiedLabels.includes(label),
+  );
+
   await removeLabels(github, context, pullRequest.number, staleProofLabels, labelSet);
+  await removeLabels(github, context, pullRequest.number, staleCandidateLabels, labelSet);
   await addMissingLabels(github, context, core, pullRequest.number, classifiedLabels, labelSet);
-  return staleProofLabels;
+  return [...staleProofLabels, ...staleCandidateLabels];
 }
 
 function isAutomationUser(user, fallbackLogin = "") {
