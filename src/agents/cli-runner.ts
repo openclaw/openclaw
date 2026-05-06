@@ -416,7 +416,7 @@ export async function runPreparedCliAgent(
           },
           buildAgentHookContext(hookContext),
         );
-      } catch (err) {
+      } catch {
         const blockMessage = resolveBlockMessage(
           { outcome: "block", reason: "before_agent_run hook failed" },
           { blockedBy: "before_agent_run" },

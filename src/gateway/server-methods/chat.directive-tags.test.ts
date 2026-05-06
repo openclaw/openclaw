@@ -389,27 +389,6 @@ function createScopedCliClient(
   };
 }
 
-async function runChatHistory(params: {
-  client?: unknown;
-  requestParams?: Record<string, unknown>;
-}) {
-  const respond = vi.fn();
-  await chatHandlers["chat.history"]({
-    params: {
-      sessionKey: "main",
-      limit: 200,
-      ...params.requestParams,
-    },
-    respond: respond as unknown as Parameters<(typeof chatHandlers)["chat.history"]>[0]["respond"],
-    req: {} as never,
-    client: (params.client ?? null) as never,
-    isWebchatConnect: () => false,
-    context: createChatContext() as GatewayRequestContext,
-  });
-  expect(respond).toHaveBeenCalledWith(true, expect.anything());
-  return respond.mock.calls[0]?.[1] as { messages?: unknown[] };
-}
-
 function createChatContext(): Pick<
   GatewayRequestContext,
   | "broadcast"

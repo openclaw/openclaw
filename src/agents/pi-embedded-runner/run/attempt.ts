@@ -2854,7 +2854,7 @@ export async function runEmbeddedAttempt(
                 },
                 hookCtx,
               );
-            } catch (err) {
+            } catch {
               log.warn("before_agent_run hook failed; blocking request");
               beforeAgentRunBlocked = true;
               beforeAgentRunBlockedBy = "before_agent_run";
