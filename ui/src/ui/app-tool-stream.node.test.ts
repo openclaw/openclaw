@@ -276,3 +276,44 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     vi.useRealTimers();
   });
 });
+
+describe("app-tool-stream tool output shaping", () => {
+  beforeAll(() => {
+    const globalWithWindow = globalThis as typeof globalThis & {
+      window?: Window & typeof globalThis;
+    };
+    if (!globalWithWindow.window) {
+      globalWithWindow.window = globalThis as unknown as Window & typeof globalThis;
+    }
+  });
+
+  it("encodes object-shaped tool results as string toolresult text in the synthesized message", () => {
+    const host = createHost({ chatRunId: "run-1" });
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        toolCallId: "tc-json",
+        name: "status",
+        args: {},
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "tool", {
+        phase: "result",
+        toolCallId: "tc-json",
+        name: "status",
+        result: { ok: true, nested: { id: 2 } },
+      }),
+    );
+    const entry = host.toolStreamById.get("tc-json");
+    expect(entry).toBeDefined();
+    const chunks = entry!.message.content as Array<{ type?: string; text?: unknown }>;
+    const toolResult = chunks.find((c) => c.type === "toolresult");
+    expect(typeof toolResult?.text).toBe("string");
+    expect(toolResult?.text).toContain('"ok": true');
+    expect(toolResult?.text).toContain('"nested"');
+    expect(String(toolResult?.text)).not.toMatch(/\[object Object\]/);
+  });
+});
