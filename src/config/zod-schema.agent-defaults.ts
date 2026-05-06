@@ -239,6 +239,13 @@ export const AgentDefaultsSchema = z
       ])
       .optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
+    toolSummaries: z
+      .object({
+        minIntervalMs: z.number().int().nonnegative().optional(),
+        locale: z.enum(["en", "zh-CN", "ko", "ja"]).optional(),
+      })
+      .strict()
+      .optional(),
     toolProgressDetail: z.union([z.literal("explain"), z.literal("raw")]).optional(),
     reasoningDefault: z.union([z.literal("off"), z.literal("on"), z.literal("stream")]).optional(),
     elevatedDefault: z

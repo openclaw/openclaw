@@ -3,7 +3,7 @@ import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { formatToolAggregate } from "../auto-reply/tool-meta.js";
+import { formatToolAggregate, normalizeToolSummaryLocale } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
@@ -119,6 +119,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const canShowReasoning = params.thinkingLevel !== "off";
   const toolResultFormat = params.toolResultFormat ?? "markdown";
   const useMarkdown = toolResultFormat === "markdown";
+  const toolSummaryConfig = params.config?.agents?.defaults?.toolSummaries;
+  const toolSummaryMinIntervalMs = Math.max(0, toolSummaryConfig?.minIntervalMs ?? 0);
+  const toolSummaryLocale = normalizeToolSummaryLocale(toolSummaryConfig?.locale);
   const initialPendingToolMediaUrls = collectPendingMediaFromInternalEvents(params.internalEvents);
   const state: EmbeddedPiSubscribeState = {
     assistantTexts: [],
@@ -192,6 +195,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     total: 0,
   };
   let compactionCount = 0;
+  let lastToolSummarySentAt = 0;
 
   const assistantTexts = state.assistantTexts;
   const toolMetas = state.toolMetas;
@@ -526,9 +530,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     toolName: string | undefined,
     message: string,
     result?: unknown,
-  ) => {
+  ): boolean => {
     if (!params.onToolResult) {
-      return;
+      return false;
     }
     const { text: cleanedText, mediaUrls } = parseReplyDirectives(message);
     const filteredMediaUrls = filterToolResultMediaUrls(
@@ -538,22 +542,33 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       params.builtinToolNames,
     );
     if (!cleanedText && filteredMediaUrls.length === 0) {
-      return;
+      return false;
     }
     try {
       void params.onToolResult({
         text: cleanedText,
         mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
       });
+      return true;
     } catch {
       // ignore tool result delivery failures
+      return false;
     }
   };
   const emitToolSummary = (toolName?: string, meta?: string) => {
+    if (toolSummaryMinIntervalMs > 0) {
+      const now = Date.now();
+      if (lastToolSummarySentAt > 0 && now - lastToolSummarySentAt < toolSummaryMinIntervalMs) {
+        return;
+      }
+    }
     const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
       markdown: useMarkdown,
+      locale: toolSummaryLocale,
     });
-    emitToolResultMessage(toolName, agg);
+    if (emitToolResultMessage(toolName, agg)) {
+      lastToolSummarySentAt = Date.now();
+    }
   };
   const emitToolOutput = (toolName?: string, meta?: string, output?: string, result?: unknown) => {
     if (!output) {
@@ -561,6 +576,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     }
     const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
       markdown: useMarkdown,
+      locale: toolSummaryLocale,
     });
     const message = `${agg}\n${formatToolOutputBlock(output)}`;
     emitToolResultMessage(toolName, message, result);

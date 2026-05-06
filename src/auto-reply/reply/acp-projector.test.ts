@@ -687,6 +687,122 @@ describe("createAcpReplyProjector", () => {
     expectToolCallSummary(deliveries[0]);
   });
 
+  it("localizes ACP tool summaries while preserving redaction", async () => {
+    const deliveries: Delivery[] = [];
+    const configured = createAcpReplyProjector({
+      cfg: createCfg({
+        agents: {
+          defaults: {
+            toolSummaries: {
+              locale: "zh-CN",
+            },
+          },
+        },
+        acp: {
+          enabled: true,
+          stream: {
+            deliveryMode: "live",
+            tagVisibility: {
+              tool_call: true,
+            },
+          },
+        },
+      }),
+      shouldSendToolSummaries: true,
+      deliver: async (kind, payload) => {
+        deliveries.push({ kind, text: payload.text });
+        return true;
+      },
+    });
+
+    await configured.onEvent({
+      type: "tool_call",
+      tag: "tool_call",
+      toolCallId: "call_secret",
+      status: "in_progress",
+      title: "Run command --token sk-abcdefghijklmnopqrstuvwxyz",
+      text: "Run command --token sk-abcdefghijklmnopqrstuvwxyz",
+    });
+
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]?.text).toContain("工具调用");
+    expect(deliveries[0]?.text).toContain("状态=进行中");
+    expect(deliveries[0]?.text).toContain("sk-abc…wxyz");
+    expect(deliveries[0]?.text).not.toContain("sk-abcdefghijklmnopqrstuvwxyz");
+  });
+
+  it("throttles ACP tool summaries from actual visible delivery time", async () => {
+    vi.useFakeTimers();
+    try {
+      const deliveries: Delivery[] = [];
+      const projector = createAcpReplyProjector({
+        cfg: createCfg({
+          agents: {
+            defaults: {
+              toolSummaries: {
+                minIntervalMs: 1000,
+              },
+            },
+          },
+          acp: {
+            enabled: true,
+            stream: {
+              deliveryMode: "live",
+              tagVisibility: {
+                tool_call: true,
+                tool_call_update: true,
+              },
+            },
+          },
+        }),
+        shouldSendToolSummaries: true,
+        deliver: async (kind, payload) => {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          deliveries.push({ kind, text: payload.text });
+          return true;
+        },
+      });
+
+      const first = projector.onEvent({
+        type: "tool_call",
+        tag: "tool_call",
+        toolCallId: "call_1",
+        status: "in_progress",
+        title: "Run first",
+        text: "Run first",
+      });
+      await vi.advanceTimersByTimeAsync(500);
+      await first;
+      expect(deliveries).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(999);
+      await projector.onEvent({
+        type: "tool_call",
+        tag: "tool_call_update",
+        toolCallId: "call_2",
+        status: "in_progress",
+        title: "Run second",
+        text: "Run second",
+      });
+      expect(deliveries).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      const third = projector.onEvent({
+        type: "tool_call",
+        tag: "tool_call_update",
+        toolCallId: "call_3",
+        status: "in_progress",
+        title: "Run third",
+        text: "Run third",
+      });
+      await vi.advanceTimersByTimeAsync(500);
+      await third;
+      expect(deliveries).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("inserts a space boundary before visible text after hidden tool updates by default", async () => {
     await runHiddenBoundaryCase({
       cfgOverrides: createHiddenBoundaryCfg(),

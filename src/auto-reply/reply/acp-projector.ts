@@ -1,12 +1,21 @@
 import type { AcpRuntimeEvent, AcpSessionUpdateTag } from "../../acp/runtime/types.js";
 import { EmbeddedBlockChunker } from "../../agents/pi-embedded-block-chunker.js";
-import { formatToolSummary, resolveToolDisplay } from "../../agents/tool-display.js";
+import {
+  formatToolDetail,
+  formatToolSummary,
+  resolveToolDisplay,
+} from "../../agents/tool-display.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import {
+  normalizeToolSummaryLocale,
+  resolveLocalizedToolLabel,
+  type ToolSummaryLocale,
+} from "../tool-meta.js";
 import type { ReplyPayload } from "../types.js";
 import {
   type AcpHiddenBoundarySeparator,
@@ -139,15 +148,96 @@ function shouldFlushLiveBufferOnIdle(text: string): boolean {
   return false;
 }
 
-function renderToolSummaryText(event: Extract<AcpRuntimeEvent, { type: "tool_call" }>): string {
+function resolveLocalizedStatusKey(locale: ToolSummaryLocale): string {
+  switch (locale) {
+    case "zh-CN":
+      return "状态";
+    case "ko":
+      return "상태";
+    case "ja":
+      return "状態";
+    default:
+      return "status";
+  }
+}
+
+function resolveLocalizedToolStatus(
+  status: string | undefined,
+  locale: ToolSummaryLocale,
+): string | undefined {
+  if (!status || locale === "en") {
+    return status;
+  }
+  switch (status) {
+    case "in_progress":
+      switch (locale) {
+        case "zh-CN":
+          return "进行中";
+        case "ko":
+          return "진행 중";
+        case "ja":
+          return "進行中";
+      }
+      break;
+    case "completed":
+    case "done":
+      switch (locale) {
+        case "zh-CN":
+          return status === "done" ? "完成" : "已完成";
+        case "ko":
+          return "완료";
+        case "ja":
+          return "完了";
+      }
+      break;
+    case "failed":
+      switch (locale) {
+        case "zh-CN":
+          return "失败";
+        case "ko":
+          return "실패";
+        case "ja":
+          return "失敗";
+      }
+      break;
+    case "cancelled":
+      switch (locale) {
+        case "zh-CN":
+          return "已取消";
+        case "ko":
+          return "취소됨";
+        case "ja":
+          return "キャンセル済み";
+      }
+      break;
+    case "error":
+      switch (locale) {
+        case "zh-CN":
+          return "错误";
+        case "ko":
+          return "오류";
+        case "ja":
+          return "エラー";
+      }
+      break;
+  }
+  return status;
+}
+
+function renderToolSummaryText(
+  event: Extract<AcpRuntimeEvent, { type: "tool_call" }>,
+  locale: ToolSummaryLocale,
+): string {
   const detailParts: string[] = [];
   const title = normalizeOptionalString(event.title);
   if (title) {
     detailParts.push(title);
   }
-  const status = normalizeOptionalString(event.status);
+  const status = normalizeOptionalLowercaseString(event.status);
   if (status) {
-    detailParts.push(`status=${status}`);
+    detailParts.push(
+      `${resolveLocalizedStatusKey(locale)}=${resolveLocalizedToolStatus(status, locale) ?? status}`,
+    );
   }
   const fallback = normalizeOptionalString(event.text);
   if (detailParts.length === 0 && fallback) {
@@ -157,7 +247,12 @@ function renderToolSummaryText(event: Extract<AcpRuntimeEvent, { type: "tool_cal
     name: "tool_call",
     meta: detailParts.join(" · ") || "tool call",
   });
-  return formatToolSummary(display);
+  if (locale === "en") {
+    return formatToolSummary(display);
+  }
+  const label = resolveLocalizedToolLabel("tool_call", locale) ?? display.label;
+  const detail = formatToolDetail(display);
+  return detail ? `${display.emoji} ${label}: ${detail}` : `${display.emoji} ${label}`;
 }
 
 export type AcpReplyProjector = {
@@ -195,12 +290,16 @@ export function createAcpReplyProjector(params: {
   let blockReplyPipeline = createTurnBlockReplyPipeline();
   const chunker = new EmbeddedBlockChunker(streaming.chunking);
   const liveIdleFlushMs = Math.max(streaming.coalescing.idleMs, ACP_LIVE_IDLE_FLUSH_FLOOR_MS);
+  const toolSummaryConfig = params.cfg.agents?.defaults?.toolSummaries;
+  const toolSummaryLocale = normalizeToolSummaryLocale(toolSummaryConfig?.locale);
+  const toolSummaryMinIntervalMs = Math.max(0, toolSummaryConfig?.minIntervalMs ?? 0);
 
   let emittedOutputChars = 0;
   let truncationNoticeEmitted = false;
   let lastStatusHash: string | undefined;
   let lastToolHash: string | undefined;
   let lastUsageTuple: string | undefined;
+  let lastToolSummarySentAt = 0;
   let lastVisibleOutputTail: string | undefined;
   let pendingHiddenBoundary = false;
   let liveBufferText = "";
@@ -333,7 +432,16 @@ export function createAcpReplyProjector(params: {
       return;
     }
 
-    const renderedToolSummary = renderToolSummaryText(event);
+    const now = Date.now();
+    if (
+      toolSummaryMinIntervalMs > 0 &&
+      lastToolSummarySentAt > 0 &&
+      now - lastToolSummarySentAt < toolSummaryMinIntervalMs
+    ) {
+      return;
+    }
+
+    const renderedToolSummary = renderToolSummaryText(event, toolSummaryLocale);
     const toolSummary = truncateText(renderedToolSummary, settings.maxSessionUpdateChars);
     const hash = hashText(renderedToolSummary);
     const toolCallId = normalizeOptionalString(event.toolCallId);
@@ -380,9 +488,13 @@ export function createAcpReplyProjector(params: {
         payload: { text: toolSummary },
         meta: deliveryMeta,
       });
+      lastToolSummarySentAt = Date.now();
     } else {
       await flush(true);
-      await params.deliver("tool", { text: toolSummary }, deliveryMeta);
+      const delivered = await params.deliver("tool", { text: toolSummary }, deliveryMeta);
+      if (delivered !== false) {
+        lastToolSummarySentAt = Date.now();
+      }
     }
     lastToolHash = hash;
   };

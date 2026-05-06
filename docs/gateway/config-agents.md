@@ -343,6 +343,10 @@ Time format in system prompt. Default: `auto` (OS preference).
       pdfMaxPages: 20,
       thinkingDefault: "low",
       verboseDefault: "off",
+      toolSummaries: {
+        locale: "en",
+        minIntervalMs: 0,
+      },
       toolProgressDetail: "explain",
       reasoningDefault: "off",
       elevatedDefault: "on",
@@ -384,6 +388,9 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `pdfMaxBytesMb`: default PDF size limit for the `pdf` tool when `maxBytesMb` is not passed at call time.
 - `pdfMaxPages`: default maximum pages considered by extraction fallback mode in the `pdf` tool.
 - `verboseDefault`: default verbose level for agents. Values: `"off"`, `"on"`, `"full"`. Default: `"off"`.
+- `toolSummaries`: optional localization and rate limiting for user-visible tool summary messages emitted in verbose/progress paths.
+  - `locale`: `"en"` (default), `"zh-CN"`, `"ko"`, or `"ja"`. Localizes common tool labels and common command hints while leaving raw command/path details intact.
+  - `minIntervalMs`: minimum interval between emitted tool summaries in milliseconds. Default: `0`.
 - `toolProgressDetail`: detail mode for `/verbose` tool summaries and progress-draft tool lines. Values: `"explain"` (default, compact human labels) or `"raw"` (append raw command/detail when available). Per-agent `agents.list[].toolProgressDetail` overrides this default.
 - `reasoningDefault`: default reasoning visibility for agents. Values: `"off"`, `"on"`, `"stream"`. Per-agent `agents.list[].reasoningDefault` overrides this default. Configured reasoning defaults are only applied for owners, authorized senders, or operator-admin gateway contexts when no per-message or session reasoning override is set.
 - `elevatedDefault`: default elevated-output level for agents. Values: `"off"`, `"on"`, `"ask"`, `"full"`. Default: `"on"`.
