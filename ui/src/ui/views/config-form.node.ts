@@ -6,6 +6,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "../string-coerce.ts";
 import type { ConfigUiHints } from "../types.ts";
+import { viDashboardText } from "../vi-dashboard-text.ts";
 import {
   defaultValue,
   hasSensitiveConfigData,
@@ -14,6 +15,8 @@ import {
   pathKey,
   REDACTED_PLACEHOLDER,
   schemaType,
+  translateConfigHelp,
+  translateConfigLabel,
   type JsonSchema,
 } from "./config-form.shared.ts";
 
@@ -189,21 +192,20 @@ function renderSensitiveToggleButton(params: {
   if (!state.isSensitive || !params.onToggleSensitivePath) {
     return nothing;
   }
+  const hideValue = viDashboardText("Hide value", "Ẩn giá trị");
+  const revealValue = viDashboardText("Reveal value", "Hiện giá trị");
+  const disabledLabel = viDashboardText(
+    "Disable stream mode to reveal value",
+    "Tắt chế độ stream để hiện giá trị",
+  );
+  const label = state.canReveal ? (state.isRevealed ? hideValue : revealValue) : disabledLabel;
   return html`
     <button
       type="button"
       class="btn btn--icon ${state.isRevealed ? "active" : ""}"
       style="width:28px;height:28px;padding:0;"
-      title=${state.canReveal
-        ? state.isRevealed
-          ? "Hide value"
-          : "Reveal value"
-        : "Disable stream mode to reveal value"}
-      aria-label=${state.canReveal
-        ? state.isRevealed
-          ? "Hide value"
-          : "Reveal value"
-        : "Disable stream mode to reveal value"}
+      title=${label}
+      aria-label=${label}
       aria-pressed=${state.isRevealed}
       ?disabled=${params.disabled || !state.canReveal}
       @click=${() => params.onToggleSensitivePath?.(params.path)}
@@ -265,8 +267,9 @@ function resolveFieldMeta(
   hints: ConfigUiHints,
 ): FieldMeta {
   const hint = hintForPath(path, hints);
-  const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
-  const help = hint?.help ?? schema.description;
+  const label =
+    translateConfigLabel(hint?.label ?? schema.title ?? humanize(String(path.at(-1)))) ?? "";
+  const help = translateConfigHelp(hint?.help ?? schema.description);
   const schemaTags = normalizeTags(schema["x-tags"] ?? schema.tags);
   const hintTags = normalizeTags(hint?.tags);
   return {
@@ -453,7 +456,12 @@ export function renderNode(params: {
   if (unsupported.has(key)) {
     return html`<div class="cfg-field cfg-field--error">
       <div class="cfg-field__label">${label}</div>
-      <div class="cfg-field__error">Unsupported schema node. Use Raw mode.</div>
+      <div class="cfg-field__error">
+        ${viDashboardText(
+          "Unsupported schema node. Use Raw mode.",
+          "Schema mục này không được hỗ trợ. Hãy dùng chế độ thô.",
+        )}
+      </div>
     </div>`;
   }
   if (
@@ -683,11 +691,19 @@ function renderTextInput(params: {
   const placeholder = effectiveRedacted
     ? isStructuredSecretRef
       ? rawAvailable
-        ? "Structured value (SecretRef) - use Raw mode to edit"
-        : "Structured value (SecretRef) - edit the config file directly"
+        ? viDashboardText(
+            "Structured value (SecretRef) - use Raw mode to edit",
+            "Giá trị có cấu trúc (SecretRef) - dùng chế độ thô để chỉnh sửa",
+          )
+        : viDashboardText(
+            "Structured value (SecretRef) - edit the config file directly",
+            "Giá trị có cấu trúc (SecretRef) - chỉnh trực tiếp tệp cấu hình",
+          )
       : REDACTED_PLACEHOLDER
     : (hint?.placeholder ??
-      (schema.default !== undefined ? `Default: ${formatUnknownText(schema.default)}` : ""));
+      (schema.default !== undefined
+        ? `${viDashboardText("Default", "Mặc định")}: ${formatUnknownText(schema.default)}`
+        : ""));
   const displayValue = effectiveRedacted
     ? ""
     : isStructuredValue
@@ -753,7 +769,7 @@ function renderTextInput(params: {
               <button
                 type="button"
                 class="cfg-input__reset"
-                title="Reset to default"
+                title=${viDashboardText("Reset to default", "Đặt lại mặc định")}
                 ?disabled=${disabled || effectiveRedacted}
                 @click=${() => onPatch(path, schema.default)}
               >
@@ -852,7 +868,9 @@ function renderSelect(params: {
           onPatch(path, val === unset ? undefined : options[Number(val)]);
         }}
       >
-        <option value=${unset} ?selected=${currentIndex < 0}>Select...</option>
+        <option value=${unset} ?selected=${currentIndex < 0}>
+          ${viDashboardText("Select...", "Chọn...")}
+        </option>
         ${options.map(
           (opt, idx) =>
             html` <option value=${String(idx)} ?selected=${idx === currentIndex}>
@@ -896,7 +914,9 @@ function renderJsonTextarea(params: {
       <div class="cfg-input-wrap">
         <textarea
           class="cfg-textarea${sensitiveState.isRedacted ? " cfg-textarea--redacted" : ""}"
-          placeholder=${sensitiveState.isRedacted ? REDACTED_PLACEHOLDER : "JSON value"}
+          placeholder=${sensitiveState.isRedacted
+            ? REDACTED_PLACEHOLDER
+            : viDashboardText("JSON value", "Giá trị JSON")}
           rows="3"
           .value=${displayValue}
           ?disabled=${disabled}
@@ -1096,7 +1116,12 @@ function renderArray(params: {
     return html`
       <div class="cfg-field cfg-field--error">
         <div class="cfg-field__label">${label}</div>
-        <div class="cfg-field__error">Unsupported array schema. Use Raw mode.</div>
+        <div class="cfg-field__error">
+          ${viDashboardText(
+            "Unsupported array schema. Use Raw mode.",
+            "Schema mảng không được hỗ trợ. Hãy dùng chế độ thô.",
+          )}
+        </div>
       </div>
     `;
   }
@@ -1110,7 +1135,12 @@ function renderArray(params: {
           ${showLabel ? html`<span class="cfg-array__label">${label}</span>` : nothing}
           ${renderTags(tags)}
         </div>
-        <span class="cfg-array__count">${arr.length} item${arr.length !== 1 ? "s" : ""}</span>
+        <span class="cfg-array__count">
+          ${viDashboardText(
+            `${arr.length} item${arr.length !== 1 ? "s" : ""}`,
+            `${arr.length} mục`,
+          )}
+        </span>
         <button
           type="button"
           class="cfg-array__add"
@@ -1121,12 +1151,19 @@ function renderArray(params: {
           }}
         >
           <span class="cfg-array__add-icon">${icons.plus}</span>
-          Add
+          ${viDashboardText("Add", "Thêm")}
         </button>
       </div>
       ${help ? html`<div class="cfg-array__help">${help}</div>` : nothing}
       ${arr.length === 0
-        ? html` <div class="cfg-array__empty">No items yet. Click "Add" to create one.</div> `
+        ? html`
+            <div class="cfg-array__empty">
+              ${viDashboardText(
+                'No items yet. Click "Add" to create one.',
+                'Chưa có mục nào. Nhấn "Thêm" để tạo một mục.',
+              )}
+            </div>
+          `
         : html`
             <div class="cfg-array__items">
               ${arr.map(
@@ -1137,7 +1174,7 @@ function renderArray(params: {
                       <button
                         type="button"
                         class="cfg-array__item-remove"
-                        title="Remove item"
+                        title=${viDashboardText("Remove item", "Xóa mục")}
                         ?disabled=${disabled}
                         @click=${() => {
                           const next = [...arr];
@@ -1222,7 +1259,7 @@ function renderMapField(params: {
   return html`
     <div class="cfg-map">
       <div class="cfg-map__header">
-        <span class="cfg-map__label">Custom entries</span>
+        <span class="cfg-map__label">${viDashboardText("Custom entries", "Mục tùy chỉnh")}</span>
         <button
           type="button"
           class="cfg-map__add"
@@ -1240,12 +1277,16 @@ function renderMapField(params: {
           }}
         >
           <span class="cfg-map__add-icon">${icons.plus}</span>
-          Add Entry
+          ${viDashboardText("Add Entry", "Thêm mục")}
         </button>
       </div>
 
       ${visibleEntries.length === 0
-        ? html` <div class="cfg-map__empty">No custom entries.</div> `
+        ? html`
+            <div class="cfg-map__empty">
+              ${viDashboardText("No custom entries.", "Không có mục tùy chỉnh.")}
+            </div>
+          `
         : html`
             <div class="cfg-map__items">
               ${visibleEntries.map(([key, entryValue]) => {
@@ -1265,7 +1306,7 @@ function renderMapField(params: {
                         <input
                           type="text"
                           class="cfg-input cfg-input--sm"
-                          placeholder="Key"
+                          placeholder=${viDashboardText("Key", "Khóa")}
                           .value=${key}
                           ?disabled=${disabled}
                           @change=${(e: Event) => {
@@ -1286,7 +1327,7 @@ function renderMapField(params: {
                       <button
                         type="button"
                         class="cfg-map__item-remove"
-                        title="Remove entry"
+                        title=${viDashboardText("Remove entry", "Xóa mục")}
                         ?disabled=${disabled}
                         @click=${() => {
                           const next = { ...value };
@@ -1307,7 +1348,7 @@ function renderMapField(params: {
                                   : ""}"
                                 placeholder=${sensitiveState.isRedacted
                                   ? REDACTED_PLACEHOLDER
-                                  : "JSON value"}
+                                  : viDashboardText("JSON value", "Giá trị JSON")}
                                 rows="2"
                                 .value=${sensitiveState.isRedacted ? "" : fallback}
                                 ?disabled=${disabled}

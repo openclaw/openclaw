@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import type { SignalStatus } from "../types.ts";
+import { viDashboardText as uiText } from "../vi-dashboard-text.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
 import {
   formatNullableBoolean,
@@ -20,7 +21,10 @@ export function renderSignalCard(params: {
 
   return renderSingleAccountChannelCard({
     title: "Signal",
-    subtitle: "signal-cli status and channel configuration.",
+    subtitle: uiText(
+      "signal-cli status and channel configuration.",
+      "Trạng thái signal-cli và cấu hình kênh.",
+    ),
     accountCountLabel,
     statusRows: [
       { label: t("common.configured"), value: formatNullableBoolean(configured) },

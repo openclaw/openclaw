@@ -2,8 +2,16 @@ import { html, nothing } from "lit";
 import { icons } from "../icons.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { ConfigUiHints } from "../types.ts";
+import { viDashboardText } from "../vi-dashboard-text.ts";
 import { matchesNodeSearch, parseConfigSearchQuery, renderNode } from "./config-form.node.ts";
-import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
+import {
+  hintForPath,
+  humanize,
+  schemaType,
+  translateConfigHelp,
+  translateConfigLabel,
+  type JsonSchema,
+} from "./config-form.shared.ts";
 
 export type ConfigFormProps = {
   schema: JsonSchema | null;
@@ -362,12 +370,21 @@ function matchesSearch(params: {
 
 export function renderConfigForm(props: ConfigFormProps) {
   if (!props.schema) {
-    return html` <div class="muted">Schema unavailable.</div> `;
+    return html`
+      <div class="muted">${viDashboardText("Schema unavailable.", "Không có schema.")}</div>
+    `;
   }
   const schema = props.schema;
   const value = props.value ?? {};
   if (schemaType(schema) !== "object" || !schema.properties) {
-    return html` <div class="callout danger">Unsupported schema. Use Raw.</div> `;
+    return html`
+      <div class="callout danger">
+        ${viDashboardText(
+          "Unsupported schema. Use Raw.",
+          "Schema không được hỗ trợ. Hãy dùng chế độ thô.",
+        )}
+      </div>
+    `;
   }
   const unsupported = new Set(props.unsupportedPaths ?? []);
   const properties = schema.properties;
@@ -427,7 +444,12 @@ export function renderConfigForm(props: ConfigFormProps) {
       <div class="config-empty">
         <div class="config-empty__icon">${icons.search}</div>
         <div class="config-empty__text">
-          ${searchQuery ? `No settings match "${searchQuery}"` : "No settings in this section"}
+          ${searchQuery
+            ? viDashboardText(
+                `No settings match "${searchQuery}"`,
+                `Không có cài đặt nào khớp "${searchQuery}"`,
+              )
+            : viDashboardText("No settings in this section", "Không có cài đặt trong mục này")}
         </div>
       </div>
     `;
@@ -483,8 +505,9 @@ export function renderConfigForm(props: ConfigFormProps) {
         ? (() => {
             const { sectionKey, subsectionKey, schema: node } = subsectionContext;
             const hint = hintForPath([sectionKey, subsectionKey], props.uiHints);
-            const label = hint?.label ?? node.title ?? humanize(subsectionKey);
-            const description = hint?.help ?? node.description ?? "";
+            const label =
+              translateConfigLabel(hint?.label ?? node.title ?? humanize(subsectionKey)) ?? "";
+            const description = translateConfigHelp(hint?.help ?? node.description) ?? "";
             const sectionValue = value[sectionKey];
             const scopedValue =
               sectionValue && typeof sectionValue === "object"
@@ -503,15 +526,15 @@ export function renderConfigForm(props: ConfigFormProps) {
           })()
         : filteredEntries.map(([key, node]) => {
             const meta = SECTION_META[key] ?? {
-              label: key.charAt(0).toUpperCase() + key.slice(1),
-              description: node.description ?? "",
+              label: translateConfigLabel(key.charAt(0).toUpperCase() + key.slice(1)) ?? key,
+              description: translateConfigHelp(node.description) ?? "",
             };
 
             return renderSectionCard({
               id: `config-section-${key}`,
               sectionKey: key,
-              label: meta.label,
-              description: meta.description,
+              label: translateConfigLabel(meta.label) ?? meta.label,
+              description: translateConfigHelp(meta.description) ?? meta.description,
               showHeader: activeSection == null,
               node,
               nodeValue: value[key],

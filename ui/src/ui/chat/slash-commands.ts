@@ -3,6 +3,7 @@ import type { CommandEntry, CommandsListResult } from "../../../../src/gateway/p
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { IconName } from "../icons.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import { viDashboardText as uiText } from "../vi-dashboard-text.ts";
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 
@@ -98,27 +99,32 @@ const LOCAL_COMMANDS = new Set([
   "redirect",
 ]);
 
-const UI_ONLY_COMMANDS: SlashCommandDef[] = [
-  {
-    key: "clear",
-    name: "clear",
-    description: "Clear chat history",
-    icon: "trash",
-    category: "session",
-    executeLocal: true,
-    tier: "standard",
-  },
-  {
-    key: "redirect",
-    name: "redirect",
-    description: "Abort and restart with a new message",
-    args: "[id] <message>",
-    icon: "refresh",
-    category: "agents",
-    executeLocal: true,
-    tier: "power",
-  },
-];
+function getUiOnlyCommands(): SlashCommandDef[] {
+  return [
+    {
+      key: "clear",
+      name: "clear",
+      description: uiText("Clear chat history", "Xóa lịch sử chat"),
+      icon: "trash",
+      category: "session",
+      executeLocal: true,
+      tier: "standard",
+    },
+    {
+      key: "redirect",
+      name: "redirect",
+      description: uiText(
+        "Abort and restart with a new message",
+        "Hủy và khởi động lại với tin nhắn mới",
+      ),
+      args: "[id] <message>",
+      icon: "refresh",
+      category: "agents",
+      executeLocal: true,
+      tier: "power",
+    },
+  ];
+}
 
 const CATEGORY_OVERRIDES: Partial<Record<string, SlashCommandCategory>> = {
   help: "tools",
@@ -329,7 +335,7 @@ function buildLocalSlashCommands(): SlashCommandDef[] {
     }))
     .map((command) => toSlashCommand(command, "local"))
     .filter((command): command is SlashCommandDef => command !== null);
-  return [...builtins, ...UI_ONLY_COMMANDS];
+  return [...builtins, ...getUiOnlyCommands()];
 }
 
 function buildReservedLocalSlashNames(localCommands = buildLocalSlashCommands()): Set<string> {
