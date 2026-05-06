@@ -194,7 +194,12 @@ export async function resolveTelegramInboundBody(params: {
     botUsername,
   });
   const commandGate = resolveControlCommandGate({
-    useAccessGroups,
+    // Only enforce the access-group gate when the group actually has a commands allow-list
+    // configured. Without one, every sender is implicitly allowed at this level; individual
+    // command handlers (e.g. /status) perform their own, broader auth check that also
+    // considers owner access and DM allow-lists. Gating here with an unconfigured list
+    // would incorrectly block all group commands (regression #74698).
+    useAccessGroups: useAccessGroups && allowForCommands.hasEntries,
     authorizers: [{ configured: allowForCommands.hasEntries, allowed: senderAllowedForCommands }],
     allowTextCommands: true,
     hasControlCommand: hasControlCommandInMessage,
