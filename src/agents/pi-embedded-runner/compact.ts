@@ -1,11 +1,5 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import {
-  createAgentSession,
-  estimateTokens,
-  SessionManager,
-} from "@earendil-works/pi-coding-agent";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
@@ -144,7 +138,6 @@ import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-disco
 import { readPiModelContextTokens } from "./model-context-tokens.js";
 import { resolveModelAsync } from "./model.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
-import { createEmbeddedPiResourceLoader } from "./resource-loader.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
 import {
@@ -1003,7 +996,7 @@ async function compactEmbeddedPiSessionDirectOnce(
         modelId,
         model,
       });
-      const resourceLoader = createEmbeddedPiResourceLoader({
+      const resourceLoader = new DefaultResourceLoader({
         cwd: resolvedWorkspace,
         agentDir,
         settingsManager,
