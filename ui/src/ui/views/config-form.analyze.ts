@@ -214,6 +214,15 @@ function normalizeUnion(
     remaining.push(entry);
   }
 
+  // Filter out "any" schema branches ({} with no type constraints).
+  // These arise from unrepresentable Zod types (transforms) and provide
+  // no rendering value when typed branches are already present.
+  const typed = remaining.filter((entry) => !isAnySchema(entry));
+  if (typed.length > 0 && typed.length < remaining.length) {
+    remaining.length = 0;
+    remaining.push(...typed);
+  }
+
   // Config secrets accept either a raw key string or a structured secret ref object.
   // The form only supports editing the string path for now.
   const secretInput = normalizeSecretInputUnion(schema, path, remaining, nullable);
