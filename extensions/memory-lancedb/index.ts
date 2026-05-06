@@ -322,7 +322,17 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
     baseUrl?: string,
     private dimensions?: number,
   ) {
-    this.client = new OpenAI({ apiKey, baseURL: baseUrl });
+    const isAzure = baseUrl?.includes(".openai.azure.com");
+    this.client = new OpenAI({
+      apiKey,
+      baseURL: baseUrl,
+      ...(isAzure
+        ? {
+            defaultHeaders: { "api-key": apiKey },
+            defaultQuery: { "api-version": "2024-02-01" },
+          }
+        : {}),
+    });
   }
 
   async embed(text: string, options?: { timeoutMs?: number }): Promise<number[]> {
