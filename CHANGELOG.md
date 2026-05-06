@@ -126,6 +126,7 @@ Docs: https://docs.openclaw.ai
 - Memory Wiki: skip empty and whitespace-only source pages when refreshing generated Related blocks, preventing blank pages from being rewritten into Related-only stubs. Fixes #78121. Thanks @amknight.
 - LINE: reject `dmPolicy: "open"` configs without wildcard `allowFrom` so webhook DMs fail validation instead of being acknowledged and silently blocked before inbound processing. Fixes #78316.
 - Telegram/Codex: keep message-tool-only progress drafts visible and render native Codex tool progress once per tool instead of duplicating item/tool draft lines. Fixes #75641. (#77949) Thanks @keshavbotagent.
+- Telegram/sessions: gap-fill delivered embedded final replies into the session JSONL even when the runner trace is missing, so Telegram answers after tool calls do not vanish from the durable transcript. Fixes #77814. Thanks @ChushulSuri and @DougButdorf.
 - Providers/xAI: stop sending OpenAI-style reasoning effort controls to native Grok Responses models, so `xai/grok-4.3` no longer fails live Docker/Gateway runs with `Invalid reasoning effort`.
 - Providers/xAI: clamp the bundled xAI thinking profile to `off` so live Gateway runs cannot send unsupported reasoning levels to native Grok Responses models.
 - Matrix/approvals: retry approval delivery up to 3 times with a short backoff so transient Matrix send failures do not strand pending approval prompts. (#78179) Thanks @Patrick-Erichsen.
