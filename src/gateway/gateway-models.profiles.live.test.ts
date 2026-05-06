@@ -2362,6 +2362,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     "runs meaningful prompts across models with available keys",
     async () =>
       await withSuppressedGatewayLiveWarnings(async () => {
+        logProgress("[all-models] discover candidates");
         clearRuntimeConfigSnapshot();
         const cfg = getRuntimeConfig();
         await ensureOpenClawModelsJson(cfg);
@@ -2433,6 +2434,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
             skipped.push({ model: modelRef, error: String(error) });
           }
         }
+        logProgress(`[all-models] candidates=${candidates.length} skipped=${skipped.length}`);
 
         if (candidates.length === 0) {
           if (skipped.length > 0) {
