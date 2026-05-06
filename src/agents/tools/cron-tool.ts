@@ -408,6 +408,26 @@ function filterCronListResultToJobId(result: unknown, jobId: string): unknown {
   };
 }
 
+function filterCronStatusResultForSelfScope(result: unknown): unknown {
+  return { enabled: isRecord(result) && result.enabled === true };
+}
+
+function cronListResultHasJob(result: unknown, jobId: string): boolean {
+  return (
+    isRecord(result) &&
+    Array.isArray(result.jobs) &&
+    result.jobs.some((job) => isRecord(job) && job.id === jobId)
+  );
+}
+
+function readCronListNextOffset(result: unknown, currentOffset: number): number | undefined {
+  if (!isRecord(result) || result.hasMore !== true || typeof result.nextOffset !== "number") {
+    return undefined;
+  }
+  const nextOffset = Math.floor(result.nextOffset);
+  return Number.isFinite(nextOffset) && nextOffset > currentOffset ? nextOffset : undefined;
+}
+
 function extractMessageText(message: ChatMessage): { role: string; text: string } | null {
   const role = typeof message.role === "string" ? message.role : "";
   if (role !== "user" && role !== "assistant") {
@@ -694,8 +714,12 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
       };
 
       switch (action) {
-        case "status":
-          return jsonResult(await callGateway("cron.status", gatewayOpts, {}));
+        case "status": {
+          const result = await callGateway("cron.status", gatewayOpts, {});
+          return jsonResult(
+            readCronSelfRemoveOnlyJobId(opts) ? filterCronStatusResultForSelfScope(result) : result,
+          );
+        }
         case "list": {
           const cfg = getRuntimeConfig();
           const selfRemoveOnlyJobId = readCronSelfRemoveOnlyJobId(opts);
@@ -708,10 +732,24 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               : opts?.agentSessionKey
                 ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
                 : undefined;
-          const result = await callGateway("cron.list", gatewayOpts, {
-            includeDisabled: Boolean(params.includeDisabled),
-            agentId: listAgentId,
-          });
+          const includeDisabled = Boolean(params.includeDisabled);
+          let offset = 0;
+          let result: unknown;
+          do {
+            result = await callGateway("cron.list", gatewayOpts, {
+              includeDisabled,
+              agentId: listAgentId,
+              ...(selfRemoveOnlyJobId ? { limit: 200, offset } : {}),
+            });
+            if (!selfRemoveOnlyJobId || cronListResultHasJob(result, selfRemoveOnlyJobId)) {
+              break;
+            }
+            const nextOffset = readCronListNextOffset(result, offset);
+            if (nextOffset === undefined) {
+              break;
+            }
+            offset = nextOffset;
+          } while (true);
           return jsonResult(
             selfRemoveOnlyJobId ? filterCronListResultToJobId(result, selfRemoveOnlyJobId) : result,
           );
