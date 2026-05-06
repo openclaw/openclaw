@@ -522,6 +522,53 @@ describe("resolvePluginTools optional tools", () => {
     expectLoaderSelectedOnlyPluginIds(["optional-demo"]);
   });
 
+  it("loads a concrete plugin tool selected through a wildcard manifest contract", () => {
+    const baseContext = createContext();
+    const config = {
+      ...baseContext.config,
+      plugins: {
+        ...baseContext.config.plugins,
+        allow: [...baseContext.config.plugins.allow, "wildcard-demo"],
+        entries: {
+          "wildcard-demo": { enabled: true },
+        },
+      },
+    };
+    const registry = createToolRegistry([
+      {
+        pluginId: "wildcard-demo",
+        optional: true,
+        source: "/tmp/wildcard-demo.js",
+        names: ["derived_tool_calendar"],
+        declaredNames: ["derived_tool_*"],
+        factory: () => makeTool("derived_tool_calendar"),
+      },
+    ]);
+    loadOpenClawPluginsMock.mockReturnValue(registry);
+    installToolManifestSnapshot({
+      config,
+      plugin: {
+        id: "wildcard-demo",
+        origin: "bundled",
+        enabledByDefault: false,
+        channels: [],
+        providers: [],
+        contracts: {
+          tools: ["derived_tool_*"],
+        },
+      },
+    });
+
+    const tools = resolvePluginTools({
+      context: { ...baseContext, config } as never,
+      toolAllowlist: ["derived_tool_calendar"],
+      allowGatewaySubagentBinding: true,
+    });
+
+    expectResolvedToolNames(tools, ["derived_tool_calendar"]);
+    expectLoaderSelectedOnlyPluginIds(["wildcard-demo"]);
+  });
+
   it("auto-loads cold registry for path-based config-origin plugins without pre-warming (#76598)", () => {
     const context = {
       ...createContext(),

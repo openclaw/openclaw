@@ -138,7 +138,56 @@ describe("bridgeCodexAppServerStartOptions", () => {
       });
       await expect(fs.access(codexHome)).resolves.toBeUndefined();
       await expect(fs.access(nativeHome)).resolves.toBeUndefined();
+      await expect(fs.readFile(path.join(codexHome, "config.toml"), "utf8")).resolves.toBe(
+        "[features]\napps = true\n\n[apps._default]\nenabled = true\n",
+      );
       expect(startOptions.env).toBeUndefined();
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("upserts native Codex app defaults into an existing app-server config", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const startOptions = createStartOptions();
+    try {
+      const codexHome = resolveCodexAppServerHomeDir(agentDir);
+      await fs.mkdir(codexHome, { recursive: true });
+      await fs.writeFile(
+        path.join(codexHome, "config.toml"),
+        [
+          'model = "gpt-5.5"',
+          "",
+          "[features]",
+          "apps = false",
+          "codex_hooks = true",
+          "",
+          "[apps._default]",
+          "enabled = false",
+          "open_world_enabled = false",
+          "",
+        ].join("\n"),
+      );
+
+      await bridgeCodexAppServerStartOptions({
+        startOptions,
+        agentDir,
+      });
+
+      await expect(fs.readFile(path.join(codexHome, "config.toml"), "utf8")).resolves.toBe(
+        [
+          'model = "gpt-5.5"',
+          "",
+          "[features]",
+          "apps = true",
+          "codex_hooks = true",
+          "",
+          "[apps._default]",
+          "enabled = true",
+          "open_world_enabled = false",
+          "",
+        ].join("\n"),
+      );
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
@@ -169,6 +218,9 @@ describe("bridgeCodexAppServerStartOptions", () => {
       });
       await expect(fs.access(codexHome)).resolves.toBeUndefined();
       await expect(fs.access(nativeHome)).resolves.toBeUndefined();
+      await expect(fs.readFile(path.join(codexHome, "config.toml"), "utf8")).resolves.toContain(
+        "[features]\napps = true",
+      );
       expect(startOptions.clearEnv).toEqual(["CODEX_HOME", "HOME", "FOO"]);
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });

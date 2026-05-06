@@ -41,11 +41,19 @@ const validateTurnCompletedNotification = ajv.compile<v2.TurnCompletedNotificati
 const validateTurnStartResponse = ajv.compile<CodexTurnStartResponse>(turnStartResponseSchema);
 
 export function assertCodexThreadStartResponse(value: unknown): CodexThreadStartResponse {
-  return assertCodexShape(validateThreadStartResponse, value, "thread/start response");
+  return assertCodexShape(
+    validateThreadStartResponse,
+    normalizeThreadPermissionProfile(value),
+    "thread/start response",
+  );
 }
 
 export function assertCodexThreadResumeResponse(value: unknown): CodexThreadResumeResponse {
-  return assertCodexShape(validateThreadResumeResponse, value, "thread/resume response");
+  return assertCodexShape(
+    validateThreadResumeResponse,
+    normalizeThreadPermissionProfile(value),
+    "thread/resume response",
+  );
 }
 
 export function assertCodexTurnStartResponse(value: unknown): CodexTurnStartResponse {
@@ -93,6 +101,95 @@ function assertCodexShape<T>(validate: ValidateFunction<T>, value: unknown, labe
 
 function readCodexShape<T>(validate: ValidateFunction<T>, value: unknown): T | undefined {
   return validate(value) ? value : undefined;
+}
+
+function normalizeThreadPermissionProfile(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  const response = value as { permissionProfile?: unknown };
+  const permissionProfile = normalizePermissionProfile(response.permissionProfile);
+  if (permissionProfile === response.permissionProfile) {
+    return value;
+  }
+  return { ...value, permissionProfile };
+}
+
+function normalizePermissionProfile(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  const profile = value as { type?: unknown; fileSystem?: unknown };
+  if (profile.type !== "managed") {
+    return value;
+  }
+  const fileSystem = normalizePermissionProfileFileSystem(profile.fileSystem);
+  if (fileSystem === profile.fileSystem) {
+    return value;
+  }
+  return { ...value, fileSystem };
+}
+
+function normalizePermissionProfileFileSystem(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  const fileSystem = value as { type?: unknown; entries?: unknown };
+  if (fileSystem.type !== "restricted" || !Array.isArray(fileSystem.entries)) {
+    return value;
+  }
+  let changed = false;
+  const entries = fileSystem.entries.map((entry) => {
+    const normalized = normalizePermissionProfileFileSystemEntry(entry);
+    if (normalized !== entry) {
+      changed = true;
+    }
+    return normalized;
+  });
+  return changed ? { ...value, entries } : value;
+}
+
+function normalizePermissionProfileFileSystemEntry(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  const entry = value as { path?: unknown };
+  const normalizedPath = normalizePermissionProfileFileSystemPath(entry.path);
+  return normalizedPath === entry.path ? value : { ...value, path: normalizedPath };
+}
+
+function normalizePermissionProfileFileSystemPath(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  const path = value as { type?: unknown; value?: unknown };
+  if (path.type !== "special" || !path.value || typeof path.value !== "object") {
+    return value;
+  }
+  const special = path.value as { kind?: unknown; subpath?: unknown };
+  if (typeof special.kind !== "string" || isKnownPermissionProfileSpecialPathKind(special.kind)) {
+    return value;
+  }
+  return {
+    ...value,
+    value: {
+      kind: "unknown",
+      path: special.kind,
+      subpath:
+        typeof special.subpath === "string" || special.subpath === null ? special.subpath : null,
+    },
+  };
+}
+
+function isKnownPermissionProfileSpecialPathKind(kind: string): boolean {
+  return (
+    kind === "root" ||
+    kind === "minimal" ||
+    kind === "project_roots" ||
+    kind === "tmpdir" ||
+    kind === "slash_tmp" ||
+    kind === "unknown"
+  );
 }
 
 function normalizeTurn(value: unknown): unknown {

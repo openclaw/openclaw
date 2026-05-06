@@ -166,4 +166,43 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
 
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/start"]);
   });
+
+  it("accepts newer permission-profile special filesystem path kinds", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return {
+          ...threadStartResult(),
+          permissionProfile: {
+            type: "managed",
+            network: { enabled: true },
+            fileSystem: {
+              type: "restricted",
+              entries: [
+                {
+                  path: {
+                    type: "special",
+                    value: { kind: "future_project_roots", subpath: null },
+                  },
+                  access: "write",
+                },
+              ],
+            },
+          },
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+    });
+
+    expect(request).toHaveBeenCalledWith("thread/start", expect.any(Object));
+  });
 });

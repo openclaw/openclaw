@@ -25,6 +25,7 @@ const CODEX_HOME_ENV_VAR = "CODEX_HOME";
 const HOME_ENV_VAR = "HOME";
 const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 const CODEX_APP_SERVER_NATIVE_HOME_DIRNAME = "home";
+const CODEX_APP_SERVER_CONFIG_FILENAME = "config.toml";
 const CODEX_API_KEY_ENV_VAR = "CODEX_API_KEY";
 const OPENAI_API_KEY_ENV_VAR = "OPENAI_API_KEY";
 const CODEX_APP_SERVER_API_KEY_ENV_VARS = [CODEX_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR];
@@ -111,6 +112,7 @@ async function withAgentCodexHomeEnvironment(
     : path.join(codexHome, CODEX_APP_SERVER_NATIVE_HOME_DIRNAME);
   await fs.mkdir(codexHome, { recursive: true });
   await fs.mkdir(nativeHome, { recursive: true });
+  await ensureCodexAppServerAppsConfig(codexHome);
   const nextStartOptions: CodexAppServerStartOptions = {
     ...startOptions,
     env: {
@@ -126,6 +128,84 @@ async function withAgentCodexHomeEnvironment(
     delete nextStartOptions.clearEnv;
   }
   return nextStartOptions;
+}
+
+async function ensureCodexAppServerAppsConfig(codexHome: string): Promise<void> {
+  const configPath = path.join(codexHome, CODEX_APP_SERVER_CONFIG_FILENAME);
+  let current = "";
+  try {
+    current = await fs.readFile(configPath, "utf8");
+  } catch (error) {
+    if (!isNodeErrorCode(error, "ENOENT")) {
+      throw error;
+    }
+  }
+  const next = upsertTomlBoolean(
+    upsertTomlBoolean(current, "features", "apps"),
+    "apps._default",
+    "enabled",
+  );
+  if (next !== current) {
+    await fs.writeFile(configPath, next, "utf8");
+  }
+}
+
+function upsertTomlBoolean(content: string, section: string, key: string): string {
+  const lines = content.split(/\r?\n/);
+  if (lines.length > 0 && lines[lines.length - 1] === "") {
+    lines.pop();
+  }
+  const sectionHeader = `[${section}]`;
+  const sectionStart = lines.findIndex((line) => line.trim() === sectionHeader);
+  if (sectionStart === -1) {
+    const nextLines = [...lines];
+    if (nextLines.length > 0) {
+      nextLines.push("");
+    }
+    nextLines.push(sectionHeader, `${key} = true`);
+    return `${nextLines.join("\n")}\n`;
+  }
+
+  const sectionEnd = findTomlSectionEnd(lines, sectionStart + 1);
+  const keyIndex = findTomlKey(lines, key, sectionStart + 1, sectionEnd);
+  const nextLines = [...lines];
+  if (keyIndex === -1) {
+    nextLines.splice(sectionEnd, 0, `${key} = true`);
+  } else if (nextLines[keyIndex] !== `${key} = true`) {
+    nextLines[keyIndex] = `${key} = true`;
+  }
+  return `${nextLines.join("\n")}\n`;
+}
+
+function findTomlSectionEnd(lines: string[], start: number): number {
+  for (let index = start; index < lines.length; index += 1) {
+    if (/^\s*\[[^\]]+\]\s*$/.test(lines[index])) {
+      return index;
+    }
+  }
+  return lines.length;
+}
+
+function findTomlKey(lines: string[], key: string, start: number, end: number): number {
+  const keyPattern = new RegExp(`^\\s*${escapeRegExp(key)}\\s*=`);
+  for (let index = start; index < end; index += 1) {
+    const line = lines[index];
+    if (line.trimStart().startsWith("#")) {
+      continue;
+    }
+    if (keyPattern.test(line)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isNodeErrorCode(error: unknown, code: string): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === code);
 }
 
 function withoutClearedCodexIsolationEnv(clearEnv: string[] | undefined): string[] | undefined {
