@@ -147,4 +147,60 @@ describe("bundled channel legacy config migrations", () => {
       ]),
     );
   });
+
+  it("migrates legacy Feishu account botName to name", () => {
+    applyPluginDoctorCompatibilityMigrations.mockReturnValueOnce({
+      config: {
+        channels: {
+          feishu: {
+            defaultAccount: "main",
+            accounts: {
+              main: {
+                appId: "cli_x",
+                appSecret: "${FEISHU_APP_SECRET}",
+                name: "Ops Bot",
+              },
+            },
+          },
+        },
+      },
+      changes: [
+        "Moved channels.feishu.accounts.main.botName → channels.feishu.accounts.main.name.",
+      ],
+    });
+
+    const result = applyChannelDoctorCompatibilityMigrations({
+      channels: {
+        feishu: {
+          defaultAccount: "main",
+          accounts: {
+            main: {
+              appId: "cli_x",
+              appSecret: "${FEISHU_APP_SECRET}",
+              botName: "Ops Bot",
+            },
+          },
+        },
+      },
+    });
+
+    expect(applyPluginDoctorCompatibilityMigrations).toHaveBeenCalledWith(expect.any(Object), {
+      pluginIds: ["feishu"],
+    });
+
+    const nextChannels = (result.next.channels ?? {}) as {
+      feishu?: {
+        accounts?: Record<string, Record<string, unknown>>;
+      };
+    };
+
+    expect(nextChannels.feishu?.accounts?.main).toEqual({
+      appId: "cli_x",
+      appSecret: "${FEISHU_APP_SECRET}",
+      name: "Ops Bot",
+    });
+    expect(result.changes).toContain(
+      "Moved channels.feishu.accounts.main.botName → channels.feishu.accounts.main.name.",
+    );
+  });
 });
