@@ -6,6 +6,7 @@ import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type WebSocket from "ws";
 import { resetConfigRuntimeState } from "../config/config.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
+import type { GatewayCronState } from "./server-cron.js";
 import {
   connectOk,
   cronIsolatedRun,
@@ -156,9 +157,7 @@ async function setupCronTestRun(params: {
   return { prevSkipCron, dir };
 }
 
-type DirectCronState = {
-  cron: { start: () => Promise<void>; stop: () => void };
-  storePath: string;
+type DirectCronState = GatewayCronState & {
   getRuntimeConfig: () => import("../config/types.openclaw.js").OpenClawConfig;
 };
 
@@ -191,12 +190,13 @@ function createCronEventCollector() {
     timer: ReturnType<typeof setTimeout>;
   }> = [];
   const flush = (payload: Record<string, unknown>) => {
-    for (const waiter of [...waiters]) {
+    for (let index = waiters.length - 1; index >= 0; index -= 1) {
+      const waiter = waiters[index];
       if (!waiter.check(payload)) {
         continue;
       }
       clearTimeout(waiter.timer);
-      waiters.splice(waiters.indexOf(waiter), 1);
+      waiters.splice(index, 1);
       waiter.resolve(payload);
     }
   };
