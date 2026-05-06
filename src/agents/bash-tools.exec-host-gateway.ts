@@ -449,6 +449,7 @@ export async function processGatewayAllowlist(
       turnSourceTo: params.turnSourceTo,
       turnSourceAccountId: params.turnSourceAccountId,
       turnSourceThreadId: params.turnSourceThreadId,
+      command: params.command,
       direct: params.approvalFollowupMode === "direct",
     });
 

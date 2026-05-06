@@ -317,6 +317,113 @@ describe("processGatewayAllowlist", () => {
     );
   });
 
+  it("keeps approved followup output bound to its own approval and run", async () => {
+    type Outcome = {
+      status: "completed";
+      exitCode: number;
+      exitSignal: null;
+      durationMs: number;
+      timedOut: false;
+      aggregated: string;
+    };
+    const deferred = <T>() => {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((innerResolve) => {
+        resolve = innerResolve;
+      });
+      return { promise, resolve };
+    };
+    const first = deferred<Outcome>();
+    const second = deferred<Outcome>();
+
+    createAndRegisterDefaultExecApprovalRequestMock
+      .mockResolvedValueOnce({
+        approvalId: "req-first",
+        approvalSlug: "first",
+        warningText: "",
+        expiresAtMs: Date.now() + 60_000,
+        preResolvedDecision: null,
+        initiatingSurface: "origin",
+        sentApproverDms: false,
+        unavailableReason: null,
+      })
+      .mockResolvedValueOnce({
+        approvalId: "req-second",
+        approvalSlug: "second",
+        warningText: "",
+        expiresAtMs: Date.now() + 60_000,
+        preResolvedDecision: null,
+        initiatingSurface: "origin",
+        sentApproverDms: false,
+        unavailableReason: null,
+      });
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    runExecProcessMock.mockImplementation(({ command }: { command: string }) => {
+      if (command === "printf first") {
+        return Promise.resolve({ session: { id: "run-first" }, promise: first.promise });
+      }
+      if (command === "printf second") {
+        return Promise.resolve({ session: { id: "run-second" }, promise: second.promise });
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+
+    await runGatewayAllowlist({ command: "printf first" });
+    await runGatewayAllowlist({ command: "printf second" });
+
+    await vi.waitFor(() => {
+      expect(runExecProcessMock).toHaveBeenCalledTimes(2);
+    });
+
+    second.resolve({
+      status: "completed",
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: 2,
+      timedOut: false,
+      aggregated: "SECOND_OUTPUT",
+    });
+    first.resolve({
+      status: "completed",
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: 1,
+      timedOut: false,
+      aggregated: "FIRST_OUTPUT",
+    });
+
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(2);
+    });
+
+    expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalId: "req-first", command: "printf first" }),
+      expect.stringContaining(
+        "Exec finished (gateway id=req-first, session=run-first, code 0)\nFIRST_OUTPUT",
+      ),
+    );
+    expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalId: "req-second", command: "printf second" }),
+      expect.stringContaining(
+        "Exec finished (gateway id=req-second, session=run-second, code 0)\nSECOND_OUTPUT",
+      ),
+    );
+    for (const [target, text] of sendExecApprovalFollowupResultMock.mock.calls) {
+      if (target?.approvalId === "req-first") {
+        expect(text).not.toContain("SECOND_OUTPUT");
+      }
+      if (target?.approvalId === "req-second") {
+        expect(text).not.toContain("FIRST_OUTPUT");
+      }
+    }
+  });
+
   it("formats diagnostics approvals as direct pasteable followups", async () => {
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
     createExecApprovalDecisionStateMock.mockReturnValue({

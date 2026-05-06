@@ -88,6 +88,7 @@ export type ExecApprovalFollowupTarget = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  command?: string;
   direct?: boolean;
 };
 
@@ -323,6 +324,7 @@ export function buildExecApprovalFollowupTarget(
     turnSourceTo: params.turnSourceTo,
     turnSourceAccountId: params.turnSourceAccountId,
     turnSourceThreadId: params.turnSourceThreadId,
+    command: params.command,
     direct: params.direct,
   };
 }
@@ -416,6 +418,7 @@ export async function sendExecApprovalFollowupResult(
     turnSourceAccountId: target.turnSourceAccountId,
     turnSourceThreadId: target.turnSourceThreadId,
     resultText,
+    command: target.command,
     direct: target.direct,
   }).catch((error) => {
     const message = formatErrorMessage(error);

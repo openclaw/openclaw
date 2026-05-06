@@ -22,6 +22,7 @@ type ExecApprovalFollowupParams = {
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
   resultText: string;
+  command?: string;
   direct?: boolean;
 };
 
@@ -55,14 +56,20 @@ function formatUnknownError(error: unknown): string {
   }
 }
 
-export function buildExecApprovalFollowupPrompt(resultText: string): string {
+export function buildExecApprovalFollowupPrompt(resultText: string, command?: string): string {
   const trimmed = resultText.trim();
   if (isExecDeniedResultText(trimmed)) {
     return buildExecDeniedFollowupPrompt(trimmed);
   }
+  const commandText = command?.trim();
   return [
     "An async command the user already approved has completed.",
     "Do not run the command again.",
+    "The exact completion details below are the only authoritative output for this approved command.",
+    "Do not mention, summarize, or reuse output from any earlier run in this session.",
+    commandText ? "Approved command:" : undefined,
+    commandText,
+    commandText ? "" : undefined,
     "If the task requires more steps, continue from this result before replying to the user.",
     "Only ask the user for help if you are actually blocked.",
     "",
@@ -70,9 +77,11 @@ export function buildExecApprovalFollowupPrompt(resultText: string): string {
     trimmed,
     "",
     "Continue the task if needed, then reply to the user in a helpful way.",
-    "If it succeeded, share the relevant output.",
+    "If it succeeded, share the relevant output from the exact completion details only.",
     "If it failed, explain what went wrong.",
-  ].join("\n");
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
 }
 
 function shouldSuppressExecDeniedFollowup(sessionKey: string | undefined): boolean {
@@ -143,6 +152,7 @@ function buildAgentFollowupArgs(params: {
   approvalId: string;
   sessionKey: string;
   resultText: string;
+  command?: string;
   deliveryTarget: ExternalBestEffortDeliveryTarget;
   sessionOnlyOriginChannel?: string;
   turnSourceChannel?: string;
@@ -157,7 +167,7 @@ function buildAgentFollowupArgs(params: {
   const fallbackChannel = sessionOnlyOriginChannel ?? params.turnSourceChannel;
   return {
     sessionKey: params.sessionKey,
-    message: buildExecApprovalFollowupPrompt(params.resultText),
+    message: buildExecApprovalFollowupPrompt(params.resultText, params.command),
     deliver: deliveryTarget.deliver,
     ...(deliveryTarget.deliver ? { bestEffortDeliver: true as const } : {}),
     channel: deliveryTarget.deliver ? deliveryTarget.channel : fallbackChannel,
@@ -244,6 +254,7 @@ export async function sendExecApprovalFollowup(
           approvalId: params.approvalId,
           sessionKey,
           resultText,
+          command: params.command,
           deliveryTarget,
           sessionOnlyOriginChannel,
           turnSourceChannel: params.turnSourceChannel,

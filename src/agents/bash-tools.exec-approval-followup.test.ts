@@ -30,11 +30,20 @@ describe("exec approval followup", () => {
     expect(prompt).not.toContain("already approved has completed");
   });
 
-  it("tells the agent to continue the task before replying when the command succeeds", () => {
-    const prompt = buildExecApprovalFollowupPrompt("Exec finished (gateway id=req-1, code 0)\nok");
+  it("tells the agent to continue only from exact completion details when the command succeeds", () => {
+    const prompt = buildExecApprovalFollowupPrompt(
+      "Exec finished (gateway id=req-1, code 0)\nok",
+      "printf ok",
+    );
 
     expect(prompt).toContain("continue from this result before replying to the user");
     expect(prompt).toContain("Continue the task if needed, then reply to the user");
+    expect(prompt).toContain(
+      "The exact completion details below are the only authoritative output",
+    );
+    expect(prompt).toContain("Do not mention, summarize, or reuse output from any earlier run");
+    expect(prompt).toContain("Approved command:\nprintf ok");
+    expect(prompt).toContain("share the relevant output from the exact completion details only");
   });
 
   it("keeps followups internal when no external route is available", async () => {
@@ -89,6 +98,7 @@ describe("exec approval followup", () => {
       turnSourceAccountId: target.accountId,
       turnSourceThreadId: target.threadId,
       resultText: "slack exec approval smoke",
+      command: "printf channel-smoke",
     });
 
     expect(callGatewayTool).toHaveBeenCalledWith(
@@ -103,6 +113,7 @@ describe("exec approval followup", () => {
         accountId: target.accountId,
         threadId: target.threadId,
         idempotencyKey: `exec-approval-followup:req-${target.channel}`,
+        message: expect.stringContaining("Approved command:\nprintf channel-smoke"),
       }),
       { expectFinal: true },
     );
