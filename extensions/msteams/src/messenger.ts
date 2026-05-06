@@ -572,7 +572,11 @@ export async function sendMSTeamsMessages(params: {
   if (params.replyStyle === "thread") {
     const ctx = params.context;
     if (!ctx) {
-      throw new Error("Missing context for replyStyle=thread");
+      // When no turn context is available (proactive send path / CLI sends),
+      // fall back to sendProactively with thread targeting instead of throwing.
+      // The proactive path reconstructs the threaded conversation ID
+      // (;messageid=<threadRootId>) so the message lands in the correct thread.
+      return await sendProactively(messages, 0, resolvedThreadId);
     }
     const messageIds: string[] = [];
     for (const [idx, message] of messages.entries()) {
