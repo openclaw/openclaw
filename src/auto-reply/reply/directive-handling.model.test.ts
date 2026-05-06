@@ -643,6 +643,36 @@ describe("/model chat UX", () => {
     });
   });
 
+  it("resets to default model when /model default is used", () => {
+    const resolved = resolveModelSelectionForCommand({
+      command: "/model default",
+      allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
+      allowedModelCatalog: [],
+    });
+
+    expect(resolved.errorText).toBeUndefined();
+    expect(resolved.modelSelection).toEqual({
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      isDefault: true,
+    });
+  });
+
+  it("resets to default model when /model primary is used", () => {
+    const resolved = resolveModelSelectionForCommand({
+      command: "/model primary",
+      allowedModelKeys: new Set(["anthropic/claude-opus-4-6"]),
+      allowedModelCatalog: [],
+    });
+
+    expect(resolved.errorText).toBeUndefined();
+    expect(resolved.modelSelection).toEqual({
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      isDefault: true,
+    });
+  });
+
   it("keeps openrouter provider/model split for exact selections", () => {
     const resolved = resolveModelSelectionForCommand({
       command: "/model openrouter/anthropic/claude-opus-4-6",

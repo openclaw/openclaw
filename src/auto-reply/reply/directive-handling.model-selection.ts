@@ -66,6 +66,19 @@ export function resolveModelSelectionFromDirective(params: {
   }
 
   const raw = params.directives.rawModelDirective.trim();
+
+  // /model default (or /model primary) resets the session to the configured default model.
+  const rawLower = raw.toLowerCase();
+  if ((rawLower === "default" || rawLower === "primary") && params.defaultProvider && params.defaultModel) {
+    return {
+      modelSelection: {
+        provider: params.defaultProvider,
+        model: params.defaultModel,
+        isDefault: true,
+      },
+    };
+  }
+
   const storedNumericProfile =
     params.directives.rawModelProfile === undefined
       ? resolveStoredNumericProfileModelDirective({
