@@ -1,0 +1,28 @@
+# Install: systemctl --user link $(pwd)/scripts/wol-relay.service
+#          systemctl --user enable --now wol-relay
+#
+# Requires WOL_RELAY_TOKEN and WOL_RELAY_ALLOWED_MACS in ~/.config/openclaw/wol-relay.env
+# Example wol-relay.env:
+#   WOL_RELAY_TOKEN=<random-secret>
+#   WOL_RELAY_ALLOWED_MACS=04:0e:3c:3c:63:c1
+
+[Unit]
+Description=OpenClaw WoL Relay (Unix socket)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/Projects/OpenClaw/OpenClaw/scripts/wol-relay.py
+EnvironmentFile=%h/.config/openclaw/wol-relay.env
+Restart=on-failure
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/run/user/%U
+
+[Install]
+WantedBy=default.target
