@@ -10,6 +10,7 @@ vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
+  isSessionCorpusPath,
   isShortTermMemoryPath,
   recordGroundedShortTermCandidates,
   rankShortTermPromotionCandidates,
@@ -83,6 +84,97 @@ describe("short-term promotion", () => {
     expect(isShortTermMemoryPath("memory/dreaming/deep/2026-04-03.md")).toBe(false);
     expect(isShortTermMemoryPath("../../vault/memory/dreaming/deep/2026-04-03.md")).toBe(false);
     expect(isShortTermMemoryPath("notes/daily/2026-04-03.md")).toBe(false);
+  });
+
+  it("isSessionCorpusPath identifies session-corpus files correctly", () => {
+    // Session-corpus files
+    expect(isSessionCorpusPath("memory/.dreams/session-corpus/2026-04-03.txt")).toBe(true);
+    expect(isSessionCorpusPath("memory/.dreams/session-corpus/2026-01-15.md")).toBe(true);
+    // Leading path segments
+    expect(isSessionCorpusPath("agents/sky/memory/.dreams/session-corpus/2026-04-03.txt")).toBe(
+      true,
+    );
+
+    // Regular memory paths — must not be flagged as corpus
+    expect(isSessionCorpusPath("memory/2026-04-03.md")).toBe(false);
+    expect(isSessionCorpusPath("memory/.dreams/short-term-recall.json")).toBe(false);
+    expect(isSessionCorpusPath("memory/dreaming/2026-04-03.md")).toBe(false);
+    expect(isSessionCorpusPath("memory/.dreams/phase-signals.json")).toBe(false);
+  });
+
+  it("session-corpus paths are still tracked by isShortTermMemoryPath", () => {
+    // Corpus files must remain in the recall store for dreaming signal tracking
+    expect(isShortTermMemoryPath("memory/.dreams/session-corpus/2026-04-03.txt")).toBe(true);
+  });
+
+  it("session-corpus entries are excluded from promotion candidates (rankShortTermPromotionCandidates)", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const corpusPath = "memory/.dreams/session-corpus/2026-05-01.txt";
+      const dailyPath = "memory/2026-05-01.md";
+
+      // Seed the recall store with both a corpus entry and a real daily note entry
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "test query",
+        results: [
+          {
+            path: corpusPath,
+            source: "memory",
+            snippet: "Session transcript data — should not be promoted",
+            startLine: 1,
+            endLine: 5,
+            score: 0.99,
+          },
+          {
+            path: dailyPath,
+            source: "memory",
+            snippet: "Real memory note that should be promotable",
+            startLine: 1,
+            endLine: 5,
+            score: 0.98,
+          },
+        ],
+        dayBucket: "2026-05-01",
+      });
+
+      // Build up enough signals to pass the promotion gate
+      for (let i = 0; i < 5; i++) {
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: `query ${i}`,
+          results: [
+            {
+              path: corpusPath,
+              source: "memory",
+              snippet: "Session transcript data — should not be promoted",
+              startLine: 1,
+              endLine: 5,
+              score: 0.99,
+            },
+            {
+              path: dailyPath,
+              source: "memory",
+              snippet: "Real memory note that should be promotable",
+              startLine: 1,
+              endLine: 5,
+              score: 0.98,
+            },
+          ],
+          dayBucket: "2026-05-01",
+        });
+      }
+
+      const candidates = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 1,
+        minUniqueQueries: 1,
+      });
+
+      const paths = candidates.map((c) => c.path);
+      expect(paths).not.toContain(corpusPath);
+      expect(paths).toContain(dailyPath);
+    });
   });
 
   it("records short-term recall for notes stored in a memory/ subdirectory", async () => {

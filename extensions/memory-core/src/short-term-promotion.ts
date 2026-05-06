@@ -870,6 +870,20 @@ export function isShortTermMemoryPath(filePath: string): boolean {
   return SHORT_TERM_BASENAME_RE.test(normalized);
 }
 
+/**
+ * Returns true when `filePath` is a dreaming session-corpus file
+ * (`memory/.dreams/session-corpus/YYYY-MM-DD.txt`).
+ *
+ * Session-corpus files are tracked in the short-term recall store so that
+ * dreaming phases can measure how often those memories surface organically.
+ * However, they are raw transcript data — not human-authored memories — and
+ * must NOT be promoted into MEMORY.md or fed back into the promotion queue.
+ */
+export function isSessionCorpusPath(filePath: string): boolean {
+  const normalized = normalizeMemoryPath(filePath);
+  return SHORT_TERM_SESSION_CORPUS_RE.test(normalized);
+}
+
 async function shortTermRecallSourceExists(params: {
   workspaceDir: string;
   entry: Pick<ShortTermRecallEntry, "path">;
@@ -1055,6 +1069,7 @@ export async function recordGroundedShortTermCandidates(params: {
         isContaminatedDreamingSnippet(snippet) ||
         !normalizedPath ||
         !isShortTermMemoryPath(normalizedPath) ||
+        isSessionCorpusPath(normalizedPath) ||
         !Number.isFinite(item.startLine) ||
         !Number.isFinite(item.endLine)
       ) {
@@ -1233,6 +1248,12 @@ export async function rankShortTermPromotionCandidates(
 
   for (const entry of Object.values(store.entries)) {
     if (!entry || entry.source !== "memory" || !isShortTermMemoryPath(entry.path)) {
+      continue;
+    }
+    // Session-corpus files are tracked for recall statistics but must never
+    // be promoted into MEMORY.md — they contain raw transcript data, not
+    // human-authored memory fragments.
+    if (isSessionCorpusPath(entry.path)) {
       continue;
     }
     if (isContaminatedDreamingSnippet(entry.snippet)) {
