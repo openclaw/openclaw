@@ -408,7 +408,7 @@ describe("short-term promotion", () => {
     });
   });
 
-  it("lets repeated dreaming-only daily signals clear the default promotion gates", async () => {
+  it("does not let repeated dreaming-only daily signals clear the default promotion gates", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const queryDays = ["2026-04-01", "2026-04-02", "2026-04-03"];
       let candidateKey = "";
@@ -471,14 +471,29 @@ describe("short-term promotion", () => {
         nowMs: Date.parse("2026-04-03T10:01:00.000Z"),
       });
 
-      expect(ranked).toHaveLength(1);
-      expect(ranked[0]).toMatchObject({
+      expect(ranked).toHaveLength(0);
+
+      const staged = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-03T10:01:00.000Z"),
+      });
+      expect(staged).toHaveLength(1);
+      expect(staged[0]).toMatchObject({
         recallCount: 0,
         dailyCount: 3,
         uniqueQueries: 3,
       });
-      expect(ranked[0]?.recallDays).toEqual(queryDays);
-      expect(ranked[0]?.score).toBeGreaterThanOrEqual(0.75);
+      expect(staged[0]?.recallDays).toEqual(queryDays);
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: staged,
+        nowMs: Date.parse("2026-04-03T10:01:00.000Z"),
+      });
+      expect(applied.applied).toBe(0);
     });
   });
 
@@ -1376,6 +1391,223 @@ describe("short-term promotion", () => {
       expect(applied.appliedCandidates[0]?.endLine).toBe(3);
       const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
       expect(memoryText).toContain("memory/2026-04-01.md:3-3");
+    });
+  });
+
+  it("rehydrates broad moved snippets beyond the original short range", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const movedLines = [
+        "Moved backups to S3 Glacier.",
+        "Keep cold storage retention at 365 days.",
+        "Expire restore manifests after quarterly verification.",
+        "Mirror billing reports into the archive bucket.",
+        "Tag storage objects with owner and purpose.",
+        "Keep recovery runbooks beside the archive index.",
+        "Rotate the restore test sample every month.",
+        "Alert if retrieval failures exceed one per week.",
+        "Preserve a local checksum manifest for audits.",
+        "Document the next cold-storage review date.",
+      ];
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+        "intro",
+        "summary",
+        "daily note churn",
+        "another inserted line",
+        ...movedLines,
+        "afterward",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "glacier broad retention",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 2,
+            score: 0.94,
+            snippet: movedLines.join("\n"),
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appliedCandidates[0]?.startLine).toBe(5);
+      expect(applied.appliedCandidates[0]?.endLine).toBe(14);
+      expect(applied.appliedCandidates[0]?.snippet).toBe(movedLines.join(" "));
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).toContain("memory/2026-04-01.md:5-14");
+      expect(memoryText).toContain("Document the next cold-storage review date.");
+    });
+  });
+
+  it("uses the tightest containing range for embedded moved snippets", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+        "Do not promote this adjacent planning line.",
+        "Context prefix Move backups to S3 Glacier. Context suffix.",
+        "Do not promote this adjacent security line.",
+        "Keep the unrelated account note local.",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "glacier embedded",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 4,
+            score: 0.94,
+            snippet: "Move backups to S3 Glacier.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appliedCandidates[0]?.startLine).toBe(2);
+      expect(applied.appliedCandidates[0]?.endLine).toBe(2);
+      expect(applied.appliedCandidates[0]?.snippet).toBe(
+        "Context prefix Move backups to S3 Glacier. Context suffix.",
+      );
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).toContain("memory/2026-04-01.md:2-2");
+      expect(memoryText).not.toContain("Do not promote this adjacent planning line.");
+      expect(memoryText).not.toContain("Do not promote this adjacent security line.");
+    });
+  });
+
+  it("keeps nearby containment matches ahead of tighter distant repeats", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+        "intro",
+        "summary",
+        "daily note churn",
+        "another inserted line",
+        "Move backups to S3",
+        "Glacier. Nearby suffix.",
+        "gap",
+        "gap",
+        "gap",
+        "Far prefix Move backups to S3 Glacier. Far suffix.",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "glacier nearby repeated",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 5,
+            endLine: 6,
+            score: 0.94,
+            snippet: "Move backups to S3 Glacier.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appliedCandidates[0]?.startLine).toBe(5);
+      expect(applied.appliedCandidates[0]?.endLine).toBe(6);
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).toContain("memory/2026-04-01.md:5-6");
+      expect(memoryText).toContain("Glacier. Nearby suffix.");
+      expect(memoryText).not.toContain("Far prefix Move backups");
+    });
+  });
+
+  it("uses nested tight containment instead of broad stale ranges", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+        "intro",
+        "summary",
+        "daily note churn",
+        "another inserted line",
+        "nearest envelope before repeated target",
+        "",
+        "",
+        "",
+        "Unrelated account note should stay local.",
+        "Far prefix Move backups to S3 Glacier. Far suffix.",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "glacier broad stale range",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 5,
+            endLine: 10,
+            score: 0.94,
+            snippet: "Move backups to S3 Glacier.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appliedCandidates[0]?.startLine).toBe(10);
+      expect(applied.appliedCandidates[0]?.endLine).toBe(10);
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).toContain("memory/2026-04-01.md:10-10");
+      expect(memoryText).not.toContain("nearest envelope before repeated target");
+      expect(memoryText).not.toContain("Unrelated account note should stay local.");
     });
   });
 

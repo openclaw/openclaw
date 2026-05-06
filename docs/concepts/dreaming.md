@@ -49,7 +49,7 @@ These phases are internal implementation details, not separate user-configured "
     Deep phase decides what becomes long-term memory.
 
     - Ranks candidates using weighted scoring and threshold gates.
-    - Requires `minScore`, `minRecallCount`, and `minUniqueQueries` to pass.
+    - Requires `minScore`, `minUniqueQueries`, and `minRecallCount` from recall or grounded evidence to pass. Daily-ingestion-only signals do not satisfy the recall gate.
     - Rehydrates snippets from live daily files before writing, so stale/deleted snippets are skipped.
     - Appends promoted entries to `MEMORY.md`.
     - Writes a `## Deep Sleep` summary into `DREAMS.md` and optionally writes `memory/dreaming/deep/YYYY-MM-DD.md`.
@@ -106,6 +106,7 @@ Deep ranking uses six weighted base signals plus phase reinforcement:
 | Conceptual richness | 0.06   | Concept-tag density from snippet/path             |
 
 Light and REM phase hits add a small recency-decayed boost from `memory/.dreams/phase-signals.json`.
+Daily-ingestion signals can still contribute to frequency and scoring, but they do not satisfy the deep phase `minRecallCount` gate without recall or grounded evidence.
 
 ## Scheduling
 

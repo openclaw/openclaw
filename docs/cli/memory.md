@@ -87,12 +87,12 @@ openclaw memory promote [--apply] [--limit <n>] [--include-promoted]
 Full options:
 
 - Ranks short-term candidates from `memory/YYYY-MM-DD.md` using weighted promotion signals (`frequency`, `relevance`, `query diversity`, `recency`, `consolidation`, `conceptual richness`).
-- Uses short-term signals from both memory recalls and daily-ingestion passes, plus light/REM phase reinforcement signals.
+- Uses short-term signals from both memory recalls and daily-ingestion passes, plus light/REM phase reinforcement signals. Daily-ingestion signals can affect scoring, but only recall or grounded evidence satisfies the recall-count gate.
 - When dreaming is enabled, `memory-core` auto-manages one cron job that runs a full sweep (`light -> REM -> deep`) in the background (no manual `openclaw cron add` required).
 - `--agent <id>`: scope to a single agent (default: the default agent).
 - `--limit <n>`: max candidates to return/apply.
 - `--min-score <n>`: minimum weighted promotion score.
-- `--min-recall-count <n>`: minimum recall count required for a candidate.
+- `--min-recall-count <n>`: minimum recall or grounded evidence count required for a candidate.
 - `--min-unique-queries <n>`: minimum distinct query count required for a candidate.
 - `--apply`: append selected candidates into `MEMORY.md` and mark them promoted.
 - `--include-promoted`: include already promoted candidates in output.

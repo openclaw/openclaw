@@ -584,6 +584,96 @@ describe("memory-core dreaming phases", () => {
     });
   });
 
+  it("prioritizes recalled entries over newer daily-only entries in light sleep", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-03.md"),
+      "Recalled router backup rotation.\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-05.md"),
+      ["Daily-only note 1.", "Daily-only note 2.", "Daily-only note 3."].join("\n"),
+      "utf-8",
+    );
+    const recalledAt = Date.parse("2026-04-03T10:00:00.000Z");
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "router backup rotation",
+      nowMs: recalledAt,
+      results: [
+        {
+          path: "memory/2026-04-03.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.92,
+          snippet: "Recalled router backup rotation.",
+          source: "memory",
+        },
+      ],
+    });
+
+    for (const index of [1, 2, 3]) {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: `__dreaming_daily__:2026-04-05:${index}`,
+        signalType: "daily",
+        dayBucket: "2026-04-05",
+        nowMs: Date.parse("2026-04-05T10:00:00.000Z") + index,
+        results: [
+          {
+            path: "memory/2026-04-05.md",
+            startLine: index,
+            endLine: index,
+            score: 0.74,
+            snippet: `Daily-only note ${index}.`,
+            source: "memory",
+          },
+        ],
+      });
+    }
+
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  timezone: "UTC",
+                  storage: { mode: "inline", separateReports: false },
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 2,
+                      lookbackDays: 7,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+    });
+
+    const dailyContent = await fs.readFile(
+      path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
+      "utf-8",
+    );
+    const recalledIndex = dailyContent.indexOf("- Candidate: Recalled router backup rotation.");
+    const dailyIndex = dailyContent.indexOf("- Candidate: Daily-only note");
+    expect(recalledIndex).toBeGreaterThanOrEqual(0);
+    expect(dailyIndex).toBeGreaterThanOrEqual(0);
+    expect(recalledIndex).toBeLessThan(dailyIndex);
+  });
+
   it("checkpoints session transcript ingestion and skips unchanged transcripts", async () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");

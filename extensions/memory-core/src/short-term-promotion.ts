@@ -400,6 +400,16 @@ function totalSignalCountForEntry(entry: {
   );
 }
 
+function promotionGateSignalCountForEntry(entry: {
+  recallCount?: number;
+  groundedCount?: number;
+}): number {
+  return (
+    Math.max(0, Math.floor(entry.recallCount ?? 0)) +
+    Math.max(0, Math.floor(entry.groundedCount ?? 0))
+  );
+}
+
 function calculateConsolidationComponent(recallDays: string[]): number {
   if (recallDays.length === 0) {
     return 0;
@@ -1248,7 +1258,11 @@ export async function rankShortTermPromotionCandidates(
     if (signalCount <= 0) {
       continue;
     }
-    if (signalCount < minRecallCount) {
+    const promotionGateSignalCount = promotionGateSignalCountForEntry({
+      recallCount,
+      groundedCount,
+    });
+    if (promotionGateSignalCount < minRecallCount) {
       continue;
     }
 
@@ -1406,6 +1420,15 @@ function compareCandidateWindow(
   return { matched: false, quality: 0 };
 }
 
+function rangesOverlap(
+  firstStartLine: number,
+  firstEndLine: number,
+  secondStartLine: number,
+  secondEndLine: number,
+): boolean {
+  return firstStartLine <= secondEndLine && secondStartLine <= firstEndLine;
+}
+
 function relocateCandidateRange(
   lines: string[],
   candidate: PromotionCandidate,
@@ -1433,10 +1456,16 @@ function relocateCandidateRange(
     };
   }
 
-  const maxSpan = Math.min(lines.length, Math.max(preferredSpan + 3, 8));
-  let bestMatch:
-    | { startLine: number; endLine: number; snippet: string; quality: number; distance: number }
-    | undefined;
+  const maxSpan = Math.min(lines.length, Math.max(preferredSpan + 15, 20));
+  const matches: Array<{
+    startLine: number;
+    endLine: number;
+    span: number;
+    snippet: string;
+    quality: number;
+    distance: number;
+  }> = [];
+  let smallestContainingSpan: number | undefined;
   for (let startIndex = 0; startIndex < lines.length; startIndex += 1) {
     for (let span = 1; span <= maxSpan && startIndex + span <= lines.length; span += 1) {
       const startLine = startIndex + 1;
@@ -1447,23 +1476,67 @@ function relocateCandidateRange(
         continue;
       }
       const distance = Math.abs(startLine - candidate.startLine);
-      if (
-        !bestMatch ||
-        comparison.quality > bestMatch.quality ||
-        (comparison.quality === bestMatch.quality && distance < bestMatch.distance) ||
-        (comparison.quality === bestMatch.quality &&
-          distance === bestMatch.distance &&
-          Math.abs(span - preferredSpan) <
-            Math.abs(bestMatch.endLine - bestMatch.startLine + 1 - preferredSpan))
-      ) {
-        bestMatch = {
-          startLine,
-          endLine,
-          snippet,
-          quality: comparison.quality,
-          distance,
-        };
+      if (comparison.quality === 2) {
+        smallestContainingSpan =
+          smallestContainingSpan === undefined ? span : Math.min(smallestContainingSpan, span);
       }
+      matches.push({
+        startLine,
+        endLine,
+        span,
+        snippet,
+        quality: comparison.quality,
+        distance,
+      });
+    }
+  }
+
+  const containingSpanLimit =
+    smallestContainingSpan === undefined ? undefined : smallestContainingSpan + 1;
+  let bestMatch:
+    | { startLine: number; endLine: number; snippet: string; quality: number; distance: number }
+    | undefined;
+  for (const match of matches) {
+    if (
+      match.quality === 2 &&
+      containingSpanLimit !== undefined &&
+      match.span > containingSpanLimit
+    ) {
+      continue;
+    }
+    let shouldReplace = false;
+    if (!bestMatch) {
+      shouldReplace = true;
+    } else if (match.quality > bestMatch.quality) {
+      shouldReplace = true;
+    } else if (match.quality === bestMatch.quality) {
+      const bestSpan = bestMatch.endLine - bestMatch.startLine + 1;
+      if (match.quality === 2) {
+        const overlapsBest = rangesOverlap(
+          match.startLine,
+          match.endLine,
+          bestMatch.startLine,
+          bestMatch.endLine,
+        );
+        shouldReplace =
+          (overlapsBest && match.span < bestSpan) ||
+          match.distance < bestMatch.distance ||
+          (match.distance === bestMatch.distance && match.span < bestSpan);
+      } else {
+        shouldReplace =
+          match.distance < bestMatch.distance ||
+          (match.distance === bestMatch.distance &&
+            Math.abs(match.span - preferredSpan) < Math.abs(bestSpan - preferredSpan));
+      }
+    }
+    if (shouldReplace) {
+      bestMatch = {
+        startLine: match.startLine,
+        endLine: match.endLine,
+        snippet: match.snippet,
+        quality: match.quality,
+        distance: match.distance,
+      };
     }
   }
 
@@ -1582,16 +1655,11 @@ export async function applyShortTermPromotions(
         if (candidate.score < minScore) {
           return false;
         }
-        const candidateSignalCount = Math.max(
-          0,
-          candidate.signalCount ??
-            totalSignalCountForEntry({
-              recallCount: candidate.recallCount,
-              dailyCount: candidate.dailyCount,
-              groundedCount: candidate.groundedCount,
-            }),
-        );
-        if (candidateSignalCount < minRecallCount) {
+        const candidatePromotionGateSignalCount = promotionGateSignalCountForEntry({
+          recallCount: candidate.recallCount,
+          groundedCount: candidate.groundedCount,
+        });
+        if (candidatePromotionGateSignalCount < minRecallCount) {
           return false;
         }
         if (Math.max(candidate.uniqueQueries, candidate.recallDays.length) < minUniqueQueries) {
