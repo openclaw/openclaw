@@ -27,16 +27,26 @@ const runPreflightCompactionIfNeededMock = vi.fn();
 const runMemoryFlushIfNeededMock = vi.fn();
 const enqueueFollowupRunMock = vi.fn();
 
-vi.mock("./agent-runner-utils.js", () => ({
-  resolveQueuedReplyExecutionConfig: (...args: unknown[]) =>
-    resolveQueuedReplyExecutionConfigMock(...args),
-}));
+vi.mock("./agent-runner-utils.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./agent-runner-utils.js")>("./agent-runner-utils.js");
+  return {
+    ...actual,
+    resolveQueuedReplyExecutionConfig: (...args: unknown[]) =>
+      resolveQueuedReplyExecutionConfigMock(...args),
+  };
+});
 
-vi.mock("./reply-threading.js", () => ({
-  resolveReplyToMode: (...args: unknown[]) => resolveReplyToModeMock(...args),
-  createReplyToModeFilterForChannel: (...args: unknown[]) =>
-    createReplyToModeFilterForChannelMock(...args),
-}));
+vi.mock("./reply-threading.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./reply-threading.js")>("./reply-threading.js");
+  return {
+    ...actual,
+    resolveReplyToMode: (...args: unknown[]) => resolveReplyToModeMock(...args),
+    createReplyToModeFilterForChannel: (...args: unknown[]) =>
+      createReplyToModeFilterForChannelMock(...args),
+  };
+});
 
 vi.mock("./reply-media-paths.js", () => ({
   createReplyMediaContext: (...args: unknown[]) => {
@@ -200,6 +210,34 @@ describe("runReplyAgent runtime config", () => {
         runtimePolicySessionKey,
       }),
     );
+  });
+
+  it("returns memory-flush error payloads before the main reply run", async () => {
+    const { replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
+    runMemoryFlushIfNeededMock.mockImplementation(
+      async (params: {
+        onVisibleErrorPayloads?: (payloads: Array<{ text?: string; isError?: boolean }>) => void;
+      }) => {
+        params.onVisibleErrorPayloads?.([
+          {
+            text: "⚠️ write failed: Memory flush writes are restricted to memory/2023-11-14.md; use that path only.",
+            isError: true,
+          },
+        ]);
+        return undefined;
+      },
+    );
+
+    const result = await runReplyAgent(replyParams);
+
+    expect(result).toMatchObject({
+      text: "⚠️ write failed: Memory flush writes are restricted to memory/2023-11-14.md; use that path only.",
+      isError: true,
+    });
   });
 
   it("surfaces known pre-run Codex usage-limit failures instead of dropping the reply", async () => {
