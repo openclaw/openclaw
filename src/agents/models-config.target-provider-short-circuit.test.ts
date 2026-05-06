@@ -413,6 +413,160 @@ describe("ensureOpenClawModelsJson targetProvider short-circuit", () => {
     expect(resolveImplicitProvidersCallCount).toBe(1);
   });
 
+  it("miss-on-provider-api-drift: tampered provider-level api rejects the short-circuit (Codex P1 round-5 on #73261)", async () => {
+    // Round-5 P1: the runtime consumes a provider-level `api` field
+    // (`models.providers.<id>.api`) at the same priority as
+    // `baseUrl`/`headers`/`auth`.  Without a structural compare for
+    // it, an attacker who can write models.json could swap the
+    // provider's transport flavor (e.g. `"openai-completions" →
+    // "openai-responses"`) and the short-circuit would re-bless the
+    // file because the per-model loop only flags `api` set on disk-side
+    // MODEL rows, not on the provider itself.  After the fix, any
+    // drift between configured and disk provider-level `api` falls
+    // through to full planning, which re-applies provider/plugin
+    // defaults and rewrites the file.
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg = createOpenAiConfig();
+
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    // Tamper with the provider-level `api` to simulate an attacker
+    // editing models.json to point a configured provider at a
+    // different transport family.  Provider-level baseUrl, apiKey,
+    // headers, and auth are all unchanged so the prior short-circuit
+    // surface would have accepted this state.
+    const targetPath = path.join(agentDir, "models.json");
+    const raw = await fs.readFile(targetPath, "utf8");
+    const parsed = JSON.parse(raw);
+    parsed.providers.openai.api = "openai-responses";
+    await fs.writeFile(targetPath, JSON.stringify(parsed));
+
+    resetModelsJsonReadyCacheForTest();
+    resolveImplicitProvidersCallCount = 0;
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+  });
+
+  it("miss-on-provider-api-config-undefined: disk-set provider api with config-undefined rejects the short-circuit", async () => {
+    // Symmetric variant of the round-5 P1 fix: when config OMITS
+    // `api` for a provider but the disk row carries one, the
+    // structural comparison must reject the disk state instead of
+    // silently accepting it.  This mirrors the symmetric baseUrl
+    // check from Greptile P1 / Aisle High #1.
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            // pragma: allowlist secret
+            apiKey: "sk-test-static-value",
+            // No `api` field configured.
+            models: [],
+          },
+        },
+      },
+    };
+
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    // Inject a provider-level `api` value that the planner did not
+    // write — config has no api, so any disk-side api must reject.
+    const targetPath = path.join(agentDir, "models.json");
+    const raw = await fs.readFile(targetPath, "utf8");
+    const parsed = JSON.parse(raw);
+    parsed.providers.openai.api = "openai-completions";
+    await fs.writeFile(targetPath, JSON.stringify(parsed));
+
+    resetModelsJsonReadyCacheForTest();
+    resolveImplicitProvidersCallCount = 0;
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+  });
+
+  it("miss-on-unhashable-models-json: oversize models.json forces a re-plan via the short-circuit (Codex P2 round-5 on #73261)", async () => {
+    // Round-5 P2: the previous scoped-cache compare used a raw
+    // `string | null` hash so an `uncacheable` models.json (oversize,
+    // symlink, I/O error) collapsed with the legitimate "file absent"
+    // case via `null === null`.  After the round-4 cache-fingerprint
+    // refactor (#73260) the primitive returns a discriminated
+    // `ContentHashOutcome`; this branch must consume it via the
+    // fail-closed `modelsContentOutcomesMatch` predicate so an
+    // oversize file forces a re-plan instead of riding a stale hit.
+    //
+    // The disk-based short-circuit fallback also uses the same
+    // `safeReadFileOutcome` primitive and refuses to short-circuit
+    // on any non-`hashed` outcome — so an oversize models.json
+    // additionally forces a full plan via that path on a fresh
+    // process (cold cache + cold disk).
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg = createOpenAiConfig();
+
+    // Cold start: full plan, populates global readyCache.
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    // Drop the in-memory cache, then warm the scoped cache via the
+    // disk-based short-circuit.  Disk state still matches config so
+    // the short-circuit fires and writes a scoped entry whose
+    // captured `modelsJsonOutcome` is `hashed`.
+    resetModelsJsonReadyCacheForTest();
+    resolveImplicitProvidersCallCount = 0;
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(0); // scoped short-circuit
+
+    // Grow models.json past `MAX_MODELS_JSON_BYTES` (1 MiB).  The
+    // next scoped-cache hit must observe an `uncacheable` outcome
+    // and treat it as drift instead of a stale hit.
+    const targetPath = path.join(agentDir, "models.json");
+    const padding = " ".repeat(2 * 1024 * 1024); // 2 MiB whitespace tail
+    const original = await fs.readFile(targetPath, "utf8");
+    await fs.writeFile(targetPath, `${original}${padding}`);
+
+    // The scoped cache compare now sees `uncacheable` on the disk
+    // side and falls through to the disk-based short-circuit, which
+    // also refuses to bless an unhashable file — ending in a full
+    // plan.
+    resolveImplicitProvidersCallCount = 0;
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+  });
+
+  it("miss-on-cold-uncacheable-models-json: cold cache + oversize models.json refuses the disk-based short-circuit", async () => {
+    // Sister test to the scoped-cache version: simulate a fresh
+    // gateway process (cold readyCache) where models.json is
+    // already oversize on disk before the call.  The disk-based
+    // short-circuit branch must refuse to bless the file (the
+    // `safeReadFileOutcome` returns `uncacheable`, which
+    // readExistingProviderMatchesConfig maps to `false`) and fall
+    // through to a full plan.
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg = createOpenAiConfig();
+
+    // Seed disk with a structurally-correct models.json the
+    // short-circuit would otherwise accept.
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    // Append > 1 MiB of whitespace so the file exceeds
+    // MAX_MODELS_JSON_BYTES and `safeReadFileOutcome` returns
+    // `uncacheable` at lstat / fstat / streaming-cap time.
+    const targetPath = path.join(agentDir, "models.json");
+    const padding = " ".repeat(2 * 1024 * 1024);
+    const original = await fs.readFile(targetPath, "utf8");
+    await fs.writeFile(targetPath, `${original}${padding}`);
+
+    // Drop ALL in-memory cache to simulate a fresh process.  No
+    // scoped entry exists, so the only path that could short-circuit
+    // is the disk-based check — which must refuse on `uncacheable`.
+    resetModelsJsonReadyCacheForTest();
+    resolveImplicitProvidersCallCount = 0;
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+  });
+
   it("miss-on-malformed-disk-apiKey: non-string disk apiKey rejects the short-circuit when config has no key", async () => {
     // Codex P2 on PR #73261: the previous fail-open branch accepted
     // any non-string disk apiKey when config had no apiKey, leaving
