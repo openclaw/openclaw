@@ -28,10 +28,15 @@ export type HookDecisionBlock = {
   metadata?: Record<string, unknown>;
 };
 
-export function resolveBlockMessage(decision: HookDecisionBlock): string {
-  return typeof decision.message === "string" && decision.message.trim()
-    ? decision.message
-    : DEFAULT_BLOCK_MESSAGE;
+export function resolveBlockMessage(
+  decision: HookDecisionBlock,
+  params: { blockedBy?: string } = {},
+): string {
+  if (typeof decision.message === "string" && decision.message.trim()) {
+    return decision.message;
+  }
+  const blockedBy = params.blockedBy?.trim();
+  return blockedBy ? `${DEFAULT_BLOCK_MESSAGE} by ${blockedBy}` : DEFAULT_BLOCK_MESSAGE;
 }
 
 /** Outcome severity for most-restrictive-wins merging. Higher = more restrictive. */

@@ -314,7 +314,7 @@ describe("session.message websocket events", () => {
           role: "user",
           content: [{ type: "text", text: "The agent cannot read this message." }],
           __openclaw: {
-            beforeAgentRunBlocked: { blockedBy: "policy-plugin", reason: "blocked", blockedAt: 1 },
+            beforeAgentRunBlocked: { blockedBy: "policy-plugin", blockedAt: 1 },
           },
         },
       });
@@ -326,6 +326,7 @@ describe("session.message websocket events", () => {
         { type: "text", text: "The agent cannot read this message." },
       ]);
       expect(JSON.stringify(payload.message)).not.toContain("secret blocked prompt");
+      expect(JSON.stringify(payload.message)).not.toContain("contains protected content");
     });
   });
 
@@ -353,7 +354,6 @@ describe("session.message websocket events", () => {
           __openclaw: {
             beforeAgentRunBlocked: {
               blockedBy: "policy-plugin",
-              reason: "contains protected content",
               blockedAt: Date.now(),
             },
           },
@@ -373,6 +373,7 @@ describe("session.message websocket events", () => {
         { type: "text", text: "The agent cannot read this message." },
       ]);
       expect(JSON.stringify(payload.message)).not.toContain("secret blocked prompt");
+      expect(JSON.stringify(payload.message)).not.toContain("contains protected content");
     });
   });
 

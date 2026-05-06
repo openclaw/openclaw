@@ -65,6 +65,9 @@ describe("HookDecision helpers", () => {
 
       expect(resolveBlockMessage(explicit)).toBe("Please rephrase your request.");
       expect(resolveBlockMessage(fallback)).toBe(DEFAULT_BLOCK_MESSAGE);
+      expect(resolveBlockMessage(fallback, { blockedBy: "policy-plugin" })).toBe(
+        `${DEFAULT_BLOCK_MESSAGE} by policy-plugin`,
+      );
       expect(resolveBlockMessage({ ...explicit, message: "   " })).toBe(DEFAULT_BLOCK_MESSAGE);
     });
   });

@@ -642,7 +642,7 @@ describe("runCliAgent reliability", () => {
         pluginId: "policy-plugin",
         decision: {
           outcome: "block" as const,
-          reason: "contains protected content",
+          reason: "matched secret prompt: secret prompt",
           message: "The agent cannot read this message.",
         },
       })),
@@ -708,10 +708,11 @@ describe("runCliAgent reliability", () => {
       const blockedLine = JSON.parse(lines[lines.length - 1]);
       expect(blockedLine.message.content[0].text).toBe("The agent cannot read this message.");
       expect(JSON.stringify(blockedLine)).not.toContain("secret prompt");
+      expect(JSON.stringify(blockedLine)).not.toContain("matched secret prompt");
       expect(blockedLine.message.__openclaw.beforeAgentRunBlocked).toMatchObject({
         blockedBy: "policy-plugin",
-        reason: "contains protected content",
       });
+      expect(blockedLine.message.__openclaw.beforeAgentRunBlocked).not.toHaveProperty("reason");
       expect(Object.hasOwn(blockedLine.message.__openclaw, "beforeAgentRunBlocked")).toBe(true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

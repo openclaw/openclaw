@@ -160,7 +160,6 @@ describe("normalizeMessagesForLlmBoundary", () => {
         __openclaw: {
           beforeAgentRunBlocked: {
             blockedBy: "policy-plugin",
-            reason: "contains protected content",
             blockedAt: 1,
           },
         },
@@ -175,7 +174,9 @@ describe("normalizeMessagesForLlmBoundary", () => {
       { type: "text", text: "The agent cannot read this message." },
     ]);
     expect(output[0]).toHaveProperty("__openclaw.beforeAgentRunBlocked");
+    expect(output[0]).not.toHaveProperty("__openclaw.beforeAgentRunBlocked.reason");
     expect(JSON.stringify(output)).not.toContain("secret prompt");
+    expect(JSON.stringify(output)).not.toContain("matched secret prompt");
     expect(input[0]).toHaveProperty("__openclaw");
   });
 });

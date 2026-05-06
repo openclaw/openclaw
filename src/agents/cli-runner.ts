@@ -4,7 +4,7 @@ import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
-import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
+import { DEFAULT_BLOCK_MESSAGE, resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
@@ -242,7 +242,6 @@ export async function runPreparedCliAgent(
   const persistBlockedBeforeAgentRun = async (block: {
     message: string;
     pluginId: string;
-    reason: string;
   }): Promise<void> => {
     try {
       const nowMs = Date.now();
@@ -255,7 +254,6 @@ export async function runPreparedCliAgent(
         __openclaw: {
           beforeAgentRunBlocked: {
             blockedBy: block.pluginId,
-            reason: block.reason,
             blockedAt: nowMs,
           },
         },
@@ -419,11 +417,10 @@ export async function runPreparedCliAgent(
           buildAgentHookContext(hookContext),
         );
       } catch (err) {
-        const blockMessage = "Request blocked by before_agent_run policy.";
+        const blockMessage = `${DEFAULT_BLOCK_MESSAGE} by before_agent_run`;
         await persistBlockedBeforeAgentRun({
           message: blockMessage,
           pluginId: "before_agent_run",
-          reason: `before_agent_run hook failed closed: ${formatErrorMessage(err)}`,
         });
         runAgentHarnessAgentEndHook({
           event: buildBlockedAgentEndEvent(blockMessage),
@@ -435,11 +432,12 @@ export async function runPreparedCliAgent(
 
       const beforeRunDecision = beforeRunResult?.decision;
       if (beforeRunDecision?.outcome === "block") {
-        const blockMessage = resolveBlockMessage(beforeRunDecision);
+        const blockMessage = resolveBlockMessage(beforeRunDecision, {
+          blockedBy: beforeRunResult?.pluginId ?? "unknown",
+        });
         await persistBlockedBeforeAgentRun({
           message: blockMessage,
           pluginId: beforeRunResult?.pluginId ?? "unknown",
-          reason: beforeRunDecision.reason,
         });
         runAgentHarnessAgentEndHook({
           event: buildBlockedAgentEndEvent(blockMessage),

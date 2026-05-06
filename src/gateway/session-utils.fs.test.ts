@@ -82,7 +82,6 @@ function appendBlockedUserMessageWithSessionManager(params: {
   originalText?: string;
   redactedText: string;
   pluginId: string;
-  reason: string;
   idempotencyKey?: string;
 }): string {
   const sessionManager = SessionManager.open(params.sessionFile, path.dirname(params.sessionFile));
@@ -94,7 +93,6 @@ function appendBlockedUserMessageWithSessionManager(params: {
     __openclaw: {
       beforeAgentRunBlocked: {
         blockedBy: params.pluginId,
-        reason: params.reason,
         blockedAt: Date.now(),
       },
     },
@@ -1300,7 +1298,6 @@ describe("readSessionMessages", () => {
       originalText: "[hitl:block] hello",
       redactedText: "Blocked by HITL test hook.",
       pluginId: "hitl-test-hooks",
-      reason: "blocked by test policy",
     });
 
     expect(messageId).toBeTruthy();
@@ -1316,6 +1313,7 @@ describe("readSessionMessages", () => {
       { role: "user", text: [{ type: "text", text: "Blocked by HITL test hook." }] },
     ]);
     expect(JSON.stringify(out)).not.toContain("[hitl:block] hello");
+    expect(JSON.stringify(out)).not.toContain("matched original");
   });
 
   test("keeps repeated blocked hook messages together in a new session", async () => {
@@ -1343,14 +1341,12 @@ describe("readSessionMessages", () => {
       originalText: "[hitl:block] first",
       redactedText: "Blocked by HITL test hook.",
       pluginId: "hitl-test-hooks",
-      reason: "blocked by test policy",
     });
     appendBlockedUserMessageWithSessionManager({
       sessionFile,
       originalText: "[hitl:block] second",
       redactedText: "Blocked again by HITL test hook.",
       pluginId: "hitl-test-hooks",
-      reason: "blocked by test policy",
     });
 
     const out = readSessionMessages(sessionId, storePath, sessionFile);
@@ -1365,6 +1361,7 @@ describe("readSessionMessages", () => {
     ]);
     expect(JSON.stringify(out)).not.toContain("[hitl:block] first");
     expect(JSON.stringify(out)).not.toContain("[hitl:block] second");
+    expect(JSON.stringify(out)).not.toContain("matched original");
   });
 });
 

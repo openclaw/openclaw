@@ -43,6 +43,37 @@ describe("diagnostics-prometheus service", () => {
     expect(rendered).not.toContain("session-should-not-export");
   });
 
+  it("records hook-blocked run metrics with safe blocker originator only", () => {
+    const store = __test__.createPrometheusMetricStore();
+
+    __test__.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "run.completed",
+        runId: "run-should-not-export",
+        sessionKey: "session-should-not-export",
+        provider: "openai",
+        model: "gpt-5.4",
+        channel: "slack",
+        trigger: "message",
+        durationMs: 250,
+        outcome: "blocked",
+        blockedBy: "policy-plugin",
+      },
+      trusted,
+    );
+
+    const rendered = __test__.renderPrometheusMetrics(store);
+
+    expect(rendered).toContain(
+      'openclaw_run_completed_total{blocked_by="policy-plugin",channel="slack",model="gpt-5.4",outcome="blocked",provider="openai",trigger="message"} 1',
+    );
+    expect(rendered).not.toContain("run-should-not-export");
+    expect(rendered).not.toContain("session-should-not-export");
+    expect(rendered).not.toContain("matched secret prompt");
+  });
+
   it("drops untrusted plugin-emitted diagnostic events", () => {
     const store = __test__.createPrometheusMetricStore();
 
