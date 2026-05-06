@@ -2478,6 +2478,118 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("exports session recovery and talk metrics with bounded attributes", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
+    await service.start(ctx);
+
+    emitTrustedDiagnosticEvent({
+      type: "session.recovery.requested",
+      sessionId: "session-should-not-export",
+      sessionKey: "key-should-not-export",
+      state: "processing",
+      ageMs: 12_000,
+      reason: "startup-sweep",
+      activeWorkKind: "tool_call",
+      allowActiveAbort: true,
+    });
+    emitTrustedDiagnosticEvent({
+      type: "session.recovery.completed",
+      sessionId: "session-should-not-export",
+      sessionKey: "key-should-not-export",
+      state: "processing",
+      ageMs: 13_000,
+      reason: "startup-sweep",
+      activeWorkKind: "tool_call",
+      status: "released",
+      action: "abort-active-run",
+    });
+    emitTrustedDiagnosticEvent({
+      type: "talk.event",
+      sessionId: "talk-session-should-not-export",
+      turnId: "turn-should-not-export",
+      talkEventType: "input.audio.delta",
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+      provider: "openai",
+      byteLength: 320,
+    });
+    emitTrustedDiagnosticEvent({
+      type: "talk.event",
+      sessionId: "talk-session-should-not-export",
+      talkEventType: "latency.metrics",
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+      provider: "openai",
+      durationMs: 45,
+    });
+    await flushDiagnosticEvents();
+
+    expect(
+      telemetryState.counters.get("openclaw.session.recovery.requested")?.add,
+    ).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({
+        "openclaw.state": "processing",
+        "openclaw.action": "abort",
+        "openclaw.active_work_kind": "tool_call",
+      }),
+    );
+    expect(
+      telemetryState.counters.get("openclaw.session.recovery.completed")?.add,
+    ).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({
+        "openclaw.state": "processing",
+        "openclaw.status": "released",
+        "openclaw.action": "abort-active-run",
+      }),
+    );
+    expect(
+      telemetryState.histograms.get("openclaw.session.recovery.age_ms")?.record,
+    ).toHaveBeenCalledWith(
+      13_000,
+      expect.objectContaining({
+        "openclaw.status": "released",
+      }),
+    );
+    expect(telemetryState.counters.get("openclaw.talk.event")?.add).toHaveBeenCalledWith(1, {
+      "openclaw.talk.brain": "agent-consult",
+      "openclaw.talk.event_type": "input.audio.delta",
+      "openclaw.talk.mode": "realtime",
+      "openclaw.talk.provider": "openai",
+      "openclaw.talk.transport": "gateway-relay",
+    });
+    expect(telemetryState.histograms.get("openclaw.talk.audio.bytes")?.record).toHaveBeenCalledWith(
+      320,
+      {
+        "openclaw.talk.brain": "agent-consult",
+        "openclaw.talk.event_type": "input.audio.delta",
+        "openclaw.talk.mode": "realtime",
+        "openclaw.talk.provider": "openai",
+        "openclaw.talk.transport": "gateway-relay",
+      },
+    );
+    expect(
+      telemetryState.histograms.get("openclaw.talk.event.duration_ms")?.record,
+    ).toHaveBeenCalledWith(45, {
+      "openclaw.talk.brain": "agent-consult",
+      "openclaw.talk.event_type": "latency.metrics",
+      "openclaw.talk.mode": "realtime",
+      "openclaw.talk.provider": "openai",
+      "openclaw.talk.transport": "gateway-relay",
+    });
+
+    const talkCounterCalls = JSON.stringify(
+      telemetryState.counters.get("openclaw.talk.event")?.add.mock.calls,
+    );
+    expect(talkCounterCalls).not.toContain("talk-session-should-not-export");
+    expect(talkCounterCalls).not.toContain("turn-should-not-export");
+    await service.stop?.(ctx);
+  });
+
   test("does not export model or tool content unless capture is explicitly enabled", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });

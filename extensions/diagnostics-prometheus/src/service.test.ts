@@ -94,6 +94,17 @@ describe("diagnostics-prometheus service", () => {
       store,
       {
         ...baseEvent(),
+        type: "message.delivery.started",
+        channel: "matrix",
+        deliveryKind: "text",
+        sessionKey: "session-should-not-export",
+      },
+      trusted,
+    );
+    __test__.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
         type: "message.processed",
         channel: "telegram/custom",
         chatId: "chat-should-not-export",
@@ -120,6 +131,9 @@ describe("diagnostics-prometheus service", () => {
     const rendered = __test__.renderPrometheusMetrics(store);
 
     expect(rendered).toContain(
+      'openclaw_message_delivery_started_total{channel="matrix",delivery_kind="text"} 1',
+    );
+    expect(rendered).toContain(
       'openclaw_message_processed_total{channel="unknown",outcome="completed",reason="none"} 1',
     );
     expect(rendered).toContain(
@@ -127,7 +141,67 @@ describe("diagnostics-prometheus service", () => {
     );
     expect(rendered).not.toContain("chat-should-not-export");
     expect(rendered).not.toContain("message-should-not-export");
+    expect(rendered).not.toContain("session-should-not-export");
     expect(rendered).not.toContain("progress draft");
+  });
+
+  it("records session recovery and talk metrics without exporting raw ids or content", () => {
+    const store = __test__.createPrometheusMetricStore();
+
+    __test__.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "session.recovery.completed",
+        sessionId: "session-should-not-export",
+        sessionKey: "key-should-not-export",
+        state: "processing",
+        stateGeneration: 2,
+        ageMs: 12_000,
+        queueDepth: 1,
+        reason: "startup-sweep",
+        activeWorkKind: "tool_call",
+        allowActiveAbort: true,
+        status: "released",
+        action: "abort-active-run",
+      },
+      trusted,
+    );
+    __test__.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "talk.event",
+        sessionId: "talk-session-should-not-export",
+        turnId: "turn-should-not-export",
+        talkEventType: "input.audio.delta",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        provider: "openai",
+        byteLength: 320,
+      },
+      trusted,
+    );
+
+    const rendered = __test__.renderPrometheusMetrics(store);
+
+    expect(rendered).toContain(
+      'openclaw_session_recovery_total{action="abort-active-run",active_work_kind="tool_call",state="processing",status="released"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_session_recovery_age_seconds_sum{action="abort-active-run",active_work_kind="tool_call",state="processing",status="released"} 12',
+    );
+    expect(rendered).toContain(
+      'openclaw_talk_event_total{brain="agent-consult",event_type="input.audio.delta",mode="realtime",provider="openai",transport="gateway-relay"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_talk_audio_bytes_sum{brain="agent-consult",event_type="input.audio.delta",mode="realtime",provider="openai",transport="gateway-relay"} 320',
+    );
+    expect(rendered).not.toContain("session-should-not-export");
+    expect(rendered).not.toContain("key-should-not-export");
+    expect(rendered).not.toContain("talk-session-should-not-export");
+    expect(rendered).not.toContain("turn-should-not-export");
   });
 
   it("caps metric series growth and reports dropped series", () => {
