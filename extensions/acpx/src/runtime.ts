@@ -324,9 +324,24 @@ function quoteShellArg(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+function commandHasConfigKey(command: string, key: string): boolean {
+  const parts = splitCommandParts(command);
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i] === "-c" && i + 1 < parts.length) {
+      if ((parts[i + 1] ?? "").startsWith(`${key}=`)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function appendCodexAcpConfigOverrides(command: string, override: CodexAcpModelOverride): string {
-  const configArgs = override.model ? [`model=${override.model}`] : [];
-  if (override.reasoningEffort) {
+  const configArgs: string[] = [];
+  if (override.model && !commandHasConfigKey(command, "model")) {
+    configArgs.push(`model=${override.model}`);
+  }
+  if (override.reasoningEffort && !commandHasConfigKey(command, "model_reasoning_effort")) {
     configArgs.push(`model_reasoning_effort=${override.reasoningEffort}`);
   }
   if (configArgs.length === 0) {
@@ -606,6 +621,7 @@ export const __testing = {
   appendCodexAcpConfigOverrides,
   assertSupportedRuntimeSessionMode,
   codexAcpSessionModelId,
+  commandHasConfigKey,
   isCodexAcpCommand,
   normalizeCodexAcpModelOverride,
 };
