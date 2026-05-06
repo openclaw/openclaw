@@ -273,6 +273,12 @@ Choose your preferred auth method and follow the setup steps.
     intentional. Switch to `openai/<model>` plus `agentRuntime.id: "codex"` when
     you want native Codex app-server execution.
 
+    `doctor --fix` does not move a working `openai-codex/*` Codex OAuth route to
+    direct `openai/*` API-key billing. If an earlier repair already rewrote a
+    PI Codex OAuth setup to `openai/*` and no direct OpenAI auth is available,
+    rerun `openclaw doctor --fix` to recover the route back to
+    `openai-codex/*`.
+
     ### Context window cap
 
     OpenClaw treats model metadata and the runtime context cap as separate values.

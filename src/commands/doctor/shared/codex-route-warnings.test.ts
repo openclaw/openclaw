@@ -6,8 +6,10 @@ const mocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
   evaluateStoredCredentialEligibility: vi.fn(),
   getInstalledPluginRecord: vi.fn(),
+  hasUsableCustomProviderApiKey: vi.fn(),
   isInstalledPluginEnabled: vi.fn(),
   loadInstalledPluginIndex: vi.fn(),
+  resolveEnvApiKey: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
   resolveProfileUnusableUntilForDisplay: vi.fn(),
 }));
@@ -20,6 +22,11 @@ vi.mock("../../../agents/auth-profiles.js", () => ({
 
 vi.mock("../../../agents/auth-profiles/credential-state.js", () => ({
   evaluateStoredCredentialEligibility: mocks.evaluateStoredCredentialEligibility,
+}));
+
+vi.mock("../../../agents/model-auth.js", () => ({
+  hasUsableCustomProviderApiKey: mocks.hasUsableCustomProviderApiKey,
+  resolveEnvApiKey: mocks.resolveEnvApiKey,
 }));
 
 vi.mock("../../../plugins/installed-plugin-index.js", async (importOriginal) => ({
@@ -47,8 +54,10 @@ describe("collectCodexRouteWarnings", () => {
       reasonCode: "ok",
     });
     mocks.getInstalledPluginRecord.mockReturnValue(undefined);
+    mocks.hasUsableCustomProviderApiKey.mockReturnValue(false);
     mocks.isInstalledPluginEnabled.mockReturnValue(false);
     mocks.loadInstalledPluginIndex.mockReturnValue({ plugins: [] });
+    mocks.resolveEnvApiKey.mockReturnValue(null);
     mocks.resolveAuthProfileOrder.mockReturnValue([]);
     mocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(null);
   });
@@ -64,12 +73,11 @@ describe("collectCodexRouteWarnings", () => {
       } as OpenClawConfig,
     });
 
-    expect(warnings).toEqual([expect.stringContaining("Legacy `openai-codex/*`")]);
+    expect(warnings).toEqual([expect.stringContaining("Codex OAuth route through OpenClaw PI")]);
     expect(warnings[0]).toContain("agents.defaults.model");
-    expect(warnings[0]).toContain("openai/gpt-5.5");
+    expect(warnings[0]).toContain("openai-codex/gpt-5.5 is preserved");
     expect(warnings[0]).toContain('runtime is "pi"');
-    expect(warnings[0]).toContain('agentRuntime.id: "codex"');
-    expect(warnings[0]).toContain("usable OAuth");
+    expect(warnings[0]).toContain("leaves these routes unchanged");
   });
 
   it("still warns when the native Codex runtime is selected with a legacy model ref", () => {
@@ -86,7 +94,7 @@ describe("collectCodexRouteWarnings", () => {
       } as OpenClawConfig,
     });
 
-    expect(warnings).toEqual([expect.stringContaining("openai/gpt-5.5")]);
+    expect(warnings).toEqual([expect.stringContaining("openai-codex/gpt-5.5")]);
     expect(warnings[0]).toContain('runtime is "codex"');
   });
 
@@ -224,7 +232,51 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.cfg.messages?.tts?.summaryModel).toBe("openai/gpt-5.4-mini");
   });
 
-  it("repairs legacy routes to PI when Codex is not installed, enabled, and OAuth-ready", () => {
+  it("preserves Codex OAuth PI routes when the native Codex runtime is not ready", () => {
+    const store = {
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access-token",
+        },
+      },
+      usageStats: {},
+    };
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+    mocks.resolveAuthProfileOrder.mockImplementation(({ provider }) =>
+      provider === "openai-codex" ? ["openai-codex:default"] : [],
+    );
+
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai-codex/gpt-5.5",
+            models: {
+              "openai-codex/gpt-5.5": {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.cfg.agents?.defaults?.model).toBe("openai-codex/gpt-5.5");
+    expect(result.cfg.agents?.defaults?.models).toEqual({
+      "openai-codex/gpt-5.5": {},
+    });
+    expect(result.cfg.agents?.defaults?.agentRuntime).toBeUndefined();
+    expect(result.changes).toEqual([]);
+    expect(result.warnings.join("\n")).toContain("Preserved Codex OAuth model routes");
+  });
+
+  it("repairs non-OAuth legacy routes to PI only when direct OpenAI auth is available", () => {
+    mocks.resolveEnvApiKey.mockReturnValue({
+      apiKey: "sk-test",
+      source: "env: OPENAI_API_KEY",
+    });
+
     const result = maybeRepairCodexRoutes({
       cfg: {
         agents: {
@@ -241,7 +293,164 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.changes.join("\n")).toContain('set agentRuntime.id to "pi"');
   });
 
-  it("repairs persisted session route pins to PI when Codex is not ready", () => {
+  it("recovers already-rewritten PI OpenAI routes when only Codex OAuth is usable", () => {
+    const store = {
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access-token",
+        },
+      },
+      usageStats: {},
+    };
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+    mocks.resolveAuthProfileOrder.mockImplementation(({ provider }) =>
+      provider === "openai-codex" ? ["openai-codex:default"] : [],
+    );
+
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+            agentRuntime: { id: "pi" },
+            models: {
+              "openai/gpt-5.5": { alias: "bad-repair" },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.cfg.agents?.defaults?.model).toBe("openai-codex/gpt-5.5");
+    expect(result.cfg.agents?.defaults?.agentRuntime).toBeUndefined();
+    expect(result.cfg.agents?.defaults?.models).toEqual({
+      "openai-codex/gpt-5.5": { alias: "bad-repair" },
+    });
+    expect(result.changes.join("\n")).toContain("Recovered Codex OAuth model routes");
+  });
+
+  it("does not recover suppressed old Codex OAuth model refs", () => {
+    const store = {
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access-token",
+        },
+      },
+      usageStats: {},
+    };
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+    mocks.resolveAuthProfileOrder.mockImplementation(({ provider }) =>
+      provider === "openai-codex" ? ["openai-codex:default"] : [],
+    );
+
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.1",
+              fallbacks: ["openai/gpt-5.2", "openai/gpt-5.3"],
+            },
+            agentRuntime: { id: "pi" },
+            models: {
+              "openai/gpt-5.1": {},
+              "openai/gpt-5.2": {},
+              "openai/gpt-5.3": {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([]);
+    expect(result.cfg.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.1",
+      fallbacks: ["openai/gpt-5.2", "openai/gpt-5.3"],
+    });
+    expect(result.cfg.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.1": {},
+      "openai/gpt-5.2": {},
+      "openai/gpt-5.3": {},
+    });
+  });
+
+  it("recovers already-rewritten session route pins when only Codex OAuth is usable", () => {
+    const store: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "s1",
+        updatedAt: 1,
+        modelProvider: "openai",
+        model: "gpt-5.5",
+        providerOverride: "openai",
+        modelOverride: "openai/gpt-5.4",
+        modelOverrideSource: "auto",
+        agentHarnessId: "pi",
+        agentRuntimeOverride: "pi",
+      },
+    };
+
+    const result = repairCodexSessionStoreRoutes({
+      store,
+      runtime: "pi",
+      mode: "recover-codex-oauth",
+      now: 123,
+    });
+
+    expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
+    expect(store.main).toMatchObject({
+      updatedAt: 123,
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+      providerOverride: "openai-codex",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "auto",
+      agentHarnessId: "pi",
+      agentRuntimeOverride: "pi",
+    });
+  });
+
+  it("preserves persisted Codex OAuth session route pins in preserve mode", () => {
+    const store: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "s1",
+        updatedAt: 1,
+        modelProvider: "openai-codex",
+        model: "gpt-5.5",
+        providerOverride: "openai-codex",
+        modelOverride: "openai-codex/gpt-5.4",
+        authProfileOverride: "openai-codex:default",
+        authProfileOverrideSource: "auto",
+      },
+    };
+
+    const result = repairCodexSessionStoreRoutes({
+      store,
+      runtime: "pi",
+      mode: "preserve",
+      now: 123,
+    });
+
+    expect(result).toEqual({ changed: false, sessionKeys: [] });
+    expect(store.main).toMatchObject({
+      updatedAt: 1,
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+      providerOverride: "openai-codex",
+      modelOverride: "openai-codex/gpt-5.4",
+      authProfileOverride: "openai-codex:default",
+      authProfileOverrideSource: "auto",
+    });
+  });
+
+  it("repairs persisted session route pins to PI when direct OpenAI repair is selected", () => {
     const store: Record<string, SessionEntry> = {
       main: {
         sessionId: "s1",
@@ -270,6 +479,7 @@ describe("collectCodexRouteWarnings", () => {
     const result = repairCodexSessionStoreRoutes({
       store,
       runtime: "pi",
+      mode: "rewrite-to-openai",
       now: 123,
     });
 
@@ -313,6 +523,7 @@ describe("collectCodexRouteWarnings", () => {
     const result = repairCodexSessionStoreRoutes({
       store,
       runtime: "codex",
+      mode: "rewrite-to-openai",
       now: 123,
     });
 
@@ -386,7 +597,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.cfg.agents?.defaults?.agentRuntime).toEqual({ id: "codex" });
   });
 
-  it("keeps PI when the installed Codex record does not contribute the Codex harness", () => {
+  it("preserves the Codex OAuth PI route when the installed Codex record does not contribute the Codex harness", () => {
     const store = {
       profiles: {
         "openai-codex:default": {
@@ -425,7 +636,8 @@ describe("collectCodexRouteWarnings", () => {
       shouldRepair: true,
     });
 
-    expect(result.cfg.agents?.defaults?.model).toBe("openai/gpt-5.5");
-    expect(result.cfg.agents?.defaults?.agentRuntime).toEqual({ id: "pi" });
+    expect(result.cfg.agents?.defaults?.model).toBe("openai-codex/gpt-5.5");
+    expect(result.cfg.agents?.defaults?.agentRuntime).toBeUndefined();
+    expect(result.warnings.join("\n")).toContain("Preserved Codex OAuth model routes");
   });
 });

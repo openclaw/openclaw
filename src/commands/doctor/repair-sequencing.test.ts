@@ -7,12 +7,14 @@ const mocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
   evaluateStoredCredentialEligibility: vi.fn(),
   getInstalledPluginRecord: vi.fn(),
+  hasUsableCustomProviderApiKey: vi.fn(),
   isInstalledPluginEnabled: vi.fn(),
   loadInstalledPluginIndex: vi.fn(),
   maybeRepairStaleManagedNpmBundledPlugins: vi.fn(),
   maybeRepairStalePluginConfig: vi.fn(),
   repairMissingConfiguredPluginInstalls: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
+  resolveEnvApiKey: vi.fn(),
   resolveProfileUnusableUntilForDisplay: vi.fn(),
 }));
 
@@ -36,6 +38,11 @@ vi.mock("../../agents/auth-profiles.js", () => ({
 
 vi.mock("../../agents/auth-profiles/credential-state.js", () => ({
   evaluateStoredCredentialEligibility: mocks.evaluateStoredCredentialEligibility,
+}));
+
+vi.mock("../../agents/model-auth.js", () => ({
+  hasUsableCustomProviderApiKey: mocks.hasUsableCustomProviderApiKey,
+  resolveEnvApiKey: mocks.resolveEnvApiKey,
 }));
 
 vi.mock("../../plugins/installed-plugin-index.js", async (importOriginal) => ({
@@ -183,6 +190,7 @@ describe("doctor repair sequencing", () => {
       reasonCode: "ok",
     });
     mocks.getInstalledPluginRecord.mockReturnValue(undefined);
+    mocks.hasUsableCustomProviderApiKey.mockReturnValue(false);
     mocks.isInstalledPluginEnabled.mockReturnValue(false);
     mocks.loadInstalledPluginIndex.mockReturnValue({ plugins: [] });
     mocks.maybeRepairStaleManagedNpmBundledPlugins.mockReturnValue(false);
@@ -191,6 +199,7 @@ describe("doctor repair sequencing", () => {
       warnings: [],
     });
     mocks.resolveAuthProfileOrder.mockReturnValue([]);
+    mocks.resolveEnvApiKey.mockReturnValue(null);
     mocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(null);
     mocks.maybeRepairStalePluginConfig.mockImplementation((cfg: OpenClawConfig) => ({
       config: cfg,
@@ -397,11 +406,25 @@ describe("doctor repair sequencing", () => {
     );
   });
 
-  it("moves legacy Codex routes to PI before missing plugin install repair when Codex is not ready", async () => {
+  it("preserves Codex OAuth PI routes before missing plugin install repair when Codex is not ready", async () => {
+    const store = {
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access-token",
+        },
+      },
+      usageStats: {},
+    };
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+    mocks.resolveAuthProfileOrder.mockImplementation(({ provider }) =>
+      provider === "openai-codex" ? ["openai-codex:default"] : [],
+    );
     mocks.repairMissingConfiguredPluginInstalls.mockImplementationOnce(
       async (params: { cfg: OpenClawConfig }) => {
-        expect(params.cfg.agents?.defaults?.model).toBe("openai/gpt-5.5");
-        expect(params.cfg.agents?.defaults?.agentRuntime).toEqual({ id: "pi" });
+        expect(params.cfg.agents?.defaults?.model).toBe("openai-codex/gpt-5.5");
+        expect(params.cfg.agents?.defaults?.agentRuntime).toBeUndefined();
         return {
           changes: [],
           warnings: [],
@@ -432,12 +455,10 @@ describe("doctor repair sequencing", () => {
       env: {},
     });
 
-    expect(result.state.pendingChanges).toBe(true);
-    expect(result.state.candidate.agents?.defaults?.model).toBe("openai/gpt-5.5");
-    expect(result.state.candidate.agents?.defaults?.agentRuntime).toEqual({ id: "pi" });
-    expect(result.changeNotes.join("\n")).toContain(
-      'agents.defaults.model: openai-codex/gpt-5.5 -> openai/gpt-5.5; set agentRuntime.id to "pi".',
-    );
+    expect(result.state.pendingChanges).toBe(false);
+    expect(result.state.candidate.agents?.defaults?.model).toBe("openai-codex/gpt-5.5");
+    expect(result.state.candidate.agents?.defaults?.agentRuntime).toBeUndefined();
+    expect(result.warningNotes.join("\n")).toContain("Preserved Codex OAuth model routes");
     expect(result.changeNotes.join("\n")).not.toContain("Installed missing configured plugin");
   });
 
