@@ -2854,6 +2854,38 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].totalTokensFresh).toBe(false);
   });
 
+  it("can persist selected session routing separately from actual fallback usage", async () => {
+    const storePath = await createStorePath("openclaw-usage-fallback-routing-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        modelProvider: "codex-lb",
+        model: "gpt-5.5",
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      usage: { input: 1_000, output: 100 },
+      providerUsed: "ollama",
+      modelUsed: "qwen3-4b-instruct-2507-q8-notools:latest",
+      sessionModelProvider: "codex-lb",
+      sessionModel: "gpt-5.5",
+      contextTokensUsed: 200_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].modelProvider).toBe("codex-lb");
+    expect(stored[sessionKey].model).toBe("gpt-5.5");
+    expect(stored[sessionKey].inputTokens).toBe(1_000);
+    expect(stored[sessionKey].outputTokens).toBe(100);
+  });
+
   it("uses promptTokens when available without lastCallUsage", async () => {
     const storePath = await createStorePath("openclaw-usage-");
     const sessionKey = "main";

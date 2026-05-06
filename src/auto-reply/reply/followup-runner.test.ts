@@ -273,6 +273,7 @@ async function loadFreshFollowupRunnerModuleForTest() {
   vi.doMock("./session-run-accounting.js", () => ({
     persistRunSessionUsage: persistRunSessionUsageForFollowupTest,
     incrementRunCompactionCount: incrementRunCompactionCountForFollowupTest,
+    resolveRunSessionModelPersistence: vi.fn(() => ({})),
   }));
   vi.doMock("./agent-runner-memory.js", () => ({
     runMemoryFlushIfNeeded: async (params: { sessionEntry?: SessionEntry }) => params.sessionEntry,

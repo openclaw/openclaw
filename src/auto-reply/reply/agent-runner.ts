@@ -86,7 +86,11 @@ import {
   type ReplyOperation,
 } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
-import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
+import {
+  incrementRunCompactionCount,
+  persistRunSessionUsage,
+  resolveRunSessionModelPersistence,
+} from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
@@ -1354,6 +1358,13 @@ export async function runReplyAgent(params: {
     const selectedModel = followupRun.run.model;
     const fallbackStateEntry =
       activeSessionEntry ?? (sessionKey ? activeSessionStore?.[sessionKey] : undefined);
+    const sessionModelPersistence = resolveRunSessionModelPersistence({
+      sessionEntry: fallbackStateEntry,
+      selectedProvider,
+      selectedModel,
+      providerUsed,
+      modelUsed,
+    });
     const fallbackTransition = resolveFallbackTransition({
       selectedProvider,
       selectedModel,
@@ -1418,6 +1429,7 @@ export async function runReplyAgent(params: {
       promptTokens,
       modelUsed,
       providerUsed,
+      ...sessionModelPersistence,
       contextTokensUsed,
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
