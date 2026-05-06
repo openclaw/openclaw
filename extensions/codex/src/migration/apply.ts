@@ -126,14 +126,20 @@ function readPluginDetail(item: MigrationItem):
   | {
       pluginName: string;
       marketplaceName: string;
+      accessible?: boolean;
     }
   | undefined {
   const pluginName = item.details?.pluginName;
   const marketplaceName = item.details?.marketplaceName;
+  const accessible = item.details?.accessible;
   if (typeof pluginName !== "string" || typeof marketplaceName !== "string") {
     return undefined;
   }
-  return { pluginName, marketplaceName };
+  return {
+    pluginName,
+    marketplaceName,
+    ...(typeof accessible === "boolean" ? { accessible } : {}),
+  };
 }
 
 async function refreshCodexPluginRuntime(request: CodexMigrationAppServerRequest): Promise<void> {
@@ -190,6 +196,14 @@ async function applyCodexPluginActivationItems(params: {
         ...item,
         status: "error",
         reason: `openai-curated Codex plugin "${detail.pluginName}" was not found in target app-server inventory`,
+      });
+      continue;
+    }
+    if (plugin.installed && plugin.enabled && detail.accessible === false) {
+      applied.push({
+        ...item,
+        status: "error",
+        reason: `plugin "${detail.pluginName}" is installed and enabled but its app is not accessible; reauthorize the app before migration can enable it`,
       });
       continue;
     }
