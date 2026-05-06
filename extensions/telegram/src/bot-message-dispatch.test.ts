@@ -3347,13 +3347,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
-  it("rewrites a no-visible-response DM turn through silent-reply fallback", async () => {
+  it("does not rewrite a no-visible-response DM turn through silent-reply fallback", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: false,
     });
-    deliverReplies.mockResolvedValueOnce({ delivered: true });
 
     await dispatchWithContext({
       context: createContext({
@@ -3377,11 +3376,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       } as unknown as OpenClawConfig,
     });
 
-    expect(deliverReplies).toHaveBeenCalledTimes(1);
-    const deliveredReplies = deliverReplies.mock.calls[0]?.[0]?.replies;
-    expect(Array.isArray(deliveredReplies)).toBe(true);
-    expect(deliveredReplies?.[0]?.text).toEqual(expect.any(String));
-    expect(deliveredReplies?.[0]?.text?.trim()).not.toBe("NO_REPLY");
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("does not add silent-reply fallback for message-tool-only turns", async () => {
