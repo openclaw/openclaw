@@ -730,10 +730,14 @@ describe("createDiscordGatewayPlugin", () => {
     globalFetchMock.mockReset();
     vi.useRealTimers();
 
+    // Regression for #78104: a bare `isConnecting=true` flag with no actual
+    // websocket is stale bookkeeping left over from a prior registration that
+    // never reached connect(false). We must still invoke super.registerClient
+    // or the gateway hangs at "awaiting gateway readiness".
     await runCase((plugin) => {
       (plugin as { isConnecting: boolean }).isConnecting = true;
     });
-    expect(baseRegisterClientSpy).not.toHaveBeenCalled();
+    expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes fallback gateway metadata on the next register attempt", async () => {
