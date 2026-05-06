@@ -875,23 +875,33 @@ export function recordAllowlistUse(
   resolvedPath?: string,
 ) {
   const target = agentId ?? DEFAULT_AGENT_ID;
-  const agents = approvals.agents ?? {};
+  const current = readExecApprovalsSnapshot().file;
+  const agents = current.agents ? { ...current.agents } : {};
   const existing = agents[target] ?? {};
   const allowlist = Array.isArray(existing.allowlist) ? existing.allowlist : [];
+  let changed = false;
   const nextAllowlist = allowlist.map((item) =>
     item.pattern === entry.pattern &&
     (item.argPattern ?? undefined) === (entry.argPattern ?? undefined)
-      ? Object.assign({}, item, {
+      ? ((changed = true),
+        Object.assign({}, item, {
           id: item.id ?? crypto.randomUUID(),
           lastUsedAt: Date.now(),
           lastUsedCommand: command,
           lastResolvedPath: resolvedPath,
-        })
+        }))
       : item,
   );
-  agents[target] = { ...existing, allowlist: nextAllowlist };
-  approvals.agents = agents;
-  saveExecApprovals(approvals);
+  if (!changed) {
+    return;
+  }
+  saveExecApprovals({
+    ...current,
+    agents: {
+      ...agents,
+      [target]: { ...existing, allowlist: nextAllowlist },
+    },
+  });
 }
 
 function buildAllowlistEntryMatchKey(

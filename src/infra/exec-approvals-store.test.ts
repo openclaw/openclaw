@@ -363,6 +363,52 @@ describe("exec approvals store helpers", () => {
     expect(readApprovalsFile(dir).agents?.main?.allowlist?.[0]?.id).toMatch(/^[0-9a-f-]{36}$/i);
   });
 
+  it("does not restore revoked allowlist entries from stale usage writeback", () => {
+    const dir = createHomeDir();
+
+    const staleApprovals: ExecApprovalsFile = {
+      version: 1,
+      agents: {
+        main: {
+          allowlist: [
+            { pattern: "/usr/bin/rg", id: "rg-id" },
+            { pattern: "/usr/bin/jq", id: "jq-id" },
+          ],
+        },
+      },
+    };
+    fs.mkdirSync(path.dirname(approvalsFilePath(dir)), { recursive: true });
+    fs.writeFileSync(approvalsFilePath(dir), JSON.stringify(staleApprovals, null, 2), "utf8");
+
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist" },
+      agents: {
+        main: {
+          allowlist: [{ pattern: "/usr/bin/jq", id: "jq-id" }],
+        },
+      },
+    });
+
+    recordAllowlistMatchesUse({
+      approvals: staleApprovals,
+      agentId: undefined,
+      matches: [{ pattern: "/usr/bin/rg" }],
+      command: "rg needle",
+      resolvedPath: "/opt/homebrew/bin/rg",
+    });
+
+    expect(readApprovalsFile(dir)).toEqual({
+      version: 1,
+      defaults: { security: "allowlist" },
+      agents: {
+        main: {
+          allowlist: [{ pattern: "/usr/bin/jq", id: "jq-id" }],
+        },
+      },
+    });
+  });
+
   it("dedupes allowlist usage by pattern and argPattern", () => {
     const dir = createHomeDir();
     vi.spyOn(Date, "now").mockReturnValue(777_000);
