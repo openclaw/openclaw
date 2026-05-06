@@ -6,7 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- Providers/NVIDIA: update the bundled build.nvidia.com catalog and docs to use `moonshotai/kimi-k2.6` and `z-ai/glm-5.1` instead of the deprecated NVIDIA-hosted Kimi K2.5 and GLM 5 endpoints.
+- Providers/NVIDIA: update the bundled build.nvidia.com catalog and docs to use `moonshotai/kimi-k2.6`, `minimaxai/minimax-m2.7`, and `z-ai/glm-5.1` instead of the deprecated NVIDIA-hosted Kimi K2.5, MiniMax M2.5, and GLM 5 endpoints.
 - PR triage: mark external pull requests with `proof: supplied` when Barnacle finds structured real behavior proof, keep stale negative proof labels in sync across CRLF-edited PR bodies, and let ClawSweeper own the stronger `proof: sufficient` judgement.
 - Sessions CLI: show the selected agent runtime in the `openclaw sessions` table so terminal output matches the runtime visibility already present in JSON/status surfaces. Thanks @vincentkoc.
 - Google Meet/Voice Call: make Twilio dial-in joins speak through the realtime Gemini voice bridge with paced audio streaming, backpressure-aware buffering, barge-in queue clearing, same-session agent consult routing, duplicate-consult coalescing, and no TwiML fallback during realtime speech, giving Meet participants a much snappier OpenClaw voice agent. (#77064) Thanks @scoootscooob.

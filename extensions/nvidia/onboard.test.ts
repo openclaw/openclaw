@@ -15,7 +15,7 @@ describe("nvidia onboard", () => {
     expect(cfg.models?.providers?.nvidia?.models.map((model) => model.id)).toEqual([
       "nvidia/nemotron-3-super-120b-a12b",
       "moonshotai/kimi-k2.6",
-      "minimaxai/minimax-m2.5",
+      "minimaxai/minimax-m2.7",
       "z-ai/glm-5.1",
     ]);
     // Config stores the canonical form; the picker label shows the literal
@@ -40,7 +40,7 @@ describe("nvidia onboard", () => {
       "custom-model",
       "nvidia/nemotron-3-super-120b-a12b",
       "moonshotai/kimi-k2.6",
-      "minimaxai/minimax-m2.5",
+      "minimaxai/minimax-m2.7",
       "z-ai/glm-5.1",
     ]);
   });

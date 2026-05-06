@@ -51,8 +51,8 @@
             }
           },
           {
-            "id": "minimaxai/minimax-m2.5",
-            "name": "MiniMax M2.5",
+            "id": "minimaxai/minimax-m2.7",
+            "name": "MiniMax M2.7",
             "input": ["text"],
             "contextWindow": 196608,
             "maxTokens": 8192,

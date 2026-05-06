@@ -126,7 +126,7 @@ describe("nvidia provider hooks", () => {
     expect(entries?.map((entry) => entry.id)).toEqual([
       "nvidia/nemotron-3-super-120b-a12b",
       "moonshotai/kimi-k2.6",
-      "minimaxai/minimax-m2.5",
+      "minimaxai/minimax-m2.7",
       "z-ai/glm-5.1",
     ]);
     expect(entries?.every((entry) => entry.provider === "nvidia")).toBe(true);
