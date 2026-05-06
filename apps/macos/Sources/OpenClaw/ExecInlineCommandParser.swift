@@ -6,6 +6,13 @@ enum ExecInlineCommandParser {
         let inlineCommand: String?
     }
 
+    private static let posixShellOptionsWithSeparateValues = Set([
+        "--init-file",
+        "--rcfile",
+        "-o",
+        "+o",
+    ])
+
     static func findMatch(
         _ argv: [String],
         flags: Set<String>,
@@ -25,12 +32,15 @@ enum ExecInlineCommandParser {
             if flags.contains(lower) {
                 return Match(tokenIndex: idx, inlineCommand: nil)
             }
-            if allowCombinedC, let inlineOffset = self.combinedCommandInlineOffset(token) {
-                let inline = String(token.dropFirst(inlineOffset))
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                return Match(
-                    tokenIndex: idx,
-                    inlineCommand: inline.isEmpty ? nil : inline)
+            if allowCombinedC, self.isCombinedCommandFlag(token) {
+                return Match(tokenIndex: idx, inlineCommand: nil)
+            }
+            if allowCombinedC, !token.hasPrefix("-"), !token.hasPrefix("+") {
+                break
+            }
+            if allowCombinedC, self.consumesSeparateValue(token) {
+                idx += 2
+                continue
             }
             idx += 1
         }
@@ -55,17 +65,19 @@ enum ExecInlineCommandParser {
         return payload.isEmpty ? nil : payload
     }
 
-    private static func combinedCommandInlineOffset(_ token: String) -> Int? {
+    private static func isCombinedCommandFlag(_ token: String) -> Bool {
         let chars = Array(token.lowercased())
         guard chars.count >= 2, chars[0] == "-", chars[1] != "-" else {
-            return nil
+            return false
         }
         if chars.dropFirst().contains("-") {
-            return nil
+            return false
         }
-        guard let commandIndex = chars.firstIndex(of: "c"), commandIndex > 0 else {
-            return nil
-        }
-        return commandIndex + 1
+        return chars.dropFirst().contains("c")
+    }
+
+    private static func consumesSeparateValue(_ token: String) -> Bool {
+        let lower = token.lowercased()
+        return self.posixShellOptionsWithSeparateValues.contains(lower)
     }
 }
