@@ -1694,34 +1694,13 @@ async function maybeRepairLegacyConfigForUpdateChannel(params: {
     return params.configSnapshot;
   }
 
-  const { migrateLegacyConfig } =
-    await import("../../commands/doctor/shared/legacy-config-migrate.js");
-  const { stripUnknownConfigKeys } = await import("../../commands/doctor-config-analysis.js");
-  const { validateConfigObjectWithPlugins } = await import("../../config/validation.js");
-  const migrated = migrateLegacyConfig(params.configSnapshot.parsed);
-  if (!migrated.config) {
-    return params.configSnapshot;
-  }
-
-  const stripped = stripUnknownConfigKeys(migrated.config);
-  const validated = validateConfigObjectWithPlugins(stripped.config);
-  if (!validated.ok) {
-    return params.configSnapshot;
-  }
-  await replaceConfigFile({
-    nextConfig: validated.config,
-    baseHash: params.configSnapshot.hash,
-    writeOptions: {
-      allowConfigSizeDrop: true,
-      skipOutputLogs: params.jsonMode,
-    },
-  });
-
-  const refreshed = await readConfigFileSnapshot();
-  if (!params.jsonMode && refreshed.valid) {
+  const { repairLegacyConfigForUpdateChannel } =
+    await import("../../commands/doctor/legacy-config-repair.js");
+  const { snapshot, repaired } = await repairLegacyConfigForUpdateChannel(params);
+  if (!params.jsonMode && repaired) {
     defaultRuntime.log(theme.muted("Migrated legacy config before changing update channel."));
   }
-  return refreshed;
+  return snapshot;
 }
 
 async function writePostCorePluginUpdateResultFile(
