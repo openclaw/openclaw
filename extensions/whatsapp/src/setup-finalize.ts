@@ -24,6 +24,8 @@ type SetupRuntime = Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["
 type WhatsAppConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["whatsapp"]>;
 type WhatsAppAccountConfig = NonNullable<NonNullable<WhatsAppConfig["accounts"]>[string]>;
 
+export const WHATSAPP_NEXT_STEPS_NOTE_TITLE = "WhatsApp next steps";
+
 function trimPromptText(value: string | null | undefined): string {
   return value?.trim() ?? "";
 }
@@ -420,10 +422,12 @@ export async function finalizeWhatsAppSetup(params: {
     message: linked ? "WhatsApp already linked. Re-link now?" : "Link WhatsApp now (QR)?",
     initialValue: !linked,
   });
+  let linkSucceeded = linked && !wantsLink;
   if (wantsLink) {
     try {
       const { loginWeb } = await import("./login.js");
       await loginWeb(false, undefined, params.runtime, accountId);
+      linkSucceeded = true;
     } catch (error) {
       params.runtime.error(`WhatsApp login failed: ${String(error)}`);
       await params.prompter.note(
@@ -444,5 +448,38 @@ export async function finalizeWhatsAppSetup(params: {
     forceAllowFrom: params.forceAllowFrom,
     prompter: params.prompter,
   });
+
+  if (linkSucceeded) {
+    const finalAccount = resolveWhatsAppAccount({ cfg: next, accountId });
+    const finalPolicy = finalAccount.dmPolicy ?? "pairing";
+    const sendCommand = formatCliCommand(
+      "openclaw message send --channel whatsapp --target +15551234567 --message hi",
+    );
+    const inboundLine = describeWhatsAppInboundLine(finalPolicy);
+    await params.prompter.note(
+      [
+        ...(inboundLine ? [inboundLine] : []),
+        `Outbound from the CLI: \`${sendCommand}\` (replace the target with a destination number or group JID).`,
+        `Docs: ${formatDocsLink("/cli/message", "cli/message")}`,
+      ].join("\n"),
+      WHATSAPP_NEXT_STEPS_NOTE_TITLE,
+    );
+  }
+
   return { cfg: next };
+}
+
+function describeWhatsAppInboundLine(policy: DmPolicy): string | undefined {
+  switch (policy) {
+    case "disabled":
+      return undefined;
+    case "pairing":
+      return `Inbound: message the linked assistant number; first contact from a new sender will trigger a pairing code you approve via \`${formatCliCommand("openclaw pairing approve whatsapp <CODE>")}\`.`;
+    case "allowlist":
+      return "Inbound: message the linked assistant number from a sender included in your `allowFrom` list to verify routing.";
+    case "open":
+      return "Inbound: message the linked assistant number from any number to verify routing (`dmPolicy=open`).";
+    default:
+      return "Inbound: message the linked assistant number to verify routing.";
+  }
 }
