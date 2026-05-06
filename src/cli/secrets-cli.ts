@@ -11,6 +11,8 @@ import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { addGatewayClientOptions, callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
 
+export { READ_ONLY_AUTH_COMMAND_PATHS } from "./secrets-cli.read-only-paths.js";
+
 type SecretsReloadOptions = GatewayRpcOpts & { json?: boolean };
 type SecretsAuditOptions = {
   check?: boolean;
@@ -81,6 +83,10 @@ export function registerSecretsCli(program: Command) {
     }
   });
 
+  // SECURITY: renaming or aliasing this command requires updating
+  // READ_ONLY_AUTH_COMMAND_PATHS in ./secrets-cli.read-only-paths.ts — the
+  // regression test in secrets-cli.read-only-paths.test.ts enforces this
+  // binding.
   secrets
     .command("audit")
     .description("Audit plaintext secrets, unresolved refs, and precedence drift")

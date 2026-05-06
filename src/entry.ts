@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
+import { READ_ONLY_AUTH_COMMAND_PATHS } from "./cli/secrets-cli.read-only-paths.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import {
   enableOpenClawCompileCache,
@@ -22,11 +23,25 @@ const ENTRY_WRAPPER_PAIRS = [
   { wrapperBasename: "openclaw.js", entryBasename: "entry.js" },
 ] as const;
 
-function shouldForceReadOnlyAuthStore(argv: string[]): boolean {
+/** @internal Exported for test. */
+export function shouldForceReadOnlyAuthStore(argv: string[]): boolean {
   const tokens = argv.slice(2).filter((token) => token.length > 0 && !token.startsWith("-"));
-  for (let index = 0; index < tokens.length - 1; index += 1) {
-    if (tokens[index] === "secrets" && tokens[index + 1] === "audit") {
-      return true;
+  for (const path of READ_ONLY_AUTH_COMMAND_PATHS) {
+    if (path.length === 0 || path.length > tokens.length) {
+      continue;
+    }
+    const lastStart = tokens.length - path.length;
+    for (let start = 0; start <= lastStart; start += 1) {
+      let matched = true;
+      for (let offset = 0; offset < path.length; offset += 1) {
+        if (tokens[start + offset] !== path[offset]) {
+          matched = false;
+          break;
+        }
+      }
+      if (matched) {
+        return true;
+      }
     }
   }
   return false;
