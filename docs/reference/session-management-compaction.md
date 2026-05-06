@@ -376,6 +376,7 @@ You can observe compaction and session state via:
 - `/status` (in any chat session)
 - `openclaw status` (CLI)
 - `openclaw sessions` / `sessions --json`
+- Gateway logs (`pnpm gateway:watch` or `openclaw logs --follow`): `embedded run auto-compaction start` + `complete`
 - Verbose mode: `🧹 Auto-compaction complete` + compaction count
 
 ---
