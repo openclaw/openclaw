@@ -200,14 +200,22 @@ function shouldRepairFutureCronNextRunAtMs(params: {
   } catch {
     return false;
   }
-  if (!isFiniteTimestamp(naturalNext) || nextRun <= naturalNext) {
+  if (!isFiniteTimestamp(naturalNext)) {
     return false;
   }
+  let isScheduledSlot = false;
   try {
-    if (isStaggeredCronRunAtMs(job, nextRun)) {
-      return false;
-    }
+    isScheduledSlot = isStaggeredCronRunAtMs(job, nextRun);
   } catch {
+    return false;
+  }
+  if (isScheduledSlot) {
+    return false;
+  }
+  if (nextRun < naturalNext) {
+    return job.payload.kind !== "agentTurn";
+  }
+  if (nextRun === naturalNext) {
     return false;
   }
 
@@ -496,6 +504,7 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
     );
     job.state.runningAtMs = undefined;
     changed = true;
+    return { changed, skip: true };
   }
 
   return { changed, skip: false };
