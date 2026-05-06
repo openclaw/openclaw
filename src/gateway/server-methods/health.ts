@@ -5,6 +5,7 @@ import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import { formatError } from "../server-utils.js";
+import { withConnectionHealth } from "../server/connection-health.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -107,10 +108,10 @@ export const healthHandlers: GatewayRequestHandlers = {
       !cachedDiffersFromRuntime &&
       now - cached.ts < HEALTH_REFRESH_INTERVAL_MS
     ) {
-      if (context.getEventLoopHealth) {
-        cached.eventLoop = context.getEventLoopHealth();
-      }
-      respond(true, cached, undefined, { cached: true });
+      const payload = context.getEventLoopHealth
+        ? { ...cached, eventLoop: context.getEventLoopHealth() }
+        : cached;
+      respond(true, withConnectionHealth(payload, client, now), undefined, { cached: true });
       void refreshHealthSnapshot({ probe: false, includeSensitive }).catch((err) =>
         logHealth.error(`background health refresh failed: ${formatError(err)}`),
       );
@@ -118,7 +119,7 @@ export const healthHandlers: GatewayRequestHandlers = {
     }
     try {
       const snap = await refreshHealthSnapshot({ probe: wantsProbe, includeSensitive });
-      respond(true, snap, undefined);
+      respond(true, withConnectionHealth(snap, client), undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }

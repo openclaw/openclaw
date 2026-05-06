@@ -1330,6 +1330,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           socket,
           connect: connectParams,
           connId,
+          connectionHealth: {
+            connectedAtMs: Date.now(),
+          },
           isDeviceTokenAuth: authMethod === "device-token",
           usesSharedGatewayAuth,
           sharedGatewaySessionGeneration,

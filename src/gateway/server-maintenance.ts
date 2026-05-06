@@ -165,7 +165,12 @@ export function startGatewayMaintenanceTimers(params: {
   }, 60_000);
 
   if (typeof params.mediaCleanupTtlMs !== "number") {
-    return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup: null };
+    return {
+      tickInterval,
+      healthInterval,
+      dedupeCleanup,
+      mediaCleanup: null,
+    };
   }
 
   let mediaCleanupInFlight: Promise<void> | null = null;

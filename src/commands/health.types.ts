@@ -35,11 +35,18 @@ export type PluginHealthSummary = {
   errors: PluginHealthErrorSummary[];
 };
 
+export type GatewayConnectionHealthSummary = {
+  connected: boolean;
+  rttMs: number | null;
+  lastHeartbeatAt: number | null;
+};
+
 export type HealthSummary = {
   ok: true;
   ts: number;
   durationMs: number;
   eventLoop?: import("../gateway/server/event-loop-health.js").GatewayEventLoopHealth;
+  connection?: GatewayConnectionHealthSummary;
   plugins?: PluginHealthSummary;
   channels: Record<string, ChannelHealthSummary>;
   channelOrder: string[];

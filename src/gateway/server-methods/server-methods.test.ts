@@ -2122,7 +2122,14 @@ describe("gateway healthHandlers.health cache freshness", () => {
       probe: false,
       includeSensitive: false,
     });
-    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        ...fresh,
+        connection: { connected: false, rttMs: null, lastHeartbeatAt: null },
+      },
+      undefined,
+    );
   });
 
   it("preserves event-loop health sampled by the refresh path", async () => {
@@ -2261,7 +2268,14 @@ describe("gateway healthHandlers.health cache freshness", () => {
       probe: false,
       includeSensitive: false,
     });
-    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        ...fresh,
+        connection: { connected: false, rttMs: null, lastHeartbeatAt: null },
+      },
+      undefined,
+    );
   });
 });
 

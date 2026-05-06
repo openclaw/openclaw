@@ -64,7 +64,19 @@ Options:
 - `--verbose`: force a live probe and print gateway connection details
 - `--debug`: alias for `--verbose`
 
-The health snapshot includes: `ok` (boolean), `ts` (timestamp), `durationMs` (probe time), per-channel status, agent availability, and session-store summary.
+The health snapshot includes: `ok` (boolean), `ts` (timestamp), `durationMs` (probe time), per-channel status, agent availability, and session-store summary. Authenticated WebSocket health responses also include a per-response `connection` block for the current client:
+
+```json
+{
+  "connection": {
+    "connected": true,
+    "rttMs": 12,
+    "lastHeartbeatAt": 1770000000000
+  }
+}
+```
+
+`connection` is not stored in the shared cached health snapshot. It is overlaid for the requesting WebSocket client so separate clients keep independent liveness and RTT state. RTT samples come from the authenticated WebSocket keepalive ping/pong. Before the first successful WebSocket ping/pong, `connected` can be `true` while `rttMs` and `lastHeartbeatAt` are `null`.
 
 ## Related
 

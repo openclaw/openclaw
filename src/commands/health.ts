@@ -47,6 +47,7 @@ export type {
   AgentHealthSummary,
   ChannelAccountHealthSummary,
   ChannelHealthSummary,
+  GatewayConnectionHealthSummary,
   HealthSummary,
 } from "./health.types.js";
 
