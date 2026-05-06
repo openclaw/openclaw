@@ -4,6 +4,7 @@ import { resolveStatusJsonOutput } from "./status-json-runtime.ts";
 const mocks = vi.hoisted(() => ({
   buildStatusJsonPayload: vi.fn((input) => ({ built: true, input })),
   resolveStatusRuntimeSnapshot: vi.fn(),
+  resolveStatusGatewayMemoryStatus: vi.fn(),
 }));
 
 vi.mock("./status-json-payload.ts", () => ({
@@ -12,6 +13,7 @@ vi.mock("./status-json-payload.ts", () => ({
 
 vi.mock("./status-runtime-shared.ts", () => ({
   resolveStatusRuntimeSnapshot: mocks.resolveStatusRuntimeSnapshot,
+  resolveStatusGatewayMemoryStatus: mocks.resolveStatusGatewayMemoryStatus,
 }));
 
 function createScan() {
@@ -59,6 +61,7 @@ describe("status-json-runtime", () => {
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },
     });
+    mocks.resolveStatusGatewayMemoryStatus.mockResolvedValue(null);
   });
 
   it("builds the full json output for status --json", async () => {
@@ -79,6 +82,14 @@ describe("status-json-runtime", () => {
       includeSecurityAudit: true,
       suppressHealthErrors: undefined,
     });
+    expect(mocks.resolveStatusGatewayMemoryStatus).toHaveBeenCalledWith({
+      config: { update: { channel: "stable" }, gateway: {} },
+      timeoutMs: 1234,
+      deep: true,
+      gatewayReachable: true,
+      memoryPluginEnabled: true,
+      memoryAvailable: false,
+    });
     expect(mocks.buildStatusJsonPayload).toHaveBeenCalledWith(
       expect.objectContaining({
         surface: expect.objectContaining({
@@ -91,6 +102,7 @@ describe("status-json-runtime", () => {
         usage: { providers: [] },
         health: { ok: true },
         lastHeartbeat: { status: "ok" },
+        gatewayMemoryStatus: null,
         pluginCompatibility: [
           {
             pluginId: "legacy",
@@ -141,6 +153,32 @@ describe("status-json-runtime", () => {
         health: undefined,
         lastHeartbeat: null,
         pluginCompatibility: undefined,
+      }),
+    );
+  });
+
+  it("passes live gateway memory fallback into the json payload", async () => {
+    mocks.resolveStatusGatewayMemoryStatus.mockResolvedValueOnce({
+      provider: "mem0",
+      runtime: { ok: true },
+      embedding: { ok: false, checked: false },
+    });
+
+    await resolveStatusJsonOutput({
+      scan: createScan(),
+      opts: { deep: true, timeoutMs: 2500 },
+      includeSecurityAudit: false,
+    });
+
+    expect(mocks.buildStatusJsonPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        memory: null,
+        memoryPlugin: { enabled: true },
+        gatewayMemoryStatus: {
+          provider: "mem0",
+          runtime: { ok: true },
+          embedding: { ok: false, checked: false },
+        },
       }),
     );
   });

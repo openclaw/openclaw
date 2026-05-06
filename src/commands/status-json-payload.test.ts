@@ -75,6 +75,11 @@ describe("status-json-payload", () => {
         osSummary: { platform: "linux" },
         memory: null,
         memoryPlugin: { enabled: true },
+        gatewayMemoryStatus: {
+          provider: "mem0",
+          runtime: { ok: true },
+          embedding: { ok: false, checked: false },
+        },
         agents: [{ id: "main" }],
         secretDiagnostics: ["diag"],
         securityAudit: { summary: { critical: 1 } },
@@ -103,6 +108,11 @@ describe("status-json-payload", () => {
       updateChannelSource: "config",
       memory: null,
       memoryPlugin: { enabled: true },
+      gatewayMemoryStatus: {
+        provider: "mem0",
+        runtime: { ok: true },
+        embedding: { ok: false, checked: false },
+      },
       gateway: {
         mode: "remote",
         url: "wss://gateway.example.com",

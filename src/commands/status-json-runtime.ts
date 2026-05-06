@@ -2,7 +2,10 @@ import type { OpenClawConfig } from "../config/types.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
 import { buildStatusJsonPayload } from "./status-json-payload.ts";
 import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
-import { resolveStatusRuntimeSnapshot } from "./status-runtime-shared.ts";
+import {
+  resolveStatusGatewayMemoryStatus,
+  resolveStatusRuntimeSnapshot,
+} from "./status-runtime-shared.ts";
 
 type StatusJsonScanLike = {
   cfg: OpenClawConfig;
@@ -48,6 +51,15 @@ type StatusJsonScanLike = {
   pluginCompatibility?: Array<Record<string, unknown>> | null | undefined;
 };
 
+function isEnabledMemoryPlugin(value: unknown): boolean {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      "enabled" in value &&
+      (value as { enabled?: unknown }).enabled === true,
+  );
+}
+
 export async function resolveStatusJsonOutput(params: {
   scan: StatusJsonScanLike;
   opts: {
@@ -71,6 +83,14 @@ export async function resolveStatusJsonOutput(params: {
       includeSecurityAudit: params.includeSecurityAudit,
       suppressHealthErrors: params.suppressHealthErrors,
     });
+  const gatewayMemoryStatus = await resolveStatusGatewayMemoryStatus({
+    config: scan.cfg,
+    timeoutMs: opts.timeoutMs,
+    deep: opts.deep,
+    gatewayReachable: scan.gatewayReachable,
+    memoryPluginEnabled: isEnabledMemoryPlugin(scan.memoryPlugin),
+    memoryAvailable: Boolean(scan.memory),
+  });
 
   return buildStatusJsonPayload({
     summary: scan.summary,
@@ -82,6 +102,7 @@ export async function resolveStatusJsonOutput(params: {
     osSummary: scan.osSummary,
     memory: scan.memory,
     memoryPlugin: scan.memoryPlugin,
+    gatewayMemoryStatus,
     agents: scan.agentStatus,
     secretDiagnostics: scan.secretDiagnostics,
     securityAudit,

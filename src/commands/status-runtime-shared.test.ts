@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveStatusGatewayHealth,
   resolveStatusGatewayHealthSafe,
+  resolveStatusGatewayMemoryStatus,
   resolveStatusLastHeartbeat,
   resolveStatusRuntimeDetails,
   resolveStatusRuntimeSnapshot,
@@ -177,6 +178,50 @@ describe("status-runtime-shared", () => {
     expect(mocks.callGateway).toHaveBeenCalledWith({
       method: "last-heartbeat",
       params: {},
+      timeoutMs: 1000,
+      config: { gateway: {} },
+    });
+  });
+
+  it("skips gateway memory probing when the local memory runtime is already available", async () => {
+    await expect(
+      resolveStatusGatewayMemoryStatus({
+        config: { gateway: {} },
+        timeoutMs: 1000,
+        deep: true,
+        gatewayReachable: true,
+        memoryPluginEnabled: true,
+        memoryAvailable: true,
+      }),
+    ).resolves.toBeNull();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("probes gateway memory status when deep status needs a remote fallback", async () => {
+    mocks.callGateway.mockResolvedValueOnce({
+      agentId: "main",
+      provider: "mem0",
+      runtime: { ok: true },
+      embedding: { ok: false },
+    });
+
+    await expect(
+      resolveStatusGatewayMemoryStatus({
+        config: { gateway: {} },
+        timeoutMs: 1000,
+        deep: true,
+        gatewayReachable: true,
+        memoryPluginEnabled: true,
+        memoryAvailable: false,
+      }),
+    ).resolves.toEqual({
+      agentId: "main",
+      provider: "mem0",
+      runtime: { ok: true },
+      embedding: { ok: false },
+    });
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "doctor.memory.status",
       timeoutMs: 1000,
       config: { gateway: {} },
     });

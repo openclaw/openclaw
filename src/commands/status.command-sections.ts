@@ -50,6 +50,16 @@ type PairingRecoveryLike = {
   remediationHint?: string | null;
 };
 
+type GatewayMemoryStatusLike = {
+  provider?: string;
+  runtime?: {
+    ok?: boolean;
+  } | null;
+  embedding?: {
+    ok?: boolean;
+  } | null;
+};
+
 export const statusHealthColumns: TableColumn[] = [
   { key: "Item", header: "Item", minWidth: 10 },
   { key: "Status", header: "Status", minWidth: 8 },
@@ -142,6 +152,7 @@ export function buildStatusMemoryValue(
   params: {
     memory: MemoryLike;
     memoryPlugin: MemoryPluginLike;
+    gatewayMemoryStatus?: GatewayMemoryStatusLike | null;
     ok: (value: string) => string;
     warn: (value: string) => string;
     muted: (value: string) => string;
@@ -154,6 +165,17 @@ export function buildStatusMemoryValue(
   }
   if (!params.memory) {
     const slot = params.memoryPlugin.slot ? `plugin ${params.memoryPlugin.slot}` : "plugin";
+    const gatewayProvider =
+      typeof params.gatewayMemoryStatus?.provider === "string" &&
+      params.gatewayMemoryStatus.provider.trim()
+        ? params.gatewayMemoryStatus.provider.trim()
+        : "";
+    const gatewayRuntimeOk =
+      params.gatewayMemoryStatus?.runtime?.ok ?? Boolean(gatewayProvider);
+    if (gatewayRuntimeOk) {
+      const provider = gatewayProvider ? ` · provider ${gatewayProvider}` : "";
+      return `${params.muted(`enabled (${slot})`)} · ${params.ok("gateway active")}${provider}`;
+    }
     return params.muted(`enabled (${slot}) · ${params.memoryUnavailableLabel ?? "unavailable"}`);
   }
   const parts: string[] = [];

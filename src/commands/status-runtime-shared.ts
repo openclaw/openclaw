@@ -1,5 +1,6 @@
 import { resolveReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { DoctorMemoryStatusPayload } from "../gateway/server-methods/doctor.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { HealthSummary } from "./health.js";
@@ -103,6 +104,30 @@ export async function resolveStatusLastHeartbeat(params: {
   return await callGateway<HeartbeatEventPayload | null>({
     method: "last-heartbeat",
     params: {},
+    timeoutMs: params.timeoutMs,
+    config: params.config,
+  }).catch(() => null);
+}
+
+export async function resolveStatusGatewayMemoryStatus(params: {
+  config: OpenClawConfig;
+  timeoutMs?: number;
+  deep?: boolean;
+  gatewayReachable: boolean;
+  memoryPluginEnabled: boolean;
+  memoryAvailable: boolean;
+}) {
+  if (
+    !params.deep ||
+    !params.gatewayReachable ||
+    !params.memoryPluginEnabled ||
+    params.memoryAvailable
+  ) {
+    return null;
+  }
+  const { callGateway } = await loadGatewayCallModule();
+  return await callGateway<DoctorMemoryStatusPayload>({
+    method: "doctor.memory.status",
     timeoutMs: params.timeoutMs,
     config: params.config,
   }).catch(() => null);

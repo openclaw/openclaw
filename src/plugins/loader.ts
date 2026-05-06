@@ -584,6 +584,33 @@ function getPluginRegistryCache(onlyPluginIds?: string[]) {
   return onlyPluginIds ? pluginLoaderCacheState : fullWorkspacePluginLoaderCacheState;
 }
 
+function restoreCachedPluginState(cached: CachedPluginState): void {
+  restoreRegisteredAgentHarnesses(cached.agentHarnesses);
+  restorePluginCommands(cached.commands ?? []);
+  restoreRegisteredCompactionProviders(cached.compactionProviders);
+  restoreDetachedTaskLifecycleRuntimeRegistration(cached.detachedTaskRuntimeRegistration);
+  restorePluginInteractiveHandlers(cached.interactiveHandlers ?? []);
+  restoreRegisteredMemoryEmbeddingProviders(cached.memoryEmbeddingProviders);
+  restoreMemoryPluginState({
+    capability: cached.memoryCapability,
+    corpusSupplements: cached.memoryCorpusSupplements,
+    promptSupplements: cached.memoryPromptSupplements,
+  });
+}
+
+function restoreActivePluginStateFromCache(): void {
+  const activeCacheKey = getActivePluginRegistryKey();
+  if (!activeCacheKey) {
+    return;
+  }
+  const cached =
+    getCachedPluginRegistry(activeCacheKey) ?? pluginLoaderCacheState.get(activeCacheKey);
+  if (!cached) {
+    return;
+  }
+  restoreCachedPluginState(cached);
+}
+
 function getCachedPluginRegistry(
   cacheKey: string,
   onlyPluginIds?: string[],
@@ -1273,12 +1300,13 @@ function getCompatibleActivePluginRegistry(
 export function resolveRuntimePluginRegistry(
   options?: PluginLoadOptions,
 ): PluginRegistry | undefined {
-  if (!options || !hasExplicitCompatibilityInputs(options)) {
-    return getCompatibleActivePluginRegistry();
+  const activeRegistry = getCompatibleActivePluginRegistry(options ?? {});
+  if (activeRegistry) {
+    restoreActivePluginStateFromCache();
+    return activeRegistry;
   }
-  const compatible = getCompatibleActivePluginRegistry(options);
-  if (compatible) {
-    return compatible;
+  if (!options || !hasExplicitCompatibilityInputs(options)) {
+    return undefined;
   }
   // Helper/runtime callers should not recurse into the same snapshot load while
   // plugin registration is still in flight. Let direct loadOpenClawPlugins(...)

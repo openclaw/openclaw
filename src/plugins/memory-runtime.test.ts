@@ -87,7 +87,7 @@ function expectMemoryRuntimeLoaded(
       requiredPluginIds: pluginIds,
       loadOptions: expect.objectContaining({
         onlyPluginIds: pluginIds,
-        workspaceDir: "/resolved-workspace",
+        workspaceDir: expect.stringMatching(/[\\/]resolved-workspace$/),
       }),
     }),
   );
