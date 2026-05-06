@@ -50,6 +50,71 @@ describe("lintMemoryWikiVault", () => {
     expect(result.issues.filter((issue) => issue.code === "broken-wikilink")).toEqual([]);
   });
 
+  it("accepts bridge-relative source links and OpenClaw transcript directives", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-bridge-links-",
+      config: {
+        vault: { renderMode: "native" },
+      },
+    });
+    await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "bridge-index.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.bridge.index",
+          title: "Bridge Index",
+          sourceType: "memory-bridge",
+          sourcePath: "/workspace/memory/chatgpt/INDEX.md",
+          bridgeRelativePath: "memory/chatgpt/INDEX.md",
+          bridgeWorkspaceDir: "/workspace",
+        },
+        body:
+          "# Bridge Index\n\n" +
+          "[护肝产业创业者描述](./2025-06-04_护肝产业创业者描述_684054d0.md)\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "bridge-target.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.bridge.target",
+          title: "Bridge Target",
+          sourceType: "memory-bridge",
+          sourcePath: "/workspace/memory/chatgpt/2025-06-04_护肝产业创业者描述_684054d0.md",
+          bridgeRelativePath: "memory/chatgpt/2025-06-04_护肝产业创业者描述_684054d0.md",
+          bridgeWorkspaceDir: "/workspace",
+        },
+        body: "# Bridge Target\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "bridge-transcript.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.bridge.transcript",
+          title: "Bridge Transcript",
+          sourceType: "memory-bridge",
+          sourcePath: "/workspace/memory/transcript_20260502T180815Z_reset_keyigan-agent-workflow.md",
+          bridgeRelativePath: "memory/transcript_20260502T180815Z_reset_keyigan-agent-workflow.md",
+          bridgeWorkspaceDir: "/workspace",
+        },
+        body: "# Bridge Transcript\n\n[[reply_to_current]]\n",
+      }),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    expect(result.issues.filter((issue) => issue.code === "broken-wikilink")).toEqual([]);
+  });
+
   it("detects duplicate ids, provenance gaps, contradictions, and open questions", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-lint-",
