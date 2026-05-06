@@ -1082,6 +1082,10 @@ Docs: https://docs.openclaw.ai
 - Security policy: classify media/base64 decode and format-conversion overhead after configured acceptance limits as performance-only for GHSA triage unless a report demonstrates a limit bypass, crash, exhaustion, data exposure, or another boundary bypass. (#74311)
 - Security/OpenGrep: add a precise OpenGrep rulepack, source-rule compiler, provenance metadata check, and PR/full scan workflows that validate first-party code and rulepack-only changes while uploading SARIF to GitHub Code Scanning. (#69483) Thanks @jesse-merhi.
 
+### Changes
+
+- Memory/sessions: index growing session transcripts incrementally by reusing unchanged chunk embeddings and only embedding new content, reducing O(n) full reindex overhead for long-running conversations. (#75179) Thanks @wr-web.
+
 ### Fixes
 
 - Agents/tools: skip unavailable media generation and PDF tool factories from the live reply path when Gateway metadata and the active auth store prove no configured provider can back them, while keeping explicit config and auth-backed providers on the normal factory path. Thanks @shakkernerd.

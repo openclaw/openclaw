@@ -4,6 +4,7 @@ export {
   buildFileEntry,
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
+  chunkMarkdownWithOffset,
   cosineSimilarity,
   ensureDir,
   hashText,
@@ -12,6 +13,7 @@ export {
   parseEmbedding,
   remapChunkLines,
   runWithConcurrency,
+  type ChunkWithOffset,
   type MemoryChunk,
   type MemoryFileEntry,
 } from "./host/internal.js";

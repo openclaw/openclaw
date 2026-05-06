@@ -4,6 +4,7 @@ export {
   buildMemoryReadResultFromSlice,
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
+  chunkMarkdownWithOffset,
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
   cosineSimilarity,
@@ -49,6 +50,7 @@ export type MemoryEmbeddingProbeResult = {
 };
 
 export type {
+  ChunkWithOffset,
   MemoryChunk,
   MemoryFileEntry,
   MemoryProviderStatus,
