@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { writeSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";
@@ -6,6 +7,7 @@ import path from "node:path";
 import {
   clampThinkingLevel,
   type Api,
+  getModels,
   type Model,
   type ModelThinkingLevel,
 } from "@mariozechner/pi-ai";
@@ -279,7 +281,7 @@ async function withGatewayLiveModelTimeout<T>(operation: Promise<T>, context: st
 }
 
 function logProgress(message: string): void {
-  process.stderr.write(`[live] ${message}\n`);
+  writeSync(2, `[live] ${message}\n`);
 }
 
 function enterProductionEnvForLiveRun() {
@@ -1408,6 +1410,43 @@ type LiveModelRegistry = {
   getAll(): Array<Model<Api>>;
 };
 
+function loadProviderScopedBuiltInModels(providerList: readonly string[]): Array<Model<Api>> {
+  const models: Array<Model<Api>> = [];
+  const seen = new Set<string>();
+  for (const rawProvider of providerList) {
+    const provider = normalizeProviderId(rawProvider);
+    if (!provider) {
+      continue;
+    }
+    for (const model of getModels(provider)) {
+      const key = `${normalizeProviderId(model.provider)}/${model.id.toLowerCase()}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      models.push(model);
+    }
+  }
+  return models;
+}
+
+function createStaticLiveModelRegistry(models: Array<Model<Api>>): LiveModelRegistry {
+  return {
+    find(provider, modelId) {
+      const normalizedProvider = normalizeProviderId(provider);
+      const normalizedModelId = modelId.toLowerCase();
+      return models.find(
+        (model) =>
+          normalizeProviderId(model.provider) === normalizedProvider &&
+          model.id.toLowerCase() === normalizedModelId,
+      );
+    },
+    getAll() {
+      return models;
+    },
+  };
+}
+
 function parseExplicitLiveModelRef(
   raw: string,
   providerFilter: Set<string> | null,
@@ -2410,45 +2449,54 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         );
 
         const agentDir = resolveDefaultAgentDir(cfg);
-        logProgress("[all-models] loading auth profiles");
-        const authProfileStore = await withGatewayLiveSetupTimeout(
-          Promise.resolve().then(() =>
-            providerList
-              ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-                  allowKeychainPrompt: false,
-                })
-              : ensureAuthProfileStore(agentDir, {
-                  allowKeychainPrompt: false,
-                }),
-          ),
-          "[all-models] load auth profiles",
-        );
-        const authStorage = await withGatewayLiveSetupTimeout(
-          Promise.resolve().then(() =>
-            discoverAuthStorage(agentDir, {
-              config: cfg,
-              env: process.env,
-              ...(providerList
-                ? {
-                    skipExternalAuthProfiles: true,
-                    syntheticAuthProviderRefs: [],
-                  }
-                : {}),
-            }),
-          ),
-          "[all-models] load auth storage",
-        );
-        logProgress("[all-models] loading model registry");
-        const modelRegistry = discoverModels(authStorage, agentDir);
-        const all = await withGatewayLiveSetupTimeout(
-          Promise.resolve().then(() => modelRegistry.getAll()),
-          "[all-models] load model registry",
-        );
-
         const rawModels = process.env.OPENCLAW_LIVE_GATEWAY_MODELS?.trim();
         const useModern = !rawModels || rawModels === "modern" || rawModels === "all";
         const useExplicit = Boolean(rawModels) && !useModern;
         const filter = useExplicit ? parseFilter(rawModels) : null;
+        const useProviderScopedBuiltIns = providerList !== null && !useExplicit;
+        let authProfileStore: AuthProfileStore | undefined;
+        let modelRegistry: LiveModelRegistry;
+        let all: Array<Model<Api>>;
+        if (useProviderScopedBuiltIns) {
+          logProgress("[all-models] loading provider-scoped model refs");
+          all = loadProviderScopedBuiltInModels(providerList);
+          modelRegistry = createStaticLiveModelRegistry(all);
+        } else {
+          logProgress("[all-models] loading auth profiles");
+          authProfileStore = await withGatewayLiveSetupTimeout(
+            Promise.resolve().then(() =>
+              providerList
+                ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+                    allowKeychainPrompt: false,
+                  })
+                : ensureAuthProfileStore(agentDir, {
+                    allowKeychainPrompt: false,
+                  }),
+            ),
+            "[all-models] load auth profiles",
+          );
+          const authStorage = await withGatewayLiveSetupTimeout(
+            Promise.resolve().then(() =>
+              discoverAuthStorage(agentDir, {
+                config: cfg,
+                env: process.env,
+                ...(providerList
+                  ? {
+                      skipExternalAuthProfiles: true,
+                      syntheticAuthProviderRefs: [],
+                    }
+                  : {}),
+              }),
+            ),
+            "[all-models] load auth storage",
+          );
+          logProgress("[all-models] loading model registry");
+          modelRegistry = discoverModels(authStorage, agentDir);
+          all = await withGatewayLiveSetupTimeout(
+            Promise.resolve().then(() => modelRegistry.getAll()),
+            "[all-models] load model registry",
+          );
+        }
         const maxModels = GATEWAY_LIVE_MAX_MODELS;
         const targetMatcher = createLiveTargetMatcher({
           providerFilter: PROVIDERS,
