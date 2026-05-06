@@ -1,4 +1,5 @@
 import { discoverOpenClawPlugins } from "./discovery.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import {
   loadPluginManifest,
   type PluginPackageChannel,
@@ -23,9 +24,11 @@ export function listChannelCatalogEntries(
     env?: NodeJS.ProcessEnv;
   } = {},
 ): PluginChannelCatalogEntry[] {
+  const installRecords = loadInstalledPluginIndexInstallRecordsSync({ env: params.env });
   return discoverOpenClawPlugins({
     workspaceDir: params.workspaceDir,
     env: params.env,
+    installRecords,
   }).candidates.flatMap((candidate) => {
     if (params.origin && candidate.origin !== params.origin) {
       return [];
