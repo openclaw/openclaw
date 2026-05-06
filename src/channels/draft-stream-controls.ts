@@ -56,8 +56,9 @@ export function createFinalizableDraftStreamControls(params: {
   };
 
   const stopForClear = async (): Promise<void> => {
-    params.markStopped();
+    // Drain BEFORE marking stopped so flush() actually waits for in-flight work
     await loop.stopAndDrain();
+    params.markStopped();
     // Give Telegram time to process the edit before the next sendMessage call
     await new Promise((resolve) => setTimeout(resolve, 50));
   };
