@@ -1520,7 +1520,13 @@ export const dispatchTelegramMessage = async ({
     !sentFallback &&
     !dispatchError &&
     !deliverySummary.delivered &&
-    !suppressSilentReplyFallback
+    !suppressSilentReplyFallback &&
+    // #78188: only synthesize a silent-reply rewrite for group/forum chats.
+    // In DMs, a turn ending with no visible response should stay quiet —
+    // emitting "All quiet on my side." (or any other rewrite of NO_REPLY)
+    // floods the user's DM with bot chatter every time the model decides
+    // not to reply, and burns user credits on each unwanted message.
+    isGroup
   ) {
     const policySessionKey =
       ctxPayload.CommandSource === "native"
