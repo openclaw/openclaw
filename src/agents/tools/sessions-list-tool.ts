@@ -118,8 +118,18 @@ export function createSessionsListTool(opts?: {
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const hydrateTranscriptFieldsAfterFiltering = includeDerivedTitles || includeLastMessage;
 
+      // sessions.list does sync transcript I/O for derived titles and
+      // last-message previews on top of per-row model/cost normalization;
+      // the default 10s gatewayCall budget is too tight on stores with
+      // hundreds of sessions (see #76421, #76931). Other tool callers
+      // (sessions-send, nodes, message, cron, gateway) already pass
+      // explicit timeoutMs for the same class of work; match that pattern
+      // here so /tools/invoke does not 500 with `tool execution failed:
+      // GatewayTransportError: gateway timeout after 10000ms` while the
+      // broader row-enrichment perf work proceeds.
       const list = await gatewayCall<{ sessions: Array<SessionListRow>; path: string }>({
         method: "sessions.list",
+        timeoutMs: 60_000,
         params: {
           limit,
           activeMinutes,
