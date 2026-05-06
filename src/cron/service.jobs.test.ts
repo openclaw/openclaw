@@ -811,4 +811,34 @@ describe("recomputeNextRuns", () => {
     expect(recomputeNextRunsForMaintenance(state)).toBe(false);
     expect(job.state.nextRunAtMs).toBe(retryAt);
   });
+
+  it("repairs stale future cron nextRunAtMs values after error backoff has elapsed", () => {
+    const now = Date.parse("2026-05-05T12:00:00.000Z");
+    const badFuture = Date.parse("2026-05-12T16:00:00.000Z");
+    const expected = Date.parse("2026-05-05T13:00:00.000Z");
+    const job: CronJob = {
+      id: "daily-expired-error",
+      name: "daily expired error",
+      enabled: true,
+      createdAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      updatedAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      schedule: { kind: "cron", expr: "0 0 21 * * *", tz: "Asia/Shanghai", staggerMs: 0 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {
+        nextRunAtMs: badFuture,
+        lastRunAtMs: Date.parse("2026-05-04T00:00:00.000Z"),
+        lastStatus: "error",
+        consecutiveErrors: 1,
+      },
+    };
+    const state = {
+      ...createMockState(now),
+      store: { version: 1 as const, jobs: [job] },
+    } as CronServiceState;
+
+    expect(recomputeNextRunsForMaintenance(state)).toBe(true);
+    expect(job.state.nextRunAtMs).toBe(expected);
+  });
 });

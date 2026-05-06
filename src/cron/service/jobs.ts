@@ -147,8 +147,36 @@ function isStaggeredCronRunAtMs(job: CronJob, runAtMs: number): boolean {
   return previous === runAtMs;
 }
 
-function shouldRepairFutureCronNextRunAtMs(params: { job: CronJob; nowMs: number }): boolean {
-  const { job, nowMs } = params;
+function isPendingErrorBackoffSlot(params: {
+  state: CronServiceState;
+  job: CronJob;
+  nextRunAtMs: number;
+  nowMs: number;
+}): boolean {
+  const { state, job, nextRunAtMs, nowMs } = params;
+  if (job.state.lastStatus !== "error" || !isFiniteTimestamp(job.state.lastRunAtMs)) {
+    return false;
+  }
+  const consecutiveErrorsRaw = job.state.consecutiveErrors;
+  const consecutiveErrors =
+    typeof consecutiveErrorsRaw === "number" && Number.isFinite(consecutiveErrorsRaw)
+      ? Math.max(1, Math.floor(consecutiveErrorsRaw))
+      : 1;
+  const backoffFloor =
+    job.state.lastRunAtMs +
+    errorBackoffMs(
+      consecutiveErrors,
+      state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+    );
+  return nowMs < backoffFloor && nextRunAtMs <= backoffFloor;
+}
+
+function shouldRepairFutureCronNextRunAtMs(params: {
+  state: CronServiceState;
+  job: CronJob;
+  nowMs: number;
+}): boolean {
+  const { state, job, nowMs } = params;
   const nextRun = job.state.nextRunAtMs;
   if (
     job.schedule.kind !== "cron" ||
@@ -160,8 +188,9 @@ function shouldRepairFutureCronNextRunAtMs(params: { job: CronJob; nowMs: number
   }
 
   // Error retries may intentionally use a non-cron future timestamp while
-  // backoff is pending. Leave those retry slots to the execution path.
-  if (job.state.lastStatus === "error" && isFiniteTimestamp(job.state.lastRunAtMs)) {
+  // backoff is pending. Once the retry window has elapsed, stale future cron
+  // slots should be eligible for the same repair as ordinary schedule state.
+  if (isPendingErrorBackoffSlot({ state, job, nextRunAtMs: nextRun, nowMs })) {
     return false;
   }
 
@@ -531,7 +560,7 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
     // a job that hasn't fired yet (e.g. during restart recovery).
     const nextRun = job.state.nextRunAtMs;
     const isDueOrMissing = !hasScheduledNextRunAtMs(nextRun) || now >= nextRun;
-    if (isDueOrMissing || shouldRepairFutureCronNextRunAtMs({ job, nowMs: now })) {
+    if (isDueOrMissing || shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })) {
       if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
         changed = true;
       }
@@ -560,7 +589,7 @@ export function recomputeNextRunsForMaintenance(
         if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
           changed = true;
         }
-      } else if (shouldRepairFutureCronNextRunAtMs({ job, nowMs: now })) {
+      } else if (shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })) {
         if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
           changed = true;
         }
