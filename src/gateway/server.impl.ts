@@ -657,7 +657,7 @@ export async function startGatewayServer(
   } = pluginBootstrap;
   setCurrentPluginMetadataSnapshot(pluginLookUpTable, {
     config: startupActivationSourceConfig,
-    compatibleConfigs: [gatewayPluginConfigAtStart],
+    compatibleConfigs: [startupRuntimeConfig, cfgAtStart, gatewayPluginConfigAtStart],
     env: process.env,
     workspaceDir: defaultWorkspaceDir,
   });
