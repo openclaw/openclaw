@@ -36,6 +36,10 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "if hasattr(os, 'O_NOFOLLOW'):",
   "    WRITE_FLAGS |= os.O_NOFOLLOW",
   "",
+  "APPEND_FLAGS = os.O_RDWR | os.O_CREAT | os.O_APPEND",
+  "if hasattr(os, 'O_NOFOLLOW'):",
+  "    APPEND_FLAGS |= os.O_NOFOLLOW",
+  "",
   "def split_relative(path_value):",
   "    segments = []",
   "    for segment in path_value.split('/'):",
@@ -128,6 +132,28 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "                os.unlink(temp_name, dir_fd=parent_fd)",
   "            except FileNotFoundError:",
   "                pass",
+  "",
+  "def append_file(parent_fd, basename, stdin_buffer, prepend_newline):",
+  "    file_fd = os.open(basename, APPEND_FLAGS, 0o666, dir_fd=parent_fd)",
+  "    try:",
+  "        file_stat = os.fstat(file_fd)",
+  "        if not stat.S_ISREG(file_stat.st_mode):",
+  "            raise OSError(errno.EPERM, 'only regular files are allowed', basename)",
+  "        if file_stat.st_nlink > 1:",
+  "            raise OSError(errno.EPERM, 'hardlinked file is not allowed', basename)",
+  "        data = stdin_buffer.read()",
+  "        if prepend_newline and file_stat.st_size > 0 and not data.startswith(b'\\n'):",
+  "            os.lseek(file_fd, -1, os.SEEK_END)",
+  "            last_byte = os.read(file_fd, 1)",
+  "            os.lseek(file_fd, 0, os.SEEK_END)",
+  "            if last_byte != b'\\n':",
+  "                os.write(file_fd, b'\\n')",
+  "        if data:",
+  "            os.write(file_fd, data)",
+  "        os.fsync(file_fd)",
+  "        os.fsync(parent_fd)",
+  "    finally:",
+  "        os.close(file_fd)",
   "",
   "def read_file(parent_fd, basename):",
   "    file_fd = os.open(basename, READ_FLAGS, dir_fd=parent_fd)",
@@ -251,6 +277,16 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "        if parent_fd is not None:",
   "            os.close(parent_fd)",
   "        os.close(root_fd)",
+  "elif operation == 'append':",
+  "    root_fd = open_dir(sys.argv[2])",
+  "    parent_fd = None",
+  "    try:",
+  "        parent_fd = walk_dir(root_fd, sys.argv[3], sys.argv[5] == '1')",
+  "        append_file(parent_fd, sys.argv[4], sys.stdin.buffer, sys.argv[6] == '1')",
+  "    finally:",
+  "        if parent_fd is not None:",
+  "            os.close(parent_fd)",
+  "        os.close(root_fd)",
   "elif operation == 'mkdirp':",
   "    root_fd = open_dir(sys.argv[2])",
   "    target_fd = None",
@@ -345,6 +381,25 @@ export function buildPinnedWritePlan(params: {
       params.pinned.relativeParentPath,
       params.pinned.basename,
       params.mkdir ? "1" : "0",
+    ],
+  });
+}
+
+export function buildPinnedAppendPlan(params: {
+  check: PathSafetyCheck;
+  pinned: PinnedSandboxEntry;
+  mkdir: boolean;
+  prependNewlineIfNeeded?: boolean;
+}): SandboxFsCommandPlan {
+  return buildPinnedMutationPlan({
+    checks: [params.check],
+    args: [
+      "append",
+      params.pinned.mountRootPath,
+      params.pinned.relativeParentPath,
+      params.pinned.basename,
+      params.mkdir ? "1" : "0",
+      params.prependNewlineIfNeeded ? "1" : "0",
     ],
   });
 }

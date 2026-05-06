@@ -58,7 +58,11 @@ import {
 } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
-import { archiveRemovedSessionTranscripts, updateSessionStore } from "../config/sessions/store.js";
+import {
+  archiveRemovedSessionTranscripts,
+  resolveSessionStoreEntry,
+  updateSessionStore,
+} from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -655,7 +659,8 @@ async function restoreHeartbeatUpdatedAt(params: {
     return;
   }
   const store = loadSessionStore(storePath);
-  const entry = store[sessionKey];
+  const resolvedRead = resolveSessionStoreEntry({ store, sessionKey });
+  const entry = resolvedRead.existing;
   if (!entry) {
     return;
   }
@@ -664,7 +669,8 @@ async function restoreHeartbeatUpdatedAt(params: {
     return;
   }
   await updateSessionStore(storePath, (nextStore) => {
-    const nextEntry = nextStore[sessionKey] ?? entry;
+    const resolved = resolveSessionStoreEntry({ store: nextStore, sessionKey });
+    const nextEntry = resolved.existing ?? entry;
     if (!nextEntry) {
       return;
     }
@@ -672,7 +678,10 @@ async function restoreHeartbeatUpdatedAt(params: {
     if (nextEntry.updatedAt === resolvedUpdatedAt) {
       return;
     }
-    nextStore[sessionKey] = { ...nextEntry, updatedAt: resolvedUpdatedAt };
+    nextStore[resolved.normalizedKey] = { ...nextEntry, updatedAt: resolvedUpdatedAt };
+    for (const legacyKey of resolved.legacyKeys) {
+      delete nextStore[legacyKey];
+    }
   });
 }
 
@@ -820,10 +829,19 @@ function inferHeartbeatWakeSourceFromReason(reason?: string): HeartbeatWakeSourc
   if (trimmed === "wake" || trimmed.startsWith("hook:")) {
     return "hook";
   }
+  if (isContinuationHeartbeatWakeReason(trimmed)) {
+    return "hook";
+  }
   if (trimmed.startsWith("acp:spawn:")) {
     return "acp-spawn";
   }
   return undefined;
+}
+
+function isContinuationHeartbeatWakeReason(reason: string): boolean {
+  return (
+    reason === "continuation" || reason === "silent-wake-enrichment" || reason === "delegate-return"
+  );
 }
 
 function resolveHeartbeatWakePayloadFlags(params: {
@@ -835,7 +853,11 @@ function resolveHeartbeatWakePayloadFlags(params: {
   return {
     isExecEventWake: source === "exec-event",
     isCronWake: source === "cron",
-    isWakePayload: source === "hook" || source === "acp-spawn" || reason === "wake",
+    isWakePayload:
+      source === "hook" ||
+      source === "acp-spawn" ||
+      reason === "wake" ||
+      isContinuationHeartbeatWakeReason(reason),
   };
 }
 
@@ -1159,6 +1181,7 @@ export async function runHeartbeatOnce(opts: {
   source?: HeartbeatWakeSource;
   intent?: HeartbeatWakeIntent;
   reason?: string;
+  parentRunId?: string;
   deps?: HeartbeatDeps;
 }): Promise<HeartbeatRunResult> {
   const cfg = opts.cfg ?? getRuntimeConfig();
@@ -1458,7 +1481,8 @@ export async function runHeartbeatOnce(opts: {
     const tasks = preflight.tasks;
 
     await updateSessionStore(storePath, (store) => {
-      const current = store[sessionKey];
+      const resolved = resolveSessionStoreEntry({ store, sessionKey });
+      const current = resolved.existing;
       // Initialize stub entry on first run when current doesn't exist.
       const base = current ?? {
         // Generate valid sessionId - derive from sessionKey without colons.
@@ -1477,7 +1501,10 @@ export async function runHeartbeatOnce(opts: {
         }
       }
 
-      store[sessionKey] = { ...base, heartbeatTaskState: taskState };
+      store[resolved.normalizedKey] = { ...base, heartbeatTaskState: taskState };
+      for (const legacyKey of resolved.legacyKeys) {
+        delete store[legacyKey];
+      }
     });
   };
 
@@ -1598,6 +1625,14 @@ export async function runHeartbeatOnce(opts: {
       typeof heartbeat?.timeoutSeconds === "number" ? heartbeat.timeoutSeconds : undefined;
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true ? "lightweight" : undefined;
+    // Map heartbeat wake reason to structured continuation trigger.
+    // "continuation" = CONTINUE_WORK timer fired; delegate-return reasons = delegate completed.
+    const continuationTrigger =
+      opts.reason === "continuation"
+        ? ("work-wake" as const)
+        : opts.reason === "silent-wake-enrichment" || opts.reason === "delegate-return"
+          ? ("delegate-return" as const)
+          : undefined;
     const replyOpts = {
       isHeartbeat: true,
       ...(heartbeatModelOverride ? { heartbeatModelOverride } : {}),
@@ -1611,6 +1646,8 @@ export async function runHeartbeatOnce(opts: {
       timeoutOverrideSeconds,
       bootstrapContextMode,
       onModelSelected: replyPrefix.onModelSelected,
+      continuationTrigger,
+      parentRunId: opts.parentRunId,
     };
     const getReplyFromConfig =
       opts.deps?.getReplyFromConfig ?? (await loadHeartbeatRunnerRuntime()).getReplyFromConfig;
@@ -1876,15 +1913,19 @@ export async function runHeartbeatOnce(opts: {
     // Record last delivered heartbeat payload for dedupe.
     if (!shouldSkipMain && normalized.text.trim()) {
       await updateSessionStore(storePath, (store) => {
-        const current = store[sessionKey];
+        const resolved = resolveSessionStoreEntry({ store, sessionKey });
+        const current = resolved.existing;
         if (!current) {
           return;
         }
-        store[sessionKey] = {
+        store[resolved.normalizedKey] = {
           ...current,
           lastHeartbeatText: normalized.text,
           lastHeartbeatSentAt: startedAt,
         };
+        for (const legacyKey of resolved.legacyKeys) {
+          delete store[legacyKey];
+        }
       });
     }
 
@@ -2187,6 +2228,7 @@ export function startHeartbeatRunner(opts: {
             intent,
             reason,
             sessionKey: requestedSessionKey,
+            parentRunId: params.parentRunId,
             deps: { runtime: state.runtime },
           });
           if (res.status === "skipped" && isRetryableHeartbeatBusySkipReason(res.reason)) {
@@ -2233,6 +2275,7 @@ export function startHeartbeatRunner(opts: {
             source: params.source,
             intent,
             reason,
+            parentRunId: params.parentRunId,
             deps: { runtime: state.runtime },
           });
         } catch (err) {
@@ -2326,6 +2369,7 @@ export function startHeartbeatRunner(opts: {
       reason: params.reason,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
+      parentRunId: params.parentRunId,
       heartbeat: params.heartbeat,
       source: params.source,
       intent: params.intent,

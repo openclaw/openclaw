@@ -27,6 +27,37 @@ import {
 import type { MemoryPluginStatus, MemoryStatusSnapshot } from "./status.scan.shared.js";
 import type { SessionStatus, StatusSummary } from "./status.types.js";
 
+/**
+ * Format the /status continuation overview row per RFC §6.3. Pure function
+ * over already-resolved config + recent-session runtime counts; the live
+ * queries (TaskFlow lookups per session key) live at the caller.
+ *
+ * @returns the formatted banner value, or `undefined` when continuation is
+ *   disabled (so the caller can skip rendering the row).
+ */
+export function formatContinuationBannerValue(params: {
+  enabled: boolean;
+  maxChainLength: number;
+  maxDelegatesPerTurn: number;
+  pendingDelegatesRecent: number;
+  postCompactionStagedRecent: number;
+}): string | undefined {
+  if (!params.enabled) {
+    return undefined;
+  }
+  const parts: string[] = ["enabled", `chain max ${params.maxChainLength}`];
+  if (params.pendingDelegatesRecent > 0) {
+    parts.push(
+      `${params.pendingDelegatesRecent} delegate${params.pendingDelegatesRecent === 1 ? "" : "s"} pending (recent sessions)`,
+    );
+  }
+  if (params.postCompactionStagedRecent > 0) {
+    parts.push(`${params.postCompactionStagedRecent} post-compaction (recent sessions)`);
+  }
+  parts.push(`fan-out max ${params.maxDelegatesPerTurn}`);
+  return parts.join(" · ");
+}
+
 export async function buildStatusCommandReportData(
   params: {
     opts: {
@@ -111,6 +142,49 @@ export async function buildStatusCommandReportData(
     resolveMemoryFtsState: params.resolveMemoryFtsState,
     resolveMemoryCacheSummary: params.resolveMemoryCacheSummary,
     updateValue: params.updateValue,
+    continuationValue: await (async () => {
+      try {
+        // Route through the lazy-runtime boundary so continuation singletons
+        // dedupe with the static graph and don't split across chunks.
+        const lazy = await import("../auto-reply/continuation/lazy.runtime.js");
+        const cfg = lazy.resolveContinuationRuntimeConfig();
+
+        // RFC §6.3 — surface runtime continuation state. TaskFlow-backed
+        // counters are queryable cold-path from the CLI (SQLite persistent);
+        // in-memory counters (volitional compaction count, session-entry
+        // chain depth) are not — they live only in the gateway process and
+        // are skipped here. Aggregate across the session keys the status
+        // summary already knows about.
+        let pendingRecent = 0;
+        let stagedRecent = 0;
+        if (cfg.enabled) {
+          try {
+            const seen = new Set<string>();
+            for (const session of params.summary.sessions.recent) {
+              if (!session.key || seen.has(session.key)) {
+                continue;
+              }
+              seen.add(session.key);
+              pendingRecent += lazy.pendingDelegateCount(session.key);
+              stagedRecent += lazy.stagedPostCompactionDelegateCount(session.key);
+            }
+          } catch {
+            // TaskFlow not initialized or lookup failed — fall back to
+            // config-only shape silently rather than hiding the whole row.
+          }
+        }
+
+        return formatContinuationBannerValue({
+          enabled: cfg.enabled,
+          maxChainLength: cfg.maxChainLength,
+          maxDelegatesPerTurn: cfg.maxDelegatesPerTurn,
+          pendingDelegatesRecent: pendingRecent,
+          postCompactionStagedRecent: stagedRecent,
+        });
+      } catch {
+        return undefined;
+      }
+    })(),
   });
 
   const sessionsColumns = [

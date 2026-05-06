@@ -79,6 +79,8 @@ type MessageSendParams = {
   cfg?: OpenClawConfig;
   gateway?: MessageGatewayOptions;
   idempotencyKey?: string;
+  /** Optional W3C trace-context carrier supplied by continuation return fallbacks. */
+  traceparent?: string;
   mirror?: OutboundMirror;
   abortSignal?: AbortSignal;
   silent?: boolean;

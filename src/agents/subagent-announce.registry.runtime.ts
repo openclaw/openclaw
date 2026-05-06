@@ -4,6 +4,7 @@ export {
   countPendingDescendantRunsExcludingRun,
   getLatestSubagentRunByChildSessionKey,
   isSubagentSessionRunActive,
+  listAncestorSessionKeys,
   listSubagentRunsForRequester,
   replaceSubagentRunAfterSteer,
   resolveRequesterForChildSession,

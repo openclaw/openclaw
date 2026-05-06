@@ -8,10 +8,16 @@ import {
 } from "../agents/agent-scope.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
+import { getVolitionalCompactionCount } from "../agents/tools/request-compaction-tool.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../agents/tools/sessions-helpers.js";
+import {
+  pendingDelegateCount,
+  stagedPostCompactionDelegateCount,
+} from "../auto-reply/continuation-delegate-store.js";
+import { resolveContinuationRuntimeConfig } from "../auto-reply/continuation/config.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
@@ -311,6 +317,24 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       pendingDescendantsForRun: (entry) => countPendingDescendantRuns(entry.childSessionKey),
     });
   }
+  let continuationLine: string | undefined;
+  const continuation = cfg.agents?.defaults?.continuation;
+  if (continuation?.enabled && sessionKey) {
+    const chainCount = sessionEntry?.continuationChainCount ?? 0;
+    const { maxChainLength } = resolveContinuationRuntimeConfig(cfg);
+    const pending = pendingDelegateCount(sessionKey);
+    const staged = stagedPostCompactionDelegateCount(sessionKey);
+    const volitional = getVolitionalCompactionCount(sessionKey);
+    const parts = [`chain ${chainCount}/${maxChainLength}`];
+    if (pending > 0) {
+      parts.push(`${pending} delegates pending`);
+    }
+    if (staged > 0) {
+      parts.push(`${staged} post-compaction staged`);
+    }
+    parts.push(`volitional: ${volitional}`);
+    continuationLine = `🔄 Continuation: ${parts.join(" | ")}`;
+  }
   const groupActivation = isGroup
     ? (normalizeGroupActivation(sessionEntry?.groupActivation) ?? defaultGroupActivation())
     : undefined;
@@ -376,6 +400,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     },
     subagentsLine,
     taskLine,
+    continuationLine,
     mediaDecisions: params.mediaDecisions,
     includeTranscriptUsage: params.includeTranscriptUsage ?? true,
   });

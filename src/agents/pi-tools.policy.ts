@@ -57,6 +57,10 @@ const SUBAGENT_TOOL_DENY_LEAF = [
   "sessions_list",
   "sessions_history",
   "sessions_spawn",
+  // Continuation: leaf workers cannot spawn further delegates.
+  // Chain-hop delegates spawned with drainsContinuationDelegateQueue: true
+  // get orchestrator role and bypass this deny. (RFC §3.4)
+  "continue_delegate",
 ];
 
 /**

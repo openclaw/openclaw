@@ -70,4 +70,18 @@ export type SubagentRunRecord = {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  /** Continuation: suppress channel echo for silent delegate returns. */
+  silentAnnounce?: boolean;
+  /** When true (with silentAnnounce), trigger a generation cycle after enrichment delivery. */
+  wakeOnReturn?: boolean;
+  /** Continuation: marks this run as a chain-hop that can consume pending delegates. */
+  drainsContinuationDelegateQueue?: boolean;
+  /** Continuation: return to one explicitly addressed session instead of the dispatcher. */
+  continuationTargetSessionKey?: string;
+  /** Continuation: byte-identical return fan-out to explicit sessions. */
+  continuationTargetSessionKeys?: string[];
+  /** Continuation: computed fan-out over the local session graph. */
+  continuationFanoutMode?: "tree" | "all";
+  /** Continuation: producer span carrier available to child completion paths. */
+  traceparent?: string;
 };

@@ -450,38 +450,6 @@ type MemoryFlushAppendOnlyWriteOptions = {
   };
 };
 
-async function readOptionalUtf8File(params: {
-  absolutePath: string;
-  relativePath: string;
-  sandbox?: MemoryFlushAppendOnlyWriteOptions["sandbox"];
-  signal?: AbortSignal;
-}): Promise<string> {
-  try {
-    if (params.sandbox) {
-      const stat = await params.sandbox.bridge.stat({
-        filePath: params.relativePath,
-        cwd: params.sandbox.root,
-        signal: params.signal,
-      });
-      if (!stat) {
-        return "";
-      }
-      const buffer = await params.sandbox.bridge.readFile({
-        filePath: params.relativePath,
-        cwd: params.sandbox.root,
-        signal: params.signal,
-      });
-      return buffer.toString("utf-8");
-    }
-    return await fs.readFile(params.absolutePath, "utf-8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
-      return "";
-    }
-    throw error;
-  }
-}
-
 async function appendMemoryFlushContent(params: {
   absolutePath: string;
   root: string;
@@ -501,35 +469,19 @@ async function appendMemoryFlushContent(params: {
     return;
   }
 
-  const existing = await readOptionalUtf8File({
-    absolutePath: params.absolutePath,
-    relativePath: params.relativePath,
-    sandbox: params.sandbox,
+  if (!params.sandbox.bridge.appendFile) {
+    throw new Error(
+      `Sandbox file bridge does not support safe append for memory flush: ${params.relativePath}`,
+    );
+  }
+  await params.sandbox.bridge.appendFile({
+    filePath: params.relativePath,
+    cwd: params.sandbox.root,
+    data: params.content,
+    mkdir: true,
+    prependNewlineIfNeeded: true,
     signal: params.signal,
   });
-  const separator =
-    existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n") ? "\n" : "";
-  const next = `${existing}${separator}${params.content}`;
-  if (params.sandbox) {
-    const parent = path.posix.dirname(params.relativePath);
-    if (parent && parent !== ".") {
-      await params.sandbox.bridge.mkdirp({
-        filePath: parent,
-        cwd: params.sandbox.root,
-        signal: params.signal,
-      });
-    }
-    await params.sandbox.bridge.writeFile({
-      filePath: params.relativePath,
-      cwd: params.sandbox.root,
-      data: next,
-      mkdir: true,
-      signal: params.signal,
-    });
-    return;
-  }
-  await fs.mkdir(path.dirname(params.absolutePath), { recursive: true });
-  await fs.writeFile(params.absolutePath, next, "utf-8");
 }
 
 export function wrapToolMemoryFlushAppendOnlyWrite(
@@ -575,6 +527,128 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
           path: options.relativePath,
           appendOnly: true,
         },
+      };
+    },
+  };
+}
+
+const DEFAULT_MEMORY_DAY_FILE_PATTERN = /^memory\/\d{4}-\d{2}-\d{2}\.md$/;
+
+type MemoryDayFileWriteGuardOptions = {
+  patterns?: RegExp[];
+};
+
+export function wrapToolMemoryDayFileWriteGuard(
+  tool: AnyAgentTool,
+  options?: MemoryDayFileWriteGuardOptions,
+): AnyAgentTool {
+  const patterns = options?.patterns?.length ? options.patterns : [DEFAULT_MEMORY_DAY_FILE_PATTERN];
+  const extendedParameters =
+    tool.parameters && typeof tool.parameters === "object"
+      ? {
+          ...tool.parameters,
+          properties: {
+            ...((tool.parameters as Record<string, unknown>).properties as Record<string, unknown>),
+            overwrite: {
+              type: "boolean",
+              description: "Pass true to allow overwriting a memory/day-file path.",
+            },
+          },
+        }
+      : tool.parameters;
+  return {
+    ...tool,
+    parameters: extendedParameters as typeof tool.parameters,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const record = getToolParamsRecord(args);
+      const filePath =
+        typeof record?.path === "string" && record.path.trim() ? record.path.trim() : undefined;
+      if (!filePath || !patterns.some((p) => p.test(filePath))) {
+        return tool.execute(toolCallId, args, signal, onUpdate);
+      }
+      if (record?.overwrite !== true) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Refusing to overwrite memory/day-file path '${filePath}' without explicit overwrite:true. Use the 'append' tool to add content, or pass overwrite:true to confirm intentional clobber.`,
+            },
+          ],
+          details: { path: filePath, refused: true },
+        };
+      }
+      const bytes = typeof record?.content === "string" ? record.content.length : 0;
+      const result = await tool.execute(toolCallId, args, signal, onUpdate);
+      const warningPrefix = `WARNING: Overwrote memory/day-file path '${filePath}' (${bytes} bytes). Previous content lost.`;
+      const firstTextIdx = result.content.findIndex((c) => c.type === "text");
+      if (firstTextIdx >= 0) {
+        const updated = [...result.content];
+        const block = updated[firstTextIdx] as { type: "text"; text: string };
+        updated[firstTextIdx] = { ...block, text: `${warningPrefix}\n${block.text}` };
+        return { ...result, content: updated };
+      }
+      return { ...result, content: [{ type: "text", text: warningPrefix }, ...result.content] };
+    },
+  };
+}
+
+export function createHostWorkspaceAppendTool(
+  root: string,
+  options?: { workspaceOnly?: boolean },
+): AnyAgentTool {
+  const workspaceOnly = options?.workspaceOnly ?? false;
+  return {
+    name: "append",
+    label: "append",
+    description:
+      "Append content to an existing file (or create if missing). Use this for memory/day-files and other append-only logs. Returns truthful 'Appended N bytes to PATH' message.",
+    parameters: {
+      type: "object",
+      required: ["path", "content"],
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to the file to append to (relative or absolute)",
+        },
+        content: { type: "string", description: "Content to append to the file" },
+      },
+    } as unknown as AnyAgentTool["parameters"],
+    execute: async (_toolCallId, args, _signal) => {
+      const record = getToolParamsRecord(args);
+      const rawPath =
+        typeof record?.path === "string" && record.path.trim() ? record.path.trim() : undefined;
+      const content = typeof record?.content === "string" ? record.content : undefined;
+      if (!rawPath) {
+        throw new Error("path is required.");
+      }
+      if (content === undefined) {
+        throw new Error("content is required.");
+      }
+      if (workspaceOnly) {
+        const resolvedPath = resolveToolPathAgainstWorkspaceRoot({ filePath: rawPath, root });
+        await assertSandboxPath({ filePath: resolvedPath, cwd: root, root });
+        const relative = path.relative(root, resolvedPath);
+        await appendFileWithinRoot({
+          rootDir: root,
+          relativePath: relative,
+          data: content,
+          mkdir: true,
+          prependNewlineIfNeeded: true,
+        });
+        return {
+          content: [{ type: "text", text: `Appended ${content.length} bytes to ${rawPath}` }],
+          details: { path: rawPath },
+        };
+      }
+      const expanded = expandTildeToOsHome(rawPath);
+      const resolved = path.isAbsolute(expanded)
+        ? path.resolve(expanded)
+        : path.resolve(root, expanded);
+      await fs.mkdir(path.dirname(resolved), { recursive: true });
+      await fs.appendFile(resolved, content, "utf-8");
+      return {
+        content: [{ type: "text", text: `Appended ${content.length} bytes to ${rawPath}` }],
+        details: { path: rawPath },
       };
     },
   };

@@ -1,0 +1,163 @@
+// OTEL adapter for the continuation-tracer surface. It is consumed only by
+// `service.ts`:
+//   - `service.ts::start()` — after `sdk.start()` succeeds, install the
+//     adapter via `setContinuationTracer(createContinuationOtelTracerAdapter())`
+//     so the existing `emitContinuation*Span` helpers emit real spans through
+//     the OTEL SDK instead of into `noopTracer`.
+//   - `service.ts::stopStarted()` — call `resetContinuationTracer()` so
+//     the runtime returns to the additive no-op contract when the plugin shuts
+//     down.
+//
+// Span parenting:
+//   The continuation-tracer surface carries a W3C `traceparent` on
+//   `StartSpanOptions`. The continuation substrate already lifts this onto
+//   `SystemEvent.traceparent` and `QueuedSessionDeliveryPayloadMetadata`
+//   so the producer→consumer hop has it available. This adapter parses
+//   it via the same `parseDiagnosticTraceparent` helper that powers the
+//   auto-instrumented spans (`service.ts::contextForTraceContext`), then
+//   uses `trace.setSpanContext` so the new span is correctly stitched
+//   into the parent OTEL trace. That stitching turns continuation chains into
+//   one trace instead of disconnected per-session spans.
+
+import {
+  context as otelContextApi,
+  trace,
+  SpanStatusCode,
+  TraceFlags,
+  type Attributes as OtelAttributes,
+  type AttributeValue as OtelAttributeValue,
+  type Span as OtelSpan,
+  type SpanOptions as OtelSpanOptions,
+} from "@opentelemetry/api";
+import {
+  parseDiagnosticTraceparent,
+  type ContinuationSpan,
+  type ContinuationSpanAttributes,
+  type ContinuationSpanStatus,
+  type ContinuationStartSpanOptions,
+  type ContinuationTracer,
+  type DiagnosticTraceContext,
+} from "../api.js";
+
+/**
+ * OTEL tracer name used for the continuation adapter.
+ *
+ * Distinguished from the `"openclaw"` tracer used by the auto-instrumented
+ * spans in `service.ts` so collector/Tempo queries can filter on
+ * `instrumentation.scope.name="openclaw.continuation"` to isolate the
+ * continuation chain-correlation spans from the per-tool/per-exec/per-model
+ * auto-instrumentation.
+ */
+export const CONTINUATION_OTEL_TRACER_NAME = "openclaw.continuation";
+
+function diagnosticTraceFlagsToOtel(flags: string | undefined): TraceFlags {
+  const parsed = Number.parseInt(flags ?? "00", 16);
+  return (parsed & TraceFlags.SAMPLED) !== 0 ? TraceFlags.SAMPLED : TraceFlags.NONE;
+}
+
+function continuationStatusToOtel(status: ContinuationSpanStatus): SpanStatusCode {
+  switch (status) {
+    case "OK":
+      return SpanStatusCode.OK;
+    case "ERROR":
+      return SpanStatusCode.ERROR;
+    case "UNSET":
+    default:
+      return SpanStatusCode.UNSET;
+  }
+}
+
+function spanAttributesToOtel(
+  attrs: ContinuationSpanAttributes | undefined,
+): OtelAttributes | undefined {
+  if (!attrs) {
+    return undefined;
+  }
+  // The continuation `SpanAttributeValue` superset (string | number |
+  // boolean | readonly arrays thereof) is a strict subset of OTEL's
+  // `AttributeValue` (which also accepts mutable arrays). Cast through
+  // `OtelAttributeValue` per-key keeps the boundary type-safe — the
+  // runtime values are already in the accepted set.
+  const out: OtelAttributes = {};
+  for (const key of Object.keys(attrs)) {
+    out[key] = attrs[key] as OtelAttributeValue;
+  }
+  return out;
+}
+
+function wrapOtelSpan(otelSpan: OtelSpan): ContinuationSpan {
+  let ended = false;
+  return {
+    setAttributes(attrs: ContinuationSpanAttributes): void {
+      const mapped = spanAttributesToOtel(attrs);
+      if (mapped) {
+        otelSpan.setAttributes(mapped);
+      }
+    },
+    setStatus(status: ContinuationSpanStatus, message?: string): void {
+      otelSpan.setStatus({
+        code: continuationStatusToOtel(status),
+        ...(message ? { message } : {}),
+      });
+    },
+    recordException(err: unknown): void {
+      if (err instanceof Error) {
+        otelSpan.recordException(err);
+        return;
+      }
+      otelSpan.recordException({
+        name: "ContinuationException",
+        message: typeof err === "string" ? err : String(err),
+      });
+    },
+    end(): void {
+      // Idempotent end matches the continuation `Span` contract:
+      //   "End the span. Idempotent: subsequent calls are no-ops."
+      // The OTEL SDK's own `Span.end()` is also documented as idempotent
+      // in practice but the guard is cheap and contractually-required.
+      if (ended) {
+        return;
+      }
+      ended = true;
+      otelSpan.end();
+    },
+  };
+}
+
+/**
+ * Build the OTEL adapter. The returned tracer conforms to the
+ * `ContinuationTracer` shape exported from
+ * `openclaw/plugin-sdk/diagnostic-runtime` and is suitable for
+ * registering via `setContinuationTracer(...)`.
+ */
+export function createContinuationOtelTracerAdapter(): ContinuationTracer {
+  const otelTracer = trace.getTracer(CONTINUATION_OTEL_TRACER_NAME);
+  return {
+    startSpan(name: string, options?: ContinuationStartSpanOptions): ContinuationSpan {
+      const otelOpts: OtelSpanOptions = {};
+      const mappedAttrs = spanAttributesToOtel(options?.attributes);
+      if (mappedAttrs) {
+        otelOpts.attributes = mappedAttrs;
+      }
+
+      // Parent-stitch via traceparent when the caller carried one through the
+      // continuation hop.
+      if (options?.traceparent) {
+        const parsed: DiagnosticTraceContext | undefined = parseDiagnosticTraceparent(
+          options.traceparent,
+        );
+        if (parsed?.spanId && parsed.traceId) {
+          const parentCtx = trace.setSpanContext(otelContextApi.active(), {
+            traceId: parsed.traceId,
+            spanId: parsed.spanId,
+            traceFlags: diagnosticTraceFlagsToOtel(parsed.traceFlags),
+            isRemote: true,
+          });
+          return wrapOtelSpan(otelTracer.startSpan(name, otelOpts, parentCtx));
+        }
+      }
+
+      return wrapOtelSpan(otelTracer.startSpan(name, otelOpts));
+    },
+  };
+}

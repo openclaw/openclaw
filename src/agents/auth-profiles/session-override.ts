@@ -39,12 +39,19 @@ export async function clearSessionAuthProfileOverride(params: {
   delete sessionEntry.authProfileOverrideSource;
   delete sessionEntry.authProfileOverrideCompactionCount;
   sessionEntry.updatedAt = Date.now();
-  sessionStore[sessionKey] = sessionEntry;
+  const runtime = await loadSessionStoreRuntime();
+  const memResolved = runtime.resolveSessionStoreEntry({ store: sessionStore, sessionKey });
+  sessionStore[memResolved.normalizedKey] = sessionEntry;
+  for (const legacyKey of memResolved.legacyKeys) {
+    delete sessionStore[legacyKey];
+  }
   if (storePath) {
-    await (
-      await loadSessionStoreRuntime()
-    ).updateSessionStore(storePath, (store) => {
-      store[sessionKey] = sessionEntry;
+    await runtime.updateSessionStore(storePath, (store) => {
+      const resolved = runtime.resolveSessionStoreEntry({ store, sessionKey });
+      store[resolved.normalizedKey] = sessionEntry;
+      for (const legacyKey of resolved.legacyKeys) {
+        delete store[legacyKey];
+      }
     });
   }
 }
@@ -170,12 +177,19 @@ export async function resolveSessionAuthProfileOverride(params: {
     sessionEntry.authProfileOverrideSource = "auto";
     sessionEntry.authProfileOverrideCompactionCount = compactionCount;
     sessionEntry.updatedAt = Date.now();
-    sessionStore[sessionKey] = sessionEntry;
+    const runtime = await loadSessionStoreRuntime();
+    const memResolved = runtime.resolveSessionStoreEntry({ store: sessionStore, sessionKey });
+    sessionStore[memResolved.normalizedKey] = sessionEntry;
+    for (const legacyKey of memResolved.legacyKeys) {
+      delete sessionStore[legacyKey];
+    }
     if (storePath) {
-      await (
-        await loadSessionStoreRuntime()
-      ).updateSessionStore(storePath, (store) => {
-        store[sessionKey] = sessionEntry;
+      await runtime.updateSessionStore(storePath, (store) => {
+        const resolved = runtime.resolveSessionStoreEntry({ store, sessionKey });
+        store[resolved.normalizedKey] = sessionEntry;
+        for (const legacyKey of resolved.legacyKeys) {
+          delete store[legacyKey];
+        }
       });
     }
   }

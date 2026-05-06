@@ -459,8 +459,8 @@ function buildMessagingSection(params: {
     : `- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to ${SILENT_REPLY_TOKEN}).`;
   const subagentOrchestrationGuidance = hasSessionsSpawn
     ? hasSubagents
-      ? '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript; use `subagents(action=list|steer|kill)` to manage already-spawned children.'
-      : '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript.'
+      ? "- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; use `subagents(action=list|steer|kill)` to manage already-spawned children."
+      : "- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work."
     : hasSubagents
       ? "- Sub-agent orchestration → use `subagents(action=list|steer|kill)` to manage already-spawned children."
       : "";
@@ -591,6 +591,8 @@ export function buildAgentSystemPrompt(params: {
   nativeCommandNames?: string[];
   /** Plugin-owned prompt guidance for registered native slash commands. */
   nativeCommandGuidanceLines?: string[];
+  /** Whether the continuation feature is enabled for this agent. */
+  continuationEnabled?: boolean;
   runtimeInfo?: {
     agentId?: string;
     host?: string;
@@ -645,8 +647,8 @@ export function buildAgentSystemPrompt(params: {
     sessions_history: "Fetch history for another session/sub-agent",
     sessions_send: "Send a message to another session/sub-agent",
     sessions_spawn: acpSpawnRuntimeEnabled
-      ? 'Spawn a sub-agent or ACP coding session; defaults to isolated, native subagents may use context="fork" when current transcript context is required (runtime="acp" requires `agentId` unless `acp.defaultAgent` is configured; ACP harness ids follow acp.allowedAgents, not agents_list)'
-      : 'Spawn an isolated sub-agent session; use context="fork" only when current transcript context is required',
+      ? 'Spawn an isolated sub-agent or ACP coding session (runtime="acp" requires `agentId` unless `acp.defaultAgent` is configured; ACP harness ids follow acp.allowedAgents, not agents_list)'
+      : "Spawn an isolated sub-agent session",
     subagents: "List, steer, or kill sub-agent runs for this requester session",
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
@@ -908,6 +910,11 @@ export function buildAgentSystemPrompt(params: {
       "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
       'Sub-agents start isolated by default. Use `sessions_spawn` with `context:"fork"` only when the child needs the current transcript context; otherwise omit `context` or use `context:"isolated"`.',
       ...nativeCommandGuidanceLines,
+      ...(availableTools.has("continue_delegate")
+        ? [
+            "For background, delayed, silent, or compaction-aware delegate work, prefer `continue_delegate` over shell sleeps, ad-hoc `openclaw ...` CLI calls, or manual relay patterns.",
+          ]
+        : []),
       ...(acpHarnessSpawnAllowed
         ? [
             'For requests like "do this in claude code/cursor/gemini/opencode" or similar ACP harnesses, treat it as ACP harness intent and call `sessions_spawn` with `runtime: "acp"`.',
@@ -1178,6 +1185,157 @@ export function buildAgentSystemPrompt(params: {
   }
 
   lines.push(...buildHeartbeatSection({ isMinimal, heartbeatPrompt }));
+
+  // Continuation tokens — only when the feature is enabled and not in subagent mode
+  // RFC §3.4: system prompt branches on tool availability (uses outer `availableTools`).
+  if (!isMinimal && params.continuationEnabled) {
+    lines.push(
+      "## Continuation & Delegation",
+      "### Self-elected turns",
+      ...(availableTools.has("continue_work")
+        ? [
+            "Use the `continue_work` tool to request another turn with structured `reason` and optional `delaySeconds`.",
+            "Fallback bracket syntax remains available: CONTINUE_WORK or CONTINUE_WORK:30.",
+          ]
+        : [
+            "End your response with CONTINUE_WORK to request another turn after a delay.",
+            "End with CONTINUE_WORK:30 to specify delay in seconds.",
+          ]),
+      "Use this when the same session should keep working later, after yielding to human input first.",
+      "This is the sequential path: your main session keeps the thread of work itself.",
+      "Use CONTINUE_WORK when you want your own next turn; use `continue_delegate` when the work",
+      "should leave your head-session, run in background shards, and inform future turns later.",
+      "",
+      "### Delegated continuation",
+      ...(availableTools.has("continue_delegate")
+        ? [
+            "This is the (a)-shape continuation surface: explicit recipient-addressing via the",
+            "session-delivery-queue substrate. A future broadcast/publish-stream shape can",
+            "reuse the same substrate when cross-host listeners need to tune in independently.",
+            "",
+            "Use the `continue_delegate` tool to dispatch background sub-agents with gateway-managed",
+            "timing and delivery control. This is the primary mechanism for delegation.",
+            "",
+            "Tool parameters:",
+            "  task (required) — the delegated sub-agent's task; include scope, context, and desired return shape",
+            "  delaySeconds — seconds to wait before spawning (0 or omitted = immediate; clamped to configured min/max)",
+            '  mode — "normal" (default, announces to channel), "silent" (internal context only),',
+            '         "silent-wake" (silent + triggers your next turn), "post-compaction" (fires at compaction)',
+            "",
+            "Call the tool multiple times in one turn for parallel fan-out while the main session stays free.",
+            "",
+            "Fallback bracket syntax (if the tool call fails or is unavailable):",
+            "  [[CONTINUE_DELEGATE: task +30s | silent-wake]]",
+            "Modifiers: +Ns for delay, | silent, | silent-wake. End your response with the bracket.",
+          ]
+        : [
+            "End your response with [[CONTINUE_DELEGATE: task description]] to dispatch a sub-agent",
+            "with gateway-managed timing and delivery control.",
+            "",
+            "Syntax:",
+            "  [[CONTINUE_DELEGATE: task +30s]]               — delayed spawn, normal return",
+            "  [[CONTINUE_DELEGATE: task | silent]]            — result as internal context only (no channel output)",
+            "  [[CONTINUE_DELEGATE: task | silent-wake]]       — silent result + triggers your next turn",
+            "  [[CONTINUE_DELEGATE: task +30s | silent-wake]]  — delayed spawn, silent return, triggers next turn",
+            "",
+            "The task text is free-form. Include working context alongside the instruction.",
+          ]),
+      "",
+      "Delegates let the main session stay free while background shards do legwork.",
+      "Silent returns may simply color later replies; they do not need immediate visible output.",
+      "They can quietly inform future blind inquiry, later synthesis, or post-compaction recovery.",
+      "Use `silent` for ambient enrichment or future recall. Use `silent-wake` when the return",
+      "should silently enrich context and immediately wake you to synthesize or fan out again.",
+      "",
+      ...(availableTools.has("request_compaction")
+        ? [
+            "### Compaction",
+            "Use the `request_compaction` tool to request compaction now and reclaim context window space.",
+            "Pair with `continue_delegate` post-compaction shards as the lifeboat for working state.",
+            "",
+          ]
+        : []),
+      "### When to use CONTINUE_DELEGATE vs sessions_spawn",
+      "Use sessions_spawn for immediate, explicit workers you want to manage directly, for ACP",
+      "runtime spawns, or when the shard needs inline attachments / explicit spawn-time controls.",
+      "Use `continue_delegate` (or `[[CONTINUE_DELEGATE:]]` bracket syntax) when you need:",
+      "  - Delayed dispatch — schedule work for N seconds from now",
+      "  - Silent return — result arrives as internal context, no channel output",
+      "  - Wake-on-return — silent result that triggers your next turn",
+      "  - Background fan-out — multiple narrow shards while the main session keeps thinking/responding",
+      "  - Compaction handoff — preserve working state or partial results across compaction",
+      "  - Chain tracking — gateway enforces cost cap and depth limit across linked dispatches",
+      "",
+      "Do not use `exec`, shell sleeps, or manual `openclaw ...` commands to imitate delayed",
+      "delegate scheduling when `continue_delegate` or `sessions_spawn` already fits the job.",
+      "",
+      "### Cooperative yield",
+      "Use `sessions_yield` to end your turn immediately, aborting any queued tool calls.",
+      "The session parks until an external event (subagent result, user message) arrives.",
+      "This is useful after dispatching delegates when you should stop and wait for results,",
+      "rather than requesting another turn on a timer.",
+      "",
+      "### Context pressure",
+      "When you receive a [system:context-pressure] event, your context window is approaching capacity.",
+      ...(availableTools.has("continue_delegate")
+        ? [
+            'Use `continue_delegate` with `mode: "post-compaction"` to dispatch working state — decisions',
+            "in progress, task context, partial results — before compaction. The post-compaction shard fires",
+            "when compaction happens and returns to re-inject context the summary cannot preserve.",
+            "Fallback if the tool call fails: [[CONTINUE_DELEGATE: ... | silent-wake]] (note: post-compaction mode requires the tool).",
+          ]
+        : [
+            "Use [[CONTINUE_DELEGATE: ... | silent-wake]] to dispatch working state — decisions in progress,",
+            "task context, partial results — before compaction. These shards return after compaction and",
+            "re-inject context that the summary cannot preserve.",
+          ]),
+      "",
+      "Continuations are bounded: max chain length, cost cap, and min/max delay enforced by the gateway.",
+      "",
+    );
+  }
+
+  // Sub-agent chain-hop continuation — teach tool-primary when available, bracket fallback otherwise
+  if (isMinimal && params.continuationEnabled) {
+    lines.push("## Chain Delegation");
+    if (availableTools.has("continue_delegate")) {
+      lines.push(
+        "Use the `continue_delegate` tool to dispatch follow-up sub-agents from this chain.",
+        "The tool supports multi-delegate fan-out, structured parameters (`task`, `delaySeconds`, `mode`),",
+        "and `post-compaction` mode. The parent/main session stays free while your branch keeps working.",
+        "",
+        "Fallback bracket syntax (if the tool call fails or is unavailable):",
+        "  [[CONTINUE_DELEGATE: task description]]",
+        "  [[CONTINUE_DELEGATE: task +30s]]          — delayed spawn",
+        "  [[CONTINUE_DELEGATE: task | silent]]       — silent return (no channel output)",
+        "  [[CONTINUE_DELEGATE: task | silent-wake]]  — silent return + triggers parent turn",
+        "",
+        "Prefer the tool. Use brackets only as fallback.",
+        "The gateway handles chain tracking and depth limits.",
+        "",
+      );
+    } else {
+      lines.push(
+        "To dispatch a follow-up sub-agent from your output, end your ENTIRE response with:",
+        "  [[CONTINUE_DELEGATE: task description]]",
+        "",
+        "Use this to keep a delegate tree moving without asking the parent to relay every hop.",
+        "The parent/main session stays free while your branch keeps working.",
+        "",
+        "Optional modifiers:",
+        "  [[CONTINUE_DELEGATE: task +30s]]          — delayed spawn",
+        "  [[CONTINUE_DELEGATE: task | silent]]       — silent return (no channel output)",
+        "  [[CONTINUE_DELEGATE: task | silent-wake]]  — silent return + triggers parent turn",
+        "",
+        "Use `| silent` when the result should only enrich the parent's future context.",
+        "Use `| silent-wake` when the result should enrich the parent and wake it to act.",
+        "",
+        "Emit exactly ONE bracket per response. Do not nest brackets inside brackets.",
+        "The gateway handles chain tracking and depth limits.",
+        "",
+      );
+    }
+  }
 
   lines.push(
     "## Runtime",

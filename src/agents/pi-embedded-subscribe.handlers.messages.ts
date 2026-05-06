@@ -474,6 +474,20 @@ export function handleMessageUpdate(
     content,
   });
 
+  // Detect when content is a non-monotonic replacement so the visible buffer
+  // can be rebuilt from scratch (feature: shouldRebuildVisibleBuffer).
+  let shouldRebuildVisibleBuffer = false;
+  if (
+    evtType !== "text_delta" &&
+    !delta &&
+    content &&
+    !content.startsWith(ctx.state.deltaBuffer) &&
+    !ctx.state.deltaBuffer.startsWith(content) &&
+    !ctx.state.deltaBuffer.includes(content)
+  ) {
+    shouldRebuildVisibleBuffer = true;
+  }
+
   const chunk = resolveAssistantTextChunk({
     evtType,
     delta,
@@ -526,34 +540,40 @@ export function handleMessageUpdate(
     // Handle partial <think> tags: stream whatever reasoning is visible so far.
     ctx.emitReasoningStream(extractThinkingFromTaggedStream(ctx.state.deltaBuffer));
   }
+  const wasThinking = ctx.state.partialBlockState.thinking;
+  let visibleDelta =
+    chunk || evtType === "text_end"
+      ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState, { final: evtType === "text_end" })
+      : "";
+  if (!wasThinking && ctx.state.partialBlockState.thinking) {
+    openReasoningStream(ctx);
+  }
+  // Detect when thinking block ends (</think> tag processed)
+  if (wasThinking && !ctx.state.partialBlockState.thinking) {
+    emitReasoningEnd(ctx);
+  }
+  if (shouldRebuildVisibleBuffer) {
+    const rebuiltBlockState = {
+      thinking: false,
+      final: false,
+      inlineCode: createInlineCodeState(),
+    };
+    const rebuiltVisible = ctx.stripBlockTags(ctx.state.deltaBuffer, rebuiltBlockState);
+    ctx.state.partialBlockState.thinking = rebuiltBlockState.thinking;
+    ctx.state.partialBlockState.final = rebuiltBlockState.final;
+    ctx.state.partialBlockState.inlineCode = rebuiltBlockState.inlineCode;
+    if (!shouldUsePhaseAwareBlockReply) {
+      ctx.state.visibleAssistantBuffer = rebuiltVisible;
+    }
+    visibleDelta = "";
+  } else if (!shouldUsePhaseAwareBlockReply && visibleDelta) {
+    ctx.state.visibleAssistantBuffer += visibleDelta;
+  }
+
   const next =
     phaseAwareVisibleText ||
-    (deliveryPhase === "final_answer"
-      ? ""
-      : ctx
-          .stripBlockTags(
-            ctx.state.deltaBuffer,
-            {
-              thinking: false,
-              final: false,
-              inlineCode: createInlineCodeState(),
-            },
-            { final: evtType === "text_end" },
-          )
-          .trim());
+    (deliveryPhase === "final_answer" ? "" : ctx.state.visibleAssistantBuffer.trim());
   if (next) {
-    const wasThinking = ctx.state.partialBlockState.thinking;
-    const visibleDelta =
-      chunk || evtType === "text_end"
-        ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState, { final: evtType === "text_end" })
-        : "";
-    if (!wasThinking && ctx.state.partialBlockState.thinking) {
-      openReasoningStream(ctx);
-    }
-    // Detect when thinking block ends (</think> tag processed)
-    if (wasThinking && !ctx.state.partialBlockState.thinking) {
-      emitReasoningEnd(ctx);
-    }
     const parsedDelta = visibleDelta ? ctx.consumePartialReplyDirectives(visibleDelta) : null;
     const finalParsedDelta =
       evtType === "text_end" ? ctx.consumePartialReplyDirectives("", { final: true }) : null;
@@ -702,6 +722,7 @@ export function handleMessageEnd(
 
   const finalizeMessageEnd = () => {
     ctx.state.deltaBuffer = "";
+    ctx.state.visibleAssistantBuffer = "";
     ctx.state.blockBuffer = "";
     ctx.blockChunker?.reset();
     ctx.state.blockState.thinking = false;

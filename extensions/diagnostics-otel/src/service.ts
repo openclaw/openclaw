@@ -25,8 +25,12 @@ import {
   isValidDiagnosticSpanId,
   isValidDiagnosticTraceFlags,
   isValidDiagnosticTraceId,
+  noopTracer,
   redactSensitiveText,
+  resetContinuationTracer,
+  setContinuationTracer,
 } from "../api.js";
+import { createContinuationOtelTracerAdapter } from "./continuation-tracer-adapter.js";
 
 const DEFAULT_SERVICE_NAME = "openclaw";
 const DROPPED_OTEL_ATTRIBUTE_KEYS = new Set([
@@ -530,6 +534,13 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
     sdk = null;
     stopActiveTrustedSpans = null;
 
+    // Always reset the continuation tracer to noop on shutdown so a stopped or
+    // restarted plugin returns to the additive no-op contract. Safe to call
+    // even if `setContinuationTracer` was never called this lifetime.
+    resetContinuationTracer();
+    // retain import for tsgo no-unused-symbol; reinstated as activeTracer on reset()
+    void noopTracer;
+
     currentUnsubscribe?.();
     currentStopActiveTrustedSpans?.();
     if (currentLogProvider) {
@@ -684,6 +695,15 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
       } else if (sdkPreloaded && (tracesEnabled || metricsEnabled)) {
         ctx.logger.info("diagnostics-otel: using preloaded OpenTelemetry SDK");
+      }
+
+      // Install the OTEL adapter after `sdk.start()` or after detecting a
+      // preloaded SDK so continuation span helpers emit through the OTEL SDK
+      // instead of into `noopTracer`. Reset on `stopStarted()`.
+      // Only install when traces are enabled — there's no useful target
+      // for continuation spans without the trace exporter.
+      if (tracesEnabled) {
+        setContinuationTracer(createContinuationOtelTracerAdapter());
       }
 
       const logSeverityMap: Record<string, SeverityNumber> = {
@@ -1121,6 +1141,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           model?: string;
           channel?: string;
           trigger?: string;
+          fireReason?: string;
+          parentRunId?: string;
         },
       ) => {
         if (evt.provider) {
@@ -1134,6 +1156,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
         if (evt.trigger) {
           spanAttrs["openclaw.trigger"] = evt.trigger;
+        }
+        if (evt.fireReason) {
+          spanAttrs["openclaw.run.fire_reason"] = evt.fireReason;
+        }
+        if (evt.parentRunId) {
+          spanAttrs["openclaw.parent_run_id"] = evt.parentRunId;
         }
       };
 
@@ -2080,6 +2108,14 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         queueDepthHistogram.record(evt.queued, { "openclaw.channel": "heartbeat" });
       };
 
+      const recordContinuationQueueSample = (
+        evt: Extract<DiagnosticEventPayload, { type: "diagnostic.continuation_queue.sample" }>,
+      ) => {
+        queueDepthHistogram.record(evt.continuationQueue.totalQueued, {
+          "openclaw.channel": "continuation",
+        });
+      };
+
       const recordLivenessWarning = (
         evt: Extract<DiagnosticEventPayload, { type: "diagnostic.liveness.warning" }>,
       ) => {
@@ -2130,6 +2166,18 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             : {}),
           ...(evt.cpuCoreRatio !== undefined
             ? { "openclaw.liveness.cpu_core_ratio": evt.cpuCoreRatio }
+            : {}),
+          ...(evt.continuationQueue
+            ? {
+                "openclaw.continuation_queue.total": evt.continuationQueue.totalQueued,
+                "openclaw.continuation_queue.runnable": evt.continuationQueue.pendingRunnable,
+                "openclaw.continuation_queue.scheduled": evt.continuationQueue.pendingScheduled,
+                "openclaw.continuation_queue.staged_post_compaction":
+                  evt.continuationQueue.stagedPostCompaction,
+                "openclaw.continuation_queue.invalid": evt.continuationQueue.invalidQueued,
+                "openclaw.continuation_queue.drained_since_last_sample":
+                  evt.continuationQueue.drainedSinceLastSample,
+              }
             : {}),
         };
         const span = spanWithDuration("openclaw.liveness.warning", spanAttrs, 0, {
@@ -2247,6 +2295,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "diagnostic.heartbeat":
               recordHeartbeat(evt);
+              return;
+            case "diagnostic.continuation_queue.sample":
+              recordContinuationQueueSample(evt);
               return;
             case "diagnostic.liveness.warning":
               recordLivenessWarning(evt);

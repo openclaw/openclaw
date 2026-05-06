@@ -120,6 +120,44 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     });
   }
 
+  async appendFile(params: {
+    filePath: string;
+    cwd?: string;
+    data: Buffer | string;
+    encoding?: BufferEncoding;
+    mkdir?: boolean;
+    prependNewlineIfNeeded?: boolean;
+    signal?: AbortSignal;
+  }): Promise<void> {
+    const target = this.resolveTarget(params);
+    this.ensureWritable(target, "append files");
+    const pinned = await this.resolvePinnedParent({
+      containerPath: target.containerPath,
+      action: "append files",
+      requireWritable: true,
+    });
+    await this.assertNoHardlinkedFile({
+      containerPath: target.containerPath,
+      action: "append files",
+      signal: params.signal,
+    });
+    const buffer = Buffer.isBuffer(params.data)
+      ? params.data
+      : Buffer.from(params.data, params.encoding ?? "utf8");
+    await this.runMutation({
+      args: [
+        "append",
+        pinned.mountRootPath,
+        pinned.relativeParentPath,
+        pinned.basename,
+        params.mkdir !== false ? "1" : "0",
+        params.prependNewlineIfNeeded ? "1" : "0",
+      ],
+      stdin: buffer,
+      signal: params.signal,
+    });
+  }
+
   async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
     const target = this.resolveTarget(params);
     this.ensureWritable(target, "create directories");

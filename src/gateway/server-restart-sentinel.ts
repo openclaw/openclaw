@@ -1,5 +1,6 @@
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
+import { deliverQueuedPostCompactionDelegate } from "../auto-reply/reply/post-compaction-delegate-dispatch.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
@@ -224,6 +225,16 @@ async function deliverQueuedSessionDelivery(params: {
   const { cfg, storePath, canonicalKey } = loadSessionEntry(params.entry.sessionKey);
   const queuedDeliveryContext = resolveQueuedSessionDeliveryContext(params.entry);
 
+  if (params.entry.kind === "postCompactionDelegate") {
+    await deliverQueuedPostCompactionDelegate({
+      entry: {
+        ...params.entry,
+        sessionKey: canonicalKey,
+      },
+    });
+    return;
+  }
+
   if (params.entry.kind === "systemEvent") {
     enqueueSystemEvent(params.entry.text, {
       sessionKey: canonicalKey,
@@ -234,6 +245,7 @@ async function deliverQueuedSessionDelivery(params: {
             },
           }
         : {}),
+      ...(params.entry.traceparent ? { traceparent: params.entry.traceparent } : {}),
     });
     requestHeartbeat({
       source: "restart-sentinel",
@@ -254,6 +266,7 @@ async function deliverQueuedSessionDelivery(params: {
             },
           }
         : {}),
+      ...(params.entry.traceparent ? { traceparent: params.entry.traceparent } : {}),
     });
     requestHeartbeat({
       source: "restart-sentinel",
@@ -369,6 +382,7 @@ function buildQueuedRestartContinuation(params: {
       sessionKey: params.sessionKey,
       text: params.continuation.text,
       ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
+      ...(params.continuation.traceparent ? { traceparent: params.continuation.traceparent } : {}),
       idempotencyKey,
     };
   }
@@ -379,6 +393,7 @@ function buildQueuedRestartContinuation(params: {
     messageId: idempotencyKey,
     ...(params.route ? { route: params.route } : {}),
     ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
+    ...(params.continuation.traceparent ? { traceparent: params.continuation.traceparent } : {}),
     idempotencyKey,
   };
 }

@@ -300,7 +300,11 @@ export async function listSessionFilesForAgent(agentId: string): Promise<string[
     return entries
       .filter((entry) => entry.isFile())
       .map((entry) => entry.name)
-      .filter((name) => isUsageCountedSessionTranscriptFileName(name))
+      .filter(
+        (name) =>
+          isUsageCountedSessionTranscriptFileName(name) &&
+          !isCompactionCheckpointTranscriptFileName(name),
+      )
       .map((name) => path.join(dir, name));
   } catch {
     return [];

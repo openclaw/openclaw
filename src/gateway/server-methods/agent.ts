@@ -557,6 +557,10 @@ export const agentHandlers: GatewayRequestHandlers = {
       groupChannel?: string;
       groupSpace?: string;
       lane?: string;
+      continuationTrigger?: "work-wake" | "delegate-return";
+      /** When true, the run drains the continuation delegate queue after completion.
+       *  Set by continuation delegate spawns so sub-agents can use the continue_delegate tool. */
+      drainsContinuationDelegateQueue?: boolean;
       extraSystemPrompt?: string;
       modelRun?: boolean;
       promptMode?: "full" | "minimal" | "none";
@@ -1397,6 +1401,9 @@ export const agentHandlers: GatewayRequestHandlers = {
             messageChannel: originMessageChannel,
             runId,
             lane: request.lane,
+            cleanupBundleMcpOnRunEnd: request.cleanupBundleMcpOnRunEnd === true,
+            continuationTrigger: request.continuationTrigger,
+            drainsContinuationDelegateQueue: request.drainsContinuationDelegateQueue,
             modelRun: request.modelRun === true,
             promptMode: request.promptMode,
             extraSystemPrompt: request.extraSystemPrompt,
@@ -1405,7 +1412,6 @@ export const agentHandlers: GatewayRequestHandlers = {
             acpTurnSource: request.acpTurnSource,
             internalEvents: request.internalEvents,
             inputProvenance,
-            cleanupBundleMcpOnRunEnd: request.cleanupBundleMcpOnRunEnd,
             abortSignal: activeRunAbort.controller.signal,
             // Internal-only: allow workspace override for spawned subagent runs.
             workspaceDir: resolveIngressWorkspaceOverrideForSpawnedRun({

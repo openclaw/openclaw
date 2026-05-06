@@ -5,9 +5,11 @@ import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import {
+  isCheckpointSessionTranscriptFileName,
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
+  parseParentSessionIdFromCheckpointFileName,
   parseSessionArchiveTimestamp,
   parseUsageCountedSessionIdFromFileName,
 } from "../config/sessions/artifacts.js";
@@ -931,7 +933,12 @@ export async function loadCostUsageSummary(params?: {
   const files = (
     await Promise.all(
       entries
-        .filter((entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name))
+        .filter(
+          (entry) =>
+            entry.isFile() &&
+            isUsageCountedSessionTranscriptFileName(entry.name) &&
+            !isCheckpointSessionTranscriptFileName(entry.name),
+        )
         .map(async (entry) => {
           const filePath = path.join(sessionsDir, entry.name);
           const stats = await fs.promises.stat(filePath).catch(() => null);
@@ -1458,6 +1465,48 @@ export async function discoverAllSessions(params?: {
       continue;
     }
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
+
+    // Checkpoint-twin dedup: `<parentId>.checkpoint.<uuid>.jsonl`
+    // files are pre-compaction snapshot siblings of the parent primary
+    // session. They must NOT surface as distinct discovered sessions — that
+    // lopsides the discover map (one lopsided session can present as
+    // 6 separate sessions) and, worse, opens each file for first-user-message
+    // extraction, which is the dominant read cost on a heavy session with deep
+    // checkpoint history. Group them under the parent session id, do not
+    // re-read for label (the parent primary already carries it), and advance
+    // the parent's mtime if this checkpoint is newer.
+    if (isCheckpointSessionTranscriptFileName(entry.name)) {
+      const parentId = parseParentSessionIdFromCheckpointFileName(entry.name);
+      if (!parentId) {
+        continue;
+      }
+      const existing = discovered.get(parentId);
+      if (!existing) {
+        // Parent primary may not have been scanned yet (or may be absent
+        // entirely, which is the parent-missing recovery case). Record the
+        // checkpoint's mtime under the parent id without a sessionFile
+        // commitment; the parent primary will replace this entry when we
+        // encounter it via the primary branch below.
+        discovered.set(parentId, {
+          sessionId: parentId,
+          sessionFile: filePath,
+          mtime: stats.mtimeMs,
+          firstUserMessage: undefined,
+        });
+      } else if (stats.mtimeMs > existing.mtime) {
+        // Advance the parent's mtime if this checkpoint is newer; do NOT
+        // overwrite sessionFile when existing points at a primary transcript.
+        const existingIsPrimary = isPrimarySessionTranscriptFileName(
+          path.basename(existing.sessionFile),
+        );
+        discovered.set(parentId, {
+          ...existing,
+          sessionFile: existingIsPrimary ? existing.sessionFile : filePath,
+          mtime: stats.mtimeMs,
+        });
+      }
+      continue;
+    }
 
     const sessionId = parseUsageCountedSessionIdFromFileName(entry.name);
     if (!sessionId) {

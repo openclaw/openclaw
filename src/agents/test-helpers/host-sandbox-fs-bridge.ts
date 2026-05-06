@@ -26,6 +26,42 @@ export function createSandboxFsBridgeFromResolver(
       const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
       await fs.writeFile(target.hostPath, buffer);
     },
+    appendFile: async ({ filePath, cwd, data, mkdir = true, prependNewlineIfNeeded = false }) => {
+      const target = resolvePath(filePath, cwd);
+      if (!target.hostPath) {
+        throw new Error(`Expected hostPath for ${target.containerPath}`);
+      }
+      if (mkdir) {
+        await fs.mkdir(path.dirname(target.hostPath), { recursive: true });
+      }
+      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      let prefix = Buffer.alloc(0);
+      if (prependNewlineIfNeeded && buffer[0] !== 0x0a) {
+        try {
+          const handle = await fs.open(target.hostPath, "r");
+          try {
+            const stat = await handle.stat();
+            if (stat.size > 0) {
+              const last = Buffer.alloc(1);
+              await handle.read(last, 0, 1, stat.size - 1);
+              if (last[0] !== 0x0a) {
+                prefix = Buffer.from("\n");
+              }
+            }
+          } finally {
+            await handle.close();
+          }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+            throw error;
+          }
+        }
+      }
+      await fs.appendFile(
+        target.hostPath,
+        prefix.length > 0 ? Buffer.concat([prefix, buffer]) : buffer,
+      );
+    },
     mkdirp: async ({ filePath, cwd }) => {
       const target = resolvePath(filePath, cwd);
       if (!target.hostPath) {

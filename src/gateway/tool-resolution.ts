@@ -97,6 +97,7 @@ export function resolveGatewayScopedTools(params: {
     disablePluginTools: params.disablePluginTools,
     senderIsOwner: params.senderIsOwner,
     config: params.cfg,
+    liveSessionToolConfig: true,
     workspaceDir,
     pluginToolAllowlist: collectExplicitAllowlist([
       profilePolicy,

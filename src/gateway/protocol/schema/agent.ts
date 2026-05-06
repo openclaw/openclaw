@@ -6,6 +6,17 @@ import {
 } from "../../../agents/internal-event-contract.js";
 import { InputProvenanceSchema, NonEmptyString, SessionLabelString } from "./primitives.js";
 
+const CONTINUATION_TRIGGER_VALUES = ["work-wake", "delegate-return"] as const;
+const INTERNAL_PROTOCOL_FIELD = "x-openclaw-internal";
+
+function internalProtocolField<T extends object>(schema: T): T {
+  Object.defineProperty(schema, INTERNAL_PROTOCOL_FIELD, {
+    value: true,
+    enumerable: false,
+  });
+  return schema;
+}
+
 export const AgentInternalEventSchema = Type.Object(
   {
     type: Type.Literal(AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION),
@@ -154,13 +165,22 @@ export const AgentParamsSchema = Type.Object(
     timeout: Type.Optional(Type.Integer({ minimum: 0 })),
     bestEffortDeliver: Type.Optional(Type.Boolean()),
     lane: Type.Optional(Type.String()),
-    // Backward-compatible no-op. Older CLI clients sent this field on gateway
-    // agent requests; the gateway accepts but intentionally ignores it.
-    cleanupBundleMcpOnRunEnd: Type.Optional(Type.Boolean()),
+    // Backward-compatible internal no-op. Older internal CLI callers sent this
+    // field on gateway agent requests; the gateway accepts but intentionally
+    // omits it from generated public protocol artifacts.
+    cleanupBundleMcpOnRunEnd: internalProtocolField(
+      Type.Optional(
+        Type.Boolean({
+          description:
+            "Internal runner cleanup knob; omitted from public generated protocol artifacts.",
+        }),
+      ),
+    ),
     modelRun: Type.Optional(Type.Boolean()),
     promptMode: Type.Optional(
       Type.Union([Type.Literal("full"), Type.Literal("minimal"), Type.Literal("none")]),
     ),
+    continuationTrigger: Type.Optional(Type.String({ enum: [...CONTINUATION_TRIGGER_VALUES] })),
     extraSystemPrompt: Type.Optional(Type.String()),
     bootstrapContextMode: Type.Optional(
       Type.Union([Type.Literal("full"), Type.Literal("lightweight")]),
@@ -174,6 +194,14 @@ export const AgentParamsSchema = Type.Object(
     voiceWakeTrigger: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
+    drainsContinuationDelegateQueue: internalProtocolField(
+      Type.Optional(
+        Type.Boolean({
+          description:
+            "Internal continuation runner knob; omitted from public generated protocol artifacts.",
+        }),
+      ),
+    ),
   },
   { additionalProperties: false },
 );

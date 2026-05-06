@@ -17,6 +17,10 @@ export function buildSubagentSystemPrompt(params: {
   childDepth?: number;
   /** Config value: max allowed spawn depth. */
   maxSpawnDepth?: number;
+  /** Tool names available to the child — used to teach tool-primary vs bracket-only continuation. */
+  toolNames?: string[];
+  /** Whether continuation chaining is enabled. Defaults to config value. */
+  continuationEnabled?: boolean;
 }) {
   const taskRaw = typeof params.task === "string" ? params.task : "";
   const taskBody = taskRaw.trim();
@@ -115,6 +119,42 @@ export function buildSubagentSystemPrompt(params: {
       "You are a leaf worker and CANNOT spawn further sub-agents. Focus on your assigned task.",
       "",
     );
+  }
+
+  if (canSpawn && params.continuationEnabled) {
+    const toolPrimaryContinuation = params.toolNames?.includes("continue_delegate") === true;
+    lines.push("## Continuation Chaining");
+    if (toolPrimaryContinuation) {
+      lines.push(
+        "Use the `continue_delegate` tool to keep a delegate branch moving without making the parent relay every hop.",
+        "The tool supports structured parameters (`task`, `delaySeconds`, `mode`) and multi-delegate fan-out.",
+        "",
+        "Fallback bracket syntax (if the tool call fails or is unavailable):",
+        "  [[CONTINUE_DELEGATE: task description]]",
+        "  [[CONTINUE_DELEGATE: task +30s]]          — delayed spawn",
+        "  [[CONTINUE_DELEGATE: task | silent]]       — silent return (no channel output)",
+        "  [[CONTINUE_DELEGATE: task | silent-wake]]  — silent return + triggers parent turn",
+        "",
+        "Prefer the tool. Use brackets only as fallback.",
+        "The gateway handles chain tracking and depth limits.",
+        "",
+      );
+    } else {
+      lines.push(
+        "To dispatch a follow-up sub-agent from your output, end your ENTIRE response with:",
+        "  [[CONTINUE_DELEGATE: task description]]",
+        "",
+        "Optional modifiers:",
+        "  [[CONTINUE_DELEGATE: task +30s]]          — delayed spawn",
+        "  [[CONTINUE_DELEGATE: task | silent]]       — silent return (no channel output)",
+        "  [[CONTINUE_DELEGATE: task | silent-wake]]  — silent return + triggers parent turn",
+        "",
+        "Use `| silent` when the result should only enrich the parent's future context.",
+        "Use `| silent-wake` when the result should enrich the parent and wake it to act.",
+        "The gateway handles chain tracking and depth limits.",
+        "",
+      );
+    }
   }
 
   lines.push(

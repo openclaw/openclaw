@@ -2,14 +2,16 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ProtocolSchemas } from "../src/gateway/protocol/schema.js";
+import { createInternalProtocolSchemaStripper } from "./protocol-public-schema.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 
 async function writeJsonSchema() {
+  const stripInternalFields = createInternalProtocolSchemaStripper();
   const definitions: Record<string, unknown> = {};
   for (const [name, schema] of Object.entries(ProtocolSchemas)) {
-    definitions[name] = schema;
+    definitions[name] = stripInternalFields(schema);
   }
 
   const rootSchema = {
