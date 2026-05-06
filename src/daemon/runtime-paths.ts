@@ -137,9 +137,6 @@ async function resolveBundledNodePath(params: {
   } catch {
     return null;
   }
-  if (!Array.isArray(entries)) {
-    return null;
-  }
 
   const executableName = params.platform === "win32" ? "node.exe" : "node";
   const candidates = entries
