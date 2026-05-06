@@ -284,7 +284,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         idleHours: 24,
         maxAgeHours: 0,
         spawnSessions: true,
-        defaultSpawnContext: "fork",
+        defaultSpawnContext: "isolated",
       },
       voice: {
         enabled: true,
@@ -336,7 +336,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
   - `idleHours`: Discord override for inactivity auto-unfocus in hours (`0` disables)
   - `maxAgeHours`: Discord override for hard max age in hours (`0` disables)
   - `spawnSessions`: switch for `sessions_spawn({ thread: true })` and ACP thread-spawn auto thread creation/binding (default: `true`)
-  - `defaultSpawnContext`: native subagent context for thread-bound spawns (`"fork"` by default)
+  - `defaultSpawnContext`: native subagent context for thread-bound spawns (`"isolated"` by default)
 - Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for channels and threads (use channel/thread id in `match.peer.id`). Field semantics are shared in [ACP Agents](/tools/acp-agents#persistent-channel-bindings).
 - `channels.discord.ui.components.accentColor` sets the accent color for Discord components v2 containers.
 - `channels.discord.voice` enables Discord voice channel conversations and optional auto-join + LLM + TTS overrides. Text-only Discord configs leave voice off by default; set `channels.discord.voice.enabled=true` to opt in.

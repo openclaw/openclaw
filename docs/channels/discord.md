@@ -762,7 +762,7 @@ Default slash command settings:
         idleHours: 24,
         maxAgeHours: 0,
         spawnSessions: true,
-        defaultSpawnContext: "fork",
+        defaultSpawnContext: "isolated",
       },
     },
   },
@@ -774,7 +774,7 @@ Default slash command settings:
     - `session.threadBindings.*` sets global defaults.
     - `channels.discord.threadBindings.*` overrides Discord behavior.
     - `spawnSessions` controls auto-create/bind threads for `sessions_spawn({ thread: true })` and ACP thread spawns. Default: `true`.
-    - `defaultSpawnContext` controls native subagent context for thread-bound spawns. Default: `"fork"`.
+    - `defaultSpawnContext` controls native subagent context for thread-bound spawns. Default: `"isolated"`.
     - Deprecated `spawnSubagentSessions`/`spawnAcpSessions` keys are migrated by `openclaw doctor --fix`.
     - If thread bindings are disabled for an account, `/focus` and related thread binding operations are unavailable.
 

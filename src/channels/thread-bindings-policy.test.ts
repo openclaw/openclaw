@@ -78,7 +78,7 @@ describe("thread binding spawn policy helpers", () => {
     expect(policy).toMatchObject({
       enabled: true,
       spawnEnabled: true,
-      defaultSpawnContext: "fork",
+      defaultSpawnContext: "isolated",
     });
   });
 
