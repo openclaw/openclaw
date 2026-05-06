@@ -1,9 +1,8 @@
-import fs from "node:fs";
 import path from "node:path";
 import type { SettingsManager } from "@mariozechner/pi-coding-agent";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { readRootJsonObjectSync } from "../infra/root-json.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
 import {
@@ -11,7 +10,6 @@ import {
   resolveEffectivePluginActivationState,
 } from "../plugins/config-policy.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { isRecord } from "../utils.js";
 import { loadEmbeddedPiMcpConfig } from "./embedded-pi-mcp.js";
 
 const log = createSubsystemLogger("embedded-pi-settings");
@@ -43,29 +41,21 @@ function loadBundleSettingsFile(params: {
   relativePath: string;
 }): PiSettingsSnapshot | null {
   const absolutePath = path.join(params.rootDir, params.relativePath);
-  const opened = openRootFileSync({
-    absolutePath,
-    rootPath: params.rootDir,
+  const result = readRootJsonObjectSync({
+    rootDir: params.rootDir,
+    relativePath: params.relativePath,
     boundaryLabel: "plugin root",
     rejectHardlinks: true,
   });
-  if (!opened.ok) {
+  if (!result.ok && result.reason === "open") {
     log.warn(`skipping unsafe bundle settings file: ${absolutePath}`);
     return null;
   }
-  try {
-    const raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
-    if (!isRecord(raw)) {
-      log.warn(`skipping bundle settings file with non-object JSON: ${absolutePath}`);
-      return null;
-    }
-    return sanitizePiSettingsSnapshot(raw as PiSettingsSnapshot);
-  } catch (error) {
-    log.warn(`failed to parse bundle settings file ${absolutePath}: ${String(error)}`);
+  if (!result.ok) {
+    log.warn(`${result.error}: ${absolutePath}`);
     return null;
-  } finally {
-    fs.closeSync(opened.fd);
   }
+  return sanitizePiSettingsSnapshot(result.raw as PiSettingsSnapshot);
 }
 
 export function loadEnabledBundlePiSettingsSnapshot(params: {

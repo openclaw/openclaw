@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { readRootJsonObjectSync } from "../infra/root-json.js";
 import { isRecord } from "../utils.js";
 import {
   inspectBundleServerRuntimeSupport,
@@ -168,34 +168,26 @@ function loadBundleFileBackedMcpConfig(params: {
 }): BundleMcpConfig {
   const rootDir = normalizeBundlePath(params.rootDir);
   const absolutePath = path.resolve(rootDir, params.relativePath);
-  const opened = openRootFileSync({
-    absolutePath,
-    rootPath: rootDir,
+  const result = readRootJsonObjectSync({
+    rootDir,
+    relativePath: params.relativePath,
     boundaryLabel: "plugin root",
     rejectHardlinks: true,
+    requireFile: true,
   });
-  if (!opened.ok) {
+  if (!result.ok) {
     return { mcpServers: {} };
   }
-  try {
-    const stat = fs.fstatSync(opened.fd);
-    if (!stat.isFile()) {
-      return { mcpServers: {} };
-    }
-    const raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
-    const servers = extractMcpServerMap(raw);
-    const baseDir = normalizeBundlePath(path.dirname(absolutePath));
-    return {
-      mcpServers: Object.fromEntries(
-        Object.entries(servers).map(([serverName, server]) => [
-          serverName,
-          absolutizeBundleMcpServer({ rootDir, baseDir, server }),
-        ]),
-      ),
-    };
-  } finally {
-    fs.closeSync(opened.fd);
-  }
+  const servers = extractMcpServerMap(result.raw);
+  const baseDir = normalizeBundlePath(path.dirname(absolutePath));
+  return {
+    mcpServers: Object.fromEntries(
+      Object.entries(servers).map(([serverName, server]) => [
+        serverName,
+        absolutizeBundleMcpServer({ rootDir, baseDir, server }),
+      ]),
+    ),
+  };
 }
 
 function loadBundleInlineMcpConfig(params: {

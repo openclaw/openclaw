@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { readRootJsonObjectSync } from "../infra/root-json.js";
 import { isRecord } from "../utils.js";
 import {
   inspectBundleServerRuntimeSupport,
@@ -64,26 +64,14 @@ function loadBundleLspConfigFile(params: {
   rootDir: string;
   relativePath: string;
 }): BundleLspConfig {
-  const absolutePath = path.resolve(params.rootDir, params.relativePath);
-  const opened = openRootFileSync({
-    absolutePath,
-    rootPath: params.rootDir,
+  const result = readRootJsonObjectSync({
+    rootDir: params.rootDir,
+    relativePath: params.relativePath,
     boundaryLabel: "plugin root",
     rejectHardlinks: true,
+    requireFile: true,
   });
-  if (!opened.ok) {
-    return { lspServers: {} };
-  }
-  try {
-    const stat = fs.fstatSync(opened.fd);
-    if (!stat.isFile()) {
-      return { lspServers: {} };
-    }
-    const raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
-    return { lspServers: extractLspServerMap(raw) };
-  } finally {
-    fs.closeSync(opened.fd);
-  }
+  return { lspServers: result.ok ? extractLspServerMap(result.raw) : {} };
 }
 
 function loadBundleLspConfig(params: {
