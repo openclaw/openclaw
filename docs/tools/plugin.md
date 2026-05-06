@@ -406,8 +406,9 @@ do not run in live chat traffic, check these first:
   containers, PID 1 may only be a supervisor; restart or signal the child
   `openclaw gateway run` process.
 - Use `openclaw plugins inspect <id> --runtime --json` to confirm hook registrations and
-  diagnostics. Non-bundled conversation hooks such as `llm_input`,
-  `llm_output`, `before_agent_finalize`, and `agent_end` need
+  diagnostics. Non-bundled conversation hooks such as `before_model_resolve`,
+  `before_agent_reply`, `before_agent_run`, `llm_input`, `llm_output`,
+  `before_agent_finalize`, and `agent_end` need
   `plugins.entries.<id>.hooks.allowConversationAccess=true`.
 - For model switching, prefer `before_model_resolve`. It runs before model
   resolution for agent turns; `llm_output` only runs after a model attempt
