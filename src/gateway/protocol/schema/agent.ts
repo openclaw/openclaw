@@ -104,9 +104,9 @@ export const SendParamsSchema = Type.Object(
     /** Optional session key for mirroring delivered output back into the transcript. */
     sessionKey: Type.Optional(Type.String()),
     /** Native location latitude (-90..90). When present, longitude is required. */
-    latitude: Type.Optional(Type.Number()),
+    latitude: Type.Optional(Type.Number({ minimum: -90, maximum: 90 })),
     /** Native location longitude (-180..180). When present, latitude is required. */
-    longitude: Type.Optional(Type.Number()),
+    longitude: Type.Optional(Type.Number({ minimum: -180, maximum: 180 })),
     /** Optional location title/POI name shown in map pin cards. */
     locationName: Type.Optional(Type.String()),
     /** Optional location address shown in map pin cards. */

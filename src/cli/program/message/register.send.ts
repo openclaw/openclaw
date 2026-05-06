@@ -9,7 +9,10 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
           message
             .command("send")
             .description("Send a message")
-            .option("-m, --message <text>", "Message body (required unless --media is set)"),
+            .option(
+              "-m, --message <text>",
+              "Message body (required unless --media or --latitude/--longitude is set)",
+            ),
         )
         .option(
           "--media <path-or-url>",
@@ -24,6 +27,17 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
         .option("--reply-to <id>", "Reply-to message id")
         .option("--thread-id <id>", "Thread id (Telegram forum thread)")
         .option("--gif-playback", "Treat video media as GIF playback (WhatsApp only).", false)
+        .option("--latitude <number>", "Latitude for a native WhatsApp location pin (-90 to 90).")
+        .option(
+          "--longitude <number>",
+          "Longitude for a native WhatsApp location pin (-180 to 180).",
+        )
+        .option("--location-name <text>", "Name shown on the native location pin.")
+        .option("--location-address <text>", "Address shown under the native location pin.")
+        .option(
+          "--accuracy-in-meters <number>",
+          "Optional accuracy radius in meters for supported location pins.",
+        )
         .option(
           "--force-document",
           "Send media as document to avoid Telegram compression (Telegram only). Applies to images and GIFs.",

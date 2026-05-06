@@ -277,7 +277,12 @@ export async function sendLocationWhatsApp(
     const redactedJid = redactIdentifier(jid);
     outboundLog.info(`Sending location -> ${redactedJid}`);
     logger.info(
-      { jid: redactedJid, latitude: location.latitude, longitude: location.longitude },
+      {
+        jid: redactedJid,
+        hasName: Boolean(location.name),
+        hasAddress: Boolean(location.address),
+        hasAccuracy: typeof location.accuracyInMeters === "number",
+      },
       "sending location",
     );
     if (!isWhatsAppNewsletterJid(jid)) {
