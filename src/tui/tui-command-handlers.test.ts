@@ -526,4 +526,34 @@ describe("tui command handlers", () => {
     expect(applySessionInfoFromPatch).toHaveBeenCalledWith({ groupActivation: "always" });
     expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
   });
+
+  it("shows all verbose levels in /verbose usage", async () => {
+    const { handleCommand, patchSession, addSystem } = createHarness();
+
+    await handleCommand("/verbose");
+
+    expect(patchSession).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("usage: /verbose <on|full|off>");
+  });
+
+  it("patches the session for /verbose full", async () => {
+    const patchSession = vi.fn().mockResolvedValue({ verboseLevel: "full" });
+    const applySessionInfoFromPatch = vi.fn();
+    const loadHistory = vi.fn().mockResolvedValue(undefined) as LoadHistoryMock;
+    const { handleCommand, addSystem } = createHarness({
+      patchSession,
+      applySessionInfoFromPatch,
+      loadHistory,
+    });
+
+    await handleCommand("/verbose full");
+
+    expect(patchSession).toHaveBeenCalledWith({
+      key: "agent:main:main",
+      verboseLevel: "full",
+    });
+    expect(addSystem).toHaveBeenCalledWith("verbose set to full");
+    expect(applySessionInfoFromPatch).toHaveBeenCalledWith({ verboseLevel: "full" });
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
 });
