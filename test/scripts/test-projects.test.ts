@@ -866,7 +866,7 @@ describe("scripts/test-projects local heavy-check lock", () => {
     OPENCLAW_TEST_PROJECTS_FORCE_LOCK: undefined,
   });
 
-  it("skips the lock for a single scoped tooling run", () => {
+  it("keeps the lock for a single scoped tooling run", () => {
     expect(
       shouldAcquireLocalHeavyCheckLock(
         [
@@ -878,7 +878,7 @@ describe("scripts/test-projects local heavy-check lock", () => {
         ],
         localCheckEnv(),
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("keeps the lock for non-tooling runs", () => {

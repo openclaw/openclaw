@@ -34,6 +34,14 @@ describe("run-oxlint", () => {
     expect(shardedLintRunner).toContain('OPENCLAW_OXLINT_SKIP_PREPARE: "1"');
   });
 
+  it("wraps sharded oxlint in the shared heavy-check lock while child shards skip duplicate locks", () => {
+    const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mjs", "utf8");
+
+    expect(shardedLintRunner).toContain("acquireLocalHeavyCheckLockSync");
+    expect(shardedLintRunner).toContain('toolName: "oxlint-shards"');
+    expect(shardedLintRunner).toContain('OPENCLAW_OXLINT_SKIP_LOCK: "1"');
+  });
+
   it("lets dev update preflight run oxlint shards serially", () => {
     const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mjs", "utf8");
 
