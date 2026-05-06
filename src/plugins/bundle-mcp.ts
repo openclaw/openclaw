@@ -162,10 +162,10 @@ function absolutizeBundleMcpServer(params: {
   return next;
 }
 
-function loadBundleFileBackedMcpConfig(params: {
-  rootDir: string;
-  relativePath: string;
-}): BundleMcpConfig {
+function loadBundleFileBackedMcpConfig(params: { rootDir: string; relativePath: string }): {
+  config: BundleMcpConfig;
+  diagnostics: string[];
+} {
   const rootDir = normalizeBundlePath(params.rootDir);
   const absolutePath = path.resolve(rootDir, params.relativePath);
   const result = readRootJsonObjectSync({
@@ -175,17 +175,32 @@ function loadBundleFileBackedMcpConfig(params: {
     rejectHardlinks: true,
   });
   if (!result.ok) {
-    return { mcpServers: {} };
+    if (result.reason === "open") {
+      return {
+        config: { mcpServers: {} },
+        diagnostics:
+          result.failure.reason === "path"
+            ? []
+            : [`unable to read ${params.relativePath}: ${result.failure.reason}`],
+      };
+    }
+    return {
+      config: { mcpServers: {} },
+      diagnostics: [`unable to read ${params.relativePath}: ${result.error}`],
+    };
   }
   const servers = extractMcpServerMap(result.value);
   const baseDir = normalizeBundlePath(path.dirname(absolutePath));
   return {
-    mcpServers: Object.fromEntries(
-      Object.entries(servers).map(([serverName, server]) => [
-        serverName,
-        absolutizeBundleMcpServer({ rootDir, baseDir, server }),
-      ]),
-    ),
+    config: {
+      mcpServers: Object.fromEntries(
+        Object.entries(servers).map(([serverName, server]) => [
+          serverName,
+          absolutizeBundleMcpServer({ rootDir, baseDir, server }),
+        ]),
+      ),
+    },
+    diagnostics: [],
   };
 }
 
@@ -234,14 +249,14 @@ function loadBundleMcpConfig(params: {
     rootDir: params.rootDir,
     bundleFormat: params.bundleFormat,
   });
+  const diagnostics: string[] = [];
   for (const relativePath of filePaths) {
-    merged = applyMergePatch(
-      merged,
-      loadBundleFileBackedMcpConfig({
-        rootDir: params.rootDir,
-        relativePath,
-      }),
-    ) as BundleMcpConfig;
+    const loaded = loadBundleFileBackedMcpConfig({
+      rootDir: params.rootDir,
+      relativePath,
+    });
+    diagnostics.push(...loaded.diagnostics);
+    merged = applyMergePatch(merged, loaded.config) as BundleMcpConfig;
   }
 
   merged = applyMergePatch(
@@ -252,7 +267,7 @@ function loadBundleMcpConfig(params: {
     }),
   ) as BundleMcpConfig;
 
-  return { config: merged, diagnostics: [] };
+  return { config: merged, diagnostics };
 }
 
 export function inspectBundleMcpRuntimeSupport(params: {
