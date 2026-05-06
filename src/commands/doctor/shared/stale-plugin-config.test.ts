@@ -200,14 +200,14 @@ describe("doctor stale plugin config helpers", () => {
   it("removes stale third-party channel config and dependent channel refs", () => {
     const result = maybeRepairStalePluginConfig({
       plugins: {
-        allow: ["discord", "missing-chat-plugin"],
+        allow: ["discord", "openclaw-weixin"],
         entries: {
           discord: { enabled: true },
-          "missing-chat-plugin": { enabled: true },
+          "openclaw-weixin": { enabled: true },
         },
       },
       channels: {
-        "missing-chat-plugin": {
+        "openclaw-weixin": {
           enabled: true,
           token: "stale",
         },
@@ -216,7 +216,7 @@ describe("doctor stale plugin config helpers", () => {
         },
         modelByChannel: {
           openai: {
-            "missing-chat-plugin": "openai/gpt-5.4",
+            "openclaw-weixin": "openai/gpt-5.4",
             telegram: "openai/gpt-5.4",
           },
         },
@@ -224,7 +224,7 @@ describe("doctor stale plugin config helpers", () => {
       agents: {
         defaults: {
           heartbeat: {
-            target: "missing-chat-plugin",
+            target: "openclaw-weixin",
             every: "30m",
           },
         },
@@ -232,7 +232,7 @@ describe("doctor stale plugin config helpers", () => {
           {
             id: "pi",
             heartbeat: {
-              target: "missing-chat-plugin",
+              target: "openclaw-weixin",
             },
           },
           {
@@ -246,17 +246,17 @@ describe("doctor stale plugin config helpers", () => {
     } as OpenClawConfig);
 
     expect(result.changes).toEqual([
-      "- plugins.allow: removed 1 stale plugin id (missing-chat-plugin)",
-      "- plugins.entries: removed 1 stale plugin entry (missing-chat-plugin)",
-      "- channels: removed 1 stale channel config (missing-chat-plugin)",
-      "- agents heartbeat: removed 2 stale heartbeat targets (missing-chat-plugin)",
-      "- channels.modelByChannel: removed 1 stale channel model override (missing-chat-plugin)",
+      "- plugins.allow: removed 1 stale plugin id (openclaw-weixin)",
+      "- plugins.entries: removed 1 stale plugin entry (openclaw-weixin)",
+      "- channels: removed 1 stale channel config (openclaw-weixin)",
+      "- agents heartbeat: removed 2 stale heartbeat targets (openclaw-weixin)",
+      "- channels.modelByChannel: removed 1 stale channel model override (openclaw-weixin)",
     ]);
     expect(result.config.plugins?.allow).toEqual(["discord"]);
     expect(result.config.plugins?.entries).toEqual({
       discord: { enabled: true },
     });
-    expect(result.config.channels?.["missing-chat-plugin"]).toBeUndefined();
+    expect(result.config.channels?.["openclaw-weixin"]).toBeUndefined();
     expect(result.config.channels?.telegram).toEqual({ botToken: "keep" });
     expect(result.config.channels?.modelByChannel).toEqual({
       openai: {
@@ -304,25 +304,25 @@ describe("doctor stale plugin config helpers", () => {
 
   it("uses missing persisted install records as stale channel evidence", () => {
     installedPluginIndexMocks.loadInstalledPluginIndexInstallRecordsSync.mockReturnValue({
-      "missing-chat-plugin": {
+      "openclaw-weixin": {
         source: "npm",
-        resolvedName: "@example/missing-chat-plugin",
+        resolvedName: "@tencent-weixin/openclaw-weixin",
         installedAt: "2026-04-12T00:00:00.000Z",
       },
     });
 
     const result = maybeRepairStalePluginConfig({
       channels: {
-        "missing-chat-plugin": {
+        "openclaw-weixin": {
           enabled: true,
         },
       },
     } as OpenClawConfig);
 
     expect(result.changes).toEqual([
-      "- channels: removed 1 stale channel config (missing-chat-plugin)",
+      "- channels: removed 1 stale channel config (openclaw-weixin)",
     ]);
-    expect(result.config.channels?.["missing-chat-plugin"]).toBeUndefined();
+    expect(result.config.channels?.["openclaw-weixin"]).toBeUndefined();
   });
 
   it("does not auto-repair stale refs while plugin discovery has errors", () => {
