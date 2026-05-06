@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import {
   createExistingSessionAgentSharedModule,
   existingSessionRouteState,
@@ -187,6 +188,24 @@ describe("existing-session browser routes", () => {
       url: "https://example.com",
       ssrfPolicy: { allowPrivateNetwork: false },
     });
+  });
+
+  it("rejects existing-session snapshot selectors before checking the current URL", async () => {
+    routeState.profileCtx.ensureTabAvailable.mockResolvedValueOnce({
+      targetId: "7",
+      url: "http://127.0.0.1:8080/admin",
+    });
+    const handler = getSnapshotGetHandler({ allowPrivateNetwork: false });
+    const response = createBrowserRouteResponse();
+
+    await handler?.({ params: {}, query: { format: "ai", selector: "#admin" } }, response.res);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toEqual({
+      error: EXISTING_SESSION_LIMITS.snapshot.snapshotSelector,
+    });
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
+    expect(chromeMcpMocks.takeChromeMcpSnapshot).not.toHaveBeenCalled();
   });
 
   it("checks existing-session screenshot URL when SSRF policy is configured", async () => {
