@@ -1,5 +1,8 @@
 import crypto from "node:crypto";
-import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
+import type {
+  ReplyBackendCancelReason,
+  ReplyBackendHandle,
+} from "../../auto-reply/reply/reply-run-registry.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import {
   createCliJsonlStreamingParser,
@@ -288,8 +291,35 @@ function buildClaudeLiveFingerprint(params: {
   });
 }
 
-function createAbortError(): Error {
-  const error = new Error("CLI run aborted");
+function describeAbortReason(reason: unknown): string | undefined {
+  if (reason === undefined || reason === null) {
+    return undefined;
+  }
+  if (typeof reason === "string") {
+    const trimmed = reason.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  if (reason instanceof Error) {
+    const message = reason.message?.trim();
+    if (message) {
+      return reason.name && reason.name !== "Error" ? `${reason.name}: ${message}` : message;
+    }
+    return reason.name || undefined;
+  }
+  if (typeof reason === "object") {
+    try {
+      const json = JSON.stringify(reason);
+      return json && json !== "{}" ? json : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return String(reason);
+}
+
+function createAbortError(reason?: unknown): Error {
+  const detail = describeAbortReason(reason);
+  const error = new Error(detail ? `CLI run aborted: ${detail}` : "CLI run aborted");
   error.name = "AbortError";
   return error;
 }
@@ -333,8 +363,15 @@ function failTurn(session: ClaudeLiveSession, error: unknown): void {
     return;
   }
   const errorKind = error instanceof Error ? error.name : typeof error;
+  const errorMessage =
+    error instanceof Error && typeof error.message === "string"
+      ? error.message.trim()
+      : typeof error === "string"
+        ? error.trim()
+        : "";
+  const detailSuffix = errorMessage ? ` detail="${errorMessage.slice(0, 240)}"` : "";
   cliBackendLog.warn(
-    `claude live session turn failed: provider=${session.providerId} model=${session.modelId} durationMs=${Date.now() - turn.startedAtMs} error=${errorKind}`,
+    `claude live session turn failed: provider=${session.providerId} model=${session.modelId} durationMs=${Date.now() - turn.startedAtMs} error=${errorKind}${detailSuffix}`,
   );
   clearTurnTimers(turn);
   turn.streamingParser.finish();
@@ -955,22 +992,25 @@ export async function runClaudeLiveSessionTurn(params: {
       reject,
     });
   });
-  const abort = () => abortTurn(liveSession, createAbortError());
+  const abortFromSignal = () =>
+    abortTurn(liveSession, createAbortError(params.context.params.abortSignal?.reason));
+  const abortFromReplyBackend = (reason?: ReplyBackendCancelReason) =>
+    abortTurn(liveSession, createAbortError(`replyBackend:${reason ?? "unknown"}`));
   let replyBackendCompleted = false;
   const replyBackendHandle: ReplyBackendHandle | undefined = params.context.params.replyOperation
     ? {
         kind: "cli",
-        cancel: abort,
+        cancel: abortFromReplyBackend,
         isStreaming: () => !replyBackendCompleted,
       }
     : undefined;
-  params.context.params.abortSignal?.addEventListener("abort", abort, { once: true });
+  params.context.params.abortSignal?.addEventListener("abort", abortFromSignal, { once: true });
   if (replyBackendHandle) {
     params.context.params.replyOperation?.attachBackend(replyBackendHandle);
   }
   try {
     if (params.context.params.abortSignal?.aborted) {
-      abort();
+      abortFromSignal();
     } else {
       try {
         await writeTurnInput(liveSession, params.prompt);
@@ -981,9 +1021,14 @@ export async function runClaudeLiveSessionTurn(params: {
     return { output: await outputPromise };
   } finally {
     replyBackendCompleted = true;
-    params.context.params.abortSignal?.removeEventListener("abort", abort);
+    params.context.params.abortSignal?.removeEventListener("abort", abortFromSignal);
     if (replyBackendHandle) {
       params.context.params.replyOperation?.detachBackend(replyBackendHandle);
     }
   }
 }
+
+export const __testing = {
+  createAbortError,
+  describeAbortReason,
+};

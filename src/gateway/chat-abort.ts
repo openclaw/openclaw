@@ -171,7 +171,7 @@ export function abortChatRunById(
   const bufferedText = ops.chatRunBuffers.get(runId);
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
   ops.chatAbortedRuns.set(runId, Date.now());
-  active.controller.abort();
+  active.controller.abort(stopReason ? `chat-abort:${stopReason}` : "chat-abort");
   ops.chatAbortControllers.delete(runId);
   ops.chatRunBuffers.delete(runId);
   ops.chatDeltaSentAt.delete(runId);
