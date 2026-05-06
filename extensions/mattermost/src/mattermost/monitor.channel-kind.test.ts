@@ -15,6 +15,14 @@ describe("mapMattermostChannelTypeToChatType", () => {
   it("keeps public channels and unknown values as channel", () => {
     expect(mapMattermostChannelTypeToChatType("O")).toBe("channel");
     expect(mapMattermostChannelTypeToChatType("x")).toBe("channel");
-    expect(mapMattermostChannelTypeToChatType(undefined)).toBe("channel");
+  });
+
+  it("rejects missing channel types", () => {
+    expect(() => mapMattermostChannelTypeToChatType(undefined)).toThrow(
+      "Mattermost channel type is required",
+    );
+    expect(() => mapMattermostChannelTypeToChatType(" ")).toThrow(
+      "Mattermost channel type is required",
+    );
   });
 });
