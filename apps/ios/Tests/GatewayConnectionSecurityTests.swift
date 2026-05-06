@@ -143,7 +143,7 @@ import Testing
         #expect(GatewayTLSStore.loadFingerprint(stableID: stableID1) == nil)
         #expect(GatewayTLSStore.loadFingerprint(stableID: stableID2) == nil)
     }
-}
+    }
 
     // MARK: - LAN host TLS override tests (#47887)
 
