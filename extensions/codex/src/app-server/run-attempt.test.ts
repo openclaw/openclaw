@@ -4,7 +4,6 @@ import path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   abortAgentHarnessRun,
-  buildAgentRuntimePlan,
   embeddedAgentLog,
   nativeHookRelayTesting,
   onAgentEvent,
@@ -53,32 +52,6 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
   } as EmbeddedRunAttemptParams;
-}
-
-function createParamsWithRuntimePlan(
-  sessionFile: string,
-  workspaceDir: string,
-): EmbeddedRunAttemptParams {
-  const params = createParams(sessionFile, workspaceDir);
-  return {
-    ...params,
-    runtimePlan: buildCodexRuntimePlan(params, workspaceDir),
-  };
-}
-
-function buildCodexRuntimePlan(params: EmbeddedRunAttemptParams, workspaceDir: string) {
-  return buildAgentRuntimePlan({
-    provider: params.provider,
-    modelId: params.modelId,
-    model: params.model,
-    modelApi: params.model.api,
-    harnessId: "codex",
-    harnessRuntime: "codex",
-    config: params.config,
-    workspaceDir,
-    agentDir: tempDir,
-    thinkingLevel: params.thinkLevel,
-  });
 }
 
 function createCodexRuntimePlanFixture(): NonNullable<EmbeddedRunAttemptParams["runtimePlan"]> {
