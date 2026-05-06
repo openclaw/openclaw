@@ -707,6 +707,14 @@ function createMessageSentEmitter(params: {
       channelId: params.channel,
       accountId: params.accountId ?? undefined,
       conversationId: params.to,
+      // Mirror the canonical outbound session key into the `message_sent`
+      // hook context so plugins that observe both `message_sending` and
+      // `message_sent` see the same `sessionKey` (and so it matches the
+      // value the internal `message:sent` hook fires with). The value is
+      // already computed for the internal hook below; reusing it here
+      // keeps the contract documented in `PluginHookMessageContext`
+      // honest for both outbound delivery hooks.
+      sessionKey: params.sessionKeyForInternalHooks,
       messageId: event.messageId,
       isGroup: params.mirrorIsGroup,
       groupId: params.mirrorGroupId,

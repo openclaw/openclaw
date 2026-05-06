@@ -16,8 +16,12 @@ export type PluginHookMessageContext = {
    * session for the inbound conversation as resolved by `resolveSessionKey`
    * / `deriveInboundMessageHookContext`.
    *
-   * For outbound delivery hooks (`message_sending`, `message_sent`), this
-   * mirrors `OutboundSessionContext.key` from the dispatch path.
+   * For outbound delivery hooks (`message_sending` and `message_sent`),
+   * this mirrors `OutboundSessionContext.key` from the dispatch path when
+   * delivery has a session attached. When the outbound path has no
+   * resolvable session (e.g. internal smoke runs without
+   * `OutboundSessionContext`), this field is omitted; plugins must treat
+   * it as optional.
    */
   sessionKey?: string;
   /**
@@ -28,9 +32,14 @@ export type PluginHookMessageContext = {
    * each cron/heartbeat/followup-triggered run.
    *
    * Generated once in `agent-runner-execution.ts`/`followup-runner.ts` via
-   * `crypto.randomUUID()`. Recommended correlation key for plugins linking
-   * `agent_end` → `message_sending` (more robust than `sessionKey`, which
-   * cannot disambiguate concurrent turns in the same session).
+   * `crypto.randomUUID()`. Currently populated for inbound message hooks
+   * (`inbound_claim`, `message_received`) and for agent-runtime hooks that
+   * already receive the run id (e.g. `agent_end`, `llm_input`, `llm_output`).
+   * It is **not yet** plumbed through the outbound delivery path, so
+   * plugins observing `message_sending` / `message_sent` should not rely
+   * on `runId` to correlate against `agent_end`; use `sessionKey` for
+   * outbound→inbound correlation today (with the caveat that it cannot
+   * disambiguate concurrent turns in the same session).
    */
   runId?: string;
   messageId?: string;
