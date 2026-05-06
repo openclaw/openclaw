@@ -79,7 +79,7 @@ import {
   cleanupManagedOutgoingImageRecords,
   createManagedOutgoingImageBlocks,
 } from "../managed-image-attachments.js";
-import { ADMIN_SCOPE, TALK_SECRETS_SCOPE } from "../method-scopes.js";
+import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
@@ -1714,7 +1714,7 @@ function broadcastChatError(params: {
 }
 
 export const chatHandlers: GatewayRequestHandlers = {
-  "chat.history": async ({ params, respond, context, client }) => {
+  "chat.history": async ({ params, respond, context }) => {
     if (!validateChatHistoryParams(params)) {
       respond(
         false,

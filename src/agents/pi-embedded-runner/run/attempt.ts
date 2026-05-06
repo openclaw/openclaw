@@ -2766,11 +2766,6 @@ export async function runEmbeddedAttempt(
             ? ""
             : buildCurrentTurnPromptContextSuffix(params.currentTurnContext);
           const promptForModel = promptSubmission.prompt + currentTurnPromptContextSuffix;
-          const blockedTranscriptPrompt =
-            effectiveTranscriptPrompt ??
-            (isRawModelRun
-              ? params.prompt
-              : annotateInterSessionPromptText(params.prompt, params.inputProvenance));
           const runtimeSystemContext = promptSubmission.runtimeSystemContext?.trim();
           if (promptSubmission.runtimeOnly && runtimeSystemContext) {
             const runtimeSystemPrompt = composeSystemPromptWithHookContext({
