@@ -101,6 +101,7 @@ export type StatusArgs = {
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
   subagentsLine?: string;
   taskLine?: string;
+  channelStatusLines?: string[];
   includeTranscriptUsage?: boolean;
   now?: number;
 };
@@ -935,6 +936,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     mediaLine,
     args.usageLine,
     `🧵 ${sessionLine}`,
+    ...(args.channelStatusLines ?? []),
     args.subagentsLine,
     args.taskLine,
     `⚙️ ${optionsLine}`,
