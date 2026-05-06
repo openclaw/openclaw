@@ -92,6 +92,9 @@ export async function handleWhatsAppAction(
     const locationName = readStringParam(params, "locationName");
     const locationAddress = readStringParam(params, "locationAddress");
     const accuracyInMeters = readNumberParam(params, "accuracyInMeters", { strict: true });
+    if (accuracyInMeters != null && accuracyInMeters < 0) {
+      throw new Error("accuracyInMeters must be a non-negative number.");
+    }
 
     const resolved = whatsAppActionRuntime.resolveAuthorizedWhatsAppOutboundTarget({
       cfg,

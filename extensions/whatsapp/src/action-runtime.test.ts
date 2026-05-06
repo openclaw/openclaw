@@ -232,6 +232,23 @@ describe("handleWhatsAppAction", () => {
       }),
     );
   });
+
+  it("rejects negative accuracy for native locations", async () => {
+    await expect(
+      handleWhatsAppAction(
+        {
+          action: "location",
+          to: "+123",
+          latitude: 18.4861,
+          longitude: -69.9312,
+          accuracyInMeters: -5,
+        },
+        enabledConfig,
+      ),
+    ).rejects.toThrow(/accuracyInMeters must be a non-negative number/);
+    expect(sendLocationWhatsApp).not.toHaveBeenCalled();
+  });
+
   it("respects reaction gating", async () => {
     const cfg = {
       channels: { whatsapp: { actions: { reactions: false } } },
