@@ -1,3 +1,4 @@
+import childProcess from "node:child_process";
 import fsSync from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { getProcessStartTime, isPidAlive } from "./pid-alive.js";
@@ -62,6 +63,25 @@ describe("isPidAlive", () => {
     });
     await withLinuxProcessPlatform(async () => {
       expect(isPidAlive(zombiePid)).toBe(false);
+    });
+  });
+
+  it("returns false for zombie processes on macOS", async () => {
+    const spawnSyncSpy = vi.spyOn(childProcess, "spawnSync").mockReturnValue({
+      stdout: "Zs\n",
+      status: 0,
+      error: undefined,
+    } as never);
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    await withProcessPlatform("darwin", async () => {
+      expect(isPidAlive(42)).toBe(false);
+    });
+
+    expect(killSpy).toHaveBeenCalledWith(42, 0);
+    expect(spawnSyncSpy).toHaveBeenCalledWith("ps", ["-o", "state=", "-p", "42"], {
+      encoding: "utf8",
+      timeout: 1000,
     });
   });
 
