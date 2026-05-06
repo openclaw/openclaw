@@ -244,6 +244,9 @@ Per-agent override: `agents.entries.*.subagents.delegationMode`.
 <ParamField path="worktreeBaseRef" type="string">
   Optional git base ref for the managed worktree. Requires `visible: true` and `worktree: true`.
 </ParamField>
+<ParamField path="toolsAllow" type="string[]">
+  Native sub-agents only. Narrows the spawned child run's tool set to the listed tool ids, for example `["read", "exec"]`. Omit to use the normal child tool policy; pass `[]` to run the child with no tools. `runtime: "acp"` rejects this field because ACP harnesses do not use the embedded-runner tool construction path.
+</ParamField>
 
 <Warning>
 `sessions_spawn` does **not** accept channel-delivery params (`target`,
