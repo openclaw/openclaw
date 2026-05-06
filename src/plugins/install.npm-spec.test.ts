@@ -64,6 +64,7 @@ function expectNpmInstallIntoRoot(params: { calls: unknown[][]; npmRoot: string 
     "install",
     "--omit=dev",
     "--loglevel=error",
+    "--legacy-peer-deps",
     "--ignore-scripts",
     "--no-audit",
     "--no-fund",
@@ -922,6 +923,9 @@ describe("installPluginFromNpmSpec", () => {
         };
       }
       if (argv[0] === "npm" && argv[1] === "uninstall") {
+        if (!argv.includes("--legacy-peer-deps")) {
+          fs.mkdirSync(path.join(npmRoot, "node_modules", "openclaw"), { recursive: true });
+        }
         return successfulSpawn("");
       }
       throw new Error(`unexpected command: ${argv.join(" ")}`);
@@ -945,6 +949,9 @@ describe("installPluginFromNpmSpec", () => {
       dependencies: {},
     });
     expect(fs.lstatSync(peerLink).isSymbolicLink()).toBe(true);
+    await expect(
+      fs.promises.access(path.join(npmRoot, "node_modules", "openclaw")),
+    ).rejects.toThrow();
   });
 
   it("rolls back installed npm package debris when security scan blocks the plugin", async () => {

@@ -9,6 +9,7 @@ import {
   createRealtimeVoiceAgentTalkbackQueue,
   createTalkSessionController,
   createRealtimeVoiceBridgeSession,
+  recordTalkDiagnosticEvent,
   type RealtimeVoiceAgentTalkbackQueue,
   type RealtimeVoiceBridgeSession,
   type RealtimeVoiceProviderPlugin,
@@ -359,13 +360,16 @@ export async function startNodeRealtimeAudioBridge(params: {
   const transcript: GoogleMeetRealtimeTranscriptEntry[] = [];
   const realtimeEvents: GoogleMeetRealtimeEventEntry[] = [];
   const strategy = params.config.realtime.strategy;
-  const talk: TalkSessionController = createTalkSessionController({
-    sessionId: `google-meet:${params.meetingSessionId}:${params.bridgeId}:node-realtime`,
-    mode: "realtime",
-    transport: "gateway-relay",
-    brain: strategy === "bidi" ? "direct-tools" : "agent-consult",
-    provider: resolved.provider.id,
-  });
+  const talk: TalkSessionController = createTalkSessionController(
+    {
+      sessionId: `google-meet:${params.meetingSessionId}:${params.bridgeId}:node-realtime`,
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: strategy === "bidi" ? "direct-tools" : "agent-consult",
+      provider: resolved.provider.id,
+    },
+    { onEvent: recordTalkDiagnosticEvent },
+  );
   const recentTalkEvents: TalkEvent[] = [];
   const rememberTalkEvent = (event: TalkEvent | undefined): void => {
     if (event) {

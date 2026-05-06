@@ -107,6 +107,7 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
         "npm",
         "uninstall",
         "--loglevel=error",
+        "--legacy-peer-deps",
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
@@ -118,6 +119,7 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
         "npm",
         "prune",
         "--loglevel=error",
+        "--legacy-peer-deps",
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
@@ -128,7 +130,11 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
     const result = await command(npmArgs, {
       cwd: params.npmRoot,
       timeoutMs: Math.max(params.timeoutMs ?? 300_000, 300_000),
-      env: createSafeNpmInstallEnv(process.env, { packageLock: true, quiet: true }),
+      env: createSafeNpmInstallEnv(process.env, {
+        legacyPeerDeps: true,
+        packageLock: true,
+        quiet: true,
+      }),
     });
     if (result.code !== 0) {
       params.logger?.warn?.(

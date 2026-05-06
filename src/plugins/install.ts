@@ -323,6 +323,7 @@ async function rollbackManagedNpmPluginInstall(params: {
         "npm",
         "uninstall",
         "--loglevel=error",
+        "--legacy-peer-deps",
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
@@ -333,7 +334,11 @@ async function rollbackManagedNpmPluginInstall(params: {
       {
         cwd: params.npmRoot,
         timeoutMs: Math.max(params.timeoutMs, 300_000),
-        env: createSafeNpmInstallEnv(process.env, { packageLock: true, quiet: true }),
+        env: createSafeNpmInstallEnv(process.env, {
+          legacyPeerDeps: true,
+          packageLock: true,
+          quiet: true,
+        }),
       },
     );
   } catch (error) {
@@ -487,6 +492,7 @@ async function installPluginFromManagedNpmRoot(
       ...createSafeNpmInstallArgs({
         omitDev: true,
         loglevel: "error",
+        legacyPeerDeps: true,
         noAudit: true,
         noFund: true,
       }),
@@ -496,7 +502,11 @@ async function installPluginFromManagedNpmRoot(
     {
       cwd: npmRoot,
       timeoutMs: Math.max(timeoutMs, 300_000),
-      env: createSafeNpmInstallEnv(process.env, { packageLock: true, quiet: true }),
+      env: createSafeNpmInstallEnv(process.env, {
+        legacyPeerDeps: true,
+        packageLock: true,
+        quiet: true,
+      }),
     },
   );
   if (install.code !== 0) {
