@@ -17,6 +17,7 @@ type LiveModelCase = {
   contextWindow: number;
   maxTokens: number;
   reasoning: boolean;
+  textVerbosity: "low" | "medium";
 };
 
 function findOpenAIModel(modelId: string): Model<Api> | null {
@@ -34,6 +35,7 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         contextWindow: 400_000,
         maxTokens: 128_000,
         reasoning: false,
+        textVerbosity: "medium",
       };
     case "gpt-5.5":
       return {
@@ -44,6 +46,7 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         contextWindow: 1_000_000,
         maxTokens: 128_000,
         reasoning: true,
+        textVerbosity: "low",
       };
     case "gpt-5.5-pro":
       return {
@@ -54,6 +57,7 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         contextWindow: 1_000_000,
         maxTokens: 128_000,
         reasoning: true,
+        textVerbosity: "low",
       };
     case "gpt-5.4":
       return {
@@ -64,6 +68,7 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         contextWindow: 400_000,
         maxTokens: 128_000,
         reasoning: true,
+        textVerbosity: "low",
       };
     case "gpt-5.4-pro":
       return {
@@ -74,6 +79,7 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         contextWindow: 400_000,
         maxTokens: 128_000,
         reasoning: true,
+        textVerbosity: "low",
       };
     case "gpt-5.4-mini":
       return {
@@ -84,6 +90,7 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         contextWindow: 400_000,
         maxTokens: 128_000,
         reasoning: true,
+        textVerbosity: "low",
       };
     case "gpt-5.4-nano":
       return {
@@ -94,6 +101,7 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         contextWindow: 400_000,
         maxTokens: 128_000,
         reasoning: true,
+        textVerbosity: "low",
       };
     default:
       throw new Error(`Unsupported live OpenAI model: ${modelId}`);
@@ -177,7 +185,7 @@ describeLive("buildOpenAIProvider live", () => {
         input: "Return exactly OK.",
         max_output_tokens: 64,
         ...(liveCase.reasoning ? { reasoning: { effort: "none" as const } } : {}),
-        text: { verbosity: "low" },
+        text: { verbosity: liveCase.textVerbosity },
       });
 
       expect(response.output_text.trim()).toMatch(/^OK[.!]?$/);
