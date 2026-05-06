@@ -1,6 +1,10 @@
 import { formatErrorMessage } from "../../infra/errors.js";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE, withFileLock } from "../../infra/file-lock.js";
 import {
+  isCanonicalOAuthOwnerAgentDir,
+  resolveCanonicalOAuthOwnerAgentDir,
+} from "./canonical-owner.js";
+import {
   AUTH_STORE_LOCK_OPTIONS,
   OAUTH_REFRESH_CALL_TIMEOUT_MS,
   OAUTH_REFRESH_LOCK_OPTIONS,
@@ -250,12 +254,20 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           mainCred.expires > params.credential.expires) &&
         isSafeToAdoptMainStoreOAuthIdentity(params.credential, mainCred)
       ) {
-        params.store.profiles[params.profileId] = { ...mainCred };
-        saveAuthProfileStore(params.store, params.agentDir);
+        if (
+          isCanonicalOAuthOwnerAgentDir({ provider: mainCred.provider, agentDir: params.agentDir })
+        ) {
+          params.store.profiles[params.profileId] = { ...mainCred };
+          saveAuthProfileStore(params.store, params.agentDir);
+        }
         log.info("adopted newer OAuth credentials from main agent", {
           profileId: params.profileId,
           agentDir: params.agentDir,
           expires: new Date(mainCred.expires).toISOString(),
+          persistedLocally: isCanonicalOAuthOwnerAgentDir({
+            provider: mainCred.provider,
+            agentDir: params.agentDir,
+          }),
         });
         return mainCred;
       }
@@ -268,7 +280,13 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     return null;
   }
 
-  const refreshQueues = new Map<string, Promise<unknown>>();
+  const refreshQueues = new Map<
+    string,
+    {
+      promise: Promise<ResolvedOAuthAccess | null>;
+      waiters: number;
+    }
+  >();
 
   function refreshQueueKey(provider: string, profileId: string): string {
     return `${provider}\u0000${profileId}`;
@@ -340,14 +358,18 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     provider: string;
     agentDir?: string;
   }): Promise<ResolvedOAuthAccess | null> {
-    const authPath = resolveAuthStorePath(params.agentDir);
+    const ownerAgentDir = resolveCanonicalOAuthOwnerAgentDir({
+      provider: params.provider,
+      agentDir: params.agentDir,
+    });
+    const authPath = resolveAuthStorePath(ownerAgentDir);
     ensureAuthStoreFile(authPath);
     const globalRefreshLockPath = resolveOAuthRefreshLockPath(params.provider, params.profileId);
 
     try {
       return await withFileLock(globalRefreshLockPath, OAUTH_REFRESH_LOCK_OPTIONS, async () =>
         withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
-          const store = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
+          const store = loadAuthProfileStoreForSecretsRuntime(ownerAgentDir);
           const cred = store.profiles[params.profileId];
           if (!cred || cred.type !== "oauth") {
             return null;
@@ -361,7 +383,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             };
           }
 
-          if (params.agentDir) {
+          if (params.agentDir && authPath !== resolveAuthStorePath(params.agentDir)) {
             try {
               const mainStore = loadAuthProfileStoreForSecretsRuntime(undefined);
               const mainCred = mainStore.profiles[params.profileId];
@@ -371,13 +393,15 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
                 hasUsableOAuthCredential(mainCred) &&
                 isSafeToAdoptMainStoreOAuthIdentity(cred, mainCred)
               ) {
-                store.profiles[params.profileId] = { ...mainCred };
-                saveAuthProfileStore(store, params.agentDir);
-                log.info("adopted fresh OAuth credential from main store (under refresh lock)", {
-                  profileId: params.profileId,
-                  agentDir: params.agentDir,
-                  expires: new Date(mainCred.expires).toISOString(),
-                });
+                log.info(
+                  "adopted fresh OAuth credential from canonical main store (under refresh lock)",
+                  {
+                    profileId: params.profileId,
+                    agentDir: params.agentDir,
+                    ownerAgentDir,
+                    expires: new Date(mainCred.expires).toISOString(),
+                  },
+                );
                 return {
                   apiKey: await adapter.buildApiKey(mainCred.provider, mainCred),
                   credential: mainCred,
@@ -425,7 +449,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
                 !areOAuthCredentialsEquivalent(cred, externallyManaged)
               ) {
                 store.profiles[params.profileId] = { ...externallyManaged };
-                saveAuthProfileStore(store, params.agentDir);
+                saveAuthProfileStore(store, ownerAgentDir);
               }
               credentialToRefresh = externallyManaged;
               if (hasUsableOAuthCredential(externallyManaged)) {
@@ -455,15 +479,12 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             return null;
           }
           store.profiles[params.profileId] = refreshedCredentials;
-          saveAuthProfileStore(store, params.agentDir);
-          if (params.agentDir) {
-            const mainPath = resolveAuthStorePath(undefined);
-            if (mainPath !== authPath) {
-              await mirrorRefreshedCredentialIntoMainStore({
-                profileId: params.profileId,
-                refreshed: refreshedCredentials,
-              });
-            }
+          saveAuthProfileStore(store, ownerAgentDir);
+          if (params.agentDir && authPath !== resolveAuthStorePath(undefined)) {
+            await mirrorRefreshedCredentialIntoMainStore({
+              profileId: params.profileId,
+              refreshed: refreshedCredentials,
+            });
           }
           return {
             apiKey: await adapter.buildApiKey(cred.provider, refreshedCredentials),
@@ -489,21 +510,64 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     agentDir?: string;
   }): Promise<ResolvedOAuthAccess | null> {
     const key = refreshQueueKey(params.provider, params.profileId);
-    const prev = refreshQueues.get(key) ?? Promise.resolve();
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    refreshQueues.set(key, gate);
-    try {
-      await prev;
-      return await doRefreshOAuthTokenWithLock(params);
-    } finally {
-      release();
-      if (refreshQueues.get(key) === gate) {
-        refreshQueues.delete(key);
-      }
+    const existing = refreshQueues.get(key);
+    if (existing) {
+      existing.waiters += 1;
+      log.info("joined in-flight OAuth refresh", {
+        profileId: params.profileId,
+        provider: params.provider,
+        agentDir: params.agentDir,
+        waiters: existing.waiters,
+        ownerAgentDir: resolveCanonicalOAuthOwnerAgentDir({
+          provider: params.provider,
+          agentDir: params.agentDir,
+        }),
+      });
+      return await existing.promise;
     }
+
+    let entry!: { promise: Promise<ResolvedOAuthAccess | null>; waiters: number };
+    const ownerAgentDir = resolveCanonicalOAuthOwnerAgentDir({
+      provider: params.provider,
+      agentDir: params.agentDir,
+    });
+    const promise = (async () => {
+      log.info("starting OAuth refresh owner", {
+        profileId: params.profileId,
+        provider: params.provider,
+        agentDir: params.agentDir,
+        ownerAgentDir,
+      });
+      try {
+        const result = await doRefreshOAuthTokenWithLock(params);
+        log.info("completed OAuth refresh owner", {
+          profileId: params.profileId,
+          provider: params.provider,
+          agentDir: params.agentDir,
+          ownerAgentDir,
+          waiters: entry.waiters,
+          success: result !== null,
+        });
+        return result;
+      } catch (error) {
+        log.warn("OAuth refresh owner failed", {
+          profileId: params.profileId,
+          provider: params.provider,
+          agentDir: params.agentDir,
+          ownerAgentDir,
+          waiters: entry.waiters,
+          error: formatErrorMessage(error),
+        });
+        throw error;
+      } finally {
+        if (refreshQueues.get(key) === entry) {
+          refreshQueues.delete(key);
+        }
+      }
+    })();
+    entry = { promise, waiters: 0 };
+    refreshQueues.set(key, entry);
+    return await promise;
   }
 
   async function resolveOAuthAccess(params: {
@@ -591,12 +655,23 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             hasUsableOAuthCredential(mainCred) &&
             isSafeToAdoptMainStoreOAuthIdentity(params.credential, mainCred)
           ) {
-            refreshedStore.profiles[params.profileId] = { ...mainCred };
-            saveAuthProfileStore(refreshedStore, params.agentDir);
+            if (
+              isCanonicalOAuthOwnerAgentDir({
+                provider: mainCred.provider,
+                agentDir: params.agentDir,
+              })
+            ) {
+              refreshedStore.profiles[params.profileId] = { ...mainCred };
+              saveAuthProfileStore(refreshedStore, params.agentDir);
+            }
             log.info("inherited fresh OAuth credentials from main agent", {
               profileId: params.profileId,
               agentDir: params.agentDir,
               expires: new Date(mainCred.expires).toISOString(),
+              persistedLocally: isCanonicalOAuthOwnerAgentDir({
+                provider: mainCred.provider,
+                agentDir: params.agentDir,
+              }),
             });
             return {
               apiKey: await adapter.buildApiKey(mainCred.provider, mainCred),

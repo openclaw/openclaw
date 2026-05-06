@@ -14,8 +14,10 @@ import {
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
+  loadAuthProfileStoreForSecretsRuntime,
   saveAuthProfileStore,
 } from "./store.js";
+import * as storeModule from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 function createCredential(overrides: Partial<OAuthCredential> = {}): OAuthCredential {
@@ -208,5 +210,149 @@ describe("createOAuthManager", () => {
         refresh: "rotated-refresh",
       }),
     });
+  });
+
+  it("shares one in-flight refresh result across concurrent callers", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-manager-singleflight-"));
+    tempDirs.push(tempRoot);
+    process.env.OPENCLAW_STATE_DIR = tempRoot;
+    const mainAgentDir = path.join(tempRoot, "agents", "main", "agent");
+    process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
+    process.env.PI_CODING_AGENT_DIR = mainAgentDir;
+    await fs.mkdir(mainAgentDir, { recursive: true });
+
+    const profileId = "openai-codex:default";
+    const expiredCredential = createCredential({
+      access: "stale-access",
+      refresh: "stale-refresh",
+      expires: Date.now() - 60_000,
+      accountId: "acct-123",
+    });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: expiredCredential,
+        },
+      },
+      mainAgentDir,
+      { filterExternalAuthProfiles: false },
+    );
+
+    let refreshCalls = 0;
+    let releaseRefresh!: () => void;
+    const refreshStarted = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    const manager = createOAuthManager({
+      buildApiKey: async (_provider, credential) => credential.access,
+      refreshCredential: vi.fn(async () => {
+        refreshCalls += 1;
+        await refreshStarted;
+        return {
+          access: "shared-access",
+          refresh: "shared-refresh",
+          expires: Date.now() + 60_000,
+        };
+      }),
+      readBootstrapCredential: () => null,
+      isRefreshTokenReusedError: () => false,
+    });
+
+    const staleA = ensureAuthProfileStore(mainAgentDir).profiles[profileId] as OAuthCredential;
+    const first = manager.resolveOAuthAccess({
+      store: ensureAuthProfileStore(mainAgentDir),
+      profileId,
+      credential: staleA,
+      agentDir: mainAgentDir,
+    });
+    const staleB = loadAuthProfileStoreForSecretsRuntime(mainAgentDir).profiles[
+      profileId
+    ] as OAuthCredential;
+    const second = manager.resolveOAuthAccess({
+      store: ensureAuthProfileStore(mainAgentDir),
+      profileId,
+      credential: staleB,
+      agentDir: mainAgentDir,
+    });
+
+    releaseRefresh();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(refreshCalls).toBe(1);
+    expect(firstResult).toMatchObject({ apiKey: "shared-access" });
+    expect(secondResult).toMatchObject({ apiKey: "shared-access" });
+    const persisted = loadAuthProfileStoreForSecretsRuntime(mainAgentDir).profiles[
+      profileId
+    ] as OAuthCredential;
+    expect(persisted.access).toBe("shared-access");
+    expect(persisted.refresh).toBe("shared-refresh");
+  });
+
+  it("fails closed when refreshed credentials cannot be persisted", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-manager-persist-fail-"));
+    tempDirs.push(tempRoot);
+    process.env.OPENCLAW_STATE_DIR = tempRoot;
+    const mainAgentDir = path.join(tempRoot, "agents", "main", "agent");
+    process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
+    process.env.PI_CODING_AGENT_DIR = mainAgentDir;
+    await fs.mkdir(mainAgentDir, { recursive: true });
+
+    const profileId = "openai-codex:default";
+    const expiredCredential = createCredential({
+      access: "stale-access",
+      refresh: "stale-refresh",
+      expires: Date.now() - 60_000,
+      accountId: "acct-123",
+    });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: expiredCredential,
+        },
+      },
+      mainAgentDir,
+      { filterExternalAuthProfiles: false },
+    );
+
+    const originalSave = storeModule.saveAuthProfileStore;
+    const saveSpy = vi
+      .spyOn(storeModule, "saveAuthProfileStore")
+      .mockImplementation((store, agentDir, options) => {
+        const profile = store.profiles[profileId];
+        if (profile?.type === "oauth" && profile.access === "broken-access") {
+          throw new Error("disk full");
+        }
+        return originalSave(store, agentDir, options);
+      });
+
+    const manager = createOAuthManager({
+      buildApiKey: async (_provider, credential) => credential.access,
+      refreshCredential: vi.fn(async () => ({
+        access: "broken-access",
+        refresh: "broken-refresh",
+        expires: Date.now() + 60_000,
+      })),
+      readBootstrapCredential: () => null,
+      isRefreshTokenReusedError: () => false,
+    });
+
+    await expect(
+      manager.resolveOAuthAccess({
+        store: ensureAuthProfileStore(mainAgentDir),
+        profileId,
+        credential: ensureAuthProfileStore(mainAgentDir).profiles[profileId] as OAuthCredential,
+        agentDir: mainAgentDir,
+      }),
+    ).rejects.toBeInstanceOf(OAuthManagerRefreshError);
+
+    saveSpy.mockRestore();
+
+    const persisted = loadAuthProfileStoreForSecretsRuntime(mainAgentDir).profiles[
+      profileId
+    ] as OAuthCredential;
+    expect(persisted.access).toBe("stale-access");
+    expect(persisted.refresh).toBe("stale-refresh");
   });
 });
