@@ -47,10 +47,7 @@ type TrajectoryRuntimeInit = {
  *  2. env.OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS
  *  3. undefined (no periodic flush)
  */
-function resolveFlushTimeoutMs(
-  cfg?: OpenClawConfig,
-  env?: NodeJS.ProcessEnv,
-): number | undefined {
+function resolveFlushTimeoutMs(cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv): number | undefined {
   const cfgValue = cfg?.trajectory?.flushTimeoutMs;
   if (typeof cfgValue === "number" && cfgValue > 0) {
     return cfgValue;
@@ -390,11 +387,8 @@ export function createTrajectoryRuntimeRecorder(
       }
       writeBoundedLine(line, { reserveSentinel: true });
 
-      // Reschedule periodic flush on new events.
-      if (flushTimeoutMs !== undefined) {
-        cancelFlushTimer();
-        scheduleFlush();
-      }
+      // Do NOT reschedule on each event — timer runs independently once started.
+      // scheduleFlush() is called once at initialization.
     },
     flush: async () => {
       // Cancel any pending periodic flush.
@@ -417,10 +411,7 @@ export function createTrajectoryRuntimeRecorder(
       if (!params.writer) {
         writers.delete(filePath);
       }
-
-      // Reschedule periodic flush if enabled.
-      lastFlushTime = Date.now();
-      scheduleFlush();
+      // Timer already cancelled above; do not reschedule after final flush.
     },
   };
 }
