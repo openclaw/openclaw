@@ -1751,6 +1751,9 @@
   "optionalDependencies": {
     "sqlite-vec": "0.1.9"
   },
+  "bundledDependencies": [
+    "zod"
+  ],
   "overrides": {
     "@aws-sdk/client-bedrock-runtime": "$@aws-sdk/client-bedrock-runtime",
     "axios": "1.16.0",
