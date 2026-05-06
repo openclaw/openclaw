@@ -8,6 +8,7 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness";
 import {
+  buildAgentRuntimePlan,
   embeddedAgentLog,
   nativeHookRelayTesting,
   onAgentEvent,
@@ -61,25 +62,25 @@ function createParamsWithRuntimePlan(
   workspaceDir: string,
 ): EmbeddedRunAttemptParams {
   const params = createParams(sessionFile, workspaceDir);
-  useLightweightCodexRuntimePlan(params);
-  return params;
+  return {
+    ...params,
+    runtimePlan: buildCodexRuntimePlan(params, workspaceDir),
+  };
 }
 
-function useLightweightCodexRuntimePlan(params: EmbeddedRunAttemptParams): void {
-  params.runtimePlan = {
-    auth: {},
-    prompt: {
-      resolveSystemPromptContribution: () => undefined,
-    },
-    tools: {
-      normalize: (tools: unknown) => tools,
-      logDiagnostics: () => undefined,
-    },
-    observability: {
-      resolvedRef: `${params.provider}/${params.modelId}`,
-      harnessId: "codex",
-    },
-  } as unknown as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
+function buildCodexRuntimePlan(params: EmbeddedRunAttemptParams, workspaceDir: string) {
+  return buildAgentRuntimePlan({
+    provider: params.provider,
+    modelId: params.modelId,
+    model: params.model,
+    modelApi: params.model.api,
+    harnessId: "codex",
+    harnessRuntime: "codex",
+    config: params.config,
+    workspaceDir,
+    agentDir: tempDir,
+    thinkingLevel: params.thinkLevel,
+  });
 }
 
 function threadStartResult(threadId = "thread-1") {
@@ -504,7 +505,7 @@ describe("runCodexAppServerAttempt", () => {
     params.config = { tools: { profile: "coding" } };
     params.sourceReplyDeliveryMode = "message_tool_only";
     params.messageProvider = "whatsapp";
-    useLightweightCodexRuntimePlan(params);
+    params.runtimePlan = buildCodexRuntimePlan(params, workspaceDir);
     let seenForceMessageTool: boolean | undefined;
     __testing.setOpenClawCodingToolsFactoryForTests((options) => {
       seenForceMessageTool = options?.forceMessageTool;
@@ -545,7 +546,7 @@ describe("runCodexAppServerAttempt", () => {
       session: { store: sessionsPath, mainKey: "main", scope: "per-sender" },
       tools: { profile: "coding" },
     };
-    useLightweightCodexRuntimePlan(params);
+    params.runtimePlan = buildCodexRuntimePlan(params, workspaceDir);
     await fs.writeFile(
       sessionsPath,
       JSON.stringify({
