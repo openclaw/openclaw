@@ -72,6 +72,33 @@ function expectWrapperToContainPathSuffix(wrapper: string, pathSuffix: string[])
   expect(wrapper.includes(escapedNativeSuffix) || wrapper.includes(posixSuffix)).toBe(true);
 }
 
+function base64UrlJson(value: unknown): string {
+  return Buffer.from(JSON.stringify(value), "utf8")
+    .toString("base64url")
+    .replace(/=+$/u, "");
+}
+
+function fakeChatgptJwt(params: {
+  email: string;
+  accountId: string;
+  planType: string;
+  exp?: number;
+}): string {
+  return [
+    base64UrlJson({ alg: "none", typ: "JWT" }),
+    base64UrlJson({
+      exp: params.exp ?? 2_000_000_000,
+      "https://api.openai.com/profile": { email: params.email },
+      "https://api.openai.com/auth": {
+        chatgpt_account_id: params.accountId,
+        chatgpt_plan_type: params.planType,
+        chatgpt_user_id: "user-id",
+      },
+    }),
+    "sig",
+  ].join(".");
+}
+
 afterEach(async () => {
   vi.restoreAllMocks();
   restoreEnv("CODEX_HOME");
@@ -258,6 +285,235 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(launched.argv).toEqual([]);
     const expectedCodexHome = await fs.realpath(path.join(stateDir, "acpx", "codex-home"));
     expect(path.resolve(String(launched.codexHome))).toBe(expectedCodexHome);
+  });
+
+  it("syncs Docker OpenClaw openai-codex OAuth into isolated Codex ACP auth", async () => {
+    const root = await makeTempDir();
+    const stateDir = path.join(root, "state");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const generated = generatedCodexPaths(stateDir);
+    const accountId = "workspace-123";
+    const access = fakeChatgptJwt({
+      email: "user@example.com",
+      accountId,
+      planType: "team",
+    });
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agentDir, "auth-profiles.json"),
+      `${JSON.stringify(
+        {
+          version: 1,
+          profiles: {
+            "openai-codex:user@example.com": {
+              type: "oauth",
+              provider: "openai-codex",
+              access,
+              refresh: "refresh-token",
+              email: "user@example.com",
+              accountId,
+              chatgptPlanType: "team",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await fs.writeFile(
+      path.join(agentDir, "auth-state.json"),
+      `${JSON.stringify(
+        { version: 1, lastGood: { "openai-codex": "openai-codex:user@example.com" } },
+        null,
+        2,
+      )}\n`,
+    );
+    const installedBinPath = path.join(root, "codex-acp-bin.js");
+    await fs.writeFile(
+      installedBinPath,
+      "console.log(JSON.stringify({ codexHome: process.env.CODEX_HOME }));\n",
+      "utf8",
+    );
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+      resolveInstalledCodexAcpBinPath: async () => installedBinPath,
+    });
+
+    await execFileAsync(process.execPath, [generated.wrapperPath], { cwd: root });
+    const auth = JSON.parse(
+      await fs.readFile(path.join(stateDir, "acpx", "codex-home", "auth.json"), "utf8"),
+    ) as {
+      auth_mode?: unknown;
+      OPENAI_API_KEY?: unknown;
+      tokens?: Record<string, unknown>;
+    };
+    expect(auth.auth_mode).toBe("chatgpt");
+    expect(auth.OPENAI_API_KEY).toBeUndefined();
+    expect(auth.tokens?.id_token).toBe(access);
+    expect(auth.tokens?.access_token).toBe(access);
+    expect(auth.tokens?.refresh_token).toBe("refresh-token");
+    expect(auth.tokens?.account_id).toBe(accountId);
+    await expect(
+      fs.access(path.join(stateDir, "acpx", "sync-codex-auth-from-openclaw.mjs")),
+    ).resolves.toBeUndefined();
+  });
+
+  it("ignores malformed Docker OpenClaw auth state while syncing Codex ACP auth", async () => {
+    const root = await makeTempDir();
+    const stateDir = path.join(root, "state");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const generated = generatedCodexPaths(stateDir);
+    const accountId = "workspace-first";
+    const access = fakeChatgptJwt({
+      email: "first@example.com",
+      accountId,
+      planType: "team",
+    });
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agentDir, "auth-profiles.json"),
+      `${JSON.stringify(
+        {
+          version: 1,
+          profiles: {
+            "openai-codex:first@example.com": {
+              type: "oauth",
+              provider: "openai-codex",
+              access,
+              refresh: "first-refresh-token",
+              email: "first@example.com",
+              accountId,
+              chatgptPlanType: "team",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await fs.writeFile(path.join(agentDir, "auth-state.json"), "{not-json", "utf8");
+    const installedBinPath = path.join(root, "codex-acp-bin.js");
+    await fs.writeFile(installedBinPath, "console.log('launched');\n", "utf8");
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+      resolveInstalledCodexAcpBinPath: async () => installedBinPath,
+    });
+
+    const { stderr } = await execFileAsync(process.execPath, [generated.wrapperPath], {
+      cwd: root,
+    });
+    const auth = JSON.parse(
+      await fs.readFile(path.join(stateDir, "acpx", "codex-home", "auth.json"), "utf8"),
+    ) as { tokens?: Record<string, unknown> };
+    expect(auth.tokens?.account_id).toBe(accountId);
+    expect(auth.tokens?.refresh_token).toBe("first-refresh-token");
+    expect(stderr).toContain("ignored unreadable Docker OpenClaw auth state");
+  });
+
+  it("adopts rotated isolated Codex ACP OAuth back into the Docker OpenClaw profile", async () => {
+    const root = await makeTempDir();
+    const stateDir = path.join(root, "state");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const generated = generatedCodexPaths(stateDir);
+    const accountId = "workspace-rotated";
+    const oldAccess = fakeChatgptJwt({
+      email: "user@example.com",
+      accountId,
+      planType: "team",
+      exp: 2_000_000_000,
+    });
+    const rotatedAccess = fakeChatgptJwt({
+      email: "user@example.com",
+      accountId,
+      planType: "team",
+      exp: 2_000_000_900,
+    });
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agentDir, "auth-profiles.json"),
+      `${JSON.stringify(
+        {
+          version: 1,
+          profiles: {
+            "openai-codex:user@example.com": {
+              type: "oauth",
+              provider: "openai-codex",
+              access: oldAccess,
+              refresh: "old-refresh-token",
+              expires: 2_000_000_000_000,
+              email: "user@example.com",
+              accountId,
+              chatgptPlanType: "team",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await fs.writeFile(
+      path.join(agentDir, "auth-state.json"),
+      `${JSON.stringify(
+        { version: 1, lastGood: { "openai-codex": "openai-codex:user@example.com" } },
+        null,
+        2,
+      )}\n`,
+    );
+    const installedBinPath = path.join(root, "codex-acp-bin.js");
+    await fs.writeFile(installedBinPath, "console.log('launched');\n", "utf8");
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+      resolveInstalledCodexAcpBinPath: async () => installedBinPath,
+    });
+    await fs.writeFile(
+      installedBinPath,
+      [
+        "const fs = require('node:fs');",
+        "const path = require('node:path');",
+        `const auth = ${JSON.stringify({
+          auth_mode: "chatgpt",
+          tokens: {
+            id_token: "rotated-id-token",
+            access_token: rotatedAccess,
+            refresh_token: "rotated-refresh-token",
+            account_id: accountId,
+          },
+          last_refresh: "2033-05-18T03:33:20.000Z",
+        })};`,
+        "fs.writeFileSync(path.join(process.env.CODEX_HOME, 'auth.json'), JSON.stringify(auth, null, 2) + '\\n');",
+        "console.log('rotated');",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await execFileAsync(process.execPath, [generated.wrapperPath], { cwd: root });
+    const store = JSON.parse(
+      await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
+    ) as { profiles?: Record<string, Record<string, unknown>> };
+    const profile = store.profiles?.["openai-codex:user@example.com"];
+    expect(profile?.access).toBe(rotatedAccess);
+    expect(profile?.refresh).toBe("rotated-refresh-token");
+    expect(profile?.expires).toBe(2_000_000_900_000);
+    expect(profile?.idToken).toBe("rotated-id-token");
+    expect(profile?.accountId).toBe(accountId);
   });
 
   it("launches the locally installed Claude ACP bin without going through npm", async () => {
