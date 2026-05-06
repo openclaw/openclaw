@@ -978,6 +978,7 @@ async function handleLocationAction(ctx: ResolvedActionContext): Promise<Message
 
   const locationName = readStringParam(params, "locationName");
   const locationAddress = readStringParam(params, "locationAddress");
+  const accuracyInMeters = readNumberParam(params, "accuracyInMeters");
 
   const gatewayPluginAction = await runGatewayPluginMessageActionOrNull({
     cfg,
@@ -1022,6 +1023,7 @@ async function handleLocationAction(ctx: ResolvedActionContext): Promise<Message
     longitude,
     locationName: locationName ?? undefined,
     locationAddress: locationAddress ?? undefined,
+    accuracyInMeters: accuracyInMeters ?? undefined,
   });
 
   return {

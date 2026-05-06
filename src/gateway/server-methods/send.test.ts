@@ -230,6 +230,66 @@ describe("gateway send mirroring", () => {
     mocks.getChannelPlugin.mockReturnValue({ outbound: { sendPoll: mocks.sendPoll } });
   });
 
+  it("mirrors location sends through the session route", async () => {
+    const sendLocation = vi.fn().mockResolvedValue({
+      messageId: "m-location",
+      toJid: "1555@s.whatsapp.net",
+    });
+    mocks.getChannelPlugin.mockReturnValueOnce({
+      outbound: { sendLocation },
+    });
+
+    const { respond } = await runSend({
+      to: "channel:C1",
+      latitude: 28.2723,
+      longitude: -16.6424,
+      locationName: "Teide",
+      locationAddress: "Parque Nacional del Teide, Tenerife",
+      accuracyInMeters: 10,
+      channel: "slack",
+      sessionKey: "agent:main:slack:channel:c1",
+      idempotencyKey: "idem-location",
+    });
+
+    expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        currentSessionKey: "agent:main:slack:channel:c1",
+        target: "resolved",
+      }),
+    );
+    expect(mocks.ensureOutboundSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        route: expect.objectContaining({
+          sessionKey: "agent:main:slack:channel:c1",
+        }),
+      }),
+    );
+    expect(sendLocation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        latitude: 28.2723,
+        longitude: -16.6424,
+        locationName: "Teide",
+        locationAddress: "Parque Nacional del Teide, Tenerife",
+        accuracyInMeters: 10,
+      }),
+    );
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "agent:main:slack:channel:c1",
+        idempotencyKey: "idem-location",
+        text: expect.stringContaining("Teide"),
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ messageId: "m-location" }),
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
+  });
+
   it("accepts media-only sends without message", async () => {
     mockDeliverySuccess("m-media");
 
