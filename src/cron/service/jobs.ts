@@ -194,15 +194,29 @@ function shouldRepairFutureCronNextRunAtMs(params: {
     return false;
   }
 
-  const naturalNext = computeStaggeredCronNextRunAtMs(job, nowMs);
+  let naturalNext: number | undefined;
+  try {
+    naturalNext = computeStaggeredCronNextRunAtMs(job, nowMs);
+  } catch {
+    return false;
+  }
   if (!isFiniteTimestamp(naturalNext) || nextRun <= naturalNext) {
     return false;
   }
-  if (isStaggeredCronRunAtMs(job, nextRun)) {
+  try {
+    if (isStaggeredCronRunAtMs(job, nextRun)) {
+      return false;
+    }
+  } catch {
     return false;
   }
 
-  const followingNaturalNext = computeStaggeredCronNextRunAtMs(job, naturalNext);
+  let followingNaturalNext: number | undefined;
+  try {
+    followingNaturalNext = computeStaggeredCronNextRunAtMs(job, naturalNext);
+  } catch {
+    return false;
+  }
   if (!isFiniteTimestamp(followingNaturalNext)) {
     return false;
   }

@@ -841,4 +841,29 @@ describe("recomputeNextRuns", () => {
     expect(recomputeNextRunsForMaintenance(state)).toBe(true);
     expect(job.state.nextRunAtMs).toBe(expected);
   });
+
+  it("does not throw while probing malformed cron schedules with future nextRunAtMs", () => {
+    const now = Date.parse("2026-05-05T12:00:00.000Z");
+    const future = Date.parse("2026-05-12T16:00:00.000Z");
+    const job: CronJob = {
+      id: "malformed-future",
+      name: "malformed future",
+      enabled: true,
+      createdAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      updatedAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      schedule: { kind: "cron", expr: "not a valid cron", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: { nextRunAtMs: future },
+    };
+    const state = {
+      ...createMockState(now),
+      store: { version: 1 as const, jobs: [job] },
+    } as CronServiceState;
+
+    expect(() => recomputeNextRunsForMaintenance(state)).not.toThrow();
+    expect(job.state.nextRunAtMs).toBe(future);
+    expect(job.state.scheduleErrorCount).toBeUndefined();
+  });
 });
