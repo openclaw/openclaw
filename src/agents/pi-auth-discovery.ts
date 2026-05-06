@@ -3,6 +3,8 @@ import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-au
 import type { ExternalCliAuthDiscovery } from "./auth-profiles/external-cli-discovery.js";
 import {
   ensureAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreForRuntime,
   loadAuthProfileStoreForSecretsRuntime,
 } from "./auth-profiles/store.js";
@@ -15,7 +17,9 @@ import {
 export type DiscoverAuthStorageOptions = {
   externalCli?: ExternalCliAuthDiscovery;
   readOnly?: boolean;
+  skipExternalAuthProfiles?: boolean;
   skipCredentials?: boolean;
+  syntheticAuthProviderRefs?: Iterable<string>;
 } & PiDiscoveryAuthLookupOptions;
 
 export function resolvePiCredentialsForDiscovery(
@@ -28,17 +32,25 @@ export function resolvePiCredentialsForDiscovery(
     ...(options?.externalCli ? { externalCli: options.externalCli } : {}),
   };
   const store =
-    options?.readOnly === true
-      ? options.externalCli || options.config
-        ? loadAuthProfileStoreForRuntime(agentDir, { readOnly: true, ...storeOptions })
-        : loadAuthProfileStoreForSecretsRuntime(agentDir)
-      : ensureAuthProfileStore(agentDir, storeOptions);
+    options?.skipExternalAuthProfiles === true
+      ? options.readOnly === true
+        ? loadAuthProfileStoreWithoutExternalProfiles(agentDir)
+        : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+            allowKeychainPrompt: false,
+          })
+      : options?.readOnly === true
+        ? options.externalCli || options.config
+          ? loadAuthProfileStoreForRuntime(agentDir, { readOnly: true, ...storeOptions })
+          : loadAuthProfileStoreForSecretsRuntime(agentDir)
+        : ensureAuthProfileStore(agentDir, storeOptions);
   const credentials = addEnvBackedPiCredentials(resolvePiCredentialMapFromStore(store), {
     config: options?.config,
     workspaceDir: options?.workspaceDir,
     env: options?.env,
   });
-  for (const provider of resolveRuntimeSyntheticAuthProviderRefs()) {
+  const syntheticAuthProviderRefs =
+    options?.syntheticAuthProviderRefs ?? resolveRuntimeSyntheticAuthProviderRefs();
+  for (const provider of syntheticAuthProviderRefs) {
     if (credentials[provider]) {
       continue;
     }

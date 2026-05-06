@@ -350,6 +350,7 @@ vi.mock("../../pi-settings.js", () => ({
     },
   }),
   isSilentOverflowProneModel: () => false,
+  resolveEffectiveCompactionMode: () => "default",
 }));
 
 vi.mock("../extensions.js", () => ({

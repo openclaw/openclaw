@@ -6,7 +6,7 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 vi.mock("../infra/boundary-file-read.js", async () => {
   const fs = await import("node:fs");
   return {
-    openBoundaryFileSync: ({ absolutePath }: { absolutePath: string }) => ({
+    openRootFileSync: ({ absolutePath }: { absolutePath: string }) => ({
       ok: true,
       fd: fs.openSync(absolutePath, "r"),
     }),

@@ -56,7 +56,7 @@ import {
   type SessionScope,
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import {
   DEFAULT_AGENT_ID,
@@ -168,7 +168,7 @@ function resolveIdentityAvatarUrl(
     return undefined;
   }
   try {
-    const opened = openBoundaryFileSync({
+    const opened = openRootFileSync({
       absolutePath: resolvedCandidate,
       rootPath: workspaceRoot,
       rootRealPath: workspaceRoot,

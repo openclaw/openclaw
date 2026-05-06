@@ -74,6 +74,12 @@ const uninstallPlugin: AsyncUnknownMock = vi.fn();
 export const updateNpmInstalledPlugins: AsyncUnknownMock = vi.fn();
 export const updateNpmInstalledHookPacks: AsyncUnknownMock = vi.fn();
 export const promptYesNo: AsyncUnknownMock = vi.fn();
+export class PromptInputClosedError extends Error {
+  constructor() {
+    super("Prompt input closed before an answer was received.");
+    this.name = "PromptInputClosedError";
+  }
+}
 export const installPluginFromNpmSpec: AsyncUnknownMock = vi.fn();
 export const installPluginFromPath: AsyncUnknownMock = vi.fn();
 export const installPluginFromClawHub: AsyncUnknownMock = vi.fn();
@@ -455,6 +461,7 @@ vi.mock("../hooks/update.js", () => ({
 }));
 
 vi.mock("./prompt.js", () => ({
+  PromptInputClosedError,
   promptYesNo: ((...args: Parameters<(typeof import("./prompt.js"))["promptYesNo"]>) =>
     invokeMock<
       Parameters<(typeof import("./prompt.js"))["promptYesNo"]>,

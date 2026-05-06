@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
 import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
-import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import {
   collectAnthropicApiKeys,
@@ -732,11 +732,18 @@ describeLive("live models (profile keys)", () => {
       }
 
       const providers = parseProviderFilter(process.env.OPENCLAW_LIVE_PROVIDERS);
-      const agentDir = resolveOpenClawAgentDir();
+      const providerList = providers ? [...providers] : null;
+      const agentDir = resolveDefaultAgentDir(cfg);
       const authStorage = discoverAuthStorage(agentDir, {
         config: cfg,
         env: process.env,
-        ...(providers ? { externalCli: externalCliDiscoveryForProviders({ cfg, providers }) } : {}),
+        ...(providerList
+          ? {
+              externalCli: externalCliDiscoveryForProviders({ cfg, providers: providerList }),
+              skipExternalAuthProfiles: true,
+              syntheticAuthProviderRefs: [],
+            }
+          : {}),
       });
       logProgress("[live-models] loading model registry");
       const models = await withLiveStageTimeout(

@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   GatewayClient,
   startGatewayClientWhenEventLoopReady,
@@ -14,11 +15,6 @@ type VoiceCallStartResult = {
 };
 
 type VoiceCallSpeakResult = {
-  success?: boolean;
-  error?: string;
-};
-
-type VoiceCallDtmfResult = {
   success?: boolean;
   error?: string;
 };
@@ -87,19 +83,24 @@ export async function joinMeetViaVoiceCallGateway(params: {
   dtmfSequence?: string;
   logger?: RuntimeLogger;
   message?: string;
+  requesterSessionKey?: string;
+  sessionKey?: string;
 }): Promise<VoiceCallMeetJoinResult> {
   let client: VoiceCallGatewayClient | undefined;
 
   try {
     client = await createConnectedGatewayClient(params.config);
     params.logger?.info(
-      `[google-meet] Delegating Twilio join to Voice Call (dtmf=${params.dtmfSequence ? "post-connect" : "none"}, intro=${params.message ? "delayed" : "none"})`,
+      `[google-meet] Delegating Twilio join to Voice Call (dtmf=${params.dtmfSequence ? "pre-connect" : "none"}, intro=${params.message ? "delayed" : "none"})`,
     );
     const start = (await client.request(
       "voicecall.start",
       {
         to: params.dialInNumber,
         mode: "conversation",
+        ...(params.dtmfSequence ? { dtmfSequence: params.dtmfSequence } : {}),
+        ...(params.requesterSessionKey ? { requesterSessionKey: params.requesterSessionKey } : {}),
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       },
       { timeoutMs: params.config.voiceCall.requestTimeoutMs },
     )) as VoiceCallStartResult;
@@ -109,27 +110,10 @@ export async function joinMeetViaVoiceCallGateway(params: {
     params.logger?.info(
       `[google-meet] Voice Call Twilio phone leg started: callId=${start.callId}`,
     );
-    let dtmfSent = false;
-    if (params.dtmfSequence) {
-      const delayMs = params.config.voiceCall.dtmfDelayMs;
+    const dtmfSent = Boolean(params.dtmfSequence);
+    if (dtmfSent) {
       params.logger?.info(
-        `[google-meet] Waiting ${delayMs}ms before sending Meet DTMF for callId=${start.callId}`,
-      );
-      await sleep(delayMs);
-      const dtmf = (await client.request(
-        "voicecall.dtmf",
-        {
-          callId: start.callId,
-          digits: params.dtmfSequence,
-        },
-        { timeoutMs: params.config.voiceCall.requestTimeoutMs },
-      )) as VoiceCallDtmfResult;
-      if (dtmf.success === false) {
-        throw new Error(dtmf.error || "voicecall.dtmf failed");
-      }
-      dtmfSent = true;
-      params.logger?.info(
-        `[google-meet] Meet DTMF sent after phone leg connected: callId=${start.callId} digits=${params.dtmfSequence.length}`,
+        `[google-meet] Meet DTMF queued before realtime connect: callId=${start.callId} digits=${params.dtmfSequence?.length ?? 0}`,
       );
     }
     let introSent = false;
@@ -141,15 +125,23 @@ export async function joinMeetViaVoiceCallGateway(params: {
         );
         await sleep(delayMs);
       }
-      const spoken = (await client.request(
-        "voicecall.speak",
-        {
-          callId: start.callId,
-          allowTwimlFallback: false,
-          message: params.message,
-        },
-        { timeoutMs: params.config.voiceCall.requestTimeoutMs },
-      )) as VoiceCallSpeakResult;
+      let spoken: VoiceCallSpeakResult;
+      try {
+        spoken = (await client.request(
+          "voicecall.speak",
+          {
+            callId: start.callId,
+            allowTwimlFallback: false,
+            message: params.message,
+          },
+          { timeoutMs: params.config.voiceCall.requestTimeoutMs },
+        )) as VoiceCallSpeakResult;
+      } catch (err) {
+        params.logger?.warn?.(
+          `[google-meet] Skipped intro speech because realtime bridge was not ready: ${formatErrorMessage(err)}`,
+        );
+        spoken = { success: false };
+      }
       if (spoken.success === false) {
         params.logger?.warn?.(
           `[google-meet] Skipped intro speech because realtime bridge was not ready: ${
