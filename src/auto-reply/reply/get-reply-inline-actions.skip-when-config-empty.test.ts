@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -46,6 +49,16 @@ const createTypingController = (): TypingController => ({
   markDispatchIdle: () => {},
   cleanup: vi.fn(),
 });
+
+async function writeSessionStore(
+  storeTemplate: string,
+  agentId: string,
+  entries: Record<string, unknown>,
+) {
+  const storePath = storeTemplate.replaceAll("{agentId}", agentId);
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.writeFile(storePath, JSON.stringify(entries, null, 2), "utf-8");
+}
 
 const createHandleInlineActionsInput = (params: {
   ctx: ReturnType<typeof buildTestCtx>;
@@ -806,5 +819,145 @@ describe("handleInlineActions", () => {
     });
     expect(messageExecute).not.toHaveBeenCalled();
     expect(sessionsExecute).not.toHaveBeenCalled();
+  });
+
+  it("applies subagent policy to ACP envelope inline dispatch sessions", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-inline-acp-policy-"));
+    try {
+      const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
+      await writeSessionStore(storeTemplate, "main", {
+        "agent:main:acp:leaf": {
+          sessionId: "session-acp-leaf",
+          updatedAt: Date.now(),
+          spawnedBy: "agent:main:subagent:parent",
+          spawnDepth: 2,
+          subagentRole: "leaf",
+          subagentControlScope: "none",
+        },
+      });
+
+      const typing = createTypingController();
+      const toolExecute = vi.fn(async () => ({ content: "spawned" }));
+      createOpenClawToolsMock.mockReturnValue([
+        {
+          name: "sessions_spawn",
+          execute: toolExecute,
+        },
+      ]);
+
+      const ctx = buildTestCtx({
+        Body: "/spawn_subagent investigate",
+        CommandBody: "/spawn_subagent investigate",
+      });
+      const skillCommands: SkillCommandSpec[] = [
+        {
+          name: "spawn_subagent",
+          skillName: "spawn-subagent",
+          description: "Spawn a subagent",
+          dispatch: {
+            kind: "tool",
+            toolName: "sessions_spawn",
+            argMode: "raw",
+          },
+          sourceFilePath: "/tmp/plugin/commands/spawn-subagent.md",
+        },
+      ];
+
+      const result = await handleInlineActions(
+        createHandleInlineActionsInput({
+          ctx,
+          typing,
+          cleanedBody: "/spawn_subagent investigate",
+          command: {
+            isAuthorizedSender: true,
+            senderId: "sender-1",
+            senderIsOwner: true,
+            abortKey: "sender-1",
+            rawBodyNormalized: "/spawn_subagent investigate",
+            commandBodyNormalized: "/spawn_subagent investigate",
+          },
+          overrides: {
+            cfg: {
+              commands: { text: true },
+              session: { store: storeTemplate },
+              agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
+            },
+            sessionKey: "agent:main:acp:leaf",
+            allowTextCommands: true,
+            skillCommands,
+          },
+        }),
+      );
+
+      expect(result).toEqual({
+        kind: "reply",
+        reply: { text: "❌ Tool not available: sessions_spawn" },
+      });
+      expect(toolExecute).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes sandboxed runtime state into inline tool construction", async () => {
+    const typing = createTypingController();
+    const toolExecute = vi.fn(async () => ({ content: "listed" }));
+    createOpenClawToolsMock.mockReturnValue([
+      {
+        name: "sessions_list",
+        execute: toolExecute,
+      },
+    ]);
+
+    const ctx = buildTestCtx({
+      Body: "/list_sessions now",
+      CommandBody: "/list_sessions now",
+    });
+    const skillCommands: SkillCommandSpec[] = [
+      {
+        name: "list_sessions",
+        skillName: "list-sessions",
+        description: "List sessions",
+        dispatch: {
+          kind: "tool",
+          toolName: "sessions_list",
+          argMode: "raw",
+        },
+        sourceFilePath: "/tmp/plugin/commands/list-sessions.md",
+      },
+    ];
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "/list_sessions now",
+        command: {
+          isAuthorizedSender: true,
+          senderId: "sender-1",
+          senderIsOwner: true,
+          abortKey: "sender-1",
+          rawBodyNormalized: "/list_sessions now",
+          commandBodyNormalized: "/list_sessions now",
+        },
+        overrides: {
+          cfg: {
+            commands: { text: true },
+            agents: { defaults: { sandbox: { mode: "all" } } },
+          },
+          sessionKey: "agent:main:thread",
+          allowTextCommands: true,
+          skillCommands,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ kind: "reply", reply: { text: "✅ Done." } });
+    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sandboxed: true,
+      }),
+    );
+    expect(toolExecute).toHaveBeenCalled();
   });
 });

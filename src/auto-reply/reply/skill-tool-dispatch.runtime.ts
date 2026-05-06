@@ -7,6 +7,10 @@ import {
 import type { AnyAgentTool } from "../../agents/pi-tools.types.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import {
+  isSubagentEnvelopeSession,
+  resolveSubagentCapabilityStore,
+} from "../../agents/subagent-capabilities.js";
+import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
 } from "../../agents/tool-policy-pipeline.js";
@@ -21,11 +25,15 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { getPluginToolMeta } from "../../plugins/tools.js";
-import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
 import { extractExplicitGroupId } from "./group-id.js";
 
+/**
+ * Policy-enforcement seam for skill `command-dispatch: tool` invocations.
+ * Keep this aligned with the normal tool surfaces so GHSA-mhm4-93fw-4qr2
+ * stays closed across allow/deny, group, sandbox, and subagent policy layers.
+ */
 export function resolveSkillDispatchTools(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
@@ -87,8 +95,16 @@ export function resolveSkillDispatchTools(params: {
     sessionKey: params.sessionKey,
   });
   const sandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
-  const subagentPolicy = isSubagentSessionKey(params.sessionKey)
-    ? resolveSubagentToolPolicyForSession(params.cfg, params.sessionKey)
+  const subagentStore = resolveSubagentCapabilityStore(params.sessionKey, {
+    cfg: params.cfg,
+  });
+  const subagentPolicy = isSubagentEnvelopeSession(params.sessionKey, {
+    cfg: params.cfg,
+    store: subagentStore,
+  })
+    ? resolveSubagentToolPolicyForSession(params.cfg, params.sessionKey, {
+        store: subagentStore,
+      })
     : undefined;
   const tools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
@@ -104,6 +120,7 @@ export function resolveSkillDispatchTools(params: {
     workspaceDir: params.workspaceDir,
     config: params.cfg,
     allowGatewaySubagentBinding: true,
+    sandboxed: sandboxRuntime.sandboxed,
     requesterAgentIdOverride: params.agentId,
     requesterSenderId: params.senderId,
     senderIsOwner: params.senderIsOwner,
