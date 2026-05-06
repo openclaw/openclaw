@@ -121,6 +121,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/compaction: clamp compaction summary reserve tokens to each model's output limit so high-context compaction no longer requests invalid `max_tokens` values. (#54392) Thanks @adzendo.
 - Doctor/OpenAI Codex: revert the 2026.5.5 `doctor --fix` repair that rewrote valid `openai-codex/*` ChatGPT/Codex OAuth routes to `openai/*`, which could break OAuth-only GPT-5.5 setups or accidentally move users onto the OpenAI API-key route. If 2026.5.5 already changed your default model, run `openclaw models set openai-codex/gpt-5.5 && openclaw config validate` to switch the default agent back to the Codex OAuth PI route. Fixes #78407.
 - Discord/groups: instruct group-chat agents to stay silent when a message is addressed to someone else, replying only when invited or correcting key facts. (#78615)
 - Discord/groups: tell Discord-channel agents to wrap bare URLs as `<https://example.com>` so link previews do not expand into uninvited embeds. (#78614)
@@ -1053,7 +1054,6 @@ Docs: https://docs.openclaw.ai
 - Agents/replies: defer implicit image model discovery and keep OAuth auth-store adoption on persisted profiles during reply startup, cutting OCM MarCodex warm prep to sub-second in live checks. Thanks @shakkernerd.
 - Plugins/tools: enforce `contracts.tools` as the manifest ownership contract for plugin tool registration, rejecting undeclared runtime tool names and adding bundled plugin drift coverage. Thanks @shakkernerd.
 - Agents/Codex: stop prompting message-tool-only source turns to finish with `NO_REPLY`, so quiet turns are represented by not calling the visible message tool instead of conflicting final-text instructions. Thanks @pashpashpash.
-- Agents/compaction: clamp compaction summary reserve tokens to each model's output limit so high-context compaction no longer requests invalid `max_tokens` values. (#54392) Thanks @adzendo.
 - Gateway/config: report failed backup restores as failed in logs and config observe audit records instead of marking them valid. (#70515) Thanks @davidangularme.
 - Compaction: use the active session model fallback chain for implicit summarization failures without persisting fallback model selection, so Azure content-filter 400s can recover. Fixes #64960. (#74470) Thanks @jalehman and @OpenCodeEngineer.
 - Gateway/config: allow `gateway config.patch` to update documented subagent thinking defaults. Fixes #75764. (#75802) Thanks @kAIborg24.
