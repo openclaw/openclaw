@@ -21,8 +21,16 @@ export async function readCodexPluginAppsCached(params: {
   const cacheKey = params.cacheKey || DEFAULT_CACHE_KEY;
   const cached = appsCacheByKey.get(cacheKey);
   const now = Date.now();
-  if (cached && cached.expiresAt > now) {
+  if (cached && cached.expiresAt > now && params.forceRefetch !== true) {
     return cached.apps;
+  }
+  if (cached && params.forceRefetch === true) {
+    return await refreshCodexPluginAppsCache({
+      request: params.request,
+      cacheKey,
+      forceRefetch: true,
+      existing: cached,
+    });
   }
   if (cached) {
     void refreshCodexPluginAppsCache({

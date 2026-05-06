@@ -154,7 +154,7 @@ describe("Codex plugin inventory", () => {
     const first = await readCodexPluginInventory({
       pluginConfig,
       request,
-      forceRefetchApps: true,
+      forceRefetchApps: false,
       appCacheKey: "stale-refresh-test",
     });
     expect(first.records[0]?.authRequired).toBe(true);
@@ -165,7 +165,7 @@ describe("Codex plugin inventory", () => {
     const second = await readCodexPluginInventory({
       pluginConfig,
       request,
-      forceRefetchApps: true,
+      forceRefetchApps: false,
       appCacheKey: "stale-refresh-test",
     });
     expect(second.records[0]?.authRequired).toBe(true);
@@ -177,10 +177,81 @@ describe("Codex plugin inventory", () => {
     const third = await readCodexPluginInventory({
       pluginConfig,
       request,
-      forceRefetchApps: true,
+      forceRefetchApps: false,
       appCacheKey: "stale-refresh-test",
     });
     expect(third.records[0]?.authRequired).toBe(false);
+    expect(appListCalls).toBe(2);
+  });
+
+  it("bypasses fresh cached app inventory when force refetch is requested", async () => {
+    let appListCalls = 0;
+    let accessible = false;
+    const request = async (method: string) => {
+      if (method === "plugin/list") {
+        return {
+          marketplaces: [
+            {
+              name: "openai-curated",
+              plugins: [
+                {
+                  id: "google-calendar",
+                  name: "google-calendar",
+                  installed: true,
+                  enabled: true,
+                  interface: { displayName: "Google Calendar" },
+                },
+              ],
+            },
+          ],
+        };
+      }
+      if (method === "app/list") {
+        appListCalls += 1;
+        return {
+          data: [
+            {
+              id: "calendar",
+              name: "Calendar",
+              isAccessible: accessible,
+              isEnabled: true,
+              pluginDisplayNames: ["Google Calendar"],
+            },
+          ],
+          nextCursor: null,
+        };
+      }
+      throw new Error(`unexpected method ${method}`);
+    };
+    const pluginConfig = {
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          calendar: {
+            enabled: true,
+            marketplaceName: "openai-curated",
+            pluginName: "google-calendar",
+          },
+        },
+      },
+    };
+
+    const first = await readCodexPluginInventory({
+      pluginConfig,
+      request,
+      forceRefetchApps: false,
+      appCacheKey: "force-refresh-test",
+    });
+    expect(first.records[0]?.authRequired).toBe(true);
+
+    accessible = true;
+    const second = await readCodexPluginInventory({
+      pluginConfig,
+      request,
+      forceRefetchApps: true,
+      appCacheKey: "force-refresh-test",
+    });
+    expect(second.records[0]?.authRequired).toBe(false);
     expect(appListCalls).toBe(2);
   });
 });
