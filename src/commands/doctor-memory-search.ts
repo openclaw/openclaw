@@ -25,10 +25,12 @@ import {
   type DreamingArtifactsAuditSummary,
   type ShortTermAuditSummary,
 } from "../plugin-sdk/memory-core-engine-runtime.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
 import {
   getActiveMemorySearchManager,
   resolveActiveMemoryBackendConfig,
 } from "../plugins/memory-runtime.js";
+import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
@@ -303,6 +305,24 @@ export async function maybeRepairMemoryRecallHealth(params: {
   }
 }
 
+function hasAlternateMemoryPluginSlot(cfg: OpenClawConfig): boolean {
+  const plugins = normalizePluginsConfig(cfg.plugins);
+  if (!plugins.enabled) {
+    return false;
+  }
+  const memorySlot = plugins.slots.memory;
+  if (typeof memorySlot !== "string" || memorySlot.length === 0) {
+    return false;
+  }
+  if (memorySlot === defaultSlotIdForKey("memory")) {
+    return false;
+  }
+  if (plugins.deny.includes(memorySlot)) {
+    return false;
+  }
+  return plugins.entries[memorySlot]?.enabled !== false;
+}
+
 /**
  * Check whether memory search has a usable embedding provider.
  * Runs as part of `openclaw doctor` — config-only checks where possible;
@@ -337,6 +357,14 @@ export async function noteMemorySearchHealth(
   const backendConfig = resolveActiveMemoryBackendConfig({ cfg, agentId });
   if (!backendConfig) {
     if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
+      return;
+    }
+    if (hasAlternateMemoryPluginSlot(cfg)) {
+      // An alternate memory plugin (e.g. memory-lancedb) owns the slot. Such
+      // plugins provide storage and embeddings via tools+hooks rather than
+      // the memory-host runtime contract, so the host-runtime probe returns
+      // null even though a memory plugin is active and configured. The
+      // plugin's own health checks own the diagnostics here.
       return;
     }
     note("No active memory plugin is registered for the current config.", "Memory search");

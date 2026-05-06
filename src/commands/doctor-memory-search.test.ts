@@ -276,6 +276,43 @@ describe("noteMemorySearchHealth", () => {
     );
   });
 
+  it("does not warn when an alternate memory plugin owns the memory slot (#78540)", async () => {
+    resolveActiveMemoryBackendConfig.mockReturnValue(null);
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+    const cfgWithLancedb = {
+      plugins: { slots: { memory: "memory-lancedb" } },
+    } as unknown as OpenClawConfig;
+
+    await noteMemorySearchHealth(cfgWithLancedb, {});
+
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+    expect(checkQmdBinaryAvailability).not.toHaveBeenCalled();
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("still warns when memory-core owns the slot but no runtime is active", async () => {
+    resolveActiveMemoryBackendConfig.mockReturnValue(null);
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+    const cfgWithDefault = {
+      plugins: { slots: { memory: "memory-core" } },
+    } as unknown as OpenClawConfig;
+
+    await noteMemorySearchHealth(cfgWithDefault, {});
+
+    expect(note).toHaveBeenCalledTimes(1);
+    expect(String(note.mock.calls[0]?.[0] ?? "")).toContain(
+      "No active memory plugin is registered",
+    );
+  });
+
   it("does not warn when CLI backend resolution is missing but gateway memory probe is ready", async () => {
     resolveActiveMemoryBackendConfig.mockReturnValue(null);
     resolveMemorySearchConfig.mockReturnValue({
