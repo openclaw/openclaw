@@ -11,8 +11,11 @@ import {
 } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
-import { externalCliDiscoveryForProviders } from "../agents/auth-profiles/external-cli-discovery.js";
-import { ensureAuthProfileStore, saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import {
+  ensureAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfiles,
+  saveAuthProfileStore,
+} from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   collectAnthropicApiKeys,
@@ -2407,16 +2410,16 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         );
 
         const agentDir = resolveDefaultAgentDir(cfg);
-        const externalCli = providerList
-          ? externalCliDiscoveryForProviders({ cfg, providers: providerList })
-          : undefined;
         logProgress("[all-models] loading auth profiles");
         const authProfileStore = await withGatewayLiveSetupTimeout(
           Promise.resolve().then(() =>
-            ensureAuthProfileStore(agentDir, {
-              allowKeychainPrompt: false,
-              ...(externalCli ? { externalCli } : {}),
-            }),
+            providerList
+              ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+                  allowKeychainPrompt: false,
+                })
+              : ensureAuthProfileStore(agentDir, {
+                  allowKeychainPrompt: false,
+                }),
           ),
           "[all-models] load auth profiles",
         );
@@ -2425,7 +2428,6 @@ describeLive("gateway live (dev agent, profile keys)", () => {
             discoverAuthStorage(agentDir, {
               config: cfg,
               env: process.env,
-              ...(externalCli ? { externalCli } : {}),
               ...(providerList
                 ? {
                     skipExternalAuthProfiles: true,
