@@ -2,7 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
+import {
+  createEditTool,
+  createReadTool,
+  createWriteTool,
+  withFileMutationQueue,
+} from "@mariozechner/pi-coding-agent";
+import { Type } from "typebox";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
 import { root as fsRoot, FsSafeError } from "../infra/fs-safe.js";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
@@ -627,10 +633,12 @@ export function createSandboxedReadTool(params: SandboxToolParams) {
 }
 
 export function createSandboxedWriteTool(params: SandboxToolParams) {
+  const ops = createSandboxWriteOperations(params);
   const base = createWriteTool(params.root, {
-    operations: createSandboxWriteOperations(params),
+    operations: ops,
   }) as unknown as AnyAgentTool;
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  const validated = wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  return wrapToolWriteWithAppend(validated, { appendFile: ops.appendFile, root: params.root });
 }
 
 export function createSandboxedEditTool(params: SandboxToolParams) {
@@ -646,10 +654,10 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
 }
 
 export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
-  const base = createWriteTool(root, {
-    operations: createHostWriteOperations(root, options),
-  }) as unknown as AnyAgentTool;
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  const ops = createHostWriteOperations(root, options);
+  const base = createWriteTool(root, { operations: ops }) as unknown as AnyAgentTool;
+  const validated = wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  return wrapToolWriteWithAppend(validated, { appendFile: ops.appendFile, root });
 }
 
 export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
@@ -709,6 +717,57 @@ function createSandboxReadOperations(params: SandboxToolParams) {
   } as const;
 }
 
+function createAbortError(): Error {
+  const err = new Error("Aborted");
+  err.name = "AbortError";
+  return err;
+}
+
+function throwAbortError(): never {
+  throw createAbortError();
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throwAbortError();
+  }
+}
+
+function appendFileWithAbort(
+  signal: AbortSignal | undefined,
+  append: () => Promise<void>,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(createAbortError());
+      return;
+    }
+
+    let aborted = false;
+    const onAbort = () => {
+      aborted = true;
+      reject(createAbortError());
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    void (async () => {
+      try {
+        await append();
+        if (aborted) {
+          return;
+        }
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      } catch (error: unknown) {
+        signal?.removeEventListener("abort", onAbort);
+        if (!aborted) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      }
+    })();
+  });
+}
+
 function createSandboxWriteOperations(params: SandboxToolParams) {
   return {
     mkdir: async (dir: string) => {
@@ -716,6 +775,25 @@ function createSandboxWriteOperations(params: SandboxToolParams) {
     },
     writeFile: async (absolutePath: string, content: string) => {
       await params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content });
+    },
+    appendFile: async (absolutePath: string, content: string) => {
+      let existing = "";
+      try {
+        const buf = await params.bridge.readFile({ filePath: absolutePath, cwd: params.root });
+        existing = buf.toString("utf8");
+      } catch (err) {
+        // Only treat genuine missing-file errors as empty; re-throw safety and I/O failures.
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!/ENOENT|no such file/i.test(msg)) {
+          throw err;
+        }
+      }
+      await params.bridge.mkdirp({ filePath: path.dirname(absolutePath), cwd: params.root });
+      await params.bridge.writeFile({
+        filePath: absolutePath,
+        cwd: params.root,
+        data: existing + content,
+      });
     },
   } as const;
 }
@@ -746,6 +824,12 @@ async function writeHostFile(absolutePath: string, content: string) {
   await fs.writeFile(resolved, content, "utf-8");
 }
 
+async function appendHostFile(absolutePath: string, content: string) {
+  const resolved = path.resolve(expandTildeToOsHome(absolutePath));
+  await fs.mkdir(path.dirname(resolved), { recursive: true });
+  await fs.appendFile(resolved, content, "utf-8");
+}
+
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
@@ -757,6 +841,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
         await fs.mkdir(resolved, { recursive: true });
       },
       writeFile: writeHostFile,
+      appendFile: appendHostFile,
     } as const;
   }
 
@@ -773,7 +858,57 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
       const relative = toRelativeWorkspacePath(root, absolutePath);
       await (await rootPromise).write(relative, content, { mkdir: true });
     },
+    appendFile: async (absolutePath: string, content: string) => {
+      const relative = toRelativeWorkspacePath(root, absolutePath);
+      await (await rootPromise).append(relative, content, { mkdir: true });
+    },
   } as const;
+}
+
+export function wrapToolWriteWithAppend(
+  tool: AnyAgentTool,
+  ops: { appendFile: (absolutePath: string, content: string) => Promise<void>; root: string },
+): AnyAgentTool {
+  return {
+    ...tool,
+    parameters: Type.Object({
+      path: Type.String({ description: "Path to the file to write (relative or absolute)" }),
+      content: Type.String({ description: "Content to write to the file" }),
+      append: Type.Optional(
+        Type.Boolean({
+          description:
+            "When true, append content to the existing file instead of overwriting it. If the file does not exist it is created.",
+        }),
+      ),
+    }),
+    description: `${tool.description} Pass \`append: true\` to append to an existing file instead of overwriting it.`,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const record = getToolParamsRecord(args);
+      const doAppend = record?.append === true;
+      if (!doAppend) {
+        return tool.execute(toolCallId, args, signal, onUpdate);
+      }
+      // Delegate validation of required params to the underlying tool when append is missing/invalid.
+      const filePath = typeof record?.path === "string" ? record.path : undefined;
+      const content = typeof record?.content === "string" ? record.content : undefined;
+      if (!filePath || !filePath.trim() || content === undefined || !content.trim()) {
+        return tool.execute(toolCallId, args, signal, onUpdate);
+      }
+      throwIfAborted(signal);
+      // Strip @ workspace-alias prefix and expand ~ before resolving; mirrors resolveToCwd semantics.
+      const normalized = filePath.startsWith("@") ? filePath.slice(1) : filePath;
+      const expanded = expandTildeToOsHome(normalized);
+      const resolved = path.isAbsolute(expanded) ? expanded : path.resolve(ops.root, expanded);
+      await withFileMutationQueue(resolved, async () => {
+        throwIfAborted(signal);
+        await appendFileWithAbort(signal, () => ops.appendFile(resolved, content));
+      });
+      return {
+        content: [{ type: "text", text: `Appended to ${filePath}.` }],
+        details: { path: filePath, append: true },
+      };
+    },
+  };
 }
 
 function createHostEditOperations(root: string, options?: { workspaceOnly?: boolean }) {

@@ -29,6 +29,7 @@ import {
   createOpenClawReadTool,
   wrapToolMemoryFlushAppendOnlyWrite,
   wrapToolWorkspaceRootGuard,
+  wrapToolWriteWithAppend,
 } from "./pi-tools.read.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -200,6 +201,170 @@ describe("FS tools with workspaceOnly=false", () => {
         content: "test content",
       }),
     ).rejects.toThrow(/Path escapes (workspace|sandbox) root/);
+  });
+
+  it("should append to an existing file when append=true (workspaceOnly=false)", async () => {
+    await fs.writeFile(outsideFile, "line one\n");
+
+    const tools = toolsFor(false);
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+
+    const result = await writeTool!.execute("test-append-1", {
+      path: outsideFile,
+      content: "line two\n",
+      append: true,
+    });
+    expect(hasToolError(result)).toBe(false);
+    const content = await fs.readFile(outsideFile, "utf-8");
+    expect(content).toBe("line one\nline two\n");
+  });
+
+  it("should create a new file when append=true and file does not exist (workspaceOnly=false)", async () => {
+    const newFile = path.join(tmpDir, "append-new.txt");
+
+    const tools = toolsFor(false);
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+
+    await writeTool!.execute("test-append-2", {
+      path: newFile,
+      content: "first line\n",
+      append: true,
+    });
+    const content = await fs.readFile(newFile, "utf-8");
+    expect(content).toBe("first line\n");
+  });
+
+  it("should overwrite (not append) when append=false", async () => {
+    await fs.writeFile(outsideFile, "old content");
+
+    const tools = toolsFor(false);
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+
+    await writeTool!.execute("test-no-append", {
+      path: outsideFile,
+      content: "new content",
+      append: false,
+    });
+    const content = await fs.readFile(outsideFile, "utf-8");
+    expect(content).toBe("new content");
+  });
+
+  it("should append within workspace boundary when append=true and workspaceOnly=true", async () => {
+    const insideFile = path.join(workspaceDir, "log.txt");
+    await fs.writeFile(insideFile, "entry 1\n");
+
+    const tools = toolsFor(true);
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+
+    const result = await writeTool!.execute("test-append-workspace", {
+      path: insideFile,
+      content: "entry 2\n",
+      append: true,
+    });
+    expect(hasToolError(result)).toBe(false);
+    const content = await fs.readFile(insideFile, "utf-8");
+    expect(content).toBe("entry 1\nentry 2\n");
+  });
+
+  it("does not mutate when an append call aborts while waiting in the same-file queue", async () => {
+    let markFirstStarted!: () => void;
+    let releaseFirst!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    const firstRelease = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const mutations: string[] = [];
+    const queuedFile = path.join(tmpDir, "queued-append.txt");
+    const baseTool: AnyAgentTool = {
+      name: "write",
+      label: "write",
+      description: "test write tool",
+      parameters: {} as AnyAgentTool["parameters"],
+      execute: vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "fallback" }],
+        details: {},
+      })),
+    };
+    const writeTool = wrapToolWriteWithAppend(baseTool, {
+      root: tmpDir,
+      appendFile: async (_absolutePath, content) => {
+        mutations.push(content);
+        if (content === "first\n") {
+          markFirstStarted();
+          await firstRelease;
+        }
+      },
+    });
+
+    const first = writeTool.execute("queued-first", {
+      path: queuedFile,
+      content: "first\n",
+      append: true,
+    });
+    await firstStarted;
+
+    const controller = new AbortController();
+    const second = writeTool.execute(
+      "queued-second",
+      { path: queuedFile, content: "second\n", append: true },
+      controller.signal,
+    );
+    controller.abort();
+    releaseFirst();
+
+    await first;
+    await expect(second).rejects.toMatchObject({ name: "AbortError" });
+    expect(mutations).toEqual(["first\n"]);
+  });
+
+  it("rejects when an append call aborts during the active append operation", async () => {
+    let markAppendStarted!: () => void;
+    let releaseAppend!: () => void;
+    const appendStarted = new Promise<void>((resolve) => {
+      markAppendStarted = resolve;
+    });
+    const appendRelease = new Promise<void>((resolve) => {
+      releaseAppend = resolve;
+    });
+    const mutations: string[] = [];
+    const activeFile = path.join(tmpDir, "active-append.txt");
+    const baseTool: AnyAgentTool = {
+      name: "write",
+      label: "write",
+      description: "test write tool",
+      parameters: {} as AnyAgentTool["parameters"],
+      execute: vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "fallback" }],
+        details: {},
+      })),
+    };
+    const writeTool = wrapToolWriteWithAppend(baseTool, {
+      root: tmpDir,
+      appendFile: async (_absolutePath, content) => {
+        mutations.push(content);
+        markAppendStarted();
+        await appendRelease;
+      },
+    });
+
+    const controller = new AbortController();
+    const append = writeTool.execute(
+      "active-append",
+      { path: activeFile, content: "active\n", append: true },
+      controller.signal,
+    );
+    await appendStarted;
+
+    controller.abort();
+    await expect(append).rejects.toMatchObject({ name: "AbortError" });
+    releaseAppend();
+    expect(mutations).toEqual(["active\n"]);
   });
 
   it("restricts memory-triggered writes to append-only canonical memory files", async () => {

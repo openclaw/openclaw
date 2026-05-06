@@ -89,6 +89,23 @@ describe("tools.fs.workspaceOnly", () => {
     });
   });
 
+  it("creates sandbox parent directories before appending a new file", async () => {
+    await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, sandbox }) => {
+      const tools = createSandboxFsTools({ sandbox });
+      const { writeTool } = expectReadWriteTools(tools);
+
+      await writeTool?.execute("t-append-new-parent", {
+        path: "new/dir/log.txt",
+        content: "first entry\n",
+        append: true,
+      });
+
+      expect(await fs.readFile(path.join(sandboxRoot, "new/dir/log.txt"), "utf8")).toBe(
+        "first entry\n",
+      );
+    });
+  });
+
   it("rejects sandbox mounts outside the workspace root when enabled", async () => {
     await withUnsafeMountedSandboxHarness(async ({ agentRoot, sandbox }) => {
       await fs.writeFile(path.join(agentRoot, "secret.txt"), "shh", "utf8");
