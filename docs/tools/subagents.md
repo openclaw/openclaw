@@ -186,6 +186,9 @@ session to confirm the effective tool list.
 <ParamField path="context" type='"isolated" | "fork"' default="isolated">
   `fork` branches the requester's current transcript into the child session. Native sub-agents only. Thread-bound spawns default to `fork`; non-thread spawns default to `isolated`.
 </ParamField>
+<ParamField path="toolsAllow" type="string[]">
+  Native sub-agents only. Narrows the spawned child run's tool set to the listed tool ids, for example `["read", "exec"]`. Omit to use the normal child tool policy; pass `[]` to run the child with no tools. `runtime: "acp"` rejects this field because ACP harnesses do not use the embedded-runner tool construction path.
+</ParamField>
 
 <Warning>
 `sessions_spawn` does **not** accept channel-delivery params (`target`,
