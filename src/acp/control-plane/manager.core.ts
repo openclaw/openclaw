@@ -88,6 +88,7 @@ const ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS = 2_000;
 const ACP_TURN_TIMEOUT_REASON = "turn-timeout";
 const ACP_BACKGROUND_TASK_TEXT_MAX_LENGTH = 160;
 const ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH = 240;
+const RECOVERABLE_GATEWAY_DISCONNECT_CLOSE_CODES = new Set(["1000", "1001", "1006", "1012"]);
 
 function summarizeBackgroundTaskText(text: string): string {
   const normalized = normalizeText(text) ?? "ACP background task";
@@ -1170,11 +1171,36 @@ export class AcpSessionManager {
           reason: params.reason,
         });
       }
-      await withAcpRuntimeErrorBoundary({
-        run: async () => await activeTurn.cancelPromise!,
-        fallbackCode: "ACP_TURN_FAILED",
-        fallbackMessage: "ACP cancel failed before completion.",
-      });
+      try {
+        await withAcpRuntimeErrorBoundary({
+          run: async () => await activeTurn.cancelPromise!,
+          fallbackCode: "ACP_TURN_FAILED",
+          fallbackMessage: "ACP cancel failed before completion.",
+        });
+      } catch (error) {
+        const acpError = toAcpRuntimeError({
+          error,
+          fallbackCode: "ACP_TURN_FAILED",
+          fallbackMessage: "ACP cancel failed before completion.",
+        });
+        if (
+          this.isRecoverableAcpxExitError(acpError.message) ||
+          this.isRecoverableGatewayDisconnectError(acpError.message)
+        ) {
+          this.clearCachedRuntimeStateIfHandleMatches({
+            sessionKey,
+            handle: activeTurn.handle,
+          });
+          await this.setSessionState({
+            cfg: params.cfg,
+            sessionKey,
+            state: "error",
+            lastError: acpError.message,
+          });
+          return;
+        }
+        throw acpError;
+      }
       return;
     }
 
@@ -1211,6 +1237,22 @@ export class AcpSessionManager {
           fallbackCode: "ACP_TURN_FAILED",
           fallbackMessage: "ACP cancel failed before completion.",
         });
+        if (
+          this.isRecoverableAcpxExitError(acpError.message) ||
+          this.isRecoverableGatewayDisconnectError(acpError.message)
+        ) {
+          this.clearCachedRuntimeStateIfHandleMatches({
+            sessionKey,
+            handle,
+          });
+          await this.setSessionState({
+            cfg: params.cfg,
+            sessionKey,
+            state: "error",
+            lastError: acpError.message,
+          });
+          return;
+        }
         await this.setSessionState({
           cfg: params.cfg,
           sessionKey,
@@ -1303,7 +1345,8 @@ export class AcpSessionManager {
               (input.discardPersistentState && acpError.code === "ACP_SESSION_INIT_FAILED") ||
               (input.discardPersistentState &&
                 acpError.code === "ACP_BACKEND_UNSUPPORTED_CONTROL") ||
-              this.isRecoverableAcpxExitError(acpError.message))
+              this.isRecoverableAcpxExitError(acpError.message) ||
+              this.isRecoverableGatewayDisconnectError(acpError.message))
           ) {
             if (input.discardPersistentState) {
               const configuredBackend = (meta.backend || input.cfg.acp?.backend || "").trim();
@@ -1687,7 +1730,10 @@ export class AcpSessionManager {
     if (params.attempt > 0 || params.sawTurnOutput) {
       return false;
     }
-    if (this.isRecoverableAcpxExitError(params.error.message)) {
+    if (
+      this.isRecoverableAcpxExitError(params.error.message) ||
+      this.isRecoverableGatewayDisconnectError(params.error.message)
+    ) {
       this.clearCachedRuntimeState(params.sessionKey);
       logVerbose(
         `acp-manager: retrying ${params.sessionKey} with a fresh runtime handle after early turn failure: ${params.error.message}`,
@@ -1730,6 +1776,14 @@ export class AcpSessionManager {
 
   private isRecoverableAcpxExitError(message: string): boolean {
     return /^acpx exited with (code \d+|signal [a-z0-9]+)/i.test(message.trim());
+  }
+
+  private isRecoverableGatewayDisconnectError(message: string): boolean {
+    const normalized = message.trim();
+    const closeCode =
+      normalized.match(/^gateway disconnected:\s*(\d{3,4})(?::|\b)/i)?.[1] ??
+      normalized.match(/^gateway closed\s*\((\d{3,4})(?:\b|\))/i)?.[1];
+    return closeCode ? RECOVERABLE_GATEWAY_DISCONNECT_CLOSE_CODES.has(closeCode) : false;
   }
 
   private isRecoverableMissingPersistentSessionError(message: string): boolean {

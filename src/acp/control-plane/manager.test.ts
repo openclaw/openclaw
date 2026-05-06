@@ -1631,6 +1631,104 @@ describe("AcpSessionManager", () => {
     }
   });
 
+  it("drops cached runtime handles when close sees a stale gateway disconnect error", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.close.mockRejectedValueOnce(
+      new Error("Gateway disconnected: 1006: connection lost"),
+    );
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: {
+          ...readySessionMeta(),
+          runtimeSessionName: `runtime:${sessionKey}`,
+        },
+      };
+    });
+    const limitedCfg = {
+      acp: {
+        ...baseCfg.acp,
+        maxConcurrentSessions: 1,
+      },
+    } as OpenClawConfig;
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: limitedCfg,
+      sessionKey: "agent:codex:acp:session-a",
+      text: "first",
+      mode: "prompt",
+      requestId: "r1",
+    });
+
+    const closeResult = await manager.closeSession({
+      cfg: limitedCfg,
+      sessionKey: "agent:codex:acp:session-a",
+      reason: "manual-close",
+      allowBackendUnavailable: true,
+    });
+    expect(closeResult.runtimeClosed).toBe(false);
+    expect(closeResult.runtimeNotice).toBe("Gateway disconnected: 1006: connection lost");
+
+    await expect(
+      manager.runTurn({
+        cfg: limitedCfg,
+        sessionKey: "agent:codex:acp:session-b",
+        text: "second",
+        mode: "prompt",
+        requestId: "r2",
+      }),
+    ).resolves.toBeUndefined();
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not swallow non-stale gateway closure errors during close", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.close.mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: {
+          ...readySessionMeta(),
+          runtimeSessionName: `runtime:${sessionKey}`,
+        },
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-a",
+      text: "first",
+      mode: "prompt",
+      requestId: "r1",
+    });
+
+    await expect(
+      manager.closeSession({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-a",
+        reason: "manual-close",
+        allowBackendUnavailable: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_TURN_FAILED",
+      message: "gateway closed (1008): pairing required",
+    });
+  });
+
   it("treats stale session init failures as recoverable during discard resets", async () => {
     const runtimeState = createRuntime();
     runtimeState.ensureSession.mockRejectedValueOnce(
@@ -2104,6 +2202,180 @@ describe("AcpSessionManager", () => {
     expect(states).not.toContain("error");
   });
 
+  it("drops cached runtime handles when active-turn cancel sees a stale gateway disconnect", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.cancel.mockRejectedValueOnce(
+      new Error("Gateway disconnected: 1006: connection lost"),
+    );
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: {
+          ...readySessionMeta(),
+          runtimeSessionName: `runtime:${sessionKey}`,
+        },
+      };
+    });
+    const limitedCfg = {
+      acp: {
+        ...baseCfg.acp,
+        maxConcurrentSessions: 1,
+      },
+    } as OpenClawConfig;
+
+    let enteredRun = false;
+    runtimeState.runTurn.mockImplementationOnce(async function* (input: { signal?: AbortSignal }) {
+      enteredRun = true;
+      await new Promise<void>((resolve) => {
+        if (input.signal?.aborted) {
+          resolve();
+          return;
+        }
+        input.signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      yield { type: "done" as const, stopReason: "cancel" };
+    });
+
+    const manager = new AcpSessionManager();
+    const runPromise = manager.runTurn({
+      cfg: limitedCfg,
+      sessionKey: "agent:codex:acp:session-a",
+      text: "long task",
+      mode: "prompt",
+      requestId: "r1",
+    });
+    await vi.waitFor(
+      () => {
+        expect(enteredRun).toBe(true);
+      },
+      { interval: 1 },
+    );
+
+    await expect(
+      manager.cancelSession({
+        cfg: limitedCfg,
+        sessionKey: "agent:codex:acp:session-a",
+        reason: "manual-cancel",
+      }),
+    ).resolves.toBeUndefined();
+    await runPromise;
+
+    await expect(
+      manager.runTurn({
+        cfg: limitedCfg,
+        sessionKey: "agent:codex:acp:session-b",
+        text: "second",
+        mode: "prompt",
+        requestId: "r2",
+      }),
+    ).resolves.toBeUndefined();
+    expect(runtimeState.cancel).toHaveBeenCalledTimes(1);
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    expect(extractStatesFromUpserts()).toContain("error");
+  });
+
+  it("treats stale gateway disconnect errors as recoverable during cancel", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.cancel.mockRejectedValueOnce(
+      new Error("Gateway disconnected: 1006: connection lost"),
+    );
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: {
+          ...readySessionMeta(),
+          runtimeSessionName: `runtime:${sessionKey}`,
+        },
+      };
+    });
+    const limitedCfg = {
+      acp: {
+        ...baseCfg.acp,
+        maxConcurrentSessions: 1,
+      },
+    } as OpenClawConfig;
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: limitedCfg,
+      sessionKey: "agent:codex:acp:session-a",
+      text: "first",
+      mode: "prompt",
+      requestId: "r1",
+    });
+
+    await expect(
+      manager.cancelSession({
+        cfg: limitedCfg,
+        sessionKey: "agent:codex:acp:session-a",
+        reason: "manual-cancel",
+      }),
+    ).resolves.toBeUndefined();
+
+    await expect(
+      manager.runTurn({
+        cfg: limitedCfg,
+        sessionKey: "agent:codex:acp:session-b",
+        text: "second",
+        mode: "prompt",
+        requestId: "r2",
+      }),
+    ).resolves.toBeUndefined();
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not swallow non-stale gateway closure errors during cancel", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.cancel.mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: {
+          ...readySessionMeta(),
+          runtimeSessionName: `runtime:${sessionKey}`,
+        },
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-a",
+      text: "first",
+      mode: "prompt",
+      requestId: "r1",
+    });
+
+    await expect(
+      manager.cancelSession({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-a",
+        reason: "manual-cancel",
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_TURN_FAILED",
+      message: "gateway closed (1008): pairing required",
+    });
+  });
+
   it("cleans actor-tail bookkeeping after session turns complete", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
@@ -2300,6 +2572,87 @@ describe("AcpSessionManager", () => {
       expect(states, message).not.toContain("error");
       resetAcpSessionManagerForTests();
     }
+  });
+
+  it("retries once with a fresh runtime handle after an early gateway disconnect", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+    runtimeState.runTurn
+      .mockImplementationOnce(async function* () {
+        yield {
+          type: "error" as const,
+          message: "Gateway disconnected: 1006: connection lost",
+        };
+      })
+      .mockImplementationOnce(async function* () {
+        yield { type: "done" as const };
+      });
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-1",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
+    const states = extractStatesFromUpserts();
+    expect(states).toContain("running");
+    expect(states).toContain("idle");
+    expect(states).not.toContain("error");
+  });
+
+  it("does not retry early turns for non-stale gateway closures", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+    runtimeState.runTurn.mockImplementationOnce(async function* () {
+      yield {
+        type: "error" as const,
+        message: "Gateway disconnected: 1008: pairing required",
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-1",
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_TURN_FAILED",
+      message: "Gateway disconnected: 1008: pairing required",
+    });
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
+    expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+    const states = extractStatesFromUpserts();
+    expect(states).toContain("running");
+    expect(states).toContain("error");
+    expect(states.at(-1)).toBe("error");
   });
 
   it("retries once with a fresh persistent session after an early missing-session turn failure", async () => {
