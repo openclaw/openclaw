@@ -195,6 +195,36 @@ describe("resolveConfigEnvVars", () => {
     });
   });
 
+  describe("escape with default syntax ($${VAR:-fallback})", () => {
+    it("escape with default syntax: $${VAR:-fallback} with VAR unset is literal", () => {
+      expect(resolveConfigEnvVars("$${VAR:-fallback}", {})).toBe("${VAR:-fallback}");
+    });
+
+    it("escape with default syntax: $${VAR:-fallback} with VAR set is still literal", () => {
+      expect(resolveConfigEnvVars("$${VAR:-fallback}", { VAR: "actual" })).toBe("${VAR:-fallback}");
+    });
+
+    it("escape with default syntax: mixed real default and escaped default", () => {
+      expect(resolveConfigEnvVars("${REAL:-default}/$${LITERAL:-default}", {})).toBe(
+        "default/${LITERAL:-default}",
+      );
+    });
+
+    it("real sub, escape, real sub in sequence", () => {
+      expect(resolveConfigEnvVars("${A:-x}/$${B:-y}/${C:-z}", {})).toBe("x/${B:-y}/z");
+    });
+
+    it("escape with URL default is preserved as literal", () => {
+      expect(resolveConfigEnvVars("$${VAR:-https://url.example.com}", {})).toBe(
+        "${VAR:-https://url.example.com}",
+      );
+    });
+
+    it("escape with brace-containing default is preserved as literal", () => {
+      expect(resolveConfigEnvVars("$${VAR:-{id}}", {})).toBe("${VAR:-{id}}");
+    });
+  });
+
   describe("pattern matching rules", () => {
     it("leaves non-matching placeholders unchanged", () => {
       const scenarios: SubstitutionScenario[] = [
@@ -314,6 +344,108 @@ describe("resolveConfigEnvVars", () => {
     });
   });
 
+  describe("default value syntax (${VAR:-default})", () => {
+    it("uses default when var is missing", () => {
+      const scenarios: SubstitutionScenario[] = [
+        {
+          name: "simple default",
+          config: { key: "${MISSING:-fallback}" },
+          env: {},
+          expected: { key: "fallback" },
+        },
+        {
+          name: "empty string default",
+          config: { key: "${MISSING:-}" },
+          env: {},
+          expected: { key: "" },
+        },
+        {
+          name: "default with URL",
+          config: { url: "${API_URL:-https://localhost:3000}" },
+          env: {},
+          expected: { url: "https://localhost:3000" },
+        },
+        {
+          name: "default with colons in value",
+          config: { dsn: "${DATABASE_URL:-postgres://localhost:5432/dev}" },
+          env: {},
+          expected: { dsn: "postgres://localhost:5432/dev" },
+        },
+      ];
+
+      expectResolvedScenarios(scenarios);
+    });
+
+    it("uses env value when var is set, ignoring default", () => {
+      const scenarios: SubstitutionScenario[] = [
+        {
+          name: "env var present overrides default",
+          config: { key: "${FOO:-fallback}" },
+          env: { FOO: "real" },
+          expected: { key: "real" },
+        },
+        {
+          name: "env var present with URL default",
+          config: { url: "${API_URL:-https://localhost:3000}" },
+          env: { API_URL: "https://prod.example.com" },
+          expected: { url: "https://prod.example.com" },
+        },
+      ];
+
+      expectResolvedScenarios(scenarios);
+    });
+
+    it("treats empty env value as missing (falls back to default)", () => {
+      expect(
+        resolveConfigEnvVars({ key: "${EMPTY:-fallback}" }, { EMPTY: "" } as NodeJS.ProcessEnv),
+      ).toEqual({ key: "fallback" });
+    });
+
+    it("works inline with other text and vars", () => {
+      const scenarios: SubstitutionScenario[] = [
+        {
+          name: "default with prefix/suffix",
+          config: { key: "prefix-${VAR:-default}-suffix" },
+          env: {},
+          expected: { key: "prefix-default-suffix" },
+        },
+        {
+          name: "mix of default and required vars",
+          config: { key: "${HOST:-localhost}:${PORT}" },
+          env: { PORT: "8080" },
+          expected: { key: "localhost:8080" },
+        },
+      ];
+
+      expectResolvedScenarios(scenarios);
+    });
+
+    it("works in nested structures", () => {
+      expect(
+        resolveConfigEnvVars(
+          { outer: { inner: "${DEEP:-nested-default}" } },
+          {} as NodeJS.ProcessEnv,
+        ),
+      ).toEqual({ outer: { inner: "nested-default" } });
+    });
+
+    it("does not trigger onMissing when default is present", () => {
+      const warnings: EnvSubstitutionWarning[] = [];
+      const result = resolveConfigEnvVars(
+        { key: "${MISSING:-fallback}" },
+        {} as NodeJS.ProcessEnv,
+        { onMissing: (w) => warnings.push(w) },
+      );
+      expect(result).toEqual({ key: "fallback" });
+      expect(warnings).toHaveLength(0);
+    });
+
+    it("is detected by containsEnvVarReference", () => {
+      expect(containsEnvVarReference("${VAR:-default}")).toBe(true);
+      expect(containsEnvVarReference("${VAR:-}")).toBe(true);
+    });
+  });
+
   describe("containsEnvVarReference", () => {
     it("detects unresolved env var placeholders", () => {
       expect(containsEnvVarReference("${FOO}")).toBe(true);
@@ -337,9 +469,65 @@ describe("resolveConfigEnvVars", () => {
       expect(containsEnvVarReference("prefix-$${ESCAPED}-suffix")).toBe(false);
     });
 
+    it("escaped with default syntax is not a reference", () => {
+      expect(containsEnvVarReference("$${VAR:-default}")).toBe(false);
+    });
+
     it("detects references mixed with escaped placeholders", () => {
       expect(containsEnvVarReference("$${ESCAPED} ${REAL}")).toBe(true);
       expect(containsEnvVarReference("${REAL} $${ESCAPED}")).toBe(true);
+    });
+  });
+
+  describe("default value containing braces (brace-balanced scanner)", () => {
+    it("default value containing braces resolves correctly when var is unset", () => {
+      expect(resolveConfigEnvVars("${URL:-https://api.example.com/v1/{id}}", {})).toBe(
+        "https://api.example.com/v1/{id}",
+      );
+    });
+
+    it("default value containing braces: var set uses env value not default", () => {
+      expect(
+        resolveConfigEnvVars("${URL:-https://api.example.com/v1/{id}}", {
+          URL: "https://custom.io",
+        }),
+      ).toBe("https://custom.io");
+    });
+
+    it("default value with nested braces resolves correctly", () => {
+      expect(resolveConfigEnvVars("${TMPL:-{key:{nested}}}", {})).toBe("{key:{nested}}");
+    });
+
+    it("quoted brace inside default does not end placeholder early", () => {
+      expect(resolveConfigEnvVars('${CFG:-{"key":"}"}}', {})).toBe('{"key":"}"}');
+    });
+
+    it("quoted brace inside default: var set uses env value", () => {
+      expect(resolveConfigEnvVars('${CFG:-{"key":"}"}}', { CFG: "override" })).toBe("override");
+    });
+
+    it("single-quoted brace inside default is handled", () => {
+      expect(resolveConfigEnvVars("${CFG:-{'k':'}'}}", {})).toBe("{'k':'}'}");
+    });
+
+    it("escaped quote inside quoted string in default", () => {
+      expect(resolveConfigEnvVars('${CFG:-{"k":"a\\"}"}}', {})).toBe('{"k":"a\\"}"}');
+    });
+
+    it("unpaired single quote in default does not break parsing", () => {
+      expect(resolveConfigEnvVars("${NAME:-don't}", {})).toBe("don't");
+    });
+
+    it("unpaired single quote in default: var set uses env value", () => {
+      expect(resolveConfigEnvVars("${NAME:-don't}", { NAME: "John" })).toBe("John");
+    });
+
+    it("unpaired double quote in default does not break parsing", () => {
+      expect(resolveConfigEnvVars('${MSG:-a"b}', {})).toBe('a"b');
+    });
+
+    it("unpaired double quote in default: var set uses env value", () => {
+      expect(resolveConfigEnvVars('${MSG:-a"b}', { MSG: "hello" })).toBe("hello");
     });
   });
 

@@ -1,18 +1,21 @@
 /**
  * Environment variable substitution for config values.
  *
- * Supports `${VAR_NAME}` syntax in string values, substituted at config load time.
+ * Supports `${VAR_NAME}` and `${VAR_NAME:-default}` syntax in string values,
+ * substituted at config load time.
  * - Only uppercase env vars are matched: `[A-Z_][A-Z0-9_]*`
+ * - `${VAR:-fallback}` uses `fallback` when the var is unset or empty
  * - Escape with `$${}` to output literal `${}`
- * - Missing env vars throw `MissingEnvVarError` with context
+ * - Missing env vars (without defaults) throw `MissingEnvVarError` with context
  *
  * @example
  * ```json5
  * {
  *   models: {
  *     providers: {
- *       "vercel-gateway": {
- *         apiKey: "${VERCEL_GATEWAY_API_KEY}"
+ *       "custom-gateway": {
+ *         apiKey: "${CUSTOM_API_KEY}",
+ *         baseUrl: "${CUSTOM_BASE_URL:-https://api.example.com/v1}"
  *       }
  *     }
  *   }
@@ -23,6 +26,7 @@
 // Pattern for valid uppercase env var names: starts with letter or underscore,
 // followed by letters, numbers, or underscores (all uppercase)
 import { isPlainObject } from "../utils.js";
+import { findClosingBrace } from "./env-brace.js";
 
 const ENV_VAR_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
 
@@ -36,9 +40,11 @@ export class MissingEnvVarError extends Error {
   }
 }
 
+// For "escaped" tokens, `name` holds the full inner content including any `:-…` suffix (e.g. "VAR:-fallback").
+// For "substitution" tokens, `name` holds only the variable name (e.g. "VAR").
 type EnvToken =
   | { kind: "escaped"; name: string; end: number }
-  | { kind: "substitution"; name: string; end: number };
+  | { kind: "substitution"; name: string; defaultValue?: string; end: number };
 
 function parseEnvTokenAt(value: string, index: number): EnvToken | null {
   if (value[index] !== "$") {
@@ -48,26 +54,36 @@ function parseEnvTokenAt(value: string, index: number): EnvToken | null {
   const next = value[index + 1];
   const afterNext = value[index + 2];
 
-  // Escaped: $${VAR} -> ${VAR}
+  // Escaped: $${VAR} -> ${VAR} or $${VAR:-default} -> ${VAR:-default}
   if (next === "$" && afterNext === "{") {
     const start = index + 3;
-    const end = value.indexOf("}", start);
+    const end = findClosingBrace(value, index + 2);
     if (end !== -1) {
-      const name = value.slice(start, end);
-      if (ENV_VAR_NAME_PATTERN.test(name)) {
-        return { kind: "escaped", name, end };
+      const inner = value.slice(start, end);
+      const sepIdx = inner.indexOf(":-");
+      const rawName = sepIdx !== -1 ? inner.slice(0, sepIdx) : inner;
+      if (ENV_VAR_NAME_PATTERN.test(rawName)) {
+        return { kind: "escaped", name: inner, end };
       }
     }
   }
 
-  // Substitution: ${VAR} -> value
+  // Substitution: ${VAR} or ${VAR:-default} -> value
   if (next === "{") {
     const start = index + 2;
-    const end = value.indexOf("}", start);
+    const end = findClosingBrace(value, index + 1);
     if (end !== -1) {
-      const name = value.slice(start, end);
-      if (ENV_VAR_NAME_PATTERN.test(name)) {
-        return { kind: "substitution", name, end };
+      const inner = value.slice(start, end);
+      const sepIndex = inner.indexOf(":-");
+      if (sepIndex !== -1) {
+        const name = inner.slice(0, sepIndex);
+        if (ENV_VAR_NAME_PATTERN.test(name)) {
+          const defaultValue = inner.slice(sepIndex + 2);
+          return { kind: "substitution", name, defaultValue, end };
+        }
+      }
+      if (ENV_VAR_NAME_PATTERN.test(inner)) {
+        return { kind: "substitution", name: inner, end };
       }
     }
   }
@@ -113,8 +129,15 @@ function substituteString(
     if (token?.kind === "substitution") {
       const envValue = env[token.name];
       if (envValue === undefined || envValue === "") {
+        if (token.defaultValue !== undefined) {
+          chunks.push(token.defaultValue);
+          i = token.end;
+          continue;
+        }
         if (opts?.onMissing) {
           opts.onMissing({ varName: token.name, configPath });
+          // onMissing is only reachable when token.defaultValue is undefined (no default),
+          // so reconstructing ${token.name} without a default suffix is always accurate.
           // Preserve the original placeholder so the value is visibly unresolved.
           chunks.push(`\${${token.name}}`);
           i = token.end;
@@ -186,7 +209,7 @@ function substituteAny(
 }
 
 /**
- * Resolves `${VAR_NAME}` environment variable references in config values.
+ * Resolves `${VAR_NAME}` and `${VAR_NAME:-default}` environment variable references in config values.
  *
  * @param obj - The parsed config object (after JSON5 parse and $include resolution)
  * @param env - Environment variables to use for substitution (defaults to process.env)

@@ -162,6 +162,74 @@ describe("restoreEnvVarRefs", () => {
     expect(result).toEqual({ note: "$${ANTHROPIC_API_KEY}" });
   });
 
+  it("restores ${VAR:-default} reference when env var is set and matches", () => {
+    const incoming = { url: "https://prod.example.com" };
+    const parsed = { url: "${API_URL:-https://localhost:3000}" };
+    const envWithVar = { API_URL: "https://prod.example.com" } as unknown as NodeJS.ProcessEnv;
+    const result = restoreEnvVarRefs(incoming, parsed, envWithVar);
+    expect(result).toEqual({ url: "${API_URL:-https://localhost:3000}" });
+  });
+
+  it("restores ${VAR:-default} reference when env var is missing and default matches", () => {
+    const incoming = { url: "https://localhost:3000" };
+    const parsed = { url: "${API_URL:-https://localhost:3000}" };
+    const emptyEnv = {} as unknown as NodeJS.ProcessEnv;
+    const result = restoreEnvVarRefs(incoming, parsed, emptyEnv);
+    expect(result).toEqual({ url: "${API_URL:-https://localhost:3000}" });
+  });
+
+  it("keeps incoming when ${VAR:-default} resolves to a different value", () => {
+    const incoming = { url: "https://new-value.example.com" };
+    const parsed = { url: "${API_URL:-https://localhost:3000}" };
+    const emptyEnv = {} as unknown as NodeJS.ProcessEnv;
+    const result = restoreEnvVarRefs(incoming, parsed, emptyEnv);
+    expect(result).toEqual({ url: "https://new-value.example.com" });
+  });
+
+  it("restores ${VAR:-} (empty default) when env is missing and incoming is empty", () => {
+    const incoming = { token: "" };
+    const parsed = { token: "${OPT_TOKEN:-}" };
+    const emptyEnv = {} as unknown as NodeJS.ProcessEnv;
+    const result = restoreEnvVarRefs(incoming, parsed, emptyEnv);
+    expect(result).toEqual({ token: "${OPT_TOKEN:-}" });
+  });
+
+  it("keeps incoming value when it differs from empty default", () => {
+    // ${VAR:-} has an empty default; if incoming is non-empty, the caller set it explicitly
+    const result = restoreEnvVarRefs("set-value", "${VAR:-}", env);
+    expect(result).toBe("set-value");
+  });
+
+  it("correctly round-trips $${VAR:-default} escape sequence back to original", () => {
+    // $${VAR:-default} is an escape literal — should be restored to $${VAR:-default}, not evaluated
+    const result = restoreEnvVarRefs("${VAR:-default}", "$${VAR:-default}", env);
+    expect(result).toBe("$${VAR:-default}");
+  });
+
+  it("correctly round-trips template with brace-containing default", () => {
+    const result = restoreEnvVarRefs(
+      "https://api.example.com/v1/{id}",
+      "${URL:-https://api.example.com/v1/{id}}",
+      env,
+    );
+    expect(result).toBe("${URL:-https://api.example.com/v1/{id}}");
+  });
+
+  it("correctly round-trips template with doubly-nested brace default", () => {
+    const result = restoreEnvVarRefs("{key:{nested}}", "${TMPL:-{key:{nested}}}", env);
+    expect(result).toBe("${TMPL:-{key:{nested}}}");
+  });
+
+  it("correctly round-trips template with unpaired single quote in default", () => {
+    const result = restoreEnvVarRefs("don't", "${NAME:-don't}", env);
+    expect(result).toBe("${NAME:-don't}");
+  });
+
+  it("correctly round-trips template with unpaired double quote in default", () => {
+    const result = restoreEnvVarRefs('a"b', '${MSG:-a"b}', env);
+    expect(result).toBe('${MSG:-a"b}');
+  });
+
   it("does not confuse $${VAR} escape with ${VAR} substitution", () => {
     // Config has both: an escaped ref and a real ref
     const incoming = {
