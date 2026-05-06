@@ -123,4 +123,33 @@ describe("media-understanding provider registry", () => {
 
     expect(getMediaUnderstandingProvider("avOnly", registry)).toBeUndefined();
   });
+
+  it("gracefully handles broken provider modules and continues with config-based providers", () => {
+    // Simulate a broken bundled provider module (e.g. codex in Nix builds with
+    // unresolved `import 'openclaw'`) crashing the entire registry build.
+    resolvePluginCapabilityProvidersMock.mockImplementation(() => {
+      throw new Error(
+        "Cannot find package 'openclaw' imported from /nix/store/.../codex/provider.js",
+      );
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          google: {
+            models: [{ id: "gemini-2.5-flash", input: ["text", "image"] }],
+          },
+        },
+      },
+    } as never;
+
+    // Should not throw — returns registry with config-based fallbacks
+    const registry = buildMediaUnderstandingRegistry(undefined, cfg);
+
+    expect(registry).toBeDefined();
+    // google should be auto-registered from resolveImageCapableConfigProviderIds
+    expect(getMediaUnderstandingProvider("google", registry)?.id).toBe("google");
+    expect(getMediaUnderstandingProvider("google", registry)?.capabilities).toEqual(["image"]);
+    expect(getMediaUnderstandingProvider("google", registry)?.describeImage).toBeDefined();
+  });
 });

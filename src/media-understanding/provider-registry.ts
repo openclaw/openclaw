@@ -1,9 +1,12 @@
 import type { OpenClawConfig } from "../config/types.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import { resolveImageCapableConfigProviderIds } from "./config-provider-models.js";
 import { describeImageWithModel, describeImagesWithModel } from "./image-runtime.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
 import type { MediaUnderstandingProvider } from "./types.js";
+
+const log = createSubsystemLogger("media-understanding").child("provider-registry");
 
 function mergeProviderIntoRegistry(
   registry: Map<string, MediaUnderstandingProvider>,
@@ -32,10 +35,22 @@ export function buildMediaUnderstandingRegistry(
   cfg?: OpenClawConfig,
 ): Map<string, MediaUnderstandingProvider> {
   const registry = new Map<string, MediaUnderstandingProvider>();
-  for (const provider of resolvePluginCapabilityProviders({
-    key: "mediaUnderstandingProviders",
-    cfg,
-  })) {
+  let pluginProviders: MediaUnderstandingProvider[];
+  try {
+    pluginProviders = resolvePluginCapabilityProviders({
+      key: "mediaUnderstandingProviders",
+      cfg,
+    });
+  } catch (err) {
+    log.warn(
+      "resolvePluginCapabilityProviders failed, continuing with config-based providers only",
+      {
+        error: String(err),
+      },
+    );
+    pluginProviders = [];
+  }
+  for (const provider of pluginProviders) {
     mergeProviderIntoRegistry(registry, provider);
   }
   // Auto-register media-understanding for config providers with image-capable models (#51392)
