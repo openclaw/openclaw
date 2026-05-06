@@ -1317,6 +1317,71 @@ describe("openai transport stream", () => {
     });
   });
 
+  it("strips reasoning items from context when switching to a non-reasoning model", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        provider: "openai",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 16384,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-responses",
+            provider: "venice",
+            model: "claude-sonnet-4-6",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "end",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Let me reason about this.",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: "rs_prior",
+                  encrypted_content: "ciphertext",
+                }),
+              },
+              {
+                type: "text",
+                text: "Here is my answer.",
+                textSignature: JSON.stringify({ v: 1, id: "msg_prior", phase: "commentary" }),
+              },
+            ],
+          },
+          { role: "user", content: "follow up question", timestamp: 2 },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      input?: Array<{ type?: string; role?: string }>;
+    };
+
+    const reasoningItem = params.input?.find((item) => item.type === "reasoning");
+    expect(reasoningItem).toBeUndefined();
+    const assistantMessage = params.input?.find(
+      (item) => item.type === "message" && item.role === "assistant",
+    );
+    expect(assistantMessage).toBeDefined();
+  });
+
   it("adds minimal user input for Codex responses when only the system prompt is present", () => {
     const params = buildOpenAIResponsesParams(
       {

@@ -994,7 +994,7 @@ export function buildOpenAIResponsesParams(
     {
       includeSystemPrompt: !isCodexResponses,
       supportsDeveloperRole,
-      replayReasoningItems: true,
+      replayReasoningItems: model.reasoning === true,
       replayResponsesItemIds: !isNativeCodexResponses,
     },
   );
