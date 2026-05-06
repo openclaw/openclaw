@@ -296,6 +296,17 @@ function buildCoreDistEntries(): Record<string, string> {
     // Keep long-lived lazy runtime boundaries on stable filenames so rebuilt
     // dist/ trees do not strand already-running gateways on stale hashed chunks.
     "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
+    // agent-runner.runtime is dynamically imported by get-reply-run.ts.
+    // Promoting it to a unified-graph entry forces rolldown to dedupe its singleton-bearing
+    // dependencies (delegate-store, state, context-pressure) with the rest of the build,
+    // eliminating the dual-chunk split that silently dropped continue_work tool calls.
+    "auto-reply/reply/agent-runner.runtime": "src/auto-reply/reply/agent-runner.runtime.ts",
+    // Single lazy-load boundary for the continuation subsystem. Every dynamic
+    // continuation import (agent-runner, status command, etc.) routes through
+    // this entry so the bundler can dedupe singleton-bearing modules (config,
+    // delegate-store, delegate-dispatch, context-pressure, state) across the
+    // main chunk and the lazy chunk.
+    "auto-reply/continuation/lazy.runtime": "src/auto-reply/continuation/lazy.runtime.ts",
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
@@ -304,6 +315,8 @@ function buildCoreDistEntries(): Record<string, string> {
     "plugins/memory-state": "src/plugins/memory-state.ts",
     "subagent-registry.runtime": "src/agents/subagent-registry.runtime.ts",
     "task-registry-control.runtime": "src/tasks/task-registry-control.runtime.ts",
+    "subagent-announce.continuation.runtime":
+      "src/agents/subagent-announce.continuation.runtime.ts",
     "agents/pi-model-discovery-runtime": "src/agents/pi-model-discovery-runtime.ts",
     "link-understanding/apply.runtime": "src/link-understanding/apply.runtime.ts",
     "media-understanding/apply.runtime": "src/media-understanding/apply.runtime.ts",
