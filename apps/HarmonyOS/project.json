@@ -1,0 +1,16 @@
+{
+  "projectName": "ohosApp",
+  "projectType": "Application",
+  "buildTool": "hvigor",
+  "language": "ArkTS",
+  "runtimeType": "ArkRuntime",
+  "ideVersion": "5.0.0.400",
+  "apiVersion": "20",
+  "compatibleSdkVersion": "4.0.0(20)",
+  "targets": [
+    {
+      "name": "default",
+      "runtimeOS": "HarmonyOS"
+    }
+  ]
+}

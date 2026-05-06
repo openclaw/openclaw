@@ -1,0 +1,10 @@
+{
+  "app": {
+    "bundleName": "ai.openclaw.harmony",
+    "vendor": "openclaw",
+    "versionCode": 202603010,
+    "versionName": "1.0.0",
+    "icon": "$media:app_icon",
+    "label": "$string:app_name"
+  }
+}

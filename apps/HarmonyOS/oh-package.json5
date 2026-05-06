@@ -1,0 +1,12 @@
+{
+  "modelVersion": "6.0.2",
+  "description": "OpenClaw HarmonyOS App",
+  "dependencies": {
+    "@luvi/lv-markdown-in": "^3.2.9"
+  },
+  "devDependencies": {
+    "@ohos/hypium": "1.0.25",
+    "@ohos/hamock": "1.0.0"
+  },
+  "dynamicDependencies": {}
+}
