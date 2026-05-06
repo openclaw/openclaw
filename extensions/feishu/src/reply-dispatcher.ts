@@ -582,7 +582,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (info?.kind === "block") {
               // Some runtimes emit block payloads without onPartial/final callbacks.
               // Mirror block text into streamText so onIdle close still sends content.
-              queueStreamingUpdate(text, { mode: "delta", dedupeWithLastPartial: true });
+              // Use snapshot mode so mergeStreamingText() dedups overlap with the
+              // latest partial snapshot (fixes #74143: streaming card duplicates
+              // text when block payloads overlap partial chunks).
+              queueStreamingUpdate(text, { mode: "snapshot", dedupeWithLastPartial: true });
             }
             if (info?.kind === "final") {
               streamText = text;
