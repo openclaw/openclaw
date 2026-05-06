@@ -1138,6 +1138,275 @@ function parseOpenClawChannelsLoginShellCommand(raw: string): boolean {
   );
 }
 
+type HeavyExecCommandClassification = "always" | "maybe";
+
+type HeavyExecCommandHit = {
+  classification: HeavyExecCommandClassification;
+  reason: string;
+  candidate: string;
+};
+
+type HeavyExecCommandAnalysis = {
+  heavy: boolean;
+  wrapped: boolean;
+  hit?: HeavyExecCommandHit;
+};
+
+const PACKAGE_MANAGER_HEAVY_DIRECT_COMMANDS = new Set([
+  "add",
+  "build",
+  "build:docker",
+  "build:strict-smoke",
+  "ci",
+  "install",
+  "lint",
+  "lint:all",
+  "lint:core",
+  "lint:extensions",
+  "test",
+  "test:all",
+  "typecheck",
+  "update",
+]);
+
+const PACKAGE_MANAGER_HEAVY_PREFIXES = ["build", "check", "lint", "test", "tsgo", "typecheck"];
+
+const DIRECT_HEAVY_EXECUTABLES = new Set(["jest", "mocha", "oxlint", "tsgo", "tsgolint", "vitest"]);
+
+function stripEnvAssignmentsForHeavyDetection(argv: string[]): string[] {
+  let index = 0;
+  while (index < argv.length && isShellEnvAssignmentToken(argv[index])) {
+    index += 1;
+  }
+  return argv.slice(index);
+}
+
+function isOpenClawHeavyRunWrapper(argv: string[]): boolean {
+  const stripped = stripEnvAssignmentsForHeavyDetection(argv);
+  const executable = normalizeCommandBaseName(stripped[0]);
+  if (executable === "openclaw-heavy-run") {
+    return true;
+  }
+  if (executable === "python" || executable === "python3" || executable === "node") {
+    return normalizeCommandBaseName(stripped[1]) === "openclaw-heavy-run";
+  }
+  return false;
+}
+
+function isExplicitSystemdMemoryScope(argv: string[]): boolean {
+  const stripped = stripEnvAssignmentsForHeavyDetection(argv);
+  if (normalizeCommandBaseName(stripped[0]) !== "systemd-run") {
+    return false;
+  }
+  return (
+    stripped.includes("--scope") &&
+    stripped.some(
+      (arg) => arg === "-p" || /^--property(?:=|$)/u.test(arg) || /^MemoryMax=/u.test(arg),
+    ) &&
+    stripped.some((arg, index) => {
+      if (/^MemoryMax=/u.test(arg)) {
+        return true;
+      }
+      const prev = stripped[index - 1];
+      return (prev === "-p" || prev === "--property") && /^MemoryMax=/u.test(arg);
+    })
+  );
+}
+
+const PACKAGE_MANAGER_LEADING_VALUE_OPTIONS = new Set([
+  "-C",
+  "--cache",
+  "--config",
+  "--configfile",
+  "--cwd",
+  "--dir",
+  "--filter",
+  "--package",
+  "--prefix",
+  "--registry",
+  "--store-dir",
+  "--userconfig",
+  "--workspace",
+]);
+
+function stripPackageManagerLeadingOptions(args: string[]): string[] {
+  let index = 0;
+  while (index < args.length) {
+    const arg = args[index] ?? "";
+    if (arg === "--") {
+      index += 1;
+      break;
+    }
+    if (!arg.startsWith("-") || arg === "-") {
+      break;
+    }
+
+    const optionName = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+    index += 1;
+    if (!arg.includes("=") && PACKAGE_MANAGER_LEADING_VALUE_OPTIONS.has(optionName)) {
+      index += 1;
+    }
+  }
+  return args.slice(index);
+}
+
+function packageManagerHeavyReason(packageManager: string, args: string[]): string | null {
+  const commandArgs = stripPackageManagerLeadingOptions(args);
+  const first = normalizeLowercaseStringOrEmpty(commandArgs[0] ?? "");
+  if (!first) {
+    return null;
+  }
+  if (first === "exec" || first === "dlx") {
+    const executable = normalizeCommandBaseName(commandArgs[1]);
+    return DIRECT_HEAVY_EXECUTABLES.has(executable)
+      ? `${packageManager} ${first} ${executable}`
+      : null;
+  }
+  if (first === "run") {
+    const script = normalizeLowercaseStringOrEmpty(commandArgs[1] ?? "");
+    return isHeavyPackageScriptName(script) ? `${packageManager} run ${script}` : null;
+  }
+  if (PACKAGE_MANAGER_HEAVY_DIRECT_COMMANDS.has(first) || isHeavyPackageScriptName(first)) {
+    return `${packageManager} ${first}`;
+  }
+  return null;
+}
+
+function isHeavyPackageScriptName(script: string): boolean {
+  if (!script) {
+    return false;
+  }
+  return PACKAGE_MANAGER_HEAVY_PREFIXES.some((prefix) => {
+    return script === prefix || script.startsWith(`${prefix}:`) || script.startsWith(`${prefix}-`);
+  });
+}
+
+function isRecursiveGrepFlag(arg: string): boolean {
+  return (
+    arg === "-r" ||
+    arg === "-R" ||
+    arg === "--recursive" ||
+    arg === "--dereference-recursive" ||
+    /^-[^-]*[rR][A-Za-z]*$/u.test(arg)
+  );
+}
+
+function classifyHeavyArgv(argv: string[]): HeavyExecCommandHit | null {
+  const stripped = stripEnvAssignmentsForHeavyDetection(argv);
+  const executable = normalizeCommandBaseName(stripped[0]);
+  if (
+    !executable ||
+    isOpenClawHeavyRunWrapper(stripped) ||
+    isExplicitSystemdMemoryScope(stripped)
+  ) {
+    return null;
+  }
+
+  if (executable === "corepack") {
+    const packageManager = normalizeCommandBaseName(stripped[1]);
+    if (["pnpm", "npm", "yarn", "bun"].includes(packageManager)) {
+      const reason = packageManagerHeavyReason(`corepack ${packageManager}`, stripped.slice(2));
+      return reason ? { classification: "always", reason, candidate: stripped.join(" ") } : null;
+    }
+  }
+
+  if (["pnpm", "npm", "yarn", "bun"].includes(executable)) {
+    const reason = packageManagerHeavyReason(executable, stripped.slice(1));
+    return reason ? { classification: "always", reason, candidate: stripped.join(" ") } : null;
+  }
+
+  if (DIRECT_HEAVY_EXECUTABLES.has(executable)) {
+    return { classification: "always", reason: executable, candidate: stripped.join(" ") };
+  }
+
+  if (executable === "rg") {
+    if (stripped.includes("-S") || stripped.includes("--no-ignore")) {
+      return { classification: "maybe", reason: "broad ripgrep", candidate: stripped.join(" ") };
+    }
+  }
+
+  if (executable === "grep" && stripped.some(isRecursiveGrepFlag)) {
+    return { classification: "maybe", reason: "recursive grep", candidate: stripped.join(" ") };
+  }
+
+  if (executable === "git" && stripped[1] === "diff" && stripped.includes("--stat")) {
+    return { classification: "maybe", reason: "git diff --stat", candidate: stripped.join(" ") };
+  }
+
+  return null;
+}
+
+function collectExecCommandCandidates(rawCommand: string): string[] {
+  const raw = rawCommand.trim();
+  const analysis = analyzeShellCommand({ command: raw });
+  return analysis.ok
+    ? analysis.segments.flatMap((segment) => buildCommandPayloadCandidates(segment.argv))
+    : raw
+        .split(/\r?\n/u)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .flatMap((line) => {
+          const argv = splitShellArgs(line);
+          return argv ? buildCommandPayloadCandidates(argv) : [line];
+        });
+}
+
+function analyzeHeavyExecCommand(command: string): HeavyExecCommandAnalysis {
+  const queue = collectExecCommandCandidates(command);
+  const seen = new Set<string>();
+  let sawHeavyRunWrapper = false;
+  while (queue.length > 0) {
+    const candidate = queue.shift() ?? "";
+    const normalizedCandidate = candidate.trim();
+    if (!normalizedCandidate || seen.has(normalizedCandidate)) {
+      continue;
+    }
+    seen.add(normalizedCandidate);
+    const argv = splitShellArgs(normalizedCandidate);
+    if (!argv) {
+      continue;
+    }
+    if (isOpenClawHeavyRunWrapper(argv) || isExplicitSystemdMemoryScope(argv)) {
+      sawHeavyRunWrapper = true;
+      continue;
+    }
+    const hit = classifyHeavyArgv(argv);
+    if (hit) {
+      return { heavy: true, wrapped: sawHeavyRunWrapper, hit };
+    }
+    // A shell-wrapper payload may itself contain a chain such as
+    // `cd /repo && corepack pnpm lint:core`; recurse into it after the wrapper
+    // unwrapping step so the inner heavy segment is still detected.
+    const nestedCandidates = collectExecCommandCandidates(normalizedCandidate);
+    for (const nested of nestedCandidates) {
+      if (!seen.has(nested.trim())) {
+        queue.push(nested);
+      }
+    }
+  }
+  return { heavy: false, wrapped: sawHeavyRunWrapper };
+}
+
+function rejectUnisolatedHeavyExecCommand(command: string): void {
+  if (process.env.OPENCLAW_EXEC_HEAVY_ENFORCEMENT === "off") {
+    return;
+  }
+  const analysis = analyzeHeavyExecCommand(command);
+  if (!analysis.heavy || !analysis.hit || analysis.hit.classification !== "always") {
+    return;
+  }
+  throw new Error(
+    [
+      `exec heavy-command guard: refused unisolated ${analysis.hit.classification}-heavy command (${analysis.hit.reason}).`,
+      `Matched command: ${truncateMiddle(analysis.hit.candidate, 180)}`,
+      "Run heavy OpenClaw/upstream validation through a configured resource-isolation wrapper, for example:",
+      "openclaw-heavy-run -- <command>",
+      "If the guard exits 75/defer, stop and report instead of bypassing.",
+      "Set OPENCLAW_EXEC_HEAVY_ENFORCEMENT=off only for an explicitly approved emergency bypass.",
+    ].join("\n"),
+  );
+}
+
 function rejectUnsafeControlShellCommand(command: string): void {
   const rawCommand = command.trim();
   const analysis = analyzeShellCommand({ command: rawCommand });
@@ -1402,6 +1671,9 @@ export function createExecTool(
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
       rejectUnsafeControlShellCommand(params.command);
+      if (host === "gateway" && !sandbox) {
+        rejectUnisolatedHeavyExecCommand(params.command);
+      }
 
       const inheritedBaseEnv = coerceEnv(process.env);
       const hostEnvResult =
@@ -1685,6 +1957,7 @@ export function createExecTool(
 export const execTool = createExecTool();
 
 export const __testing = {
+  analyzeHeavyExecCommand,
   parseOpenClawChannelsLoginShellCommand,
   validateScriptFileForShellBleed,
 };
