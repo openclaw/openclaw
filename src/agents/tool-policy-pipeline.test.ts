@@ -266,4 +266,44 @@ describe("tool-policy-pipeline", () => {
     });
     expect(filtered.map((t) => (t as unknown as DummyTool).name)).toEqual(["exec"]);
   });
+
+  test("does not warn about tools declared in knownPluginToolNames even when not yet registered", () => {
+    const warnings: string[] = [];
+    const tools = [{ name: "exec" }] as unknown as DummyTool[];
+    applyToolPolicyPipeline({
+      tools: tools as any,
+      toolMeta: () => undefined,
+      warn: (msg) => warnings.push(msg),
+      knownPluginToolNames: ["llm-task"],
+      steps: [
+        {
+          policy: { allow: ["*", "llm-task"] },
+          label: "agents.main.tools.alsoAllow",
+          stripPluginOnlyAllowlist: true,
+        },
+      ],
+    });
+    expect(warnings).toHaveLength(0);
+  });
+
+  test("still warns about truly unknown entries not in knownPluginToolNames", () => {
+    const warnings: string[] = [];
+    const tools = [{ name: "exec" }] as unknown as DummyTool[];
+    applyToolPolicyPipeline({
+      tools: tools as any,
+      toolMeta: () => undefined,
+      warn: (msg) => warnings.push(msg),
+      knownPluginToolNames: ["llm-task"],
+      steps: [
+        {
+          policy: { allow: ["*", "llm-task", "typo-tool"] },
+          label: "agents.main.tools.alsoAllow",
+          stripPluginOnlyAllowlist: true,
+        },
+      ],
+    });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("typo-tool");
+    expect(warnings[0]).not.toContain("llm-task");
+  });
 });

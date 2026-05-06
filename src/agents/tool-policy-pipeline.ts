@@ -94,6 +94,12 @@ export function applyToolPolicyPipeline(params: {
   toolMeta: (tool: AnyAgentTool) => { pluginId: string } | undefined;
   warn: (message: string) => void;
   steps: ToolPolicyPipelineStep[];
+  /**
+   * Tool names declared in enabled plugin manifests (contracts.tools) that may
+   * not yet be registered in the tool catalog at pipeline evaluation time.
+   * Entries matching these names will not trigger unknown-allowlist warnings.
+   */
+  knownPluginToolNames?: string[];
 }): AnyAgentTool[] {
   const coreToolNames = new Set(
     params.tools
@@ -106,6 +112,15 @@ export function applyToolPolicyPipeline(params: {
     tools: params.tools,
     toolMeta: params.toolMeta,
   });
+  if (params.knownPluginToolNames && params.knownPluginToolNames.length > 0) {
+    const knownSet = new Set(pluginGroups.all);
+    for (const name of params.knownPluginToolNames) {
+      if (!knownSet.has(name)) {
+        pluginGroups.all.push(name);
+        knownSet.add(name);
+      }
+    }
+  }
 
   let filtered = params.tools;
   for (const step of params.steps) {
