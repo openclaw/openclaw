@@ -108,6 +108,26 @@ function assertApprovalMetadata(params: {
   }
 }
 
+function isExpectedApprovalEvent(
+  event: MatrixQaObservedEvent,
+  params: {
+    context: MatrixQaScenarioContext;
+    expectedApprovalId: string;
+    expectedKind: MatrixQaApprovalKind;
+    roomId: string;
+    threadRootEventId?: string;
+  },
+) {
+  return (
+    event.roomId === params.roomId &&
+    event.sender === params.context.sutUserId &&
+    event.type === "m.room.message" &&
+    event.approval?.kind === params.expectedKind &&
+    event.approval.id === params.expectedApprovalId &&
+    (!params.threadRootEventId || event.relatesTo?.eventId === params.threadRootEventId)
+  );
+}
+
 async function waitForApprovalEvent(params: {
   context: MatrixQaScenarioContext;
   expectedApprovalId: string;
@@ -116,19 +136,26 @@ async function waitForApprovalEvent(params: {
   since?: string;
   threadRootEventId?: string;
 }) {
+  const observedMatch = params.context.observedEvents.find((event) =>
+    isExpectedApprovalEvent(event, params),
+  );
+  if (observedMatch) {
+    assertApprovalMetadata({
+      event: observedMatch,
+      expectedKind: params.expectedKind,
+    });
+    return {
+      event: observedMatch,
+      since: params.since,
+    };
+  }
   const client = createMatrixQaScenarioClient({
     accessToken: params.context.driverAccessToken,
     baseUrl: params.context.baseUrl,
   });
   const matched = await client.waitForRoomEvent({
     observedEvents: params.context.observedEvents,
-    predicate: (event) =>
-      event.roomId === params.roomId &&
-      event.sender === params.context.sutUserId &&
-      event.type === "m.room.message" &&
-      event.approval?.kind === params.expectedKind &&
-      event.approval.id === params.expectedApprovalId &&
-      (!params.threadRootEventId || event.relatesTo?.eventId === params.threadRootEventId),
+    predicate: (event) => isExpectedApprovalEvent(event, params),
     roomId: params.roomId,
     since: params.since,
     timeoutMs: params.context.timeoutMs,
