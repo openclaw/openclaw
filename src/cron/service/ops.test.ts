@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
-import { loadCronStore } from "../store.js";
+import { importLegacyCronStateFileToSqlite, loadCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { run, start, stop, update } from "./ops.js";
 import { createCronServiceState } from "./state.js";
@@ -186,7 +186,7 @@ describe("cron service ops seam coverage", () => {
     stop(state);
   });
 
-  it("start persists load-time updatedAtMs repairs to the state sidecar only", async () => {
+  it("start persists load-time updatedAtMs repairs to SQLite state only", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-04-09T08:00:00.000Z");
     const createdAtMs = now - 86_400_000;
@@ -235,6 +235,7 @@ describe("cron service ops seam coverage", () => {
       ),
       "utf-8",
     );
+    await importLegacyCronStateFileToSqlite(storePath);
     const configBefore = await fs.readFile(storePath, "utf-8");
 
     const state = createCronServiceState({
@@ -251,13 +252,11 @@ describe("cron service ops seam coverage", () => {
       await start(state);
 
       const configAfter = await fs.readFile(storePath, "utf-8");
-      const persistedState = JSON.parse(await fs.readFile(statePath, "utf-8")) as {
-        jobs: Record<string, { updatedAtMs?: unknown; state?: { nextRunAtMs?: unknown } }>;
-      };
+      const persisted = await loadCronStore(storePath);
 
       expect(configAfter).toBe(configBefore);
-      expect(persistedState.jobs[jobId]?.updatedAtMs).toBe(createdAtMs);
-      expect(persistedState.jobs[jobId]?.state?.nextRunAtMs).toBe(nextRunAtMs);
+      expect(persisted.jobs[0]?.updatedAtMs).toBe(createdAtMs);
+      expect(persisted.jobs[0]?.state.nextRunAtMs).toBe(nextRunAtMs);
     } finally {
       stop(state);
     }

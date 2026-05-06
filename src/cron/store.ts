@@ -2,10 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  readOpenClawStateKvJson,
+  writeOpenClawStateKvJson,
+  type OpenClawStateJsonValue,
+} from "../state/openclaw-state-kv.js";
 import { resolveConfigDir } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { tryCronScheduleIdentity } from "./schedule-identity.js";
 import type { CronStoreFile } from "./types.js";
+
+const CRON_STATE_KV_SCOPE = "cron.jobs.state";
 
 type SerializedStoreCacheEntry = {
   configJson?: string;
@@ -50,6 +58,66 @@ type CronStateFile = {
   jobs: Record<string, CronStateFileEntry>;
 };
 
+function cronStateKey(storePath: string): string {
+  return path.resolve(storePath);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeCronStateFile(value: unknown): CronStateFile | null {
+  if (!isRecord(value) || value.version !== 1 || !isRecord(value.jobs)) {
+    return null;
+  }
+  const jobs: Record<string, CronStateFileEntry> = {};
+  for (const [jobId, entry] of Object.entries(value.jobs)) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const normalized: CronStateFileEntry = {};
+    if (typeof entry.updatedAtMs === "number" && Number.isFinite(entry.updatedAtMs)) {
+      normalized.updatedAtMs = entry.updatedAtMs;
+    }
+    if (typeof entry.scheduleIdentity === "string") {
+      normalized.scheduleIdentity = entry.scheduleIdentity;
+    }
+    if (isRecord(entry.state)) {
+      normalized.state = entry.state;
+    }
+    jobs[jobId] = normalized;
+  }
+  return { version: 1, jobs };
+}
+
+function readStateDatabase(storePath: string): CronStateFile | null {
+  const value = readOpenClawStateKvJson(CRON_STATE_KV_SCOPE, cronStateKey(storePath));
+  return normalizeCronStateFile(value);
+}
+
+function readStateDatabaseSync(storePath: string): CronStateFile | null {
+  const database = openOpenClawStateDatabase();
+  const row = database.db
+    .prepare("SELECT value_json FROM kv WHERE scope = ? AND key = ?")
+    .get(CRON_STATE_KV_SCOPE, cronStateKey(storePath)) as { value_json?: string } | undefined;
+  if (typeof row?.value_json !== "string") {
+    return null;
+  }
+  try {
+    return normalizeCronStateFile(JSON.parse(row.value_json));
+  } catch {
+    return null;
+  }
+}
+
+function writeStateDatabase(storePath: string, stateFile: CronStateFile) {
+  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
+    CRON_STATE_KV_SCOPE,
+    cronStateKey(storePath),
+    stateFile as unknown as OpenClawStateJsonValue,
+  );
+}
+
 function stripRuntimeOnlyCronFields(store: CronStoreFile): unknown {
   return {
     version: store.version,
@@ -81,6 +149,14 @@ export function resolveCronStorePath(storePath?: string) {
     return path.resolve(raw);
   }
   return resolveDefaultCronStorePath();
+}
+
+export function legacyCronStateFileExists(storePath: string): boolean {
+  try {
+    return fs.existsSync(resolveStatePath(storePath));
+  } catch {
+    return false;
+  }
 }
 
 async function loadStateFile(statePath: string): Promise<CronStateFile | null> {
@@ -117,37 +193,28 @@ async function loadStateFile(statePath: string): Promise<CronStateFile | null> {
   }
 }
 
-function loadStateFileSync(statePath: string): CronStateFile | null {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(statePath, "utf-8");
-  } catch (err) {
-    if ((err as { code?: unknown })?.code === "ENOENT") {
-      return null;
-    }
-    throw new Error(`Failed to read cron state at ${statePath}: ${String(err)}`, {
-      cause: err,
-    });
+export async function importLegacyCronStateFileToSqlite(storePath: string): Promise<{
+  imported: boolean;
+  importedJobs: number;
+  removedPath?: string;
+}> {
+  const statePath = resolveStatePath(storePath);
+  const stateFile = await loadStateFile(statePath);
+  if (!stateFile) {
+    return { imported: false, importedJobs: 0 };
   }
-
+  writeStateDatabase(storePath, stateFile);
   try {
-    const parsed = parseJsonWithJson5Fallback(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return null;
-    }
-    const record = parsed as Record<string, unknown>;
-    if (
-      record.version !== 1 ||
-      typeof record.jobs !== "object" ||
-      record.jobs === null ||
-      Array.isArray(record.jobs)
-    ) {
-      return null;
-    }
-    return { version: 1, jobs: record.jobs as Record<string, CronStateFileEntry> };
+    await fs.promises.rm(statePath, { force: true });
   } catch {
-    return null;
+    // Import already succeeded; a later doctor run can remove the stale sidecar.
   }
+  serializedStoreCache.delete(storePath);
+  return {
+    imported: true,
+    importedJobs: Object.keys(stateFile.jobs).length,
+    removedPath: statePath,
+  };
 }
 
 function hasInlineState(jobs: Array<Record<string, unknown> | null | undefined>): boolean {
@@ -219,14 +286,13 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
       jobs: jobs.filter(Boolean) as never as CronStoreFile["jobs"],
     };
 
-    // Load state file and merge.
-    const statePath = resolveStatePath(storePath);
-    const stateFile = await loadStateFile(statePath);
+    // Load runtime state from SQLite and merge.
+    const stateFile = readStateDatabase(storePath);
     const hasLegacyInlineState =
       !stateFile && hasInlineState(jobs as unknown as Array<Record<string, unknown>>);
 
     if (stateFile) {
-      // State file exists: merge state by job ID. Inline state in jobs.json is ignored.
+      // Runtime state exists: merge state by job ID. Inline state in jobs.json is ignored.
       for (const job of store.jobs) {
         const entry = stateFile.jobs[job.id];
         if (entry) {
@@ -287,7 +353,7 @@ export function loadCronStoreSync(storePath: string): CronStoreFile {
       jobs: jobs.filter(Boolean) as never as CronStoreFile["jobs"],
     };
 
-    const stateFile = loadStateFileSync(resolveStatePath(storePath));
+    const stateFile = readStateDatabaseSync(storePath);
     const hasLegacyInlineState =
       !stateFile && hasInlineState(jobs as unknown as Array<Record<string, unknown>>);
 
@@ -369,7 +435,6 @@ export async function saveCronStore(
   const stateFile = extractStateFile(store);
   const stateJson = JSON.stringify(stateFile, null, 2);
 
-  const statePath = resolveStatePath(storePath);
   const cache = serializedStoreCache.get(storePath);
 
   const configChanged = !stateOnly && cache?.configJson !== configJson;
@@ -378,7 +443,7 @@ export async function saveCronStore(
   const configNeedsWrite = stateOnly
     ? false
     : await serializedFileNeedsWrite(storePath, configJson, configChanged);
-  const stateNeedsWrite = await serializedFileNeedsWrite(statePath, stateJson, stateChanged);
+  const stateNeedsWrite = stateChanged || cache?.stateJson === undefined;
 
   if (
     stateOnly ? !stateNeedsWrite && !migrating : !configNeedsWrite && !stateNeedsWrite && !migrating
@@ -390,7 +455,7 @@ export async function saveCronStore(
 
   // Write state first so migration never leaves stripped config without runtime state.
   if (stateNeedsWrite || migrating) {
-    await atomicWrite(statePath, stateJson);
+    writeStateDatabase(storePath, stateFile);
     updatedCache.stateJson = stateJson;
   }
 

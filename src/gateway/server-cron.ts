@@ -10,11 +10,7 @@ import {
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
-import {
-  appendCronRunLog,
-  resolveCronRunLogPath,
-  resolveCronRunLogPruneOptions,
-} from "../cron/run-log.js";
+import { appendCronRunLogToSqlite, resolveCronRunLogPruneOptions } from "../cron/run-log.js";
 import type { CronServiceContract } from "../cron/service-contract.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
@@ -394,12 +390,8 @@ export function buildGatewayCronService(params: {
           warnedLegacyWebhookJobs,
         });
 
-        const logPath = resolveCronRunLogPath({
+        void appendCronRunLogToSqlite(
           storePath,
-          jobId: evt.jobId,
-        });
-        void appendCronRunLog(
-          logPath,
           {
             ts: Date.now(),
             jobId: evt.jobId,
@@ -424,7 +416,7 @@ export function buildGatewayCronService(params: {
           },
           runLogPrune,
         ).catch((err) => {
-          cronLogger.warn({ err: String(err), logPath }, "cron: run log append failed");
+          cronLogger.warn({ err: String(err), storePath }, "cron: run log append failed");
         });
       }
     },

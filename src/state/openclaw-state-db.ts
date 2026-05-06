@@ -8,7 +8,7 @@ import {
   resolveOpenClawStateSqlitePath,
 } from "./openclaw-state-db.paths.js";
 
-const OPENCLAW_STATE_SCHEMA_VERSION = 1;
+const OPENCLAW_STATE_SCHEMA_VERSION = 2;
 const OPENCLAW_STATE_DIR_MODE = 0o700;
 const OPENCLAW_STATE_FILE_MODE = 0o600;
 const OPENCLAW_STATE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
@@ -134,6 +134,19 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
       created_at    INTEGER NOT NULL,
       PRIMARY KEY (agent_id, run_id, artifact_id)
     );
+
+    CREATE TABLE IF NOT EXISTS cron_run_logs (
+      store_key  TEXT NOT NULL,
+      job_id     TEXT NOT NULL,
+      seq        INTEGER NOT NULL,
+      ts         INTEGER NOT NULL,
+      entry_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (store_key, job_id, seq)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cron_run_logs_store_ts
+      ON cron_run_logs(store_key, ts DESC, seq DESC);
 
     PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
   `);

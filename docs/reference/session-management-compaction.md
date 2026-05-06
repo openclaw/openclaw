@@ -124,7 +124,7 @@ openclaw sessions cleanup --enforce
 Isolated cron runs also create session entries/transcripts. Session rows use the same explicit session cleanup path as other rows:
 
 - `openclaw sessions cleanup --enforce` maintains old isolated cron run sessions through `session.maintenance`.
-- `cron.runLog.maxBytes` + `cron.runLog.keepLines` prune `~/.openclaw/cron/runs/<jobId>.jsonl` files (defaults: `2_000_000` bytes and `2000` lines).
+- `cron.runLog.maxBytes` + `cron.runLog.keepLines` prune SQLite cron run history (defaults: `2_000_000` approximate serialized bytes and `2000` rows per job).
 
 When cron force-creates a new isolated run session, it sanitizes the previous
 `cron:<jobId>` session entry before writing the new row. It carries safe

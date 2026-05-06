@@ -88,7 +88,7 @@ Skipped runs are tracked separately from execution errors. They do not affect re
 
 For isolated jobs that target a local configured model provider, cron runs a lightweight provider preflight before starting the agent turn. Loopback, private-network, and `.local` `api: "ollama"` providers are probed at `/api/tags`; local OpenAI-compatible providers such as vLLM, SGLang, and LM Studio are probed at `/models`. If the endpoint is unreachable, the run is recorded as `skipped` and retried on a later schedule; matching dead endpoints are cached for 5 minutes to avoid many jobs hammering the same local server.
 
-Note: cron job definitions live in `jobs.json`, while pending runtime state lives in `jobs-state.json`. If `jobs.json` is edited externally, the Gateway reloads changed schedules and clears stale pending slots; formatting-only rewrites do not clear the pending slot.
+Note: cron job definitions live in `jobs.json`, while pending runtime state lives in the shared SQLite state database. Legacy `jobs-state.json` sidecars are imported by `openclaw doctor --fix`. If `jobs.json` is edited externally, the Gateway reloads changed schedules and clears stale pending slots; formatting-only rewrites do not clear the pending slot.
 
 ### Manual runs
 
@@ -151,7 +151,7 @@ Isolated cron runs prefer structured execution-denial metadata from the embedded
 Retention and pruning are controlled in config:
 
 - `openclaw sessions cleanup` maintains completed isolated run sessions.
-- `cron.runLog.maxBytes` and `cron.runLog.keepLines` prune `~/.openclaw/cron/runs/<jobId>.jsonl`.
+- `cron.runLog.maxBytes` and `cron.runLog.keepLines` prune SQLite cron run history.
 
 ## Migrating older jobs
 

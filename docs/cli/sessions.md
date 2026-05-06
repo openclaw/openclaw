@@ -114,7 +114,7 @@ openclaw sessions cleanup --json
 
 `openclaw sessions cleanup` uses `session.maintenance` settings from config:
 
-- Scope note: `openclaw sessions cleanup` maintains SQLite session rows only. It does not prune transcript files, trajectory sidecars, or cron run logs (`cron/runs/<jobId>.jsonl`), which are managed by their owning runtimes.
+- Scope note: `openclaw sessions cleanup` maintains SQLite session rows only. It does not prune trajectory sidecars or cron run history, which are managed by their owning runtimes.
 - Legacy JSON import belongs to `openclaw doctor --fix`; cleanup no longer imports or rewrites `sessions.json`.
 
 - `--dry-run`: preview how many entries would be pruned/capped without writing.

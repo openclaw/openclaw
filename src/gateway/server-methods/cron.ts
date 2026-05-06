@@ -2,9 +2,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import {
-  readCronRunLogEntriesPage,
-  readCronRunLogEntriesPageAll,
-  resolveCronRunLogPath,
+  readCronRunLogEntriesPageAllFromSqlite,
+  readCronRunLogEntriesPageFromSqlite,
 } from "../../cron/run-log.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
 import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js";
@@ -510,7 +509,7 @@ export const cronHandlers: GatewayRequestHandlers = {
           .filter((job) => typeof job.id === "string" && typeof job.name === "string")
           .map((job) => [job.id, job.name]),
       );
-      const page = await readCronRunLogEntriesPageAll({
+      const page = await readCronRunLogEntriesPageAllFromSqlite({
         storePath: context.cronStorePath,
         limit: p.limit,
         offset: p.offset,
@@ -525,31 +524,25 @@ export const cronHandlers: GatewayRequestHandlers = {
       respond(true, page, undefined);
       return;
     }
-    let logPath: string;
     try {
-      logPath = resolveCronRunLogPath({
-        storePath: context.cronStorePath,
+      const page = await readCronRunLogEntriesPageFromSqlite(context.cronStorePath, {
+        limit: p.limit,
+        offset: p.offset,
         jobId: jobId as string,
+        statuses: p.statuses,
+        status: p.status,
+        deliveryStatuses: p.deliveryStatuses,
+        deliveryStatus: p.deliveryStatus,
+        query: p.query,
+        sortDir: p.sortDir,
       });
+      respond(true, page, undefined);
     } catch {
       respond(
         false,
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, "invalid cron.runs params: invalid id"),
       );
-      return;
     }
-    const page = await readCronRunLogEntriesPage(logPath, {
-      limit: p.limit,
-      offset: p.offset,
-      jobId: jobId as string,
-      statuses: p.statuses,
-      status: p.status,
-      deliveryStatuses: p.deliveryStatuses,
-      deliveryStatus: p.deliveryStatus,
-      query: p.query,
-      sortDir: p.sortDir,
-    });
-    respond(true, page, undefined);
   },
 };

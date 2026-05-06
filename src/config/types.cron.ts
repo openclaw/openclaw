@@ -42,7 +42,7 @@ export type CronConfig = {
   /** Bearer token for cron webhook POST delivery. */
   webhookToken?: SecretInput;
   /**
-   * Run-log pruning controls for `cron/runs/<jobId>.jsonl`.
+   * Run-log pruning controls for SQLite cron run history.
    * Defaults: `maxBytes=2_000_000`, `keepLines=2000`.
    */
   runLog?: {

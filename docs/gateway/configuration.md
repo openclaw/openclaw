@@ -427,7 +427,7 @@ candidate contains redacted secret placeholders such as `***`.
     }
     ```
 
-    - `runLog`: prune `cron/runs/<jobId>.jsonl` by size and retained lines.
+    - `runLog`: prune SQLite cron run history by approximate serialized size and retained rows.
     - See [Cron jobs](/automation/cron-jobs) for feature overview and CLI examples.
 
   </Accordion>
