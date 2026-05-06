@@ -58,6 +58,51 @@ describe("createWebSendApi", () => {
     });
   });
 
+  it("strips CRLF from document fileName to prevent header injection", async () => {
+    const payload = Buffer.from("pdf");
+    await api.sendMessage("+1555", "doc", payload, "application/pdf", {
+      fileName: "evil.pdf\r\nX-Injected: bad",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        document: payload,
+        fileName: "evil.pdfX-Injected: bad",
+        mimetype: "application/pdf",
+      }),
+    );
+  });
+
+  it("strips control characters from document fileName", async () => {
+    const payload = Buffer.from("pdf");
+    await api.sendMessage("+1555", "doc", payload, "application/pdf", {
+      fileName: "\x00evil\x1f.pdf",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        document: payload,
+        fileName: "evil.pdf",
+        mimetype: "application/pdf",
+      }),
+    );
+  });
+
+  it("falls back to 'file' when fileName consists only of control characters", async () => {
+    const payload = Buffer.from("pdf");
+    await api.sendMessage("+1555", "doc", payload, "application/pdf", {
+      fileName: "\r\n\x00",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        document: payload,
+        fileName: "file",
+        mimetype: "application/pdf",
+      }),
+    );
+  });
+
   it("falls back to default document filename when fileName is absent", async () => {
     const payload = Buffer.from("pdf");
     await api.sendMessage("+1555", "doc", payload, "application/pdf");
