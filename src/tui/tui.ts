@@ -17,6 +17,7 @@ import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js"
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
+import type { SessionsListParams } from "../gateway/protocol/index.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { loggingState } from "../logging/state.js";
@@ -228,7 +229,25 @@ export function formatStartupConversationSummary(summaryText?: string): string[]
     return [];
   }
 
-  return ["startup summary from your last conversation:", ...lines.map((line) => `• ${line}`)];
+  return ["startup summary from your last conversation:", ...lines.map((line) => `- ${line}`)];
+}
+
+export function shouldFetchStartupConversationSummary(params: {
+  isLocalMode: boolean;
+  reconnected: boolean;
+}): boolean {
+  return !params.isLocalMode && !params.reconnected;
+}
+
+export function createStartupConversationSummaryListParams(agentId: string): SessionsListParams {
+  return {
+    limit: 10,
+    includeGlobal: false,
+    includeUnknown: false,
+    includeDerivedTitles: true,
+    includeLastMessage: true,
+    agentId: normalizeAgentId(agentId),
+  };
 }
 
 export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?: () => number }) {
@@ -1512,13 +1531,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       updateHeader();
       updateAutocompleteProvider();
       await loadHistory();
-      if (!isLocalMode) {
+      if (shouldFetchStartupConversationSummary({ isLocalMode, reconnected })) {
         try {
-          const sessionsRes = await client.listSessions({
-            limit: 10,
-            includeDerivedTitles: true,
-            includeLastMessage: true,
-          });
+          const sessionsRes = await client.listSessions(
+            createStartupConversationSummaryListParams(currentAgentId),
+          );
           const activeNonCurrent = sessionsRes.sessions?.find((s) => s.key !== currentSessionKey);
           if (activeNonCurrent) {
             const summaryStr =
