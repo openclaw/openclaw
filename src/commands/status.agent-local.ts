@@ -1,7 +1,8 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
+import { loadSessionStore } from "../config/sessions/store-load.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { pathExists } from "../infra/fs-safe.js";
@@ -24,6 +25,14 @@ type AgentLocalStatusesResult = {
   bootstrapPendingCount: number;
 };
 
+function loadStatusSessionStore(storePath: string): Record<string, SessionEntry | undefined> {
+  try {
+    return loadSessionStore(storePath);
+  } catch {
+    return {};
+  }
+}
+
 export async function getAgentLocalStatuses(
   cfg: OpenClawConfig,
 ): Promise<AgentLocalStatusesResult> {
@@ -45,7 +54,7 @@ export async function getAgentLocalStatuses(
     const bootstrapPending = bootstrapPath != null ? await pathExists(bootstrapPath) : null;
 
     const sessionsPath = resolveStorePath(cfg.session?.store, { agentId });
-    const store = readSessionStoreReadOnly(sessionsPath);
+    const store = loadStatusSessionStore(sessionsPath);
     const sessions = Object.entries(store)
       .filter(([key]) => key !== "global" && key !== "unknown")
       .map(([, entry]) => entry);

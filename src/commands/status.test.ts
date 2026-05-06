@@ -532,8 +532,8 @@ vi.mock("../config/sessions/main-session.js", () => ({
 vi.mock("../config/sessions/paths.js", () => ({
   resolveStorePath: mocks.resolveStorePath,
 }));
-vi.mock("../config/sessions/store-read.js", () => ({
-  readSessionStoreReadOnly: mocks.loadSessionStore,
+vi.mock("../config/sessions/store-load.js", () => ({
+  loadSessionStore: mocks.loadSessionStore,
 }));
 vi.mock("../config/sessions/types.js", () => ({
   resolveSessionTotalTokens: vi.fn((entry?: { totalTokens?: number }) =>

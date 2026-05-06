@@ -17,6 +17,10 @@ async function resolveRealStorePath(sessionsDir: string): Promise<string> {
   return fsSync.realpathSync.native(path.join(sessionsDir, "sessions.json"));
 }
 
+function resolveRealSyntheticStorePath(sessionsDir: string): string {
+  return path.join(fsSync.realpathSync.native(sessionsDir), "sessions.json");
+}
+
 async function createAgentSessionStores(
   root: string,
   agentIds: string[],
@@ -27,6 +31,19 @@ async function createAgentSessionStores(
     await fs.mkdir(sessionsDir, { recursive: true });
     await fs.writeFile(path.join(sessionsDir, "sessions.json"), "{}", "utf8");
     storePaths[agentId] = await resolveRealStorePath(sessionsDir);
+  }
+  return storePaths;
+}
+
+async function createAgentSessionDirs(
+  root: string,
+  agentIds: string[],
+): Promise<Record<string, string>> {
+  const storePaths: Record<string, string> = {};
+  for (const agentId of agentIds) {
+    const sessionsDir = path.join(root, "agents", agentId, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    storePaths[agentId] = resolveRealSyntheticStorePath(sessionsDir);
   }
   return storePaths;
 }
@@ -197,6 +214,24 @@ describe("resolveAllAgentSessionStoreTargets", () => {
 
       expectTargetsToContainStores(targets, storePaths);
       expect(countMatching(targets, (target) => target.storePath === storePaths.ops)).toBe(1);
+    });
+  });
+
+  it("discovers sqlite-backed agent session dirs after sessions.json import cleanup", async () => {
+    await withTempHome(async (home) => {
+      const stateDir = path.join(home, ".openclaw");
+      const storePaths = await createAgentSessionDirs(stateDir, ["ops", "retired"]);
+
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [{ id: "ops", default: true }],
+        },
+      };
+
+      const targets = await resolveAllAgentSessionStoreTargets(cfg, { env: process.env });
+
+      expectTargetsToContainStores(targets, storePaths);
+      expect(targets.filter((target) => target.storePath === storePaths.ops)).toHaveLength(1);
     });
   });
 
