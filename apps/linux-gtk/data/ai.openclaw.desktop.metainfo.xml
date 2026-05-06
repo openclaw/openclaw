@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>ai.openclaw.desktop</id>
+  <name>OpenClaw</name>
+  <summary>Native GTK4 desktop client for the OpenClaw AI agent gateway</summary>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>
+      OpenClaw is a native Linux desktop application for managing AI agents
+      through the OpenClaw gateway. It provides a full-featured interface for
+      chat, session management, agent configuration, and voice interaction.
+    </p>
+  </description>
+  <launchable type="desktop-id">ai.openclaw.desktop.desktop</launchable>
+  <url type="homepage">https://openclaw.ai</url>
+  <url type="bugtracker">https://github.com/openclaw/openclaw/issues</url>
+  <content_rating type="oars-1.1" />
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </recommends>
+</component>

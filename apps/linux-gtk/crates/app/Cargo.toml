@@ -1,0 +1,31 @@
+[package]
+name = "openclaw-linux-gtk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Native GTK4 desktop application for OpenClaw"
+
+[[bin]]
+name = "openclaw-gtk"
+path = "src/main.rs"
+
+[dependencies]
+openclaw-gateway-client = { path = "../gateway-client" }
+gtk4 = "0.9"
+libadwaita = { version = "0.7", features = ["v1_6"] }
+glib = "0.20"
+gio = "0.20"
+pango = "0.20"
+sourceview5 = "0.9"
+tokio = { workspace = true }
+async-channel = "2"
+pulldown-cmark = "0.12"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+dirs = { workspace = true }
+reqwest = { workspace = true }
+ksni = "0.3"

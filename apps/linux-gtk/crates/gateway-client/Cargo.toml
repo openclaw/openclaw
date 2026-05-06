@@ -1,0 +1,25 @@
+[package]
+name = "openclaw-gateway-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Async WebSocket client for the OpenClaw gateway protocol"
+
+[dependencies]
+tokio = { workspace = true }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
+rustls = { version = "0.23", default-features = false }
+tokio-rustls = { version = "0.26", default-features = false }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ed25519-dalek = { version = "2.1", features = ["rand_core", "pem"] }
+sha2 = "0.10"
+base64 = "0.22"
+uuid = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+url = "2"
+dirs = { workspace = true }
+rand_core = { version = "0.6", features = ["getrandom"] }

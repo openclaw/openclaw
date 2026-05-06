@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=OpenClaw
+Comment=AI agent gateway desktop client
+Exec=openclaw-gtk
+Icon=ai.openclaw.desktop
+Terminal=false
+Type=Application
+Categories=Network;Chat;Utility;
+Keywords=AI;agents;chat;openclaw;
+StartupNotify=true
