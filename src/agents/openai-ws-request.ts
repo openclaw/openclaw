@@ -78,6 +78,30 @@ function inputItemsStartWith(input: InputItem[], baseline: InputItem[]): boolean
   return baseline.every((item, index) => stringifyStable(item) === stringifyStable(input[index]));
 }
 
+function responseInputEndedWithFinalAnswer(input: InputItem[]): boolean {
+  const lastConversationItem = input.findLast(
+    (item) =>
+      item.type === "message" ||
+      item.type === "function_call" ||
+      item.type === "function_call_output",
+  );
+  return (
+    lastConversationItem?.type === "message" &&
+    lastConversationItem.role === "assistant" &&
+    lastConversationItem.phase === "final_answer"
+  );
+}
+
+function suffixStartsNewUserTurn(input: InputItem[]): boolean {
+  const firstConversationItem = input.find(
+    (item) =>
+      item.type === "message" ||
+      item.type === "function_call" ||
+      item.type === "function_call_output",
+  );
+  return firstConversationItem?.type === "message" && firstConversationItem.role === "user";
+}
+
 export function planOpenAIWebSocketRequestPayload(params: {
   fullPayload: ResponseCreateEvent;
   previousRequestPayload?: ResponseCreateEvent;
@@ -97,14 +121,22 @@ export function planOpenAIWebSocketRequestPayload(params: {
   ) {
     const baseline = [...previousInputItems, ...previousResponseInputItems];
     if (inputItemsStartWith(fullInputItems, baseline)) {
-      return {
-        mode: "incremental",
-        payload: {
-          ...params.fullPayload,
-          previous_response_id: params.previousResponseId,
-          input: fullInputItems.slice(baseline.length),
-        },
-      };
+      const incrementalInput = fullInputItems.slice(baseline.length);
+      if (
+        !(
+          responseInputEndedWithFinalAnswer(previousResponseInputItems) &&
+          suffixStartsNewUserTurn(incrementalInput)
+        )
+      ) {
+        return {
+          mode: "incremental",
+          payload: {
+            ...params.fullPayload,
+            previous_response_id: params.previousResponseId,
+            input: incrementalInput,
+          },
+        };
+      }
     }
   }
 

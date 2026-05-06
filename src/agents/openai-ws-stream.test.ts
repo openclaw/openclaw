@@ -1818,6 +1818,39 @@ describe("planOpenAIWebSocketRequestPayload", () => {
     expect(plan.payload.input).toEqual([{ type: "message", role: "user", content: "Next" }]);
   });
 
+  it("uses full context when a new user turn follows a final answer", () => {
+    const previousInputItems: InputItem[] = [{ type: "message", role: "user", content: "Fix X" }];
+    const previousRequest: ResponseCreateEvent = {
+      type: "response.create",
+      model: "gpt-5.4",
+      store: false,
+      instructions: "You are helpful.",
+      input: previousInputItems,
+    };
+    const previousResponseInputItems: InputItem[] = [
+      { type: "message", role: "assistant", content: "Done — fixed X.", phase: "final_answer" },
+    ];
+    const fullPayload: ResponseCreateEvent = {
+      ...previousRequest,
+      input: [
+        ...previousInputItems,
+        ...previousResponseInputItems,
+        { type: "message", role: "user", content: "Now inspect Y" },
+      ],
+    };
+
+    const plan = planOpenAIWebSocketRequestPayload({
+      fullPayload,
+      previousRequestPayload: previousRequest,
+      previousResponseId: "resp_prev_final",
+      previousResponseInputItems,
+    });
+
+    expect(plan.mode).toBe("full_context");
+    expect(plan.payload.previous_response_id).toBeUndefined();
+    expect(plan.payload.input).toEqual(fullPayload.input);
+  });
+
   it("falls back to full context when non-input fields differ", () => {
     const previousInputItems: InputItem[] = [{ type: "message", role: "user", content: "Hello" }];
     const previousRequest: ResponseCreateEvent = {
