@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { NpmSpecResolution } from "./install-source-utils.js";
-import { readJson, tryReadJson, writeJson } from "./json-files.js";
+import { readJson, readJsonIfExists, writeJson } from "./json-files.js";
 import type { ParsedRegistryNpmSpec } from "./npm-registry-spec.js";
 
 type ManagedNpmRootManifest = {
@@ -38,7 +38,7 @@ function readDependencyRecord(value: unknown): Record<string, string> {
 }
 
 async function readManagedNpmRootManifest(filePath: string): Promise<ManagedNpmRootManifest> {
-  const parsed = await tryReadJson<unknown>(filePath);
+  const parsed = await readJsonIfExists<unknown>(filePath);
   return isRecord(parsed) ? { ...parsed } : {};
 }
 

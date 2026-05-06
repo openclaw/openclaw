@@ -61,6 +61,22 @@ describe("managed npm root", () => {
     });
   });
 
+  it("does not overwrite a present malformed package manifest", async () => {
+    const npmRoot = await makeTempRoot();
+    const manifestPath = path.join(npmRoot, "package.json");
+    await fs.writeFile(manifestPath, "{not-json", "utf8");
+
+    await expect(
+      upsertManagedNpmRootDependency({
+        npmRoot,
+        packageName: "@openclaw/feishu",
+        dependencySpec: "2026.5.2",
+      }),
+    ).rejects.toThrow();
+
+    await expect(fs.readFile(manifestPath, "utf8")).resolves.toBe("{not-json");
+  });
+
   it("pins managed dependencies to the resolved version", () => {
     expect(
       resolveManagedNpmRootDependencySpec({
