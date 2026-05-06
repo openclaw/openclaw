@@ -860,12 +860,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
     },
     appendFile: async (absolutePath: string, content: string) => {
       const relative = toRelativeWorkspacePath(root, absolutePath);
-      await appendFileWithinRoot({
-        rootDir: root,
-        relativePath: relative,
-        data: content,
-        mkdir: true,
-      });
+      await (await rootPromise).append(relative, content, { mkdir: true });
     },
   } as const;
 }
