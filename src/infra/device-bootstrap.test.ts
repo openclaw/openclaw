@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  acquireFileLock,
+  drainFileLockStateForTest,
+  resetFileLockStateForTest,
+} from "./file-lock.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
@@ -39,10 +44,18 @@ async function verifyBootstrapToken(
   });
 }
 
+async function flushMicrotasks(rounds = 3): Promise<void> {
+  for (let index = 0; index < rounds; index += 1) {
+    await Promise.resolve();
+  }
+}
+
 afterEach(async () => {
   vi.useRealTimers();
   resetLogger();
   setLoggerOverride(null);
+  await drainFileLockStateForTest();
+  resetFileLockStateForTest();
   await tempDirs.cleanup();
 });
 
@@ -76,6 +89,42 @@ describe("device bootstrap tokens", () => {
         scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
       },
     });
+  });
+
+  it("waits for the cross-process bootstrap file lock before issuing a token", async () => {
+    const baseDir = await createTempDir();
+    const bootstrapPath = resolveBootstrapPath(baseDir);
+    await fs.mkdir(path.dirname(bootstrapPath), { recursive: true });
+
+    const externalLock = await acquireFileLock(bootstrapPath, {
+      retries: {
+        retries: 10,
+        factor: 2,
+        minTimeout: 100,
+        maxTimeout: 10_000,
+        randomize: true,
+      },
+      stale: 30_000,
+    });
+
+    try {
+      let settled = false;
+      const issuedPromise = issueDeviceBootstrapToken({ baseDir }).finally(() => {
+        settled = true;
+      });
+
+      await flushMicrotasks();
+      expect(settled).toBe(false);
+      await expect(fs.access(bootstrapPath)).rejects.toThrow();
+
+      await externalLock.release();
+
+      const issued = await issuedPromise;
+      const raw = await fs.readFile(bootstrapPath, "utf8");
+      expect(JSON.parse(raw)).toHaveProperty(issued.token);
+    } finally {
+      await externalLock.release().catch(() => {});
+    }
   });
 
   it("verifies valid bootstrap tokens and binds them to the first device identity", async () => {

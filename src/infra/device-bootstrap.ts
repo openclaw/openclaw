@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -9,6 +10,7 @@ import {
   type DeviceBootstrapProfileInput,
 } from "../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { withFileLock } from "./file-lock.js";
 import { normalizeDevicePublicKeyBase64Url } from "./device-identity.js";
 import { resolvePairingPaths } from "./pairing-files.js";
 import { createAsyncLock, pruneExpiredPending, tryReadJson, writeJson } from "./pairing-files.js";
@@ -32,10 +34,28 @@ export type DeviceBootstrapTokenRecord = {
 type DeviceBootstrapStateFile = Record<string, DeviceBootstrapTokenRecord>;
 
 const withLock = createAsyncLock();
+const DEVICE_BOOTSTRAP_LOCK_OPTIONS = {
+  retries: {
+    retries: 10,
+    factor: 2,
+    minTimeout: 100,
+    maxTimeout: 10_000,
+    randomize: true,
+  },
+  stale: 30_000,
+} as const;
 const log = createSubsystemLogger("device-bootstrap");
 
 function resolveBootstrapPath(baseDir?: string): string {
   return path.join(resolvePairingPaths(baseDir, "devices").dir, "bootstrap.json");
+}
+
+async function withBootstrapStateLock<T>(baseDir: string | undefined, fn: () => Promise<T>): Promise<T> {
+  const bootstrapPath = resolveBootstrapPath(baseDir);
+  await fs.mkdir(path.dirname(bootstrapPath), { recursive: true });
+  return await withLock(async () => {
+    return await withFileLock(bootstrapPath, DEVICE_BOOTSTRAP_LOCK_OPTIONS, fn);
+  });
 }
 
 function resolveIssuedBootstrapProfileInput(params: {
@@ -201,7 +221,7 @@ export async function issueDeviceBootstrapToken(
     scopes?: readonly string[];
   } = {},
 ): Promise<{ token: string; expiresAtMs: number }> {
-  return await withLock(async () => {
+  return await withBootstrapStateLock(params.baseDir, async () => {
     const state = await loadState(params.baseDir);
     const token = generatePairingToken();
     const issuedAtMs = Date.now();
@@ -225,7 +245,7 @@ export async function clearDeviceBootstrapTokens(
     baseDir?: string;
   } = {},
 ): Promise<{ removed: number }> {
-  return await withLock(async () => {
+  return await withBootstrapStateLock(params.baseDir, async () => {
     const state = await loadState(params.baseDir);
     const removed = Object.keys(state).length;
     await persistState({}, params.baseDir);
@@ -237,7 +257,7 @@ export async function revokeDeviceBootstrapToken(params: {
   token: string;
   baseDir?: string;
 }): Promise<{ removed: boolean; record?: DeviceBootstrapTokenRecord }> {
-  return await withLock(async () => {
+  return await withBootstrapStateLock(params.baseDir, async () => {
     const providedToken = params.token.trim();
     if (!providedToken) {
       return { removed: false };
@@ -260,7 +280,7 @@ export async function restoreDeviceBootstrapToken(params: {
   record: DeviceBootstrapTokenRecord;
   baseDir?: string;
 }): Promise<void> {
-  return await withLock(async () => {
+  return await withBootstrapStateLock(params.baseDir, async () => {
     const state = await loadState(params.baseDir);
     state[params.record.token] = params.record;
     await persistState(state, params.baseDir);
@@ -290,7 +310,7 @@ export async function redeemDeviceBootstrapTokenProfile(params: {
   scopes: readonly string[];
   baseDir?: string;
 }): Promise<{ recorded: boolean; fullyRedeemed: boolean }> {
-  return await withLock(async () => {
+  return await withBootstrapStateLock(params.baseDir, async () => {
     const providedToken = params.token.trim();
     if (!providedToken) {
       return { recorded: false, fullyRedeemed: false };
@@ -335,7 +355,7 @@ export async function verifyDeviceBootstrapToken(params: {
   scopes: readonly string[];
   baseDir?: string;
 }): Promise<{ ok: true } | { ok: false; reason: string }> {
-  return await withLock(async () => {
+  return await withBootstrapStateLock(params.baseDir, async () => {
     const state = await loadState(params.baseDir);
     const providedToken = params.token.trim();
     if (!providedToken) {
