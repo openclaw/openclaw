@@ -5,8 +5,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   clearAllowFromStoreReadCacheForTest,
   readChannelAllowFromStoreEntriesSync,
-  resolveChannelAllowFromPath,
 } from "./allow-from-store-read.js";
+import { addChannelAllowFromStoreEntry } from "./pairing-store.js";
 
 let fixtureRoot = "";
 let caseId = 0;
@@ -24,19 +24,20 @@ function makeHomeDir(): string {
   return dir;
 }
 
-function writeAllowFromFile(params: {
+async function writeAllowFromStore(params: {
   channel: "telegram";
   env: NodeJS.ProcessEnv;
   accountId?: string;
   allowFrom: string[];
-}): void {
-  const filePath = resolveChannelAllowFromPath(params.channel, params.env, params.accountId);
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(
-    filePath,
-    JSON.stringify({ version: 1, allowFrom: params.allowFrom }, null, 2),
-    "utf8",
-  );
+}): Promise<void> {
+  for (const entry of params.allowFrom) {
+    await addChannelAllowFromStoreEntry({
+      channel: params.channel,
+      env: params.env,
+      accountId: params.accountId,
+      entry,
+    });
+  }
 }
 
 beforeAll(() => {
@@ -54,35 +55,26 @@ afterEach(() => {
 });
 
 describe("allow-from-store-read", () => {
-  it("merges scoped and legacy entries for the default account", () => {
+  it("reads default account entries from SQLite", async () => {
     const env = makeEnv(makeHomeDir());
-    writeAllowFromFile({
-      channel: "telegram",
-      env,
-      allowFrom: [" legacy-a ", "legacy-a", "legacy-b"],
-    });
-    writeAllowFromFile({
+    await writeAllowFromStore({
       channel: "telegram",
       env,
       accountId: "default",
-      allowFrom: [" scoped-a ", "legacy-b"],
+      allowFrom: [" scoped-a ", "scoped-a", "legacy-b"],
     });
 
-    expect(readChannelAllowFromStoreEntriesSync("telegram", env)).toEqual([
-      "scoped-a",
-      "legacy-b",
-      "legacy-a",
-    ]);
+    expect(readChannelAllowFromStoreEntriesSync("telegram", env)).toEqual(["scoped-a", "legacy-b"]);
   });
 
-  it("keeps non-default account reads scoped", () => {
+  it("keeps non-default account reads scoped", async () => {
     const env = makeEnv(makeHomeDir());
-    writeAllowFromFile({
+    await writeAllowFromStore({
       channel: "telegram",
       env,
-      allowFrom: ["legacy-a"],
+      allowFrom: ["default-a"],
     });
-    writeAllowFromFile({
+    await writeAllowFromStore({
       channel: "telegram",
       env,
       accountId: "work",

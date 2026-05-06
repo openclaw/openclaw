@@ -131,9 +131,11 @@ This plan has started landing in slices:
   legacy import source and is removed after import; `auth-profiles.json` still
   owns credentials and stays file-backed.
 - Device identity, local device auth tokens, bootstrap tokens, device/node
-  pairing ledgers, web push subscriptions/VAPID keys, and APNs registration
-  state now use the shared SQLite `kv` store. `openclaw doctor --fix` imports
-  the legacy `identity/*.json`, `devices/*.json`, `nodes/*.json`, and
+  pairing ledgers, channel pairing requests/allowlists, web push
+  subscriptions/VAPID keys, and APNs registration state now use the shared
+  SQLite `kv` store. `openclaw doctor --fix` imports the legacy
+  `identity/*.json`, `devices/*.json`, `nodes/*.json`,
+  `credentials/*-pairing.json`, `credentials/*-allowFrom.json`, and
   `push/*.json` files into SQLite and removes those files after a successful
   import. Runtime paths no longer read or write those JSON ledgers.
 - `AgentRuntimeBackend`, `PreparedAgentRun`, and the Node worker runner exist
