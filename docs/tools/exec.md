@@ -40,31 +40,12 @@ Override the configured exec timeout for this call. Set `timeout: 0` only when t
 Run in a pseudo-terminal when available. Use for TTY-only CLIs, coding agents, and terminal UIs.
 </ParamField>
 
-<ParamField path="host" type="'auto' | 'sandbox' | 'gateway' | 'node'" default="auto">
-Where to execute. `auto` resolves to `sandbox` when a sandbox runtime is active and `gateway` otherwise.
-</ParamField>
-
-<ParamField path="security" type="'deny' | 'allowlist' | 'full'">
-Enforcement mode for `gateway` / `node` execution.
-</ParamField>
-
-<ParamField path="ask" type="'off' | 'on-miss' | 'always'">
-Approval prompt behavior for `gateway` / `node` execution.
-</ParamField>
-
-<ParamField path="node" type="string">
-Node id/name when `host=node`.
-</ParamField>
-
-<ParamField path="elevated" type="boolean" default="false">
-Request elevated mode — escape the sandbox onto the configured host path. `security=full` is forced only when elevated resolves to `full`.
-</ParamField>
-
 Notes:
 
+- Exec policy controls (`host`, `security`, `ask`, `node`, and elevated host access) are not tool-call parameters. Set them in config or with `/exec` session defaults.
 - `host` defaults to `auto`: sandbox when sandbox runtime is active for the session, otherwise gateway.
-- `host` only accepts `auto`, `sandbox`, `gateway`, or `node`. It is not a hostname selector; hostname-like values are rejected before the command runs.
-- `auto` is the default routing strategy, not a wildcard. Per-call `host=node` is allowed from `auto`; per-call `host=gateway` is only allowed when no sandbox runtime is active.
+- `host` only accepts `auto`, `sandbox`, `gateway`, or `node`. It is not a hostname selector.
+- `auto` is the default routing strategy, not a wildcard. To force gateway or node routing, set `tools.exec.host`, `exec.host`, or use `/exec host=...`.
 - With no extra config, `host=auto` still "just works": no sandbox means it resolves to `gateway`; a live sandbox means it stays in the sandbox.
 - `elevated` escapes the sandbox onto the configured host path: `gateway` by default, or `node` when `tools.exec.host=node` (or the session default is `host=node`). It is only available when elevated access is enabled for the current session/provider.
 - `gateway`/`node` approvals are controlled by `~/.openclaw/exec-approvals.json`.

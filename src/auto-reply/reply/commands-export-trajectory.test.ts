@@ -352,10 +352,10 @@ describe("buildExportTrajectoryCommandReply", () => {
       accountId: "account-1",
     });
     expect(execCalls[0]?.params).toMatchObject({
-      security: "allowlist",
-      ask: "always",
       background: true,
     });
+    expect(execCalls[0]?.params).not.toHaveProperty("security");
+    expect(execCalls[0]?.params).not.toHaveProperty("ask");
     const command = (execCalls[0]?.params as { command?: string }).command ?? "";
     expect(command).toContain("sessions");
     expect(command).toContain("export-trajectory");

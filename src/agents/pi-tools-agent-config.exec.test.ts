@@ -93,7 +93,7 @@ describe("Agent-specific exec tool defaults", () => {
     expect(resultDetails?.status).toBe("completed");
   });
 
-  it("fails closed when exec host=sandbox is requested without sandbox runtime", async () => {
+  it("ignores model-requested exec host=sandbox without sandbox runtime", async () => {
     const tools = createOpenClawCodingTools({
       config: {},
       sessionKey: "agent:main:main",
@@ -102,12 +102,12 @@ describe("Agent-specific exec tool defaults", () => {
     });
     const execTool = tools.find((tool) => tool.name === "exec");
     expect(execTool).toBeDefined();
-    await expect(
-      execTool!.execute("call-fail-closed", {
-        command: "echo done",
-        host: "sandbox",
-      }),
-    ).rejects.toThrow(/requires a sandbox runtime/);
+    const result = await execTool!.execute("call-ignored-host", {
+      command: "echo done",
+      host: "sandbox",
+    });
+    const resultDetails = result?.details as { status?: string } | undefined;
+    expect(resultDetails?.status).toBe("completed");
   });
 
   it("should apply agent-specific exec host defaults over global defaults", async () => {
@@ -130,12 +130,12 @@ describe("Agent-specific exec tool defaults", () => {
     });
     const mainDetails = mainResult?.details as { status?: string } | undefined;
     expect(mainDetails?.status).toBe("completed");
-    await expect(
-      mainExecTool!.execute("call-main", {
-        command: "echo done",
-        host: "sandbox",
-      }),
-    ).rejects.toThrow("exec host not allowed");
+    const mainOverrideResult = await mainExecTool!.execute("call-main", {
+      command: "echo done",
+      host: "sandbox",
+    });
+    const mainOverrideDetails = mainOverrideResult?.details as { status?: string } | undefined;
+    expect(mainOverrideDetails?.status).toBe("completed");
 
     const helperTools = createOpenClawCodingTools({
       config: cfg,
@@ -151,13 +151,13 @@ describe("Agent-specific exec tool defaults", () => {
     });
     const helperDetails = helperResult?.details as { status?: string } | undefined;
     expect(helperDetails?.status).toBe("completed");
-    await expect(
-      helperExecTool!.execute("call-helper", {
-        command: "echo done",
-        host: "sandbox",
-        yieldMs: 1000,
-      }),
-    ).rejects.toThrow(/requires a sandbox runtime/);
+    const helperOverrideResult = await helperExecTool!.execute("call-helper", {
+      command: "echo done",
+      host: "sandbox",
+      yieldMs: 1000,
+    });
+    const helperOverrideDetails = helperOverrideResult?.details as { status?: string } | undefined;
+    expect(helperOverrideDetails?.status).toBe("completed");
   });
 
   it("applies explicit agentId exec defaults when sessionKey is opaque", async () => {

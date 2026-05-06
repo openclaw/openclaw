@@ -261,8 +261,6 @@ async function requestTrajectoryExportApproval(
     });
     const result = await execTool.execute("chat-export-trajectory", {
       command: request.command,
-      security: "allowlist",
-      ask: "always",
       background: true,
       timeout: timeoutSec,
     });
