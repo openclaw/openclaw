@@ -242,4 +242,36 @@ describe("bundled plugin tool manifest contracts", () => {
 
     expect(failures).toEqual([]);
   });
+
+  // New test for glob/wildcard support in contracts.tools
+  it("supports glob/wildcard patterns in contracts.tools", async () => {
+    // Test that glob patterns are correctly compiled and matched
+    const { compileGlobPatterns, matchesAnyGlobPattern } =
+      await import("../../agents/glob-pattern.js");
+
+    // Test basic glob pattern
+    const patterns = compileGlobPatterns({
+      raw: ["xxx-*"],
+      normalize: (v: string) => v.toLowerCase().trim(),
+    });
+
+    expect(matchesAnyGlobPattern("xxx-test", patterns)).toBe(true);
+    expect(matchesAnyGlobPattern("xxx-", patterns)).toBe(true);
+    expect(matchesAnyGlobPattern("yyy-test", patterns)).toBe(false);
+
+    // Test wildcard * pattern
+    const patterns2 = compileGlobPatterns({
+      raw: ["*"],
+      normalize: (v: string) => v.toLowerCase().trim(),
+    });
+    expect(matchesAnyGlobPattern("any-tool", patterns2)).toBe(true);
+
+    // Test exact match still works
+    const patterns3 = compileGlobPatterns({
+      raw: ["exact-tool"],
+      normalize: (v: string) => v.toLowerCase().trim(),
+    });
+    expect(matchesAnyGlobPattern("exact-tool", patterns3)).toBe(true);
+    expect(matchesAnyGlobPattern("other-tool", patterns3)).toBe(false);
+  });
 });

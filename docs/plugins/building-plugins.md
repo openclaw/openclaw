@@ -94,10 +94,12 @@ and provider plugins have dedicated guides linked above.
 
     Every plugin needs a manifest, even with no config. Runtime-registered tools
     must be listed in `contracts.tools` so OpenClaw can discover the owning
-    plugin without loading every plugin runtime. Plugins should also declare
-    `activation.onStartup` intentionally. This example sets it to `true`. See
-    [Manifest](/plugins/manifest) for the full schema. The canonical ClawHub
-    publish snippets live in `docs/snippets/plugin-publish/`.
+    plugin without loading every plugin runtime. **Glob/wildcard patterns are supported**
+    (e.g., `"example-*"`) for plugins that register tools dynamically.
+    Plugins should also declare `activation.onStartup` intentionally.
+    This example sets it to `true`. See
+    [Manifest](/plugins/manifest) for the full schema.
+    The canonical ClawHub publish snippets live in `docs/snippets/plugin-publish/`.
 
   </Step>
 

@@ -413,6 +413,11 @@ export type PluginManifestContracts = {
   webFetchProviders?: string[];
   webSearchProviders?: string[];
   migrationProviders?: string[];
+  /**
+   * Tool names or glob patterns that this plugin registers.
+   * Supports glob/wildcard patterns like "xxx-*" for dynamic tool registration.
+   * @example ["my-tool", "plugin-*"]
+   */
   tools?: string[];
 };
 
