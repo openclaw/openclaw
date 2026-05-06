@@ -44,7 +44,7 @@ jobs:
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
-      - uses: actions/labeler@v6
+      - uses: actions/labeler@v6.0.1
         with:
           configuration-path: .github/labeler.yml
           repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
