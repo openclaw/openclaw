@@ -172,8 +172,8 @@ export function createWebSendApi(params: {
         degreesLatitude: latitude,
         degreesLongitude: longitude,
       };
-      if (options?.locationName) locationPayload.locationName = options.locationName;
-      if (options?.locationAddress) locationPayload.locationAddress = options.locationAddress;
+      if (options?.locationName) locationPayload.name = options.locationName;
+      if (options?.locationAddress) locationPayload.address = options.locationAddress;
       if (options?.accuracyInMeters != null) {
         locationPayload.accuracyInMeters = options.accuracyInMeters;
       }

@@ -332,8 +332,8 @@ describe("createWebSendApi", () => {
 
   it("includes optional location fields when provided", async () => {
     await api.sendLocation("+1555", 28.2723, -16.6424, {
-      name: "Teide",
-      address: "Parque Nacional del Teide, Tenerife",
+      locationName: "Teide",
+      locationAddress: "Parque Nacional del Teide, Tenerife",
       accuracyInMeters: 10,
     });
     expect(sendMessage).toHaveBeenCalledWith(
