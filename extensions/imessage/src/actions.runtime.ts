@@ -80,7 +80,9 @@ function chatListCacheGet(
   dbPath?: string,
 ): ReadonlyArray<Record<string, unknown>> | null {
   const entry = chatListCache.get(chatListCacheKey(cliPath, dbPath));
-  if (!entry) return null;
+  if (!entry) {
+    return null;
+  }
   if (entry.expiresAt < Date.now()) {
     chatListCache.delete(chatListCacheKey(cliPath, dbPath));
     return null;
@@ -148,7 +150,9 @@ function findChatGuid(
   for (const chat of chats) {
     const identifier = stringFromUnknown(chat.identifier);
     const guid = stringFromUnknown(chat.guid);
-    if (!guid) continue;
+    if (!guid) {
+      continue;
+    }
     if (
       identifier === target.chatIdentifier ||
       guid === target.chatIdentifier ||
@@ -203,13 +207,21 @@ async function runIMessageCliJson(
       stderr += chunk;
     });
     child.on("error", (error) => {
-      if (timer) clearTimeout(timer);
-      if (killEscalation) clearTimeout(killEscalation);
+      if (timer) {
+        clearTimeout(timer);
+      }
+      if (killEscalation) {
+        clearTimeout(killEscalation);
+      }
       reject(error);
     });
     child.on("close", (code) => {
-      if (timer) clearTimeout(timer);
-      if (killEscalation) clearTimeout(killEscalation);
+      if (timer) {
+        clearTimeout(timer);
+      }
+      if (killEscalation) {
+        clearTimeout(killEscalation);
+      }
       const lines = stdout
         .split(/\r?\n/)
         .map((line) => line.trim())

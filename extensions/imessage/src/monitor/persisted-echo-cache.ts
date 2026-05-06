@@ -55,7 +55,9 @@ function parseEntry(line: string): PersistedEchoEntry | null {
 let mirror: { entries: PersistedEchoEntry[]; mtimeMs: number } | null = null;
 let persistenceFailureLogged = false;
 function reportFailure(scope: string, err: unknown): void {
-  if (persistenceFailureLogged) return;
+  if (persistenceFailureLogged) {
+    return;
+  }
   persistenceFailureLogged = true;
   logVerbose(`imessage echo-cache: ${scope} disabled after first failure: ${String(err)}`);
 }

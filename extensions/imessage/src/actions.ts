@@ -53,10 +53,6 @@ function readMessageText(params: Record<string, unknown>): string | undefined {
   return readStringParam(params, "text") ?? readStringParam(params, "message");
 }
 
-function readMessageId(params: Record<string, unknown>): string {
-  return readStringParam(params, "messageId", { required: true });
-}
-
 /**
  * Read messageId from the action params, falling back to the most recent
  * inbound in the same chat when the caller omitted it. The natural intent
@@ -86,7 +82,9 @@ function isGroupTarget(raw?: string | null): boolean {
   // Defer to the canonical target classifier so action gating and the
   // routing layer can't drift apart on edge cases (URI-encoded targets,
   // service prefixes, etc.).
-  if (!raw) return false;
+  if (!raw) {
+    return false;
+  }
   return inferIMessageTargetChatType(raw) === "group";
 }
 
@@ -386,7 +384,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
           account.config.probeTimeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS,
         );
       }
-      if (privateApiStatus?.available !== true) {
+      if (!privateApiStatus?.available) {
         throw new Error(
           `iMessage ${action} requires the imsg private API bridge. Run imsg launch, then openclaw channels status to refresh capability detection.`,
         );

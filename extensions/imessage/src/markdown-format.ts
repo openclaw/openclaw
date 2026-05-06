@@ -37,8 +37,6 @@ export type IMessageFormatRange = {
   styles: IMessageFormatStyle[];
 };
 
-const WORD = /\w/;
-
 type Marker = {
   marker: string;
   styles: IMessageFormatStyle[];
@@ -71,14 +69,20 @@ function tryConsumeMarker(
   i: number,
   m: Marker,
 ): { close: number; inner: string } | null {
-  if (!input.startsWith(m.marker, i)) return null;
+  if (!input.startsWith(m.marker, i)) {
+    return null;
+  }
   // For single-char markers, reject when the next char is the same so we
   // don't consume the leading half of a longer marker (e.g. `*` matching
   // the first asterisk of `**bold**`).
-  if (m.marker.length === 1 && input[i + 1] === m.marker) return null;
+  if (m.marker.length === 1 && input[i + 1] === m.marker) {
+    return null;
+  }
   // For 2-char markers, reject when there's a third repeat — that's the
   // longer compound marker (`***`, `___`) which should match first.
-  if (m.marker.length === 2 && input[i + 2] === m.marker[0]) return null;
+  if (m.marker.length === 2 && input[i + 2] === m.marker[0]) {
+    return null;
+  }
   // For underscore markers we use a stricter rule than CommonMark: the
   // OUTSIDE of each marker must be whitespace, start-of-string, or
   // end-of-string. That keeps `def __init__(self)` literal (`(` after the
@@ -86,15 +90,21 @@ function tryConsumeMarker(
   // still parses cleanly. Asterisk markers don't need this because they
   // don't appear inside identifiers.
   const isAtBoundary = (ch: string | undefined): boolean => ch === undefined || /\s/.test(ch);
-  if (m.requireWordBoundary && i > 0 && !isAtBoundary(input[i - 1])) return null;
+  if (m.requireWordBoundary && i > 0 && !isAtBoundary(input[i - 1])) {
+    return null;
+  }
   const startInner = i + m.marker.length;
   const close = input.indexOf(m.marker, startInner);
-  if (close === -1 || close === startInner) return null;
+  if (close === -1 || close === startInner) {
+    return null;
+  }
   if (m.requireWordBoundary && !isAtBoundary(input[close + m.marker.length])) {
     return null;
   }
   const inner = input.slice(startInner, close);
-  if (!inner.trim()) return null;
+  if (!inner.trim()) {
+    return null;
+  }
   return { close, inner };
 }
 
@@ -105,7 +115,9 @@ function parseInternal(input: string, baseOffset: number, sink: IMessageFormatRa
     let consumed = false;
     for (const m of MARKERS) {
       const hit = tryConsumeMarker(input, i, m);
-      if (!hit) continue;
+      if (!hit) {
+        continue;
+      }
       // Recurse on the inner span so nested markers compose. The inner
       // ranges are emitted with offsets relative to the new base.
       const innerOffset = baseOffset + out.length;

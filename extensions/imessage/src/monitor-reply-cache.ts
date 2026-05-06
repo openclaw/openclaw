@@ -11,7 +11,9 @@ const LATEST_FALLBACK_MS = 10 * 60 * 1000;
 let persistenceFailureLogged = false;
 let parseFailureLogged = false;
 function reportPersistenceFailure(scope: string, err: unknown): void {
-  if (persistenceFailureLogged) return;
+  if (persistenceFailureLogged) {
+    return;
+  }
   persistenceFailureLogged = true;
   logVerbose(`imessage reply-cache: ${scope} disabled after first failure: ${String(err)}`);
 }
@@ -65,7 +67,9 @@ function readPersistedEntries(): {
   // that came earlier in the file.
   let maxObservedShortId = 0;
   for (const line of raw.split(/\n+/)) {
-    if (!line) continue;
+    if (!line) {
+      continue;
+    }
     let parsed: Partial<IMessageReplyCacheEntry> | null = null;
     try {
       parsed = JSON.parse(line) as Partial<IMessageReplyCacheEntry>;
@@ -164,7 +168,9 @@ function appendPersistedEntry(entry: IMessageReplyCacheEntry): void {
 
 let hydrated = false;
 function hydrateFromDiskOnce(): void {
-  if (hydrated) return;
+  if (hydrated) {
+    return;
+  }
   hydrated = true;
   const { entries, maxObservedShortId } = readPersistedEntries();
   // Bump the counter past every observed shortId, even from dropped lines —
@@ -172,7 +178,9 @@ function hydrateFromDiskOnce(): void {
   if (maxObservedShortId > imessageShortIdCounter) {
     imessageShortIdCounter = maxObservedShortId;
   }
-  if (entries.length === 0) return;
+  if (entries.length === 0) {
+    return;
+  }
   // Entries are appended chronologically, so iterate forward to keep the
   // newest entry as the "live" mapping when the same messageId appears
   // multiple times (e.g. after a write-rewrite cycle).
@@ -441,9 +449,15 @@ export function findLatestIMessageEntryForChat(
   const cutoff = Date.now() - LATEST_FALLBACK_MS;
   let best: IMessageReplyCacheEntry | undefined;
   for (const entry of imessageReplyCacheByMessageId.values()) {
-    if (entry.accountId !== ctx.accountId) continue;
-    if (entry.timestamp < cutoff) continue;
-    if (!isPositiveChatMatch(entry, ctx)) continue;
+    if (entry.accountId !== ctx.accountId) {
+      continue;
+    }
+    if (entry.timestamp < cutoff) {
+      continue;
+    }
+    if (!isPositiveChatMatch(entry, ctx)) {
+      continue;
+    }
     if (!best || entry.timestamp > best.timestamp) {
       best = entry;
     }
