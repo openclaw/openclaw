@@ -1429,6 +1429,15 @@ function rangesOverlap(
   return firstStartLine <= secondEndLine && secondStartLine <= firstEndLine;
 }
 
+type RelocationMatch = {
+  startLine: number;
+  endLine: number;
+  span: number;
+  snippet: string;
+  quality: number;
+  distance: number;
+};
+
 function relocateCandidateRange(
   lines: string[],
   candidate: PromotionCandidate,
@@ -1457,14 +1466,8 @@ function relocateCandidateRange(
   }
 
   const maxSpan = Math.min(lines.length, Math.max(preferredSpan + 15, 20));
-  const matches: Array<{
-    startLine: number;
-    endLine: number;
-    span: number;
-    snippet: string;
-    quality: number;
-    distance: number;
-  }> = [];
+  const matches: RelocationMatch[] = [];
+  let containingAnchor: RelocationMatch | undefined;
   for (let startIndex = 0; startIndex < lines.length; startIndex += 1) {
     for (let span = 1; span <= maxSpan && startIndex + span <= lines.length; span += 1) {
       const startLine = startIndex + 1;
@@ -1475,29 +1478,26 @@ function relocateCandidateRange(
         continue;
       }
       const distance = Math.abs(startLine - candidate.startLine);
-      matches.push({
+      const match = {
         startLine,
         endLine,
         span,
         snippet,
         quality: comparison.quality,
         distance,
-      });
+      };
+      if (
+        match.quality === 2 &&
+        (!containingAnchor ||
+          match.distance < containingAnchor.distance ||
+          (match.distance === containingAnchor.distance && match.span < containingAnchor.span))
+      ) {
+        containingAnchor = match;
+      }
+      matches.push(match);
     }
   }
 
-  const containingAnchor = matches.reduce<(typeof matches)[number] | undefined>((best, match) => {
-    if (match.quality !== 2) {
-      return best;
-    }
-    if (!best || match.distance < best.distance) {
-      return match;
-    }
-    if (match.distance === best.distance && match.span < best.span) {
-      return match;
-    }
-    return best;
-  }, undefined);
   let bestMatch:
     | { startLine: number; endLine: number; snippet: string; quality: number; distance: number }
     | undefined;
@@ -1522,16 +1522,8 @@ function relocateCandidateRange(
     } else if (match.quality === bestMatch.quality) {
       const bestSpan = bestMatch.endLine - bestMatch.startLine + 1;
       if (match.quality === 2) {
-        const overlapsBest = rangesOverlap(
-          match.startLine,
-          match.endLine,
-          bestMatch.startLine,
-          bestMatch.endLine,
-        );
         shouldReplace =
-          (overlapsBest && match.span < bestSpan) ||
-          match.distance < bestMatch.distance ||
-          (match.distance === bestMatch.distance && match.span < bestSpan);
+          match.span < bestSpan || (match.span === bestSpan && match.distance < bestMatch.distance);
       } else {
         shouldReplace =
           match.distance < bestMatch.distance ||

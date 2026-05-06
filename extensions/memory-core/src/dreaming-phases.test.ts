@@ -606,11 +606,19 @@ describe("memory-core dreaming phases", () => {
     });
   });
 
-  it("prioritizes recalled entries over newer daily-only entries in light sleep", async () => {
+  it("prioritizes fresh recalled entries over stale recalled and daily-only entries in light sleep", async () => {
     const workspaceDir = await createDreamingWorkspace();
+    await fs.mkdir(path.join(workspaceDir, "memory", ".dreams", "session-corpus"), {
+      recursive: true,
+    });
     await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-04-03.md"),
-      "Recalled router backup rotation.\n",
+      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-03.txt"),
+      "Stale recalled router backup rotation.\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-04.txt"),
+      "Fresh recalled router backup check.\n",
       "utf-8",
     );
     await fs.writeFile(
@@ -625,11 +633,41 @@ describe("memory-core dreaming phases", () => {
       nowMs: recalledAt,
       results: [
         {
-          path: "memory/2026-04-03.md",
+          path: "memory/.dreams/session-corpus/2026-04-03.txt",
           startLine: 1,
           endLine: 1,
           score: 0.92,
-          snippet: "Recalled router backup rotation.",
+          snippet: "Stale recalled router backup rotation.",
+          source: "memory",
+        },
+      ],
+    });
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "router backup retention",
+      nowMs: recalledAt + 1_000,
+      results: [
+        {
+          path: "memory/.dreams/session-corpus/2026-04-03.txt",
+          startLine: 1,
+          endLine: 1,
+          score: 0.91,
+          snippet: "Stale recalled router backup rotation.",
+          source: "memory",
+        },
+      ],
+    });
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "fresh router backup check",
+      nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+      results: [
+        {
+          path: "memory/.dreams/session-corpus/2026-04-04.txt",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Fresh recalled router backup check.",
           source: "memory",
         },
       ],
@@ -668,7 +706,7 @@ describe("memory-core dreaming phases", () => {
                   phases: {
                     light: {
                       enabled: true,
-                      limit: 2,
+                      limit: 3,
                       lookbackDays: 7,
                     },
                   },
@@ -689,11 +727,18 @@ describe("memory-core dreaming phases", () => {
       path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
       "utf-8",
     );
-    const recalledIndex = dailyContent.indexOf("- Candidate: Recalled router backup rotation.");
+    const freshRecalledIndex = dailyContent.indexOf(
+      "- Candidate: Fresh recalled router backup check.",
+    );
+    const staleRecalledIndex = dailyContent.indexOf(
+      "- Candidate: Stale recalled router backup rotation.",
+    );
     const dailyIndex = dailyContent.indexOf("- Candidate: Daily-only note");
-    expect(recalledIndex).toBeGreaterThanOrEqual(0);
+    expect(freshRecalledIndex).toBeGreaterThanOrEqual(0);
+    expect(staleRecalledIndex).toBeGreaterThanOrEqual(0);
     expect(dailyIndex).toBeGreaterThanOrEqual(0);
-    expect(recalledIndex).toBeLessThan(dailyIndex);
+    expect(freshRecalledIndex).toBeLessThan(staleRecalledIndex);
+    expect(staleRecalledIndex).toBeLessThan(dailyIndex);
   });
 
   it("checkpoints session transcript ingestion and skips unchanged transcripts", async () => {
