@@ -170,7 +170,7 @@ function pluginAccessible(
   if (matchingApps.length === 0) {
     return undefined;
   }
-  return matchingApps.some((app) => app.isAccessible);
+  return matchingApps.every((app) => app.isAccessible && app.isEnabled);
 }
 
 function readCodexPluginConfigFromOpenClawConfig(config: unknown): unknown {

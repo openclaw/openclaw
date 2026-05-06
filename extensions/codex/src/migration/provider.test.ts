@@ -142,7 +142,7 @@ function pluginListResponse(params: {
   };
 }
 
-function appsListResponse(params: { accessible?: boolean } = {}) {
+function appsListResponse(params: { accessible?: boolean; extraAppAccessible?: boolean } = {}) {
   return {
     data: [
       {
@@ -160,6 +160,25 @@ function appsListResponse(params: { accessible?: boolean } = {}) {
         isEnabled: true,
         pluginDisplayNames: ["Gmail"],
       },
+      ...(params.extraAppAccessible === undefined
+        ? []
+        : [
+            {
+              id: "gmail-extra",
+              name: "Gmail extra",
+              description: null,
+              logoUrl: null,
+              logoUrlDark: null,
+              distributionChannel: null,
+              branding: null,
+              appMetadata: null,
+              labels: null,
+              installUrl: null,
+              isAccessible: params.extraAppAccessible,
+              isEnabled: true,
+              pluginDisplayNames: ["Gmail"],
+            },
+          ]),
     ],
     nextCursor: null,
   };
@@ -761,6 +780,65 @@ describe("buildCodexMigrationProvider", () => {
     );
 
     expect(applyRequest).not.toHaveBeenCalledWith("plugin/install", expect.anything());
+    expect(result.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "plugin:gmail",
+          status: "error",
+          reason: expect.stringContaining("app is not accessible"),
+        }),
+        expect.objectContaining({ id: "config:codex-plugins", status: "error" }),
+      ]),
+    );
+    expect(getConfig()).not.toMatchObject({
+      plugins: { entries: { codex: { config: { codexPlugins: expect.anything() } } } },
+    });
+  });
+
+  it("does not enable Codex plugin bridge config when any related app is inaccessible", async () => {
+    const fixture = await createCodexFixture();
+    sourceTesting.setAppServerRequestForTests(async (method: string) => {
+      if (method === "plugin/list") {
+        return pluginListResponse({});
+      }
+      if (method === "app/list") {
+        return appsListResponse({ accessible: true, extraAppAccessible: false });
+      }
+      throw new Error(`unexpected plan ${method}`);
+    });
+    applyTesting.setAppServerRequestForTests(async (method: string) => {
+      if (method === "plugin/list") {
+        return pluginListResponse({});
+      }
+      throw new Error(`unexpected apply ${method}`);
+    });
+    const config = {
+      agents: { defaults: { workspace: fixture.workspaceDir } },
+    } as MigrationProviderContext["config"];
+    const { runtime, getConfig } = createConfigRuntime(config);
+    const provider = buildCodexMigrationProvider();
+    const plan = await provider.plan(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+        plugins: ["gmail"],
+        config,
+      }),
+    );
+
+    const result = await provider.apply(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+        reportDir: path.join(fixture.root, "report"),
+        config,
+        runtime,
+      }),
+      plan,
+    );
+
     expect(result.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
