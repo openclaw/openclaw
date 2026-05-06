@@ -1,6 +1,6 @@
-import type { User } from "@buape/carbon";
 import { resolveCanonicalIdentityFromLinks } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import type { User } from "../internal/discord.js";
 import type { PluralKitMessageInfo } from "../pluralkit.js";
 import { formatDiscordUserTag } from "./format.js";
 
