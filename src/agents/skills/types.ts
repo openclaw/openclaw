@@ -93,7 +93,11 @@ export type SkillEligibilityContext = {
 };
 
 export type SkillSnapshot = {
-  prompt: string;
+  /**
+   * Fully-rendered system-prompt fragment listing available skills.
+   * Runtime-only, never persisted (stripped alongside resolvedSkills).
+   */
+  prompt?: string;
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];

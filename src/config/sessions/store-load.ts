@@ -68,15 +68,21 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
 // resolvedSkills carries the full parsed Skill[] (including each SKILL.md body)
 // and is only used as an in-turn cache by the runtime — see
 // src/agents/pi-embedded-runner/skills-runtime.ts. Persisting it bloats
-// sessions.json by orders of magnitude when many sessions are active. Strip
-// it from every entry that flows through normalize, so neither the in-memory
-// store reloaded from disk nor the JSON serialized back to disk carries it.
+// sessions.json by orders of magnitude when many sessions are active.
+//
+// prompt carries the fully-rendered system-prompt fragment (~140 KB per entry)
+// listing all available skills. It is recomputable from the skills array at
+// resume time, so persisting it bloats sessions.json unnecessarily.
+//
+// Strip both from every entry that flows through normalize, so neither the
+// in-memory store reloaded from disk nor the JSON serialized back to disk
+// carries them.
 function stripPersistedSkillsCache(entry: SessionEntry): SessionEntry {
   const snapshot = entry.skillsSnapshot;
-  if (!snapshot || snapshot.resolvedSkills === undefined) {
+  if (!snapshot || (snapshot.resolvedSkills === undefined && snapshot.prompt === undefined)) {
     return entry;
   }
-  const { resolvedSkills: _drop, ...rest } = snapshot;
+  const { resolvedSkills: _dropResolved, prompt: _dropPrompt, ...rest } = snapshot;
   return { ...entry, skillsSnapshot: rest };
 }
 

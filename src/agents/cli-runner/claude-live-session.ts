@@ -217,7 +217,7 @@ function buildClaudeLiveFingerprint(params: {
   const skillsFingerprint = skillSnapshot
     ? sha256(
         JSON.stringify({
-          promptHash: sha256(skillSnapshot.prompt),
+          promptHash: skillSnapshot.prompt ? sha256(skillSnapshot.prompt) : undefined,
           skillFilter: skillSnapshot.skillFilter,
           skills: skillSnapshot.skills,
           resolvedSkills: (skillSnapshot.resolvedSkills ?? []).map((skill) => ({

@@ -540,7 +540,12 @@ export type GroupKeyResolution = {
 };
 
 export type SessionSkillSnapshot = {
-  prompt: string;
+  /**
+   * Fully-rendered system-prompt fragment listing available skills.
+   * Runtime-only, never persisted (stripped alongside resolvedSkills).
+   * On cold session resume this is undefined and can be rebuilt from the skills array.
+   */
+  prompt?: string;
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
