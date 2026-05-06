@@ -77,6 +77,11 @@ type EmbeddingProbeCacheEntry = {
 
 const EMBEDDING_PROBE_CACHE = new Map<string, EmbeddingProbeCacheEntry>();
 
+function isMemoryDatabaseNotOpenError(err: unknown): boolean {
+  const message = formatErrorMessage(err).toLowerCase();
+  return message.includes("database is not open") || message.includes("sqlite database is closed");
+}
+
 export async function closeAllMemoryIndexManagers(): Promise<void> {
   EMBEDDING_PROBE_CACHE.clear();
   await closeManagedCacheEntries({
@@ -181,6 +186,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       params.purpose === "status" || params.purpose === "cli" ? params.purpose : "default";
     const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}:${purpose}`;
     const transient = purpose === "status" || purpose === "cli";
+    const cached = INDEX_CACHE.get(key);
+    if (cached?.closed) {
+      INDEX_CACHE.delete(key);
+    }
     return await getOrCreateManagedCacheEntry({
       cache: INDEX_CACHE,
       pending: INDEX_CACHE_PENDING,
@@ -250,6 +259,29 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.batch = this.resolveBatchConfig();
   }
 
+  private ensureDatabaseOpenForUse(): void {
+    if (this.closed) {
+      return;
+    }
+    try {
+      this.db.prepare("SELECT 1").get();
+      return;
+    } catch (err) {
+      if (!isMemoryDatabaseNotOpenError(err)) {
+        throw err;
+      }
+    }
+
+    log.warn("memory index sqlite handle was closed; reopening");
+    this.db = this.openDatabase();
+    this.resetVectorState();
+    this.ensureSchema();
+    const meta = this.readMeta();
+    if (meta?.vectorDims) {
+      this.vector.dims = meta.vectorDims;
+    }
+  }
+
   private applyProviderResult(providerResult: EmbeddingProviderResult): void {
     const providerState = resolveMemoryProviderState(providerResult);
     this.provider = providerState.provider;
@@ -313,6 +345,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       sources?: MemorySource[];
     },
   ): Promise<MemorySearchResult[]> {
+    if (this.closed) {
+      return [];
+    }
+    this.ensureDatabaseOpenForUse();
     opts?.onDebug?.({ backend: "builtin" });
     let hasIndexedContent = this.hasIndexedContent();
     if (!hasIndexedContent) {
@@ -506,6 +542,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private hasIndexedContent(): boolean {
+    this.ensureDatabaseOpenForUse();
     const chunkRow = this.db.prepare(`SELECT 1 as found FROM chunks LIMIT 1`).get() as
       | {
           found?: number;
@@ -624,6 +661,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (this.closed) {
       return;
     }
+    this.ensureDatabaseOpenForUse();
     await this.ensureProviderInitialized();
     if (this.syncing) {
       if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
@@ -748,6 +786,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   status(): MemoryProviderStatus {
+    this.ensureDatabaseOpenForUse();
     const sourceFilter = this.buildSourceFilter();
     const aggregateState = collectMemoryStatusAggregate({
       db: {
