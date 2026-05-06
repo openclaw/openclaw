@@ -941,6 +941,7 @@ describe("subagent registry seam flow", () => {
     await mod.__testing.sweepOnceForTests();
 
     await waitForFast(() => {
+      expect(mocks.resolveContextEngine).toHaveBeenCalled();
       expect(mocks.resolveContextEngine).toHaveBeenCalledWith(
         expect.any(Object),
         expect.objectContaining({

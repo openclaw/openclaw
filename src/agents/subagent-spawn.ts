@@ -115,6 +115,19 @@ let subagentSpawnDeps: SubagentSpawnDeps = defaultSubagentSpawnDeps;
 const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
 const DEFAULT_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 60_000;
 const MAX_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 300_000;
+const SUBAGENT_GATEWAY_READINESS_TIMEOUT_MS = 20_000;
+const SUBAGENT_GATEWAY_READINESS_RETRY_DELAYS_MS_DEFAULT = [1_000, 3_000, 10_000] as const;
+const SUBAGENT_GATEWAY_READINESS_RETRY_DELAYS_MS_FAST = [8, 16, 32] as const;
+let _subagentGatewayReadinessRetryDelaysMs: readonly number[] | null = null;
+
+function getSubagentGatewayReadinessRetryDelaysMs(): readonly number[] {
+  if (_subagentGatewayReadinessRetryDelaysMs !== null) {
+    return _subagentGatewayReadinessRetryDelaysMs;
+  }
+  return process.env.OPENCLAW_TEST_FAST === "1"
+    ? SUBAGENT_GATEWAY_READINESS_RETRY_DELAYS_MS_FAST
+    : SUBAGENT_GATEWAY_READINESS_RETRY_DELAYS_MS_DEFAULT;
+}
 
 export type SpawnSubagentParams = {
   task: string;
@@ -580,6 +593,51 @@ function summarizeError(err: unknown): string {
   return "error";
 }
 
+function isGatewayLifecycleReadinessError(error: unknown): boolean {
+  const message = summarizeError(error).toLowerCase();
+  return (
+    message.includes("gateway timeout") ||
+    message.includes("gateway closed") ||
+    message.includes("handshake timeout") ||
+    message.includes("closed before connect") ||
+    message.includes("not yet ready to accept connections")
+  );
+}
+
+async function waitForGatewayReadinessRetryDelay(ms: number): Promise<void> {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return;
+  }
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function ensureGatewayReadyForSubagentSpawn(): Promise<void> {
+  let attempt = 0;
+  for (;;) {
+    try {
+      // Probe at admin scope rather than read scope so that the gateway
+      // connection pairs at a tier sufficient for the subsequent lifecycle
+      // calls (agent → write, sessions.delete / sessions.patch → admin).
+      // A read-scoped probe can trigger close(1008) "pairing required"
+      // on the later higher-scope upgrade (#59428).
+      await callSubagentGateway({
+        method: "sessions.list",
+        params: {},
+        timeoutMs: SUBAGENT_GATEWAY_READINESS_TIMEOUT_MS,
+        scopes: [ADMIN_SCOPE],
+      });
+      return;
+    } catch (err) {
+      const delayMs = getSubagentGatewayReadinessRetryDelaysMs()[attempt];
+      if (delayMs == null || !isGatewayLifecycleReadinessError(err)) {
+        throw err;
+      }
+      attempt += 1;
+      await waitForGatewayReadinessRetryDelay(delayMs);
+    }
+  }
+}
+
 function buildThreadBindingUnavailableError(mode: SpawnSubagentMode): string {
   if (mode === "session") {
     return (
@@ -841,6 +899,19 @@ export async function spawnSubagentDirect(
         'sessions_spawn sandbox="require" needs a sandboxed target runtime. Pick a sandboxed agentId or use sandbox="inherit".',
     };
   }
+
+  // All local guards passed — verify gateway is reachable at the scope tier
+  // required for subsequent lifecycle calls (agent → write, sessions.delete/
+  // sessions.patch → admin) before performing any gateway operations.
+  try {
+    await ensureGatewayReadyForSubagentSpawn();
+  } catch (err) {
+    return {
+      status: "error",
+      error: summarizeError(err),
+    };
+  }
+
   const childDepth = callerDepth + 1;
   const spawnedByKey = requesterInternalKey;
   const childCapabilities = resolveSubagentCapabilities({
@@ -1322,5 +1393,8 @@ export const __testing = {
           ...overrides,
         }
       : defaultSubagentSpawnDeps;
+  },
+  setReadinessRetryDelaysForTest(delays: readonly number[] | null) {
+    _subagentGatewayReadinessRetryDelaysMs = delays;
   },
 };

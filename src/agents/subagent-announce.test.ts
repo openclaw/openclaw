@@ -168,6 +168,15 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     params.requesterOrigin,
   resolveSubagentAnnounceTimeoutMs: () => 10_000,
   runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),
+  isTransientAnnounceDeliveryError: (error: unknown) => {
+    const message =
+      error instanceof Error
+        ? error.message
+        : typeof error === "string"
+          ? error
+          : "";
+    return message.toLowerCase().includes("gateway closed");
+  },
 }));
 
 vi.mock("./subagent-announce.registry.runtime.js", () => subagentRegistryRuntimeMock);
@@ -281,7 +290,7 @@ describe("subagent announce seam flow", () => {
         deleteTranscript: true,
         emitLifecycleHooks: false,
       },
-      timeoutMs: 10_000,
+      timeoutMs: 20_000,
     });
   });
 
@@ -312,7 +321,7 @@ describe("subagent announce seam flow", () => {
         deleteTranscript: true,
         emitLifecycleHooks: true,
       },
-      timeoutMs: 10_000,
+      timeoutMs: 20_000,
     });
   });
 
@@ -435,6 +444,85 @@ describe("subagent announce seam flow", () => {
     expect(params.to).toBeUndefined();
     expect(params.accountId).toBeUndefined();
     expect(params.threadId).toBeUndefined();
+  });
+
+  it("retries transient gateway errors during sessions.delete finalize", async () => {
+    let deleteCallCount = 0;
+    callGatewayMock.mockImplementation(async (req: unknown) => {
+      const typed = req as AgentCallRequest;
+      if (typed.method === "agent") {
+        return await agentSpy(typed);
+      }
+      if (typed.method === "sessions.delete") {
+        deleteCallCount += 1;
+        if (deleteCallCount === 1) {
+          throw new Error("gateway closed (1006): transport close");
+        }
+        return {};
+      }
+      if (typed.method === "sessions.patch") {
+        return {};
+      }
+      return {};
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:retry-delete",
+      childRunId: "run-transient-delete-retry",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 10,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "completed",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(deleteCallCount).toBe(2);
+  });
+
+  it("retries transient gateway errors during sessions.patch finalize", async () => {
+    let patchCallCount = 0;
+    callGatewayMock.mockImplementation(async (req: unknown) => {
+      const typed = req as AgentCallRequest;
+      if (typed.method === "agent") {
+        return await agentSpy(typed);
+      }
+      if (typed.method === "sessions.patch") {
+        patchCallCount += 1;
+        if (patchCallCount === 1) {
+          throw new Error("gateway closed (1006): transport close");
+        }
+        return {};
+      }
+      if (typed.method === "sessions.delete") {
+        return {};
+      }
+      return {};
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:retry-patch",
+      childRunId: "run-transient-patch-retry",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 10,
+      cleanup: "delete",
+      label: "retry-test-label",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "completed",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(patchCallCount).toBe(2);
   });
 
   it("falls back to stored delivery target when mocked completion origins omit to", async () => {

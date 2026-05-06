@@ -33,6 +33,7 @@ import {
 import {
   ANNOUNCE_EXPIRY_MS,
   MAX_ANNOUNCE_RETRY_COUNT,
+  deleteSubagentSessionWithRetry,
   reconcileOrphanedRestoredRuns,
   reconcileOrphanedRun,
   resolveAnnounceRetryDelayMs,
@@ -840,14 +841,9 @@ async function sweepSubagentRuns() {
       }
       clearPendingLifecycleError(runId);
       try {
-        await subagentRegistryDeps.callGateway({
-          method: "sessions.delete",
-          params: {
-            key: entry.childSessionKey,
-            deleteTranscript: true,
-            emitLifecycleHooks: false,
-          },
-          timeoutMs: 10_000,
+        await deleteSubagentSessionWithRetry({
+          callGateway: subagentRegistryDeps.callGateway,
+          sessionKey: entry.childSessionKey,
         });
       } catch (err) {
         log.warn("sessions.delete failed during subagent sweep; keeping run for retry", {

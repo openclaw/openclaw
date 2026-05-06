@@ -329,6 +329,10 @@ describe("spawnSubagentDirect seam flow", () => {
       if (call.method === "sessions.patch" || call.method === "sessions.delete") {
         // Admin-only methods must be pinned to operator.admin.
         expect(call.scopes).toEqual(["operator.admin"]);
+      } else if (call.method === "sessions.list") {
+        // The readiness probe pins sessions.list to admin scope to avoid
+        // close(1008) scope-upgrade failures on subsequent lifecycle calls.
+        expect(call.scopes).toEqual(["operator.admin"]);
       } else {
         // Non-admin methods (e.g. "agent") must NOT be forced to admin scope
         // so the gateway preserves least-privilege and senderIsOwner stays false.
@@ -444,5 +448,47 @@ describe("spawnSubagentDirect seam flow", () => {
         (call) => (call[0] as { method?: string }).method === "agent",
       ),
     ).toBe(false);
+  });
+
+  it("retries transient gateway readiness failures before starting the child agent", async () => {
+    const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
+    let readinessAttempts = 0;
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: Record<string, unknown> }) => {
+        calls.push(request);
+        if (request.method === "sessions.list") {
+          readinessAttempts += 1;
+          if (readinessAttempts < 3) {
+            throw new Error("gateway closed (1006): transport close");
+          }
+          return { sessions: [] };
+        }
+        if (request.method === "agent") {
+          return { runId: "run-ready", status: "accepted", acceptedAt: 1000 };
+        }
+        if (request.method?.startsWith("sessions.")) {
+          return { ok: true };
+        }
+        return {};
+      },
+    );
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock);
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "retry gateway readiness before spawn",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(readinessAttempts).toBe(3);
+    expect(calls.filter((call) => call.method === "sessions.list")).toHaveLength(3);
+    const firstAgentIndex = calls.findIndex((call) => call.method === "agent");
+    const lastReadinessIndex = calls.findLastIndex((call) => call.method === "sessions.list");
+    expect(firstAgentIndex).toBeGreaterThan(lastReadinessIndex);
   });
 });
