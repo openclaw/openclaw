@@ -15,6 +15,10 @@ export function normalizeHttpWebhookUrl(value: unknown): string | null {
     if (!isAllowedWebhookProtocol(parsed.protocol)) {
       return null;
     }
+    // Do not allow embedded credentials in webhook URLs.
+    if (parsed.username || parsed.password) {
+      return null;
+    }
     return trimmed;
   } catch {
     return null;
