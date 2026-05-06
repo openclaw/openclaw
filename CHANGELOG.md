@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Doctor/memory: suppress the false-positive "No active memory plugin is registered" note when an alternate memory plugin (for example `memory-lancedb`) owns the memory slot. Such plugins provide storage and embeddings via tools+hooks rather than the memory-host runtime contract, so the host-runtime probe returns null even though a memory plugin is active and configured. Fixes #78540. Thanks @dseravalli.
 - Plugins/install: add `npm-pack:<path.tgz>` installs so local npm pack artifacts run through the same managed npm-root install, lockfile verification, dependency scan, and install-record path as registry npm plugins.
 - Plugin skills/Windows: publish plugin-provided skill directories as junctions on Windows so standard users without Developer Mode can register plugin skills without symlink EPERM failures. Fixes #77958. (#77971) Thanks @hclsys and @jarro.
 - MS Teams: surface blocked Bot Framework egress by logging JWKS fetch network failures and adding a Bot Connector send hint for transport-level reply failures. Fixes #77674. (#78081) Thanks @Beandon13.
