@@ -119,7 +119,7 @@ describe("Telegram direct session recreation after delete", () => {
       onRecordError: context.turn.record.onRecordError,
     });
 
-    const store = loadSessionStore(storePath, { skipCache: true });
+    const store = loadSessionStore(storePath);
     expect(context?.ctxPayload?.SessionKey).toBe(TELEGRAM_DIRECT_KEY);
     expect(store[TELEGRAM_DIRECT_KEY]).toEqual(
       expect.objectContaining({

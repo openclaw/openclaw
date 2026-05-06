@@ -123,7 +123,7 @@ describe("SQLite session store backend", () => {
     });
 
     expect(fs.existsSync(storePath)).toBe(false);
-    expect(loadSessionStore(storePath, { skipCache: true })).toEqual({
+    expect(loadSessionStore(storePath)).toEqual({
       "discord:ops": {
         ...entry,
         updatedAt: 200,
@@ -145,7 +145,7 @@ describe("SQLite session store backend", () => {
     await saveSessionStore(storePath, { "discord:ops": entry });
 
     expect(fs.existsSync(storePath)).toBe(false);
-    expect(loadSessionStore(storePath, { skipCache: true })).toEqual({
+    expect(loadSessionStore(storePath)).toEqual({
       "discord:ops": entry,
     });
   });
@@ -170,7 +170,7 @@ describe("SQLite session store backend", () => {
       ),
     );
 
-    expect(loadSessionStore(storePath, { skipCache: true })).toEqual({});
+    expect(loadSessionStore(storePath)).toEqual({});
 
     await saveSessionStore(storePath, {
       "discord:ops": {
@@ -179,7 +179,7 @@ describe("SQLite session store backend", () => {
         updatedAt: 200,
       },
     });
-    expect(loadSessionStore(storePath, { skipCache: true })).toEqual({
+    expect(loadSessionStore(storePath)).toEqual({
       "discord:ops": {
         ...legacyEntry,
         sessionId: "sqlite-session",

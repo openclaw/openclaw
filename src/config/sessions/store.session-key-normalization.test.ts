@@ -57,7 +57,7 @@ describe("session store key normalization", () => {
       ctx: createInboundContext(),
     });
 
-    const store = loadSessionStore(storePath, { skipCache: true });
+    const store = loadSessionStore(storePath);
     expect(Object.keys(store)).toEqual([CANONICAL_KEY]);
     expect(store[CANONICAL_KEY]?.origin?.provider).toBe("webchat");
   });
@@ -76,7 +76,7 @@ describe("session store key normalization", () => {
       to: "webchat:user-1",
     });
 
-    const store = loadSessionStore(storePath, { skipCache: true });
+    const store = loadSessionStore(storePath);
     expect(Object.keys(store)).toEqual([CANONICAL_KEY]);
     expect(store[CANONICAL_KEY]).toEqual(
       expect.objectContaining({
@@ -112,7 +112,7 @@ describe("session store key normalization", () => {
       to: "webchat:user-2",
     });
 
-    const store = loadSessionStore(storePath, { skipCache: true });
+    const store = loadSessionStore(storePath);
     expect(store[CANONICAL_KEY]?.sessionId).toBe("legacy-session");
     expect(store[MIXED_CASE_KEY]).toBeUndefined();
   });
@@ -149,7 +149,7 @@ describe("session store key normalization", () => {
       ctx: createInboundContext(),
     });
 
-    const store = loadSessionStore(storePath, { skipCache: true });
+    const store = loadSessionStore(storePath);
     expect(store[CANONICAL_KEY]?.sessionId).toBe("existing-session");
     expect(store[CANONICAL_KEY]?.updatedAt).toBe(existingUpdatedAt);
     expect(store[CANONICAL_KEY]?.origin?.provider).toBe("webchat");

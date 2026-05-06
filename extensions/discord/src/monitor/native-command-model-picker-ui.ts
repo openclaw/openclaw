@@ -241,7 +241,7 @@ export function resolveDiscordModelPickerCurrentModel(params: {
     const storePath = resolveStorePath(params.cfg.session?.store, {
       agentId: params.route.agentId,
     });
-    const sessionStore = loadSessionStore(storePath, { skipCache: true });
+    const sessionStore = loadSessionStore(storePath);
     const sessionEntry = sessionStore[params.route.sessionKey];
     const override = resolveStoredModelOverride({
       sessionEntry,
@@ -270,7 +270,7 @@ export function resolveDiscordModelPickerCurrentRuntime(params: {
     const storePath = resolveStorePath(params.cfg.session?.store, {
       agentId: params.route.agentId,
     });
-    const sessionStore = loadSessionStore(storePath, { skipCache: true });
+    const sessionStore = loadSessionStore(storePath);
     const sessionRuntime = normalizeOptionalString(
       sessionStore[params.route.sessionKey]?.agentRuntimeOverride,
     );

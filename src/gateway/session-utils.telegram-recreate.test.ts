@@ -86,7 +86,7 @@ describe("Telegram direct session recreation after delete", () => {
     await updateSessionStore(storePath, (store) => {
       delete store[TELEGRAM_DIRECT_KEY];
     });
-    expect(loadSessionStore(storePath, { skipCache: true })[TELEGRAM_DIRECT_KEY]).toBeUndefined();
+    expect(loadSessionStore(storePath)[TELEGRAM_DIRECT_KEY]).toBeUndefined();
 
     const ctx = createTelegramDirectContext();
     await recordSessionMetaFromInbound({
@@ -103,7 +103,7 @@ describe("Telegram direct session recreation after delete", () => {
       ctx,
     });
 
-    const store = loadSessionStore(storePath, { skipCache: true });
+    const store = loadSessionStore(storePath);
     const listed = listSessionsFromStore({
       cfg,
       storePath,

@@ -82,7 +82,7 @@ describe("runBootOnce", () => {
 
   const mockAgentUpdatesMainSession = (storePath: string, sessionKey: string) => {
     agentCommand.mockImplementation(async (opts: { sessionId?: string }) => {
-      const current = loadSessionStore(storePath, { skipCache: true });
+      const current = loadSessionStore(storePath);
       current[sessionKey] = {
         sessionId: String(opts.sessionId),
         updatedAt: Date.now(),
@@ -96,7 +96,7 @@ describe("runBootOnce", () => {
     sessionKey: string;
     expectedSessionId?: string;
   }) => {
-    const restored = loadSessionStore(params.storePath, { skipCache: true });
+    const restored = loadSessionStore(params.storePath);
     if (params.expectedSessionId === undefined) {
       expect(restored[params.sessionKey]).toBeUndefined();
       return;

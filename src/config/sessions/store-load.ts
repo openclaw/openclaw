@@ -9,19 +9,11 @@ import type { SessionEntry } from "./types.js";
 
 export { normalizeSessionStore } from "./store-normalize.js";
 
-export type LoadSessionStoreOptions = {
-  skipCache?: boolean;
-  clone?: boolean;
-};
-
 function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-export function loadSessionStore(
-  storePath: string,
-  _opts: LoadSessionStoreOptions = {},
-): Record<string, SessionEntry> {
+export function loadSessionStore(storePath: string): Record<string, SessionEntry> {
   const sqliteOptions = resolveSqliteSessionStoreOptionsForPath(storePath);
   if (sqliteOptions) {
     return loadSqliteSessionStore(sqliteOptions);

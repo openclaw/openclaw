@@ -244,7 +244,7 @@ export function resolveMattermostModelPickerCurrentModel(params: {
       agentId: params.route.agentId,
     });
     const sessionStore = params.skipCache
-      ? loadSessionStore(storePath, { skipCache: true })
+      ? loadSessionStore(storePath)
       : loadSessionStore(storePath);
     const sessionEntry = sessionStore[params.route.sessionKey];
     const override = resolveStoredModelOverride({

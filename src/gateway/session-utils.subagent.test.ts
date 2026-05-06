@@ -7,7 +7,7 @@ import {
   resetSubagentRegistryForTests,
 } from "../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadSessionStore, type SessionEntry } from "../config/sessions.js";
+import { loadSessionStore, saveSessionStore, type SessionEntry } from "../config/sessions.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnv } from "../test-utils/env.js";
@@ -1252,21 +1252,12 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       fs.mkdirSync(mainDir, { recursive: true });
       fs.mkdirSync(codexDir, { recursive: true });
 
-      fs.writeFileSync(
-        path.join(mainDir, "sessions.json"),
-        JSON.stringify({
-          "agent:main:main": { sessionId: "s-main", updatedAt: 100 },
-        }),
-        "utf8",
-      );
-
-      fs.writeFileSync(
-        path.join(codexDir, "sessions.json"),
-        JSON.stringify({
-          "agent:codex:acp-task": { sessionId: "s-codex", updatedAt: 200 },
-        }),
-        "utf8",
-      );
+      await saveSessionStore(path.join(mainDir, "sessions.json"), {
+        "agent:main:main": { sessionId: "s-main", updatedAt: 100 },
+      });
+      await saveSessionStore(path.join(codexDir, "sessions.json"), {
+        "agent:codex:acp-task": { sessionId: "s-codex", updatedAt: 200 },
+      });
 
       const cfg = {
         session: {
@@ -1295,20 +1286,12 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
 
       const mainStorePath = path.join(mainDir, "sessions.json");
       const codexStorePath = path.join(codexDir, "sessions.json");
-      fs.writeFileSync(
-        mainStorePath,
-        JSON.stringify({
-          "agent:main:main": { sessionId: "s-main", updatedAt: 100 },
-        }),
-        "utf8",
-      );
-      fs.writeFileSync(
-        codexStorePath,
-        JSON.stringify({
-          "agent:codex:acp-task": { sessionId: "s-codex", updatedAt: 200 },
-        }),
-        "utf8",
-      );
+      await saveSessionStore(mainStorePath, {
+        "agent:main:main": { sessionId: "s-main", updatedAt: 100 },
+      });
+      await saveSessionStore(codexStorePath, {
+        "agent:codex:acp-task": { sessionId: "s-codex", updatedAt: 200 },
+      });
 
       const cfg = {
         session: {
@@ -1320,41 +1303,28 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
         },
       } as OpenClawConfig;
 
-      const readSpy = vi.spyOn(fs, "readFileSync");
-
       const { store, storePath } = loadCombinedSessionStoreForGateway(cfg, { agentId: "codex" });
 
       expect(storePath).toBe(fs.realpathSync.native(codexStorePath));
       expect(store["agent:codex:acp-task"]).toMatchObject({ sessionId: "s-codex" });
       expect(store["agent:main:main"]).toBeUndefined();
-      const readPaths = readSpy.mock.calls
-        .map((call) => call[0])
-        .filter((arg): arg is string => typeof arg === "string");
-      expect(readPaths).toContain(fs.realpathSync.native(codexStorePath));
-      expect(readPaths).not.toContain(fs.realpathSync.native(mainStorePath));
-
-      readSpy.mockRestore();
     });
   });
 
-  test("keeps canonical single-target entries by reference", async () => {
+  test("keeps canonical single-target entries intact", async () => {
     await withStateDirEnv("openclaw-acp-canonical-", async ({ stateDir }) => {
       const customRoot = path.join(stateDir, "custom-state");
       const codexDir = path.join(customRoot, "agents", "codex", "sessions");
       fs.mkdirSync(codexDir, { recursive: true });
 
       const codexStorePath = path.join(codexDir, "sessions.json");
-      fs.writeFileSync(
-        codexStorePath,
-        JSON.stringify({
-          "agent:codex:acp-task": {
-            sessionId: "s-codex",
-            updatedAt: 200,
-            spawnedBy: "agent:codex:main",
-          },
-        }),
-        "utf8",
-      );
+      await saveSessionStore(codexStorePath, {
+        "agent:codex:acp-task": {
+          sessionId: "s-codex",
+          updatedAt: 200,
+          spawnedBy: "agent:codex:main",
+        },
+      });
 
       const cfg = {
         session: {
@@ -1366,12 +1336,12 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
         },
       } as OpenClawConfig;
 
-      const cachedStore = loadSessionStore(fs.realpathSync.native(codexStorePath), {
-        clone: false,
-      });
+      const savedStore = loadSessionStore(
+        path.join(fs.realpathSync.native(codexDir), "sessions.json"),
+      );
       const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId: "codex" });
 
-      expect(store["agent:codex:acp-task"]).toBe(cachedStore["agent:codex:acp-task"]);
+      expect(store["agent:codex:acp-task"]).toEqual(savedStore["agent:codex:acp-task"]);
     });
   });
 });

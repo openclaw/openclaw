@@ -883,7 +883,7 @@ describe("sessions", () => {
       parseSpy.mockRestore();
     }
 
-    const store = loadSessionStore(storePath, { skipCache: true });
+    const store = loadSessionStore(storePath);
     expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
   });
 

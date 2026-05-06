@@ -529,7 +529,7 @@ describe("resolveAndPersistSessionFile", () => {
       },
     };
     fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
-    const sessionStore = loadSessionStore(fixture.storePath(), { skipCache: true });
+    const sessionStore = loadSessionStore(fixture.storePath());
     const fallbackSessionFile = resolveSessionTranscriptPathInDir(
       sessionId,
       fixture.sessionsDir(),
@@ -547,7 +547,7 @@ describe("resolveAndPersistSessionFile", () => {
 
     expect(result.sessionFile).toBe(fallbackSessionFile);
 
-    const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
+    const saved = loadSessionStore(fixture.storePath());
     expect(saved[sessionKey]?.sessionFile).toBe(fallbackSessionFile);
   });
 
@@ -555,7 +555,7 @@ describe("resolveAndPersistSessionFile", () => {
     const sessionId = "new-session-id";
     const sessionKey = "agent:main:telegram:group:123";
     fs.writeFileSync(fixture.storePath(), JSON.stringify({}), "utf-8");
-    const sessionStore = loadSessionStore(fixture.storePath(), { skipCache: true });
+    const sessionStore = loadSessionStore(fixture.storePath());
     const fallbackSessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
 
     const result = await resolveAndPersistSessionFile({
@@ -568,7 +568,7 @@ describe("resolveAndPersistSessionFile", () => {
 
     expect(result.sessionFile).toBe(fallbackSessionFile);
     expect(result.sessionEntry.sessionId).toBe(sessionId);
-    const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
+    const saved = loadSessionStore(fixture.storePath());
     expect(saved[sessionKey]?.sessionFile).toBe(fallbackSessionFile);
   });
 
@@ -592,7 +592,7 @@ describe("resolveAndPersistSessionFile", () => {
       },
     };
     fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
-    const sessionStore = loadSessionStore(fixture.storePath(), { skipCache: true });
+    const sessionStore = loadSessionStore(fixture.storePath());
 
     const result = await resolveAndPersistSessionFile({
       sessionId: nextSessionId,
@@ -607,7 +607,7 @@ describe("resolveAndPersistSessionFile", () => {
     expect(result.sessionFile).not.toBe(previousSessionFile);
     expect(result.sessionEntry.sessionFile).toBe(expectedNextSessionFile);
 
-    const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
+    const saved = loadSessionStore(fixture.storePath());
     expect(saved[sessionKey]?.sessionFile).toBe(expectedNextSessionFile);
   });
 });

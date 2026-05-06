@@ -52,7 +52,7 @@ const expectWorkGroupActivationEntry = async (
   assertEntry?: (entry: SessionStoreEntry | undefined) => void,
 ) => {
   await vi.waitFor(() => {
-    const scopedEntry = loadSessionStore(storePath, { skipCache: true })[WORK_GROUP_SESSION_KEY];
+    const scopedEntry = loadSessionStore(storePath)[WORK_GROUP_SESSION_KEY];
     expect(scopedEntry?.groupActivation).toBe("always");
     assertEntry?.(scopedEntry);
   });

@@ -226,7 +226,7 @@ describe("createTelegramBot", () => {
 
       expect(replySpy).not.toHaveBeenCalled();
       expect(editMessageTextSpy).not.toHaveBeenCalled();
-      expect(loadSessionStore(storePath, { skipCache: true })).toStrictEqual({});
+      expect(loadSessionStore(storePath)).toStrictEqual({});
       expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-authz-bypass-1");
     } finally {
       await rm(storePath, { force: true });
@@ -299,7 +299,7 @@ describe("createTelegramBot", () => {
 
       expect(replySpy).not.toHaveBeenCalled();
       expect(editMessageTextSpy).not.toHaveBeenCalled();
-      expect(loadSessionStore(storePath, { skipCache: true })).toStrictEqual({});
+      expect(loadSessionStore(storePath)).toStrictEqual({});
       expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-group-model-authz-1");
     } finally {
       await rm(storePath, { force: true });
@@ -381,7 +381,7 @@ describe("createTelegramBot", () => {
 
       expect(replySpy).not.toHaveBeenCalled();
       expect(editMessageTextSpy).not.toHaveBeenCalled();
-      expect(loadSessionStore(storePath, { skipCache: true })).toStrictEqual({});
+      expect(loadSessionStore(storePath)).toStrictEqual({});
       expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-group-model-authz-runtime-1");
     } finally {
       loadConfig.mockReset();
@@ -1104,7 +1104,7 @@ describe("createTelegramBot", () => {
         "Session selection cleared. Runtime unchanged. New replies use the agent's configured default.",
       );
 
-      const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
+      const entry = Object.values(loadSessionStore(storePath))[0];
       expect(entry?.providerOverride).toBeUndefined();
       expect(entry?.modelOverride).toBeUndefined();
       expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-compact-1");
@@ -1255,7 +1255,7 @@ describe("createTelegramBot", () => {
         "Session selection cleared. Runtime unchanged. New replies use the agent's configured default.",
       );
 
-      const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
+      const entry = Object.values(loadSessionStore(storePath))[0];
       expect(entry?.providerOverride).toBeUndefined();
       expect(entry?.modelOverride).toBeUndefined();
       expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-default-1");
@@ -1330,7 +1330,7 @@ describe("createTelegramBot", () => {
         expect.objectContaining({ parse_mode: "HTML" }),
       );
 
-      const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
+      const entry = Object.values(loadSessionStore(storePath))[0];
       expect(entry?.providerOverride).toBe("openai");
       expect(entry?.modelOverride).toBe("gpt-5.4");
       expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-html-1");
@@ -1420,7 +1420,7 @@ describe("createTelegramBot", () => {
 
       // Override must be persisted (not cleared) because openai/gpt-5.4 is
       // NOT the default in the fresh config.
-      const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
+      const entry = Object.values(loadSessionStore(storePath))[0];
       expect(entry?.providerOverride).toBe("openai");
       expect(entry?.modelOverride).toBe("gpt-5.4");
     } finally {

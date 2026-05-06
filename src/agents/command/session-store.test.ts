@@ -382,12 +382,14 @@ describe("updateSessionStoreAfterAgentRun", () => {
         } as never,
       });
 
-      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
-      expect(persisted?.acp?.backend).toBe("acpx");
-      expect(persisted?.acp?.agent).toBe("codex");
-      expect(persisted?.acp?.runtimeSessionName).toBe("runtime-1");
-      expect(persisted?.acp?.mode).toBe("persistent");
-      expect(persisted?.acp?.state).toBe("idle");
+      const persisted = loadSessionStore(storePath)[sessionKey];
+      expect(persisted?.acp).toMatchObject({
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime-1",
+        mode: "persistent",
+        state: "idle",
+      });
       expect(staleInMemory[sessionKey]?.acp).toEqual(persisted?.acp);
     });
   });
@@ -436,13 +438,15 @@ describe("updateSessionStoreAfterAgentRun", () => {
         } as never,
       });
 
-      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
-      expect(persisted?.status).toBe("done");
-      expect(persisted?.startedAt).toBe(1_000);
-      expect(persisted?.endedAt).toBe(1_900);
-      expect(persisted?.runtimeMs).toBe(900);
-      expect(persisted?.modelProvider).toBe("openai");
-      expect(persisted?.model).toBe("gpt-5.4");
+      const persisted = loadSessionStore(storePath)[sessionKey];
+      expect(persisted).toMatchObject({
+        status: "done",
+        startedAt: 1_000,
+        endedAt: 1_900,
+        runtimeMs: 900,
+        modelProvider: "openai",
+        model: "gpt-5.4",
+      });
       expect(staleInMemory[sessionKey]?.status).toBe("done");
     });
   });
@@ -498,7 +502,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         } as never,
       });
 
-      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      const persisted = loadSessionStore(storePath)[sessionKey];
       expect(persisted?.systemPromptReport?.bootstrapTruncation?.warningSignaturesSeen).toEqual([
         "sig-a",
         "sig-b",
@@ -568,7 +572,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         authEpoch: "auth-epoch-1",
       });
 
-      const persisted = loadSessionStore(storePath, { skipCache: true })[first.sessionKey!];
+      const persisted = loadSessionStore(storePath)[first.sessionKey!];
       expect(persisted?.cliSessionBindings?.["claude-cli"]).toEqual({
         sessionId: "claude-cli-session-1",
         authEpoch: "auth-epoch-1",
@@ -1221,7 +1225,7 @@ describe("clearCliSessionInStore", () => {
       expect(cleared?.claudeCliSessionId).toBeUndefined();
       expect(sessionStore[sessionKey]).toEqual(cleared);
 
-      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      const persisted = loadSessionStore(storePath)[sessionKey];
       expect(persisted?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
       expect(persisted?.cliSessionBindings?.["codex-cli"]).toEqual({
         sessionId: "codex-session-1",
@@ -1253,9 +1257,7 @@ describe("clearCliSessionInStore", () => {
 
       expect(cleared).toBeUndefined();
       expect(sessionStore[existingKey]?.claudeCliSessionId).toBe("claude-session-1");
-      expect(
-        loadSessionStore(storePath, { skipCache: true })[existingKey]?.claudeCliSessionId,
-      ).toBe("claude-session-1");
+      expect(loadSessionStore(storePath)[existingKey]?.claudeCliSessionId).toBe("claude-session-1");
     });
   });
 });

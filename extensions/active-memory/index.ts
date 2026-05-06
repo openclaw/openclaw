@@ -546,7 +546,7 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
         agentId: params.agentId,
       },
     );
-    const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
+    const store = params.api.runtime.agent.session.loadSessionStore(storePath);
     let bestMatch:
       | {
           sessionKey: string;
@@ -673,7 +673,7 @@ function resolveRecallRunChannelContext(params: {
         agentId: params.agentId,
       },
     );
-    const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
+    const store = params.api.runtime.agent.session.loadSessionStore(storePath);
     const sessionEntry = resolveSessionStoreEntry({
       store,
       sessionKey: resolvedSessionKey,
@@ -1554,7 +1554,7 @@ async function persistPluginStatusLines(params: {
       agentId ? { agentId } : undefined,
     );
     if (!params.statusLine && !debugLine) {
-      const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
+      const store = params.api.runtime.agent.session.loadSessionStore(storePath);
       const existingEntry = resolveSessionStoreEntry({ store, sessionKey }).existing;
       const hasActiveMemoryEntry = Array.isArray(existingEntry?.pluginDebugEntries)
         ? existingEntry.pluginDebugEntries.some((entry) => entry?.pluginId === "active-memory")

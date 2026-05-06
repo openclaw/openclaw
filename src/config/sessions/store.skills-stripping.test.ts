@@ -100,7 +100,7 @@ describe("session store strips resolvedSkills from persistence", () => {
     };
 
     await saveSessionStore(storePath, store);
-    const loaded = loadSessionStore(storePath, { skipCache: true });
+    const loaded = loadSessionStore(storePath);
 
     const persistedSnapshot = loaded["agent:main:test:1"]?.skillsSnapshot;
     expect(persistedSnapshot).toMatchObject({
@@ -122,7 +122,7 @@ describe("session store strips resolvedSkills from persistence", () => {
     expect(rawLegacy).toContain("resolvedSkills");
     await fs.writeFile(storePath, rawLegacy, "utf-8");
 
-    const loaded = loadSessionStore(storePath, { skipCache: true });
+    const loaded = loadSessionStore(storePath);
     expect(loaded["agent:main:test:1"]?.skillsSnapshot?.resolvedSkills).toBeUndefined();
     expect(loaded["agent:main:test:1"]?.skillsSnapshot?.prompt).toBe(
       legacy["agent:main:test:1"].skillsSnapshot?.prompt,
@@ -143,7 +143,7 @@ describe("session store strips resolvedSkills from persistence", () => {
 
     const raw = await fs.readFile(storePath, "utf-8");
     expect(raw).not.toContain("resolvedSkills");
-    const reloaded = loadSessionStore(storePath, { skipCache: true });
+    const reloaded = loadSessionStore(storePath);
     expect(reloaded["agent:main:test:1"]?.skillsSnapshot?.resolvedSkills).toBeUndefined();
     expect(reloaded["agent:main:test:1"]?.skillsSnapshot?.skills).toHaveLength(6);
   });
