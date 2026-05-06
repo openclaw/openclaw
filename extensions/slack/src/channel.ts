@@ -366,6 +366,10 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: null,
   textChunkLimit: SLACK_TEXT_LIMIT,
+  normalizePayload: ({ payload, cfg, accountId }) =>
+    isSlackInteractiveRepliesEnabled({ cfg, accountId })
+      ? compileSlackInteractiveReplies(payload)
+      : payload,
   deliveryCapabilities: {
     durableFinal: {
       text: true,
