@@ -850,12 +850,12 @@ describe("block reply coalescer", () => {
       },
     });
 
-    coalescer.enqueue({ text: "Reasoning:\n_hidden_", isReasoning: true });
+    coalescer.enqueue({ text: "hidden", isReasoning: true });
     coalescer.enqueue({ text: "Visible answer" });
     await coalescer.flush({ force: true });
 
     expect(flushes).toEqual([
-      { text: "Reasoning:\n_hidden_", isReasoning: true },
+      { text: "hidden", isReasoning: true },
       { text: "Visible answer", isReasoning: undefined },
     ]);
     coalescer.stop();
