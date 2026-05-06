@@ -65,10 +65,12 @@ export function createDiscordMessage(params: {
   mentionedEveryone?: boolean;
   attachments?: Array<Record<string, unknown>>;
   webhookId?: string;
+  type?: import("../internal/discord.js").Message["type"];
 }): import("../internal/discord.js").Message {
   return {
     id: params.id,
     content: params.content,
+    type: params.type,
     timestamp: new Date().toISOString(),
     channelId: params.channelId,
     webhookId: params.webhookId,

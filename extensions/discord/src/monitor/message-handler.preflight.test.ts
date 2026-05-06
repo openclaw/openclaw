@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { ChannelType } from "../internal/discord.js";
+import { ChannelType, MessageType } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
@@ -964,6 +964,90 @@ describe("preflightDiscordMessage", () => {
     const result = await runMentionOnlyBotPreflight({ channelId, guildId, message });
 
     expect(result).not.toBeNull();
+  });
+
+  it("routes guild text control commands through the text command gate", async () => {
+    const channelId = "channel-text-command-human";
+    const guildId = "guild-text-command-human";
+    const message = createDiscordMessage({
+      id: "m-text-command-human",
+      channelId,
+      content: "/steer use a darker sidebar",
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      cfg: {
+        ...DEFAULT_PREFLIGHT_CFG,
+        commands: {
+          useAccessGroups: false,
+        },
+      },
+      discordConfig: {} as DiscordConfig,
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.messageText).toBe("/steer use a darker sidebar");
+    expect(result?.shouldRequireMention).toBe(true);
+    expect(result?.effectiveWasMentioned).toBe(true);
+  });
+
+  it("still drops native Discord command echo messages", async () => {
+    const channelId = "channel-native-command-echo";
+    const guildId = "guild-native-command-echo";
+    const message = createDiscordMessage({
+      id: "m-native-command-echo",
+      channelId,
+      content: "/steer use a darker sidebar",
+      type: MessageType.ChatInputCommand,
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      cfg: {
+        ...DEFAULT_PREFLIGHT_CFG,
+        commands: {
+          useAccessGroups: false,
+        },
+      },
+      discordConfig: {} as DiscordConfig,
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
   });
 
   it("does not mask mention gating when bot id is missing but mention patterns can detect", async () => {
