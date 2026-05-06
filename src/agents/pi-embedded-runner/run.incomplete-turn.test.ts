@@ -49,7 +49,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
   });
 
-  it("does not emit a duplicate agent payload when before_agent_run blocks", async () => {
+  it("emits the before_agent_run hook block message as the agent payload", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
@@ -64,8 +64,11 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    expect(result.payloads).toEqual([]);
+    expect(result.payloads).toEqual([{ text: "Blocked by before-run policy.", isError: true }]);
     expect(result.meta).toMatchObject({
+      finalAssistantVisibleText: "Blocked by before-run policy.",
+      finalAssistantRawText: "Blocked by before-run policy.",
+      finalPromptText: undefined,
       livenessState: "blocked",
       error: { kind: "hook_block", message: "Blocked by before-run policy." },
     });

@@ -2129,21 +2129,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     expect(userUpdateCountAtAgentStart).toBe(0);
-    const userUpdate = mockState.emittedTranscriptUpdates.find(
+    const userUpdates = mockState.emittedTranscriptUpdates.filter(
       (update) =>
         typeof update.message === "object" &&
         update.message !== null &&
         (update.message as { role?: unknown }).role === "user",
     );
-    expect(userUpdate).toMatchObject({
-      sessionFile: expect.stringMatching(/sess\.jsonl$/),
-      sessionKey: "main",
-      message: {
-        role: "user",
-        content: "secret prompt that may be blocked",
-        timestamp: expect.any(Number),
-      },
-    });
+    expect(userUpdates).toHaveLength(0);
   });
 
   it("does not emit raw user transcript content when before_agent_run blocks without a persisted marker", async () => {
@@ -2172,7 +2164,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(userUpdates).toHaveLength(0);
   });
 
-  it("emits raw user transcript content when before_agent_run passes but the agent fails", async () => {
+  it("does not emit live user transcript content when before_agent_run hooks are present and the agent fails", async () => {
     createTranscriptFixture("openclaw-chat-send-user-transcript-gate-pass-error-");
     mockState.triggerAgentRunStart = true;
     mockState.hasBeforeAgentRunHooks = true;
@@ -2188,23 +2180,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    await waitForAssertion(() => {
-      const userUpdate = mockState.emittedTranscriptUpdates.find(
-        (update) =>
-          typeof update.message === "object" &&
-          update.message !== null &&
-          (update.message as { role?: unknown }).role === "user",
-      );
-      expect(userUpdate).toMatchObject({
-        sessionFile: expect.stringMatching(/sess\.jsonl$/),
-        sessionKey: "main",
-        message: {
-          role: "user",
-          content: "prompt allowed before model error",
-          timestamp: expect.any(Number),
-        },
-      });
-    });
+    const userUpdates = mockState.emittedTranscriptUpdates.filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "user",
+    );
+    expect(userUpdates).toHaveLength(0);
   });
 
   it("adds persisted media paths to the user transcript update", async () => {

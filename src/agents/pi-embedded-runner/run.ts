@@ -1834,7 +1834,7 @@ export async function runEmbeddedPiAgent(
               livenessState: "blocked",
             });
             return {
-              payloads: [],
+              payloads: [{ text: errorText, isError: true }],
               meta: {
                 durationMs: Date.now() - started,
                 agentMeta: buildErrorAgentMeta({
@@ -1848,7 +1848,9 @@ export async function runEmbeddedPiAgent(
                   lastTurnTotal,
                 }),
                 systemPromptReport: attempt.systemPromptReport,
-                finalPromptText: attempt.finalPromptText,
+                finalAssistantVisibleText: errorText,
+                finalAssistantRawText: errorText,
+                finalPromptText: undefined,
                 replayInvalid,
                 livenessState: "blocked",
                 error: { kind: "hook_block", message: errorText },
