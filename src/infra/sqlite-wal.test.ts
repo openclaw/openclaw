@@ -46,6 +46,20 @@ describe("sqlite WAL maintenance", () => {
     expect(db.exec).toHaveBeenCalledTimes(4);
   });
 
+  it("can close timers without running a final checkpoint", () => {
+    vi.useFakeTimers();
+    const db = createMockDb();
+
+    const maintenance = configureSqliteWalMaintenance(db, { checkpointIntervalMs: 100 });
+    expect(db.exec).toHaveBeenCalledTimes(2);
+
+    expect(maintenance.close({ checkpoint: false })).toBe(true);
+    expect(db.exec).toHaveBeenCalledTimes(2);
+
+    vi.advanceTimersByTime(200);
+    expect(db.exec).toHaveBeenCalledTimes(2);
+  });
+
   it("reports checkpoint errors without throwing from background maintenance", () => {
     const db = createMockDb();
     const error = new Error("busy");
