@@ -203,6 +203,35 @@ describe("web session", () => {
     openMock.restore();
   });
 
+  it("batches large Baileys signal key reads so startup can yield", async () => {
+    const get = vi.fn(async (_type: string, ids: string[]) =>
+      Object.fromEntries(ids.map((id) => [id, { id }])),
+    );
+    useMultiFileAuthStateMock.mockResolvedValueOnce({
+      state: {
+        creds: {},
+        keys: { get, set: vi.fn() },
+      } as never,
+      saveCreds: vi.fn(),
+    });
+
+    await createWaSocket(false, false);
+
+    const passed = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      auth?: { keys?: { get?: (type: string, ids: string[]) => Promise<Record<string, unknown>> } };
+    };
+    const ids = Array.from({ length: 130 }, (_value, index) => `key-${index}`);
+    const result = await passed.auth?.keys?.get?.("session", ids);
+
+    expect(get).toHaveBeenCalledTimes(3);
+    expect(get.mock.calls.map((call) => call[1])).toEqual([
+      ids.slice(0, 64),
+      ids.slice(64, 128),
+      ids.slice(128),
+    ]);
+    expect(result).toMatchObject({ "key-0": { id: "key-0" }, "key-129": { id: "key-129" } });
+  });
+
   it("passes explicit Baileys socket timing overrides", async () => {
     await createWaSocket(false, false, {
       keepAliveIntervalMs: 10_000,

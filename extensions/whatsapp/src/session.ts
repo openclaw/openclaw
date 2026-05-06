@@ -67,8 +67,44 @@ export type { CredsQueueWaitResult } from "./creds-persistence.js";
 
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 const WHATSAPP_WEBSOCKET_PROXY_TARGET = "https://mmg.whatsapp.net/";
+const WHATSAPP_SIGNAL_KEY_GET_YIELD_BATCH_SIZE = 64;
 const CREDS_FLUSH_TIMEOUT_MESSAGE =
   "Queued WhatsApp creds save did not finish before auth bootstrap; skipping repair and continuing with primary creds.";
+
+type WhatsAppAuthState = Awaited<ReturnType<typeof useMultiFileAuthState>>["state"];
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+function createYieldingSignalKeyStore(keys: WhatsAppAuthState["keys"]): WhatsAppAuthState["keys"] {
+  const get = (keys as { get?: unknown }).get;
+  if (typeof get !== "function") {
+    return keys;
+  }
+  const yieldingKeys = Object.create(Object.getPrototypeOf(keys)) as WhatsAppAuthState["keys"];
+  Object.assign(yieldingKeys, keys, {
+    get: async (type: unknown, ids: readonly string[]) => {
+      if (!Array.isArray(ids) || ids.length <= WHATSAPP_SIGNAL_KEY_GET_YIELD_BATCH_SIZE) {
+        return await get.call(keys, type, ids);
+      }
+      const result: Record<string, unknown> = {};
+      for (
+        let offset = 0;
+        offset < ids.length;
+        offset += WHATSAPP_SIGNAL_KEY_GET_YIELD_BATCH_SIZE
+      ) {
+        if (offset > 0) {
+          await yieldToEventLoop();
+        }
+        const chunk = ids.slice(offset, offset + WHATSAPP_SIGNAL_KEY_GET_YIELD_BATCH_SIZE);
+        Object.assign(result, await get.call(keys, type, chunk));
+      }
+      return result;
+    },
+  });
+  return yieldingKeys;
+}
 
 function enqueueSaveCreds(
   authDir: string,
@@ -168,7 +204,7 @@ export async function createWaSocket(
   const sock = makeWASocket({
     auth: {
       creds: state.creds,
-      keys: makeCacheableSignalKeyStore(state.keys, logger),
+      keys: makeCacheableSignalKeyStore(createYieldingSignalKeyStore(state.keys), logger),
     },
     version,
     logger,
