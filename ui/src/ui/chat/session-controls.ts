@@ -692,7 +692,7 @@ export function resolveSessionOptionGroups(
     const scopeLabel = normalizeOptionalString(parsed?.rest) ?? key;
     let label = resolveSessionScopedOptionLabel(key, row, parsed?.rest);
     if (isChild) {
-      label = `└─ ${label}`;
+      label = `└─ ${label.replace(/^Subagent:\s*/i, "")}`;
     }
     group.options.push({
       key,
@@ -727,6 +727,20 @@ export function resolveSessionOptionGroups(
     addOption(sessionKey);
   } else if (isAgentMainSessionKey(sessionKey)) {
     addOption(sessionKey);
+  }
+
+  for (const group of groups.values()) {
+    const options = group.options;
+    for (let i = options.length - 1; i >= 0; i--) {
+      const parentKey = options[i].parentKey;
+      if (parentKey) {
+        const parentIdx = options.findIndex((o) => o.key === parentKey);
+        if (parentIdx !== -1) {
+          const [child] = options.splice(i, 1);
+          options.splice(parentIdx + 1, 0, child);
+        }
+      }
+    }
   }
 
   for (const group of groups.values()) {
