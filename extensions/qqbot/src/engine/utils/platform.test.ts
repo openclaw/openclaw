@@ -1,12 +1,82 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getHomeDir,
+  getQQBotDataDir,
+  getQQBotDataPath,
   resolveQQBotLocalMediaPath,
   resolveQQBotPayloadLocalFilePath,
 } from "./platform.js";
+
+describe("QQBot data directory with QQBOT_DATA_DIR", () => {
+  const createdPaths: string[] = [];
+  let originalDataDir: string | undefined;
+
+  beforeEach(() => {
+    originalDataDir = process.env.QQBOT_DATA_DIR;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (originalDataDir === undefined) {
+      delete process.env.QQBOT_DATA_DIR;
+    } else {
+      process.env.QQBOT_DATA_DIR = originalDataDir;
+    }
+    for (const target of createdPaths.splice(0)) {
+      fs.rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it("uses QQBOT_DATA_DIR when set", () => {
+    const customDir = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-custom-data-"));
+    createdPaths.push(customDir);
+    process.env.QQBOT_DATA_DIR = customDir;
+
+    const dataDir = getQQBotDataDir();
+    expect(dataDir).toBe(customDir);
+    expect(fs.existsSync(dataDir)).toBe(true);
+  });
+
+  it("uses QQBOT_DATA_DIR with subpaths", () => {
+    const customDir = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-custom-data-"));
+    createdPaths.push(customDir);
+    process.env.QQBOT_DATA_DIR = customDir;
+
+    const sessionsDir = getQQBotDataDir("sessions", "test");
+    expect(sessionsDir).toBe(path.join(customDir, "sessions", "test"));
+    expect(fs.existsSync(sessionsDir)).toBe(true);
+  });
+
+  it("falls back to ~/.openclaw/qqbot when QQBOT_DATA_DIR is not set", () => {
+    delete process.env.QQBOT_DATA_DIR;
+    const homeDir = getHomeDir();
+    const expectedDir = path.join(homeDir, ".openclaw", "qqbot");
+
+    const dataDir = getQQBotDataDir();
+    expect(dataDir).toBe(expectedDir);
+  });
+
+  it("expands tilde in QQBOT_DATA_DIR", () => {
+    const homeDir = getHomeDir();
+    const customDir = path.join(homeDir, "custom-qqbot-data");
+    process.env.QQBOT_DATA_DIR = "~/custom-qqbot-data";
+
+    const dataDir = getQQBotDataPath();
+    expect(dataDir).toBe(customDir);
+  });
+
+  it("returns path without creating when using getQQBotDataPath", () => {
+    const customDir = path.join(os.tmpdir(), "qqbot-not-created-yet");
+    process.env.QQBOT_DATA_DIR = customDir;
+
+    const dataPath = getQQBotDataPath("not-created", "subdir");
+    expect(dataPath).toBe(path.join(customDir, "not-created", "subdir"));
+    expect(fs.existsSync(dataPath)).toBe(false);
+  });
+});
 
 describe("qqbot local media path remapping", () => {
   const createdPaths: string[] = [];
