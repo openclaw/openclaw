@@ -40,7 +40,13 @@ function makeControlUiResponse() {
 }
 
 const wsMockState = vi.hoisted(() => ({
-  last: null as { url: unknown; opts: unknown; noProxyDuringConstruction: unknown } | null,
+  last: null as {
+    url: unknown;
+    opts: unknown;
+    noProxyDuringConstruction: unknown;
+    httpProxyDuringConstruction: unknown;
+    httpsProxyDuringConstruction: unknown;
+  } | null,
 }));
 
 vi.mock("ws", () => ({
@@ -57,6 +63,14 @@ vi.mock("ws", () => ({
         noProxyDuringConstruction:
           typeof agent === "object" && agent !== null
             ? (agent as Record<string, unknown>)["NO_PROXY"]
+            : undefined,
+        httpProxyDuringConstruction:
+          typeof agent === "object" && agent !== null
+            ? (agent as Record<string, unknown>)["HTTP_PROXY"]
+            : undefined,
+        httpsProxyDuringConstruction:
+          typeof agent === "object" && agent !== null
+            ? (agent as Record<string, unknown>)["HTTPS_PROXY"]
             : undefined,
       };
     }
@@ -151,6 +165,39 @@ describe("GatewayClient", () => {
 
       expect(last?.noProxyDuringConstruction).toBe("corp.example.com,127.0.0.1:18789");
       expect(agent.NO_PROXY).toBe("corp.example.com");
+    } finally {
+      stopActiveManagedProxyRegistration(registration);
+      delete (global as Record<string, unknown>)["GLOBAL_AGENT"];
+    }
+  });
+
+  test("uses a scoped direct construction path for IPv6 loopback in Gateway-only proxy mode", () => {
+    const agent = {
+      NO_PROXY: "corp.example.com",
+      HTTP_PROXY: "http://127.0.0.1:3128",
+      HTTPS_PROXY: "http://127.0.0.1:3128",
+    };
+    (global as Record<string, unknown>)["GLOBAL_AGENT"] = agent;
+    const registration = registerActiveManagedProxyUrl(
+      new URL("http://127.0.0.1:3128"),
+      "gateway-only",
+    );
+
+    try {
+      const client = new GatewayClient({ url: "ws://[::1]:18789" });
+      client.start();
+      const last = wsMockState.last as {
+        noProxyDuringConstruction: unknown;
+        httpProxyDuringConstruction: unknown;
+        httpsProxyDuringConstruction: unknown;
+      } | null;
+
+      expect(last?.noProxyDuringConstruction).toBe("corp.example.com,[::1]:18789");
+      expect(last?.httpProxyDuringConstruction).toBeNull();
+      expect(last?.httpsProxyDuringConstruction).toBeNull();
+      expect(agent.NO_PROXY).toBe("corp.example.com");
+      expect(agent.HTTP_PROXY).toBe("http://127.0.0.1:3128");
+      expect(agent.HTTPS_PROXY).toBe("http://127.0.0.1:3128");
     } finally {
       stopActiveManagedProxyRegistration(registration);
       delete (global as Record<string, unknown>)["GLOBAL_AGENT"];

@@ -454,6 +454,22 @@ function getGatewayControlPlaneNoProxyAuthority(value: string): string | null {
   return url.port ? `${url.hostname}:${url.port}` : url.hostname;
 }
 
+function unbracketHost(hostname: string): string {
+  return hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+}
+
+function isGatewayControlPlaneIpv6LoopbackUrl(value: string): boolean {
+  const url = parseGatewayControlPlaneUrl(value);
+  if (
+    url === null ||
+    !isGatewayControlPlaneProtocol(url.protocol) ||
+    !isGatewayControlPlaneLoopbackHost(url.hostname)
+  ) {
+    return false;
+  }
+  return isIP(unbracketHost(url.hostname)) === 6;
+}
+
 function readGlobalAgentNoProxy(): string {
   const agent = (global as Record<string, unknown>)["GLOBAL_AGENT"];
   if (!isRecord(agent)) {
@@ -472,6 +488,33 @@ function writeGlobalAgentNoProxy(value: string): void {
 function appendNoProxyAuthority(noProxy: string, authority: string): string {
   const entries = noProxy.split(/[\s,]+/).filter(Boolean);
   return entries.includes(authority) ? noProxy : [...entries, authority].join(",");
+}
+
+function disableGlobalAgentProxyForIpv6GatewayLoopback(url: string): (() => void) | undefined {
+  if (
+    getActiveManagedProxyLoopbackMode() !== "gateway-only" ||
+    !isGatewayControlPlaneIpv6LoopbackUrl(url)
+  ) {
+    return undefined;
+  }
+  const agent = (global as Record<string, unknown>)["GLOBAL_AGENT"];
+  if (!isRecord(agent)) {
+    return undefined;
+  }
+
+  const previousHttpProxy = agent["HTTP_PROXY"];
+  const previousHttpsProxy = agent["HTTPS_PROXY"];
+  agent["HTTP_PROXY"] = null;
+  agent["HTTPS_PROXY"] = null;
+  let stopped = false;
+  return () => {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
+    agent["HTTP_PROXY"] = previousHttpProxy;
+    agent["HTTPS_PROXY"] = previousHttpsProxy;
+  };
 }
 
 export function registerManagedProxyGatewayLoopbackNoProxy(url: string): (() => void) | undefined {
@@ -499,6 +542,19 @@ export function registerManagedProxyGatewayLoopbackNoProxy(url: string): (() => 
     stopped = true;
     writeGlobalAgentNoProxy(previousNoProxy);
   };
+}
+
+export function withManagedProxyGatewayLoopbackRouting<T>(url: string, run: () => T): T {
+  let unregisterNoProxy: (() => void) | undefined;
+  let restoreIpv6Bypass: (() => void) | undefined;
+  try {
+    unregisterNoProxy = registerManagedProxyGatewayLoopbackNoProxy(url);
+    restoreIpv6Bypass = disableGlobalAgentProxyForIpv6GatewayLoopback(url);
+    return run();
+  } finally {
+    restoreIpv6Bypass?.();
+    unregisterNoProxy?.();
+  }
 }
 
 function isGatewayControlPlaneLoopbackHost(hostname: string): boolean {

@@ -13,7 +13,7 @@ import {
 } from "../infra/device-identity.js";
 import {
   ensureInheritedManagedProxyRoutingActive,
-  registerManagedProxyGatewayLoopbackNoProxy,
+  withManagedProxyGatewayLoopbackRouting,
 } from "../infra/net/proxy/proxy-lifecycle.js";
 import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { rawDataToString } from "../infra/ws.js";
@@ -310,15 +310,10 @@ export class GatewayClient {
         return undefined;
       };
     }
-    let unregisterNoProxy: (() => void) | undefined;
-    const ws = (() => {
-      try {
-        unregisterNoProxy = registerManagedProxyGatewayLoopbackNoProxy(url);
-        return new WebSocket(url, wsOptions as ClientOptions);
-      } finally {
-        unregisterNoProxy?.();
-      }
-    })();
+    const ws = withManagedProxyGatewayLoopbackRouting(
+      url,
+      () => new WebSocket(url, wsOptions as ClientOptions),
+    );
     this.ws = ws;
     this.socketOpened = false;
     this.connectNonce = null;
