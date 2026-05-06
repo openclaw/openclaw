@@ -8,13 +8,19 @@ import { stripInlineStatus } from "./reply-inline.js";
 import { buildTestCtx } from "./test-ctx.js";
 import type { TypingController } from "./typing.js";
 
-const { buildStatusReplyMock, createOpenClawToolsMock, getChannelPluginMock, handleCommandsMock } =
-  vi.hoisted(() => ({
-    buildStatusReplyMock: vi.fn(),
-    createOpenClawToolsMock: vi.fn(),
-    getChannelPluginMock: vi.fn(),
-    handleCommandsMock: vi.fn(),
-  }));
+const {
+  buildStatusReplyMock,
+  createOpenClawToolsMock,
+  getChannelPluginMock,
+  handleCommandsMock,
+  runBeforeToolCallHookMock,
+} = vi.hoisted(() => ({
+  buildStatusReplyMock: vi.fn(),
+  createOpenClawToolsMock: vi.fn(),
+  getChannelPluginMock: vi.fn(),
+  handleCommandsMock: vi.fn(),
+  runBeforeToolCallHookMock: vi.fn(),
+}));
 
 type HandleInlineActionsInput = Parameters<
   typeof import("./get-reply-inline-actions.js").handleInlineActions
@@ -27,6 +33,10 @@ vi.mock("./commands.runtime.js", () => ({
 
 vi.mock("../../agents/openclaw-tools.runtime.js", () => ({
   createOpenClawTools: (...args: unknown[]) => createOpenClawToolsMock(...args),
+}));
+
+vi.mock("../../agents/pi-tools.before-tool-call.js", () => ({
+  runBeforeToolCallHook: (...args: unknown[]) => runBeforeToolCallHookMock(...args),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -149,9 +159,14 @@ describe("handleInlineActions", () => {
     handleCommandsMock.mockResolvedValue({ shouldContinue: true, reply: undefined });
     getChannelPluginMock.mockReset();
     createOpenClawToolsMock.mockReset();
+    runBeforeToolCallHookMock.mockReset();
     buildStatusReplyMock.mockReset();
     buildStatusReplyMock.mockResolvedValue({ text: "status" });
     createOpenClawToolsMock.mockReturnValue([]);
+    runBeforeToolCallHookMock.mockImplementation(async ({ params }) => ({
+      blocked: false,
+      params,
+    }));
     getChannelPluginMock.mockImplementation((channelId?: string) =>
       channelId === "whatsapp"
         ? { commands: { skipWhenConfigEmpty: true } }
@@ -635,12 +650,21 @@ describe("handleInlineActions", () => {
   it("passes senderIsOwner into inline tool runtimes before owner-only filtering", async () => {
     const typing = createTypingController();
     const toolExecute = vi.fn(async () => ({ text: "updated" }));
+    const adjustedParams = {
+      command: "display name --approved",
+      commandName: "set_profile",
+      skillName: "matrix-profile",
+    };
     createOpenClawToolsMock.mockReturnValue([
       {
         name: "message",
         execute: toolExecute,
       },
     ]);
+    runBeforeToolCallHookMock.mockResolvedValueOnce({
+      blocked: false,
+      params: adjustedParams,
+    });
 
     const ctx = buildTestCtx({
       Body: "/set_profile display name",
@@ -687,6 +711,102 @@ describe("handleInlineActions", () => {
         senderIsOwner: true,
       }),
     );
-    expect(toolExecute).toHaveBeenCalled();
+    expect(toolExecute).toHaveBeenCalledWith(expect.stringMatching(/^cmd_/), adjustedParams);
+  });
+
+  it("honors before-tool-call hook blocks for inline tool dispatch", async () => {
+    const typing = createTypingController();
+    const toolExecute = vi.fn(async () => ({ text: "updated" }));
+    createOpenClawToolsMock.mockReturnValue([
+      {
+        name: "message",
+        execute: toolExecute,
+      },
+    ]);
+    runBeforeToolCallHookMock.mockResolvedValueOnce({
+      blocked: true,
+      kind: "veto",
+      deniedReason: "plugin-before-tool-call",
+      reason: "denied by policy",
+      params: {
+        command: "display name",
+        commandName: "set_profile",
+        skillName: "matrix-profile",
+      },
+    });
+
+    const ctx = buildTestCtx({
+      Body: "/set_profile display name",
+      CommandBody: "/set_profile display name",
+    });
+    const skillCommands: SkillCommandSpec[] = [
+      {
+        name: "set_profile",
+        skillName: "matrix-profile",
+        description: "Set Matrix profile",
+        dispatch: {
+          kind: "tool",
+          toolName: "message",
+          argMode: "raw",
+        },
+        sourceFilePath: "/tmp/plugin/commands/set-profile.md",
+      },
+    ];
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "/set_profile display name",
+        command: {
+          isAuthorizedSender: true,
+          senderId: "sender-1",
+          senderIsOwner: true,
+          abortKey: "sender-1",
+          rawBodyNormalized: "/set_profile display name",
+          commandBodyNormalized: "/set_profile display name",
+        },
+        overrides: {
+          cfg: {
+            commands: { text: true },
+            tools: {
+              loopDetection: {
+                enabled: true,
+              },
+            },
+          },
+          agentId: "main",
+          allowTextCommands: true,
+          skillCommands,
+          sessionEntry: {
+            sessionId: "session-1",
+            updatedAt: 0,
+          },
+        },
+      }),
+    );
+
+    expect(result).toEqual({
+      kind: "reply",
+      reply: { text: "❌ Tool call blocked: denied by policy" },
+    });
+    expect(runBeforeToolCallHookMock).toHaveBeenCalledWith({
+      toolName: "message",
+      params: {
+        command: "display name",
+        commandName: "set_profile",
+        skillName: "matrix-profile",
+      },
+      toolCallId: expect.stringMatching(/^cmd_/),
+      ctx: expect.objectContaining({
+        agentId: "main",
+        config: expect.any(Object),
+        sessionKey: "s:main",
+        sessionId: "session-1",
+        loopDetection: { enabled: true },
+      }),
+    });
+    expect(toolExecute).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalled();
   });
 });
