@@ -76,6 +76,29 @@ describe("resolvePreferredNodePath", () => {
     });
   });
 
+  it("prefers a Windows bundled node.exe at the archive root", async () => {
+    const bundledNode = "C:/Users/test/.openclaw/tools/node-v22.22.0-win-x64/node.exe";
+    const pathNode = "C:/Users/test/AppData/Local/fnm_multishells/123/node.exe";
+    mockNodePathPresent(bundledNode);
+    fsMocks.readdir.mockResolvedValue(["node-v22.22.0-win-x64"]);
+
+    const execFile = vi.fn().mockResolvedValueOnce({ stdout: "22.22.0\n", stderr: "" });
+
+    const result = await resolvePreferredNodePath({
+      env: { OPENCLAW_STATE_DIR: "C:/Users/test/.openclaw" },
+      runtime: "node",
+      platform: "win32",
+      execFile,
+      execPath: pathNode,
+    });
+
+    expect(result).toBe(bundledNode);
+    expect(execFile).toHaveBeenCalledTimes(1);
+    expect(execFile).toHaveBeenCalledWith(bundledNode, ["-p", "process.versions.node"], {
+      encoding: "utf8",
+    });
+  });
+
   it("prefers supported system node over version-manager execPath", async () => {
     mockNodePathPresent(darwinNode);
     fsMocks.readdir.mockRejectedValue(new Error("missing"));

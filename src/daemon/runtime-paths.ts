@@ -145,7 +145,13 @@ async function resolveBundledNodePath(params: {
   const candidates = entries
     .filter((entry) => parseBundledNodeVersionDir(entry) !== null)
     .toSorted(compareBundledNodeVersionDirs)
-    .map((entry) => path.join(toolsDir, entry, "bin", executableName));
+    .flatMap((entry) => {
+      const root = path.join(toolsDir, entry);
+      if (params.platform === "win32") {
+        return [path.join(root, executableName), path.join(root, "bin", executableName)];
+      }
+      return [path.join(root, "bin", executableName)];
+    });
 
   for (const candidate of candidates) {
     try {
