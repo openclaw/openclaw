@@ -2681,6 +2681,53 @@ describe("active-memory plugin", () => {
     expect(result?.prependContext).toContain("User usually orders ramen after late flights.");
   });
 
+  it("does not abort recall early when memory_search returns a warning without an error (#77864)", async () => {
+    // Regression test: Boolean(debug?.warning) was included in the `unavailable`
+    // condition, causing the terminal watch to short-circuit the sub-agent on any
+    // advisory warning (e.g. embedding provider slow, using fallback mode).
+    // Now only disabled===true or a hard error triggers the fast-fail path.
+    __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 500,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:warning-only";
+    hoisted.sessionStore[sessionKey] = { sessionId: "s-warning-only", updatedAt: 0 };
+    runEmbeddedPiAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      // Write a memory_search result with only a warning (no error, not disabled)
+      await writeTranscriptJsonl(params.sessionFile, [
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_search",
+            details: {
+              results: [{ id: "m1", text: "User usually orders ramen." }],
+              warning: "Embedding provider is slow; using cached index.",
+            },
+          },
+        },
+      ]);
+      // Sub-agent completes normally with a useful summary
+      return { payloads: [{ text: "User usually orders ramen after late nights." }] };
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? warning-only", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    // The warning must NOT abort the sub-agent — useful memory should be returned
+    expect(result?.prependContext).toContain("User usually orders ramen after late nights.");
+
+    const infoLines = vi
+      .mocked(api.logger.info)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(infoLines.some((line: string) => line.includes("done status=ok"))).toBe(true);
+  });
+
   it("returns undefined instead of throwing when an unexpected error escapes prompt building", async () => {
     const result = await hooks.before_prompt_build(
       { prompt: "what should i eat? escape test", messages: undefined as never },
