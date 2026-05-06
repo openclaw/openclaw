@@ -295,6 +295,35 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     expect(childAgentCall?.timeoutMs).toBe(125_000);
   });
 
+  it("passes toolsAllow through to the native child agent run", async () => {
+    const ctx = setupSessionsSpawnGatewayMock({
+      includeChatHistory: true,
+      agentWaitResult: { status: "ok", startedAt: 1000, endedAt: 2000 },
+    });
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+    });
+
+    const result = await tool.execute("call-tools-allow", {
+      task: "do thing",
+      toolsAllow: [" read ", "exec"],
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: expect.any(String),
+    });
+    const childAgentCall = ctx.calls.find((call) => {
+      const params = call.params as { lane?: string } | undefined;
+      return call.method === "agent" && params?.lane === "subagent";
+    });
+    expect((childAgentCall?.params as { toolsAllow?: string[] } | undefined)?.toolsAllow).toEqual([
+      "read",
+      "exec",
+    ]);
+  });
+
   it("sessions_spawn retires bundle MCP runtime when run-mode cleanup completes", async () => {
     let resumeAnnounceFlow: ((value: boolean) => void) | undefined;
     let announceFlowStarted: (() => void) | undefined;
