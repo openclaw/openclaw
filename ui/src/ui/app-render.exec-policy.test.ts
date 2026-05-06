@@ -1,4 +1,4 @@
-// @vitest-environment node
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { extractQuickSettingsSecurity } from "./app-render.ts";
 import type { AppViewState } from "./app-view-state.ts";
