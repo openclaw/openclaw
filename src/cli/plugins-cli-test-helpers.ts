@@ -81,6 +81,7 @@ export class PromptInputClosedError extends Error {
   }
 }
 export const installPluginFromNpmSpec: AsyncUnknownMock = vi.fn();
+export const installPluginFromNpmPackArchive: AsyncUnknownMock = vi.fn();
 export const installPluginFromPath: AsyncUnknownMock = vi.fn();
 export const installPluginFromClawHub: AsyncUnknownMock = vi.fn();
 export const parseClawHubPluginSpec: Mock<ParseClawHubPluginSpecFn> = vi.fn();
@@ -485,6 +486,16 @@ vi.mock("../plugins/install.js", () => ({
       installPluginFromNpmSpec,
       ...args,
     )) as (typeof import("../plugins/install.js"))["installPluginFromNpmSpec"],
+  installPluginFromNpmPackArchive: ((
+    ...args: Parameters<(typeof import("../plugins/install.js"))["installPluginFromNpmPackArchive"]>
+  ) =>
+    invokeMock<
+      Parameters<(typeof import("../plugins/install.js"))["installPluginFromNpmPackArchive"]>,
+      ReturnType<(typeof import("../plugins/install.js"))["installPluginFromNpmPackArchive"]>
+    >(
+      installPluginFromNpmPackArchive,
+      ...args,
+    )) as (typeof import("../plugins/install.js"))["installPluginFromNpmPackArchive"],
   installPluginFromPath: ((
     ...args: Parameters<(typeof import("../plugins/install.js"))["installPluginFromPath"]>
   ) =>
@@ -650,6 +661,7 @@ export function resetPluginsCliTestState() {
   installPluginFromGitSpec.mockReset();
   parseGitPluginSpec.mockReset();
   installPluginFromNpmSpec.mockReset();
+  installPluginFromNpmPackArchive.mockReset();
   installPluginFromPath.mockReset();
   installPluginFromClawHub.mockReset();
   parseClawHubPluginSpec.mockReset();
