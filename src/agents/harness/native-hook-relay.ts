@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
 import { runBeforeToolCallHook } from "../pi-tools.before-tool-call.js";
 import { normalizeToolName } from "../tool-policy.js";
@@ -343,6 +344,9 @@ export function buildNativeHookRelayCommand(params: {
   executable?: string;
   nodeExecutable?: string;
 }): string {
+  if (!nativeHookRelayEventHasLocalWork(params.event)) {
+    return buildNativeHookRelayNoopCommand(params);
+  }
   const timeoutMs = normalizePositiveInteger(params.timeoutMs, DEFAULT_RELAY_TIMEOUT_MS);
   const executable = params.executable ?? resolveOpenClawCliExecutable();
   const argv =
@@ -362,6 +366,23 @@ export function buildNativeHookRelayCommand(params: {
     "--timeout",
     String(timeoutMs),
   ]);
+}
+
+function nativeHookRelayEventHasLocalWork(event: NativeHookRelayEvent): boolean {
+  if (event === "pre_tool_use") {
+    return hasGlobalHooks("before_tool_call");
+  }
+  if (event === "post_tool_use") {
+    return hasGlobalHooks("after_tool_call");
+  }
+  if (event === "before_agent_finalize") {
+    return hasGlobalHooks("before_agent_finalize");
+  }
+  return true;
+}
+
+function buildNativeHookRelayNoopCommand(params: { nodeExecutable?: string }): string {
+  return shellQuoteArgs([params.nodeExecutable ?? process.execPath, "-e", ""]);
 }
 
 export async function invokeNativeHookRelay(
