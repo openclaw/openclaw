@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
-import { formatSessionArchiveTimestamp } from "../config/sessions/artifacts.js";
+import { formatFilesystemTimestamp } from "../config/sessions/artifacts.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import {
   resolveSessionFilePath,
@@ -156,7 +156,7 @@ function resolveHeartbeatMainRecoveryKey(params: {
   if (!parsed) {
     return null;
   }
-  const stamp = formatSessionArchiveTimestamp(params.nowMs).toLowerCase();
+  const stamp = formatFilesystemTimestamp(params.nowMs).toLowerCase();
   const base = `agent:${parsed.agentId}:heartbeat-recovered-${stamp}`;
   if (!params.store[base]) {
     return base;
@@ -285,7 +285,7 @@ export async function repairHeartbeatPoisonedMainSession(params: {
       entry: currentEntry,
       transcriptPath,
     });
-    if (!currentCandidate) {
+    if (!currentCandidate && currentEntry?.sessionId !== mainEntry.sessionId) {
       return;
     }
     if (moveHeartbeatMainSessionEntry({ store: currentStore, mainKey, recoveredKey })) {

@@ -78,7 +78,6 @@ function emitCompactionSessionLifecycleHooks(params: {
       cfg: params.cfg,
       reason: "compaction",
       sessionFile: transcript.sessionFile,
-      transcriptArchived: transcript.transcriptArchived,
       nextSessionId: params.nextEntry.sessionId,
     });
     void hookRunner.runSessionEnd(payload.event, payload.context).catch((err) => {

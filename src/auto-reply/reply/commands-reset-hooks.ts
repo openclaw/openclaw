@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import {
   exportSqliteSessionTranscriptJsonl,
   hasSqliteSessionTranscriptEvents,
@@ -35,21 +33,6 @@ function parseTranscriptMessages(content: string): unknown[] {
     }
   }
   return messages;
-}
-
-async function findLatestArchivedTranscript(sessionFile: string): Promise<string | undefined> {
-  try {
-    const dir = path.dirname(sessionFile);
-    const base = path.basename(sessionFile);
-    const resetPrefix = `${base}.reset.`;
-    const archived = (await fs.readdir(dir))
-      .filter((name) => name.startsWith(resetPrefix))
-      .toSorted();
-    const latest = archived[archived.length - 1];
-    return latest ? path.join(dir, latest) : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 type BeforeResetTranscriptScope = {
@@ -105,45 +88,10 @@ async function loadBeforeResetTranscript(params: {
     return scopedTranscript;
   }
 
-  const sessionFile = params.sessionFile;
-  if (!sessionFile) {
-    logVerbose("before_reset: no session file available, firing hook with empty messages");
-    return { sessionFile, messages: [] };
-  }
-
-  try {
-    return {
-      sessionFile,
-      messages: parseTranscriptMessages(await fs.readFile(sessionFile, "utf-8")),
-    };
-  } catch (err: unknown) {
-    if ((err as { code?: unknown })?.code !== "ENOENT") {
-      logVerbose(
-        `before_reset: failed to read session file ${sessionFile}; firing hook with empty messages (${String(err)})`,
-      );
-      return { sessionFile, messages: [] };
-    }
-  }
-
-  const archivedSessionFile = await findLatestArchivedTranscript(sessionFile);
-  if (!archivedSessionFile) {
-    logVerbose(
-      `before_reset: failed to find archived transcript for ${sessionFile}; firing hook with empty messages`,
-    );
-    return { sessionFile, messages: [] };
-  }
-
-  try {
-    return {
-      sessionFile: archivedSessionFile,
-      messages: parseTranscriptMessages(await fs.readFile(archivedSessionFile, "utf-8")),
-    };
-  } catch (err: unknown) {
-    logVerbose(
-      `before_reset: failed to read archived session file ${archivedSessionFile}; firing hook with empty messages (${String(err)})`,
-    );
-    return { sessionFile: archivedSessionFile, messages: [] };
-  }
+  logVerbose(
+    "before_reset: no scoped SQLite transcript available, firing hook with empty messages",
+  );
+  return { sessionFile: params.sessionFile, messages: [] };
 }
 
 export async function emitResetCommandHooks(params: {

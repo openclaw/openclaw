@@ -76,7 +76,9 @@ This plan has started landing in slices:
   transcript. Legacy JSONL import is doctor/import/debug only: `openclaw doctor
 --fix` builds the transcript database from old files and removes the JSONL
   sources after successful import. Runtime paths do not import, prune, or repair
-  JSONL files.
+  JSONL files. Pre-compaction checkpoints are SQLite transcript snapshots, not
+  `.checkpoint.*.jsonl` copies; branch/restore and checkpoint pruning now work
+  against snapshot rows. The old PI session-manager cache/prewarm layer is gone.
 - `AgentFilesystem` and `SqliteVirtualAgentFs` exist for scratch storage, with
   `disk`, `vfs-scratch`, and `vfs-only` filesystem modes at the runtime
   boundary. VFS contents can be listed and exported for support bundles. When
@@ -110,6 +112,11 @@ This plan has started landing in slices:
   the primary persistent cache. The older
   `cache/openrouter-models.json` file is a legacy import source and is removed
   after import.
+- Codex app-server thread bindings now use the shared SQLite `kv` store as the
+  only runtime record path. The old per-session
+  `.codex-app-server.json` sidecar reader/writer has been removed from runtime
+  and tests now seed the binding store directly. `openclaw doctor --fix`
+  imports old sidecars into SQLite and removes the JSON source.
 - TUI last-session restore pointers now use the shared SQLite `kv` store as the
   primary record path. The older `tui/last-session.json` file is a legacy
   import source and is removed after import.
@@ -586,6 +593,10 @@ Phase 5: transcript ownership
 - Store transcript events in SQLite.
 - Import legacy JSONL through doctor only; export JSONL for debugging/support.
 - Remove direct PI `SessionManager` usage from non-adapter code.
+- Remove file-backed compaction checkpoint copies and the session-manager
+  cache/prewarm layer.
+- Move Codex app-server binding state from per-session JSON sidecars to the
+  shared SQLite `kv` table.
 
 Phase 6: internalize or replace PI pieces
 

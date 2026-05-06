@@ -182,7 +182,6 @@ const TARGET_KEYS = [
   "session.maintenance.pruneDays",
   "session.maintenance.maxEntries",
   "session.maintenance.rotateBytes",
-  "session.maintenance.resetArchiveRetention",
   "session.maintenance.maxDiskBytes",
   "session.maintenance.highWaterBytes",
   "approvals",
@@ -718,10 +717,6 @@ describe("config help copy quality", () => {
     const deprecated = FIELD_HELP["session.maintenance.pruneDays"];
     expect(/deprecated/i.test(deprecated)).toBe(true);
     expect(deprecated.includes("session.maintenance.pruneAfter")).toBe(true);
-
-    const resetRetention = FIELD_HELP["session.maintenance.resetArchiveRetention"];
-    expect(resetRetention.includes(".reset.")).toBe(true);
-    expect(/false/i.test(resetRetention)).toBe(true);
 
     const maxDisk = FIELD_HELP["session.maintenance.maxDiskBytes"];
     expect(maxDisk.includes("500mb")).toBe(true);

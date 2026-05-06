@@ -1,14 +1,18 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { AssistantMessage } from "../agents/pi-ai-contract.js";
+import { SessionManager } from "../agents/transcript/session-transcript-contract.js";
+import { loadSessionStore, saveSessionStore } from "../config/sessions.js";
 import {
-  CURRENT_SESSION_VERSION,
-  SessionManager,
-} from "../agents/transcript/session-transcript-contract.js";
+  exportSqliteSessionTranscriptJsonl,
+  hasSqliteSessionTranscriptEvents,
+  loadSqliteSessionTranscriptEvents,
+  replaceSqliteSessionTranscriptEvents,
+} from "../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   captureCompactionCheckpointSnapshotAsync,
   cleanupCompactionCheckpointSnapshot,
@@ -20,11 +24,11 @@ import {
 
 const tempDirs: string[] = [];
 
-function requireNonEmptyString(value: string | null | undefined, message: string): string {
-  if (!value) {
-    throw new Error(message);
-  }
-  return value;
+function readSqliteTranscriptEvents(sessionId: string): Record<string, unknown>[] {
+  return loadSqliteSessionTranscriptEvents({
+    agentId: DEFAULT_AGENT_ID,
+    sessionId,
+  }).map((entry) => entry.event as Record<string, unknown>);
 }
 
 afterEach(async () => {
@@ -32,7 +36,7 @@ afterEach(async () => {
 });
 
 describe("session-compaction-checkpoints", () => {
-  test("async capture stores the copied pre-compaction transcript without sync copy", async () => {
+  test("async capture stores the pre-compaction transcript in SQLite", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-async-"));
     tempDirs.push(dir);
 
@@ -51,40 +55,59 @@ describe("session-compaction-checkpoints", () => {
       timestamp: Date.now(),
     } as AssistantMessage);
 
-    const sessionFile = requireNonEmptyString(session.getSessionFile(), "session file missing");
-    const leafId = requireNonEmptyString(session.getLeafId(), "session leaf id missing");
+    const sessionFile = session.getSessionFile();
+    const leafId = session.getLeafId();
+    expect(sessionFile).toBeTruthy();
+    expect(leafId).toBeTruthy();
 
-    const originalBefore = await fs.readFile(sessionFile, "utf-8");
-    const copyFileSyncSpy = vi.spyOn(fsSync, "copyFileSync");
     const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
+    const originalBefore = exportSqliteSessionTranscriptJsonl({
+      agentId: DEFAULT_AGENT_ID,
+      sessionId: session.getSessionId(),
+    });
     try {
       const snapshot = await captureCompactionCheckpointSnapshotAsync({
         sessionManager: session,
-        sessionFile,
+        sessionFile: sessionFile!,
       });
 
-      expect(copyFileSyncSpy).not.toHaveBeenCalled();
       expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
-      expect(snapshot).toMatchObject({ leafId });
-      if (!snapshot) {
-        throw new Error("expected checkpoint snapshot");
-      }
-      expect(snapshot.sessionFile).not.toBe(sessionFile);
-      expect(snapshot.sessionFile).toContain(".checkpoint.");
-      expect(fsSync.existsSync(snapshot.sessionFile)).toBe(true);
-      expect(await fs.readFile(snapshot.sessionFile, "utf-8")).toBe(originalBefore);
+      expect(snapshot).not.toBeNull();
+      expect(snapshot?.leafId).toBe(leafId);
+      expect(snapshot?.sessionFile).not.toBe(sessionFile);
+      expect(snapshot?.sessionFile).toContain(".checkpoint.");
+      const snapshotBefore = exportSqliteSessionTranscriptJsonl({
+        agentId: DEFAULT_AGENT_ID,
+        sessionId: snapshot!.sessionId,
+      });
+      expect(snapshotBefore).toContain("before async compaction");
+      expect(snapshotBefore).toContain("async working on it");
+      expect(snapshotBefore).not.toBe(originalBefore);
 
-      session.appendCompaction("checkpoint summary", leafId, 123, { ok: true });
+      session.appendCompaction("checkpoint summary", leafId!, 123, { ok: true });
 
-      expect(await fs.readFile(snapshot.sessionFile, "utf-8")).toBe(originalBefore);
-      expect(await fs.readFile(sessionFile, "utf-8")).not.toBe(originalBefore);
+      expect(
+        exportSqliteSessionTranscriptJsonl({
+          agentId: DEFAULT_AGENT_ID,
+          sessionId: snapshot!.sessionId,
+        }),
+      ).toBe(snapshotBefore);
+      expect(
+        exportSqliteSessionTranscriptJsonl({
+          agentId: DEFAULT_AGENT_ID,
+          sessionId: session.getSessionId(),
+        }),
+      ).not.toBe(originalBefore);
 
       await cleanupCompactionCheckpointSnapshot(snapshot);
 
-      expect(fsSync.existsSync(snapshot.sessionFile)).toBe(false);
-      expect(fsSync.existsSync(sessionFile)).toBe(true);
+      expect(
+        hasSqliteSessionTranscriptEvents({
+          agentId: DEFAULT_AGENT_ID,
+          sessionId: snapshot!.sessionId,
+        }),
+      ).toBe(true);
     } finally {
-      copyFileSyncSpy.mockRestore();
       sessionManagerOpenSpy.mockRestore();
     }
   });
@@ -108,31 +131,29 @@ describe("session-compaction-checkpoints", () => {
       timestamp: Date.now(),
     } as unknown as AssistantMessage);
 
-    const sessionFile = requireNonEmptyString(session.getSessionFile(), "session file missing");
-    const sessionId = requireNonEmptyString(session.getSessionId(), "session id missing");
-    const leafId = requireNonEmptyString(session.getLeafId(), "session leaf id missing");
-    await fs.appendFile(sessionFile, "\nnot-json\n", "utf-8");
+    const sessionFile = session.getSessionFile();
+    const sessionId = session.getSessionId();
+    const leafId = session.getLeafId();
+    expect(sessionFile).toBeTruthy();
+    expect(sessionId).toBeTruthy();
+    expect(leafId).toBeTruthy();
 
-    const copyFileSyncSpy = vi.spyOn(fsSync, "copyFileSync");
     const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
     let snapshot: Awaited<ReturnType<typeof captureCompactionCheckpointSnapshotAsync>> = null;
     try {
-      expect(await readSessionLeafIdFromTranscriptAsync(sessionFile)).toBe(leafId);
+      expect(await readSessionLeafIdFromTranscriptAsync(sessionFile!)).toBe(leafId);
       snapshot = await captureCompactionCheckpointSnapshotAsync({
-        sessionFile,
+        sessionFile: sessionFile!,
       });
 
-      expect(copyFileSyncSpy).not.toHaveBeenCalled();
       expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
-      expect(snapshot).toMatchObject({ sessionId, leafId });
-      if (!snapshot) {
-        throw new Error("expected checkpoint snapshot");
-      }
-      expect(snapshot.sessionFile).not.toBe(sessionFile);
-      expect(snapshot.sessionFile).toContain(".checkpoint.");
+      expect(snapshot).not.toBeNull();
+      expect(snapshot?.sessionId).not.toBe(sessionId);
+      expect(snapshot?.leafId).toBe(leafId);
+      expect(snapshot?.sessionFile).not.toBe(sessionFile);
+      expect(snapshot?.sessionFile).toContain(".checkpoint.");
     } finally {
       await cleanupCompactionCheckpointSnapshot(snapshot);
-      copyFileSyncSpy.mockRestore();
       sessionManagerOpenSpy.mockRestore();
     }
   });
@@ -147,24 +168,17 @@ describe("session-compaction-checkpoints", () => {
       content: "before compaction",
       timestamp: Date.now(),
     });
-    const sessionFile = requireNonEmptyString(session.getSessionFile(), "session file missing");
-    await fs.appendFile(sessionFile, "x".repeat(128), "utf-8");
+    const sessionFile = session.getSessionFile();
+    expect(sessionFile).toBeTruthy();
 
-    const copyFileSyncSpy = vi.spyOn(fsSync, "copyFileSync");
-    try {
-      const snapshot = await captureCompactionCheckpointSnapshotAsync({
-        sessionManager: session,
-        sessionFile,
-        maxBytes: 64,
-      });
+    const snapshot = await captureCompactionCheckpointSnapshotAsync({
+      sessionManager: session,
+      sessionFile: sessionFile!,
+      maxBytes: 64,
+    });
 
-      expect(snapshot).toBeNull();
-      expect(copyFileSyncSpy).not.toHaveBeenCalled();
-      expect(MAX_COMPACTION_CHECKPOINT_SNAPSHOT_BYTES).toBeGreaterThan(64);
-      expect(fsSync.readdirSync(dir).some((file) => file.includes(".checkpoint."))).toBe(false);
-    } finally {
-      copyFileSyncSpy.mockRestore();
-    }
+    expect(snapshot).toBeNull();
+    expect(MAX_COMPACTION_CHECKPOINT_SNAPSHOT_BYTES).toBeGreaterThan(64);
   });
 
   test("async fork creates a checkpoint branch transcript without SessionManager sync reads", async () => {
@@ -186,48 +200,34 @@ describe("session-compaction-checkpoints", () => {
       timestamp: Date.now(),
     } as unknown as AssistantMessage);
 
-    const sessionFile = requireNonEmptyString(session.getSessionFile(), "session file missing");
-    await fs.appendFile(sessionFile, "\nnot-json\n", "utf-8");
+    const sessionFile = session.getSessionFile();
+    expect(sessionFile).toBeTruthy();
 
     const openSpy = vi.spyOn(SessionManager, "open");
     const forkSpy = vi.spyOn(SessionManager, "forkFrom");
     let forked: Awaited<ReturnType<typeof forkCompactionCheckpointTranscriptAsync>> = null;
     try {
       forked = await forkCompactionCheckpointTranscriptAsync({
-        sourceFile: sessionFile,
+        sourceFile: sessionFile!,
         sessionDir: dir,
       });
 
       expect(openSpy).not.toHaveBeenCalled();
       expect(forkSpy).not.toHaveBeenCalled();
-      expect(forked).toMatchObject({ sessionFile: expect.any(String) });
-      if (!forked) {
-        throw new Error("expected forked checkpoint transcript");
-      }
-      expect(forked.sessionFile).not.toBe(sessionFile);
-      expect(forked.sessionId).toBeTypeOf("string");
-      expect(forked.sessionId).not.toBe("");
+      expect(forked).not.toBeNull();
+      expect(forked?.sessionFile).not.toBe(sessionFile);
+      expect(forked?.sessionId).toBeTruthy();
     } finally {
       openSpy.mockRestore();
       forkSpy.mockRestore();
     }
 
-    const forkedLines = (await fs.readFile(forked.sessionFile, "utf-8")).trim().split(/\r?\n/);
-    const forkedEntries = forkedLines.map((line) => JSON.parse(line) as Record<string, unknown>);
-    const sourceEntries = (await fs.readFile(sessionFile, "utf-8"))
-      .trim()
-      .split(/\r?\n/)
-      .flatMap((line) => {
-        try {
-          return [JSON.parse(line) as Record<string, unknown>];
-        } catch {
-          return [];
-        }
-      });
+    const forkedEntries = readSqliteTranscriptEvents(forked!.sessionId);
+    const sourceEntries = readSqliteTranscriptEvents(session.getSessionId());
 
     expect(forkedEntries[0]).toMatchObject({
       type: "session",
-      id: forked.sessionId,
+      id: forked!.sessionId,
       cwd: dir,
       parentSession: sessionFile,
     });
@@ -236,32 +236,11 @@ describe("session-compaction-checkpoints", () => {
     );
   });
 
-  test("async fork migrates legacy checkpoint snapshots before writing a current header", async () => {
+  test("async fork ignores legacy checkpoint files that doctor has not imported", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-legacy-fork-"));
     tempDirs.push(dir);
 
     const legacySessionFile = path.join(dir, "legacy.jsonl");
-    const firstMessage = {
-      type: "message",
-      timestamp: new Date(0).toISOString(),
-      message: {
-        role: "user",
-        content: "legacy first",
-        timestamp: 1,
-      },
-    };
-    const secondMessage = {
-      type: "message",
-      timestamp: new Date(1).toISOString(),
-      message: {
-        role: "assistant",
-        content: "legacy second",
-        api: "responses",
-        provider: "openai",
-        model: "gpt-test",
-        timestamp: 2,
-      },
-    };
     await fs.writeFile(
       legacySessionFile,
       [
@@ -271,8 +250,6 @@ describe("session-compaction-checkpoints", () => {
           timestamp: new Date(0).toISOString(),
           cwd: dir,
         }),
-        JSON.stringify(firstMessage),
-        JSON.stringify(secondMessage),
         "",
       ].join("\n"),
       "utf-8",
@@ -283,54 +260,31 @@ describe("session-compaction-checkpoints", () => {
       sessionDir: dir,
     });
 
-    expect(forked).toMatchObject({ sessionFile: expect.any(String) });
-    if (!forked) {
-      throw new Error("expected forked checkpoint transcript");
-    }
-    const forkedEntries = (await fs.readFile(forked.sessionFile, "utf-8"))
-      .trim()
-      .split(/\r?\n/)
-      .map((line) => JSON.parse(line) as Record<string, unknown>);
-    expect(forkedEntries[0]).toMatchObject({
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: forked.sessionId,
-      parentSession: legacySessionFile,
-    });
-    expect(forkedEntries[1]).toMatchObject({
-      type: "message",
-      parentId: null,
-      message: expect.objectContaining({ content: "legacy first" }),
-    });
-    expect(forkedEntries[1]?.id).toBeTypeOf("string");
-    expect(forkedEntries[1]?.id).not.toBe("");
-    expect(forkedEntries[2]).toMatchObject({
-      type: "message",
-      parentId: forkedEntries[1]?.id,
-      message: expect.objectContaining({ content: "legacy second" }),
-    });
-    expect(forkedEntries[2]?.id).toBeTypeOf("string");
-    expect(forkedEntries[2]?.id).not.toBe("");
-
-    const messages = SessionManager.open(forked.sessionFile, dir).buildSessionContext().messages;
-    expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
-      "legacy first",
-      "legacy second",
-    ]);
+    expect(forked).toBeNull();
   });
 
-  test("persist trims old checkpoint metadata and removes trimmed snapshot files", async () => {
+  test("persist trims old checkpoint metadata and removes trimmed SQLite snapshots", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-trim-"));
     tempDirs.push(dir);
 
-    const storePath = path.join(dir, "sessions.json");
+    const storePath = path.join(dir, ".openclaw", "agents", "main", "sessions", "sessions.json");
     const sessionId = "sess";
     const sessionKey = "agent:main:main";
     const now = Date.now();
     const existingCheckpoints = Array.from({ length: 26 }, (_, index) => {
-      const uuid = `${String(index + 1).padStart(8, "0")}-1111-4111-8111-111111111111`;
-      const sessionFile = path.join(dir, `sess.checkpoint.${uuid}.jsonl`);
-      fsSync.writeFileSync(sessionFile, `checkpoint ${index}`, "utf-8");
+      const checkpointSessionId = `checkpoint-session-${index}`;
+      replaceSqliteSessionTranscriptEvents({
+        agentId: DEFAULT_AGENT_ID,
+        sessionId: checkpointSessionId,
+        events: [
+          {
+            type: "session",
+            id: checkpointSessionId,
+            timestamp: new Date(now + index).toISOString(),
+            cwd: dir,
+          },
+        ],
+      });
       return {
         checkpointId: `old-${index}`,
         sessionKey,
@@ -338,62 +292,75 @@ describe("session-compaction-checkpoints", () => {
         createdAt: now + index,
         reason: "manual" as const,
         preCompaction: {
-          sessionId,
-          sessionFile,
+          sessionId: checkpointSessionId,
           leafId: `old-leaf-${index}`,
         },
         postCompaction: { sessionId },
       };
     });
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [sessionKey]: {
-            sessionId,
-            updatedAt: now,
-            compactionCheckpoints: existingCheckpoints,
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    await saveSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: now,
+        compactionCheckpoints: existingCheckpoints,
+      },
+    });
 
-    const currentSnapshotFile = path.join(
-      dir,
-      "sess.checkpoint.99999999-9999-4999-8999-999999999999.jsonl",
-    );
-    await fs.writeFile(currentSnapshotFile, "current", "utf-8");
+    replaceSqliteSessionTranscriptEvents({
+      agentId: DEFAULT_AGENT_ID,
+      sessionId: "current-snapshot",
+      events: [
+        {
+          type: "session",
+          id: "current-snapshot",
+          timestamp: new Date(now + 100).toISOString(),
+          cwd: dir,
+        },
+      ],
+    });
 
     const stored = await persistSessionCompactionCheckpoint({
       cfg: {
         session: { store: storePath },
         agents: { list: [{ id: "main", default: true }] },
       } as OpenClawConfig,
-      sessionKey: "main",
+      sessionKey,
       sessionId,
       reason: "manual",
       snapshot: {
-        sessionId,
-        sessionFile: currentSnapshotFile,
+        sessionId: "current-snapshot",
         leafId: "current-leaf",
       },
       createdAt: now + 100,
     });
 
-    expect(stored?.preCompaction).toMatchObject({
-      sessionId,
-      sessionFile: currentSnapshotFile,
-      leafId: "current-leaf",
-    });
-    expect(fsSync.existsSync(existingCheckpoints[0].preCompaction.sessionFile)).toBe(false);
-    expect(fsSync.existsSync(existingCheckpoints[1].preCompaction.sessionFile)).toBe(false);
-    expect(fsSync.existsSync(existingCheckpoints[2].preCompaction.sessionFile)).toBe(true);
-    expect(fsSync.existsSync(currentSnapshotFile)).toBe(true);
+    expect(stored).not.toBeNull();
+    expect(
+      hasSqliteSessionTranscriptEvents({
+        agentId: DEFAULT_AGENT_ID,
+        sessionId: existingCheckpoints[0].preCompaction.sessionId,
+      }),
+    ).toBe(false);
+    expect(
+      hasSqliteSessionTranscriptEvents({
+        agentId: DEFAULT_AGENT_ID,
+        sessionId: existingCheckpoints[1].preCompaction.sessionId,
+      }),
+    ).toBe(false);
+    expect(
+      hasSqliteSessionTranscriptEvents({
+        agentId: DEFAULT_AGENT_ID,
+        sessionId: existingCheckpoints[2].preCompaction.sessionId,
+      }),
+    ).toBe(true);
+    expect(
+      hasSqliteSessionTranscriptEvents({
+        agentId: DEFAULT_AGENT_ID,
+        sessionId: "current-snapshot",
+      }),
+    ).toBe(true);
 
-    const nextStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    const nextStore = loadSessionStore(storePath) as Record<
       string,
       { compactionCheckpoints?: unknown[] }
     >;

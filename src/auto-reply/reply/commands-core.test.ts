@@ -2,11 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HookRunner } from "../../plugins/hooks.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-const fsMocks = vi.hoisted(() => ({
-  readFile: vi.fn(),
-  readdir: vi.fn(),
-}));
-
 const hookRunnerMocks = vi.hoisted(() => ({
   hasHooks: vi.fn<HookRunner["hasHooks"]>(),
   runBeforeReset: vi.fn<HookRunner["runBeforeReset"]>(),
@@ -16,20 +11,6 @@ const sqliteTranscriptMocks = vi.hoisted(() => ({
   exportSqliteSessionTranscriptJsonl: vi.fn(() => ""),
   hasSqliteSessionTranscriptEvents: vi.fn(() => false),
 }));
-
-vi.mock("node:fs/promises", async () => {
-  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-  return {
-    ...actual,
-    default: {
-      ...actual,
-      readFile: fsMocks.readFile,
-      readdir: fsMocks.readdir,
-    },
-    readFile: fsMocks.readFile,
-    readdir: fsMocks.readdir,
-  };
-});
 
 vi.mock("../../config/sessions/transcript-store.sqlite.js", () => ({
   exportSqliteSessionTranscriptJsonl: sqliteTranscriptMocks.exportSqliteSessionTranscriptJsonl,
@@ -75,14 +56,10 @@ describe("emitResetCommandHooks", () => {
   }
 
   beforeEach(() => {
-    fsMocks.readFile.mockReset();
-    fsMocks.readdir.mockReset();
     hookRunnerMocks.hasHooks.mockReset();
     hookRunnerMocks.runBeforeReset.mockReset();
     hookRunnerMocks.hasHooks.mockImplementation((hookName) => hookName === "before_reset");
     hookRunnerMocks.runBeforeReset.mockResolvedValue(undefined);
-    fsMocks.readFile.mockResolvedValue("");
-    fsMocks.readdir.mockResolvedValue([]);
     sqliteTranscriptMocks.exportSqliteSessionTranscriptJsonl.mockReturnValue("");
     sqliteTranscriptMocks.hasSqliteSessionTranscriptEvents.mockReturnValue(false);
   });
@@ -121,16 +98,7 @@ describe("emitResetCommandHooks", () => {
     });
   });
 
-  it("recovers the archived transcript when the original reset transcript path is gone", async () => {
-    fsMocks.readFile.mockRejectedValueOnce(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
-    fsMocks.readdir.mockResolvedValueOnce(["prev-session.jsonl.reset.2026-02-16T22-26-33.000Z"]);
-    fsMocks.readFile.mockResolvedValueOnce(
-      `${JSON.stringify({
-        type: "message",
-        id: "m1",
-        message: { role: "user", content: "Recovered from archive" },
-      })}\n`,
-    );
+  it("fires before_reset with empty messages when no scoped SQLite transcript exists", async () => {
     const command = {
       surface: "telegram",
       senderId: "vac",
@@ -156,8 +124,8 @@ describe("emitResetCommandHooks", () => {
     await vi.waitFor(() => expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1));
     expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionFile: "/tmp/prev-session.jsonl.reset.2026-02-16T22-26-33.000Z",
-        messages: [{ role: "user", content: "Recovered from archive" }],
+        sessionFile: "/tmp/prev-session.jsonl",
+        messages: [],
         reason: "new",
       }),
       expect.objectContaining({
@@ -210,7 +178,6 @@ describe("emitResetCommandHooks", () => {
       agentId: "target",
       sessionId: "prev-session",
     });
-    expect(fsMocks.readFile).not.toHaveBeenCalled();
     expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionFile: "/tmp/prev-session.jsonl",

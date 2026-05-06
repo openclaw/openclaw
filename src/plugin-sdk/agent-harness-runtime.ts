@@ -119,6 +119,17 @@ export {
   type SessionWriteLockAcquireTimeoutConfig,
 } from "../agents/session-write-lock.js";
 export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
+export {
+  deleteOpenClawStateKvJson,
+  readOpenClawStateKvJson,
+  writeOpenClawStateKvJson,
+  type OpenClawStateJsonValue,
+} from "../state/openclaw-state-kv.js";
+export {
+  hasSqliteSessionTranscriptEvents,
+  loadSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScopeForPath,
+} from "../config/sessions/transcript-store.sqlite.js";
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
   buildSessionContext,
@@ -129,6 +140,7 @@ export {
   type AgentSession,
   type ExtensionAPI,
   type ExtensionContext,
+  type FileEntry,
   type SessionEntry,
 } from "../agents/transcript/session-transcript-contract.js";
 export {

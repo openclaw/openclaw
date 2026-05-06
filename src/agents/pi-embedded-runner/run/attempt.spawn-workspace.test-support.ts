@@ -427,11 +427,6 @@ vi.mock("../../session-file-repair.js", () => ({
   repairSessionFileIfNeeded: async () => {},
 }));
 
-vi.mock("../session-manager-cache.js", () => ({
-  prewarmSessionFile: async () => {},
-  trackSessionManagerAccess: () => {},
-}));
-
 vi.mock("../../session-write-lock.js", () => ({
   acquireSessionWriteLock: (params: Parameters<AcquireSessionWriteLockFn>[0]) =>
     hoisted.acquireSessionWriteLockMock(params),

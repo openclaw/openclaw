@@ -5,8 +5,10 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
   buildGatewaySessionRow,
@@ -17,7 +19,6 @@ import {
   listAgentsForGateway,
   listSessionsFromStore,
   listSessionsFromStoreAsync,
-  loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   parseGroupKey,
   pruneLegacyStoreKeys,
@@ -29,10 +30,6 @@ import {
   resolveSessionModelRef,
   resolveSessionStoreKey,
 } from "./session-utils.js";
-
-function resolveSyncRealpath(filePath: string): string {
-  return fs.realpathSync.native(filePath);
-}
 
 function createSymlinkOrSkip(targetPath: string, linkPath: string): boolean {
   try {
@@ -616,313 +613,6 @@ describe("gateway session utils", () => {
     expect(target.storePath).toBe(path.resolve(storeTemplate.replace("{agentId}", "ops")));
   });
 
-  test("resolveGatewaySessionStoreTarget includes legacy mixed-case store key", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-case-"));
-    const storePath = path.join(dir, "sessions.json");
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify({ "agent:ops:MySession": { sessionId: "s1", updatedAt: 1 } }),
-      "utf8",
-    );
-    const cfg = {
-      session: { mainKey: "main", store: storePath },
-      agents: { list: [{ id: "ops", default: true }] },
-    } as OpenClawConfig;
-    const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:ops:mysession" });
-    expect(target.canonicalKey).toBe("agent:ops:mysession");
-    expect(target.storeKeys).toEqual(
-      expect.arrayContaining(["agent:ops:mysession", "agent:ops:MySession"]),
-    );
-    const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
-    const found = target.storeKeys.some((k) => Boolean(store[k]));
-    expect(found).toBe(true);
-  });
-
-  test("resolveGatewaySessionStoreTarget includes all case-variant duplicate keys", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-dupes-"));
-    const storePath = path.join(dir, "sessions.json");
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify({
-        "agent:ops:mysession": { sessionId: "s-lower", updatedAt: 2 },
-        "agent:ops:MySession": { sessionId: "s-mixed", updatedAt: 1 },
-      }),
-      "utf8",
-    );
-    const cfg = {
-      session: { mainKey: "main", store: storePath },
-      agents: { list: [{ id: "ops", default: true }] },
-    } as OpenClawConfig;
-    const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:ops:mysession" });
-    expect(target.storeKeys).toEqual(
-      expect.arrayContaining(["agent:ops:mysession", "agent:ops:MySession"]),
-    );
-  });
-
-  test("resolveGatewaySessionStoreTarget finds legacy main alias key when mainKey is customized", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-alias-"));
-    const storePath = path.join(dir, "sessions.json");
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify({ "agent:ops:MAIN": { sessionId: "s1", updatedAt: 1 } }),
-      "utf8",
-    );
-    const cfg = {
-      session: { mainKey: "work", store: storePath },
-      agents: { list: [{ id: "ops", default: true }] },
-    } as OpenClawConfig;
-    const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:ops:main" });
-    expect(target.canonicalKey).toBe("agent:ops:work");
-    expect(target.storeKeys).toEqual(expect.arrayContaining(["agent:ops:MAIN"]));
-  });
-
-  test("resolveGatewaySessionStoreTarget preserves discovered store paths for non-round-tripping agent dirs", async () => {
-    await withStateDirEnv("session-utils-discovered-store-", async ({ stateDir }) => {
-      const retiredSessionsDir = path.join(stateDir, "agents", "Retired Agent", "sessions");
-      fs.mkdirSync(retiredSessionsDir, { recursive: true });
-      const retiredStorePath = path.join(retiredSessionsDir, "sessions.json");
-      fs.writeFileSync(
-        retiredStorePath,
-        JSON.stringify({
-          "agent:retired-agent:main": { sessionId: "sess-retired", updatedAt: 1 },
-        }),
-        "utf8",
-      );
-
-      const cfg = {
-        session: {
-          mainKey: "main",
-          store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
-        },
-        agents: { list: [{ id: "main", default: true }] },
-      } as OpenClawConfig;
-
-      const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:retired-agent:main" });
-
-      expect(target.storePath).toBe(resolveSyncRealpath(retiredStorePath));
-    });
-  });
-
-  test("loadSessionEntry reads discovered stores from non-round-tripping agent dirs", async () => {
-    resetConfigRuntimeState();
-    try {
-      await withStateDirEnv("session-utils-load-entry-", async ({ stateDir }) => {
-        const retiredSessionsDir = path.join(stateDir, "agents", "Retired Agent", "sessions");
-        fs.mkdirSync(retiredSessionsDir, { recursive: true });
-        const retiredStorePath = path.join(retiredSessionsDir, "sessions.json");
-        fs.writeFileSync(
-          retiredStorePath,
-          JSON.stringify({
-            "agent:retired-agent:main": { sessionId: "sess-retired", updatedAt: 7 },
-          }),
-          "utf8",
-        );
-        const cfg = {
-          session: {
-            mainKey: "main",
-            store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
-          },
-          agents: { list: [{ id: "main", default: true }] },
-        } as OpenClawConfig;
-        setRuntimeConfigSnapshot(cfg, cfg);
-
-        const loaded = loadSessionEntry("agent:retired-agent:main");
-
-        expect(loaded.storePath).toBe(resolveSyncRealpath(retiredStorePath));
-        expect(loaded.entry?.sessionId).toBe("sess-retired");
-      });
-    } finally {
-      resetConfigRuntimeState();
-    }
-  });
-
-  test("loadSessionEntry preserves a listed deleted main session over the live default main", async () => {
-    resetConfigRuntimeState();
-    try {
-      await withStateDirEnv("session-utils-load-deleted-main-entry-", async ({ stateDir }) => {
-        const storeTemplate = path.join(
-          stateDir,
-          "agents",
-          "{agentId}",
-          "sessions",
-          "sessions.json",
-        );
-        const liveSessionsDir = path.join(stateDir, "agents", "ops", "sessions");
-        const deletedSessionsDir = path.join(stateDir, "agents", "main", "sessions");
-        fs.mkdirSync(liveSessionsDir, { recursive: true });
-        fs.mkdirSync(deletedSessionsDir, { recursive: true });
-        const liveStorePath = path.join(liveSessionsDir, "sessions.json");
-        const deletedStorePath = path.join(deletedSessionsDir, "sessions.json");
-        fs.writeFileSync(
-          liveStorePath,
-          JSON.stringify({
-            "agent:ops:main": { sessionId: "sess-live-default", updatedAt: 10 },
-          }),
-          "utf8",
-        );
-        fs.writeFileSync(
-          deletedStorePath,
-          JSON.stringify({
-            "agent:main:main": { sessionId: "sess-deleted-main", updatedAt: 20 },
-          }),
-          "utf8",
-        );
-        const cfg = {
-          session: { mainKey: "main", store: storeTemplate },
-          agents: { list: [{ id: "ops", default: true }] },
-        } as OpenClawConfig;
-        setRuntimeConfigSnapshot(cfg, cfg);
-
-        const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:main:main" });
-        const loaded = loadSessionEntry("agent:main:main");
-
-        expect(target.canonicalKey).toBe("agent:main:main");
-        expect(target.agentId).toBe("main");
-        expect(target.storePath).toBe(resolveSyncRealpath(deletedStorePath));
-        expect(loaded.canonicalKey).toBe("agent:main:main");
-        expect(loaded.storePath).toBe(resolveSyncRealpath(deletedStorePath));
-        expect(loaded.entry?.sessionId).toBe("sess-deleted-main");
-      });
-    } finally {
-      resetConfigRuntimeState();
-    }
-  });
-
-  test("loadSessionEntry resolves deleted main aliases when mainKey is customized", async () => {
-    resetConfigRuntimeState();
-    try {
-      await withStateDirEnv("session-utils-load-deleted-main-alias-", async ({ stateDir }) => {
-        const storeTemplate = path.join(
-          stateDir,
-          "agents",
-          "{agentId}",
-          "sessions",
-          "sessions.json",
-        );
-        const liveSessionsDir = path.join(stateDir, "agents", "ops", "sessions");
-        const deletedSessionsDir = path.join(stateDir, "agents", "main", "sessions");
-        fs.mkdirSync(liveSessionsDir, { recursive: true });
-        fs.mkdirSync(deletedSessionsDir, { recursive: true });
-        fs.writeFileSync(
-          path.join(liveSessionsDir, "sessions.json"),
-          JSON.stringify({
-            "agent:ops:work": { sessionId: "sess-live-default", updatedAt: 10 },
-          }),
-          "utf8",
-        );
-        const deletedStorePath = path.join(deletedSessionsDir, "sessions.json");
-        fs.writeFileSync(
-          deletedStorePath,
-          JSON.stringify({
-            "agent:main:main": { sessionId: "sess-deleted-main", updatedAt: 20 },
-          }),
-          "utf8",
-        );
-        const cfg = {
-          session: { mainKey: "work", store: storeTemplate },
-          agents: { list: [{ id: "ops", default: true }] },
-        } as OpenClawConfig;
-        setRuntimeConfigSnapshot(cfg, cfg);
-
-        const loaded = loadSessionEntry("agent:main:work");
-
-        expect(loaded.canonicalKey).toBe("agent:main:work");
-        expect(loaded.storePath).toBe(resolveSyncRealpath(deletedStorePath));
-        expect(loaded.entry?.sessionId).toBe("sess-deleted-main");
-      });
-    } finally {
-      resetConfigRuntimeState();
-    }
-  });
-
-  test("loadSessionEntry prefers the freshest duplicate row for a logical key", async () => {
-    resetConfigRuntimeState();
-    try {
-      await withStateDirEnv("session-utils-load-entry-freshest-", async ({ stateDir }) => {
-        const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
-        fs.mkdirSync(sessionsDir, { recursive: true });
-        const storePath = path.join(sessionsDir, "sessions.json");
-        fs.writeFileSync(
-          storePath,
-          JSON.stringify(
-            {
-              "agent:main:main": { sessionId: "sess-stale", updatedAt: 1 },
-              "agent:main:MAIN": { sessionId: "sess-fresh", updatedAt: 2 },
-            },
-            null,
-            2,
-          ),
-          "utf8",
-        );
-        const cfg = {
-          session: {
-            mainKey: "main",
-            store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
-          },
-          agents: { list: [{ id: "main", default: true }] },
-        } as OpenClawConfig;
-        setRuntimeConfigSnapshot(cfg, cfg);
-
-        const loaded = loadSessionEntry("agent:main:main");
-
-        expect(loaded.entry?.sessionId).toBe("sess-fresh");
-      });
-    } finally {
-      resetConfigRuntimeState();
-    }
-  });
-
-  test("loadSessionEntry prefers the freshest duplicate row across discovered stores", async () => {
-    resetConfigRuntimeState();
-    try {
-      await withStateDirEnv("session-utils-load-entry-cross-store-", async ({ stateDir }) => {
-        const canonicalSessionsDir = path.join(stateDir, "agents", "main", "sessions");
-        fs.mkdirSync(canonicalSessionsDir, { recursive: true });
-        fs.writeFileSync(
-          path.join(canonicalSessionsDir, "sessions.json"),
-          JSON.stringify(
-            {
-              "agent:main:main": { sessionId: "sess-canonical-stale", updatedAt: 10 },
-              "agent:main:MAIN": { sessionId: "sess-canonical-fresh", updatedAt: 1000 },
-            },
-            null,
-            2,
-          ),
-          "utf8",
-        );
-
-        const discoveredSessionsDir = path.join(stateDir, "agents", "main ", "sessions");
-        fs.mkdirSync(discoveredSessionsDir, { recursive: true });
-        fs.writeFileSync(
-          path.join(discoveredSessionsDir, "sessions.json"),
-          JSON.stringify(
-            {
-              "agent:main:main": { sessionId: "sess-discovered-mid", updatedAt: 500 },
-            },
-            null,
-            2,
-          ),
-          "utf8",
-        );
-
-        const cfg = {
-          session: {
-            mainKey: "main",
-            store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
-          },
-          agents: { list: [{ id: "main", default: true }] },
-        } as OpenClawConfig;
-        setRuntimeConfigSnapshot(cfg, cfg);
-
-        const loaded = loadSessionEntry("agent:main:main");
-
-        expect(loaded.entry?.sessionId).toBe("sess-canonical-fresh");
-      });
-    } finally {
-      resetConfigRuntimeState();
-    }
-  });
-
   test("pruneLegacyStoreKeys removes alias and case-variant ghost keys", () => {
     const store: Record<string, unknown> = {
       "agent:ops:work": { sessionId: "canonical", updatedAt: 3 },
@@ -1272,6 +962,8 @@ describe("resolveSessionModelRef", () => {
 describe("listSessionsFromStore selected model display", () => {
   test("async list yields during bulk transcript title and last-message hydration", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-yield-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
     try {
       const storePath = path.join(tmpDir, "sessions.json");
       const store: Record<string, SessionEntry> = {};
@@ -1288,15 +980,16 @@ describe("listSessionsFromStore selected model display", () => {
           contextTokens: 1,
           estimatedCostUsd: 0,
         } as SessionEntry;
-        fs.writeFileSync(
-          path.join(tmpDir, `${sessionId}.jsonl`),
-          [
-            JSON.stringify({ type: "session", version: 1, id: sessionId }),
-            JSON.stringify({ message: { role: "user", content: `title ${i}` } }),
-            JSON.stringify({ message: { role: "assistant", content: `last ${i}` } }),
-          ].join("\n"),
-          "utf-8",
-        );
+        replaceSqliteSessionTranscriptEvents({
+          agentId: "main",
+          sessionId,
+          transcriptPath: path.join(tmpDir, `${sessionId}.jsonl`),
+          events: [
+            { type: "session", version: 1, id: sessionId },
+            { message: { role: "user", content: `title ${i}` } },
+            { message: { role: "assistant", content: `last ${i}` } },
+          ],
+        });
       }
 
       const params = {
@@ -1333,12 +1026,20 @@ describe("listSessionsFromStore selected model display", () => {
       expect(listed.sessions[0]?.thinkingOptions?.length).toBeGreaterThan(0);
       expect(listed.sessions[0]?.thinkingDefault).toBe("off");
     } finally {
+      closeOpenClawStateDatabaseForTest();
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
   test("caps transcript title and last-message hydration for bulk list responses", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-cap-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
     try {
       const storePath = path.join(tmpDir, "sessions.json");
       const store: Record<string, SessionEntry> = {};
@@ -1351,17 +1052,16 @@ describe("listSessionsFromStore selected model display", () => {
           modelProvider: "openai",
           model: "gpt-5.4",
         } as SessionEntry;
-        if (i === 0 || i === 99 || i === 100) {
-          fs.writeFileSync(
-            path.join(tmpDir, `${sessionId}.jsonl`),
-            [
-              JSON.stringify({ type: "session", version: 1, id: sessionId }),
-              JSON.stringify({ message: { role: "user", content: `title ${i}` } }),
-              JSON.stringify({ message: { role: "assistant", content: `last ${i}` } }),
-            ].join("\n"),
-            "utf-8",
-          );
-        }
+        replaceSqliteSessionTranscriptEvents({
+          agentId: "main",
+          sessionId,
+          transcriptPath: path.join(tmpDir, `${sessionId}.jsonl`),
+          events: [
+            { type: "session", version: 1, id: sessionId },
+            { message: { role: "user", content: `title ${i}` } },
+            { message: { role: "assistant", content: `last ${i}` } },
+          ],
+        });
       }
 
       const result = await listSessionsFromStoreAsync({
@@ -1379,6 +1079,12 @@ describe("listSessionsFromStore selected model display", () => {
       expect(result.sessions[100]?.derivedTitle).toBeUndefined();
       expect(result.sessions[100]?.lastMessagePreview).toBeUndefined();
     } finally {
+      closeOpenClawStateDatabaseForTest();
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });

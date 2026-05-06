@@ -46,6 +46,28 @@ describe("legacy session maintenance migrate", () => {
     });
     expect(res.changes).toContain("Removed deprecated session.maintenance.rotateBytes.");
   });
+
+  it("removes legacy session.maintenance.resetArchiveRetention", () => {
+    const res = migrateLegacyConfigForTest({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          maxEntries: 500,
+          resetArchiveRetention: "14d",
+        },
+      },
+    });
+
+    expect(res.config?.session?.maintenance).toEqual({
+      mode: "enforce",
+      pruneAfter: "30d",
+      maxEntries: 500,
+    });
+    expect(res.changes).toContain(
+      "Removed session.maintenance.resetArchiveRetention; reset transcript archives are no longer used.",
+    );
+  });
 });
 
 describe("legacy session parent fork migrate", () => {

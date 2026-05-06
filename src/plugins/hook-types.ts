@@ -525,7 +525,6 @@ export type PluginHookSessionEndEvent = {
   durationMs?: number;
   reason?: PluginHookSessionEndReason;
   sessionFile?: string;
-  transcriptArchived?: boolean;
   nextSessionId?: string;
   nextSessionKey?: string;
 };

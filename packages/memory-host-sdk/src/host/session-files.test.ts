@@ -45,25 +45,18 @@ function requireSessionEntry(entry: SessionFileEntry | null): SessionFileEntry {
 }
 
 describe("listSessionFilesForAgent", () => {
-  it("includes reset and deleted transcripts in session file listing", async () => {
+  it("includes primary transcripts in session file listing", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     fsSync.mkdirSync(path.join(sessionsDir, "archive"), { recursive: true });
 
-    const included = [
-      "active.jsonl",
-      "active.jsonl.reset.2026-02-16T22-26-33.000Z",
-      "active.jsonl.deleted.2026-02-16T22-27-33.000Z",
-    ];
+    const included = ["active.jsonl"];
     const excluded = ["active.jsonl.bak.2026-02-16T22-28-33.000Z", "sessions.json", "notes.md"];
     excluded.push("active.checkpoint.11111111-1111-4111-8111-111111111111.jsonl");
 
     for (const fileName of [...included, ...excluded]) {
       fsSync.writeFileSync(path.join(sessionsDir, fileName), "");
     }
-    fsSync.writeFileSync(
-      path.join(sessionsDir, "archive", "nested.jsonl.deleted.2026-02-16T22-29-33.000Z"),
-      "",
-    );
+    fsSync.writeFileSync(path.join(sessionsDir, "archive", "nested.jsonl"), "");
 
     const files = await listSessionFilesForAgent("main");
 
@@ -75,17 +68,9 @@ describe("listSessionFilesForAgent", () => {
 
 describe("sessionPathForFile", () => {
   it("includes the owning agent id when the transcript lives under an agent sessions dir", () => {
-    const absPath = path.join(
-      tmpDir,
-      "agents",
-      "main",
-      "sessions",
-      "deleted-session.jsonl.deleted.2026-02-16T22-27-33.000Z",
-    );
+    const absPath = path.join(tmpDir, "agents", "main", "sessions", "active-session.jsonl");
 
-    expect(sessionPathForFile(absPath)).toBe(
-      "sessions/main/deleted-session.jsonl.deleted.2026-02-16T22-27-33.000Z",
-    );
+    expect(sessionPathForFile(absPath)).toBe("sessions/main/active-session.jsonl");
   });
 
   it("keeps the legacy basename-only path when the agent owner cannot be derived", () => {
@@ -143,13 +128,10 @@ describe("buildSessionEntry", () => {
 
     const entry = requireSessionEntry(await buildSessionEntry(filePath));
     expect(entry.content).toBe("");
-    expect(entry.lineMap).toStrictEqual([]);
+    expect(entry.lineMap).toEqual([]);
   });
 
-  it("indexes usage-counted reset/deleted archives but still skips bak and checkpoint artifacts", async () => {
-    const resetPath = path.join(tmpDir, "ordinary.jsonl.reset.2026-02-16T22-26-33.000Z");
-    const deletedPath = path.join(tmpDir, "ordinary.jsonl.deleted.2026-02-16T22-27-33.000Z");
-    const bakPath = path.join(tmpDir, "ordinary.jsonl.bak.2026-02-16T22-28-33.000Z");
+  it("skips checkpoint artifacts so snapshots do not double-index session content", async () => {
     const checkpointPath = path.join(
       tmpDir,
       "ordinary.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
@@ -158,29 +140,12 @@ describe("buildSessionEntry", () => {
       type: "message",
       message: { role: "user", content: "Archived hello" },
     });
-    fsSync.writeFileSync(resetPath, content);
-    fsSync.writeFileSync(deletedPath, content);
-    fsSync.writeFileSync(bakPath, content);
     fsSync.writeFileSync(checkpointPath, content);
 
-    const resetEntry = requireSessionEntry(await buildSessionEntry(resetPath));
-    const deletedEntry = requireSessionEntry(await buildSessionEntry(deletedPath));
-    const bakEntry = requireSessionEntry(await buildSessionEntry(bakPath));
     const checkpointEntry = requireSessionEntry(await buildSessionEntry(checkpointPath));
 
-    // Usage-counted archives (reset, deleted) must surface real content so
-    // post-reset memory_search can recover prior session history.
-    expect(resetEntry.content).toContain("User: Archived hello");
-    expect(resetEntry.lineMap).toEqual([1]);
-    expect(deletedEntry.content).toContain("User: Archived hello");
-    expect(deletedEntry.lineMap).toEqual([1]);
-
-    // .bak and compaction checkpoints remain opaque pre-archive / snapshot
-    // artifacts and stay empty so they do not get double-indexed.
-    expect(bakEntry.content).toBe("");
-    expect(bakEntry.lineMap).toStrictEqual([]);
     expect(checkpointEntry.content).toBe("");
-    expect(checkpointEntry.lineMap).toStrictEqual([]);
+    expect(checkpointEntry.lineMap).toEqual([]);
   });
 
   it("keeps cron-run deleted archives opaque when the live session store entry is gone", async () => {
@@ -203,7 +168,7 @@ describe("buildSessionEntry", () => {
     const entry = requireSessionEntry(await buildSessionEntry(archivePath));
 
     expect(entry.content).toBe("");
-    expect(entry.lineMap).toStrictEqual([]);
+    expect(entry.lineMap).toEqual([]);
     expect(entry.generatedByCronRun).toBe(true);
   });
 
@@ -224,7 +189,7 @@ describe("buildSessionEntry", () => {
     const entry = requireSessionEntry(await buildSessionEntry(archivePath));
 
     expect(entry.content).toBe("");
-    expect(entry.lineMap).toStrictEqual([]);
+    expect(entry.lineMap).toEqual([]);
     expect(entry.generatedByCronRun).toBe(true);
   });
 

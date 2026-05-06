@@ -17,8 +17,6 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
-  isSessionArchiveArtifactName,
-  isUsageCountedSessionTranscriptFileName,
   listSessionFilesForAgent,
   sessionPathForFile,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
@@ -495,24 +493,6 @@ export abstract class MemoryManagerSyncOps {
     this.sessionPendingFiles.clear();
     let shouldSync = false;
     for (const sessionFile of pending) {
-      // Usage-counted session archives (`.jsonl.reset.<iso>` and
-      // `.jsonl.deleted.<iso>`) are one-shot mutation events: the file is
-      // written once by the archive rotation and then never touched again.
-      // They carry no incremental `append` semantics, so the delta-bytes /
-      // delta-messages thresholds (designed for live transcripts accumulating
-      // appended messages) cannot gate them correctly — a short archive
-      // below the threshold would simply never reindex. Mark them dirty
-      // directly and skip the delta accounting.
-      const baseName = path.basename(sessionFile);
-      if (
-        isSessionArchiveArtifactName(baseName) &&
-        isUsageCountedSessionTranscriptFileName(baseName)
-      ) {
-        this.sessionsDirtyFiles.add(sessionFile);
-        this.sessionsDirty = true;
-        shouldSync = true;
-        continue;
-      }
       const delta = await this.updateSessionDelta(sessionFile);
       if (!delta) {
         continue;

@@ -2,6 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { loadSessionStore, saveSessionStore } from "../config/sessions.js";
+import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
+import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   embeddedRunMock,
@@ -25,36 +28,34 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
   const fixture = await createCheckpointFixture(dir);
   const checkpointCreatedAt = Date.now();
   const { SessionManager } = await getSessionManagerModule();
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry(fixture.sessionId, {
-        sessionFile: fixture.sessionFile,
-        compactionCheckpoints: [
-          {
-            checkpointId: "checkpoint-1",
-            sessionKey: "agent:main:main",
-            sessionId: fixture.sessionId,
-            createdAt: checkpointCreatedAt,
-            reason: "manual",
-            tokensBefore: 123,
-            tokensAfter: 45,
-            summary: "checkpoint summary",
-            firstKeptEntryId: fixture.preCompactionLeafId,
-            preCompaction: {
-              sessionId: fixture.preCompactionSession.getSessionId(),
-              sessionFile: fixture.preCompactionSessionFile,
-              leafId: fixture.preCompactionLeafId,
-            },
-            postCompaction: {
-              sessionId: fixture.sessionId,
-              sessionFile: fixture.sessionFile,
-              leafId: fixture.postCompactionLeafId,
-              entryId: fixture.postCompactionLeafId,
-            },
+  await saveSessionStore(storePath, {
+    "agent:main:main": sessionStoreEntry(fixture.sessionId, {
+      sessionFile: fixture.sessionFile,
+      compactionCheckpoints: [
+        {
+          checkpointId: "checkpoint-1",
+          sessionKey: "agent:main:main",
+          sessionId: fixture.sessionId,
+          createdAt: checkpointCreatedAt,
+          reason: "manual",
+          tokensBefore: 123,
+          tokensAfter: 45,
+          summary: "checkpoint summary",
+          firstKeptEntryId: fixture.preCompactionLeafId,
+          preCompaction: {
+            sessionId: fixture.preCompactionSession.getSessionId(),
+            sessionFile: fixture.preCompactionSessionFile,
+            leafId: fixture.preCompactionLeafId,
           },
-        ],
-      }),
-    },
+          postCompaction: {
+            sessionId: fixture.sessionId,
+            sessionFile: fixture.sessionFile,
+            leafId: fixture.postCompactionLeafId,
+            entryId: fixture.postCompactionLeafId,
+          },
+        },
+      ],
+    }),
   });
 
   const { ws } = await openClient();
@@ -152,7 +153,7 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
     fixture.preCompactionSession.getEntries().length,
   );
 
-  const storeAfterBranch = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+  const storeAfterBranch = loadSessionStore(storePath) as Record<
     string,
     {
       parentSessionKey?: string;
@@ -205,7 +206,7 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
     fixture.preCompactionSession.getEntries().length,
   );
 
-  const storeAfterRestore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+  const storeAfterRestore = loadSessionStore(storePath) as Record<
     string,
     { compactionCheckpoints?: unknown[]; sessionId?: string }
   >;
@@ -217,18 +218,32 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
 
 test("sessions.compact without maxLines runs embedded manual compaction for checkpoint-capable flows", async () => {
   const { dir, storePath } = await createSessionStoreDir();
-  await fs.writeFile(
-    path.join(dir, "sess-main.jsonl"),
-    `${JSON.stringify({ role: "user", content: "hello" })}\n`,
-    "utf-8",
-  );
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-main", {
-        thinkingLevel: "medium",
-        reasoningLevel: "stream",
-      }),
-    },
+  replaceSqliteSessionTranscriptEvents({
+    agentId: DEFAULT_AGENT_ID,
+    sessionId: "sess-main",
+    transcriptPath: path.join(dir, "sess-main.jsonl"),
+    events: [
+      {
+        type: "session",
+        id: "sess-main",
+        timestamp: new Date().toISOString(),
+        cwd: dir,
+      },
+      {
+        type: "message",
+        id: "user-1",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "hello", timestamp: Date.now() },
+      },
+    ],
+  });
+  await saveSessionStore(storePath, {
+    "agent:main:main": sessionStoreEntry("sess-main", {
+      sessionFile: path.join(dir, "sess-main.jsonl"),
+      thinkingLevel: "medium",
+      reasoningLevel: "stream",
+    }),
   });
 
   const { ws } = await openClient();
@@ -259,7 +274,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
     }),
   );
 
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+  const store = loadSessionStore(storePath) as Record<
     string,
     { compactionCount?: number; totalTokens?: number; totalTokensFresh?: boolean }
   >;

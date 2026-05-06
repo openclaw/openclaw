@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import {
   CURRENT_SESSION_VERSION,
   migrateSessionEntries,
   SessionManager,
   type FileEntry as PiSessionFileEntry,
+  type SessionHeader,
 } from "../agents/transcript/session-transcript-contract.js";
 import { updateSessionStore } from "../config/sessions.js";
 import type {
@@ -13,8 +13,9 @@ import type {
   SessionCompactionCheckpointReason,
   SessionEntry,
 } from "../config/sessions.js";
-import { isCompactionCheckpointTranscriptFileName } from "../config/sessions/artifacts.js";
 import {
+  deleteSqliteSessionTranscript,
+  loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScopeForPath,
 } from "../config/sessions/transcript-store.sqlite.js";
@@ -29,7 +30,7 @@ export const MAX_COMPACTION_CHECKPOINT_SNAPSHOT_BYTES = 64 * 1024 * 1024;
 
 export type CapturedCompactionCheckpointSnapshot = {
   sessionId: string;
-  sessionFile: string;
+  sessionFile?: string;
   leafId: string;
 };
 
@@ -74,197 +75,113 @@ export function resolveSessionCompactionCheckpointReason(params: {
   return "auto-threshold";
 }
 
-const SESSION_HEADER_READ_MAX_BYTES = 64 * 1024;
-const SESSION_TAIL_READ_INITIAL_BYTES = 64 * 1024;
-
-type AsyncTranscriptFileHandle = Awaited<ReturnType<typeof fs.open>>;
-
-async function readFileRangeAsync(
-  fileHandle: AsyncTranscriptFileHandle,
-  position: number,
-  length: number,
-): Promise<Buffer> {
-  const buffer = Buffer.alloc(length);
-  let offset = 0;
-  while (offset < length) {
-    const { bytesRead } = await fileHandle.read(buffer, offset, length - offset, position + offset);
-    if (bytesRead <= 0) {
-      break;
-    }
-    offset += bytesRead;
-  }
-  return offset === length ? buffer : buffer.subarray(0, offset);
-}
-
-async function readSessionHeaderFromTranscriptAsync(
-  sessionFile: string,
-): Promise<{ id: string; cwd?: string } | null> {
-  let fileHandle: AsyncTranscriptFileHandle | undefined;
-  try {
-    fileHandle = await fs.open(sessionFile, "r");
-    const buffer = await readFileRangeAsync(fileHandle, 0, SESSION_HEADER_READ_MAX_BYTES);
-    if (buffer.length <= 0) {
-      return null;
-    }
-    const chunk = buffer.toString("utf-8");
-    const firstLine = chunk
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find((line) => line.length > 0);
-    if (!firstLine) {
-      return null;
-    }
-    const parsed = JSON.parse(firstLine) as { type?: unknown; id?: unknown; cwd?: unknown };
-    if (parsed.type !== "session" || typeof parsed.id !== "string" || !parsed.id.trim()) {
-      return null;
-    }
-    return {
-      id: parsed.id.trim(),
-      ...(typeof parsed.cwd === "string" && parsed.cwd.trim() ? { cwd: parsed.cwd } : {}),
-    };
-  } catch {
+function cloneTranscriptEvents(events: unknown[]): PiSessionFileEntry[] | null {
+  const entries = events.filter((event): event is PiSessionFileEntry =>
+    Boolean(event && typeof event === "object"),
+  );
+  const firstEntry = entries[0] as { type?: unknown; id?: unknown } | undefined;
+  if (firstEntry?.type !== "session" || typeof firstEntry.id !== "string") {
     return null;
-  } finally {
-    if (fileHandle) {
-      await fileHandle.close().catch(() => undefined);
-    }
   }
+  return structuredClone(entries);
 }
 
-async function readSessionIdFromTranscriptHeaderAsync(sessionFile: string): Promise<string | null> {
-  return (await readSessionHeaderFromTranscriptAsync(sessionFile))?.id ?? null;
-}
-
-function parseTranscriptLineId(
-  line: string,
-): { kind: "session" } | { kind: "entry"; id: string } | null {
-  try {
-    const parsed = JSON.parse(line) as { type?: unknown; id?: unknown };
-    if (parsed.type === "session") {
-      return { kind: "session" };
-    }
-    if (typeof parsed.id === "string" && parsed.id.trim()) {
-      return { kind: "entry", id: parsed.id.trim() };
-    }
-  } catch {
+function loadTranscriptEntriesFromSqlite(params: {
+  agentId?: string;
+  sessionId?: string;
+  sessionFile?: string;
+}): PiSessionFileEntry[] | null {
+  let agentId = params.agentId?.trim() || DEFAULT_AGENT_ID;
+  let sessionId = params.sessionId?.trim();
+  if (!sessionId && params.sessionFile?.trim()) {
+    const scope = resolveSqliteSessionTranscriptScopeForPath({
+      transcriptPath: params.sessionFile,
+    });
+    agentId = scope?.agentId ?? agentId;
+    sessionId = scope?.sessionId;
+  }
+  if (!sessionId) {
     return null;
+  }
+  return cloneTranscriptEvents(
+    loadSqliteSessionTranscriptEvents({
+      agentId,
+      sessionId,
+    }).map((entry) => entry.event),
+  );
+}
+
+function transcriptEventsByteLength(events: readonly PiSessionFileEntry[]): number {
+  let total = 0;
+  for (const event of events) {
+    total += Buffer.byteLength(`${JSON.stringify(event)}\n`, "utf8");
+  }
+  return total;
+}
+
+function latestEntryId(entries: readonly PiSessionFileEntry[]): string | null {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index] as { type?: unknown; id?: unknown } | undefined;
+    if (entry?.type === "session") {
+      return null;
+    }
+    if (typeof entry?.id === "string" && entry.id.trim()) {
+      return entry.id.trim();
+    }
   }
   return null;
 }
 
-async function readTranscriptEntriesForForkAsync(
-  sessionFile: string,
-): Promise<PiSessionFileEntry[] | null> {
-  let fileHandle: AsyncTranscriptFileHandle | undefined;
-  try {
-    fileHandle = await fs.open(sessionFile, "r");
-    const content = await fileHandle.readFile("utf-8");
-    const entries: PiSessionFileEntry[] = [];
-    for (const line of content.trim().split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        continue;
-      }
-      try {
-        entries.push(JSON.parse(trimmed) as PiSessionFileEntry);
-      } catch {
-        // Match pi-coding-agent's loader: malformed JSONL entries are ignored.
-      }
-    }
-    const firstEntry = entries[0] as { type?: unknown; id?: unknown } | undefined;
-    if (firstEntry?.type !== "session" || typeof firstEntry.id !== "string") {
-      return null;
-    }
-    return entries;
-  } catch {
-    return null;
-  } finally {
-    if (fileHandle) {
-      await fileHandle.close().catch(() => undefined);
-    }
+function createCheckpointVirtualTranscriptPath(params: {
+  sourceFile?: string;
+  checkpointId: string;
+}): string | undefined {
+  const sourceFile = params.sourceFile?.trim();
+  if (!sourceFile) {
+    return undefined;
   }
+  const parsed = path.parse(sourceFile);
+  return path.join(
+    parsed.dir,
+    `${parsed.name}.checkpoint.${params.checkpointId}${parsed.ext || ".jsonl"}`,
+  );
 }
 
 export async function readSessionLeafIdFromTranscriptAsync(
   sessionFile: string,
   maxBytes = MAX_COMPACTION_CHECKPOINT_SNAPSHOT_BYTES,
 ): Promise<string | null> {
-  let fileHandle: AsyncTranscriptFileHandle | undefined;
-  try {
-    fileHandle = await fs.open(sessionFile, "r");
-    const stat = await fileHandle.stat();
-    if (!stat.isFile() || stat.size <= 0) {
-      return null;
-    }
-
-    const requestedMaxBytes = Number.isFinite(maxBytes)
-      ? Math.max(1024, Math.floor(maxBytes))
-      : MAX_COMPACTION_CHECKPOINT_SNAPSHOT_BYTES;
-    const maxReadableBytes = Math.min(stat.size, requestedMaxBytes);
-    let readLength = Math.min(maxReadableBytes, SESSION_TAIL_READ_INITIAL_BYTES);
-    while (readLength > 0) {
-      const readStart = Math.max(0, stat.size - readLength);
-      const buffer = await readFileRangeAsync(fileHandle, readStart, readLength);
-      const lines = buffer.toString("utf-8").split(/\r?\n/);
-      // If we did not read from the beginning, the first line may be a suffix of
-      // a larger JSONL entry. Ignore it and grow the window if no complete entry
-      // is found.
-      const candidateLines = readStart > 0 ? lines.slice(1) : lines;
-      for (let i = candidateLines.length - 1; i >= 0; i -= 1) {
-        const line = candidateLines[i]?.trim();
-        if (!line) {
-          continue;
-        }
-        const parsed = parseTranscriptLineId(line);
-        if (!parsed) {
-          continue;
-        }
-        if (parsed.kind === "session") {
-          return null;
-        }
-        return parsed.id;
-      }
-
-      if (readStart === 0) {
-        return null;
-      }
-      const nextReadLength = Math.min(maxReadableBytes, readLength * 2);
-      if (nextReadLength === readLength) {
-        return null;
-      }
-      readLength = nextReadLength;
-    }
-  } catch {
+  const entries = loadTranscriptEntriesFromSqlite({ sessionFile });
+  if (!entries || transcriptEventsByteLength(entries) > maxBytes) {
     return null;
-  } finally {
-    if (fileHandle) {
-      await fileHandle.close().catch(() => undefined);
-    }
   }
-  return null;
+  return latestEntryId(entries);
 }
 
 export async function forkCompactionCheckpointTranscriptAsync(params: {
-  sourceFile: string;
+  sourceFile?: string;
+  sourceSessionId?: string;
+  agentId?: string;
   targetCwd?: string;
   sessionDir?: string;
 }): Promise<ForkedCompactionCheckpointTranscript | null> {
-  const sourceFile = params.sourceFile.trim();
-  if (!sourceFile) {
-    return null;
-  }
-  const sourceHeader = await readSessionHeaderFromTranscriptAsync(sourceFile);
-  if (!sourceHeader) {
-    return null;
-  }
-  const entries = await readTranscriptEntriesForForkAsync(sourceFile);
+  const sourceFile = params.sourceFile?.trim();
+  const entries = loadTranscriptEntriesFromSqlite({
+    agentId: params.agentId,
+    sessionId: params.sourceSessionId,
+    sessionFile: sourceFile,
+  });
   if (!entries) {
+    return null;
+  }
+  const sourceHeader = entries[0] as SessionHeader | undefined;
+  if (!sourceHeader) {
     return null;
   }
   migrateSessionEntries(entries);
 
   const targetCwd = params.targetCwd ?? sourceHeader.cwd ?? process.cwd();
-  const sessionDir = params.sessionDir ?? path.dirname(sourceFile);
+  const sessionDir = params.sessionDir ?? (sourceFile ? path.dirname(sourceFile) : process.cwd());
   const sessionId = randomUUID();
   const timestamp = new Date().toISOString();
   const fileTimestamp = timestamp.replace(/[:.]/g, "-");
@@ -275,13 +192,12 @@ export async function forkCompactionCheckpointTranscriptAsync(params: {
     id: sessionId,
     timestamp,
     cwd: targetCwd,
-    parentSession: sourceFile,
+    ...(sourceFile ? { parentSession: sourceFile } : {}),
   };
 
   try {
-    const sourceScope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: sourceFile });
     replaceSqliteSessionTranscriptEvents({
-      agentId: sourceScope?.agentId ?? DEFAULT_AGENT_ID,
+      agentId: params.agentId?.trim() || DEFAULT_AGENT_ID,
       sessionId,
       transcriptPath: sessionFile,
       events: [
@@ -300,7 +216,8 @@ export async function forkCompactionCheckpointTranscriptAsync(params: {
  * Gateway event loop on synchronous file reads/copies.
  */
 export async function captureCompactionCheckpointSnapshotAsync(params: {
-  sessionManager?: Pick<SessionManager, "getLeafId">;
+  agentId?: string;
+  sessionManager?: Pick<SessionManager, "getEntries" | "getHeader" | "getLeafId">;
   sessionFile: string;
   maxBytes?: number;
 }): Promise<CapturedCompactionCheckpointSnapshot | null> {
@@ -317,36 +234,45 @@ export async function captureCompactionCheckpointSnapshotAsync(params: {
     return null;
   }
   const maxBytes = params.maxBytes ?? MAX_COMPACTION_CHECKPOINT_SNAPSHOT_BYTES;
-  try {
-    const stat = await fs.stat(sessionFile);
-    if (!stat.isFile() || stat.size > maxBytes) {
-      return null;
-    }
-  } catch {
+  const entries = params.sessionManager
+    ? cloneTranscriptEvents([
+        params.sessionManager.getHeader(),
+        ...params.sessionManager.getEntries(),
+      ])
+    : loadTranscriptEntriesFromSqlite({
+        agentId: params.agentId,
+        sessionFile,
+      });
+  if (!entries || transcriptEventsByteLength(entries) > maxBytes) {
     return null;
   }
-  const parsedSessionFile = path.parse(sessionFile);
-  const snapshotFile = path.join(
-    parsedSessionFile.dir,
-    `${parsedSessionFile.name}.checkpoint.${randomUUID()}${parsedSessionFile.ext || ".jsonl"}`,
-  );
-  try {
-    await fs.copyFile(sessionFile, snapshotFile);
-  } catch {
+  const sourceHeader = entries[0] as SessionHeader | undefined;
+  const leafId = liveLeafId ?? latestEntryId(entries);
+  if (!sourceHeader?.id || !leafId) {
     return null;
   }
-  const sessionId = await readSessionIdFromTranscriptHeaderAsync(snapshotFile);
-  const leafId = liveLeafId ?? (await readSessionLeafIdFromTranscriptAsync(snapshotFile, maxBytes));
-  if (!sessionId || !leafId) {
-    try {
-      await fs.unlink(snapshotFile);
-    } catch {
-      // Best-effort cleanup if the copied transcript cannot be validated.
-    }
-    return null;
-  }
+  const snapshotSessionId = randomUUID();
+  const snapshotFile = createCheckpointVirtualTranscriptPath({
+    sourceFile: sessionFile,
+    checkpointId: snapshotSessionId,
+  });
+  const snapshotHeader: SessionHeader = {
+    ...sourceHeader,
+    id: snapshotSessionId,
+    timestamp: new Date().toISOString(),
+    parentSession: sessionFile,
+  };
+  replaceSqliteSessionTranscriptEvents({
+    agentId: params.agentId?.trim() || DEFAULT_AGENT_ID,
+    sessionId: snapshotSessionId,
+    transcriptPath: snapshotFile,
+    events: [
+      snapshotHeader,
+      ...entries.filter((entry) => (entry as { type?: unknown }).type !== "session"),
+    ],
+  });
   return {
-    sessionId,
+    sessionId: snapshotSessionId,
     sessionFile: snapshotFile,
     leafId,
   };
@@ -355,48 +281,7 @@ export async function captureCompactionCheckpointSnapshotAsync(params: {
 export async function cleanupCompactionCheckpointSnapshot(
   snapshot: CapturedCompactionCheckpointSnapshot | null | undefined,
 ): Promise<void> {
-  if (!snapshot?.sessionFile) {
-    return;
-  }
-  try {
-    await fs.unlink(snapshot.sessionFile);
-  } catch {
-    // Best-effort cleanup; retained snapshots are harmless and easier to debug.
-  }
-}
-
-async function cleanupTrimmedCompactionCheckpointFiles(params: {
-  removed: SessionCompactionCheckpoint[];
-  retained: SessionCompactionCheckpoint[] | undefined;
-  currentSnapshotFile: string;
-}): Promise<void> {
-  if (params.removed.length === 0) {
-    return;
-  }
-  const retainedPaths = new Set(
-    (params.retained ?? [])
-      .map((checkpoint) => checkpoint.preCompaction.sessionFile?.trim())
-      .filter((filePath): filePath is string => Boolean(filePath)),
-  );
-  const snapshotDir = path.resolve(path.dirname(params.currentSnapshotFile));
-  for (const checkpoint of params.removed) {
-    const sessionFile = checkpoint.preCompaction.sessionFile?.trim();
-    if (!sessionFile || retainedPaths.has(sessionFile)) {
-      continue;
-    }
-    const resolvedSessionFile = path.resolve(sessionFile);
-    if (
-      path.dirname(resolvedSessionFile) !== snapshotDir ||
-      !isCompactionCheckpointTranscriptFileName(path.basename(resolvedSessionFile))
-    ) {
-      continue;
-    }
-    try {
-      await fs.unlink(resolvedSessionFile);
-    } catch {
-      // Best-effort cleanup; disk budget can still collect old checkpoint artifacts.
-    }
-  }
+  void snapshot;
 }
 
 export async function persistSessionCompactionCheckpoint(params: {
@@ -433,7 +318,9 @@ export async function persistSessionCompactionCheckpoint(params: {
       : {}),
     preCompaction: {
       sessionId: params.snapshot.sessionId,
-      sessionFile: params.snapshot.sessionFile,
+      ...(params.snapshot.sessionFile?.trim()
+        ? { sessionFile: params.snapshot.sessionFile.trim() }
+        : {}),
       leafId: params.snapshot.leafId,
     },
     postCompaction: {
@@ -473,11 +360,12 @@ export async function persistSessionCompactionCheckpoint(params: {
     });
     return null;
   }
-  await cleanupTrimmedCompactionCheckpointFiles({
-    removed: trimmedCheckpoints?.removed ?? [],
-    retained: trimmedCheckpoints?.kept,
-    currentSnapshotFile: params.snapshot.sessionFile,
-  });
+  for (const removed of trimmedCheckpoints?.removed ?? []) {
+    deleteSqliteSessionTranscript({
+      agentId: target.agentId,
+      sessionId: removed.preCompaction.sessionId,
+    });
+  }
   return checkpoint;
 }
 

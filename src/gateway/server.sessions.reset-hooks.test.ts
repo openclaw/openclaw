@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "vitest";
-import { appendSqliteSessionTranscriptEvent } from "../config/sessions/transcript-store.sqlite.js";
+import { loadSessionStore } from "../config/sessions.js";
+import {
+  appendSqliteSessionTranscriptEvent,
+  replaceSqliteSessionTranscriptEvents,
+} from "../config/sessions/transcript-store.sqlite.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -70,15 +74,18 @@ test("sessions.reset emits internal command hook with reason", async () => {
 test("sessions.reset emits before_reset hook with transcript context", async () => {
   const { dir } = await createSessionStoreDir();
   const transcriptPath = path.join(dir, "sess-main.jsonl");
-  await fs.writeFile(
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "sess-main",
     transcriptPath,
-    `${JSON.stringify({
-      type: "message",
-      id: "m1",
-      message: { role: "user", content: "hello from transcript" },
-    })}\n`,
-    "utf-8",
-  );
+    events: [
+      {
+        type: "message",
+        id: "m1",
+        message: { role: "user", content: "hello from transcript" },
+      },
+    ],
+  });
 
   await writeSessionStore({
     entries: {
@@ -121,14 +128,17 @@ test("sessions.reset emits before_reset hook with transcript context", async () 
 test("sessions.reset emits before_reset hook with scoped SQLite transcript context", async () => {
   const { dir } = await createSessionStoreDir();
   const transcriptPath = path.join(dir, "missing-sess-main.jsonl");
-  appendSqliteSessionTranscriptEvent({
+  replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-main-sqlite",
-    event: {
-      type: "message",
-      id: "m1",
-      message: { role: "user", content: "hello from sqlite transcript" },
-    },
+    transcriptPath,
+    events: [
+      {
+        type: "message",
+        id: "m1",
+        message: { role: "user", content: "hello from sqlite transcript" },
+      },
+    ],
   });
 
   await writeSessionStore({
@@ -172,15 +182,18 @@ test("sessions.reset emits before_reset hook with scoped SQLite transcript conte
 test("sessions.reset emits enriched session_end and session_start hooks", async () => {
   const { dir } = await createSessionStoreDir();
   const transcriptPath = path.join(dir, "sess-main.jsonl");
-  await fs.writeFile(
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "sess-main",
     transcriptPath,
-    `${JSON.stringify({
-      type: "message",
-      id: "m1",
-      message: { role: "user", content: "hello from transcript" },
-    })}\n`,
-    "utf-8",
-  );
+    events: [
+      {
+        type: "message",
+        id: "m1",
+        message: { role: "user", content: "hello from transcript" },
+      },
+    ],
+  });
 
   await writeSessionStore({
     entries: {
@@ -211,11 +224,8 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
     sessionId: "sess-main",
     sessionKey: "agent:main:main",
     reason: "new",
-    transcriptArchived: true,
   });
-  expect((endEvent as { sessionFile?: string } | undefined)?.sessionFile).toContain(
-    ".jsonl.reset.",
-  );
+  expect((endEvent as { sessionFile?: string } | undefined)?.sessionFile).toBe(transcriptPath);
   expect((endEvent as { nextSessionId?: string } | undefined)?.nextSessionId).toBe(
     (startEvent as { sessionId?: string } | undefined)?.sessionId,
   );
@@ -257,39 +267,38 @@ test("sessions.reset returns unavailable when active run does not stop", async (
   expect(waitCallCountAtSnapshotClear).toEqual([1]);
   expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
 
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    { sessionId?: string }
-  >;
+  const store = loadSessionStore(storePath);
   expect(store["agent:main:main"]?.sessionId).toBe("sess-main");
-  const filesAfterResetAttempt = await fs.readdir(dir);
-  expect(filesAfterResetAttempt).not.toContainEqual(
-    expect.stringMatching(/^sess-main\.jsonl\.reset\./),
-  );
 });
 
 test("sessions.reset emits before_reset for the entry actually reset in the writer slot", async () => {
   const { dir } = await createSessionStoreDir();
   const oldTranscriptPath = path.join(dir, "sess-old.jsonl");
   const newTranscriptPath = path.join(dir, "sess-new.jsonl");
-  await fs.writeFile(
-    oldTranscriptPath,
-    `${JSON.stringify({
-      type: "message",
-      id: "m-old",
-      message: { role: "user", content: "old transcript" },
-    })}\n`,
-    "utf-8",
-  );
-  await fs.writeFile(
-    newTranscriptPath,
-    `${JSON.stringify({
-      type: "message",
-      id: "m-new",
-      message: { role: "user", content: "new transcript" },
-    })}\n`,
-    "utf-8",
-  );
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "sess-old",
+    transcriptPath: oldTranscriptPath,
+    events: [
+      {
+        type: "message",
+        id: "m-old",
+        message: { role: "user", content: "old transcript" },
+      },
+    ],
+  });
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "sess-new",
+    transcriptPath: newTranscriptPath,
+    events: [
+      {
+        type: "message",
+        id: "m-new",
+        message: { role: "user", content: "new transcript" },
+      },
+    ],
+  });
 
   await writeSessionStore({
     entries: {
@@ -389,15 +398,18 @@ test("sessions.create with emitCommandHooks=true fires command:new hook against 
 test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks against parent (#76957)", async () => {
   const { dir } = await createSessionStoreDir();
   const transcriptPath = path.join(dir, "sess-parent-hooks.jsonl");
-  await fs.writeFile(
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "sess-parent-hooks",
     transcriptPath,
-    `${JSON.stringify({
-      type: "message",
-      id: "m1",
-      message: { role: "user", content: "remember this before new" },
-    })}\n`,
-    "utf-8",
-  );
+    events: [
+      {
+        type: "message",
+        id: "m1",
+        message: { role: "user", content: "remember this before new" },
+      },
+    ],
+  });
 
   await writeSessionStore({
     entries: {

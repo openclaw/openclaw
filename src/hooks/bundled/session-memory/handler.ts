@@ -24,7 +24,7 @@ import {
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
-import { findPreviousSessionFile, getRecentSessionContentWithResetFallback } from "./transcript.js";
+import { findPreviousSessionFile, getRecentSessionContent } from "./transcript.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
 
@@ -173,18 +173,13 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
     const currentSessionId = sessionEntry.sessionId as string;
     let currentSessionFile = (sessionEntry.sessionFile as string) || undefined;
 
-    // If sessionFile is empty or looks like a new/reset file, try to find the previous session file.
-    if (!currentSessionFile || currentSessionFile.includes(".reset.")) {
+    if (!currentSessionFile) {
       const sessionsDirs = new Set<string>();
-      if (currentSessionFile) {
-        sessionsDirs.add(path.dirname(currentSessionFile));
-      }
       sessionsDirs.add(path.join(workspaceDir, "sessions"));
 
       for (const sessionsDir of sessionsDirs) {
         const recoveredSessionFile = await findPreviousSessionFile({
           sessionsDir,
-          currentSessionFile,
           sessionId: currentSessionId,
         });
         if (!recoveredSessionFile) {
@@ -215,8 +210,7 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
     let sessionContent: string | null = null;
 
     if (sessionFile) {
-      // Get recent conversation content, with fallback to rotated reset transcript.
-      sessionContent = await getRecentSessionContentWithResetFallback(sessionFile, messageCount);
+      sessionContent = await getRecentSessionContent(sessionFile, messageCount);
       log.debug("Session content loaded", {
         length: sessionContent?.length ?? 0,
         messageCount,

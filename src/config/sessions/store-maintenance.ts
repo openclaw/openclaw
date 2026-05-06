@@ -39,7 +39,6 @@ export type ResolvedSessionMaintenanceConfig = {
   mode: SessionMaintenanceMode;
   pruneAfterMs: number;
   maxEntries: number;
-  resetArchiveRetentionMs: number | null;
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
 };
@@ -54,25 +53,6 @@ function resolvePruneAfterMs(maintenance?: SessionMaintenanceConfig): number {
     return parseDurationMs(normalized, { defaultUnit: "d" });
   } catch {
     return DEFAULT_SESSION_PRUNE_AFTER_MS;
-  }
-}
-
-function resolveResetArchiveRetentionMs(
-  maintenance: SessionMaintenanceConfig | undefined,
-  pruneAfterMs: number,
-): number | null {
-  const raw = maintenance?.resetArchiveRetention;
-  if (raw === false) {
-    return null;
-  }
-  const normalized = normalizeStringifiedOptionalString(raw);
-  if (!normalized) {
-    return pruneAfterMs;
-  }
-  try {
-    return parseDurationMs(normalized, { defaultUnit: "d" });
-  } catch {
-    return pruneAfterMs;
   }
 }
 
@@ -137,7 +117,6 @@ export function resolveMaintenanceConfigFromInput(
     mode: maintenance?.mode ?? DEFAULT_SESSION_MAINTENANCE_MODE,
     pruneAfterMs,
     maxEntries: maintenance?.maxEntries ?? DEFAULT_SESSION_MAX_ENTRIES,
-    resetArchiveRetentionMs: resolveResetArchiveRetentionMs(maintenance, pruneAfterMs),
     maxDiskBytes,
     highWaterBytes: resolveHighWaterBytes(maintenance, maxDiskBytes),
   };

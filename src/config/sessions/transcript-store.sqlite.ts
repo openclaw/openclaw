@@ -48,6 +48,12 @@ export type SqliteSessionTranscriptFile = SqliteSessionTranscriptScope & {
   updatedAt: number;
 };
 
+export type SqliteSessionTranscript = SqliteSessionTranscriptScope & {
+  path?: string;
+  updatedAt: number;
+  eventCount: number;
+};
+
 function normalizeSessionId(value: string): string {
   const sessionId = value.trim();
   if (!sessionId) {
@@ -141,6 +147,51 @@ export function resolveSqliteSessionTranscriptScopeForPath(
   };
 }
 
+export function resolveSqliteSessionTranscriptScope(
+  options: OpenClawStateDatabaseOptions & {
+    agentId?: string;
+    sessionId: string;
+    transcriptPath?: string;
+  },
+): SqliteSessionTranscriptScope | undefined {
+  const sessionId = normalizeSessionId(options.sessionId);
+  if (options.agentId?.trim()) {
+    return {
+      agentId: normalizeAgentId(options.agentId),
+      sessionId,
+    };
+  }
+  if (options.transcriptPath?.trim()) {
+    const byPath = resolveSqliteSessionTranscriptScopeForPath({
+      ...options,
+      transcriptPath: options.transcriptPath,
+    });
+    if (byPath?.sessionId === sessionId) {
+      return byPath;
+    }
+  }
+  const database = openOpenClawStateDatabase(options);
+  const row = database.db
+    .prepare(
+      `
+        SELECT agent_id, session_id
+        FROM transcript_events
+        WHERE session_id = ?
+        GROUP BY agent_id, session_id
+        ORDER BY MAX(created_at) DESC, agent_id ASC
+        LIMIT 1
+      `,
+    )
+    .get(sessionId) as { agent_id?: unknown; session_id?: unknown } | undefined;
+  if (typeof row?.agent_id !== "string" || typeof row.session_id !== "string") {
+    return undefined;
+  }
+  return {
+    agentId: normalizeAgentId(row.agent_id),
+    sessionId: normalizeSessionId(row.session_id),
+  };
+}
+
 export function listSqliteSessionTranscriptFiles(
   options: OpenClawStateDatabaseOptions = {},
 ): SqliteSessionTranscriptFile[] {
@@ -190,6 +241,66 @@ export function listSqliteSessionTranscriptFiles(
           sessionId: normalizeSessionId(record.session_id),
           path: record.path,
           updatedAt: Number.isFinite(updatedAt) ? updatedAt : 0,
+        },
+      ];
+    });
+}
+
+export function listSqliteSessionTranscripts(
+  options: OpenClawStateDatabaseOptions & { agentId?: string } = {},
+): SqliteSessionTranscript[] {
+  const agentId = options.agentId ? normalizeAgentId(options.agentId) : undefined;
+  const database = openOpenClawStateDatabase(options);
+  return database.db
+    .prepare(
+      `
+        SELECT
+          events.agent_id,
+          events.session_id,
+          MAX(events.created_at) AS updated_at,
+          COUNT(*) AS event_count,
+          (
+            SELECT files.path
+            FROM transcript_files files
+            WHERE files.agent_id = events.agent_id
+              AND files.session_id = events.session_id
+            ORDER BY COALESCE(files.imported_at, files.exported_at, 0) DESC, files.path ASC
+            LIMIT 1
+          ) AS path
+        FROM transcript_events events
+        WHERE (? IS NULL OR events.agent_id = ?)
+        GROUP BY events.agent_id, events.session_id
+        ORDER BY updated_at DESC, events.session_id ASC
+      `,
+    )
+    .all(agentId ?? null, agentId ?? null)
+    .flatMap((row) => {
+      const record = row as {
+        agent_id?: unknown;
+        session_id?: unknown;
+        path?: unknown;
+        updated_at?: unknown;
+        event_count?: unknown;
+      };
+      if (typeof record.agent_id !== "string" || typeof record.session_id !== "string") {
+        return [];
+      }
+      const updatedAt =
+        typeof record.updated_at === "bigint"
+          ? Number(record.updated_at)
+          : Number(record.updated_at ?? 0);
+      const eventCount =
+        typeof record.event_count === "bigint"
+          ? Number(record.event_count)
+          : Number(record.event_count ?? 0);
+      const path = typeof record.path === "string" ? record.path : undefined;
+      return [
+        {
+          agentId: normalizeAgentId(record.agent_id),
+          sessionId: normalizeSessionId(record.session_id),
+          path,
+          updatedAt: Number.isFinite(updatedAt) ? updatedAt : 0,
+          eventCount: Number.isFinite(eventCount) ? eventCount : 0,
         },
       ];
     });
@@ -314,6 +425,21 @@ export function hasSqliteSessionTranscriptEvents(
     )
     .get(agentId, sessionId) as { found?: number | bigint } | undefined;
   return row?.found !== undefined;
+}
+
+export function deleteSqliteSessionTranscript(
+  options: SqliteSessionTranscriptStoreOptions,
+): boolean {
+  const { agentId, sessionId } = normalizeTranscriptScope(options);
+  return runOpenClawStateWriteTransaction((database) => {
+    const events = database.db
+      .prepare("DELETE FROM transcript_events WHERE agent_id = ? AND session_id = ?")
+      .run(agentId, sessionId);
+    database.db
+      .prepare("DELETE FROM transcript_files WHERE agent_id = ? AND session_id = ?")
+      .run(agentId, sessionId);
+    return Number(events.changes ?? 0) > 0;
+  }, options);
 }
 
 export function exportSqliteSessionTranscriptJsonl(

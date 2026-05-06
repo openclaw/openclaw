@@ -1,16 +1,18 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { writeOpenClawStateKvJson } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearCodexAppServerBinding,
   readCodexAppServerBinding,
-  resolveCodexAppServerBindingPath,
   writeCodexAppServerBinding,
   type CodexAppServerAuthProfileLookup,
 } from "./session-binding.js";
 
+const CODEX_APP_SERVER_BINDING_KV_SCOPE = "codex_app_server_thread_bindings";
 let tempDir: string;
+let previousStateDir: string | undefined;
 
 const nativeAuthLookup: Pick<CodexAppServerAuthProfileLookup, "authProfileStore"> = {
   authProfileStore: {
@@ -30,13 +32,20 @@ const nativeAuthLookup: Pick<CodexAppServerAuthProfileLookup, "authProfileStore"
 describe("codex app-server session binding", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-binding-"));
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tempDir;
   });
 
   afterEach(async () => {
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("round-trips the thread binding beside the PI session file", async () => {
+  it("round-trips the thread binding through SQLite", async () => {
     const sessionFile = path.join(tempDir, "session.json");
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-123",
@@ -57,8 +66,6 @@ describe("codex app-server session binding", () => {
       modelProvider: "openai",
       dynamicToolsFingerprint: "tools-v1",
     });
-    const bindingStat = await fs.stat(resolveCodexAppServerBindingPath(sessionFile));
-    expect(bindingStat.isFile()).toBe(true);
   });
 
   it("round-trips plugin app policy context with app ids as record keys", async () => {
@@ -91,33 +98,30 @@ describe("codex app-server session binding", () => {
 
   it("rejects old plugin app policy entries that duplicate the app id", async () => {
     const sessionFile = path.join(tempDir, "session.json");
-    await fs.writeFile(
-      resolveCodexAppServerBindingPath(sessionFile),
-      `${JSON.stringify({
-        schemaVersion: 1,
-        threadId: "thread-123",
-        sessionFile,
-        cwd: tempDir,
-        pluginAppPolicyContext: {
-          fingerprint: "plugin-policy-1",
-          apps: {
-            "google-calendar-app": {
-              appId: "google-calendar-app",
-              configKey: "google-calendar",
-              marketplaceName: "openai-curated",
-              pluginName: "google-calendar",
-              allowDestructiveActions: true,
-              mcpServerNames: ["google-calendar"],
-            },
-          },
-          pluginAppIds: {
-            "google-calendar": ["google-calendar-app"],
+    writeOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-123",
+      sessionFile,
+      cwd: tempDir,
+      pluginAppPolicyContext: {
+        fingerprint: "plugin-policy-1",
+        apps: {
+          "google-calendar-app": {
+            appId: "google-calendar-app",
+            configKey: "google-calendar",
+            marketplaceName: "openai-curated",
+            pluginName: "google-calendar",
+            allowDestructiveActions: true,
+            mcpServerNames: ["google-calendar"],
           },
         },
-        createdAt: "2026-05-03T00:00:00.000Z",
-        updatedAt: "2026-05-03T00:00:00.000Z",
-      })}\n`,
-    );
+        pluginAppIds: {
+          "google-calendar": ["google-calendar-app"],
+        },
+      },
+      createdAt: "2026-05-03T00:00:00.000Z",
+      updatedAt: "2026-05-03T00:00:00.000Z",
+    });
 
     const binding = await readCodexAppServerBinding(sessionFile);
 
@@ -138,10 +142,8 @@ describe("codex app-server session binding", () => {
       nativeAuthLookup,
     );
 
-    const raw = await fs.readFile(resolveCodexAppServerBindingPath(sessionFile), "utf8");
     const binding = await readCodexAppServerBinding(sessionFile, nativeAuthLookup);
 
-    expect(raw).not.toContain('"modelProvider": "openai"');
     expect(binding).toMatchObject({
       threadId: "thread-123",
       authProfileId: "work",
@@ -152,20 +154,17 @@ describe("codex app-server session binding", () => {
 
   it("normalizes older Codex-native bindings that stored public OpenAI provider", async () => {
     const sessionFile = path.join(tempDir, "session.json");
-    await fs.writeFile(
-      resolveCodexAppServerBindingPath(sessionFile),
-      `${JSON.stringify({
-        schemaVersion: 1,
-        threadId: "thread-123",
-        sessionFile,
-        cwd: tempDir,
-        authProfileId: "work",
-        model: "gpt-5.4-mini",
-        modelProvider: "openai",
-        createdAt: "2026-05-03T00:00:00.000Z",
-        updatedAt: "2026-05-03T00:00:00.000Z",
-      })}\n`,
-    );
+    writeOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-123",
+      sessionFile,
+      cwd: tempDir,
+      authProfileId: "work",
+      model: "gpt-5.4-mini",
+      modelProvider: "openai",
+      createdAt: "2026-05-03T00:00:00.000Z",
+      updatedAt: "2026-05-03T00:00:00.000Z",
+    });
 
     const binding = await readCodexAppServerBinding(sessionFile, nativeAuthLookup);
 
@@ -175,18 +174,15 @@ describe("codex app-server session binding", () => {
 
   it("normalizes legacy fast service tier bindings to Codex priority", async () => {
     const sessionFile = path.join(tempDir, "session.json");
-    await fs.writeFile(
-      resolveCodexAppServerBindingPath(sessionFile),
-      `${JSON.stringify({
-        schemaVersion: 1,
-        threadId: "thread-123",
-        sessionFile,
-        cwd: tempDir,
-        serviceTier: "fast",
-        createdAt: "2026-05-03T00:00:00.000Z",
-        updatedAt: "2026-05-03T00:00:00.000Z",
-      })}\n`,
-    );
+    writeOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-123",
+      sessionFile,
+      cwd: tempDir,
+      serviceTier: "fast",
+      createdAt: "2026-05-03T00:00:00.000Z",
+      updatedAt: "2026-05-03T00:00:00.000Z",
+    });
 
     const binding = await readCodexAppServerBinding(sessionFile);
 

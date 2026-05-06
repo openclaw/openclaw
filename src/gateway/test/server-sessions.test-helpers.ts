@@ -1,13 +1,14 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { AssistantMessage, UserMessage } from "../../agents/pi-ai-contract.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "../server.e2e-ws-harness.js";
+import { captureCompactionCheckpointSnapshotAsync } from "../session-compaction-checkpoints.js";
 import {
   connectOk,
   embeddedRunMock,
@@ -323,12 +324,26 @@ export function setupGatewaySessionsTestHarness() {
   };
 }
 
-export async function writeSingleLineSession(dir: string, sessionId: string, content: string) {
-  await fs.writeFile(
-    path.join(dir, `${sessionId}.jsonl`),
-    `${JSON.stringify({ role: "user", content })}\n`,
-    "utf-8",
-  );
+export async function writeSingleLineSession(
+  dir: string,
+  sessionId: string,
+  content: string,
+  opts: { agentId?: string; transcriptPath?: string } = {},
+) {
+  const transcriptPath = opts.transcriptPath ?? path.join(dir, `${sessionId}.jsonl`);
+  replaceSqliteSessionTranscriptEvents({
+    agentId: opts.agentId ?? "main",
+    sessionId,
+    transcriptPath,
+    events: [
+      {
+        type: "message",
+        id: `${sessionId}-message`,
+        message: { role: "user", content },
+      },
+    ],
+  });
+  return transcriptPath;
 }
 
 export function sessionStoreEntry(sessionId: string, overrides: Partial<SessionEntry> = {}) {
@@ -380,11 +395,14 @@ export async function createCheckpointFixture(dir: string) {
   if (!sessionFile) {
     throw new Error("expected persisted session file");
   }
-  const preCompactionSessionFile = path.join(
-    dir,
-    `${path.parse(sessionFile).name}.checkpoint-test.jsonl`,
-  );
-  fsSync.copyFileSync(sessionFile, preCompactionSessionFile);
+  const checkpointSnapshot = await captureCompactionCheckpointSnapshotAsync({
+    sessionManager: session,
+    sessionFile,
+  });
+  const preCompactionSessionFile = checkpointSnapshot?.sessionFile;
+  if (!preCompactionSessionFile) {
+    throw new Error("expected persisted checkpoint snapshot");
+  }
   const preCompactionSession = SessionManager.open(preCompactionSessionFile, dir);
   session.appendCompaction("checkpoint summary", preCompactionLeafId, 123, { ok: true });
   const postCompactionLeafId = session.getLeafId();

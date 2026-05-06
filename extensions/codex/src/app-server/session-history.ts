@@ -1,27 +1,35 @@
-import fs from "node:fs/promises";
-import type { SessionEntry } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { FileEntry, SessionEntry } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   buildSessionContext,
+  loadSqliteSessionTranscriptEvents,
   migrateSessionEntries,
-  parseSessionEntries,
+  resolveSqliteSessionTranscriptScopeForPath,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 
-function isMissingFileError(error: unknown): boolean {
-  return Boolean(
-    error &&
-    typeof error === "object" &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "ENOENT",
-  );
-}
+export type CodexMirroredSessionHistoryScope = {
+  sessionFile: string;
+  agentId?: string;
+  sessionId?: string;
+};
 
 export async function readCodexMirroredSessionHistoryMessages(
-  sessionFile: string,
+  scope: CodexMirroredSessionHistoryScope,
 ): Promise<AgentMessage[] | undefined> {
   try {
-    const raw = await fs.readFile(sessionFile, "utf-8");
-    const entries = parseSessionEntries(raw);
+    const resolvedScope =
+      scope.agentId && scope.sessionId
+        ? { agentId: scope.agentId, sessionId: scope.sessionId }
+        : resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: scope.sessionFile });
+    if (!resolvedScope) {
+      return [];
+    }
+    const entries = loadSqliteSessionTranscriptEvents(resolvedScope)
+      .map((entry) => entry.event)
+      .filter((entry): entry is FileEntry => Boolean(entry && typeof entry === "object"));
+    if (entries.length === 0) {
+      return [];
+    }
     const firstEntry = entries[0] as { type?: unknown; id?: unknown } | undefined;
     if (firstEntry?.type !== "session" || typeof firstEntry.id !== "string") {
       return undefined;
@@ -31,10 +39,7 @@ export async function readCodexMirroredSessionHistoryMessages(
       (entry): entry is SessionEntry => entry.type !== "session",
     );
     return buildSessionContext(sessionEntries).messages;
-  } catch (error) {
-    if (isMissingFileError(error)) {
-      return [];
-    }
+  } catch {
     return undefined;
   }
 }

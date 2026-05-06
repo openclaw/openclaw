@@ -98,8 +98,6 @@ const NARRATIVE_SYSTEM_PROMPT = [
 // comment warned against.
 const NARRATIVE_TIMEOUT_MS = 60_000;
 const DREAMING_SESSION_KEY_PREFIX = "dreaming-narrative-";
-const DREAMING_TRANSCRIPT_RUN_MARKER = '"runId":"dreaming-narrative-';
-const DREAMING_ORPHAN_MIN_AGE_MS = 300_000;
 const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
 const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
 const DIARY_START_MARKER = "<!-- openclaw:dreaming:diary:start -->";
@@ -760,8 +758,6 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
   }
 
   let prunedEntries = 0;
-  let archivedOrphans = 0;
-
   for (const agentEntry of agentEntries) {
     if (!agentEntry.isDirectory()) {
       continue;
@@ -779,16 +775,12 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
       continue;
     }
 
-    const referencedSessionFiles = new Set<string>();
     let needsStoreUpdate = false;
     for (const [key, entry] of Object.entries(store)) {
       const normalizedSessionFile = await normalizeSessionEntryPathForComparison({
         sessionsDir,
         entry,
       });
-      if (normalizedSessionFile) {
-        referencedSessionFiles.add(normalizedSessionFile);
-      }
       if (!isDreamingSessionStoreKey(key)) {
         continue;
       }
@@ -798,7 +790,6 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
     }
 
     if (needsStoreUpdate) {
-      referencedSessionFiles.clear();
       prunedEntries += await updateSessionStore(storePath, async (lockedStore) => {
         let prunedForAgent = 0;
         for (const [key, entry] of Object.entries(lockedStore)) {
@@ -806,9 +797,6 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
             sessionsDir,
             entry,
           });
-          if (normalizedSessionFile) {
-            referencedSessionFiles.add(normalizedSessionFile);
-          }
           if (!isDreamingSessionStoreKey(key)) {
             continue;
           }
@@ -820,58 +808,11 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
         return prunedForAgent;
       });
     }
-
-    let sessionFiles: Dirent[] = [];
-    try {
-      sessionFiles = await fs.readdir(sessionsDir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-
-    for (const fileEntry of sessionFiles) {
-      if (!fileEntry.isFile() || !fileEntry.name.endsWith(".jsonl")) {
-        continue;
-      }
-      const transcriptPath = path.join(sessionsDir, fileEntry.name);
-      const normalizedTranscriptPath =
-        (await normalizeSessionFileForComparison({
-          sessionsDir,
-          sessionFile: fileEntry.name,
-        })) ?? normalizeComparablePath(transcriptPath);
-      if (referencedSessionFiles.has(normalizedTranscriptPath)) {
-        continue;
-      }
-      let stat;
-      try {
-        stat = await fs.stat(transcriptPath);
-      } catch {
-        continue;
-      }
-      if (Date.now() - stat.mtimeMs < DREAMING_ORPHAN_MIN_AGE_MS) {
-        continue;
-      }
-      let content = "";
-      try {
-        content = await fs.readFile(transcriptPath, "utf-8");
-      } catch {
-        continue;
-      }
-      if (!content.includes(DREAMING_TRANSCRIPT_RUN_MARKER)) {
-        continue;
-      }
-      const archivedPath = `${transcriptPath}.deleted.${Date.now()}`;
-      try {
-        await fs.rename(transcriptPath, archivedPath);
-        archivedOrphans += 1;
-      } catch {
-        // best-effort scrubber
-      }
-    }
   }
 
-  if (prunedEntries > 0 || archivedOrphans > 0) {
+  if (prunedEntries > 0) {
     logger.info(
-      `memory-core: dreaming cleanup scrubbed ${prunedEntries} stale session entr${prunedEntries === 1 ? "y" : "ies"} and archived ${archivedOrphans} orphan transcript${archivedOrphans === 1 ? "" : "s"}.`,
+      `memory-core: dreaming cleanup scrubbed ${prunedEntries} stale session entr${prunedEntries === 1 ? "y" : "ies"}.`,
     );
   }
 }

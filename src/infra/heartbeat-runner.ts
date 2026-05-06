@@ -60,7 +60,7 @@ import {
 } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
-import { archiveRemovedSessionTranscripts, updateSessionStore } from "../config/sessions/store.js";
+import { deleteRemovedSessionTranscripts, updateSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -1434,15 +1434,14 @@ export async function runHeartbeatOnce(opts: {
     });
     if (removedSessionFiles.size > 0) {
       try {
-        await archiveRemovedSessionTranscripts({
+        await deleteRemovedSessionTranscripts({
           removedSessionFiles,
           referencedSessionIds,
           storePath: isolatedStorePath,
-          reason: "deleted",
           restrictToStoreDir: true,
         });
       } catch (err) {
-        log.warn("heartbeat: failed to archive stale isolated session transcript", {
+        log.warn("heartbeat: failed to delete stale isolated session transcript", {
           err: String(err),
           sessionKey: staleIsolatedSessionKey,
         });

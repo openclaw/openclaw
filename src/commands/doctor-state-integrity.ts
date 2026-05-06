@@ -9,10 +9,7 @@ import {
 } from "../agents/subagent-recovery-state.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
-import {
-  formatSessionArchiveTimestamp,
-  isPrimarySessionTranscriptFileName,
-} from "../config/sessions/artifacts.js";
+import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import {
   resolveSessionFilePath,
@@ -1040,32 +1037,30 @@ export async function noteStateIntegrity(
         [
           `- Found ${orphanCount} in ${displaySessionsDir}.`,
           "  These .jsonl files are no longer referenced by sessions.json, so they are not part of any active session history.",
-          "  Doctor can archive them safely by renaming each file to *.deleted.<timestamp>.",
+          "  Doctor can delete them after the session transcript migration/import has run.",
           `  Examples: ${orphanPreview}`,
         ].join("\n"),
       );
-      const archiveOrphans = await prompter.confirmRuntimeRepair({
-        message: `Archive ${orphanCount} in ${displaySessionsDir}? This only renames them to *.deleted.<timestamp>.`,
+      const deleteOrphans = await prompter.confirmRuntimeRepair({
+        message: `Delete ${orphanCount} in ${displaySessionsDir}?`,
         initialValue: false,
         requiresInteractiveConfirmation: true,
       });
-      if (archiveOrphans) {
-        let archived = 0;
-        const archivedAt = formatSessionArchiveTimestamp();
+      if (deleteOrphans) {
+        let deleted = 0;
         for (const orphanPath of orphanTranscriptPaths) {
-          const archivedPath = `${orphanPath}.deleted.${archivedAt}`;
           try {
-            fs.renameSync(orphanPath, archivedPath);
-            archived += 1;
+            fs.rmSync(orphanPath, { force: true });
+            deleted += 1;
           } catch (err) {
             warnings.push(
-              `- Failed to archive orphan transcript ${shortenHomePath(orphanPath)}: ${String(err)}`,
+              `- Failed to delete orphan transcript ${shortenHomePath(orphanPath)}: ${String(err)}`,
             );
           }
         }
-        if (archived > 0) {
+        if (deleted > 0) {
           changes.push(
-            `- Archived ${countLabel(archived, "orphan transcript file")} in ${displaySessionsDir} as .deleted timestamped backups.`,
+            `- Deleted ${countLabel(deleted, "orphan transcript file")} in ${displaySessionsDir}.`,
           );
         }
       }

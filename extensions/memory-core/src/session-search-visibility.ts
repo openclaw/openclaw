@@ -49,9 +49,6 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     const keys = resolveTranscriptStemToSessionKeys({
       store: combinedSessionStore,
       stem: identity.stem,
-      ...(identity.archived && identity.ownerAgentId
-        ? { archivedOwnerAgentId: identity.ownerAgentId }
-        : {}),
     });
     if (keys.length === 0) {
       continue;

@@ -1,5 +1,10 @@
-import fs from "node:fs/promises";
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  deleteOpenClawStateKvJson,
+  embeddedAgentLog,
+  readOpenClawStateKvJson,
+  writeOpenClawStateKvJson,
+  type OpenClawStateJsonValue,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   ensureAuthProfileStore,
   resolveDefaultAgentDir,
@@ -17,6 +22,7 @@ import type { CodexServiceTier } from "./protocol.js";
 
 const CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER = "openai-codex";
 const PUBLIC_OPENAI_MODEL_PROVIDER = "openai";
+const CODEX_APP_SERVER_BINDING_KV_SCOPE = "codex_app_server_thread_bindings";
 
 type ProviderAuthAliasLookupParams = Parameters<typeof resolveProviderIdForAuth>[1];
 type ProviderAuthAliasConfig = NonNullable<ProviderAuthAliasLookupParams>["config"];
@@ -47,65 +53,70 @@ export type CodexAppServerThreadBinding = {
   updatedAt: string;
 };
 
-export function resolveCodexAppServerBindingPath(sessionFile: string): string {
-  return `${sessionFile}.codex-app-server.json`;
+function codexAppServerBindingKvKey(sessionFile: string): string {
+  return sessionFile.trim();
+}
+
+function codexAppServerBindingToJsonValue(
+  binding: CodexAppServerThreadBinding,
+): OpenClawStateJsonValue {
+  return binding as unknown as OpenClawStateJsonValue;
+}
+
+function normalizeCodexAppServerBinding(
+  sessionFile: string,
+  value: unknown,
+  lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId">,
+): CodexAppServerThreadBinding | undefined {
+  const parsed = value as Partial<CodexAppServerThreadBinding>;
+  if (!parsed || parsed.schemaVersion !== 1 || typeof parsed.threadId !== "string") {
+    return undefined;
+  }
+  const authProfileId = typeof parsed.authProfileId === "string" ? parsed.authProfileId : undefined;
+  return {
+    schemaVersion: 1,
+    threadId: parsed.threadId,
+    sessionFile,
+    cwd: typeof parsed.cwd === "string" ? parsed.cwd : "",
+    authProfileId,
+    model: typeof parsed.model === "string" ? parsed.model : undefined,
+    modelProvider: normalizeCodexAppServerBindingModelProvider({
+      ...lookup,
+      authProfileId,
+      modelProvider: typeof parsed.modelProvider === "string" ? parsed.modelProvider : undefined,
+    }),
+    approvalPolicy: readApprovalPolicy(parsed.approvalPolicy),
+    sandbox: readSandboxMode(parsed.sandbox),
+    serviceTier: readServiceTier(parsed.serviceTier),
+    dynamicToolsFingerprint:
+      typeof parsed.dynamicToolsFingerprint === "string"
+        ? parsed.dynamicToolsFingerprint
+        : undefined,
+    pluginAppsFingerprint:
+      typeof parsed.pluginAppsFingerprint === "string" ? parsed.pluginAppsFingerprint : undefined,
+    pluginAppsInputFingerprint:
+      typeof parsed.pluginAppsInputFingerprint === "string"
+        ? parsed.pluginAppsInputFingerprint
+        : undefined,
+    pluginAppPolicyContext: readPluginAppPolicyContext(parsed.pluginAppPolicyContext),
+    createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : new Date().toISOString(),
+    updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
+  };
 }
 
 export async function readCodexAppServerBinding(
   sessionFile: string,
   lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
 ): Promise<CodexAppServerThreadBinding | undefined> {
-  const path = resolveCodexAppServerBindingPath(sessionFile);
-  let raw: string;
-  try {
-    raw = await fs.readFile(path, "utf8");
-  } catch (error) {
-    if (isNotFound(error)) {
-      return undefined;
-    }
-    embeddedAgentLog.warn("failed to read codex app-server binding", { path, error });
+  const key = codexAppServerBindingKvKey(sessionFile);
+  if (!key) {
     return undefined;
   }
-  try {
-    const parsed = JSON.parse(raw) as Partial<CodexAppServerThreadBinding>;
-    if (parsed.schemaVersion !== 1 || typeof parsed.threadId !== "string") {
-      return undefined;
-    }
-    const authProfileId =
-      typeof parsed.authProfileId === "string" ? parsed.authProfileId : undefined;
-    return {
-      schemaVersion: 1,
-      threadId: parsed.threadId,
-      sessionFile,
-      cwd: typeof parsed.cwd === "string" ? parsed.cwd : "",
-      authProfileId,
-      model: typeof parsed.model === "string" ? parsed.model : undefined,
-      modelProvider: normalizeCodexAppServerBindingModelProvider({
-        ...lookup,
-        authProfileId,
-        modelProvider: typeof parsed.modelProvider === "string" ? parsed.modelProvider : undefined,
-      }),
-      approvalPolicy: readApprovalPolicy(parsed.approvalPolicy),
-      sandbox: readSandboxMode(parsed.sandbox),
-      serviceTier: readServiceTier(parsed.serviceTier),
-      dynamicToolsFingerprint:
-        typeof parsed.dynamicToolsFingerprint === "string"
-          ? parsed.dynamicToolsFingerprint
-          : undefined,
-      pluginAppsFingerprint:
-        typeof parsed.pluginAppsFingerprint === "string" ? parsed.pluginAppsFingerprint : undefined,
-      pluginAppsInputFingerprint:
-        typeof parsed.pluginAppsInputFingerprint === "string"
-          ? parsed.pluginAppsInputFingerprint
-          : undefined,
-      pluginAppPolicyContext: readPluginAppPolicyContext(parsed.pluginAppPolicyContext),
-      createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : new Date().toISOString(),
-      updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
-    };
-  } catch (error) {
-    embeddedAgentLog.warn("failed to parse codex app-server binding", { path, error });
-    return undefined;
-  }
+  return normalizeCodexAppServerBinding(
+    sessionFile,
+    readOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, key),
+    lookup,
+  );
 }
 
 export async function writeCodexAppServerBinding(
@@ -141,9 +152,10 @@ export async function writeCodexAppServerBinding(
     createdAt: binding.createdAt ?? now,
     updatedAt: now,
   };
-  await fs.writeFile(
-    resolveCodexAppServerBindingPath(sessionFile),
-    `${JSON.stringify(payload, null, 2)}\n`,
+  writeOpenClawStateKvJson(
+    CODEX_APP_SERVER_BINDING_KV_SCOPE,
+    codexAppServerBindingKvKey(sessionFile),
+    codexAppServerBindingToJsonValue(payload),
   );
 }
 
@@ -205,17 +217,10 @@ function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | un
 }
 
 export async function clearCodexAppServerBinding(sessionFile: string): Promise<void> {
-  try {
-    await fs.unlink(resolveCodexAppServerBindingPath(sessionFile));
-  } catch (error) {
-    if (!isNotFound(error)) {
-      embeddedAgentLog.warn("failed to clear codex app-server binding", { sessionFile, error });
-    }
-  }
-}
-
-function isNotFound(error: unknown): boolean {
-  return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
+  deleteOpenClawStateKvJson(
+    CODEX_APP_SERVER_BINDING_KV_SCOPE,
+    codexAppServerBindingKvKey(sessionFile),
+  );
 }
 
 export function isCodexAppServerNativeAuthProfile(

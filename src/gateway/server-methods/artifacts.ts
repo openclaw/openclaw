@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
 import {
   ErrorCodes,
@@ -328,6 +329,7 @@ async function loadArtifacts(
       });
     },
     {
+      agentId: resolveAgentIdFromSessionKey(sessionKey),
       mode: "full",
       reason: "artifact query transcript scan",
     },

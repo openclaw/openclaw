@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { loadSessionStore, saveSessionStore } from "../config/sessions.js";
 import { isSessionPatchEvent } from "../hooks/internal-hooks.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import {
@@ -109,12 +110,10 @@ test("session:patch hook fires with correct context", async () => {
   const storePath = path.join(dir, "sessions.json");
   testState.sessionStorePath = storePath;
 
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-hook-test", {
-        label: "original-label",
-      }),
-    },
+  await saveSessionStore(storePath, {
+    "agent:main:main": sessionStoreEntry("sess-hook-test", {
+      label: "original-label",
+    }),
   });
 
   sessionHookMocks.triggerInternalHook.mockClear();
@@ -303,11 +302,9 @@ test("control-ui client can delete sessions even in webchat mode", async () => {
   const storePath = path.join(dir, "sessions.json");
   testState.sessionStorePath = storePath;
 
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-main"),
-      "discord:group:dev": sessionStoreEntry("sess-group"),
-    },
+  await saveSessionStore(storePath, {
+    "agent:main:main": sessionStoreEntry("sess-main"),
+    "agent:main:discord:group:dev": sessionStoreEntry("sess-group"),
   });
 
   const ws = new WebSocket(`ws://127.0.0.1:${getHarness().port}`, {
@@ -331,10 +328,7 @@ test("control-ui client can delete sessions even in webchat mode", async () => {
   expect(deleted.ok).toBe(true);
   expect(deleted.payload?.deleted).toBe(true);
 
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    { sessionId?: string }
-  >;
+  const store = loadSessionStore(storePath) as Record<string, { sessionId?: string }>;
   expect(store["agent:main:discord:group:dev"]).toBeUndefined();
 
   ws.close();

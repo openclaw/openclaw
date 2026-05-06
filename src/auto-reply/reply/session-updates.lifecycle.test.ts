@@ -87,9 +87,8 @@ describe("session-updates lifecycle hooks", () => {
       sessionId: "s1",
       sessionKey,
       reason: "compaction",
-      transcriptArchived: false,
     });
-    expect(endEvent?.sessionFile).toBe(await fs.realpath(transcriptPath));
+    expect(endEvent?.sessionFile).toBe(path.resolve(transcriptPath));
     expect(endContext).toMatchObject({
       sessionId: "s1",
       sessionKey,
