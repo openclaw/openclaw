@@ -17,7 +17,7 @@ import {
   type ResponsePrefixContext,
 } from "./response-prefix-template.js";
 
-export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat";
+export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat" | "empty-tool-output";
 
 export type NormalizeReplyOptions = {
   responsePrefix?: string;
@@ -93,6 +93,11 @@ export function normalizeReplyPayload(
       return null;
     }
     text = stripped.text;
+  }
+
+  if (text?.trim().toLowerCase() === "(no output)") {
+    opts.onSkip?.("empty-tool-output");
+    return null;
   }
 
   if (text) {

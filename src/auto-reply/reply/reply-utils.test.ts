@@ -97,6 +97,17 @@ describe("normalizeReplyPayload", () => {
     expect(normalized?.channelData).toEqual(payload.channelData);
   });
 
+  it("records empty-tool-output for bare no-output placeholders", () => {
+    const reasons: string[] = [];
+    const normalized = normalizeReplyPayload(
+      { text: "  (no output)\n" },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+
+    expect(normalized).toBeNull();
+    expect(reasons).toEqual(["empty-tool-output"]);
+  });
+
   it("records skip reasons for silent/empty payloads", () => {
     const cases = [
       { name: "silent", payload: { text: SILENT_REPLY_TOKEN }, reason: "silent" },

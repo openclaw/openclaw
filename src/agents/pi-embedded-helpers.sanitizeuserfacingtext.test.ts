@@ -309,6 +309,41 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(input)).toBe("Done. Clean answer only.");
   });
 
+  it("strips leaked current-message scaffolding while preserving reply text", () => {
+    const input = [
+      "Current message priority: high",
+      "[Current message - respond to this]",
+      "[Telegram 2026-05-05T20:20:00Z] Danny: ping",
+      "[from: Danny]",
+      "",
+      "Pong.",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Pong.");
+  });
+
+  it("strips copied history/current-message scaffolding blocks", () => {
+    const input = [
+      "[Chat messages since your last reply - for context]",
+      "[Telegram 2026-05-05T20:19:00Z] Danny: previous",
+      "",
+      "[Current message - respond to this]",
+      "[Telegram 2026-05-05T20:20:00Z] Danny: current",
+      "",
+      "Visible reply.",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Visible reply.");
+  });
+
+  it("suppresses standalone no-output placeholders without stripping inline mentions", () => {
+    expect(sanitizeUserFacingText("(no output)")).toBe("");
+    expect(sanitizeUserFacingText("Before\n(no output)\nAfter")).toBe("Before\nAfter");
+    expect(sanitizeUserFacingText("The literal (no output) text is relevant.")).toBe(
+      "The literal (no output) text is relevant.",
+    );
+  });
+
   it("strips copied inbound metadata blocks from user-facing assistant text", () => {
     const input = [
       "Conversation info (untrusted metadata):",
