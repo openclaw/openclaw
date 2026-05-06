@@ -8,8 +8,6 @@ title: "Plugin dependency resolution"
 sidebarTitle: "Dependencies"
 ---
 
-# Plugin dependency resolution
-
 OpenClaw keeps plugin dependency work at install/update time. Runtime loading
 does not run package managers, repair dependency trees, or mutate the OpenClaw
 package directory.

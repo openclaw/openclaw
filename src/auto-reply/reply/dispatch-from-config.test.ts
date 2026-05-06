@@ -4691,6 +4691,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const result = await dispatchReplyFromConfig({
       ctx: buildTestCtx({
         ChatType: "channel",
+        CommandSource: undefined,
         SessionKey: "test:discord:channel:C1",
       }),
       cfg: emptyConfig,
@@ -4715,6 +4716,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const result = await dispatchReplyFromConfig({
       ctx: buildTestCtx({
         ChatType: "channel",
+        CommandSource: undefined,
         Provider: "discord",
         Surface: "discord",
         OriginatingChannel: "discord",
@@ -4781,6 +4783,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const result = await dispatchReplyFromConfig({
       ctx: buildTestCtx({
         ChatType: "direct",
+        CommandSource: undefined,
         SessionKey: "agent:main:main",
       }),
       cfg: emptyConfig,
