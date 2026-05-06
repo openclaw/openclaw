@@ -30,9 +30,15 @@ function isDirectory(dirPath: string): boolean {
   }
 }
 
-function mergePath(params: { existing: string; prepend?: string[]; append?: string[] }): string {
+function mergePath(params: {
+  existing: string;
+  prepend?: string[];
+  append?: string[];
+  delimiter?: string;
+}): string {
+  const delimiter = params.delimiter ?? path.delimiter;
   const partsExisting = params.existing
-    .split(path.delimiter)
+    .split(delimiter)
     .map((part) => part.trim())
     .filter(Boolean);
   const partsPrepend = (params.prepend ?? []).map((part) => part.trim()).filter(Boolean);
@@ -46,7 +52,7 @@ function mergePath(params: { existing: string; prepend?: string[]; append?: stri
       merged.push(part);
     }
   }
-  return merged.join(path.delimiter);
+  return merged.join(delimiter);
 }
 
 function candidateBinDirs(opts: EnsureOpenClawPathOpts): { prepend: string[]; append: string[] } {
@@ -109,6 +115,32 @@ function candidateBinDirs(opts: EnsureOpenClawPathOpts): { prepend: string[]; ap
   if (platform === "darwin") {
     append.push(path.join(homeDir, "Library", "pnpm"));
   }
+  if (platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA;
+    const roamingAppData = process.env.APPDATA;
+    const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
+    const programFiles = process.env.ProgramW6432 ?? process.env.ProgramFiles;
+    const programFilesX86 = process.env["ProgramFiles(x86)"];
+
+    if (localAppData) {
+      prepend.push(
+        path.join(localAppData, "pnpm"),
+        path.join(localAppData, "Microsoft", "WindowsApps"),
+      );
+    }
+    if (roamingAppData) {
+      prepend.push(path.join(roamingAppData, "npm"));
+    }
+    if (programFiles) {
+      prepend.push(path.join(programFiles, "nodejs"));
+    }
+    if (programFilesX86) {
+      prepend.push(path.join(programFilesX86, "nodejs"));
+    }
+    if (systemRoot) {
+      prepend.push(path.join(systemRoot, "System32"), systemRoot);
+    }
+  }
   if (process.env.XDG_BIN_HOME) {
     append.push(process.env.XDG_BIN_HOME);
   }
@@ -131,12 +163,13 @@ export function ensureOpenClawCliOnPath(opts: EnsureOpenClawPathOpts = {}) {
   process.env.OPENCLAW_PATH_BOOTSTRAPPED = "1";
 
   const existing = opts.pathEnv ?? process.env.PATH ?? "";
+  const delimiter = (opts.platform ?? process.platform) === "win32" ? ";" : path.delimiter;
   const { prepend, append } = candidateBinDirs(opts);
   if (prepend.length === 0 && append.length === 0) {
     return;
   }
 
-  const merged = mergePath({ existing, prepend, append });
+  const merged = mergePath({ existing, prepend, append, delimiter });
   if (merged) {
     process.env.PATH = merged;
   }
