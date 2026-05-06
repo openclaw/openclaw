@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 // Copilot's OpenAI-compatible `/responses` endpoint can emit replay item IDs
 // that encode upstream connection state. Those IDs are rejected after the
 // connection changes, so normalize them at the provider boundary before send.
@@ -17,12 +15,6 @@ function looksLikeConnectionBoundId(id: string): boolean {
   return Buffer.from(id, "base64").length >= 16;
 }
 
-function deriveReplacementId(type: string | undefined, originalId: string): string {
-  const prefix = type === "function_call" ? "fc" : "msg";
-  const hex = createHash("sha256").update(originalId).digest("hex").slice(0, 16);
-  return `${prefix}_${hex}`;
-}
-
 type InputItem = Record<string, unknown> & { id?: unknown; type?: unknown };
 
 export function rewriteCopilotConnectionBoundResponseIds(input: unknown): boolean {
@@ -35,15 +27,13 @@ export function rewriteCopilotConnectionBoundResponseIds(input: unknown): boolea
     if (typeof id !== "string" || id.length === 0) {
       continue;
     }
-    // Reasoning items always reference server-side encrypted state bound to the
-    // original item ID. Rewriting the ID — even when encrypted_content is absent
-    // or null — breaks Copilot's server-side lookup and causes a 400 validation
-    // failure regardless of whether the client included encrypted_content.
-    if (item.type === "reasoning") {
-      continue;
-    }
     if (looksLikeConnectionBoundId(id)) {
-      item.id = deriveReplacementId(typeof item.type === "string" ? item.type : undefined, id);
+      // Copilot accepts replayed connection-bound response items when the id is
+      // omitted and recovers the real id from encrypted_content/server state.
+      // Synthesizing rs_/fc_/msg_ ids with hashes creates values Copilot never
+      // issued, so encrypted_content validation can fail with "item_id did not
+      // match the target item id" on multi-turn tool-call replays.
+      delete item.id;
       rewrote = true;
     }
   }
