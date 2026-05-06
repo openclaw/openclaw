@@ -1,5 +1,5 @@
-import type { PluginManifestContracts } from "./manifest.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../agents/glob-pattern.js";
+import type { PluginManifestContracts } from "./manifest.js";
 
 export function normalizePluginToolContractNames(
   contracts: Pick<PluginManifestContracts, "tools"> | undefined,
@@ -24,10 +24,10 @@ export function findUndeclaredPluginToolNames(params: {
 }): string[] {
   const declared = new Set(normalizePluginToolNames(params.declaredNames));
   const compiledGlobPatterns = compileGlobPatterns({
-    raw: params.declaredNames,
+    raw: Array.from(params.declaredNames),
     normalize: (v: string) => v.toLowerCase().trim(),
   });
-  return normalizePluginToolNames(params.toolNames).filter((name) =>
-    !declared.has(name) && !matchesAnyGlobPattern(name, compiledGlobPatterns)
+  return normalizePluginToolNames(params.toolNames).filter(
+    (name) => !declared.has(name) && !matchesAnyGlobPattern(name, compiledGlobPatterns),
   );
 }
