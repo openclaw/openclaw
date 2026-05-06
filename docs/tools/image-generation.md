@@ -218,7 +218,8 @@ from each attempt.
   <Accordion title="Timeouts">
     Set `agents.defaults.imageGenerationModel.timeoutMs` for slow image
     backends. A per-call `timeoutMs` tool parameter overrides the configured
-    default.
+    default. Bundled hosted image providers use a 180 second default, except
+    Azure OpenAI image generation, which uses 600 seconds.
   </Accordion>
   <Accordion title="Inspect at runtime">
     Use `action: "list"` to inspect the currently registered providers,

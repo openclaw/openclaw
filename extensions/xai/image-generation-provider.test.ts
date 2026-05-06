@@ -124,6 +124,11 @@ describe("xai image generation provider", () => {
         baseUrl: "https://custom.x.ai/v1",
       }),
     );
+    expect(resolveProviderOperationTimeoutMsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        defaultTimeoutMs: 180_000,
+      }),
+    );
     expect(postJsonRequestMock).toHaveBeenCalledWith(
       expect.objectContaining({
         url: expect.stringContaining("/images/generations"),
