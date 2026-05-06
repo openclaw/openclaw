@@ -6,6 +6,7 @@ const statusSummaryMocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
   buildChannelSummary: vi.fn(async () => ["ok"]),
   readSessionStoreReadOnly: vi.fn(() => ({})),
+  configureTaskRegistryMaintenance: vi.fn(),
   taskRegistrySummary: {
     total: 0,
     active: 0,
@@ -27,6 +28,7 @@ const statusSummaryMocks = vi.hoisted(() => ({
       cron: 0,
     },
   } as TaskRegistrySummary,
+  getInspectableTaskRegistrySummary: vi.fn(() => statusSummaryMocks.taskRegistrySummary),
   taskAuditFindings: [
     {
       severity: "warn",
@@ -46,6 +48,7 @@ const statusSummaryMocks = vi.hoisted(() => ({
       },
     },
   ] as TaskAuditFinding[],
+  getInspectableTaskAuditFindings: vi.fn(() => statusSummaryMocks.taskAuditFindings),
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -114,22 +117,9 @@ vi.mock("../infra/system-events.js", () => ({
 }));
 
 vi.mock("../tasks/task-registry.maintenance.js", () => ({
-  configureTaskRegistryMaintenance: vi.fn(),
-  getInspectableTaskRegistrySummary: vi.fn(() => statusSummaryMocks.taskRegistrySummary),
-  getInspectableTaskAuditSummary: vi.fn(() => ({
-    total: 1,
-    warnings: 1,
-    errors: 0,
-    byCode: {
-      stale_queued: 0,
-      stale_running: 0,
-      lost: 0,
-      delivery_failed: 1,
-      missing_cleanup: 0,
-      inconsistent_timestamps: 0,
-    },
-  })),
-  getInspectableTaskAuditFindings: vi.fn(() => statusSummaryMocks.taskAuditFindings),
+  configureTaskRegistryMaintenance: statusSummaryMocks.configureTaskRegistryMaintenance,
+  getInspectableTaskRegistrySummary: statusSummaryMocks.getInspectableTaskRegistrySummary,
+  getInspectableTaskAuditFindings: statusSummaryMocks.getInspectableTaskAuditFindings,
 }));
 
 vi.mock("../routing/session-key.js", () => ({
@@ -297,6 +287,16 @@ describe("getStatusSummary", () => {
     expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope).not.toHaveBeenCalled();
     expect(buildChannelSummary).not.toHaveBeenCalled();
     expect(resolveLinkChannelContext).not.toHaveBeenCalled();
+  });
+
+  it("skips task registry maintenance when task summary is explicitly disabled", async () => {
+    const summary = await getStatusSummary({ includeTaskSummary: false });
+
+    expect(summary.tasks.total).toBe(0);
+    expect(summary.taskAudit.total).toBe(0);
+    expect(statusSummaryMocks.configureTaskRegistryMaintenance).not.toHaveBeenCalled();
+    expect(statusSummaryMocks.getInspectableTaskRegistrySummary).not.toHaveBeenCalled();
+    expect(statusSummaryMocks.getInspectableTaskAuditFindings).not.toHaveBeenCalled();
   });
 
   it("does not trigger async context warmup while building status summaries", async () => {

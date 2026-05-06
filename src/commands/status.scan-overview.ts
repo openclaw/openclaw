@@ -144,6 +144,8 @@ export async function collectStatusScanOverview(params: {
   ) => boolean | Promise<boolean>;
   includeChannelsData?: boolean;
   includeLiveChannelStatus?: boolean;
+  includeLocalStatusRpcFallback?: boolean;
+  gatewayProbeTimeoutMs?: number;
   includeChannelSetupRuntimeFallback?: boolean;
   channelCredentialResolutionSkipped?: boolean;
   useGatewayCallOverridesForChannelsStatus?: boolean;
@@ -213,6 +215,8 @@ export async function collectStatusScanOverview(params: {
     skipUpdateCheck: params.skipUpdateCheck,
     fetchGitUpdate: params.fetchGitUpdate,
     includeRegistryUpdate: params.includeRegistryUpdate,
+    includeLocalStatusRpcFallback: params.includeLocalStatusRpcFallback,
+    gatewayProbeTimeoutMs: params.gatewayProbeTimeoutMs,
     getTailnetHostname: async (runner) =>
       await loadStatusScanDepsRuntimeModule().then(({ getTailnetHostname }) =>
         getTailnetHostname(runner),
@@ -316,6 +320,7 @@ export async function collectStatusScanOverview(params: {
 export async function resolveStatusSummaryFromOverview(params: {
   overview: Pick<StatusScanOverviewResult, "skipColdStartNetworkChecks" | "cfg" | "sourceConfig">;
   includeChannelSummary?: boolean;
+  includeTaskSummary?: boolean;
 }) {
   if (params.overview.skipColdStartNetworkChecks) {
     return buildColdStartStatusSummary();
@@ -325,6 +330,7 @@ export async function resolveStatusSummaryFromOverview(params: {
       config: params.overview.cfg,
       sourceConfig: params.overview.sourceConfig,
       includeChannelSummary: params.includeChannelSummary,
+      includeTaskSummary: params.includeTaskSummary,
     }),
   );
 }

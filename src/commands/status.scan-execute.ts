@@ -14,6 +14,7 @@ export async function executeStatusScanFromOverview(params: {
   runtime?: RuntimeEnv;
   summary?: {
     includeChannelSummary?: boolean;
+    includeTaskSummary?: boolean;
   };
   resolveMemory: (args: {
     cfg: StatusScanOverviewResult["cfg"];
@@ -36,6 +37,7 @@ export async function executeStatusScanFromOverview(params: {
     resolveStatusSummaryFromOverview({
       overview: params.overview,
       includeChannelSummary: params.summary?.includeChannelSummary,
+      includeTaskSummary: params.summary?.includeTaskSummary,
     }),
   ]);
 
