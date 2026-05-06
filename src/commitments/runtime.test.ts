@@ -224,6 +224,11 @@ describe("commitment extraction runtime", () => {
     expect(request.provider).toBe("openai");
     expect(request.model).toBe("gpt-5.5");
     expect(request.disableTools).toBe(true);
+    // Regression for #78451: commitment extraction must NOT hardcode fastMode,
+    // so MiniMax (and similar) stream wrappers do not flip the configured
+    // base model id to a -highspeed variant the operator's plan does not own.
+    const rawRequest = runEmbeddedAgentMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(rawRequest).not.toHaveProperty("fastMode");
   });
 
   it("backs off hidden extraction after terminal model or auth failures", async () => {
