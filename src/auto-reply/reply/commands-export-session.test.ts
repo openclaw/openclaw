@@ -19,6 +19,7 @@ const hoisted = await vi.hoisted(async () => {
     ),
     mkdirMock: vi.fn(async (_filePath: string, _options?: { recursive?: boolean }) => undefined),
     accessMock: vi.fn(async (_filePath: string) => undefined),
+    pathExistsMock: vi.fn(async (_filePath: string) => true),
     exportHtmlTemplateContents: new Map<string, string>(),
   };
 });
@@ -35,6 +36,10 @@ vi.mock("../../config/sessions/store.js", () => ({
 
 vi.mock("./commands-system-prompt.js", () => ({
   resolveCommandsSystemPromptBundle: hoisted.resolveCommandsSystemPromptBundleMock,
+}));
+
+vi.mock("../../infra/fs-safe.js", () => ({
+  pathExists: hoisted.pathExistsMock,
 }));
 
 vi.mock("node:fs", async () => {
@@ -146,6 +151,7 @@ describe("buildExportSessionReply", () => {
       sandboxRuntime: { sandboxed: false, mode: "off" },
     });
     hoisted.accessMock.mockResolvedValue(undefined);
+    hoisted.pathExistsMock.mockResolvedValue(true);
     hoisted.exportHtmlTemplateContents.clear();
   });
 

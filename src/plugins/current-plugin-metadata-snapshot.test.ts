@@ -160,6 +160,27 @@ describe("current plugin metadata snapshot", () => {
     expect(getCurrentPluginMetadataSnapshot({ config: autoEnabledConfig })).toBeUndefined();
   });
 
+  it("accepts explicit compatible configs for gateway runtime reuse", () => {
+    const sourceConfig = { channels: { telegram: { botToken: "token" } } };
+    const runtimeConfig = {
+      ...sourceConfig,
+      plugins: { allow: ["telegram"] },
+    };
+    const snapshot = createSnapshot({ config: sourceConfig, workspaceDir: "/workspace" });
+    setCurrentPluginMetadataSnapshot(snapshot, {
+      config: sourceConfig,
+      compatibleConfigs: [runtimeConfig],
+      workspaceDir: "/workspace",
+    });
+
+    expect(
+      getCurrentPluginMetadataSnapshot({ config: sourceConfig, workspaceDir: "/workspace" }),
+    ).toBe(snapshot);
+    expect(
+      getCurrentPluginMetadataSnapshot({ config: runtimeConfig, workspaceDir: "/workspace" }),
+    ).toBe(snapshot);
+  });
+
   it("clears the current snapshot", () => {
     setCurrentPluginMetadataSnapshot(createSnapshot());
     clearCurrentPluginMetadataSnapshot();

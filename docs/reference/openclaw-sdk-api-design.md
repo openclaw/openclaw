@@ -379,7 +379,7 @@ Benefits:
 - low-level consumers still have full protocol access
 - high-level consumers get the small product API
 
-## Related docs
+## Related
 
 - [OpenClaw App SDK](/concepts/openclaw-sdk)
 - [Gateway RPC reference](/reference/rpc)
