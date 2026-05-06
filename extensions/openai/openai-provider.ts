@@ -1,3 +1,4 @@
+import type { StreamFn } from "@mariozechner/pi-agent-core";
 import {
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
@@ -77,6 +78,42 @@ const OPENAI_MODERN_MODEL_IDS = [
   OPENAI_GPT_54_NANO_MODEL_ID,
   "gpt-5.2",
 ] as const;
+
+function clampChatLatestTextVerbosity(payload: unknown): void {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  const payloadObj = payload as Record<string, unknown>;
+  const text = payloadObj.text;
+  if (!text || typeof text !== "object") {
+    return;
+  }
+  const textObj = text as Record<string, unknown>;
+  if (textObj.verbosity !== undefined && textObj.verbosity !== "medium") {
+    payloadObj.text = { ...textObj, verbosity: "medium" };
+  }
+}
+
+function createOpenAIChatLatestCompatWrapper(baseStreamFn: StreamFn, modelId: string): StreamFn {
+  const underlying = baseStreamFn;
+  return (model, context, options) => {
+    if (
+      model.api !== "openai-responses" ||
+      normalizeLowercaseStringOrEmpty(modelId) !== OPENAI_CHAT_LATEST_MODEL_ID
+    ) {
+      return underlying(model, context, options);
+    }
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        clampChatLatestTextVerbosity(payload);
+        return originalOnPayload?.(payload, model);
+      },
+    });
+  };
+}
+
 function shouldUseOpenAIResponsesTransport(params: {
   provider: string;
   api?: string | null;
@@ -210,6 +247,7 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
 }
 
 export function buildOpenAIProvider(): ProviderPlugin {
+  const responsesHooks = buildOpenAIResponsesProviderHooks({ transport: "sse" });
   return {
     id: PROVIDER_ID,
     label: "OpenAI",
@@ -247,7 +285,12 @@ export function buildOpenAIProvider(): ProviderPlugin {
       shouldUseOpenAIResponsesTransport({ provider, api, baseUrl })
         ? { api: "openai-responses", baseUrl }
         : undefined,
-    ...buildOpenAIResponsesProviderHooks({ transport: "sse" }),
+    ...responsesHooks,
+    wrapStreamFn: (ctx) =>
+      createOpenAIChatLatestCompatWrapper(
+        responsesHooks.wrapStreamFn?.(ctx) ?? ctx.streamFn,
+        ctx.modelId,
+      ),
     matchesContextOverflowError: ({ errorMessage }) =>
       /content_filter.*(?:prompt|input).*(?:too long|exceed)/i.test(errorMessage),
     resolveReasoningOutputMode: () => "native",

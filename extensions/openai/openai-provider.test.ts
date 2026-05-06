@@ -587,6 +587,40 @@ describe("buildOpenAIProvider", () => {
     expect(result.payload.tools).toEqual([{ type: "web_search" }]);
   });
 
+  it("clamps chat-latest text verbosity to the only live-supported value", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+    const extraParams = provider.prepareExtraParams?.({
+      provider: "openai",
+      modelId: "chat-latest",
+      extraParams: {
+        textVerbosity: "low",
+      },
+    } as never);
+    const result = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "chat-latest",
+      extraParams: extraParams ?? undefined,
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "chat-latest",
+        baseUrl: "https://api.openai.com/v1",
+        contextWindow: 400_000,
+      } as Model<"openai-responses">,
+      payload: {
+        text: { verbosity: "high" },
+      },
+    });
+
+    expect(result.payload.text).toEqual({ verbosity: "medium" });
+  });
+
   it("uses native OpenAI web search instead of the managed web_search function", () => {
     const provider = buildOpenAIProvider();
     const wrap = provider.wrapStreamFn;

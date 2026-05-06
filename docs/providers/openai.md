@@ -179,7 +179,9 @@ Choose your preferred auth method and follow the setup steps.
     `chat-latest` is a moving alias. OpenAI documents it as the latest Instant
     model used in ChatGPT and recommends `gpt-5.5` for production API usage, so
     keep `openai/gpt-5.5` as the stable default unless you explicitly want that
-    alias behavior.
+    alias behavior. The alias currently accepts only `medium` text verbosity, so
+    OpenClaw normalizes incompatible OpenAI text-verbosity overrides for this
+    model.
 
     <Warning>
     OpenClaw does **not** expose `openai/gpt-5.3-codex-spark`. Live OpenAI API requests reject that model, and the current Codex catalog does not expose it either.
