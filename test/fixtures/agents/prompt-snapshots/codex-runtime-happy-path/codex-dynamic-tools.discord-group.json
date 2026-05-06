@@ -1337,6 +1337,14 @@
         "timeoutSeconds": {
           "minimum": 0,
           "type": "number"
+        },
+        "toolsAllow": {
+          "description": "Allowed tool ids for runtime=\"subagent\". Omit to use the default tool set; pass [] to disable all tools.",
+          "items": {
+            "description": "Allowed tool id for the spawned native subagent run.",
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": ["task"],

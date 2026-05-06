@@ -265,6 +265,30 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     );
   });
 
+  it("uses minimal prompt inputs for explicit empty runtime toolsAllow", async () => {
+    hoisted.resolveSkillsPromptForRunMock.mockReturnValue("SKILL CATALOG SHOULD NOT APPEAR");
+    const seen: { systemPrompt?: string } = {};
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        toolsAllow: [],
+      },
+      sessionPrompt: async (session) => {
+        seen.systemPrompt = session.agent.state.systemPrompt;
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(seen.systemPrompt).not.toContain("SKILL CATALOG SHOULD NOT APPEAR");
+  });
+
   it("keeps before_prompt_build prependContext out of system prompt on transcriptPrompt runs", async () => {
     const runBeforePromptBuild = vi.fn(async () => ({ prependContext: "dynamic hook context" }));
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
