@@ -457,6 +457,15 @@ describe("config view", () => {
       expect(translateConfigLabel("Audio Understanding Timeout (sec)")).toBe(
         "Thời gian chờ hiểu âm thanh (giây)",
       );
+      expect(translateConfigLabel("Sensitive Data Redaction Mode")).toBe(
+        "Chế độ che dữ liệu nhạy cảm",
+      );
+      expect(translateConfigLabel("Video Understanding Max Bytes")).toBe(
+        "Dung lượng tối đa khi hiểu video",
+      );
+      expect(translateConfigLabel("Link Understanding Max Links")).toBe(
+        "Số liên kết tối đa khi hiểu liên kết",
+      );
 
       const browserHelp = translateConfigHelp(
         "Default timeout in milliseconds for browser action requests before the client gives up waiting. Raise this when healthy waits or UI interactions exceed the default request budget.",
@@ -473,6 +482,13 @@ describe("config view", () => {
       expect(imageHelp).toContain("chế độ chỉ văn bản");
       expect(imageHelp).not.toContain("image understanding");
       expect(imageHelp).not.toContain("text-only operation");
+
+      const redactionHelp = translateConfigHelp(
+        'Sensitive log/transcript redaction mode: "off" disables general log and transcript masking, while "tools" redacts sensitive tool/config payload fields in those sinks. Safety-boundary UI, tool, and diagnostic payloads may still redact even when this is "off".',
+      );
+      expect(redactionHelp).toContain("Chế độ che dữ liệu nhạy cảm");
+      expect(redactionHelp).toContain("Payload UI/công cụ/chẩn đoán");
+      expect(redactionHelp).not.toContain("transcript masking");
     } finally {
       await i18n.setLocale("en");
     }
