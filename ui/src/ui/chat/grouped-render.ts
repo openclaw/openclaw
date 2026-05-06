@@ -17,6 +17,7 @@ import type {
 } from "../types/chat-types.ts";
 import { resolveLocalUserName } from "../user-identity.ts";
 export { resolveAssistantTextAvatar } from "../views/agents-utils.ts";
+import { stripThinkingTags } from "../strip-thinking-tags.ts";
 import { renderChatAvatar } from "./chat-avatar.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import { extractThinkingCached, formatReasoningMarkdown } from "./message-extract.ts";
@@ -1412,7 +1413,7 @@ function renderGroupedMessage(
   const hasImages = images.length > 0;
 
   const normalizedMessage = normalizeMessage(message);
-  const extractedText = normalizedMessage.content
+  const rawExtractedText = normalizedMessage.content
     .reduce<string[]>((lines, item) => {
       if (item.type === "text" && typeof item.text === "string") {
         lines.push(item.text);
@@ -1421,6 +1422,13 @@ function renderGroupedMessage(
     }, [])
     .join("\n")
     .trim();
+  // Strip <think>...</think> and <final>...</final> scaffolding from
+  // assistant-rendered text so they don't leak into the chat bubble. The
+  // non-streaming history path already strips these via extractText, but
+  // renderGroupedMessage reads message.content[].text directly, and the
+  // streaming path feeds raw model output here. See issue #77879.
+  const extractedText =
+    role === "assistant" ? stripThinkingTags(rawExtractedText) : rawExtractedText;
   const assistantAttachments = normalizedMessage.content.filter(
     (item): item is AttachmentItem => item.type === "attachment",
   );
