@@ -25,6 +25,10 @@ import {
   resolveModelRefFromString,
 } from "./model-selection.js";
 
+vi.mock("./provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
+}));
+
 const EXPLICIT_ALLOWLIST_CONFIG = {
   agents: {
     defaults: {
@@ -195,11 +199,14 @@ describe("model-selection", () => {
       expected: { provider: string; model: string },
     ) => {
       for (const raw of variants) {
-        expect(parseModelRef(raw, defaultProvider), raw).toEqual(expected);
+        expect(
+          parseModelRef(raw, defaultProvider, { allowPluginNormalization: false }),
+          raw,
+        ).toEqual(expected);
       }
     };
 
-    it.each([
+    const parseModelRefCases = [
       {
         name: "parses explicit provider/model refs",
         variants: ["anthropic/claude-3-5-sonnet"],
@@ -335,19 +342,30 @@ describe("model-selection", () => {
         defaultProvider: "google-vertex",
         expected: { provider: "google-vertex", model: "gemini-3.1-flash-lite-preview" },
       },
-    ])("$name", ({ variants, defaultProvider, expected }) => {
-      expectParsedModelVariants(variants, defaultProvider, expected);
+    ];
+
+    it("parses and normalizes provider/model refs", () => {
+      for (const { variants, defaultProvider, expected } of parseModelRefCases) {
+        expectParsedModelVariants(variants, defaultProvider, expected);
+      }
     });
 
     it("round-trips normalized refs through modelKey", () => {
-      const parsed = parseModelRef(" opus-4.6 ", "anthropic");
+      const parsed = parseModelRef(" opus-4.6 ", "anthropic", {
+        allowPluginNormalization: false,
+      });
       expect(parsed).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
       expect(modelKey(parsed?.provider ?? "", parsed?.model ?? "")).toBe(
         "anthropic/claude-opus-4-6",
       );
     });
-    it.each(["", "  ", "/", "anthropic/", "/model"])("returns null for invalid ref %j", (raw) => {
-      expect(parseModelRef(raw, "anthropic")).toBeNull();
+    it("returns null for invalid refs", () => {
+      for (const raw of ["", "  ", "/", "anthropic/", "/model"]) {
+        expect(
+          parseModelRef(raw, "anthropic", { allowPluginNormalization: false }),
+          raw,
+        ).toBeNull();
+      }
     });
   });
 

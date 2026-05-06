@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -18,7 +19,6 @@ import {
   resolveAttemptSpawnWorkspaceDir,
   resolveAgentHarnessBeforePromptBuildResult,
   resolveModelAuthMode,
-  resolveOpenClawAgentDir,
   resolveSandboxContext,
   resolveSessionAgentIds,
   resolveUserPath,
@@ -38,6 +38,7 @@ import {
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import {
@@ -46,8 +47,8 @@ import {
   resolveCodexAppServerAuthProfileIdForAgent,
 } from "./auth-bridge.js";
 import {
-  createCodexAppServerClientFactoryTestHooks,
   defaultCodexAppServerClientFactory,
+  type CodexAppServerClientFactory,
 } from "./client-factory.js";
 import {
   isCodexAppServerApprovalRequest,
@@ -126,8 +127,16 @@ const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
 type OpenClawCodingToolsOptions = NonNullable<
   Parameters<(typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"]>[0]
 >;
+type OpenClawCodingToolsFactory =
+  (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
 
-let clientFactory = defaultCodexAppServerClientFactory;
+const testClientFactoryStorage = new AsyncLocalStorage<CodexAppServerClientFactory | undefined>();
+const clientFactory = defaultCodexAppServerClientFactory;
+let openClawCodingToolsFactoryForTests: OpenClawCodingToolsFactory | undefined;
+
+function resolveCodexAppServerClientFactory(): CodexAppServerClientFactory {
+  return testClientFactoryStorage.getStore() ?? clientFactory;
+}
 
 function emitCodexAppServerEvent(
   params: EmbeddedRunAttemptParams,
@@ -351,7 +360,7 @@ export async function runCodexAppServerAttempt(
   } = {},
 ): Promise<EmbeddedRunAttemptResult> {
   const attemptStartedAt = Date.now();
-  const attemptClientFactory = clientFactory;
+  const attemptClientFactory = resolveCodexAppServerClientFactory();
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
@@ -385,7 +394,7 @@ export async function runCodexAppServerAttempt(
     config: params.config,
     agentId: params.agentId,
   });
-  const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+  const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
   const startupBinding = await readCodexAppServerBinding(params.sessionFile);
   const startupAuthProfileCandidate =
     params.runtimePlan?.auth.forwardedAuthProfileId ??
@@ -1466,7 +1475,7 @@ type DynamicToolBuildParams = {
   sandboxSessionKey: string;
   sandbox: Awaited<ReturnType<typeof resolveSandboxContext>>;
   runAbortController: AbortController;
-  sessionAgentId: string | undefined;
+  sessionAgentId: string;
   pluginConfig: CodexPluginConfig;
   onYieldDetected: () => void;
 };
@@ -1477,8 +1486,10 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     return [];
   }
   const modelHasVision = params.model.input?.includes("image") ?? false;
-  const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
-  const { createOpenClawCodingTools } = await import("openclaw/plugin-sdk/agent-harness");
+  const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, input.sessionAgentId);
+  const createOpenClawCodingTools =
+    openClawCodingToolsFactoryForTests ??
+    (await import("openclaw/plugin-sdk/agent-harness")).createOpenClawCodingTools;
   const allTools = createOpenClawCodingTools({
     agentId: input.sessionAgentId,
     ...buildEmbeddedAttemptToolRunContext(params),
@@ -1963,7 +1974,16 @@ export const __testing = {
   buildDynamicTools,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
-  ...createCodexAppServerClientFactoryTestHooks((factory) => {
-    clientFactory = factory;
-  }),
+  setOpenClawCodingToolsFactoryForTests(factory: OpenClawCodingToolsFactory): void {
+    openClawCodingToolsFactoryForTests = factory;
+  },
+  resetOpenClawCodingToolsFactoryForTests(): void {
+    openClawCodingToolsFactoryForTests = undefined;
+  },
+  setCodexAppServerClientFactoryForTests(factory: CodexAppServerClientFactory): void {
+    testClientFactoryStorage.enterWith(factory);
+  },
+  resetCodexAppServerClientFactoryForTests(): void {
+    testClientFactoryStorage.enterWith(undefined);
+  },
 } as const;

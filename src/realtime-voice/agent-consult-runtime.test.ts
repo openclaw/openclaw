@@ -17,6 +17,16 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
       spawnedBy?: string;
       forkedFromParent?: boolean;
       totalTokens?: number;
+      deliveryContext?: {
+        channel?: string;
+        to?: string;
+        accountId?: string;
+        threadId?: string | number;
+      };
+      lastChannel?: string;
+      lastTo?: string;
+      lastAccountId?: string;
+      lastThreadId?: string | number;
     }
   > = {};
   const runEmbeddedPiAgent = vi.fn(async () => ({
@@ -114,6 +124,7 @@ describe("realtime voice agent consult runtime", () => {
         thinkLevel: "high",
         timeoutMs: 10_000,
         prompt: expect.stringContaining("Caller: Can you check this?"),
+        extraSystemPrompt: expect.stringContaining("delegated requests"),
       }),
     );
   });
@@ -229,6 +240,99 @@ describe("realtime voice agent consult runtime", () => {
         sessionId: "forked-session",
         sessionFile: "/tmp/forked.jsonl",
         spawnedBy: "agent:main:main",
+      }),
+    );
+  });
+
+  it("inherits requester message routing for forked consult sessions", async () => {
+    const { runtime, runEmbeddedPiAgent, sessionStore } = createAgentRuntime();
+    sessionStore["agent:main:discord:channel:123"] = {
+      sessionId: "parent-session",
+      deliveryContext: {
+        channel: "discord",
+        to: "channel:123",
+        accountId: "default",
+      },
+      updatedAt: 1,
+    };
+
+    await consultRealtimeVoiceAgent({
+      cfg: {} as never,
+      agentRuntime: runtime as never,
+      logger: { warn: vi.fn() },
+      agentId: "main",
+      sessionKey: "voice:google-meet:meet-1",
+      spawnedBy: "agent:main:discord:channel:123",
+      contextMode: "fork",
+      messageProvider: "voice",
+      lane: "voice",
+      runIdPrefix: "voice-realtime-consult:call-1",
+      args: { question: "Send a status message." },
+      transcript: [],
+      surface: "a live phone call",
+      userLabel: "Caller",
+    });
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "voice:google-meet:meet-1",
+        spawnedBy: "agent:main:discord:channel:123",
+        messageProvider: "discord",
+        agentAccountId: "default",
+        messageTo: "channel:123",
+        currentChannelId: "channel:123",
+      }),
+    );
+    expect(sessionStore["voice:google-meet:meet-1"]).toMatchObject({
+      deliveryContext: {
+        channel: "discord",
+        to: "channel:123",
+        accountId: "default",
+      },
+      lastChannel: "discord",
+      lastTo: "channel:123",
+      lastAccountId: "default",
+    });
+  });
+
+  it("reuses the call session delivery context when requester metadata is absent", async () => {
+    const { runtime, runEmbeddedPiAgent, sessionStore } = createAgentRuntime();
+    sessionStore["voice:google-meet:meet-1"] = {
+      sessionId: "call-session",
+      deliveryContext: {
+        channel: "discord",
+        to: "channel:123",
+        accountId: "default",
+        threadId: "thread-456",
+      },
+      updatedAt: 1,
+    };
+
+    await consultRealtimeVoiceAgent({
+      cfg: {} as never,
+      agentRuntime: runtime as never,
+      logger: { warn: vi.fn() },
+      agentId: "main",
+      sessionKey: "voice:google-meet:meet-1",
+      messageProvider: "voice",
+      lane: "voice",
+      runIdPrefix: "voice-realtime-consult:call-1",
+      args: { question: "Send this to the original chat." },
+      transcript: [],
+      surface: "a live phone call",
+      userLabel: "Caller",
+    });
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "call-session",
+        sessionKey: "voice:google-meet:meet-1",
+        messageProvider: "discord",
+        agentAccountId: "default",
+        messageTo: "channel:123",
+        messageThreadId: "thread-456",
+        currentChannelId: "channel:123",
+        currentThreadTs: "thread-456",
       }),
     );
   });

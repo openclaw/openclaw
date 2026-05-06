@@ -13,6 +13,7 @@ import type {
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../types.ts";
+import { resolveAgentRuntimeLabel } from "./agents-utils.ts";
 
 export type SessionsProps = {
   loading: boolean;
@@ -178,7 +179,14 @@ function filterRows(
     const label = normalizeLowercaseStringOrEmpty(row.label);
     const kind = normalizeLowercaseStringOrEmpty(row.kind);
     const displayName = normalizeLowercaseStringOrEmpty(row.displayName);
-    if (key.includes(q) || label.includes(q) || kind.includes(q) || displayName.includes(q)) {
+    const runtime = normalizeLowercaseStringOrEmpty(resolveAgentRuntimeLabel(row.agentRuntime));
+    if (
+      key.includes(q) ||
+      label.includes(q) ||
+      kind.includes(q) ||
+      displayName.includes(q) ||
+      runtime.includes(q)
+    ) {
       return true;
     }
     const keyParts = parseSessionKeyParts(row.key);
@@ -543,6 +551,7 @@ export function renderSessions(props: SessionsProps) {
                 ${sortHeader("key", t("sessionsView.key"), "data-table-key-col")}
                 <th>${t("sessionsView.label")}</th>
                 ${sortHeader("kind", t("sessionsView.kind"))}
+                <th>${t("agents.context.runtime")}</th>
                 ${sortHeader("updated", t("sessionsView.updated"))}
                 ${sortHeader("tokens", t("sessionsView.tokens"))}
                 <th>${t("sessionsView.compaction")}</th>
@@ -556,7 +565,7 @@ export function renderSessions(props: SessionsProps) {
               ${paginated.length === 0
                 ? html`
                     <tr>
-                      <td colspan="11" class="data-table-empty-cell">
+                      <td colspan="12" class="data-table-empty-cell">
                         ${emptyBecauseFiltered
                           ? html`
                               <div class="data-table-empty-state" role="status" aria-live="polite">
@@ -748,6 +757,9 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       <td>
         <span class="data-table-badge ${badgeClass}">${row.kind}</span>
       </td>
+      <td class="session-runtime-cell">
+        <span class="mono">${resolveAgentRuntimeLabel(row.agentRuntime)}</span>
+      </td>
       <td>${updated}</td>
       <td class="session-token-cell">${formatSessionTokens(row)}</td>
       <td>
@@ -858,7 +870,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
     ...(isExpanded && hasCheckpoints
       ? [
           html`<tr id=${detailsId} class="session-checkpoint-details-row">
-            <td colspan="11" style="padding: 0;">
+            <td colspan="12" style="padding: 0;">
               <div
                 style="padding: 14px 16px; border-top: 1px solid var(--border); background: var(--surface-2, rgba(127, 127, 127, 0.05));"
               >

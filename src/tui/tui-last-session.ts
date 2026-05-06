@@ -42,6 +42,30 @@ async function readStore(filePath: string): Promise<LastSessionStore> {
   }
 }
 
+function normalizeMarker(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function isHeartbeatSessionKey(sessionKey: string): boolean {
+  return normalizeMarker(sessionKey).endsWith(":heartbeat");
+}
+
+export function isHeartbeatLikeTuiSession(session: TuiSessionList["sessions"][number]): boolean {
+  if (isHeartbeatSessionKey(session.key)) {
+    return true;
+  }
+  const markers = [
+    session.provider,
+    session.lastProvider,
+    session.lastChannel,
+    session.lastTo,
+    session.origin?.provider,
+    session.origin?.surface,
+    session.origin?.label,
+  ];
+  return markers.some((marker) => normalizeMarker(marker) === "heartbeat");
+}
+
 export async function readTuiLastSessionKey(params: {
   scopeKey: string;
   stateDir?: string;
@@ -57,7 +81,7 @@ export async function writeTuiLastSessionKey(params: {
   stateDir?: string;
 }): Promise<void> {
   const sessionKey = params.sessionKey.trim();
-  if (!sessionKey || sessionKey === "unknown") {
+  if (!sessionKey || sessionKey === "unknown" || isHeartbeatSessionKey(sessionKey)) {
     return;
   }
   const filePath = resolveTuiLastSessionStatePath(params.stateDir);
@@ -82,6 +106,9 @@ export function resolveRememberedTuiSessionKey(params: {
   if (!rememberedKey) {
     return null;
   }
+  if (isHeartbeatSessionKey(rememberedKey)) {
+    return null;
+  }
   const currentAgentId = normalizeAgentId(params.currentAgentId);
   const parsed = parseAgentSessionKey(rememberedKey);
   if (parsed && normalizeAgentId(parsed.agentId) !== currentAgentId) {
@@ -89,6 +116,9 @@ export function resolveRememberedTuiSessionKey(params: {
   }
   const rememberedRest = parsed?.rest ?? rememberedKey;
   const match = params.sessions.find((session) => {
+    if (isHeartbeatLikeTuiSession(session)) {
+      return false;
+    }
     if (session.key === rememberedKey) {
       return true;
     }

@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
+import {
+  resolvePluginCapabilityProvider,
+  resolvePluginCapabilityProviders,
+} from "../plugins/capability-provider-runtime.js";
 import {
   buildCapabilityProviderMaps,
   normalizeCapabilityProviderId,
@@ -38,6 +41,14 @@ export function getRealtimeVoiceProvider(
   const normalized = normalizeRealtimeVoiceProviderId(providerId);
   if (!normalized) {
     return undefined;
+  }
+  const directProvider = resolvePluginCapabilityProvider({
+    key: "realtimeVoiceProviders",
+    providerId: normalized,
+    cfg,
+  });
+  if (directProvider) {
+    return directProvider;
   }
   return buildProviderMaps(cfg).aliases.get(normalized);
 }
