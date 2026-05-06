@@ -1014,6 +1014,7 @@ export async function spawnSubagentDirect(
     targetAgentId,
     attachments: params.attachments,
     mountPathHint,
+    workspaceDirOverride: ctx.workspaceDir,
   });
   if (materializedAttachments && materializedAttachments.status !== "ok") {
     await cleanupProvisionalSession(childSessionKey, {

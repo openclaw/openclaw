@@ -454,7 +454,7 @@ export function createSessionsSpawnTool(
           agentGroupSpace: opts?.agentGroupSpace,
           agentMemberRoleIds: opts?.agentMemberRoleIds,
           requesterAgentIdOverride: opts?.requesterAgentIdOverride,
-          workspaceDir: opts?.workspaceDir,
+          workspaceDir: cwd || opts?.workspaceDir,
         },
       );
 

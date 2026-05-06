@@ -99,6 +99,8 @@ export async function materializeSubagentAttachments(params: {
   targetAgentId: string;
   attachments?: SubagentInlineAttachment[];
   mountPathHint?: string;
+  /** Override workspace dir when cwd is specified via sessions_spawn. */
+  workspaceDirOverride?: string;
 }): Promise<MaterializeSubagentAttachmentsResult | null> {
   const requestedAttachments = Array.isArray(params.attachments) ? params.attachments : [];
   if (requestedAttachments.length === 0) {
@@ -121,7 +123,7 @@ export async function materializeSubagentAttachments(params: {
   }
 
   const attachmentId = crypto.randomUUID();
-  const childWorkspaceDir = resolveAgentWorkspaceDir(params.config, params.targetAgentId);
+  const childWorkspaceDir = params.workspaceDirOverride ?? resolveAgentWorkspaceDir(params.config, params.targetAgentId);
   const absRootDir = path.join(childWorkspaceDir, ".openclaw", "attachments");
   const relDir = path.posix.join(".openclaw", "attachments", attachmentId);
   const absDir = path.join(absRootDir, attachmentId);
