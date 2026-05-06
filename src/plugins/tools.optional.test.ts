@@ -522,6 +522,53 @@ describe("resolvePluginTools optional tools", () => {
     expectLoaderSelectedOnlyPluginIds(["optional-demo"]);
   });
 
+  it("loads a concrete plugin tool selected through a wildcard manifest contract", () => {
+    const baseContext = createContext();
+    const config = {
+      ...baseContext.config,
+      plugins: {
+        ...baseContext.config.plugins,
+        allow: [...baseContext.config.plugins.allow, "codex"],
+        entries: {
+          codex: { enabled: true },
+        },
+      },
+    };
+    const registry = createToolRegistry([
+      {
+        pluginId: "codex",
+        optional: true,
+        source: "/tmp/codex.js",
+        names: ["codex_plugin_google_calendar"],
+        declaredNames: ["codex_plugin_*"],
+        factory: () => makeTool("codex_plugin_google_calendar"),
+      },
+    ]);
+    loadOpenClawPluginsMock.mockReturnValue(registry);
+    installToolManifestSnapshot({
+      config,
+      plugin: {
+        id: "codex",
+        origin: "bundled",
+        enabledByDefault: false,
+        channels: [],
+        providers: [],
+        contracts: {
+          tools: ["codex_plugin_*"],
+        },
+      },
+    });
+
+    const tools = resolvePluginTools({
+      context: { ...baseContext, config } as never,
+      toolAllowlist: ["codex_plugin_google_calendar"],
+      allowGatewaySubagentBinding: true,
+    });
+
+    expectResolvedToolNames(tools, ["codex_plugin_google_calendar"]);
+    expectLoaderSelectedOnlyPluginIds(["codex"]);
+  });
+
   it("auto-loads cold registry for path-based config-origin plugins without pre-warming (#76598)", () => {
     const context = {
       ...createContext(),

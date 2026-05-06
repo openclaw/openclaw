@@ -264,6 +264,71 @@ For live and Docker smoke tests, auth usually comes from the Codex CLI account
 or an OpenClaw `openai-codex` auth profile. Local stdio app-server launches can
 also fall back to `CODEX_API_KEY` / `OPENAI_API_KEY` when no account is present.
 
+## Codex plugin bridge
+
+OpenClaw can expose selected native Codex plugins as OpenClaw agent tools. This
+is intentionally narrower than loading every plugin bundle in a Codex home:
+OpenClaw only bridges plugins that were observed as source-installed
+`openai-curated` Codex plugins during migration, then activates them through
+Codex app-server APIs.
+
+The bridge is fail-closed. It is disabled unless `codexPlugins.enabled` is
+true, and each bridged plugin needs an explicit entry. The migration provider
+writes those entries for selected source-installed plugins:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          codexPlugins: {
+            enabled: true,
+            allow_destructive_actions: false,
+            plugins: {
+              "*": { enabled: true },
+              "google-calendar": {
+                enabled: true,
+                marketplaceName: "openai-curated",
+                pluginName: "google-calendar",
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Each configured plugin becomes one OpenClaw tool named
+`codex_plugin_<plugin_name>`, for example `codex_plugin_google_calendar`. The
+tool accepts:
+
+```json
+{ "request": "Find a free slot tomorrow afternoon." }
+```
+
+At runtime OpenClaw uses the shared Codex app-server client to:
+
+- refresh `plugin/list` and `app/list`
+- install or enable the selected `openai-curated` plugin with `plugin/install`
+- enable related Codex apps in app-server config
+- reload skills, hooks, MCP servers, and apps
+- start an ephemeral Codex turn with a plugin mention such as
+  `[@Google Calendar](plugin://google-calendar)`
+
+Command/file approval requests and unsupported user-input requests stay
+declined by the app-server bridge defaults. MCP elicitation requests are
+declined unless the effective plugin policy has
+`allow_destructive_actions: true`; keep the default `false` unless you trust
+the plugin to perform destructive app actions.
+
+Config changes require a gateway restart because OpenClaw registers agent tools
+when plugins load. Use `/new` or `/reset` after changing the Codex runtime or
+plugin bridge config so active sessions rebuild their tool catalog.
+
 ## Workspace bootstrap files
 
 Codex handles `AGENTS.md` itself through native project-doc discovery. OpenClaw

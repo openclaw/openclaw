@@ -179,7 +179,9 @@ function isOptionalToolEntryPotentiallyAllowed(params: {
   if (params.names.length === 0) {
     return true;
   }
-  return params.names.some((name) => params.allowlist.has(normalizeToolName(name)));
+  return params.names.some((name) =>
+    allowlistMatchesToolNameOrContract(params.allowlist, normalizeToolName(name)),
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -348,6 +350,25 @@ function pluginToolNamesMatchAllowlist(params: {
   return isOptionalToolEntryPotentiallyAllowed(params);
 }
 
+function toolContractPrefix(name: string): string | undefined {
+  if (!name.endsWith("*")) {
+    return undefined;
+  }
+  const prefix = normalizeToolName(name.slice(0, -1));
+  return prefix || undefined;
+}
+
+function allowlistMatchesToolNameOrContract(allowlist: Set<string>, name: string): boolean {
+  const normalized = normalizeToolName(name);
+  if (allowlist.has(normalized)) {
+    return true;
+  }
+  const wildcardPrefix = toolContractPrefix(normalized);
+  return wildcardPrefix
+    ? [...allowlist].some((allowed) => normalizeToolName(allowed).startsWith(wildcardPrefix))
+    : false;
+}
+
 function listManifestToolNamesForAllowlist(params: {
   plugin: PluginManifestRecord;
   toolNames: readonly string[];
@@ -365,13 +386,13 @@ function listManifestToolNamesForAllowlist(params: {
     return [...params.toolNames];
   }
   const matchedToolNames = params.toolNames.filter((name) =>
-    params.allowlist.has(normalizeToolName(name)),
+    allowlistMatchesToolNameOrContract(params.allowlist, name),
   );
   if (!allowlistIncludesDefaultPluginTools(params.allowlist)) {
     return matchedToolNames;
   }
   const defaultToolNames = params.toolNames.filter(
-    (name) => !isManifestToolOptional(params.plugin, name),
+    (name) => !toolContractPrefix(name) && !isManifestToolOptional(params.plugin, name),
   );
   return [...new Set([...defaultToolNames, ...matchedToolNames])];
 }

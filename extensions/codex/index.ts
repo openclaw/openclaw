@@ -4,6 +4,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildCodexProvider } from "./provider.js";
+import { createConfiguredCodexPluginToolRegistrations } from "./src/app-server/plugin-tools.js";
 import { createCodexCommand } from "./src/commands.js";
 import {
   handleCodexConversationBindingResolved,
@@ -31,6 +32,14 @@ export default definePluginEntry({
     );
     api.registerMigrationProvider(buildCodexMigrationProvider());
     api.registerCommand(createCodexCommand({ pluginConfig: api.pluginConfig }));
+    for (const registration of createConfiguredCodexPluginToolRegistrations({
+      pluginConfig: resolveCurrentPluginConfig(),
+    })) {
+      api.registerTool(registration.factory, {
+        name: registration.name,
+        optional: true,
+      });
+    }
     api.on("inbound_claim", (event, ctx) =>
       handleCodexConversationInboundClaim(event, ctx, {
         pluginConfig: resolveCurrentPluginConfig(),

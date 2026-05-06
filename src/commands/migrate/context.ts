@@ -31,6 +31,7 @@ export function buildMigrationContext(params: {
   source?: string;
   includeSecrets?: boolean;
   overwrite?: boolean;
+  plugins?: string[];
   backupPath?: string;
   runtime: RuntimeEnv;
   reportDir?: string;
@@ -38,8 +39,9 @@ export function buildMigrationContext(params: {
 }): MigrationProviderContext {
   const config = getRuntimeConfig();
   const stateDir = resolveStateDir();
-  return {
+  const ctx: MigrationProviderContext & { plugins?: string[] } = {
     config,
+    runtime: params.runtime,
     stateDir,
     source: params.source,
     includeSecrets: Boolean(params.includeSecrets),
@@ -48,4 +50,8 @@ export function buildMigrationContext(params: {
     reportDir: params.reportDir,
     logger: createMigrationLogger(params.runtime, { json: params.json }),
   };
+  if (params.plugins) {
+    ctx.plugins = params.plugins;
+  }
+  return ctx;
 }

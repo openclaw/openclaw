@@ -1,6 +1,9 @@
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveCodexAppServerRuntimeOptions } from "../app-server/config.js";
+import type { v2 } from "../app-server/protocol-generated/typescript/index.js";
+import { requestCodexAppServerJson } from "../app-server/request.js";
 import {
   exists,
   isDirectory,
@@ -12,6 +15,8 @@ import {
 const SKILL_FILENAME = "SKILL.md";
 const MAX_SCAN_DEPTH = 6;
 const MAX_DISCOVERED_DIRS = 2000;
+const OPENAI_CURATED_MARKETPLACE = "openai-curated";
+const CODEX_PLUGIN_DISCOVERY_TIMEOUT_MS = 5_000;
 
 export type CodexSkillSource = {
   name: string;
@@ -19,10 +24,21 @@ export type CodexSkillSource = {
   sourceLabel: string;
 };
 
-type CodexPluginSource = {
+export type CodexPluginSource = {
   name: string;
   source: string;
   manifestPath: string;
+};
+
+export type CodexInstalledPluginSource = {
+  id: string;
+  name: string;
+  displayName: string;
+  marketplaceName: typeof OPENAI_CURATED_MARKETPLACE;
+  marketplacePath?: string;
+  installed: boolean;
+  enabled: boolean;
+  accessible?: boolean;
 };
 
 type CodexArchiveSource = {
@@ -41,9 +57,15 @@ type CodexSource = {
   configPath?: string;
   hooksPath?: string;
   skills: CodexSkillSource[];
+  codexPlugins: CodexInstalledPluginSource[];
+  pluginDiscoveryError?: string;
   plugins: CodexPluginSource[];
   archivePaths: CodexArchiveSource[];
 };
+
+type CodexMigrationAppServerRequest = <T>(method: string, params?: unknown) => Promise<T>;
+
+let appServerRequestForTests: CodexMigrationAppServerRequest | undefined;
 
 function defaultCodexHome(): string {
   return resolveHomePath(process.env.CODEX_HOME?.trim() || "~/.codex");
@@ -118,7 +140,147 @@ async function discoverPluginDirs(codexHome: string): Promise<CodexPluginSource[
   return [...discovered.values()].toSorted((a, b) => a.source.localeCompare(b.source));
 }
 
-export async function discoverCodexSource(input?: string): Promise<CodexSource> {
+function displayNameForPlugin(plugin: v2.PluginSummary): string {
+  const displayName = plugin.interface?.displayName?.trim();
+  return displayName || plugin.name || plugin.id;
+}
+
+function pluginNameFromSummary(plugin: v2.PluginSummary): string {
+  const name = plugin.name.trim();
+  if (name) {
+    return name;
+  }
+  return plugin.id.replace(new RegExp(`@${OPENAI_CURATED_MARKETPLACE}$`, "u"), "");
+}
+
+function pluginAccessible(
+  plugin: v2.PluginSummary,
+  apps: readonly v2.AppInfo[],
+): boolean | undefined {
+  const displayName = displayNameForPlugin(plugin).toLowerCase();
+  const pluginName = pluginNameFromSummary(plugin).toLowerCase();
+  const matchingApps = apps.filter((app) => {
+    const pluginNames = new Set(
+      app.pluginDisplayNames
+        .map((name) => name.trim().toLowerCase())
+        .filter((name) => name.length > 0),
+    );
+    return pluginNames.has(displayName) || pluginNames.has(pluginName);
+  });
+  if (matchingApps.length === 0) {
+    return undefined;
+  }
+  return matchingApps.some((app) => app.isAccessible);
+}
+
+function readCodexPluginConfigFromOpenClawConfig(config: unknown): unknown {
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return undefined;
+  }
+  const plugins = (config as { plugins?: unknown }).plugins;
+  if (!plugins || typeof plugins !== "object" || Array.isArray(plugins)) {
+    return undefined;
+  }
+  const entries = (plugins as { entries?: unknown }).entries;
+  if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
+    return undefined;
+  }
+  const codex = (entries as Record<string, unknown>).codex;
+  if (!codex || typeof codex !== "object" || Array.isArray(codex)) {
+    return undefined;
+  }
+  return (codex as { config?: unknown }).config;
+}
+
+async function defaultAppServerRequest(params: {
+  codexHome: string;
+  pluginConfig?: unknown;
+}): Promise<CodexMigrationAppServerRequest> {
+  const runtimeOptions = resolveCodexAppServerRuntimeOptions({ pluginConfig: params.pluginConfig });
+  const startOptions = {
+    ...runtimeOptions.start,
+    env: {
+      ...(runtimeOptions.start.env ?? {}),
+      CODEX_HOME: params.codexHome,
+    },
+  };
+  return async <T>(method: string, requestParams?: unknown): Promise<T> =>
+    await requestCodexAppServerJson<T>({
+      method,
+      requestParams,
+      timeoutMs: CODEX_PLUGIN_DISCOVERY_TIMEOUT_MS,
+      startOptions,
+    });
+}
+
+async function listAllApps(request: CodexMigrationAppServerRequest): Promise<v2.AppInfo[]> {
+  const apps: v2.AppInfo[] = [];
+  let cursor: string | null | undefined;
+  do {
+    const params = {
+      ...(cursor !== undefined ? { cursor } : {}),
+      limit: 100,
+      forceRefetch: true,
+    } satisfies v2.AppsListParams;
+    const response = await request<v2.AppsListResponse>("app/list", params);
+    apps.push(...response.data);
+    cursor = response.nextCursor;
+  } while (cursor);
+  return apps;
+}
+
+async function discoverInstalledOpenAiCuratedPlugins(params: {
+  codexHome: string;
+  pluginConfig?: unknown;
+  appServerRequest?: CodexMigrationAppServerRequest;
+}): Promise<{ plugins: CodexInstalledPluginSource[]; error?: string }> {
+  try {
+    const request =
+      params.appServerRequest ??
+      appServerRequestForTests ??
+      (await defaultAppServerRequest({
+        codexHome: params.codexHome,
+        pluginConfig: params.pluginConfig,
+      }));
+    const [listed, apps] = await Promise.all([
+      request<v2.PluginListResponse>("plugin/list", { cwds: [] } satisfies v2.PluginListParams),
+      listAllApps(request),
+    ]);
+    const marketplace = listed.marketplaces.find(
+      (entry) => entry.name === OPENAI_CURATED_MARKETPLACE,
+    );
+    if (!marketplace) {
+      return { plugins: [] };
+    }
+    const plugins = marketplace.plugins
+      .filter((plugin) => plugin.installed)
+      .map((plugin) => {
+        const accessible = pluginAccessible(plugin, apps);
+        return {
+          id: plugin.id,
+          name: pluginNameFromSummary(plugin),
+          displayName: displayNameForPlugin(plugin),
+          marketplaceName: OPENAI_CURATED_MARKETPLACE,
+          ...(marketplace.path ? { marketplacePath: marketplace.path } : {}),
+          installed: plugin.installed,
+          enabled: plugin.enabled,
+          ...(accessible !== undefined ? { accessible } : {}),
+        };
+      })
+      .toSorted((a, b) => a.name.localeCompare(b.name));
+    return { plugins };
+  } catch (err) {
+    return { plugins: [], error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function discoverCodexSource(
+  input?: string,
+  options: {
+    config?: unknown;
+    appServerRequest?: CodexMigrationAppServerRequest;
+  } = {},
+): Promise<CodexSource> {
   const codexHome = resolveHomePath(input?.trim() || defaultCodexHome());
   const codexSkillsDir = path.join(codexHome, "skills");
   const agentsSkillsDir = personalAgentsSkillsDir();
@@ -133,7 +295,12 @@ export async function discoverCodexSource(input?: string): Promise<CodexSource> 
     root: agentsSkillsDir,
     sourceLabel: "personal AgentSkill",
   });
-  const plugins = await discoverPluginDirs(codexHome);
+  const appServerPlugins = await discoverInstalledOpenAiCuratedPlugins({
+    codexHome,
+    pluginConfig: readCodexPluginConfigFromOpenClawConfig(options.config),
+    appServerRequest: options.appServerRequest,
+  });
+  const plugins = appServerPlugins.error ? await discoverPluginDirs(codexHome) : [];
   const archivePaths: CodexArchiveSource[] = [];
   if (await exists(configPath)) {
     archivePaths.push({
@@ -155,7 +322,9 @@ export async function discoverCodexSource(input?: string): Promise<CodexSource> 
   const skills = [...codexSkills, ...personalAgentSkills].toSorted((a, b) =>
     a.source.localeCompare(b.source),
   );
-  const high = Boolean(codexSkills.length || plugins.length || archivePaths.length);
+  const high = Boolean(
+    codexSkills.length || appServerPlugins.plugins.length || plugins.length || archivePaths.length,
+  );
   const medium = personalAgentSkills.length > 0;
   return {
     root: codexHome,
@@ -166,6 +335,8 @@ export async function discoverCodexSource(input?: string): Promise<CodexSource> 
     ...((await exists(configPath)) ? { configPath } : {}),
     ...((await exists(hooksPath)) ? { hooksPath } : {}),
     skills,
+    codexPlugins: appServerPlugins.plugins,
+    ...(appServerPlugins.error ? { pluginDiscoveryError: appServerPlugins.error } : {}),
     plugins,
     archivePaths,
   };
@@ -174,3 +345,9 @@ export async function discoverCodexSource(input?: string): Promise<CodexSource> 
 export function hasCodexSource(source: CodexSource): boolean {
   return source.confidence !== "low";
 }
+
+export const __testing = {
+  setAppServerRequestForTests(request: CodexMigrationAppServerRequest | undefined): void {
+    appServerRequestForTests = request;
+  },
+};

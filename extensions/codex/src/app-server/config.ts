@@ -12,6 +12,27 @@ type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subage
 type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
 type CodexDynamicToolsProfile = "native-first" | "openclaw-compat";
 
+export type CodexPluginDestructivePolicy = boolean;
+
+export type CodexPluginEntryConfig = {
+  enabled?: boolean;
+  marketplaceName?: string;
+  pluginName?: string;
+  allow_destructive_actions?: CodexPluginDestructivePolicy;
+};
+
+export type CodexPluginsConfig = {
+  enabled?: boolean;
+  allow_destructive_actions?: CodexPluginDestructivePolicy;
+  plugins?: Record<string, CodexPluginEntryConfig>;
+};
+
+export type ResolvedCodexPluginsConfig = {
+  enabled: boolean;
+  allow_destructive_actions: CodexPluginDestructivePolicy;
+  plugins: Record<string, CodexPluginEntryConfig>;
+};
+
 export type CodexComputerUseConfig = {
   enabled?: boolean;
   autoInstall?: boolean;
@@ -58,6 +79,7 @@ export type CodexAppServerRuntimeOptions = {
 export type CodexPluginConfig = {
   codexDynamicToolsProfile?: CodexDynamicToolsProfile;
   codexDynamicToolsExclude?: string[];
+  codexPlugins?: CodexPluginsConfig;
   discovery?: {
     enabled?: boolean;
     timeoutMs?: number;
@@ -109,6 +131,19 @@ export const CODEX_COMPUTER_USE_CONFIG_KEYS = [
   "mcpServerName",
 ] as const;
 
+export const CODEX_PLUGINS_CONFIG_KEYS = [
+  "enabled",
+  "allow_destructive_actions",
+  "plugins",
+] as const;
+
+export const CODEX_PLUGIN_ENTRY_CONFIG_KEYS = [
+  "enabled",
+  "marketplaceName",
+  "pluginName",
+  "allow_destructive_actions",
+] as const;
+
 const DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME = "computer-use";
 const DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME = "computer-use";
 const DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 60_000;
@@ -130,11 +165,27 @@ const codexAppServerServiceTierSchema = z
     z.enum(["fast", "flex"]).nullable().optional(),
   )
   .optional();
+const codexPluginEntryConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    marketplaceName: z.string().optional(),
+    pluginName: z.string().optional(),
+    allow_destructive_actions: z.boolean().optional(),
+  })
+  .strict();
+const codexPluginsConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    allow_destructive_actions: z.boolean().optional(),
+    plugins: z.record(z.string(), codexPluginEntryConfigSchema).optional(),
+  })
+  .strict();
 
 const codexPluginConfigSchema = z
   .object({
     codexDynamicToolsProfile: codexDynamicToolsProfileSchema.optional(),
     codexDynamicToolsExclude: z.array(z.string()).optional(),
+    codexPlugins: codexPluginsConfigSchema.optional(),
     discovery: z
       .object({
         enabled: z.boolean().optional(),
@@ -180,6 +231,45 @@ const codexPluginConfigSchema = z
 export function readCodexPluginConfig(value: unknown): CodexPluginConfig {
   const parsed = codexPluginConfigSchema.safeParse(value);
   return parsed.success ? parsed.data : {};
+}
+
+export function resolveCodexPluginsConfig(
+  params: {
+    pluginConfig?: unknown;
+  } = {},
+): ResolvedCodexPluginsConfig {
+  const config = readCodexPluginConfig(params.pluginConfig).codexPlugins ?? {};
+  return {
+    enabled: config.enabled === true,
+    allow_destructive_actions: config.allow_destructive_actions === true,
+    plugins: normalizeCodexPluginEntries(config.plugins),
+  };
+}
+
+function normalizeCodexPluginEntries(
+  plugins: Record<string, CodexPluginEntryConfig> | undefined,
+): Record<string, CodexPluginEntryConfig> {
+  if (!plugins) {
+    return {};
+  }
+  const normalized: Record<string, CodexPluginEntryConfig> = {};
+  for (const [rawKey, entry] of Object.entries(plugins)) {
+    const key = rawKey.trim();
+    if (!key) {
+      continue;
+    }
+    const marketplaceName = readNonEmptyString(entry.marketplaceName);
+    const pluginName = readNonEmptyString(entry.pluginName);
+    normalized[key] = {
+      ...(entry.enabled !== undefined ? { enabled: entry.enabled } : {}),
+      ...(marketplaceName ? { marketplaceName } : {}),
+      ...(pluginName ? { pluginName } : {}),
+      ...(entry.allow_destructive_actions !== undefined
+        ? { allow_destructive_actions: entry.allow_destructive_actions }
+        : {}),
+    };
+  }
+  return normalized;
 }
 
 export function resolveCodexAppServerRuntimeOptions(

@@ -33,6 +33,7 @@ export async function createMigrationPlan(
     source: opts.source,
     includeSecrets: opts.includeSecrets,
     overwrite: opts.overwrite,
+    plugins: opts.plugins,
     runtime,
     json: opts.json,
   });
