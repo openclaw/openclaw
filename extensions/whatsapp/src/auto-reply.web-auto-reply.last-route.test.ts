@@ -181,4 +181,55 @@ describe("web auto-reply last-route", () => {
 
     await store.cleanup();
   });
+
+  it("uses distinct session keys for different direct chat contacts", async () => {
+    const now = Date.now();
+    const store = await makeSessionStore({});
+
+    const { handler, backgroundTasks } = createLastRouteHarness(store.storePath);
+
+    await handler(
+      buildInboundMessage({
+        id: "m1",
+        from: "+15551112222",
+        conversationId: "+15551112222",
+        chatType: "direct",
+        chatId: "direct:+15551112222",
+        timestamp: now,
+        senderE164: "+15551112222",
+      }),
+    );
+
+    await awaitBackgroundTasks(backgroundTasks);
+
+    const firstCall = updateLastRouteInBackgroundMock.mock.calls[0];
+    const firstSessionKey = firstCall[0]?.sessionKey as string | undefined;
+
+    updateLastRouteInBackgroundMock.mockClear();
+
+    await handler(
+      buildInboundMessage({
+        id: "m2",
+        from: "+15553334444",
+        conversationId: "+15553334444",
+        chatType: "direct",
+        chatId: "direct:+15553334444",
+        timestamp: now + 1,
+        senderE164: "+15553334444",
+      }),
+    );
+
+    await awaitBackgroundTasks(backgroundTasks);
+
+    const secondCall = updateLastRouteInBackgroundMock.mock.calls[0];
+    const secondSessionKey = secondCall[0]?.sessionKey as string | undefined;
+
+    expect(firstSessionKey).toBeDefined();
+    expect(secondSessionKey).toBeDefined();
+    expect(firstSessionKey).not.toBe(secondSessionKey);
+    expect(firstSessionKey).toMatch(/^agent:main:whatsapp:direct:\+15551112222$/);
+    expect(secondSessionKey).toMatch(/^agent:main:whatsapp:direct:\+15553334444$/);
+
+    await store.cleanup();
+  });
 });

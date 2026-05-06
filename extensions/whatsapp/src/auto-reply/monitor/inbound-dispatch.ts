@@ -259,6 +259,23 @@ export function updateWhatsAppMainLastRoute(params: {
     return;
   }
 
+  // Record last-route for per-contact session when using scoped dmScope.
+  // Always record per-contact sessions regardless of pinnedMainDmRecipient,
+  // since the pin guard only applies to main session updates.
+  if (params.dmRouteTarget && params.route.sessionKey !== params.route.mainSessionKey) {
+    params.updateLastRoute({
+      cfg: params.cfg,
+      backgroundTasks: params.backgroundTasks,
+      storeAgentId: params.route.agentId,
+      sessionKey: params.route.sessionKey,
+      channel: "whatsapp",
+      to: params.dmRouteTarget,
+      accountId: params.route.accountId,
+      ctx: params.ctx,
+      warn: params.warn,
+    });
+  }
+
   if (
     params.dmRouteTarget &&
     inboundLastRouteSessionKey === params.route.mainSessionKey &&
