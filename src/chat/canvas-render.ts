@@ -14,6 +14,14 @@ type CanvasPreview = {
   style?: string;
 };
 
+const SAFE_EMBED_REF_RE = /^[A-Za-z0-9_.:-]+$/;
+
+function isSafeEmbedRef(value: string): boolean {
+  const ref = value.trim();
+  return ref !== "." && ref !== ".." && SAFE_EMBED_REF_RE.test(ref);
+}
+const EMBED_SHORTCODE_RE = /^\[embed\s+([^\]]*?)\/\]$/i;
+
 function tryParseJsonRecord(value: string | undefined): Record<string, unknown> | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -143,6 +151,16 @@ function parseCanvasAttributes(raw: string): Record<string, string> {
   return attrs;
 }
 
+function parseEmbedShortcodeAttributes(
+  value: string | undefined,
+): Record<string, string> | undefined {
+  const match = typeof value === "string" ? value.trim().match(EMBED_SHORTCODE_RE) : null;
+  if (!match) {
+    return undefined;
+  }
+  return parseCanvasAttributes(match[1] ?? "");
+}
+
 function defaultCanvasEntryUrl(ref: string): string {
   const encoded = encodeURIComponent(ref.trim());
   return `/__openclaw__/canvas/documents/${encoded}/index.html`;
@@ -178,12 +196,47 @@ function previewFromShortcode(attrs: Record<string, string>): CanvasPreview | un
   return undefined;
 }
 
+function coerceFluidBridgeOpenSurfacePreview(
+  record: Record<string, unknown> | undefined,
+): CanvasPreview | undefined {
+  if (!record) {
+    return undefined;
+  }
+  const kind = getRecordStringField(record, "kind")?.trim().toLowerCase();
+  if (kind !== "ack" && kind !== "executed") {
+    return undefined;
+  }
+  const regenerate = getNestedRecord(record, "regenerate");
+  const ref = getRecordStringField(regenerate, "ref")?.trim();
+  const embed = getRecordStringField(regenerate, "embed")?.trim();
+  if (!ref || !isSafeEmbedRef(ref) || !embed) {
+    return undefined;
+  }
+  const attrs = parseEmbedShortcodeAttributes(embed);
+  if (!attrs) {
+    return undefined;
+  }
+  // The bridge hand-off is intentionally ref-only. Explicit URLs from a bridge
+  // result would bypass the hosted Canvas document route and are ignored here.
+  if (attrs.url) {
+    return undefined;
+  }
+  const embedRef = attrs.ref?.trim();
+  if (!embedRef || embedRef !== ref || !isSafeEmbedRef(embedRef)) {
+    return undefined;
+  }
+  if (attrs.target && normalizeSurface(attrs.target) !== "assistant_message") {
+    return undefined;
+  }
+  return previewFromShortcode(attrs);
+}
+
 export function extractCanvasFromText(
   outputText: string | undefined,
   _toolName?: string,
 ): CanvasPreview | undefined {
   const parsed = tryParseJsonRecord(outputText);
-  return coerceCanvasPreview(parsed);
+  return coerceCanvasPreview(parsed) ?? coerceFluidBridgeOpenSurfacePreview(parsed);
 }
 
 export function extractCanvasShortcodes(text: string | undefined): {
