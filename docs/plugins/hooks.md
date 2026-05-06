@@ -244,8 +244,10 @@ to stop the run before the model can read the prompt. `reason` is internal;
 When a run is blocked, OpenClaw stores only the replacement text in
 `message.content` plus non-sensitive block metadata such as the blocking plugin
 id and timestamp. The original user text is not retained in transcript or future
-context. The internal block reason remains logging/diagnostics-only and is not
-stored in transcript or history metadata.
+context. Internal block reasons are treated as sensitive and excluded from
+transcript, history, broadcast, log, and diagnostics payloads. Observability
+should use sanitized fields such as blocker id, outcome, timestamp, or a safe
+category.
 
 `before_agent_start` and `agent_end` include `event.runId` when OpenClaw can
 identify the active run. The same value is also available on `ctx.runId`.

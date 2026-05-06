@@ -2882,9 +2882,7 @@ export async function runEmbeddedAttempt(
               const blockReplacementMsg = resolveBlockMessage(beforeRunDecision, {
                 blockedBy: beforeRunPluginId,
               });
-              log.warn(
-                `before_agent_run hook blocked by ${beforeRunPluginId}: ${beforeRunDecision.reason}`,
-              );
+              log.warn(`before_agent_run hook blocked by ${beforeRunPluginId}`);
               await persistBlockedBeforeAgentRun({
                 message: blockReplacementMsg,
                 pluginId: beforeRunPluginId,
