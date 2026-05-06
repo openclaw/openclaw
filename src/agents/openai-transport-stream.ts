@@ -1349,9 +1349,6 @@ async function processOpenAICompletionsStream(
   const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
   const MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES = 256_000;
   const compat = getCompat(model as OpenAIModeModel);
-  const deepSeekDsmlTextFilter = shouldFilterDeepSeekDsmlText(model, compat)
-    ? createDeepSeekDsmlToolUseErrorTextFilter()
-    : null;
   let currentBlock:
     | { type: "text"; text: string }
     | { type: "thinking"; thinking: string; thinkingSignature?: string }
@@ -1495,13 +1492,10 @@ async function processOpenAICompletionsStream(
       continue;
     }
     if (choice.delta.content) {
-      const content = deepSeekDsmlTextFilter?.push(choice.delta.content) ?? choice.delta.content;
-      if (content) {
-        if (currentBlock?.type === "toolCall") {
-          queuePostToolCallDelta({ kind: "text", text: content });
-        } else {
-          appendTextDelta(content);
-        }
+      if (currentBlock?.type === "toolCall") {
+        queuePostToolCallDelta({ kind: "text", text: choice.delta.content });
+      } else {
+        appendTextDelta(choice.delta.content);
       }
       continue;
     }
@@ -1581,14 +1575,6 @@ async function processOpenAICompletionsStream(
     }
     flushPendingPostToolCallDeltas();
   }
-  const trailingFilteredContent = deepSeekDsmlTextFilter?.flush() ?? "";
-  if (trailingFilteredContent) {
-    if (currentBlock?.type === "toolCall") {
-      queuePostToolCallDelta({ kind: "text", text: trailingFilteredContent });
-    } else {
-      appendTextDelta(trailingFilteredContent);
-    }
-  }
   finishCurrentBlock();
   if (currentBlock?.type === "toolCall") {
     currentBlock = null;
@@ -1610,100 +1596,6 @@ type CompletionsReasoningDelta =
       kind: "text";
       text: string;
     };
-
-const DEEPSEEK_DSML_TOOL_USE_ERROR_OPEN_TOKENS = [
-  "<|DSML|tool_use_error>",
-  "<｜DSML｜tool_use_error>",
-] as const;
-const DEEPSEEK_DSML_TOOL_USE_ERROR_CLOSE_TOKENS = [
-  "</|DSML|tool_use_error>",
-  "</｜DSML｜tool_use_error>",
-] as const;
-
-function findFirstToken(text: string, tokens: readonly string[]) {
-  let firstIndex = -1;
-  let firstToken = "";
-  for (const token of tokens) {
-    const index = text.indexOf(token);
-    if (index === -1) {
-      continue;
-    }
-    if (firstIndex === -1 || index < firstIndex) {
-      firstIndex = index;
-      firstToken = token;
-    }
-  }
-  return firstIndex === -1 ? null : { index: firstIndex, token: firstToken };
-}
-
-function longestTokenPrefixSuffixLength(text: string, tokens: readonly string[]): number {
-  let longest = 0;
-  for (const token of tokens) {
-    const maxLength = Math.min(text.length, token.length - 1);
-    for (let length = 1; length <= maxLength; length += 1) {
-      if (length > longest && text.endsWith(token.slice(0, length))) {
-        longest = length;
-      }
-    }
-  }
-  return longest;
-}
-
-function createDeepSeekDsmlToolUseErrorTextFilter() {
-  let buffer = "";
-  let suppressing = false;
-  return {
-    push(chunk: string): string {
-      buffer += chunk;
-      let visible = "";
-      while (buffer) {
-        if (suppressing) {
-          const close = findFirstToken(buffer, DEEPSEEK_DSML_TOOL_USE_ERROR_CLOSE_TOKENS);
-          if (!close) {
-            const keep = longestTokenPrefixSuffixLength(
-              buffer,
-              DEEPSEEK_DSML_TOOL_USE_ERROR_CLOSE_TOKENS,
-            );
-            buffer = keep > 0 ? buffer.slice(-keep) : "";
-            return visible;
-          }
-          buffer = buffer.slice(close.index + close.token.length);
-          suppressing = false;
-          continue;
-        }
-
-        const open = findFirstToken(buffer, DEEPSEEK_DSML_TOOL_USE_ERROR_OPEN_TOKENS);
-        if (!open) {
-          const keep = longestTokenPrefixSuffixLength(
-            buffer,
-            DEEPSEEK_DSML_TOOL_USE_ERROR_OPEN_TOKENS,
-          );
-          const emitLength = buffer.length - keep;
-          if (emitLength > 0) {
-            visible += buffer.slice(0, emitLength);
-            buffer = buffer.slice(emitLength);
-          }
-          return visible;
-        }
-
-        visible += buffer.slice(0, open.index);
-        buffer = buffer.slice(open.index + open.token.length);
-        suppressing = true;
-      }
-      return visible;
-    },
-    flush(): string {
-      const visible = suppressing ? "" : buffer;
-      buffer = "";
-      suppressing = false;
-      return visible;
-    },
-  };
-}
-
-function shouldFilterDeepSeekDsmlText(model: Model<Api>, compat: ReturnType<typeof getCompat>) {
-  return model.provider === "deepseek" || compat.thinkingFormat === "deepseek";
-}
 
 function getCompletionsReasoningDeltas(
   delta: Record<string, unknown>,
