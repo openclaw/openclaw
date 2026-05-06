@@ -5,8 +5,6 @@ read_when:
 title: "Telegram plugin"
 ---
 
-# Telegram plugin
-
 Adds the Telegram channel surface for sending and receiving OpenClaw messages.
 
 ## Distribution

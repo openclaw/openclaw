@@ -5,8 +5,6 @@ read_when:
 title: "Discord plugin"
 ---
 
-# Discord plugin
-
 Adds the Discord channel surface for sending and receiving OpenClaw messages.
 
 ## Distribution
