@@ -1,6 +1,6 @@
 import fsSync from "node:fs";
 import path from "node:path";
-import { openBoundaryFileSync } from "./boundary-file-read.js";
+import { openRootFileSync } from "./boundary-file-read.js";
 
 export function expectedIntegrityForUpdate(
   spec: string | undefined,
@@ -30,7 +30,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readInstalledPackageManifest(dir: string): Record<string, unknown> | undefined {
   const manifestPath = path.join(dir, "package.json");
-  const opened = openBoundaryFileSync({
+  const opened = openRootFileSync({
     absolutePath: manifestPath,
     rootPath: dir,
     boundaryLabel: "installed package directory",

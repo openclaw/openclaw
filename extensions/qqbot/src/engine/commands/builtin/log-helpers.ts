@@ -128,6 +128,28 @@ type LogCandidate = {
   mtimeMs: number;
 };
 
+function addCollisionSuffix(filePath: string, suffix: number): string {
+  const ext = path.extname(filePath);
+  const baseName = path.basename(filePath, ext);
+  return path.join(path.dirname(filePath), `${baseName}-${suffix}${ext}`);
+}
+
+function writeNewTextFileSync(filePath: string, contents: string): string {
+  for (let suffix = 1; suffix <= 100; suffix++) {
+    const candidate = suffix === 1 ? filePath : addCollisionSuffix(filePath, suffix);
+    try {
+      fs.writeFileSync(candidate, contents, { encoding: "utf8", flag: "wx" });
+      return candidate;
+    } catch (error) {
+      if (typeof error === "object" && error && "code" in error && error.code === "EEXIST") {
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error(`Could not find an unused log export filename near ${filePath}`);
+}
+
 function collectRecentLogFiles(logDirs: string[]): LogCandidate[] {
   const candidates: LogCandidate[] = [];
   const dedupe = new Set<string>();
@@ -303,8 +325,10 @@ export function buildBotLogsResult(): SlashCommandResult {
 
   const tmpDir = getQQBotDataDir("downloads");
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const tmpFile = path.join(tmpDir, `bot-logs-${timestamp}.txt`);
-  fs.writeFileSync(tmpFile, lines.join("\n"), "utf8");
+  const tmpFile = writeNewTextFileSync(
+    path.join(tmpDir, `bot-logs-${timestamp}.txt`),
+    lines.join("\n"),
+  );
 
   const fileCount = recentFiles.length;
   const topSources = Array.from(new Set(recentFiles.map((item) => item.sourceDir))).slice(0, 3);
