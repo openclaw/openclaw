@@ -895,6 +895,46 @@ describe("resolvePluginTools optional tools", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
+  it("loads wildcard-owned dynamic plugin tools for an explicit runtime tool allowlist", () => {
+    const factory = vi.fn(() => [makeTool("dynamic_alpha"), makeTool("other_tool")]);
+    setRegistry([
+      {
+        pluginId: "dynamic-owner",
+        optional: false,
+        source: "/tmp/dynamic-owner.js",
+        names: ["dynamic_alpha"],
+        declaredNames: ["dynamic_*"],
+        factory,
+      },
+    ]);
+
+    const context = createContext();
+    context.config.plugins.allow.push("dynamic-owner");
+    installToolManifestSnapshots({
+      config: context.config,
+      plugins: [
+        {
+          id: "dynamic-owner",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: { tools: ["dynamic_*"] },
+        },
+      ],
+    });
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        context,
+        toolAllowlist: ["dynamic_alpha"],
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["dynamic_alpha"]);
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
   it("skips optional tools without explicit allowlist", () => {
     setOptionalDemoRegistry();
     const tools = resolveOptionalDemoTools();

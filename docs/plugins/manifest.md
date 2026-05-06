@@ -661,7 +661,9 @@ output before the model sees it.
 
 Runtime `api.registerTool(...)` registrations must match `contracts.tools`.
 Tool discovery uses this list to load only the plugin runtimes that can own the
-requested tools.
+requested tools. For dynamic catalogs, a tool contract may use one terminal
+wildcard, for example `acme_*`, to declare ownership of a bounded namespace. A
+contract entry of bare `*` is not treated as wildcard ownership.
 
 Provider plugins that implement `resolveExternalAuthProfiles` should declare
 `contracts.externalAuthProviders`. Plugins without the declaration still run

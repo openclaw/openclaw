@@ -3040,6 +3040,48 @@ module.exports = { id: "throws-after-import", register() {} };`,
     );
   });
 
+  it("allows plugin tool registrations covered by a terminal wildcard manifest contract", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "dynamic-tool-owner",
+      filename: "dynamic-tool-owner.cjs",
+      body: `module.exports = {
+        id: "dynamic-tool-owner",
+        register(api) {
+          api.registerTool({
+            name: "dynamic_runtime_tool",
+            description: "Runtime dynamic tool",
+            parameters: {},
+            execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+          });
+        },
+      };`,
+    });
+    updatePluginManifest(plugin, { contracts: { tools: ["dynamic_*"] } });
+
+    const registry = loadOpenClawPlugins({
+      activate: false,
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["dynamic-tool-owner"],
+        },
+      },
+    });
+
+    expect(registry.tools.flatMap((entry) => entry.names)).toEqual(["dynamic_runtime_tool"]);
+    expect(registry.diagnostics).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "dynamic-tool-owner",
+          message: expect.stringContaining("contracts.tools"),
+        }),
+      ]),
+    );
+  });
+
   it("rejects plugin tool names outside the manifest tool contract", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
