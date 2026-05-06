@@ -256,6 +256,12 @@ export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, no
     lines.push("Command:");
     lines.push(command.text);
   }
+  const explanationLines = request.request.commandExplanationLines
+    ?.map((line) => line.trim())
+    .filter(Boolean);
+  if (explanationLines?.length) {
+    lines.push("", "Command explanation:", ...explanationLines);
+  }
   if (request.request.cwd) {
     lines.push(`CWD: ${request.request.cwd}`);
   }

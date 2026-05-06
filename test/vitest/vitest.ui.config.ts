@@ -18,7 +18,9 @@ export function createUiVitestConfig(
   options?: { includePatterns?: string[]; name?: string },
 ) {
   const includePatterns = options?.includePatterns ?? ["ui/src/**/*.test.ts"];
-  const exclude = options?.includePatterns ? [] : unitUiIncludePatterns;
+  const exclude = options?.includePatterns
+    ? []
+    : [...unitUiIncludePatterns, "ui/src/**/*.browser.test.ts"];
   return createScopedVitestConfig(includePatterns, {
     deps: jsdomOptimizedDeps,
     environment: "jsdom",

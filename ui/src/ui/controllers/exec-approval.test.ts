@@ -96,3 +96,41 @@ describe("parsePluginApprovalRequested", () => {
     expect(result!.request.sessionKey).toBeNull();
   });
 });
+
+describe("parseExecApprovalRequested command explanations", () => {
+  it("preserves command text spacing for highlight offsets", () => {
+    const parsed = parseExecApprovalRequested({
+      id: "approval-spaces-1",
+      request: { command: "  python -c 'print(1)'" },
+      createdAtMs: 1,
+      expiresAtMs: 2,
+    });
+
+    expect(parsed?.request.command).toBe("  python -c 'print(1)'");
+  });
+
+  it("preserves command explanation lines and highlight severities from exec approval events", () => {
+    const parsed = parseExecApprovalRequested({
+      id: "approval-explain-1",
+      request: {
+        command: "ls | grep stuff",
+        commandExplanationLines: ["", 123],
+        commandExplanationHighlights: [
+          { startIndex: 0, endIndex: 2, kind: "command", severity: "info" },
+          { startIndex: 5, endIndex: 9, kind: "risk", severity: "warning" },
+          { startIndex: 10, endIndex: 15, kind: "risk", severity: "danger" },
+          { startIndex: 16, endIndex: 20, kind: "risk", severity: "loud" },
+        ],
+      },
+      createdAtMs: 1,
+      expiresAtMs: 2,
+    });
+
+    expect(parsed?.request.commandExplanationLines).toBeUndefined();
+    expect(parsed?.request.commandExplanationHighlights).toEqual([
+      { startIndex: 0, endIndex: 2, kind: "command", severity: "info" },
+      { startIndex: 5, endIndex: 9, kind: "risk", severity: "warning" },
+      { startIndex: 10, endIndex: 15, kind: "risk", severity: "danger" },
+    ]);
+  });
+});
