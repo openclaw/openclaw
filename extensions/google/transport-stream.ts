@@ -33,10 +33,13 @@ import {
   type GoogleThinkingInputLevel,
   type GoogleThinkingLevel,
 } from "./thinking-api.js";
+import { resolveGoogleVertexAdcToken } from "./vertex-adc.js";
 import {
-  isGoogleVertexCredentialsMarker,
-  resolveGoogleVertexAuthorizedUserHeaders,
-} from "./vertex-adc.js";
+  GOOGLE_VERTEX_CREDENTIALS_MARKER,
+  resolveGoogleVertexClientRegion,
+  resolveGoogleVertexProjectId,
+  resolveGoogleVertexRegionFromBaseUrl,
+} from "./vertex-region.js";
 
 type GoogleTransportApi = "google-generative-ai" | "google-vertex";
 
@@ -105,8 +108,6 @@ type MutableAssistantOutput = {
   errorMessage?: string;
 };
 
-const GOOGLE_VERTEX_DEFAULT_API_VERSION = "v1";
-
 type GoogleSseChunk = {
   responseId?: string;
   candidates?: Array<{
@@ -134,10 +135,6 @@ type GoogleSseChunk = {
 };
 
 let toolCallCounter = 0;
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 function requiresToolCallId(modelId: string): boolean {
   return modelId.startsWith("claude-") || modelId.startsWith("gpt-oss-");
@@ -200,64 +197,97 @@ function resolveGoogleModelPath(modelId: string): string {
   return `models/${modelId}`;
 }
 
-function buildGoogleGenerativeAiRequestUrl(model: GoogleTransportModel): string {
+function isGoogleVertexModel(model: GoogleTransportModel): boolean {
+  if (model.provider === "google-vertex") {
+    return true;
+  }
+  return resolveGoogleVertexRegionFromBaseUrl(model.baseUrl) !== undefined;
+}
+
+function resolveGoogleVertexRequestProject(model: GoogleTransportModel): string | undefined {
+  return (
+    model.headers?.["x-goog-user-project"]?.trim() ||
+    model.headers?.["X-Goog-User-Project"]?.trim() ||
+    resolveGoogleVertexProjectId() ||
+    undefined
+  );
+}
+
+function resolveGoogleVertexEndpointOrigin(baseUrl: string | undefined): string {
+  // Strip any path or trailing /v1 from the configured baseUrl so the Vertex URL
+  // builder can append /v1/projects/... without producing /v1/v1/projects/...
+  if (!baseUrl) {
+    return "https://aiplatform.googleapis.com";
+  }
+  try {
+    const url = new URL(baseUrl);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return baseUrl.replace(/\/v1\/?$/, "").replace(/\/+$/, "");
+  }
+}
+
+function resolveGoogleVertexModelPath(modelId: string): string {
+  // Preserve already-qualified Vertex paths so callers can pass tunedModels/...
+  // or fully-qualified publishers/.../models/... ids without double-prefixing.
+  if (
+    modelId.startsWith("publishers/") ||
+    modelId.startsWith("tunedModels/") ||
+    modelId.startsWith("projects/")
+  ) {
+    return modelId;
+  }
+  if (modelId.startsWith("models/")) {
+    return `publishers/google/${modelId}`;
+  }
+  return `publishers/google/models/${modelId}`;
+}
+
+function buildGoogleVertexRequestUrl(model: GoogleTransportModel): string {
+  const project = resolveGoogleVertexRequestProject(model);
+  if (!project) {
+    throw new Error(
+      "Google Vertex AI: project ID is required. Set GOOGLE_CLOUD_PROJECT or " +
+        'configure models.providers.google-vertex.headers["x-goog-user-project"].',
+    );
+  }
+  const location = resolveGoogleVertexClientRegion({ baseUrl: model.baseUrl }) ?? "global";
+  const origin = resolveGoogleVertexEndpointOrigin(model.baseUrl);
+  const modelPath = resolveGoogleVertexModelPath(model.id);
+  return `${origin}/v1/projects/${project}/locations/${location}/${modelPath}:streamGenerateContent?alt=sse`;
+}
+
+function buildGoogleRequestUrl(model: GoogleTransportModel): string {
+  if (isGoogleVertexModel(model)) {
+    return buildGoogleVertexRequestUrl(model);
+  }
   const baseUrl = normalizeGoogleApiBaseUrl(model.baseUrl);
   return `${baseUrl}/${resolveGoogleModelPath(model.id)}:streamGenerateContent?alt=sse`;
 }
 
-function resolveGoogleVertexProject(options: GoogleTransportOptions | undefined): string {
-  const project =
-    normalizeOptionalString((options as { project?: unknown } | undefined)?.project) ||
-    normalizeOptionalString(process.env.GOOGLE_CLOUD_PROJECT) ||
-    normalizeOptionalString(process.env.GCLOUD_PROJECT);
-  if (!project) {
-    throw new Error(
-      "Vertex AI requires a project ID. Set GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT or pass project in options.",
-    );
-  }
-  return project;
-}
-
-function resolveGoogleVertexLocation(options: GoogleTransportOptions | undefined): string {
-  const location =
-    normalizeOptionalString((options as { location?: unknown } | undefined)?.location) ||
-    normalizeOptionalString(process.env.GOOGLE_CLOUD_LOCATION);
-  if (!location) {
-    throw new Error(
-      "Vertex AI requires a location. Set GOOGLE_CLOUD_LOCATION or pass location in options.",
-    );
-  }
-  return location;
-}
-
-function resolveGoogleVertexBaseOrigin(model: GoogleTransportModel, location: string): string {
-  const configured = normalizeOptionalString(model.baseUrl);
-  if (configured && !configured.includes("{location}")) {
-    try {
-      const url = new URL(configured);
-      url.pathname = "";
-      url.search = "";
-      url.hash = "";
-      return url.toString().replace(/\/$/u, "");
-    } catch {
-      return configured.replace(/\/+$/u, "");
-    }
-  }
-  if (location === "global") {
-    return "https://aiplatform.googleapis.com";
-  }
-  return `https://${location}-aiplatform.googleapis.com`;
-}
-
-function buildGoogleVertexRequestUrl(
+async function resolveGoogleRequestApiKey(
   model: GoogleTransportModel,
-  options: GoogleTransportOptions | undefined,
-): string {
-  const project = encodeURIComponent(resolveGoogleVertexProject(options));
-  const location = encodeURIComponent(resolveGoogleVertexLocation(options));
-  const modelId = encodeURIComponent(model.id);
-  const origin = resolveGoogleVertexBaseOrigin(model, decodeURIComponent(location));
-  return `${origin}/${GOOGLE_VERTEX_DEFAULT_API_VERSION}/projects/${project}/locations/${location}/publishers/google/models/${modelId}:streamGenerateContent?alt=sse`;
+  apiKey: string | undefined,
+): Promise<string | undefined> {
+  if (!isGoogleVertexModel(model)) {
+    return apiKey;
+  }
+  // Vertex auth flows through ADC. The synthetic marker is published as the
+  // provider apiKey so the rest of the runtime treats the provider as
+  // configured; we exchange it for a real Bearer token here so that
+  // parseGeminiAuth emits Authorization: Bearer <token> rather than
+  // sending the marker as x-goog-api-key.
+  if (!apiKey || apiKey === GOOGLE_VERTEX_CREDENTIALS_MARKER) {
+    const token = await resolveGoogleVertexAdcToken();
+    if (!token) {
+      throw new Error(
+        "Google Vertex AI: ADC credentials not available. " +
+          'Run "gcloud auth application-default login" or set GOOGLE_APPLICATION_CREDENTIALS.',
+      );
+    }
+    return JSON.stringify({ token: token.accessToken });
+  }
+  return apiKey;
 }
 
 function resolveThinkingLevel(level: ThinkingLevel, modelId: string): GoogleThinkingLevel {
@@ -598,56 +628,19 @@ function buildGoogleHeaders(
   );
 }
 
-async function buildGoogleVertexHeaders(
-  model: GoogleTransportModel,
-  apiKey: string | undefined,
-  optionHeaders: Record<string, string> | undefined,
-  fetchImpl?: typeof fetch,
-): Promise<Record<string, string>> {
-  const authHeaders = isGoogleVertexCredentialsMarker(apiKey)
-    ? await resolveGoogleVertexAuthorizedUserHeaders(fetchImpl)
-    : { "x-goog-api-key": apiKey };
-  return (
-    mergeTransportHeaders(
-      {
-        "Content-Type": "application/json",
-        accept: "text/event-stream",
-      },
-      authHeaders,
-      model.headers,
-      optionHeaders,
-    ) ?? {
-      "Content-Type": "application/json",
-      accept: "text/event-stream",
-    }
-  );
-}
-
 function buildGoogleTransportRequestUrl(
-  kind: GoogleTransportApi,
+  _kind: GoogleTransportApi,
   model: GoogleTransportModel,
-  options: GoogleTransportOptions | undefined,
 ): string {
-  return kind === "google-vertex"
-    ? buildGoogleVertexRequestUrl(model, options)
-    : buildGoogleGenerativeAiRequestUrl(model);
+  return buildGoogleRequestUrl(model);
 }
 
-async function buildGoogleTransportHeaders(params: {
-  kind: GoogleTransportApi;
+function buildGoogleTransportHeaders(params: {
   model: GoogleTransportModel;
   apiKey: string | undefined;
   optionHeaders: Record<string, string> | undefined;
-  fetchImpl?: typeof fetch;
-}): Promise<Record<string, string>> {
-  return params.kind === "google-vertex"
-    ? await buildGoogleVertexHeaders(
-        params.model,
-        params.apiKey,
-        params.optionHeaders,
-        params.fetchImpl,
-      )
-    : buildGoogleHeaders(params.model, params.apiKey, params.optionHeaders);
+}): Record<string, string> {
+  return buildGoogleHeaders(params.model, params.apiKey, params.optionHeaders);
 }
 
 async function* parseGoogleSseChunks(
@@ -762,21 +755,20 @@ function createGoogleTransportStreamFn(kind: GoogleTransportApi): StreamFn {
         timestamp: Date.now(),
       };
       try {
-        const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? undefined;
+        const rawApiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? undefined;
+        const apiKey = await resolveGoogleRequestApiKey(model, rawApiKey);
         const guardedFetch = buildGuardedModelFetch(model);
         let params = buildGoogleGenerativeAiParams(model, context, options);
         const nextParams = await options?.onPayload?.(params, model);
         if (nextParams !== undefined) {
           params = nextParams as GoogleGenerateContentRequest;
         }
-        const response = await guardedFetch(buildGoogleTransportRequestUrl(kind, model, options), {
+        const response = await guardedFetch(buildGoogleTransportRequestUrl(kind, model), {
           method: "POST",
-          headers: await buildGoogleTransportHeaders({
-            kind,
+          headers: buildGoogleTransportHeaders({
             model,
             apiKey,
             optionHeaders: options?.headers,
-            fetchImpl: (options as { fetch?: typeof fetch } | undefined)?.fetch,
           }),
           body: JSON.stringify(params),
           signal: options?.signal,

@@ -95,6 +95,8 @@
     ]
   },
   "cliBackends": ["google-gemini-cli"],
+  "syntheticAuthRefs": ["google-vertex"],
+  "nonSecretAuthMarkers": ["gcp-vertex-credentials"],
   "providerAuthEnvVars": {
     "google": ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
   },
