@@ -1510,6 +1510,36 @@ describe("model-selection", () => {
       expect(result.allowedKeys.has("openai/gpt-5.5")).toBe(true);
       expect(result.allowedKeys.has("claude-cli/claude-opus-4-6")).toBe(true);
     });
+
+    it("infers catalog provider for bare-key fallback aliases instead of leaking default provider", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai-codex/gpt-5.5",
+              fallbacks: ["opus"],
+            },
+            models: {
+              "openai-codex/gpt-5.5": {},
+              "claude-opus-4-6": { alias: "opus" },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [
+          { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5" },
+          { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.6" },
+        ],
+        defaultProvider: "openai-codex",
+        defaultModel: "gpt-5.5",
+      });
+
+      expect(result.allowedKeys.has("anthropic/claude-opus-4-6")).toBe(true);
+      expect(result.allowedKeys.has("openai-codex/claude-opus-4-6")).toBe(false);
+    });
   });
 
   describe("resolveAllowedModelRef", () => {
