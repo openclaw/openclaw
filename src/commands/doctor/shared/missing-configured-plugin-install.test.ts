@@ -993,6 +993,80 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result).toEqual({ changes: [], warnings: [] });
   });
 
+  it("installs channel-selected plugins during the post-restart update doctor pass", async () => {
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "openclaw-weixin",
+        pluginId: "openclaw-weixin",
+        meta: { label: "Weixin" },
+        install: {
+          npmSpec: "@tencent-weixin/openclaw-weixin@2.4.1",
+          expectedIntegrity: "sha512-weixin",
+          defaultChoice: "npm",
+        },
+        trustedSourceLinkedOfficialInstall: true,
+      },
+    ]);
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "openclaw-weixin",
+      targetDir: "/tmp/openclaw-plugins/openclaw-weixin",
+      version: "2.4.1",
+      npmResolution: {
+        name: "@tencent-weixin/openclaw-weixin",
+        version: "2.4.1",
+        resolvedSpec: "@tencent-weixin/openclaw-weixin@2.4.1",
+        integrity: "sha512-weixin",
+        resolvedAt: "2026-05-01T00:00:00.000Z",
+      },
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        channels: {
+          "openclaw-weixin": { enabled: true, token: "secret" },
+        },
+      },
+      env: {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+      },
+    });
+
+    expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@tencent-weixin/openclaw-weixin@2.4.1",
+        expectedPluginId: "openclaw-weixin",
+        expectedIntegrity: "sha512-weixin",
+        trustedSourceLinkedOfficialInstall: true,
+      }),
+    );
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+      expect.objectContaining({
+        "openclaw-weixin": expect.objectContaining({
+          source: "npm",
+          spec: "@tencent-weixin/openclaw-weixin@2.4.1",
+          installPath: "/tmp/openclaw-plugins/openclaw-weixin",
+          version: "2.4.1",
+        }),
+      }),
+      {
+        env: {
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+        },
+      },
+    );
+    expect(result).toEqual({
+      changes: [
+        'Installed missing configured plugin "openclaw-weixin" from @tencent-weixin/openclaw-weixin@2.4.1.',
+      ],
+      warnings: [],
+    });
+  });
+
   it("does not install configured plugins when plugins are globally disabled", async () => {
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
       {
