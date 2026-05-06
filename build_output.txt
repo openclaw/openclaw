@@ -1,0 +1,67 @@
+
+> openclaw@2026.5.6 build /Users/aqibmughal/Documents/Projects/openclaw
+> node scripts/build-all.mjs
+
+[build-all] canvas:a2ui:bundle
+
+> openclaw@2026.5.6 canvas:a2ui:bundle /Users/aqibmughal/Documents/Projects/openclaw
+> node scripts/bundle-a2ui.mjs
+
+A2UI bundle up to date; skipping.
+[build-all] tsdown
+
+[41m ERROR [49m Error: Build failed with 18 errors:
+
+[31m[MISSING_EXPORT] Error:[0m "ackJsonDurableQueueEntry" is not exported by "node_modules/@openclaw/fs-safe/dist/store.js".
+   [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/infra/outbound/delivery-queue-storage.ts:3:3 [38;5;246m][0m
+   [38;5;246m│[0m
+ [38;5;246m3 │[0m [38;5;249m [0m[38;5;249m [0mackJsonDurableQueueEntry[38;5;249m,[0m
+ [38;5;240m  │[0m   ────────────┬───────────  
+ [38;5;240m  │[0m               ╰───────────── Missing export
+[38;5;246m───╯[0m
+
+[31m[MISSING_EXPORT] Error:[0m "ensureJsonDurableQueueDirs" is not exported by "node_modules/@openclaw/fs-safe/dist/store.js".
+   [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/infra/outbound/delivery-queue-storage.ts:4:3 [38;5;246m][0m
+   [38;5;246m│[0m
+ [38;5;246m4 │[0m [38;5;249m [0m[38;5;249m [0mensureJsonDurableQueueDirs[38;5;249m,[0m
+ [38;5;240m  │[0m   ─────────────┬────────────  
+ [38;5;240m  │[0m                ╰────────────── Missing export
+[38;5;246m───╯[0m
+
+[31m[MISSING_EXPORT] Error:[0m "loadJsonDurableQueueEntry" is not exported by "node_modules/@openclaw/fs-safe/dist/store.js".
+   [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/infra/outbound/delivery-queue-storage.ts:5:3 [38;5;246m][0m
+   [38;5;246m│[0m
+ [38;5;246m5 │[0m [38;5;249m [0m[38;5;249m [0mloadJsonDurableQueueEntry[38;5;249m,[0m
+ [38;5;240m  │[0m   ────────────┬────────────  
+ [38;5;240m  │[0m               ╰────────────── Missing export
+[38;5;246m───╯[0m
+
+[31m[MISSING_EXPORT] Error:[0m "loadPendingJsonDurableQueueEntries" is not exported by "node_modules/@openclaw/fs-safe/dist/store.js".
+   [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/infra/outbound/delivery-queue-storage.ts:6:3 [38;5;246m][0m
+   [38;5;246m│[0m
+ [38;5;246m6 │[0m [38;5;249m [0m[38;5;249m [0mloadPendingJsonDurableQueueEntries[38;5;249m,[0m
+ [38;5;240m  │[0m   ─────────────────┬────────────────  
+ [38;5;240m  │[0m                    ╰────────────────── Missing export
+[38;5;246m───╯[0m
+
+[31m[MISSING_EXPORT] Error:[0m "moveJsonDurableQueueEntryToFailed" is not exported by "node_modules/@openclaw/fs-safe/dist/store.js".
+   [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/infra/outbound/delivery-queue-storage.ts:7:3 [38;5;246m][0m
+   [38;5;246m│[0m
+ [38;5;246m7 │[0m [38;5;249m [0m[38;5;249m [0mmoveJsonDurableQueueEntryToFailed[38;5;249m,[0m
+ [38;5;240m  │[0m   ────────────────┬────────────────  
+ [38;5;240m  │[0m                   ╰────────────────── Missing export
+[38;5;246m───╯[0m
+
+...
+    at aggregateBindingErrorsIntoJsError (file:///Users/aqibmughal/Documents/Projects/openclaw/node_modules/rolldown/dist/shared/error-DL-e8-oE.mjs:48:18)
+    at unwrapBindingResult (file:///Users/aqibmughal/Documents/Projects/openclaw/node_modules/rolldown/dist/shared/error-DL-e8-oE.mjs:18:128)
+    at #build (file:///Users/aqibmughal/Documents/Projects/openclaw/node_modules/rolldown/dist/shared/rolldown-build-DSxL8qiP.mjs:3317:34)
+    at async build (file:///Users/aqibmughal/Documents/Projects/openclaw/node_modules/rolldown/dist/index.mjs:42:22)
+    at async Promise.all (index 0)
+    at async buildSingle (file:///Users/aqibmughal/Documents/Projects/openclaw/node_modules/tsdown/dist/build-CgGnBlCD.mjs:760:19)
+    at async Promise.all (index 0)
+    at async buildWithConfigs (file:///Users/aqibmughal/Documents/Projects/openclaw/node_modules/tsdown/dist/build-CgGnBlCD.mjs:716:18)
+    at async CAC.<anonymous> (file:///Users/aqibmughal/Documents/Projects/openclaw/node_modules/tsdown/dist/run.mjs:25:2)
+    at async runCLI (file:///Users/aqibmughal/Documents/Projects/openclaw/node_modules/tsdown/dist/run.mjs:49:3)
+
+ ELIFECYCLE  Command failed with exit code 1.

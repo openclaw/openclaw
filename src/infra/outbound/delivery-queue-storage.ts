@@ -1,14 +1,5 @@
+import fs from "node:fs";
 import path from "node:path";
-import {
-  ackJsonDurableQueueEntry,
-  ensureJsonDurableQueueDirs,
-  loadJsonDurableQueueEntry,
-  loadPendingJsonDurableQueueEntries,
-  moveJsonDurableQueueEntryToFailed,
-  readJsonDurableQueueEntry,
-  resolveJsonDurableQueueEntryPaths,
-  writeJsonDurableQueueEntry,
-} from "@openclaw/fs-safe/store";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { RenderedMessageBatchPlanItem } from "../../channels/message/types.js";
 import { resolveStateDir } from "../../config/paths.js";
@@ -90,6 +81,130 @@ function resolveQueueEntryPaths(
   deliveredPath: string;
 } {
   return resolveJsonDurableQueueEntryPaths(resolveQueueDir(stateDir), id);
+}
+
+function resolveJsonDurableQueueEntryPaths(queueDir: string, id: string) {
+  return {
+    jsonPath: path.join(queueDir, `${id}.json`),
+    deliveredPath: path.join(queueDir, `${id}.delivered`),
+  };
+}
+
+async function writeJsonDurableQueueEntry<T>(params: {
+  filePath: string;
+  entry: T;
+  tempPrefix: string;
+}): Promise<void> {
+  const tempPath = path.join(
+    path.dirname(params.filePath),
+    `${params.tempPrefix}-${path.basename(params.filePath)}`,
+  );
+  await fs.promises.writeFile(tempPath, JSON.stringify(params.entry, null, 2), "utf8");
+  await fs.promises.rename(tempPath, params.filePath);
+}
+
+async function readJsonDurableQueueEntry<T>(filePath: string): Promise<T> {
+  const data = await fs.promises.readFile(filePath, "utf8");
+  return JSON.parse(data) as T;
+}
+
+async function ensureJsonDurableQueueDirs(params: {
+  queueDir: string;
+  failedDir: string;
+}): Promise<void> {
+  await fs.promises.mkdir(params.queueDir, { recursive: true });
+  await fs.promises.mkdir(params.failedDir, { recursive: true });
+}
+
+async function ackJsonDurableQueueEntry(paths: {
+  jsonPath: string;
+  deliveredPath: string;
+}): Promise<void> {
+  try {
+    await fs.promises.rename(paths.jsonPath, paths.deliveredPath);
+    await fs.promises.unlink(paths.deliveredPath);
+  } catch (err: any) {
+    if (err && err.code !== "ENOENT") throw err;
+  }
+}
+
+async function loadJsonDurableQueueEntry<T>(params: {
+  paths: { jsonPath: string; deliveredPath: string };
+  tempPrefix: string;
+  read: (entry: any) => Promise<{ entry: T; migrated: boolean }>;
+}): Promise<T | null> {
+  try {
+    const deliveredStat = await fs.promises.stat(params.paths.deliveredPath).catch(() => null);
+    if (deliveredStat) {
+      await fs.promises.unlink(params.paths.deliveredPath).catch(() => {});
+      return null;
+    }
+    const data = await readJsonDurableQueueEntry<any>(params.paths.jsonPath);
+    const { entry, migrated } = await params.read(data);
+    if (migrated) {
+      await writeJsonDurableQueueEntry({
+        filePath: params.paths.jsonPath,
+        entry,
+        tempPrefix: params.tempPrefix,
+      });
+    }
+    return entry;
+  } catch (err: any) {
+    if (err && err.code === "ENOENT") return null;
+    throw err;
+  }
+}
+
+async function loadPendingJsonDurableQueueEntries<T>(params: {
+  queueDir: string;
+  tempPrefix: string;
+  read: (entry: any) => Promise<{ entry: T; migrated: boolean }>;
+}): Promise<T[]> {
+  const entries: T[] = [];
+  let files: string[];
+  try {
+    files = await fs.promises.readdir(params.queueDir);
+  } catch (err: any) {
+    if (err && err.code === "ENOENT") return [];
+    throw err;
+  }
+  for (const file of files) {
+    if (file.startsWith(params.tempPrefix)) {
+      await fs.promises.unlink(path.join(params.queueDir, file)).catch(() => {});
+      continue;
+    }
+    if (file.endsWith(".delivered")) {
+      await fs.promises.unlink(path.join(params.queueDir, file)).catch(() => {});
+      continue;
+    }
+    if (!file.endsWith(".json")) continue;
+
+    const id = path.basename(file, ".json");
+    const paths = resolveJsonDurableQueueEntryPaths(params.queueDir, id);
+    const entry = await loadJsonDurableQueueEntry({
+      paths,
+      tempPrefix: params.tempPrefix,
+      read: params.read,
+    });
+    if (entry) {
+      entries.push(entry);
+    }
+  }
+  return entries;
+}
+
+async function moveJsonDurableQueueEntryToFailed(params: {
+  queueDir: string;
+  failedDir: string;
+  id: string;
+}) {
+  const source = path.join(params.queueDir, `${params.id}.json`);
+  const dest = path.join(params.failedDir, `${params.id}.json`);
+  try {
+    await fs.promises.rename(source, dest);
+  } catch (err: any) {
+    if (err && err.code !== "ENOENT") throw err;
+  }
 }
 
 async function writeQueueEntry(filePath: string, entry: QueuedDelivery): Promise<void> {
