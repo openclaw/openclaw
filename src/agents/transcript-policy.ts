@@ -7,8 +7,8 @@ import type { ProviderReplayPolicy } from "../plugins/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./model-selection.js";
 import {
-  isGemma4ModelRequiringReasoningStrip,
   isGoogleModelApi,
+  isOpenAiCompatibleReasoningStripModelId,
 } from "./pi-embedded-helpers/google.js";
 import type { ToolCallIdMode } from "./tool-call-id.js";
 
@@ -120,7 +120,7 @@ function buildUnownedProviderTransportReplayFallback(params: {
     ...(isAnthropic && modelId.includes("claude")
       ? { dropThinkingBlocks: !shouldPreserveThinkingBlocks(modelId) }
       : {}),
-    ...(isStrictOpenAiCompatible && isGemma4ModelRequiringReasoningStrip(modelId)
+    ...(isStrictOpenAiCompatible && isOpenAiCompatibleReasoningStripModelId(modelId)
       ? { dropReasoningFromHistory: true }
       : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { applyAssistantFirstOrderingFix: true } : {}),

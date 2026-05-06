@@ -362,6 +362,36 @@ describe("resolveTranscriptPolicy", () => {
     expect(gemma3Policy.dropReasoningFromHistory).toBe(false);
   });
 
+  it("strips historical reasoning for Qwen 3.x on OpenAI-compatible providers (#46637)", () => {
+    // Self-hosted oMLX/vLLM/llama.cpp users typically register Qwen 3.x models
+    // via a custom OpenAI-compatible base url; Qwen returns provider-side
+    // `reasoning_content` blocks that, when replayed verbatim into the next
+    // request body, contain unescaped control characters that strict server-
+    // side JSON parsers (Pydantic/FastAPI in oMLX) reject as 422 parse errors.
+    for (const modelId of [
+      "omlx/Qwen3.5-122B-A10B-8bit",
+      "qwen3.6-plus",
+      "qwen3-coder-plus",
+      "vllm/qwen3-thinking-70b",
+      "qwq-32b",
+    ]) {
+      const policy = resolveTranscriptPolicy({
+        provider: "custom-openai-proxy",
+        modelId,
+        modelApi: "openai-completions",
+      });
+      expect(policy.dropReasoningFromHistory).toBe(true);
+    }
+
+    // Non-Qwen models on the same OpenAI-compatible fallback are unaffected.
+    const llamaPolicy = resolveTranscriptPolicy({
+      provider: "custom-openai-proxy",
+      modelId: "meta-llama/llama-3.3-70b-instruct",
+      modelApi: "openai-completions",
+    });
+    expect(llamaPolicy.dropReasoningFromHistory).toBe(false);
+  });
+
   it("falls back to unowned transport defaults when no owning plugin exists", () => {
     expectStrictOpenAiCompatibleReplayDefaults("custom-openai-proxy");
   });
