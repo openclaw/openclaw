@@ -59,7 +59,11 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
     });
 
     const { spawnLspServerProcess } = await import("./pi-bundle-lsp-runtime.js");
-    spawnLspServerProcess({ command: "typescript-language-server", args: ["--stdio"], env: configEnv });
+    spawnLspServerProcess({
+      command: "typescript-language-server",
+      args: ["--stdio"],
+      env: configEnv,
+    });
 
     // Must use structured params so config.env entries are not dropped
     expect(sanitizeHostExecEnvMock).toHaveBeenCalledWith(
