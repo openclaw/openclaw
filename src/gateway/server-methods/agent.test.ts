@@ -164,7 +164,19 @@ const makeContext = (): GatewayRequestContext =>
 
 type AgentHandlerArgs = Parameters<typeof agentHandlers.agent>[0];
 type AgentParams = AgentHandlerArgs["params"];
-type AgentCommandCall = Record<string, unknown>;
+type AgentCommandCall = Record<string, unknown> & {
+  agentId?: string;
+  channel?: string;
+  message?: string;
+  messageChannel?: string;
+  modelRun?: boolean;
+  promptMode?: string;
+  runContext?: { messageChannel?: string };
+  senderIsOwner?: boolean;
+  sessionId?: string;
+  sessionKey?: string;
+  workspaceDir?: string;
+};
 
 type AgentIdentityGetHandlerArgs = Parameters<(typeof agentHandlers)["agent.identity.get"]>[0];
 type AgentIdentityGetParams = AgentIdentityGetHandlerArgs["params"];
@@ -326,15 +338,13 @@ function readLastAgentCommandCall(): AgentCommandCall | undefined {
   return mocks.agentCommand.mock.calls.at(-1)?.[0] as AgentCommandCall | undefined;
 }
 
-async function waitForAgentCommandCall<
-  T extends AgentCommandCall = AgentCommandCall,
->(): Promise<T> {
+async function waitForAgentCommandCall(): Promise<AgentCommandCall> {
   await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
   const call = readLastAgentCommandCall();
   if (!call) {
     throw new Error("expected agentCommand call");
   }
-  return call as T;
+  return call;
 }
 
 function mockSessionResetSuccess(params: {
@@ -988,7 +998,7 @@ describe("gateway agent handler", () => {
       { reqId: "ts-1" },
     );
 
-    const callArgs = await waitForAgentCommandCall<{ message?: string }>();
+    const callArgs = await waitForAgentCommandCall();
     expect(callArgs.message).toBe("[Wed 2026-01-28 20:30 EST] Is it the weekend?");
 
     resetTimeConfig();
@@ -1013,7 +1023,7 @@ describe("gateway agent handler", () => {
       { reqId: "inter-session-marker" },
     );
 
-    const callArgs = await waitForAgentCommandCall<{ message?: string }>();
+    const callArgs = await waitForAgentCommandCall();
     expect(callArgs.message).toMatch(/^\[Inter-session message\]/);
     expect(callArgs.message).toContain("isUser=false");
     expect(callArgs.message).toContain("forwarded reply");
@@ -1124,11 +1134,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    const callArgs = await waitForAgentCommandCall<{
-      message?: string;
-      modelRun?: boolean;
-      promptMode?: string;
-    }>();
+    const callArgs = await waitForAgentCommandCall();
     expect(callArgs).toEqual(
       expect.objectContaining({
         message: "Reply exactly: pong",
@@ -1174,7 +1180,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    const callArgs = await waitForAgentCommandCall<{ senderIsOwner?: boolean }>();
+    const callArgs = await waitForAgentCommandCall();
     expect(callArgs.senderIsOwner).toBe(senderIsOwner);
   });
 
@@ -1475,7 +1481,7 @@ describe("gateway agent handler", () => {
       },
       { reqId: "workspace-forwarded-1" },
     );
-    const spawnedCall = await waitForAgentCommandCall<{ workspaceDir?: string }>();
+    const spawnedCall = await waitForAgentCommandCall();
     expect(spawnedCall.workspaceDir).toBe("/tmp/inherited");
   });
 
@@ -1517,11 +1523,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    const callArgs = await waitForAgentCommandCall<{
-      channel?: string;
-      messageChannel?: string;
-      runContext?: { messageChannel?: string };
-    }>();
+    const callArgs = await waitForAgentCommandCall();
     expect(callArgs.channel).toBe("telegram");
     expect(callArgs.messageChannel).toBe("webchat");
     expect(callArgs.runContext?.messageChannel).toBe("webchat");
@@ -1720,11 +1722,7 @@ describe("gateway agent handler", () => {
       { reqId: "session-id-agent-resume" },
     );
 
-    const call = await waitForAgentCommandCall<{
-      agentId?: string;
-      sessionId?: string;
-      sessionKey?: string;
-    }>();
+    const call = await waitForAgentCommandCall();
     expect(call.agentId).toBe("main");
     expect(call.sessionId).toBe("resume-whatsapp-session");
     expect(call.sessionKey).toBeUndefined();
@@ -1748,11 +1746,7 @@ describe("gateway agent handler", () => {
       { reqId: "blank-session-id-agent-resume" },
     );
 
-    const call = await waitForAgentCommandCall<{
-      agentId?: string;
-      sessionId?: string;
-      sessionKey?: string;
-    }>();
+    const call = await waitForAgentCommandCall();
     expect(call.agentId).toBe("main");
     expect(call.sessionId).toBe("existing-session-id");
     expect(call.sessionKey).toBe("agent:main:main");
@@ -1805,10 +1799,7 @@ describe("gateway agent handler", () => {
         { reqId: "daily-rollover-agent-session" },
       );
 
-      const call = await waitForAgentCommandCall<{
-        sessionId?: string;
-        sessionKey?: string;
-      }>();
+      const call = await waitForAgentCommandCall();
       expect(call.sessionKey).toBe("agent:main:main");
       expect(call.sessionId).not.toBe("stale-session-id");
       expect(capturedEntry?.sessionStartedAt).toBe(now);
@@ -1866,10 +1857,7 @@ describe("gateway agent handler", () => {
         { reqId: "daily-rollover-agent-session-id" },
       );
 
-      const call = await waitForAgentCommandCall<{
-        sessionId?: string;
-        sessionKey?: string;
-      }>();
+      const call = await waitForAgentCommandCall();
       expect(call.sessionKey).toBe("agent:main:main");
       expect(call.sessionId).not.toBe("stale-session-id");
       expect(capturedEntry?.sessionStartedAt).toBe(now);
@@ -1911,10 +1899,7 @@ describe("gateway agent handler", () => {
       { reqId: "global-session-agent-id" },
     );
 
-    const call = await waitForAgentCommandCall<{
-      agentId?: string;
-      sessionKey?: string;
-    }>();
+    const call = await waitForAgentCommandCall();
     expect(call.agentId).toBeUndefined();
     expect(call.sessionKey).toBe("global");
   });
@@ -2014,7 +1999,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
+    const callArgs = await waitForAgentCommandCall();
     expect(callArgs.sessionKey).toBe("agent:main:voice");
   });
 
@@ -2057,7 +2042,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
+    const callArgs = await waitForAgentCommandCall();
     expect(callArgs.sessionKey).toBe("agent:main:main");
   });
 
@@ -2100,7 +2085,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
+    const callArgs = await waitForAgentCommandCall();
     expect(callArgs.sessionKey).toBe("agent:main:voice");
     expect(mocks.resolveVoiceWakeRouteByTrigger).toHaveBeenCalledWith({
       trigger: undefined,
@@ -2149,7 +2134,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
+    const callArgs = await waitForAgentCommandCall();
     expect(callArgs.sessionKey).toBe("agent:main:voice");
     expect(mocks.resolveVoiceWakeRouteByTrigger).toHaveBeenCalledWith({
       trigger: "robot wake",
@@ -2198,7 +2183,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
+    const callArgs = await waitForAgentCommandCall();
     expect(callArgs.sessionKey).toBe("agent:main:research");
     expect(mocks.loadVoiceWakeRoutingConfig).not.toHaveBeenCalled();
     expect(mocks.resolveVoiceWakeRouteByTrigger).not.toHaveBeenCalled();
@@ -2245,7 +2230,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
+    const callArgs = await waitForAgentCommandCall();
     expect(callArgs.sessionKey).toBe("agent:ops:main");
     expect(mocks.loadVoiceWakeRoutingConfig).not.toHaveBeenCalled();
     expect(mocks.resolveVoiceWakeRouteByTrigger).not.toHaveBeenCalled();
@@ -2293,7 +2278,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
+    const callArgs = await waitForAgentCommandCall();
     expect(callArgs.sessionKey).toBe("agent:main:main");
     expect(mocks.loadVoiceWakeRoutingConfig).not.toHaveBeenCalled();
     expect(mocks.resolveVoiceWakeRouteByTrigger).not.toHaveBeenCalled();
