@@ -243,6 +243,27 @@ function resolveRecordedExtensionsDir(params: {
   }
 }
 
+function resolveRecordedNpmRoot(installPath: string | undefined): string | undefined {
+  if (!installPath?.trim()) {
+    return undefined;
+  }
+  const resolved = path.resolve(resolveUserPath(installPath));
+  const parts = resolved.split(path.sep);
+  const nodeModulesIndex = parts.lastIndexOf("node_modules");
+  if (nodeModulesIndex <= 0) {
+    return undefined;
+  }
+  const root = parts.slice(0, nodeModulesIndex).join(path.sep);
+  return root || path.sep;
+}
+
+function shouldFallbackBetaNpmUpdate(result: { ok: false; code?: string; error: string }): boolean {
+  return (
+    result.code === PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND ||
+    /\b(ETARGET|notarget)\b|No matching version found|dist-tag|tag .*not found/i.test(result.error)
+  );
+}
+
 function buildLoadPathHelpers(existing: string[], env: NodeJS.ProcessEnv = process.env) {
   let paths = [...existing];
   const resolveSet = () => new Set(paths.map((entry) => resolveUserPath(entry, env)));
@@ -1045,6 +1066,8 @@ export async function updateNpmInstalledPlugins(params: {
       pluginId,
       installPath,
     });
+    const recordedNpmRoot =
+      record.source === "npm" ? resolveRecordedNpmRoot(record.installPath) : undefined;
 
     if (!params.dryRun && record.source === "npm" && currentVersion) {
       const metadataResult = await resolveNpmSpecMetadata({
@@ -1094,10 +1117,12 @@ export async function updateNpmInstalledPlugins(params: {
                 spec: effectiveSpec!,
                 mode: "update",
                 extensionsDir,
+                npmDir: recordedNpmRoot,
                 timeoutMs: params.timeoutMs,
                 dryRun: true,
                 dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                 trustedSourceLinkedOfficialInstall,
+                trustedManagedNpmRoot: Boolean(recordedNpmRoot),
                 expectedPluginId: pluginId,
                 expectedIntegrity,
                 onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
@@ -1147,7 +1172,12 @@ export async function updateNpmInstalledPlugins(params: {
         continue;
       }
       let usedNpmFallback = false;
-      if (!probe.ok && record.source === "npm" && npmSpecs?.fallbackSpec) {
+      if (
+        !probe.ok &&
+        record.source === "npm" &&
+        npmSpecs?.fallbackSpec &&
+        shouldFallbackBetaNpmUpdate(probe)
+      ) {
         logger.warn?.(
           describeBetaNpmFallback({
             pluginId,
@@ -1161,10 +1191,12 @@ export async function updateNpmInstalledPlugins(params: {
           spec: npmSpecs.fallbackSpec,
           mode: "update",
           extensionsDir,
+          npmDir: recordedNpmRoot,
           timeoutMs: params.timeoutMs,
           dryRun: true,
           dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
           trustedSourceLinkedOfficialInstall,
+          trustedManagedNpmRoot: Boolean(recordedNpmRoot),
           expectedPluginId: pluginId,
           expectedIntegrity: fallbackExpectedIntegrity,
           onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
@@ -1279,9 +1311,11 @@ export async function updateNpmInstalledPlugins(params: {
               spec: effectiveSpec!,
               mode: "update",
               extensionsDir,
+              npmDir: recordedNpmRoot,
               timeoutMs: params.timeoutMs,
               dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
               trustedSourceLinkedOfficialInstall,
+              trustedManagedNpmRoot: Boolean(recordedNpmRoot),
               expectedPluginId: pluginId,
               expectedIntegrity,
               onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
@@ -1328,7 +1362,12 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
     let usedNpmFallback = false;
-    if (!result.ok && record.source === "npm" && npmSpecs?.fallbackSpec) {
+    if (
+      !result.ok &&
+      record.source === "npm" &&
+      npmSpecs?.fallbackSpec &&
+      shouldFallbackBetaNpmUpdate(result)
+    ) {
       logger.warn?.(
         describeBetaNpmFallback({
           pluginId,
@@ -1342,9 +1381,11 @@ export async function updateNpmInstalledPlugins(params: {
         spec: npmSpecs.fallbackSpec,
         mode: "update",
         extensionsDir,
+        npmDir: recordedNpmRoot,
         timeoutMs: params.timeoutMs,
         dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         trustedSourceLinkedOfficialInstall,
+        trustedManagedNpmRoot: Boolean(recordedNpmRoot),
         expectedPluginId: pluginId,
         expectedIntegrity: fallbackExpectedIntegrity,
         onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({

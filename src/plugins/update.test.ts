@@ -1865,6 +1865,46 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
+  it("trusts the npm root derived from an existing npm install record", async () => {
+    const npmRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-update-npm-root-"));
+    tempDirs.push(npmRoot);
+    const installPath = path.join(npmRoot, "node_modules", "@openclaw", "discord");
+    fs.mkdirSync(installPath, { recursive: true });
+    fs.writeFileSync(
+      path.join(installPath, "package.json"),
+      JSON.stringify({ name: "@openclaw/discord", version: "2026.5.4" }),
+    );
+    mockNpmViewMetadata({
+      name: "@openclaw/discord",
+      version: "2026.5.5-beta.1",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "discord",
+        targetDir: installPath,
+        version: "2026.5.5-beta.1",
+      }),
+    );
+
+    await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "discord",
+        spec: "@openclaw/discord",
+        installPath,
+      }),
+      pluginIds: ["discord"],
+      updateChannel: "beta",
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        npmDir: npmRoot,
+        spec: "@openclaw/discord@beta",
+        trustedManagedNpmRoot: true,
+      }),
+    );
+  });
+
   it("falls back to the default npm spec when a beta tag is unavailable", async () => {
     installPluginFromNpmSpecMock
       .mockResolvedValueOnce({
@@ -1916,24 +1956,11 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
-  it("falls back to the default npm spec when the beta package exists but is invalid", async () => {
-    installPluginFromNpmSpecMock
-      .mockResolvedValueOnce({
-        ok: false,
-        error: "Installed plugin package uses a TypeScript entry without compiled runtime output.",
-      })
-      .mockResolvedValueOnce(
-        createSuccessfulNpmUpdateResult({
-          pluginId: "openclaw-codex-app-server",
-          targetDir: "/tmp/openclaw-codex-app-server",
-          version: "0.2.6",
-          npmResolution: {
-            name: "openclaw-codex-app-server",
-            version: "0.2.6",
-            resolvedSpec: "openclaw-codex-app-server@0.2.6",
-          },
-        }),
-      );
+  it("does not fall back to the default npm spec when the beta package exists but is invalid", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValueOnce({
+      ok: false,
+      error: "Installed plugin package uses a TypeScript entry without compiled runtime output.",
+    });
 
     const warnMessages: string[] = [];
     const result = await updateNpmInstalledPlugins({
@@ -1951,26 +1978,52 @@ describe("updateNpmInstalledPlugins", () => {
         spec: "openclaw-codex-app-server@beta",
       }),
     );
-    expect(installPluginFromNpmSpecMock).toHaveBeenNthCalledWith(
-      2,
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+    expect(warnMessages).toEqual([]);
+    expect(result.outcomes).toEqual([
       expect.objectContaining({
+        status: "error",
+        message: expect.stringContaining("TypeScript entry"),
+      }),
+    ]);
+  });
+
+  it("does not fall back to the default npm spec for beta peer-resolution failures", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValueOnce({
+      ok: false,
+      error:
+        'npm ERR! code ERESOLVE\nnpm ERR! Found: openclaw@2026.5.4\nnpm ERR! peerOptional openclaw@">=2026.5.5-beta.1" from @openclaw/discord@2026.5.5-beta.1',
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: createCodexAppServerInstallConfig({
         spec: "openclaw-codex-app-server",
       }),
-    );
-    expect(warnMessages).toEqual([expect.stringContaining("failed beta npm update")]);
-    expectCodexAppServerInstallState({
-      result,
-      spec: "openclaw-codex-app-server",
-      version: "0.2.6",
-      resolvedSpec: "openclaw-codex-app-server@0.2.6",
+      pluginIds: ["openclaw-codex-app-server"],
+      updateChannel: "beta",
     });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+    expect(installPluginFromNpmSpecMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        spec: "openclaw-codex-app-server@beta",
+      }),
+    );
+    expect(result.outcomes).toEqual([
+      expect.objectContaining({
+        status: "error",
+        message: expect.stringContaining("ERESOLVE"),
+      }),
+    ]);
   });
 
   it("reports the fallback npm spec when beta fallback also fails", async () => {
     installPluginFromNpmSpecMock
       .mockResolvedValueOnce({
         ok: false,
-        error: "Installed plugin package uses a TypeScript entry without compiled runtime output.",
+        code: "npm_package_not_found",
+        error: "npm package not found",
       })
       .mockResolvedValueOnce({
         ok: false,

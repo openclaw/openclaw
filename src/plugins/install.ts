@@ -24,6 +24,7 @@ import {
   parseRegistryNpmSpec,
   type ParsedRegistryNpmSpec,
 } from "../infra/npm-registry-spec.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import {
   createSafeNpmInstallArgs,
   createSafeNpmInstallEnv,
@@ -380,6 +381,7 @@ type PackageInstallCommonParams = InstallSafetyOverrides & {
   expectedPluginId?: string;
   requirePluginManifest?: boolean;
   installPolicyRequest?: PluginInstallPolicyRequest;
+  trustedManagedNpmRoot?: boolean;
 };
 
 type FileInstallCommonParams = Pick<
@@ -1223,6 +1225,7 @@ export async function installPluginFromNpmSpec(
     logger?: PluginInstallLogger;
     mode?: "install" | "update";
     dryRun?: boolean;
+    trustedManagedNpmRoot?: boolean;
     expectedPluginId?: string;
     expectedIntegrity?: string;
     onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
@@ -1337,9 +1340,28 @@ export async function installPluginFromNpmSpec(
 
   logger.info?.(`Installing ${spec} into ${npmRoot}…`);
   if (parsedSpec.name !== "openclaw") {
-    const repairedOpenClawPeer = await repairManagedNpmRootOpenClawPeer({ npmRoot });
-    if (repairedOpenClawPeer) {
+    const repairedOpenClawPeer = await repairManagedNpmRootOpenClawPeer({
+      defaultNpmRoot: resolveDefaultPluginNpmDir(),
+      env: createSafeNpmInstallEnv(process.env, { packageLock: true, quiet: true }),
+      hostPackageRoot: resolveOpenClawPackageRootSync({
+        argv1: process.argv[1],
+        moduleUrl: import.meta.url,
+        cwd: process.cwd(),
+      }),
+      npmRoot,
+      runCommand: runCommandWithTimeout,
+      timeoutMs,
+      trustedByInstallRecord: params.trustedManagedNpmRoot,
+    });
+    for (const warning of repairedOpenClawPeer.warnings) {
+      logger.warn?.(warning);
+    }
+    if (repairedOpenClawPeer.status === "repaired") {
       logger.info?.(`Repaired stale openclaw peer dependency in ${npmRoot}`);
+    } else if (repairedOpenClawPeer.status === "skipped") {
+      logger.warn?.(
+        `Skipped stale openclaw peer repair in ${npmRoot}: ${repairedOpenClawPeer.reason ?? "unproven managed npm root"}`,
+      );
     }
   }
   await upsertManagedNpmRootDependency({

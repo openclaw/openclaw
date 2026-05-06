@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -17,7 +18,10 @@ vi.resetModules();
 
 const { installPluginFromNpmSpec, PLUGIN_INSTALL_ERROR_CODE } = await import("./install.js");
 
-const suiteTempRootTracker = createSuiteTempRootTracker("openclaw-plugin-install-npm-spec");
+const suiteTempRootTracker = createSuiteTempRootTracker(
+  "openclaw-plugin-install-npm-spec",
+  os.tmpdir(),
+);
 
 function successfulSpawn(stdout = "") {
   return {
@@ -234,7 +238,12 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
         for (const packageName of Object.keys(manifest.dependencies ?? {})) {
           const pkg = packagesByName.get(packageName);
           if (!pkg) {
-            throw new Error(`unexpected managed npm dependency: ${packageName}`);
+            const calls = runCommandWithTimeoutMock.mock.calls
+              .map((call) => (Array.isArray(call[0]) ? call[0].join(" ") : String(call[0])))
+              .join(" | ");
+            throw new Error(
+              `unexpected managed npm dependency: ${packageName}; npmRoot: ${npmRoot}; calls: ${calls}`,
+            );
           }
           const dependencySpec = manifest.dependencies?.[packageName];
           if (pkg.expectedDependencySpec && dependencySpec !== pkg.expectedDependencySpec) {
@@ -257,6 +266,40 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
       }
       if (argv[0] === "npm" && argv[1] === "uninstall") {
         const packageName = argv.at(-1);
+        if (packageName === "openclaw") {
+          const prefixIndex = argv.indexOf("--prefix");
+          const prefixValue = prefixIndex >= 0 ? argv[prefixIndex + 1] : undefined;
+          const npmRoot = prefixValue === "." ? options?.cwd : prefixValue;
+          if (!npmRoot) {
+            throw new Error(`unexpected npm uninstall command: ${argv.join(" ")}`);
+          }
+          const manifestPath = path.join(npmRoot, "package.json");
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+            dependencies?: Record<string, string>;
+          };
+          if (manifest.dependencies) {
+            delete manifest.dependencies.openclaw;
+          }
+          fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+          const lockPath = path.join(npmRoot, "package-lock.json");
+          if (fs.existsSync(lockPath)) {
+            const lock = JSON.parse(fs.readFileSync(lockPath, "utf8")) as {
+              dependencies?: Record<string, unknown>;
+              packages?: Record<string, { dependencies?: Record<string, string> }>;
+            };
+            if (lock.packages?.[""]?.dependencies) {
+              delete lock.packages[""].dependencies.openclaw;
+            }
+            delete lock.packages?.["node_modules/openclaw"];
+            delete lock.dependencies?.openclaw;
+            fs.writeFileSync(lockPath, `${JSON.stringify(lock, null, 2)}\n`, "utf-8");
+          }
+          fs.rmSync(path.join(npmRoot, "node_modules", "openclaw"), {
+            recursive: true,
+            force: true,
+          });
+          return successfulSpawn();
+        }
         const pkg = packageName ? packagesByName.get(packageName) : undefined;
         if (!pkg) {
           throw new Error(`unexpected npm uninstall package: ${packageName ?? ""}`);
@@ -265,6 +308,9 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
           recursive: true,
           force: true,
         });
+        return successfulSpawn();
+      }
+      if (argv[0] === "npm" && argv[1] === "prune") {
         return successfulSpawn();
       }
       throw new Error(`unexpected command: ${argv.join(" ")}`);
@@ -510,6 +556,7 @@ describe("installPluginFromNpmSpec", () => {
   it("repairs stale managed openclaw root packages before npm plugin installs", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(stateDir, "npm");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     fs.mkdirSync(path.join(npmRoot, "node_modules", "openclaw"), { recursive: true });
     fs.writeFileSync(
       path.join(npmRoot, "package.json"),
@@ -574,17 +621,28 @@ describe("installPluginFromNpmSpec", () => {
     const result = await installPluginFromNpmSpec({
       spec: "@openclaw/discord@beta",
       npmDir: npmRoot,
+      trustedManagedNpmRoot: true,
       logger: { info: () => {}, warn: () => {} },
     });
 
     expect(result.ok).toBe(true);
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
+      expect.arrayContaining(["npm", "uninstall", "openclaw"]),
+      expect.objectContaining({ cwd: npmRoot }),
+    );
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
+      expect.arrayContaining(["npm", "prune"]),
+      expect.objectContaining({ cwd: npmRoot }),
+    );
     const manifest = JSON.parse(fs.readFileSync(path.join(npmRoot, "package.json"), "utf8")) as {
       dependencies?: Record<string, string>;
+      openclawManagedPluginRoot?: boolean;
     };
     expect(manifest.dependencies).not.toHaveProperty("openclaw");
     expect(manifest.dependencies).toMatchObject({
       "@openclaw/discord": "2026.5.5-beta.1",
     });
+    expect(manifest.openclawManagedPluginRoot).toBe(true);
     const lockfile = JSON.parse(
       fs.readFileSync(path.join(npmRoot, "package-lock.json"), "utf8"),
     ) as {
