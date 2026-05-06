@@ -98,6 +98,13 @@ export function humanize(raw: string) {
 
 const CONFIG_EXACT_TRANSLATIONS: Record<string, string> = {
   "Setup Wizard State": "Trạng thái trình hướng dẫn thiết lập",
+  Config: "Cấu hình",
+  Communication: "Liên lạc",
+  Communications: "Liên lạc",
+  Appearance: "Giao diện",
+  Automation: "Tự động hóa",
+  Infrastructure: "Hạ tầng",
+  "AI & Agents": "AI & Agent",
   Updates: "Cập nhật",
   CLI: "CLI",
   Diagnostics: "Chẩn đoán",
@@ -106,20 +113,21 @@ const CONFIG_EXACT_TRANSLATIONS: Record<string, string> = {
   "Node Host": "Node host",
   Agents: "Agent",
   Tools: "Công cụ",
-  Bindings: "Binding",
+  Binding: "Liên kết",
+  Bindings: "Liên kết",
   Audio: "Âm thanh",
   Models: "Mô hình",
   Messages: "Tin nhắn",
   Commands: "Lệnh",
   Session: "Phiên",
-  Cron: "Cron",
+  Cron: "Tác vụ Cron",
   Hooks: "Hook",
   UI: "UI",
   Browser: "Trình duyệt",
   Talk: "Giọng nói",
   Channels: "Kênh",
   Skills: "Kỹ năng",
-  Plugins: "Plugin",
+  Plugins: "Tiện ích",
   Discovery: "Khám phá",
   Presence: "Hiện diện",
   "Voice Wake": "Đánh thức bằng giọng nói",
@@ -132,8 +140,40 @@ const CONFIG_EXACT_TRANSLATIONS: Record<string, string> = {
   Secrets: "Secret",
   "Setup Wizard": "Trình hướng dẫn thiết lập",
   Web: "Web",
+  Approvals: "Phê duyệt",
+  Approval: "Phê duyệt",
+  "Exec Approval Forwarding": "Chuyển tiếp phê duyệt exec",
+  "Forward Exec Approvals": "Chuyển tiếp phê duyệt exec",
+  "Approval Forwarding Mode": "Chế độ chuyển tiếp phê duyệt",
+  "Approval Agent Filter": "Bộ lọc agent phê duyệt",
+  "Approval Session Filter": "Bộ lọc phiên phê duyệt",
+  "Approval Forwarding Targets": "Đích chuyển tiếp phê duyệt",
+  "Approval Target Channel": "Kênh đích phê duyệt",
+  "Approval Target Destination": "Đích nhận phê duyệt",
+  "Approval Target Account ID": "ID tài khoản đích phê duyệt",
+  "Approval Target Thread ID": "ID luồng đích phê duyệt",
+  "Plugin Approval Forwarding": "Chuyển tiếp phê duyệt plugin",
+  "Forward Plugin Approvals": "Chuyển tiếp phê duyệt plugin",
+  "Plugin Approval Forwarding Mode": "Chế độ chuyển tiếp phê duyệt plugin",
+  "Plugin Approval Agent Filter": "Bộ lọc agent phê duyệt plugin",
+  "Plugin Approval Session Filter": "Bộ lọc phiên phê duyệt plugin",
+  "Plugin Approval Forwarding Targets": "Đích chuyển tiếp phê duyệt plugin",
+  "Plugin Approval Target Channel": "Kênh đích phê duyệt plugin",
+  "Plugin Approval Target Destination": "Đích nhận phê duyệt plugin",
+  "Plugin Approval Target Account ID": "ID tài khoản đích phê duyệt plugin",
+  "Plugin Approval Target Thread ID": "ID luồng đích phê duyệt plugin",
+  "Forwarding Mode": "Chế độ chuyển tiếp",
+  "Agent Filter": "Bộ lọc agent",
+  "Session Filter": "Bộ lọc phiên",
+  "Forwarding Targets": "Đích chuyển tiếp",
+  "Target Channel": "Kênh đích",
+  "Target Destination": "Đích nhận",
+  "Target Account ID": "ID tài khoản đích",
+  "Target Thread ID": "ID luồng đích",
   ACP: "ACP",
   MCP: "MCP",
+  Advanced: "Nâng cao",
+  advanced: "nâng cao",
   Enabled: "Đã bật",
   Disabled: "Đã tắt",
   Default: "Mặc định",
@@ -169,6 +209,13 @@ const CONFIG_EXACT_TRANSLATIONS: Record<string, string> = {
   "User interface preferences": "Tùy chọn giao diện người dùng",
   "AI model configurations and providers": "Cấu hình mô hình AI và nhà cung cấp",
   "Key bindings and shortcuts": "Key binding và phím tắt",
+  "Top-level binding rules for routing and persistent ACP conversation ownership. Use type=route for normal routing and type=acp for persistent ACP harness bindings.":
+    "Quy tắc liên kết cấp cao nhất cho định tuyến và quyền sở hữu hội thoại ACP lâu dài. Dùng type=route cho định tuyến thông thường và type=acp cho liên kết harness ACP lâu dài.",
+  "Approval routing and forwarding controls": "Kiểm soát định tuyến và chuyển tiếp phê duyệt",
+  "Node host controls and exposed local capabilities":
+    "Kiểm soát node host và các năng lực cục bộ được mở ra",
+  "Memory indexing, recall, and persistence": "Lập chỉ mục, truy hồi và lưu trữ bộ nhớ",
+  "Media generation and processing settings": "Cài đặt tạo và xử lý media",
   "Broadcast and notification settings": "Cài đặt broadcast và thông báo",
   "Audio input/output settings": "Cài đặt đầu vào/đầu ra âm thanh",
   "Session management and persistence": "Quản lý và lưu trạng thái phiên",
@@ -185,9 +232,115 @@ const CONFIG_EXACT_TRANSLATIONS: Record<string, string> = {
   "Agent Communication Protocol runtime and streaming settings":
     "Cài đặt runtime và streaming Agent Communication Protocol",
   "Model Context Protocol server definitions": "Định nghĩa server Model Context Protocol",
+  "Update-channel and startup-check behavior for keeping OpenClaw runtime versions current. Use conservative channels in production and more experimental channels only in controlled environments.":
+    "Hành vi kênh cập nhật và kiểm tra khi khởi động để giữ phiên bản runtime OpenClaw luôn mới. Dùng kênh thận trọng trong production và chỉ dùng kênh thử nghiệm hơn trong môi trường kiểm soát.",
+  "CLI presentation controls for local command output behavior such as banner and tagline style. Use this section to keep startup output aligned with operator preference without changing runtime behavior.":
+    "Kiểm soát cách hiển thị đầu ra lệnh cục bộ như banner và kiểu tagline. Dùng mục này để giữ đầu ra khởi động đúng sở thích vận hành mà không đổi hành vi runtime.",
+  "Diagnostics controls for targeted tracing, telemetry export, and cache inspection during debugging. Keep baseline diagnostics minimal in production and enable deeper signals only when investigating issues.":
+    "Kiểm soát chẩn đoán cho trace có mục tiêu, xuất telemetry và kiểm tra cache khi debug. Giữ chẩn đoán nền tối thiểu trong production và chỉ bật tín hiệu sâu khi điều tra sự cố.",
+  "Logging behavior controls for severity, output destinations, formatting, and sensitive-data redaction. Keep levels and redaction strict enough for production while preserving useful diagnostics.":
+    "Kiểm soát ghi log cho mức độ, đích đầu ra, định dạng và che dữ liệu nhạy cảm. Giữ mức log và che dữ liệu đủ chặt cho production nhưng vẫn còn thông tin chẩn đoán hữu ích.",
+  "Gateway runtime surface for bind mode, auth, control UI, remote transport, and operational safety controls. Keep conservative defaults unless you intentionally expose the gateway beyond trusted local interfaces.":
+    "Bề mặt runtime Gateway cho chế độ bind, xác thực, Control UI, truyền tải từ xa và kiểm soát an toàn vận hành. Giữ mặc định thận trọng trừ khi chủ động mở Gateway vượt ngoài giao diện cục bộ tin cậy.",
+  "Node host controls for features exposed from this gateway node to other nodes or clients. Keep defaults unless you intentionally proxy local capabilities across your node network.":
+    "Kiểm soát node host cho các tính năng được mở từ node Gateway này tới node hoặc client khác. Giữ mặc định trừ khi chủ động proxy năng lực cục bộ qua mạng node.",
+  "Agent runtime configuration root covering defaults and explicit agent entries used for routing and execution context. Keep this section explicit so model/tool behavior stays predictable across multi-agent workflows.":
+    "Gốc cấu hình runtime agent, gồm mặc định và các mục agent rõ ràng dùng cho định tuyến và ngữ cảnh thực thi. Giữ mục này rõ ràng để hành vi mô hình/công cụ dễ dự đoán trong workflow nhiều agent.",
+  "Global tool access policy and capability configuration across web, exec, media, messaging, and elevated surfaces. Use this section to constrain risky capabilities before broad rollout.":
+    "Chính sách truy cập công cụ toàn cục và cấu hình năng lực cho web, exec, media, nhắn tin và các bề mặt nâng quyền. Dùng mục này để giới hạn năng lực rủi ro trước khi mở rộng.",
+  "Global audio ingestion settings used before higher-level tools process speech or media content. Configure this when you need deterministic transcription behavior for voice notes and clips.":
+    "Cài đặt nhận âm thanh toàn cục dùng trước khi công cụ cấp cao xử lý giọng nói hoặc nội dung media. Cấu hình khi cần hành vi phiên âm ổn định cho ghi chú thoại và clip.",
+  "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.":
+    "Gốc danh mục mô hình cho định nghĩa nhà cung cấp, hành vi gộp/thay thế và tích hợp khám phá Bedrock tùy chọn. Giữ định nghĩa nhà cung cấp rõ ràng và đã xác thực trước khi dựa vào failover production.",
+  "Message formatting, acknowledgment, queueing, debounce, and status reaction behavior for inbound/outbound chat flows. Use this section when channel responsiveness or message UX needs adjustment.":
+    "Hành vi định dạng tin nhắn, xác nhận, hàng đợi, debounce và reaction trạng thái cho luồng chat vào/ra. Dùng mục này khi cần chỉnh độ phản hồi kênh hoặc UX tin nhắn.",
+  "Controls chat command surfaces, owner gating, and elevated command access behavior across providers. Keep defaults unless you need stricter operator controls or broader command availability.":
+    "Kiểm soát bề mặt lệnh chat, chặn theo chủ sở hữu và quyền truy cập lệnh nâng cao giữa các nhà cung cấp. Giữ mặc định trừ khi cần kiểm soát vận hành chặt hơn hoặc mở rộng lệnh.",
+  "Global session routing, reset, delivery policy, and maintenance controls for conversation history behavior. Keep defaults unless you need stricter isolation, retention, or delivery constraints.":
+    "Kiểm soát định tuyến phiên, reset, chính sách gửi và bảo trì cho hành vi lịch sử hội thoại. Giữ mặc định trừ khi cần cô lập, lưu giữ hoặc ràng buộc gửi chặt hơn.",
+  "Global scheduler settings for stored cron jobs, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling job volume or integrating external webhook receivers.":
+    "Cài đặt bộ lập lịch toàn cục cho tác vụ Cron đã lưu, số lượt chạy đồng thời, fallback gửi và lưu giữ phiên chạy. Giữ mặc định trừ khi mở rộng số lượng job hoặc tích hợp receiver webhook ngoài.",
+  "Inbound webhook automation surface for mapping external events into wake or agent actions in OpenClaw. Keep this locked down with explicit token/session/agent controls before exposing it beyond trusted networks.":
+    "Bề mặt tự động hóa webhook chiều vào để ánh xạ sự kiện bên ngoài thành hành động wake hoặc agent trong OpenClaw. Khóa chặt bằng kiểm soát token/phiên/agent rõ ràng trước khi mở ra ngoài mạng tin cậy.",
+  "UI presentation settings for accenting and assistant identity shown in control surfaces. Use this for branding and readability customization without changing runtime behavior.":
+    "Cài đặt hiển thị UI cho màu nhấn và danh tính assistant trên các bề mặt điều khiển. Dùng để tùy chỉnh thương hiệu và độ dễ đọc mà không đổi hành vi runtime.",
+  "Browser runtime controls for local or remote CDP attachment, profile routing, and screenshot/snapshot behavior. Keep defaults unless your automation workflow requires custom browser transport settings.":
+    "Kiểm soát runtime trình duyệt cho gắn CDP cục bộ/từ xa, định tuyến profile và hành vi screenshot/snapshot. Giữ mặc định trừ khi workflow tự động hóa cần cấu hình truyền tải trình duyệt riêng.",
+  "Talk-mode voice synthesis settings for voice identity, model selection, output format, and interruption behavior. Use this section to tune human-facing voice UX while controlling latency and cost.":
+    "Cài đặt tổng hợp giọng nói chế độ Talk cho danh tính giọng, chọn mô hình, định dạng đầu ra và hành vi ngắt lời. Dùng mục này để tinh chỉnh UX giọng nói cho người dùng đồng thời kiểm soát độ trễ và chi phí.",
+  "Channel provider configurations plus shared defaults that control access policies, heartbeat visibility, and per-surface behavior. Keep defaults centralized and override per provider only where required.":
+    "Cấu hình nhà cung cấp kênh cùng mặc định dùng chung kiểm soát chính sách truy cập, hiển thị heartbeat và hành vi theo từng bề mặt. Giữ mặc định tập trung và chỉ ghi đè theo nhà cung cấp khi cần.",
+  "Plugin system controls for enabling extensions, constraining load scope, configuring entries, and tracking installs. Keep plugin policy explicit and least-privilege in production environments.":
+    "Kiểm soát hệ thống plugin để bật plugin, giới hạn phạm vi tải, cấu hình mục và theo dõi cài đặt. Giữ chính sách plugin rõ ràng và tối thiểu quyền trong môi trường production.",
+  "Service discovery settings for local mDNS advertisement and optional wide-area presence signaling. Keep discovery scoped to expected networks to avoid leaking service metadata.":
+    "Cài đặt khám phá dịch vụ cho quảng bá mDNS cục bộ và tín hiệu hiện diện diện rộng tùy chọn. Giới hạn khám phá trong mạng dự kiến để tránh lộ metadata dịch vụ.",
+  "Approval routing controls for forwarding exec and plugin approval requests to chat destinations outside the originating session. Keep these disabled unless operators need explicit out-of-band approval visibility.":
+    "Kiểm soát định tuyến phê duyệt để chuyển tiếp yêu cầu phê duyệt exec và plugin tới đích chat bên ngoài phiên gốc. Giữ tắt trừ khi người vận hành cần thấy phê duyệt ngoài luồng rõ ràng.",
+  "Groups exec-approval forwarding behavior including enablement, routing mode, filters, and explicit targets. Configure here when approval prompts must reach operational channels instead of only the origin thread.":
+    "Nhóm hành vi chuyển tiếp phê duyệt exec, gồm bật/tắt, chế độ định tuyến, bộ lọc và đích rõ ràng. Cấu hình ở đây khi prompt phê duyệt phải tới kênh vận hành thay vì chỉ luồng gốc.",
+  "Enables forwarding of exec approval requests to configured delivery destinations (default: false). Keep disabled in low-risk setups and enable only when human approval responders need channel-visible prompts.":
+    "Bật chuyển tiếp yêu cầu phê duyệt exec tới các đích gửi đã cấu hình (mặc định: false). Giữ tắt trong thiết lập rủi ro thấp và chỉ bật khi người phê duyệt cần prompt hiển thị trên kênh.",
+  'Controls where approval prompts are sent: "session" uses origin chat, "targets" uses configured targets, and "both" sends to both paths. Use "session" as baseline and expand only when operational workflow requires redundancy.':
+    'Kiểm soát nơi gửi prompt phê duyệt: "session" dùng chat gốc, "targets" dùng các đích đã cấu hình, và "both" gửi theo cả hai đường. Dùng "session" làm nền và chỉ mở rộng khi workflow vận hành cần dự phòng.',
+  'Optional allowlist of agent IDs eligible for forwarded approvals, for example `["primary", "ops-agent"]`. Use this to limit forwarding blast radius and avoid notifying channels for unrelated agents.':
+    'Danh sách cho phép tùy chọn gồm ID agent đủ điều kiện nhận phê duyệt chuyển tiếp, ví dụ `["primary", "ops-agent"]`. Dùng để giới hạn phạm vi ảnh hưởng và tránh thông báo kênh cho agent không liên quan.',
+  'Optional session-key filters matched as substring or regex-style patterns, for example `["discord:", "^agent:ops:"]`. Use narrow patterns so only intended approval contexts are forwarded to shared destinations.':
+    'Bộ lọc session-key tùy chọn, khớp theo chuỗi con hoặc pattern kiểu regex, ví dụ `["discord:", "^agent:ops:"]`. Dùng pattern hẹp để chỉ chuyển tiếp đúng ngữ cảnh phê duyệt tới đích dùng chung.',
+  "Explicit delivery targets used when forwarding mode includes targets, each with channel and destination details. Keep target lists least-privilege and validate each destination before enabling broad forwarding.":
+    "Các đích gửi rõ ràng dùng khi chế độ chuyển tiếp bao gồm targets, mỗi mục có thông tin kênh và đích nhận. Giữ danh sách đích ở mức tối thiểu quyền và xác thực từng đích trước khi bật chuyển tiếp rộng.",
+  "Channel/provider ID used for forwarded approval delivery, such as discord, slack, or a plugin channel id. Use valid channel IDs only so approvals do not silently fail due to unknown routes.":
+    "ID kênh/nhà cung cấp dùng để gửi phê duyệt chuyển tiếp, ví dụ discord, slack hoặc ID kênh plugin. Chỉ dùng ID kênh hợp lệ để phê duyệt không lỗi âm thầm vì route không xác định.",
+  "Destination identifier inside the target channel (channel ID, user ID, or thread root depending on provider). Verify semantics per provider because destination format differs across channel integrations.":
+    "Định danh đích bên trong kênh mục tiêu (ID kênh, ID người dùng hoặc gốc luồng tùy nhà cung cấp). Kiểm tra ngữ nghĩa theo từng nhà cung cấp vì định dạng đích khác nhau giữa các tích hợp kênh.",
+  "Optional account selector for multi-account channel setups when approvals must route through a specific account context. Use this only when the target channel has multiple configured identities.":
+    "Bộ chọn tài khoản tùy chọn cho thiết lập kênh nhiều tài khoản khi phê duyệt phải đi qua một ngữ cảnh tài khoản cụ thể. Chỉ dùng khi kênh đích có nhiều danh tính đã cấu hình.",
+  "Optional thread/topic target for channels that support threaded delivery of forwarded approvals. Use this to keep approval traffic contained in operational threads instead of main channels.":
+    "Đích luồng/chủ đề tùy chọn cho kênh hỗ trợ gửi phê duyệt chuyển tiếp theo luồng. Dùng để giữ lưu lượng phê duyệt trong luồng vận hành thay vì kênh chính.",
+  "Groups plugin-approval forwarding behavior including enablement, routing mode, filters, and explicit targets. Independent of exec approval forwarding. Configure here when plugin approval prompts must reach operational channels.":
+    "Nhóm hành vi chuyển tiếp phê duyệt plugin, gồm bật/tắt, chế độ định tuyến, bộ lọc và đích rõ ràng. Độc lập với chuyển tiếp phê duyệt exec. Cấu hình ở đây khi prompt phê duyệt plugin phải tới kênh vận hành.",
+  "Enables forwarding of plugin approval requests to configured delivery destinations (default: false). Independent of approvals.exec.enabled.":
+    "Bật chuyển tiếp yêu cầu phê duyệt plugin tới các đích gửi đã cấu hình (mặc định: false). Độc lập với approvals.exec.enabled.",
+  'Controls where plugin approval prompts are sent: "session" uses origin chat, "targets" uses configured targets, and "both" sends to both paths.':
+    'Kiểm soát nơi gửi prompt phê duyệt plugin: "session" dùng chat gốc, "targets" dùng các đích đã cấu hình, và "both" gửi theo cả hai đường.',
+  'Optional allowlist of agent IDs eligible for forwarded plugin approvals, for example `["primary", "ops-agent"]`. Use this to limit forwarding blast radius.':
+    'Danh sách cho phép tùy chọn gồm ID agent đủ điều kiện nhận phê duyệt plugin chuyển tiếp, ví dụ `["primary", "ops-agent"]`. Dùng để giới hạn phạm vi ảnh hưởng.',
+  'Optional session-key filters matched as substring or regex-style patterns, for example `["discord:", "^agent:ops:"]`. Use narrow patterns so only intended approval contexts are forwarded.':
+    'Bộ lọc session-key tùy chọn, khớp theo chuỗi con hoặc pattern kiểu regex, ví dụ `["discord:", "^agent:ops:"]`. Dùng pattern hẹp để chỉ chuyển tiếp đúng ngữ cảnh phê duyệt.',
+  "Explicit delivery targets used when plugin approval forwarding mode includes targets, each with channel and destination details.":
+    "Các đích gửi rõ ràng dùng khi chế độ chuyển tiếp phê duyệt plugin bao gồm targets, mỗi mục có thông tin kênh và đích nhận.",
+  "Channel/provider ID used for forwarded plugin approval delivery, such as discord, slack, or a plugin channel id.":
+    "ID kênh/nhà cung cấp dùng để gửi phê duyệt plugin chuyển tiếp, ví dụ discord, slack hoặc ID kênh plugin.",
+  "Destination identifier inside the target channel (channel ID, user ID, or thread root depending on provider).":
+    "Định danh đích bên trong kênh mục tiêu (ID kênh, ID người dùng hoặc gốc luồng tùy nhà cung cấp).",
+  "Optional account selector for multi-account channel setups when plugin approvals must route through a specific account context.":
+    "Bộ chọn tài khoản tùy chọn cho thiết lập kênh nhiều tài khoản khi phê duyệt plugin phải đi qua một ngữ cảnh tài khoản cụ thể.",
+  "Optional thread/topic target for channels that support threaded delivery of forwarded plugin approvals.":
+    "Đích luồng/chủ đề tùy chọn cho kênh hỗ trợ gửi phê duyệt plugin chuyển tiếp theo luồng.",
 };
 
 const CONFIG_PHRASE_TRANSLATIONS: Array<[RegExp, string]> = [
+  [/\bAI & Agents\b/g, "AI & Agent"],
+  [/\bCommunication\b/g, "Liên lạc"],
+  [/\bCommunications\b/g, "Liên lạc"],
+  [/\bAppearance\b/g, "Giao diện"],
+  [/\bAutomation\b/g, "Tự động hóa"],
+  [/\bInfrastructure\b/g, "Hạ tầng"],
+  [/\bApproval Forwarding\b/g, "Chuyển tiếp phê duyệt"],
+  [/\bApproval Target\b/g, "Đích phê duyệt"],
+  [/\bApproval Agent\b/g, "Agent phê duyệt"],
+  [/\bApproval Session\b/g, "Phiên phê duyệt"],
+  [/\bApprovals\b/g, "Phê duyệt"],
+  [/\bApproval\b/g, "Phê duyệt"],
+  [/\bForwarding\b/g, "Chuyển tiếp"],
+  [/\bTargets\b/g, "Đích"],
+  [/\bTarget\b/g, "Đích"],
+  [/\bDestination\b/g, "Đích nhận"],
+  [/\bDestinations\b/g, "Đích nhận"],
+  [/\bFilter\b/g, "Bộ lọc"],
+  [/\bFilters\b/g, "Bộ lọc"],
+  [/\bAllowlist\b/g, "Danh sách cho phép"],
+  [/\bBinding\b/g, "Liên kết"],
+  [/\bBindings\b/g, "Liên kết"],
   [/\bSetup Wizard State\b/g, "Trạng thái trình hướng dẫn thiết lập"],
   [/\bConfig Last Touched Version\b/g, "Phiên bản cấu hình chỉnh sửa gần nhất"],
   [/\bConfig Last Touched At\b/g, "Thời điểm cấu hình chỉnh sửa gần nhất"],
@@ -258,6 +411,7 @@ const CONFIG_PHRASE_TRANSLATIONS: Array<[RegExp, string]> = [
   [/\bDashboard\b/g, "Dashboard"],
   [/\bChannel\b/g, "Kênh"],
   [/\bChannels\b/g, "Kênh"],
+  [/\bMedia\b/g, "Media"],
   [/\bMessage\b/g, "Tin nhắn"],
   [/\bMessages\b/g, "Tin nhắn"],
   [/\bCommand\b/g, "Lệnh"],
@@ -323,6 +477,54 @@ const CONFIG_PHRASE_TRANSLATIONS: Array<[RegExp, string]> = [
 ];
 
 const CONFIG_DESCRIPTION_TRANSLATIONS: Array<[RegExp, string]> = [
+  [/\bGroups\b/g, "Nhóm"],
+  [/\bgroups\b/g, "nhóm"],
+  [/\bincluding\b/g, "gồm"],
+  [/\benablement\b/g, "bật/tắt"],
+  [/\brouting mode\b/g, "chế độ định tuyến"],
+  [/\bfilters\b/g, "bộ lọc"],
+  [/\bexplicit targets\b/g, "đích rõ ràng"],
+  [/\bapproval prompts\b/g, "prompt phê duyệt"],
+  [/\bapproval requests\b/g, "yêu cầu phê duyệt"],
+  [/\boperational channels\b/g, "kênh vận hành"],
+  [/\borigin thread\b/g, "luồng gốc"],
+  [/\boriginating session\b/g, "phiên gốc"],
+  [/\bout-of-band\b/g, "ngoài luồng"],
+  [/\bvisibility\b/g, "khả năng quan sát"],
+  [/\bforwarded approvals\b/g, "phê duyệt chuyển tiếp"],
+  [/\bforwarded plugin approvals\b/g, "phê duyệt plugin chuyển tiếp"],
+  [/\bforwarded approval\b/g, "phê duyệt chuyển tiếp"],
+  [/\bforwarded\b/g, "được chuyển tiếp"],
+  [/\bforwarding\b/g, "chuyển tiếp"],
+  [/\bForwarding\b/g, "Chuyển tiếp"],
+  [/\bconfigured delivery destinations\b/g, "các đích gửi đã cấu hình"],
+  [/\bconfigured targets\b/g, "các đích đã cấu hình"],
+  [/\bdelivery destinations\b/g, "đích gửi"],
+  [/\bdelivery targets\b/g, "đích gửi"],
+  [/\btargets\b/g, "đích"],
+  [/\bdestinations\b/g, "đích"],
+  [/\bDestination\b/g, "Đích"],
+  [/\beligible\b/g, "đủ điều kiện"],
+  [/\ballowlist\b/g, "danh sách cho phép"],
+  [/\bblast radius\b/g, "phạm vi ảnh hưởng"],
+  [/\bunrelated agents\b/g, "agent không liên quan"],
+  [/\bnotifying\b/g, "thông báo"],
+  [/\blow-risk setups\b/g, "thiết lập rủi ro thấp"],
+  [/\bhuman approval responders\b/g, "người phê duyệt"],
+  [/\bchannel-visible prompts\b/g, "prompt hiển thị trên kênh"],
+  [/\bsession-key filters\b/g, "bộ lọc session-key"],
+  [/\bsubstring\b/g, "chuỗi con"],
+  [/\bregex-style patterns\b/g, "pattern kiểu regex"],
+  [/\bnarrow patterns\b/g, "pattern hẹp"],
+  [/\bshared destinations\b/g, "đích dùng chung"],
+  [/\bchannel\/provider ID\b/g, "ID kênh/nhà cung cấp"],
+  [/\bplugin channel id\b/g, "ID kênh plugin"],
+  [/\bunknown routes\b/g, "route không xác định"],
+  [/\baccount selector\b/g, "bộ chọn tài khoản"],
+  [/\bmulti-account channel setups\b/g, "thiết lập kênh nhiều tài khoản"],
+  [/\bspecific account context\b/g, "ngữ cảnh tài khoản cụ thể"],
+  [/\bthread\/topic target\b/g, "đích luồng/chủ đề"],
+  [/\bthreaded delivery\b/g, "gửi theo luồng"],
   [/\bAuto-set when OpenClaw writes the config\b/g, "Tự đặt khi OpenClaw ghi cấu hình"],
   [
     /\bISO timestamp of the last config write \(auto-set\)\b/g,
@@ -340,7 +542,14 @@ const CONFIG_DESCRIPTION_TRANSLATIONS: Array<[RegExp, string]> = [
   [/\bKeep defaults unless\b/g, "Giữ mặc định trừ khi"],
   [/\bKeep this section explicit so\b/g, "Giữ mục này rõ ràng để"],
   [/\bUse this section to\b/g, "Dùng mục này để"],
+  [/\bUse this to\b/g, "Dùng để"],
+  [/\bUse this\b/g, "Dùng mục này"],
   [/\bConfigure this when\b/g, "Cấu hình mục này khi"],
+  [/\bConfigure here when\b/g, "Cấu hình ở đây khi"],
+  [/\bControls where\b/g, "Kiểm soát nơi"],
+  [/\bControls\b/g, "Kiểm soát"],
+  [/\bEnables\b/g, "Bật"],
+  [/\bEnable\b/g, "Bật"],
   [/\bfalls back to\b/g, "fallback về"],
   [/\boverrides\b/g, "ghi đè"],
   [/\binherits\b/g, "kế thừa"],
@@ -376,6 +585,9 @@ const CONFIG_DESCRIPTION_TRANSLATIONS: Array<[RegExp, string]> = [
   [/\bdefault\b/g, "mặc định"],
   [/\bmessage\b/g, "tin nhắn"],
   [/\bmessages\b/g, "tin nhắn"],
+  [/\bapproval\b/g, "phê duyệt"],
+  [/\bapprovals\b/g, "phê duyệt"],
+  [/\bexec\b/g, "exec"],
   [/\bchannel\b/g, "kênh"],
   [/\bchannels\b/g, "kênh"],
   [/\bagent\b/g, "agent"],
@@ -397,6 +609,7 @@ const CONFIG_DESCRIPTION_TRANSLATIONS: Array<[RegExp, string]> = [
   [/\bhistory\b/g, "lịch sử"],
   [/\bdelivery\b/g, "gửi/nhận"],
   [/\brouting\b/g, "định tuyến"],
+  [/\broute\b/g, "route"],
   [/\bworkspace\b/g, "workspace"],
   [/\bdirectory\b/g, "thư mục"],
   [/\bfile\b/g, "tệp"],
@@ -443,6 +656,22 @@ function applyConfigTranslations(value: string, replacements: Array<[RegExp, str
     .trim();
 }
 
+const CONFIG_TAG_TRANSLATIONS: Record<string, string> = {
+  access: "truy cập",
+  advanced: "nâng cao",
+  automation: "tự động hóa",
+  media: "media",
+  models: "mô hình",
+  observability: "quan sát",
+  performance: "hiệu năng",
+  privacy: "riêng tư",
+  reliability: "độ tin cậy",
+  security: "bảo mật",
+  storage: "lưu trữ",
+  tools: "công cụ",
+  "url-secret": "URL secret",
+};
+
 export function translateConfigLabel(value: string | undefined): string | undefined {
   if (!value || i18n.getLocale() === "en") {
     return value;
@@ -474,6 +703,13 @@ export function translateConfigHelp(value: string | undefined): string | undefin
     ...CONFIG_PHRASE_TRANSLATIONS,
   ]);
   return translated || value;
+}
+
+export function translateConfigTag(value: string): string {
+  if (i18n.getLocale() === "en") {
+    return value;
+  }
+  return CONFIG_TAG_TRANSLATIONS[value] ?? CONFIG_TAG_TRANSLATIONS[value.toLowerCase()] ?? value;
 }
 
 const SENSITIVE_KEY_WHITELIST_SUFFIXES = [

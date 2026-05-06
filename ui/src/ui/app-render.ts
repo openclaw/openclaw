@@ -1507,7 +1507,7 @@ export function renderApp(state: AppViewState) {
             state.communicationsActiveSubsection = null;
           },
           onSubsectionChange: (section) => (state.communicationsActiveSubsection = section),
-          navRootLabel: "Communication",
+          navRootLabel: t("tabs.communications"),
           includeSections: [...COMMUNICATION_SECTION_KEYS],
           includeVirtualSections: true,
           webPush: {
@@ -1550,7 +1550,7 @@ export function renderApp(state: AppViewState) {
             state.automationActiveSubsection = null;
           },
           onSubsectionChange: (section) => (state.automationActiveSubsection = section),
-          navRootLabel: "Automation",
+          navRootLabel: t("tabs.automation"),
           includeSections: [...AUTOMATION_SECTION_KEYS],
         });
       case "infrastructure":
@@ -1566,7 +1566,7 @@ export function renderApp(state: AppViewState) {
             state.infrastructureActiveSubsection = null;
           },
           onSubsectionChange: (section) => (state.infrastructureActiveSubsection = section),
-          navRootLabel: "Infrastructure",
+          navRootLabel: t("tabs.infrastructure"),
           includeSections: [...INFRASTRUCTURE_SECTION_KEYS],
         });
       case "aiAgents":
@@ -1582,7 +1582,7 @@ export function renderApp(state: AppViewState) {
             state.aiAgentsActiveSubsection = null;
           },
           onSubsectionChange: (section) => (state.aiAgentsActiveSubsection = section),
-          navRootLabel: "AI & Agents",
+          navRootLabel: t("tabs.aiAgents"),
           includeSections: [...AI_AGENTS_SECTION_KEYS],
         });
       default:

@@ -1,5 +1,6 @@
 import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../../i18n/index.ts";
 import type { ThemeMode, ThemeName } from "../theme.ts";
 import { renderConfig, resetConfigViewStateForTests, type ConfigProps } from "./config.ts";
 
@@ -348,6 +349,95 @@ describe("config view", () => {
     const btn = findButtonByText(container, "Gateway");
     btn.click();
     expect(onSectionChange).toHaveBeenCalledWith("gateway");
+  });
+
+  it("localizes Vietnamese scoped config schema labels, help, and badges", async () => {
+    await i18n.setLocale("vi");
+    try {
+      const { container } = renderConfigView({
+        activeSection: "approvals",
+        navRootLabel: "Tự động hóa",
+        includeSections: ["commands", "hooks", "bindings", "cron", "approvals", "plugins"],
+        schema: {
+          type: "object",
+          properties: {
+            commands: { type: "object", properties: {} },
+            hooks: { type: "object", properties: {} },
+            bindings: { type: "object", properties: {} },
+            cron: { type: "object", properties: {} },
+            plugins: { type: "object", properties: {} },
+            approvals: {
+              type: "object",
+              title: "Approvals",
+              description:
+                "Approval routing controls for forwarding exec and plugin approval requests to chat destinations outside the originating session. Keep these disabled unless operators need explicit out-of-band approval visibility.",
+              properties: {
+                exec: {
+                  type: "object",
+                  title: "Exec Approval Forwarding",
+                  description:
+                    "Groups exec-approval forwarding behavior including enablement, routing mode, filters, and explicit targets. Configure here when approval prompts must reach operational channels instead of only the origin thread.",
+                  tags: ["advanced"],
+                  properties: {
+                    enabled: {
+                      type: "boolean",
+                      title: "Forward Exec Approvals",
+                      description:
+                        "Enables forwarding of exec approval requests to configured delivery destinations (default: false). Keep disabled in low-risk setups and enable only when human approval responders need channel-visible prompts.",
+                      tags: ["advanced"],
+                    },
+                    agentFilter: {
+                      type: "array",
+                      title: "Approval Agent Filter",
+                      description:
+                        'Optional allowlist of agent IDs eligible for forwarded approvals, for example `["primary", "ops-agent"]`. Use this to limit forwarding blast radius and avoid notifying channels for unrelated agents.',
+                      tags: ["advanced"],
+                      items: { type: "string" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        formValue: {
+          approvals: {
+            exec: {
+              enabled: false,
+              agentFilter: [],
+            },
+          },
+        },
+        originalValue: {
+          approvals: {
+            exec: {
+              enabled: false,
+              agentFilter: [],
+            },
+          },
+        },
+      });
+
+      const text = normalizedText(container);
+      const tabs = Array.from(container.querySelectorAll(".config-top-tabs__tab")).map((tab) =>
+        tab.textContent?.trim(),
+      );
+
+      expect(tabs).toContain("Tự động hóa");
+      expect(tabs).toContain("Liên kết");
+      expect(tabs).toContain("Tác vụ Cron");
+      expect(tabs).toContain("Phê duyệt");
+      expect(tabs).toContain("Tiện ích");
+      expect(text).toContain("Chuyển tiếp phê duyệt exec");
+      expect(text).toContain("Bộ lọc agent phê duyệt");
+      expect(text).toContain("nâng cao");
+      expect(text).toContain("Nhóm hành vi chuyển tiếp phê duyệt exec");
+      expect(text).not.toContain("Exec Approval Forwarding");
+      expect(text).not.toContain("Approval Agent Filter");
+      expect(text).not.toContain("advanced");
+    } finally {
+      await i18n.setLocale("en");
+    }
   });
 
   it("resets config content scroll when switching top-tab sections", async () => {

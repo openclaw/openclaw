@@ -17,6 +17,7 @@ import {
   schemaType,
   translateConfigHelp,
   translateConfigLabel,
+  translateConfigTag,
   type JsonSchema,
 } from "./config-form.shared.ts";
 
@@ -427,7 +428,9 @@ function renderTags(tags: string[]): TemplateResult | typeof nothing {
     return nothing;
   }
   return html`
-    <div class="cfg-tags">${tags.map((tag) => html`<span class="cfg-tag">${tag}</span>`)}</div>
+    <div class="cfg-tags">
+      ${tags.map((tag) => html`<span class="cfg-tag">${translateConfigTag(tag)}</span>`)}
+    </div>
   `;
 }
 
