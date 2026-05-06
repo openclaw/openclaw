@@ -19,7 +19,13 @@ let monitorAccountRuntimePromise: Promise<typeof import("./monitor.account.js")>
 
 async function loadMonitorAccountRuntime() {
   monitorAccountRuntimePromise ??= import("./monitor.account.js");
-  return await monitorAccountRuntimePromise;
+  try {
+    return await monitorAccountRuntimePromise;
+  } catch {
+    // Retry once: dynamic import may fail on first call due to module graph initialization order
+    monitorAccountRuntimePromise = import("./monitor.account.js");
+    return await monitorAccountRuntimePromise;
+  }
 }
 
 export {
