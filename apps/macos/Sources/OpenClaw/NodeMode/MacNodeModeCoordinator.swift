@@ -201,7 +201,11 @@ final class MacNodeModeCoordinator {
         return "\(host):\(port)"
     }
 
-    nonisolated static func shouldAutoRepairStaleTLSPin(url: URL, failure: GatewayTLSValidationFailure) -> Bool {
+    nonisolated static func shouldAutoRepairStaleTLSPin(
+        url: URL,
+        failure: GatewayTLSValidationFailure,
+        allowSystemTrustedFallback: Bool = false) -> Bool
+    {
         guard failure.kind == .pinMismatch else { return false }
         guard url.scheme?.lowercased() == "wss" else { return false }
         guard failure.storeKey == nil || failure.storeKey == self.tlsPinStoreKey(for: url) else { return false }
@@ -218,12 +222,22 @@ final class MacNodeModeCoordinator {
             return failure.systemTrustOk
         }
 
-        return false
+        // For arbitrary remote hosts, system trust alone is not a safe replacement signal:
+        // SecTrustEvaluateWithError also accepts MDM-/admin-/user-installed roots and local
+        // interception roots, so silent self-heal would weaken the pin against exactly the
+        // MitM cases pinning is meant to catch. Operators running rotating public gateways
+        // (e.g. ACME-issued certs) can opt in via `gateway.remote.allowSystemTrustedPinRepair`
+        // to accept the trade-off explicitly.
+        return allowSystemTrustedFallback && failure.systemTrustOk
     }
 
     private func autoRepairStaleTLSPinIfNeeded(error: Error, url: URL?) async -> Bool {
         guard let tlsError = error as? GatewayTLSValidationError, let url else { return false }
-        guard Self.shouldAutoRepairStaleTLSPin(url: url, failure: tlsError.failure) else { return false }
+        let allowSystemTrustedFallback = OpenClawConfigFile.gatewayAllowSystemTrustedPinRepair()
+        guard Self.shouldAutoRepairStaleTLSPin(
+            url: url,
+            failure: tlsError.failure,
+            allowSystemTrustedFallback: allowSystemTrustedFallback) else { return false }
         let storeKey = tlsError.failure.storeKey ?? Self.tlsPinStoreKey(for: url)
         guard let observedFingerprint = tlsError.failure.observedFingerprint else { return false }
         guard self.autoRepairedTLSFingerprintsByStoreKey[storeKey] != observedFingerprint else { return false }
