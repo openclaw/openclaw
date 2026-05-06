@@ -3,11 +3,22 @@ import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js"
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
 
 const TARGET_KIND_PREFIXES = new Set([
+  "auto",
   "channel",
+  "chat",
+  "chat_guid",
+  "chat_identifier",
+  "chat_id",
+  "chatguid",
+  "chatid",
+  "chatident",
   "conversation",
   "dm",
   "group",
+  "guid",
+  "imessage",
   "room",
+  "sms",
   "thread",
   "user",
 ]);
