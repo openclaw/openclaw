@@ -226,6 +226,43 @@ describe("sessionsCommand", () => {
     expect(payload.sessions?.map((row) => row.key)).toEqual(["recent"]);
   });
 
+  it("excludes win-ollama quarantined sessions by default and counts them in JSON", async () => {
+    const mk = () =>
+      writeStore(
+        {
+          keep: {
+            sessionId: "a",
+            updatedAt: Date.now(),
+            model: "qwen3:4b",
+            modelProvider: "ollama",
+          },
+          drop: {
+            sessionId: "b",
+            updatedAt: Date.now() - 60_000,
+            model: "qwen3:4b",
+            modelProvider: "win-ollama",
+          },
+        },
+        "sessions-quarantine",
+      );
+
+    const storeHidden = mk();
+    const hidden = await runSessionsJson<{
+      sessions?: Array<{ key: string }>;
+      excludedQuarantinedCount?: number;
+    }>(sessionsCommand, storeHidden);
+    expect(hidden.sessions?.map((r) => r.key)).toEqual(["keep"]);
+    expect(hidden.excludedQuarantinedCount).toBe(1);
+
+    const storeShown = mk();
+    const shown = await runSessionsJson<{
+      sessions?: Array<{ key: string }>;
+      excludedQuarantinedCount?: number;
+    }>(sessionsCommand, storeShown, { includeQuarantined: true });
+    expect(shown.sessions?.map((r) => r.key).toSorted()).toEqual(["drop", "keep"]);
+    expect(shown.excludedQuarantinedCount).toBeUndefined();
+  });
+
   it("uses a default JSON output limit of 100 sessions", () => {
     expect(__testing.parseSessionsLimit(undefined)).toBe(100);
   });

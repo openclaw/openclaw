@@ -125,6 +125,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
       opts: {
         includeGlobal: false,
         includeUnknown: false,
+        includeQuarantined: true,
         spawnedBy: "controller-1",
         agentId: undefined,
       },

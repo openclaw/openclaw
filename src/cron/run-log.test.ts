@@ -9,6 +9,7 @@ import {
   getPendingCronRunLogWriteCountForTests,
   readCronRunLogEntries,
   readCronRunLogEntriesPage,
+  readCronRunLogEntriesPageAll,
   readCronRunLogEntriesSync,
   resolveCronRunLogPruneOptions,
   resolveCronRunLogPath,
@@ -308,6 +309,74 @@ describe("cron run log", () => {
           })
         ).entries,
       ).toEqual([]);
+    });
+  });
+
+  it("excludes win-ollama cron run log entries by default", async () => {
+    await withRunLogDir("openclaw-cron-log-quarantine-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-1.jsonl");
+      await appendCronRunLog(logPath, {
+        ts: 1,
+        jobId: "job-1",
+        action: "finished",
+        status: "ok",
+        provider: "win-ollama",
+        model: "qwen3:4b",
+      });
+      await appendCronRunLog(logPath, {
+        ts: 2,
+        jobId: "job-1",
+        action: "finished",
+        status: "ok",
+        provider: "ollama",
+        model: "qwen3:4b",
+      });
+
+      const hidden = await readCronRunLogEntriesPage(logPath, {
+        limit: 10,
+        jobId: "job-1",
+      });
+      expect(hidden.entries.map((entry) => entry.ts)).toEqual([2]);
+      expect(hidden.total).toBe(1);
+      expect(hidden.excludedQuarantinedCount).toBe(1);
+
+      const shown = await readCronRunLogEntriesPage(logPath, {
+        limit: 10,
+        jobId: "job-1",
+        includeQuarantined: true,
+      });
+      expect(shown.entries.map((entry) => entry.ts)).toEqual([2, 1]);
+      expect(shown.total).toBe(2);
+      expect(shown.excludedQuarantinedCount).toBeUndefined();
+    });
+  });
+
+  it("excludes win-ollama cron run log entries before all-scope paging", async () => {
+    await withRunLogDir("openclaw-cron-log-quarantine-all-", async (dir) => {
+      const storePath = path.join(dir, "jobs.json");
+      await appendCronRunLog(path.join(dir, "runs", "job-1.jsonl"), {
+        ts: 1,
+        jobId: "job-1",
+        action: "finished",
+        status: "ok",
+        summary: "win-ollama bridge",
+      });
+      await appendCronRunLog(path.join(dir, "runs", "job-2.jsonl"), {
+        ts: 2,
+        jobId: "job-2",
+        action: "finished",
+        status: "ok",
+        summary: "regular",
+      });
+
+      const hidden = await readCronRunLogEntriesPageAll({
+        storePath,
+        limit: 1,
+      });
+      expect(hidden.entries.map((entry) => entry.jobId)).toEqual(["job-2"]);
+      expect(hidden.total).toBe(1);
+      expect(hidden.hasMore).toBe(false);
+      expect(hidden.excludedQuarantinedCount).toBe(1);
     });
   });
 

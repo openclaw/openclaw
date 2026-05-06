@@ -9,6 +9,7 @@ import { info } from "../globals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
+import { isWinOllamaQuarantinedSessionEntry } from "../sessions/win-ollama-quarantine.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
@@ -235,10 +236,12 @@ export async function sessionsCommand(
     agent?: string;
     allAgents?: boolean;
     limit?: string | number;
+    includeQuarantined?: boolean;
   },
   runtime: RuntimeEnv,
 ) {
   const aggregateAgents = opts.allAgents === true;
+  const includeQuarantined = opts.includeQuarantined === true;
   const cfg = getRuntimeConfig();
   const displayDefaults = resolveSessionDisplayDefaults(cfg);
   const configuredContextTokens = cfg.agents?.defaults?.contextTokens;
@@ -277,36 +280,44 @@ export async function sessionsCommand(
     return;
   }
 
+  let excludedQuarantinedCount = 0;
   const allRows = targets.flatMap((target) => {
     const store = loadSessionStore(target.storePath);
-    return Object.entries(store)
-      .filter(([, entry]) => {
-        if (activeMinutes === undefined) {
-          return true;
-        }
-        const updatedAt = entry?.updatedAt;
-        return typeof updatedAt === "number" && Date.now() - updatedAt <= activeMinutes * 60_000;
-      })
-      .map(([key, entry]) => {
-        const row = toSessionDisplayRow(key, entry);
-        const agentId = parseAgentSessionKey(row.key)?.agentId ?? target.agentId;
-        const modelRef = resolveSessionDisplayModelRef(cfg, row);
-        const agentRuntime = resolveAgentRuntimeMetadata(cfg, agentId);
-        return Object.assign({}, row, {
-          agentId,
+    const filteredEntries = Object.entries(store).filter(([, entry]) => {
+      if (activeMinutes === undefined) {
+        return true;
+      }
+      const updatedAt = entry?.updatedAt;
+      return typeof updatedAt === "number" && Date.now() - updatedAt <= activeMinutes * 60_000;
+    });
+    if (!includeQuarantined) {
+      excludedQuarantinedCount += filteredEntries.filter(([, entry]) =>
+        isWinOllamaQuarantinedSessionEntry(entry),
+      ).length;
+    }
+    const rowsSource = includeQuarantined
+      ? filteredEntries
+      : filteredEntries.filter(([, entry]) => !isWinOllamaQuarantinedSessionEntry(entry));
+    return rowsSource.map(([key, entry]) => {
+      const row = toSessionDisplayRow(key, entry);
+      const agentId = parseAgentSessionKey(row.key)?.agentId ?? target.agentId;
+      const modelRef = resolveSessionDisplayModelRef(cfg, row);
+      const agentRuntime = resolveAgentRuntimeMetadata(cfg, agentId);
+      return Object.assign({}, row, {
+        agentId,
+        agentRuntime,
+        kind: classifySessionKey(row.key, store[row.key]),
+        runtimeLabel: resolveSessionRuntimeLabel({
+          cfg,
+          entry,
           agentRuntime,
-          kind: classifySessionKey(row.key, store[row.key]),
-          runtimeLabel: resolveSessionRuntimeLabel({
-            cfg,
-            entry,
-            agentRuntime,
-            modelProvider: modelRef.provider,
-            model: modelRef.model,
-            agentId,
-            sessionKey: row.key,
-          }),
-        });
+          modelProvider: modelRef.provider,
+          model: modelRef.model,
+          agentId,
+          sessionKey: row.key,
+        }),
       });
+    });
   });
   const totalCount = allRows.length;
   const rows = selectNewestSessionRows(allRows, limit);
@@ -329,6 +340,7 @@ export async function sessionsCommand(
       limitApplied: limit ?? null,
       hasMore,
       activeMinutes: activeMinutes ?? null,
+      ...(excludedQuarantinedCount > 0 ? { excludedQuarantinedCount } : {}),
       sessions: await Promise.all(
         rows.map(async (row) => {
           const r = toJsonSessionRow(row);
@@ -367,6 +379,13 @@ export async function sessionsCommand(
         : `Sessions listed: ${rows.length}`,
     ),
   );
+  if (excludedQuarantinedCount > 0) {
+    runtime.log(
+      info(
+        `Excluded ${excludedQuarantinedCount} quarantined win-ollama session(s) (use --include-quarantined).`,
+      ),
+    );
+  }
   if (activeMinutes) {
     runtime.log(info(`Filtered to last ${activeMinutes} minute(s)`));
   }

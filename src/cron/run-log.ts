@@ -5,6 +5,7 @@ import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { appendRegularFile, isPathInside, pathExists, root as fsRoot } from "../infra/fs-safe.js";
 import { privateFileStore } from "../infra/private-file-store.js";
+import { isWinOllamaQuarantinedCronRunLogEntry } from "../sessions/win-ollama-quarantine.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -46,6 +47,7 @@ type ReadCronRunLogPageOptions = {
   limit?: number;
   offset?: number;
   jobId?: string;
+  includeQuarantined?: boolean;
   status?: CronRunLogStatusFilter;
   statuses?: CronRunStatus[];
   deliveryStatus?: CronDeliveryStatus;
@@ -61,6 +63,7 @@ type CronRunLogPageResult = {
   limit: number;
   hasMore: boolean;
   nextOffset: number | null;
+  excludedQuarantinedCount?: number;
 };
 
 type ReadCronRunLogAllPageOptions = Omit<ReadCronRunLogPageOptions, "jobId"> & {
@@ -421,10 +424,20 @@ export async function readCronRunLogEntriesPage(
         ...(entry.delivery?.messageToolSentTo ?? []).map((target) => target.channel),
       ].join(" "),
   });
+  let excludedQuarantinedCount = 0;
+  const visible = opts?.includeQuarantined
+    ? filtered
+    : filtered.filter((entry) => {
+        if (isWinOllamaQuarantinedCronRunLogEntry(entry)) {
+          excludedQuarantinedCount += 1;
+          return false;
+        }
+        return true;
+      });
   const sorted =
     sortDir === "asc"
-      ? filtered.toSorted((a, b) => a.ts - b.ts)
-      : filtered.toSorted((a, b) => b.ts - a.ts);
+      ? visible.toSorted((a, b) => a.ts - b.ts)
+      : visible.toSorted((a, b) => b.ts - a.ts);
   const total = sorted.length;
   const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
   const entries = sorted.slice(offset, offset + limit);
@@ -436,6 +449,7 @@ export async function readCronRunLogEntriesPage(
     limit,
     hasMore: nextOffset < total,
     nextOffset: nextOffset < total ? nextOffset : null,
+    ...(excludedQuarantinedCount > 0 ? { excludedQuarantinedCount } : {}),
   };
 }
 
@@ -510,10 +524,20 @@ export async function readCronRunLogEntriesPageAll(
       ].join(" ");
     },
   });
+  let excludedQuarantinedCount = 0;
+  const visible = opts.includeQuarantined
+    ? filtered
+    : filtered.filter((entry) => {
+        if (isWinOllamaQuarantinedCronRunLogEntry(entry)) {
+          excludedQuarantinedCount += 1;
+          return false;
+        }
+        return true;
+      });
   const sorted =
     sortDir === "asc"
-      ? filtered.toSorted((a, b) => a.ts - b.ts)
-      : filtered.toSorted((a, b) => b.ts - a.ts);
+      ? visible.toSorted((a, b) => a.ts - b.ts)
+      : visible.toSorted((a, b) => b.ts - a.ts);
   const total = sorted.length;
   const offset = Math.max(0, Math.min(total, Math.floor(opts.offset ?? 0)));
   const entries = sorted.slice(offset, offset + limit);
@@ -533,5 +557,6 @@ export async function readCronRunLogEntriesPageAll(
     limit,
     hasMore: nextOffset < total,
     nextOffset: nextOffset < total ? nextOffset : null,
+    ...(excludedQuarantinedCount > 0 ? { excludedQuarantinedCount } : {}),
   };
 }

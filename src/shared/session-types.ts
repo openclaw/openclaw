@@ -33,6 +33,8 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   totalCount?: number;
   limitApplied?: number;
   hasMore?: boolean;
+  /** Present when default list mode hid quarantined win-ollama sessions. */
+  excludedQuarantinedCount?: number;
   defaults: TDefaults;
   sessions: TRow[];
 };

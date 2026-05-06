@@ -273,7 +273,7 @@ function parseTasksListRouteArgsForCommandPath(argv: string[], commandPath: stri
   }
   const positionals = getCommandPositionalsWithRootOptions(argv, {
     commandPath,
-    booleanFlags: ["--json"],
+    booleanFlags: ["--json", "--include-quarantined"],
     valueFlags: ["--runtime", "--status"],
   });
   if (!positionals || positionals.length !== 0) {
@@ -291,6 +291,7 @@ function parseTasksListRouteArgsForCommandPath(argv: string[], commandPath: stri
     json: true as const,
     runtime: runtime.value,
     status: status.value,
+    includeQuarantined: hasFlag(argv, "--include-quarantined"),
   };
 }
 

@@ -60,6 +60,11 @@ export const SessionsListParamsSchema = Type.Object(
     spawnedBy: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
     search: Type.Optional(Type.String()),
+    /**
+     * When true, include sessions flagged as quarantined win-ollama metadata in results
+     * (default list views hide them).
+     */
+    includeQuarantined: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

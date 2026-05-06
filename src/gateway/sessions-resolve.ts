@@ -26,6 +26,8 @@ function resolveSessionVisibilityFilterOptions(p: SessionsResolveParams) {
     includeUnknown: p.includeUnknown === true,
     spawnedBy: p.spawnedBy,
     agentId: p.agentId,
+    /** Resolve must not treat quarantined list rows as absent. */
+    includeQuarantined: true,
   };
 }
 
@@ -206,11 +208,8 @@ export async function resolveSessionKeyFromResolveParams(params: {
     storePath,
     store,
     opts: {
-      includeGlobal: p.includeGlobal === true,
-      includeUnknown: p.includeUnknown === true,
+      ...resolveSessionVisibilityFilterOptions(p),
       label: parsedLabel.label,
-      agentId: p.agentId,
-      spawnedBy: p.spawnedBy,
       limit: 2,
     },
   });

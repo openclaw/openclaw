@@ -1,5 +1,6 @@
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
+import { isWinOllamaQuarantinedCronTask } from "../sessions/win-ollama-quarantine.js";
 import { listTaskRecords } from "../tasks/runtime-internal.js";
 import {
   listTaskFlowAuditFindings,
@@ -43,6 +44,7 @@ export type TasksListJsonArgs = {
   json?: boolean;
   runtime?: string;
   status?: string;
+  includeQuarantined?: boolean;
 };
 
 export type TasksAuditJsonArgs = {
@@ -125,7 +127,8 @@ function toSystemAuditFindings(params: {
 function buildTasksListJsonPayload(opts: TasksListJsonArgs) {
   const runtimeFilter = opts.runtime?.trim();
   const statusFilter = opts.status?.trim();
-  const tasks = listTaskJsonRecords().filter((task) => {
+  const includeQuarantined = opts.includeQuarantined === true;
+  const reconciled = listTaskJsonRecords().filter((task) => {
     if (runtimeFilter && task.runtime !== runtimeFilter) {
       return false;
     }
@@ -134,10 +137,21 @@ function buildTasksListJsonPayload(opts: TasksListJsonArgs) {
     }
     return true;
   });
+  let excludedQuarantinedCount = 0;
+  const tasks = includeQuarantined
+    ? reconciled
+    : reconciled.filter((task) => {
+        if (isWinOllamaQuarantinedCronTask(task)) {
+          excludedQuarantinedCount += 1;
+          return false;
+        }
+        return true;
+      });
   return {
     count: tasks.length,
     runtime: runtimeFilter ?? null,
     status: statusFilter ?? null,
+    ...(excludedQuarantinedCount > 0 ? { excludedQuarantinedCount } : {}),
     tasks,
   };
 }

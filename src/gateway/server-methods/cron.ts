@@ -489,6 +489,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       status?: "all" | "ok" | "error" | "skipped";
       deliveryStatuses?: Array<"delivered" | "not-delivered" | "unknown" | "not-requested">;
       deliveryStatus?: "delivered" | "not-delivered" | "unknown" | "not-requested";
+      includeQuarantined?: boolean;
       query?: string;
       sortDir?: "asc" | "desc";
     };
@@ -518,6 +519,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         status: p.status,
         deliveryStatuses: p.deliveryStatuses,
         deliveryStatus: p.deliveryStatus,
+        includeQuarantined: p.includeQuarantined,
         query: p.query,
         sortDir: p.sortDir,
         jobNameById,
@@ -547,6 +549,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       status: p.status,
       deliveryStatuses: p.deliveryStatuses,
       deliveryStatus: p.deliveryStatus,
+      includeQuarantined: p.includeQuarantined,
       query: p.query,
       sortDir: p.sortDir,
     });

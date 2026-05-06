@@ -139,6 +139,7 @@ describe("cron protocol validators", () => {
         limit: 50,
         offset: 0,
         status: "error",
+        includeQuarantined: false,
         query: "timeout",
         sortDir: "desc",
       }),

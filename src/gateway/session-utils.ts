@@ -65,6 +65,7 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { isWinOllamaQuarantinedSessionEntry } from "../sessions/win-ollama-quarantine.js";
 import {
   AVATAR_MAX_BYTES,
   isAvatarDataUrl,
@@ -1837,6 +1838,7 @@ type SessionEntrySelection = {
   entries: SessionEntryPair[];
   totalCount: number;
   limitApplied?: number;
+  excludedQuarantinedCount?: number;
 };
 
 function compareSessionEntryPairsByUpdatedAt(a: SessionEntryPair, b: SessionEntryPair): number {
@@ -1994,12 +1996,31 @@ function selectSessionEntries(params: {
   defaultLimit?: number;
 }): SessionEntrySelection {
   const filtered = filterSessionEntries(params);
+  const includeQuarantined = params.opts.includeQuarantined === true;
+  let working = filtered;
+  let excludedQuarantinedCount: number | undefined;
+  if (!includeQuarantined) {
+    let excluded = 0;
+    const next: SessionEntryPair[] = [];
+    for (const pair of filtered) {
+      if (isWinOllamaQuarantinedSessionEntry(pair[1])) {
+        excluded += 1;
+      } else {
+        next.push(pair);
+      }
+    }
+    working = next;
+    if (excluded > 0) {
+      excludedQuarantinedCount = excluded;
+    }
+  }
   const limit = resolveSessionsListLimit(params.opts, params.defaultLimit);
-  const entries = sortAndLimitSessionEntries(filtered, limit);
+  const entries = sortAndLimitSessionEntries(working, limit);
   return {
     entries,
-    totalCount: filtered.length,
+    totalCount: working.length,
     limitApplied: limit,
+    excludedQuarantinedCount,
   };
 }
 
@@ -2039,7 +2060,7 @@ export function listSessionsFromStore(params: {
     rowContext: hasSpawnedByFilter ? getRowContext() : undefined,
     defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
   });
-  const { entries, totalCount, limitApplied } = selection;
+  const { entries, totalCount, limitApplied, excludedQuarantinedCount } = selection;
 
   const sessions = entries.map(([key, entry], index) => {
     const includeTranscriptFields = index < sessionListTranscriptFieldRows;
@@ -2068,6 +2089,7 @@ export function listSessionsFromStore(params: {
     hasMore: sessions.length < totalCount,
     defaults: getSessionDefaults(cfg, params.modelCatalog),
     sessions,
+    ...(excludedQuarantinedCount ? { excludedQuarantinedCount } : {}),
   };
 }
 
@@ -2108,7 +2130,7 @@ export async function listSessionsFromStoreAsync(params: {
     rowContext: hasSpawnedByFilter ? getRowContext() : undefined,
     defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
   });
-  const { entries, totalCount, limitApplied } = selection;
+  const { entries, totalCount, limitApplied, excludedQuarantinedCount } = selection;
 
   const sessions: GatewaySessionRow[] = [];
   for (let i = 0; i < entries.length; i++) {
@@ -2169,5 +2191,6 @@ export async function listSessionsFromStoreAsync(params: {
     hasMore: sessions.length < totalCount,
     defaults: getSessionDefaults(cfg, params.modelCatalog),
     sessions,
+    ...(excludedQuarantinedCount ? { excludedQuarantinedCount } : {}),
   };
 }

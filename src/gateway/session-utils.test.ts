@@ -141,6 +141,40 @@ describe("gateway session utils", () => {
     expect(listed.hasMore).toBe(true);
   });
 
+  test("listSessionsFromStore excludes win-ollama quarantined rows by default", () => {
+    const cfg = {};
+    const store: Record<string, SessionEntry> = {
+      keep: {
+        sessionId: "a",
+        updatedAt: 200,
+        model: "pi:opus",
+      },
+      drop: {
+        sessionId: "b",
+        updatedAt: 100,
+        modelProvider: "win-ollama",
+        model: "m",
+      },
+    };
+    const listed = listSessionsFromStore({
+      cfg: cfg as never,
+      storePath: "/tmp/s.json",
+      store,
+      opts: {},
+    });
+    expect(listed.sessions.map((s) => s.key)).toEqual(["keep"]);
+    expect(listed.excludedQuarantinedCount).toBe(1);
+
+    const full = listSessionsFromStore({
+      cfg: cfg as never,
+      storePath: "/tmp/s.json",
+      store,
+      opts: { includeQuarantined: true },
+    });
+    expect(full.sessions.map((s) => s.key).toSorted()).toEqual(["drop", "keep"]);
+    expect(full.excludedQuarantinedCount).toBeUndefined();
+  });
+
   test("parseGroupKey handles group keys", () => {
     expect(parseGroupKey("discord:group:dev")).toEqual({
       channel: "discord",

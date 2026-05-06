@@ -1,6 +1,7 @@
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { isWinOllamaQuarantinedCronTask } from "../sessions/win-ollama-quarantine.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
 import { cancelDetachedTaskRunById } from "../tasks/task-executor.js";
@@ -273,12 +274,13 @@ function toSystemAuditFindings(params: {
 }
 
 export async function tasksListCommand(
-  opts: { json?: boolean; runtime?: string; status?: string },
+  opts: { json?: boolean; runtime?: string; status?: string; includeQuarantined?: boolean },
   runtime: RuntimeEnv,
 ) {
   const runtimeFilter = opts.runtime?.trim();
   const statusFilter = opts.status?.trim();
-  const tasks = reconcileInspectableTasks().filter((task) => {
+  const includeQuarantined = opts.includeQuarantined === true;
+  const reconciled = reconcileInspectableTasks().filter((task) => {
     if (runtimeFilter && task.runtime !== runtimeFilter) {
       return false;
     }
@@ -287,6 +289,16 @@ export async function tasksListCommand(
     }
     return true;
   });
+  let excludedQuarantinedCount = 0;
+  const tasks = includeQuarantined
+    ? reconciled
+    : reconciled.filter((task) => {
+        if (isWinOllamaQuarantinedCronTask(task)) {
+          excludedQuarantinedCount += 1;
+          return false;
+        }
+        return true;
+      });
 
   if (opts.json) {
     runtime.log(
@@ -295,6 +307,7 @@ export async function tasksListCommand(
           count: tasks.length,
           runtime: runtimeFilter ?? null,
           status: statusFilter ?? null,
+          ...(excludedQuarantinedCount > 0 ? { excludedQuarantinedCount } : {}),
           tasks,
         },
         null,
@@ -306,6 +319,13 @@ export async function tasksListCommand(
 
   runtime.log(info(`Background tasks: ${tasks.length}`));
   runtime.log(info(`Task pressure: ${formatTaskListSummary(tasks)}`));
+  if (excludedQuarantinedCount > 0) {
+    runtime.log(
+      info(
+        `Excluded ${excludedQuarantinedCount} quarantined win-ollama cron task(s) (use --include-quarantined).`,
+      ),
+    );
+  }
   if (runtimeFilter) {
     runtime.log(info(`Runtime filter: ${runtimeFilter}`));
   }

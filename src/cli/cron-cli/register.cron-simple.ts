@@ -138,6 +138,7 @@ export function registerCronSimpleCommands(cron: Command) {
       .description("Show cron run history (JSONL-backed)")
       .requiredOption("--id <id>", "Job id")
       .option("--limit <n>", "Max entries (default 50)", "50")
+      .option("--include-quarantined", "Include win-ollama quarantined cron runs", false)
       .action(async (opts) => {
         try {
           const limitRaw = Number.parseInt(String(opts.limit ?? "50"), 10);
@@ -146,6 +147,7 @@ export function registerCronSimpleCommands(cron: Command) {
           const res = await callGatewayFromCli("cron.runs", opts, {
             id,
             limit,
+            includeQuarantined: Boolean(opts.includeQuarantined),
           });
           printCronJson(res);
         } catch (err) {

@@ -429,7 +429,7 @@ describe("program routes", () => {
       ]),
     ).resolves.toBe(true);
     expect(tasksListJsonCommandMock).toHaveBeenCalledWith(
-      { json: true, runtime: "cli", status: "running" },
+      { json: true, runtime: "cli", status: "running", includeQuarantined: false },
       expect.any(Object),
     );
 
@@ -439,7 +439,7 @@ describe("program routes", () => {
       listRoute?.run(["node", "openclaw", "tasks", "list", "--json", "--runtime=cron"]),
     ).resolves.toBe(true);
     expect(tasksListJsonCommandMock).toHaveBeenLastCalledWith(
-      { json: true, runtime: "cron", status: undefined },
+      { json: true, runtime: "cron", status: undefined, includeQuarantined: false },
       expect.any(Object),
     );
   });
@@ -459,7 +459,7 @@ describe("program routes", () => {
     expect(separateValueRoute).not.toBeNull();
     await expect(separateValueRoute?.run(separateValueArgv)).resolves.toBe(true);
     expect(tasksListJsonCommandMock).toHaveBeenCalledWith(
-      { json: true, runtime: "cli", status: "running" },
+      { json: true, runtime: "cli", status: "running", includeQuarantined: false },
       expect.any(Object),
     );
 
@@ -481,7 +481,7 @@ describe("program routes", () => {
       parentOptionBeforeSubcommandRoute?.run(parentOptionBeforeSubcommandArgv),
     ).resolves.toBe(true);
     expect(tasksListJsonCommandMock).toHaveBeenLastCalledWith(
-      { json: true, runtime: "cli", status: undefined },
+      { json: true, runtime: "cli", status: undefined, includeQuarantined: false },
       expect.any(Object),
     );
   });

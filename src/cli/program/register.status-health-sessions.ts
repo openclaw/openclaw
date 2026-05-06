@@ -128,6 +128,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .description("List stored conversation sessions")
     .option("--json", "Output as JSON", false)
     .option("--verbose", "Verbose logging", false)
+    .option("--include-quarantined", "Include win-ollama quarantined sessions", false)
     .option("--store <path>", "Path to session store (default: resolved from config)")
     .option("--agent <id>", "Agent id to inspect (default: configured default agent)")
     .option("--all-agents", "Aggregate sessions across all configured agents", false)
@@ -163,6 +164,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           allAgents: Boolean(opts.allAgents),
           active: opts.active as string | undefined,
           limit: opts.limit as string | undefined,
+          includeQuarantined: Boolean(opts.includeQuarantined),
         },
         defaultRuntime,
       );
@@ -344,6 +346,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       "--status <name>",
       "Filter by status (queued, running, succeeded, failed, timed_out, cancelled, lost)",
     )
+    .option("--include-quarantined", "Include win-ollama quarantined cron tasks", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         await tasksListCommand(
@@ -351,6 +354,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             json: Boolean(opts.json),
             runtime: opts.runtime as string | undefined,
             status: opts.status as string | undefined,
+            includeQuarantined: Boolean(opts.includeQuarantined),
           },
           defaultRuntime,
         );
@@ -367,12 +371,14 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       "--status <name>",
       "Filter by status (queued, running, succeeded, failed, timed_out, cancelled, lost)",
     )
+    .option("--include-quarantined", "Include win-ollama quarantined cron tasks", false)
     .action(async (opts, command) => {
       const parentOpts = command.parent?.opts() as
         | {
             json?: boolean;
             runtime?: string;
             status?: string;
+            includeQuarantined?: boolean;
           }
         | undefined;
       await runCommandWithRuntime(defaultRuntime, async () => {
@@ -381,6 +387,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             json: Boolean(opts.json || parentOpts?.json),
             runtime: (opts.runtime as string | undefined) ?? parentOpts?.runtime,
             status: (opts.status as string | undefined) ?? parentOpts?.status,
+            includeQuarantined: Boolean(opts.includeQuarantined || parentOpts?.includeQuarantined),
           },
           defaultRuntime,
         );

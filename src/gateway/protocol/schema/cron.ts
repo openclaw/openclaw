@@ -402,6 +402,7 @@ export const CronRunsParamsSchema = Type.Object(
       Type.Array(CronDeliveryStatusSchema, { minItems: 1, maxItems: 4 }),
     ),
     deliveryStatus: Type.Optional(CronDeliveryStatusSchema),
+    includeQuarantined: Type.Optional(Type.Boolean()),
     query: Type.Optional(Type.String()),
     sortDir: Type.Optional(CronSortDirSchema),
   },
