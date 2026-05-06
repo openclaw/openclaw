@@ -274,6 +274,18 @@ function isPinnedRegistrySpec(spec: string): boolean {
   return /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version);
 }
 
+function hasPinnedResolvedInstallWithIntegrity(record: {
+  resolvedSpec?: unknown;
+  integrity?: unknown;
+}): boolean {
+  return (
+    typeof record.resolvedSpec === "string" &&
+    isPinnedRegistrySpec(record.resolvedSpec) &&
+    typeof record.integrity === "string" &&
+    record.integrity.trim() !== ""
+  );
+}
+
 export async function collectPluginsTrustFindings(params: {
   cfg: OpenClawConfig;
   stateDir: string;
@@ -447,7 +459,12 @@ export async function collectPluginsTrustFindings(params: {
   );
   if (npmPluginInstalls.length > 0) {
     const unpinned = npmPluginInstalls
-      .filter(([, record]) => typeof record.spec === "string" && !isPinnedRegistrySpec(record.spec))
+      .filter(
+        ([, record]) =>
+          typeof record.spec === "string" &&
+          !isPinnedRegistrySpec(record.spec) &&
+          !hasPinnedResolvedInstallWithIntegrity(record),
+      )
       .map(([pluginId, record]) => `${pluginId} (${record.spec})`);
     if (unpinned.length > 0) {
       findings.push({
@@ -509,7 +526,12 @@ export async function collectPluginsTrustFindings(params: {
   );
   if (npmHookInstalls.length > 0) {
     const unpinned = npmHookInstalls
-      .filter(([, record]) => typeof record.spec === "string" && !isPinnedRegistrySpec(record.spec))
+      .filter(
+        ([, record]) =>
+          typeof record.spec === "string" &&
+          !isPinnedRegistrySpec(record.spec) &&
+          !hasPinnedResolvedInstallWithIntegrity(record),
+      )
       .map(([hookId, record]) => `${hookId} (${record.spec})`);
     if (unpinned.length > 0) {
       findings.push({
