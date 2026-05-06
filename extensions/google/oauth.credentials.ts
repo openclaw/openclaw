@@ -22,6 +22,14 @@ const defaultFs: CredentialFs = {
 };
 
 let credentialFs: CredentialFs = defaultFs;
+const GEMINI_CLI_TREE_SEARCH_DEPTH = 10;
+
+type GeminiCliCredentialExtractDiagnostics = {
+  searchedPaths: string[];
+  recursiveSearchRoots: string[];
+  parseFailures: string[];
+  readErrors: string[];
+};
 
 function resolveEnv(keys: string[]): string | undefined {
   for (const key of keys) {
@@ -34,9 +42,11 @@ function resolveEnv(keys: string[]): string | undefined {
 }
 
 let cachedGeminiCliCredentials: { clientId: string; clientSecret: string } | null = null;
+let geminiCliCredentialExtractError: string | null = null;
 
 export function clearCredentialsCache(): void {
   cachedGeminiCliCredentials = null;
+  geminiCliCredentialExtractError = null;
 }
 
 export function setOAuthCredentialsFsForTest(overrides?: Partial<CredentialFs>): void {
@@ -48,9 +58,19 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
     return cachedGeminiCliCredentials;
   }
 
+  geminiCliCredentialExtractError = null;
+  const diagnostics: GeminiCliCredentialExtractDiagnostics = {
+    searchedPaths: [],
+    recursiveSearchRoots: [],
+    parseFailures: [],
+    readErrors: [],
+  };
+
   try {
     const geminiPath = findInPath("gemini");
     if (!geminiPath) {
+      geminiCliCredentialExtractError =
+        "Gemini CLI binary was not found in PATH during OAuth credential extraction.";
       return null;
     }
 
@@ -58,28 +78,82 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
     const geminiCliDirs = resolveGeminiCliDirs(geminiPath, resolvedPath);
 
     for (const geminiCliDir of geminiCliDirs) {
-      const directCredentials = readGeminiCliCredentialsFromKnownPaths(geminiCliDir);
+      const directCredentials = readGeminiCliCredentialsFromKnownPaths(geminiCliDir, diagnostics);
       if (directCredentials) {
         cachedGeminiCliCredentials = directCredentials;
         return directCredentials;
       }
 
-      const bundledCredentials = readGeminiCliCredentialsFromBundle(geminiCliDir);
+      const bundledCredentials = readGeminiCliCredentialsFromBundle(geminiCliDir, diagnostics);
       if (bundledCredentials) {
         cachedGeminiCliCredentials = bundledCredentials;
         return bundledCredentials;
       }
 
-      const discoveredCredentials = findGeminiCliCredentialsInTree(geminiCliDir, 10);
+      diagnostics.recursiveSearchRoots.push(geminiCliDir);
+      const discoveredCredentials = findGeminiCliCredentialsInTree(
+        geminiCliDir,
+        GEMINI_CLI_TREE_SEARCH_DEPTH,
+        diagnostics,
+      );
       if (discoveredCredentials) {
         cachedGeminiCliCredentials = discoveredCredentials;
         return discoveredCredentials;
       }
     }
-  } catch {
-    // Gemini CLI not installed or extraction failed
+    geminiCliCredentialExtractError = formatGeminiCliCredentialExtractError({
+      geminiPath,
+      resolvedPath,
+      diagnostics,
+    });
+  } catch (error) {
+    geminiCliCredentialExtractError = `Unexpected error while extracting Gemini CLI OAuth credentials: ${formatError(error)}`;
   }
   return null;
+}
+
+function formatGeminiCliCredentialExtractError({
+  geminiPath,
+  resolvedPath,
+  diagnostics,
+}: {
+  geminiPath: string;
+  resolvedPath: string;
+  diagnostics: GeminiCliCredentialExtractDiagnostics;
+}): string {
+  const prefix = [
+    "Found Gemini CLI in PATH, but could not extract OAuth credentials.",
+    `geminiPath=${geminiPath}`,
+    `resolvedPath=${resolvedPath}`,
+  ];
+
+  if (diagnostics.parseFailures.length > 0) {
+    return [
+      ...prefix,
+      "Candidate credential files did not contain a parseable OAuth client id/secret.",
+      `candidates=${diagnostics.parseFailures.join(", ")}`,
+    ].join(" ");
+  }
+
+  if (diagnostics.readErrors.length > 0) {
+    return [
+      ...prefix,
+      "Unexpected errors occurred while reading candidate credential files/directories.",
+      `errors=${diagnostics.readErrors.join(", ")}`,
+    ].join(" ");
+  }
+
+  return [
+    ...prefix,
+    "Could not locate oauth2.js or bundled credential source.",
+    `searched=${diagnostics.searchedPaths.join(", ") || "(none)"}`,
+    `recursiveSearchRoots=${diagnostics.recursiveSearchRoots.join(", ") || "(none)"}`,
+    `recursiveSearchDepth=${GEMINI_CLI_TREE_SEARCH_DEPTH}`,
+  ].join(" ");
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function resolveGeminiCliDirs(geminiPath: string, resolvedPath: string): string[] {
@@ -141,10 +215,16 @@ function findInPath(name: string): string | null {
 
 function readGeminiCliCredentialsFile(
   path: string,
+  diagnostics: GeminiCliCredentialExtractDiagnostics,
 ): { clientId: string; clientSecret: string } | null {
   try {
-    return parseGeminiCliCredentials(credentialFs.readFileSync(path, "utf8"));
-  } catch {
+    const credentials = parseGeminiCliCredentials(credentialFs.readFileSync(path, "utf8"));
+    if (!credentials) {
+      diagnostics.parseFailures.push(path);
+    }
+    return credentials;
+  } catch (error) {
+    diagnostics.readErrors.push(`${path}: ${formatError(error)}`);
     return null;
   }
 }
@@ -166,6 +246,7 @@ function parseGeminiCliCredentials(
 
 function readGeminiCliCredentialsFromKnownPaths(
   geminiCliDir: string,
+  diagnostics: GeminiCliCredentialExtractDiagnostics,
 ): { clientId: string; clientSecret: string } | null {
   const searchPaths = [
     join(
@@ -188,12 +269,13 @@ function readGeminiCliCredentialsFromKnownPaths(
       "oauth2.js",
     ),
   ];
+  diagnostics.searchedPaths.push(...searchPaths);
 
   for (const path of searchPaths) {
     if (!credentialFs.existsSync(path)) {
       continue;
     }
-    const credentials = readGeminiCliCredentialsFile(path);
+    const credentials = readGeminiCliCredentialsFile(path, diagnostics);
     if (credentials) {
       return credentials;
     }
@@ -204,6 +286,7 @@ function readGeminiCliCredentialsFromKnownPaths(
 
 function readGeminiCliCredentialsFromBundle(
   geminiCliDir: string,
+  diagnostics: GeminiCliCredentialExtractDiagnostics,
 ): { clientId: string; clientSecret: string } | null {
   const bundleDir = join(geminiCliDir, "bundle");
   if (!credentialFs.existsSync(bundleDir)) {
@@ -215,13 +298,14 @@ function readGeminiCliCredentialsFromBundle(
       if (!entry.isFile() || !entry.name.endsWith(".js")) {
         continue;
       }
-      const credentials = readGeminiCliCredentialsFile(join(bundleDir, entry.name));
+      const credentials = readGeminiCliCredentialsFile(join(bundleDir, entry.name), diagnostics);
       if (credentials) {
         return credentials;
       }
     }
-  } catch {
-    // Ignore bundle traversal failures and fall back to the recursive search.
+  } catch (error) {
+    diagnostics.readErrors.push(`${bundleDir}: ${formatError(error)}`);
+    // Preserve the read error for diagnostics and fall back to the recursive search.
   }
 
   return null;
@@ -230,6 +314,7 @@ function readGeminiCliCredentialsFromBundle(
 function findGeminiCliCredentialsInTree(
   dir: string,
   depth: number,
+  diagnostics: GeminiCliCredentialExtractDiagnostics,
 ): { clientId: string; clientSecret: string } | null {
   if (depth <= 0) {
     return null;
@@ -238,20 +323,22 @@ function findGeminiCliCredentialsInTree(
     for (const entry of credentialFs.readdirSync(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name);
       if (entry.isFile() && entry.name === "oauth2.js") {
-        const credentials = readGeminiCliCredentialsFile(path);
+        const credentials = readGeminiCliCredentialsFile(path, diagnostics);
         if (credentials) {
           return credentials;
         }
         continue;
       }
       if (entry.isDirectory() && !entry.name.startsWith(".")) {
-        const found = findGeminiCliCredentialsInTree(path, depth - 1);
+        const found = findGeminiCliCredentialsInTree(path, depth - 1, diagnostics);
         if (found) {
           return found;
         }
       }
     }
-  } catch {}
+  } catch (error) {
+    diagnostics.readErrors.push(`${dir}: ${formatError(error)}`);
+  }
   return null;
 }
 
@@ -267,7 +354,10 @@ export function resolveOAuthClientConfig(): { clientId: string; clientSecret?: s
     return extracted;
   }
 
+  const detail = geminiCliCredentialExtractError
+    ? ` Details: ${geminiCliCredentialExtractError}`
+    : "";
   throw new Error(
-    "Gemini CLI not found. Install it first: brew install gemini-cli (or npm install -g @google/gemini-cli), or set GEMINI_CLI_OAUTH_CLIENT_ID.",
+    `Gemini CLI not found. Install it first: brew install gemini-cli (or npm install -g @google/gemini-cli), or set GEMINI_CLI_OAUTH_CLIENT_ID.${detail}`,
   );
 }
