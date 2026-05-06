@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
-import { fileExists, resolveArchiveKind } from "./archive.js";
+import { resolveArchiveKind } from "./archive.js";
+import { pathExists } from "./fs-safe.js";
+import { withTempWorkspace } from "./private-temp-workspace.js";
 
 export type NpmSpecResolution = {
   name?: string;
@@ -105,12 +107,7 @@ export async function withTempDir<T>(
   prefix: string,
   fn: (tmpDir: string) => Promise<T>,
 ): Promise<T> {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  try {
-    return await fn(tmpDir);
-  } finally {
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
-  }
+  return await withTempWorkspace({ rootDir: os.tmpdir(), prefix }, async (tmp) => fn(tmp.dir));
 }
 
 export async function resolveArchiveSourcePath(archivePath: string): Promise<
@@ -124,7 +121,7 @@ export async function resolveArchiveSourcePath(archivePath: string): Promise<
     }
 > {
   const resolved = resolveUserPath(archivePath);
-  if (!(await fileExists(resolved))) {
+  if (!(await pathExists(resolved))) {
     return { ok: false, error: `archive not found: ${resolved}` };
   }
 
@@ -310,7 +307,7 @@ export async function packNpmSpecToArchive(params: {
   }
 
   let archivePath = path.isAbsolute(packed) ? packed : path.join(params.cwd, packed);
-  if (!(await fileExists(archivePath))) {
+  if (!(await pathExists(archivePath))) {
     const fallbackPacked = await findPackedArchiveInDir(params.cwd);
     if (!fallbackPacked) {
       return { ok: false, error: "npm pack produced no archive" };

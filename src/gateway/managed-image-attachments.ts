@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { getLatestSubagentRunByChildSessionKey } from "../agents/subagent-registry.js";
 import { resolveStateDir } from "../config/paths.js";
+import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import {
   getImageMetadata,
@@ -366,7 +367,7 @@ function parseImageDataUrl(
 }
 
 async function getVariantStats(filePath: string) {
-  const [stats, metadataBuffer] = await Promise.all([fs.stat(filePath), fs.readFile(filePath)]);
+  const { buffer: metadataBuffer, stat } = await readLocalFileSafely({ filePath });
   const metadata = (await getImageMetadata(metadataBuffer).catch(() => null)) ?? {
     width: null,
     height: null,
@@ -374,7 +375,7 @@ async function getVariantStats(filePath: string) {
   return {
     width: metadata.width ?? null,
     height: metadata.height ?? null,
-    sizeBytes: Number.isFinite(stats.size) ? stats.size : null,
+    sizeBytes: Number.isFinite(stat.size) ? stat.size : null,
   };
 }
 
@@ -866,7 +867,7 @@ export async function createManagedOutgoingImageBlocks(params: {
       let originalBuffer =
         parsedDataUrl.kind === "image-data-url"
           ? parsedDataUrl.buffer
-          : await fs.readFile(savedOriginal.path);
+          : (await readLocalFileSafely({ filePath: savedOriginal.path })).buffer;
       validateManagedImageBuffer(originalBuffer, alt, limits);
 
       let originalStats = await getVariantStats(savedOriginal.path);
@@ -1081,7 +1082,7 @@ export async function handleManagedOutgoingImageHttpRequest(
 
   let body: Buffer;
   try {
-    body = await fs.readFile(record.original.path);
+    body = (await readLocalFileSafely({ filePath: record.original.path })).buffer;
   } catch {
     sendStatus(res, 404, "not found");
     return true;

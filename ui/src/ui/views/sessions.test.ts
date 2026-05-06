@@ -367,6 +367,41 @@ describe("sessions view", () => {
     expect(badge?.textContent?.trim()).toBe("cron");
   });
 
+  it("renders and filters the session runtime", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            {
+              key: "agent:main:claude",
+              kind: "direct",
+              updatedAt: 20,
+              agentRuntime: { id: "claude-cli", fallback: "none", source: "agent" },
+            },
+            {
+              key: "agent:main:pi",
+              kind: "direct",
+              updatedAt: 10,
+              agentRuntime: { id: "pi", source: "implicit" },
+            },
+          ]),
+        ),
+        searchQuery: "fallback none",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(
+      Array.from(container.querySelectorAll("thead th")).map((cell) => cell.textContent?.trim()),
+    ).toContain("Runtime");
+    expect(container.querySelector(".session-runtime-cell")?.textContent?.trim()).toBe(
+      "claude-cli (fallback none)",
+    );
+    expect(container.textContent).not.toContain("agent:main:pi");
+  });
+
   it("keeps raw keys for inherited identity object properties", async () => {
     const container = document.createElement("div");
     render(

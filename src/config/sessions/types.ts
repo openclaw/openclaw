@@ -267,6 +267,18 @@ export type SessionEntry = {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  /** Durable marker that final user reply delivery still needs a retry/resume pass. */
+  pendingFinalDelivery?: boolean;
+  pendingFinalDeliveryCreatedAt?: number;
+  pendingFinalDeliveryLastAttemptAt?: number;
+  pendingFinalDeliveryAttemptCount?: number;
+  pendingFinalDeliveryLastError?: string | null;
+  /** Frozen reply text that needs delivery. */
+  pendingFinalDeliveryText?: string | null;
+  /** Original delivery context (channel, recipient, etc). */
+  pendingFinalDeliveryContext?: DeliveryContext;
+  /** Durable send intent backing pending final delivery, when already created. */
+  pendingFinalDeliveryIntentId?: string | null;
   /**
    * Whether totalTokens reflects a fresh context snapshot for the latest run.
    * Undefined means legacy/unknown freshness; false forces consumers to treat

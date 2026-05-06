@@ -97,6 +97,22 @@ export function formatSlackSocketReconnectMessage(params: {
   return `slack socket disconnected (${params.event}); reconnecting in ${Math.round(params.delayMs / 1000)}s (attempt ${params.attempt}/${maxAttempts})${suffix}`;
 }
 
+export function formatSlackSocketStartRetryMessage(params: {
+  attempt: number;
+  maxAttempts: number;
+  delayMs: number;
+  error: unknown;
+  sdkContext?: string;
+}) {
+  const maxAttempts = params.maxAttempts > 0 ? String(params.maxAttempts) : "∞";
+  const reason = formatUnknownError(
+    params.error,
+    "Slack Socket Mode start failed without error detail",
+  );
+  const sdkContext = params.sdkContext?.trim() ? `; last SDK log: ${params.sdkContext.trim()}` : "";
+  return `slack socket mode failed to start; retry ${params.attempt}/${maxAttempts} in ${Math.round(params.delayMs / 1000)}s reason="${reason}${sdkContext}"`;
+}
+
 function parseApiAppIdFromAppToken(raw?: string) {
   const token = raw?.trim();
   if (!token) {
@@ -201,7 +217,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const clientOptions = resolveSlackWebClientOptions();
-  const { app, receiver } = createSlackBoltApp({
+  const { app, receiver, socketModeLogger } = createSlackBoltApp({
     interop: await getSlackBoltInterop(),
     slackMode,
     botToken,
@@ -534,7 +550,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           }
           const delayMs = computeBackoff(SLACK_SOCKET_RECONNECT_POLICY, reconnectAttempts);
           runtime.error?.(
-            `slack socket mode failed to start. retry ${reconnectAttempts}/${SLACK_SOCKET_RECONNECT_POLICY.maxAttempts || "∞"} in ${Math.round(delayMs / 1000)}s (${formatUnknownError(err)})`,
+            formatSlackSocketStartRetryMessage({
+              attempt: reconnectAttempts,
+              maxAttempts: SLACK_SOCKET_RECONNECT_POLICY.maxAttempts,
+              delayMs,
+              error: err,
+              sdkContext: socketModeLogger.getLastMessage(),
+            }),
           );
           try {
             await sleepWithAbort(delayMs, opts.abortSignal);

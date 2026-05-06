@@ -337,7 +337,7 @@ const compactResult = await compactEmbeddedPiSessionDirect({
 });
 ```
 
-## Authentication & Model Resolution
+## Authentication and model resolution
 
 ### Auth profiles
 
@@ -418,7 +418,7 @@ if (cfg?.agents?.defaults?.contextPruning?.mode === "cache-ttl") {
 }
 ```
 
-## Streaming & Block Replies
+## Streaming and block replies
 
 ### Block chunking
 

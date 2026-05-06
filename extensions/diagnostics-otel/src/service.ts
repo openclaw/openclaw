@@ -91,6 +91,10 @@ type TelemetryExporterDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   { type: "telemetry.exporter" }
 >;
+type SessionRecoveryDiagnosticEvent = Extract<
+  DiagnosticEventPayload,
+  { type: "session.recovery.requested" | "session.recovery.completed" }
+>;
 
 const NO_CONTENT_CAPTURE: OtelContentCapturePolicy = {
   inputMessages: false,
@@ -819,6 +823,27 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         unit: "ms",
         description: "Age of stuck sessions",
       });
+      const sessionRecoveryRequestedCounter = meter.createCounter(
+        "openclaw.session.recovery.requested",
+        {
+          unit: "1",
+          description: "Session recovery attempts requested",
+        },
+      );
+      const sessionRecoveryCompletedCounter = meter.createCounter(
+        "openclaw.session.recovery.completed",
+        {
+          unit: "1",
+          description: "Session recovery attempts completed",
+        },
+      );
+      const sessionRecoveryAgeHistogram = meter.createHistogram(
+        "openclaw.session.recovery.age_ms",
+        {
+          unit: "ms",
+          description: "Age of sessions selected for recovery",
+        },
+      );
       const runAttemptCounter = meter.createCounter("openclaw.run.attempt", {
         unit: "1",
         description: "Run attempts",
@@ -1466,6 +1491,39 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         const span = tracer.startSpan("openclaw.session.stuck", { attributes: spanAttrs });
         span.setStatus({ code: SpanStatusCode.ERROR, message: "session stuck" });
         span.end();
+      };
+
+      const sessionRecoveryAttrs = (evt: SessionRecoveryDiagnosticEvent) => {
+        const attrs: Record<string, string> = { "openclaw.state": evt.state };
+        if (evt.reason) {
+          attrs["openclaw.reason"] = redactSensitiveText(evt.reason);
+        }
+        if (evt.activeWorkKind) {
+          attrs["openclaw.active_work_kind"] = evt.activeWorkKind;
+        }
+        return attrs;
+      };
+
+      const recordSessionRecoveryRequested = (
+        evt: Extract<DiagnosticEventPayload, { type: "session.recovery.requested" }>,
+      ) => {
+        const attrs = sessionRecoveryAttrs(evt);
+        attrs["openclaw.action"] = evt.allowActiveAbort ? "abort" : "recover";
+        sessionRecoveryRequestedCounter.add(1, attrs);
+        sessionRecoveryAgeHistogram.record(evt.ageMs, attrs);
+      };
+
+      const recordSessionRecoveryCompleted = (
+        evt: Extract<DiagnosticEventPayload, { type: "session.recovery.completed" }>,
+      ) => {
+        const attrs = sessionRecoveryAttrs(evt);
+        attrs["openclaw.status"] = evt.status;
+        attrs["openclaw.action"] = lowCardinalityAttr(evt.action, "unknown");
+        if (evt.outcomeReason) {
+          attrs["openclaw.reason"] = redactSensitiveText(evt.outcomeReason);
+        }
+        sessionRecoveryCompletedCounter.add(1, attrs);
+        sessionRecoveryAgeHistogram.record(evt.ageMs, attrs);
       };
 
       const recordRunAttempt = (evt: Extract<DiagnosticEventPayload, { type: "run.attempt" }>) => {
@@ -2142,6 +2200,35 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         span.end(evt.ts);
       };
 
+      const recordDiagnosticPhaseCompleted = (
+        evt: Extract<DiagnosticEventPayload, { type: "diagnostic.phase.completed" }>,
+      ) => {
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number> = {
+          "openclaw.phase": lowCardinalityAttr(evt.name, "unknown"),
+          ...(evt.cpuUserMs !== undefined ? { "openclaw.phase.cpu_user_ms": evt.cpuUserMs } : {}),
+          ...(evt.cpuSystemMs !== undefined
+            ? { "openclaw.phase.cpu_system_ms": evt.cpuSystemMs }
+            : {}),
+          ...(evt.cpuTotalMs !== undefined
+            ? { "openclaw.phase.cpu_total_ms": evt.cpuTotalMs }
+            : {}),
+          ...(evt.cpuCoreRatio !== undefined
+            ? { "openclaw.phase.cpu_core_ratio": evt.cpuCoreRatio }
+            : {}),
+        };
+        for (const [key, value] of Object.entries(evt.details ?? {})) {
+          spanAttrs[`openclaw.phase.detail.${key}`] =
+            typeof value === "boolean" ? String(value) : value;
+        }
+        const span = spanWithDuration("openclaw.diagnostic.phase", spanAttrs, evt.durationMs, {
+          endTimeMs: evt.ts,
+        });
+        span.end(evt.ts);
+      };
+
       const recordTelemetryExporter = (
         evt: TelemetryExporterDiagnosticEvent,
         metadata: DiagnosticEventMetadata,
@@ -2207,9 +2294,17 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "session.long_running":
             case "session.stalled":
+            case "session.recovery.completed":
+            case "session.recovery.requested":
               return;
             case "session.stuck":
               recordSessionStuck(evt);
+              return;
+            case "session.recovery.requested":
+              recordSessionRecoveryRequested(evt);
+              return;
+            case "session.recovery.completed":
+              recordSessionRecoveryCompleted(evt);
               return;
             case "run.attempt":
               recordRunAttempt(evt);
@@ -2221,6 +2316,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "diagnostic.liveness.warning":
               recordLivenessWarning(evt);
+              return;
+            case "diagnostic.phase.completed":
+              recordDiagnosticPhaseCompleted(evt);
               return;
             case "run.started":
               recordRunStarted(evt, metadata);

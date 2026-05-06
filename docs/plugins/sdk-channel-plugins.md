@@ -34,6 +34,46 @@ shared `message` tool in core. Your plugin owns:
 Core owns the shared message tool, prompt wiring, the outer session-key shape,
 generic `:thread:` bookkeeping, and dispatch.
 
+New channel plugins should also expose a `message` adapter with
+`defineChannelMessageAdapter` from `openclaw/plugin-sdk/channel-message`. The
+adapter declares which durable final-send capabilities the native transport
+actually supports and points text/media sends at the same transport functions as
+the legacy `outbound` adapter. Only declare a capability when a contract test
+proves the native side effect and returned receipt.
+For the full API contract, examples, capability matrix, receipt rules, live
+preview finalization, receive ack policy, tests, and migration table, see
+[Channel message API](/plugins/sdk-channel-message).
+If the existing `outbound` adapter already has the right send methods and
+capability metadata, use `createChannelMessageAdapterFromOutbound(...)` to
+derive the `message` adapter instead of hand-writing another bridge.
+Adapter sends should return `MessageReceipt` values. When compatibility code
+still needs legacy ids, derive them with `listMessageReceiptPlatformIds(...)`
+or `resolveMessageReceiptPrimaryId(...)` instead of keeping parallel
+`messageIds` fields in new lifecycle code.
+Preview-capable channels should also declare `message.live.capabilities` with
+the exact live lifecycle they own, such as `draftPreview`,
+`previewFinalization`, `progressUpdates`, `nativeStreaming`, or
+`quietFinalization`. Channels that finalize a draft preview in place should
+also declare `message.live.finalizer.capabilities`, such as `finalEdit`,
+`normalFallback`, `discardPending`, `previewReceipt`, and
+`retainOnAmbiguousFailure`, and route the runtime logic through
+`defineFinalizableLivePreviewAdapter(...)` plus
+`deliverWithFinalizableLivePreviewAdapter(...)`. Keep those capabilities backed
+by `verifyChannelMessageLiveCapabilityAdapterProofs(...)` and
+`verifyChannelMessageLiveFinalizerProofs(...)` tests so native preview,
+progress, edit, fallback/retention, cleanup, and receipt behavior cannot drift
+silently.
+Inbound receivers that defer platform acknowledgements should declare
+`message.receive.defaultAckPolicy` and `supportedAckPolicies` instead of hiding
+ack timing in monitor-local state. Cover every declared policy with
+`verifyChannelMessageReceiveAckPolicyAdapterProofs(...)`.
+
+Legacy reply/turn helpers such as `createChannelTurnReplyPipeline`,
+`dispatchInboundReplyWithBase`, and `recordInboundSessionAndDispatchReply`
+remain available for compatibility dispatchers. Do not use those names for new
+channel code; new plugins should start with the `message` adapter, receipts, and
+receive/send lifecycle helpers on `openclaw/plugin-sdk/channel-message`.
+
 If your channel supports typing indicators outside inbound replies, expose
 `heartbeat.sendTyping(...)` on the channel plugin. Core calls it with the
 resolved heartbeat delivery target before the heartbeat model run starts and
@@ -49,6 +89,13 @@ Prefer returning an action-keyed map such as
 `{ "set-profile": ["avatarUrl", "avatarPath"] }` so unrelated actions do not
 inherit another action's media args. A flat array still works for params that
 are intentionally shared across every exposed action.
+
+If your channel needs provider-specific shaping for `message(action="send")`,
+prefer `actions.prepareSendPayload(...)`. Put native cards, blocks, embeds, or
+other durable data under `payload.channelData.<channel>` and let core perform
+the actual send through the outbound/message adapter. Use
+`actions.handleAction(...)` for send only as a compatibility fallback for
+payloads that cannot be serialized and retried.
 
 If your platform stores extra scope inside conversation ids, keep that parsing
 in the plugin with `messaging.resolveSessionConversation(...)`. That is the

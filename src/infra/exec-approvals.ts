@@ -12,8 +12,10 @@ import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
+import { assertNoSymlinkParentsSync } from "./fs-safe-advanced.js";
 import { expandHomePrefix, resolveRequiredHomeDir } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
+import { privateFileStoreSync } from "./private-file-store.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
 export type { ExecAllowlistEntry } from "./exec-approvals.types.js";
@@ -258,7 +260,7 @@ function mergeLegacyAgent(
 
 function ensureDir(filePath: string) {
   const dir = path.dirname(filePath);
-  assertNoSymlinkPathComponents(dir, resolveRequiredHomeDir());
+  assertNoExecApprovalsSymlinkParents(dir, resolveRequiredHomeDir());
   fs.mkdirSync(dir, { recursive: true });
   const dirStat = fs.lstatSync(dir);
   if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
@@ -267,29 +269,13 @@ function ensureDir(filePath: string) {
   return dir;
 }
 
-function assertNoSymlinkPathComponents(targetPath: string, trustedRoot: string): void {
-  const resolvedTarget = path.resolve(targetPath);
-  const resolvedRoot = path.resolve(trustedRoot);
-  if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(`${resolvedRoot}${path.sep}`)) {
-    return;
-  }
-
-  const relative = path.relative(resolvedRoot, resolvedTarget);
-  const segments = relative && relative !== "." ? relative.split(path.sep) : [];
-  let current = resolvedRoot;
-  for (const segment of segments) {
-    current = path.join(current, segment);
-    try {
-      const stat = fs.lstatSync(current);
-      if (stat.isSymbolicLink()) {
-        throw new Error(`Refusing to traverse symlink in exec approvals path: ${current}`);
-      }
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw err;
-      }
-    }
-  }
+function assertNoExecApprovalsSymlinkParents(targetPath: string, trustedRoot: string): void {
+  assertNoSymlinkParentsSync({
+    rootDir: trustedRoot,
+    targetPath,
+    allowOutsideRoot: true,
+    messagePrefix: "Refusing to traverse symlink in exec approvals path",
+  });
 }
 
 function assertSafeExecApprovalsDestination(filePath: string): void {
@@ -514,22 +500,7 @@ export function saveExecApprovals(file: ExecApprovalsFile) {
 function writeExecApprovalsRaw(filePath: string, raw: string) {
   const dir = ensureDir(filePath);
   assertSafeExecApprovalsDestination(filePath);
-  const tempPath = path.join(dir, `.exec-approvals.${process.pid}.${crypto.randomUUID()}.tmp`);
-  let tempWritten = false;
-  try {
-    fs.writeFileSync(tempPath, raw, { mode: 0o600, flag: "wx" });
-    tempWritten = true;
-    fs.renameSync(tempPath, filePath);
-  } finally {
-    if (tempWritten && fs.existsSync(tempPath)) {
-      fs.rmSync(tempPath, { force: true });
-    }
-  }
-  try {
-    fs.chmodSync(filePath, 0o600);
-  } catch {
-    // best-effort on platforms without chmod
-  }
+  privateFileStoreSync(dir).writeText(path.basename(filePath), raw);
 }
 
 export function restoreExecApprovalsSnapshot(snapshot: ExecApprovalsSnapshot): void {

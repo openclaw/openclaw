@@ -242,6 +242,7 @@ Use the same shape under another compact progress channel key, for example `chan
 
 ## Related
 
+- [Message lifecycle refactor](/concepts/message-lifecycle-refactor) - target shared preview, edit, stream, and finalization design
 - [Progress drafts](/concepts/progress-drafts) — visible work-in-progress messages that update during long turns
 - [Messages](/concepts/messages) — message lifecycle and delivery
 - [Retry](/concepts/retry) — retry behavior on delivery failure

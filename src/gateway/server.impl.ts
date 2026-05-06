@@ -37,6 +37,7 @@ import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
+import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import {
@@ -355,7 +356,7 @@ function createGatewayStartupTrace() {
         timelineOptions(),
       );
       try {
-        const result = await run();
+        const result = await withDiagnosticPhase(mapTimelineName(name), run, { traceName: name });
         const now = performance.now();
         emitDiagnosticsTimelineEvent(
           {
@@ -735,9 +736,13 @@ export async function startGatewayServer(
         env: process.env,
         tailscaleMode,
       }),
+      config.gateway?.trustedProxies,
     );
   const resolveCurrentSharedGatewaySessionGeneration = () =>
-    resolveSharedGatewaySessionGeneration(getResolvedAuth());
+    resolveSharedGatewaySessionGeneration(
+      getResolvedAuth(),
+      getRuntimeConfig().gateway?.trustedProxies,
+    );
   const resolveSharedGatewaySessionGenerationForRuntimeSnapshot = () =>
     resolveSharedGatewaySessionGeneration(
       resolveGatewayAuth({
@@ -746,6 +751,7 @@ export async function startGatewayServer(
         env: process.env,
         tailscaleMode,
       }),
+      getRuntimeConfig().gateway?.trustedProxies,
     );
   const sharedGatewaySessionGenerationState: SharedGatewaySessionGenerationState = {
     current: resolveCurrentSharedGatewaySessionGeneration(),
@@ -878,7 +884,7 @@ export async function startGatewayServer(
     nodeUnsubscribe,
     nodeUnsubscribeAll,
     broadcastVoiceWakeChanged,
-    hasMobileNodeConnected,
+    hasTalkNodeConnected,
   } = createGatewayNodeSessionRuntime({ broadcast });
   applyGatewayLaneConcurrency(cfgAtStart);
 
@@ -1255,7 +1261,7 @@ export async function startGatewayServer(
       nodeSubscribe,
       nodeUnsubscribe,
       nodeUnsubscribeAll,
-      hasConnectedMobileNode: hasMobileNodeConnected,
+      hasConnectedTalkNode: hasTalkNodeConnected,
       clients,
       enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig: OpenClawConfig) => {
         enforceSharedGatewaySessionGenerationForConfigWrite({
@@ -1519,14 +1525,28 @@ export async function startGatewayServer(
         onStarted: () => {
           postReadyMaintenanceTimer = null;
         },
-        startMaintenance: earlyRuntime.startMaintenance,
+        startMaintenance: async () => {
+          if (closePreludeStarted) {
+            return null;
+          }
+          return earlyRuntime.startMaintenance();
+        },
         applyMaintenance: (maintenance) => {
+          if (closePreludeStarted) {
+            clearInterval(maintenance.tickInterval);
+            clearInterval(maintenance.healthInterval);
+            clearInterval(maintenance.dedupeCleanup);
+            if (maintenance.mediaCleanup) {
+              clearInterval(maintenance.mediaCleanup);
+            }
+            return;
+          }
           runtimeState.tickInterval = maintenance.tickInterval;
           runtimeState.healthInterval = maintenance.healthInterval;
           runtimeState.dedupeCleanup = maintenance.dedupeCleanup;
           runtimeState.mediaCleanup = maintenance.mediaCleanup;
         },
-        shouldStartCron: () => !gatewayCronStartHandled,
+        shouldStartCron: () => !closePreludeStarted && !gatewayCronStartHandled,
         markCronStartHandled: () => {
           gatewayCronStartHandled = true;
         },

@@ -164,6 +164,12 @@ Packaged installs must ship that JavaScript runtime output. The TypeScript
 source fallback is for source checkouts and local development paths, not for
 npm packages installed into OpenClaw's managed plugin root.
 
+If a managed package warning says it `requires compiled runtime output for
+TypeScript entry ...`, the package was published without the JavaScript files
+OpenClaw needs at runtime. That is a plugin packaging issue, not a local config
+problem. Update or reinstall the plugin after the publisher republishes compiled
+JavaScript, or disable/uninstall that plugin until a fixed package is available.
+
 Use `openclaw.runtimeExtensions` when published runtime files do not live at the
 same paths as the source entries. When present, `runtimeExtensions` must contain
 exactly one entry for every `extensions` entry. Mismatched lists fail install and
@@ -260,20 +266,28 @@ Looking for third-party plugins? See [Community Plugins](/plugins/community).
 }
 ```
 
-| Field            | Description                                               |
-| ---------------- | --------------------------------------------------------- |
-| `enabled`        | Master toggle (default: `true`)                           |
-| `allow`          | Plugin allowlist (optional)                               |
-| `deny`           | Plugin denylist (optional; deny wins)                     |
-| `load.paths`     | Extra plugin files/directories                            |
-| `slots`          | Exclusive slot selectors (e.g. `memory`, `contextEngine`) |
-| `entries.\<id\>` | Per-plugin toggles + config                               |
+| Field              | Description                                               |
+| ------------------ | --------------------------------------------------------- |
+| `enabled`          | Master toggle (default: `true`)                           |
+| `allow`            | Plugin allowlist (optional)                               |
+| `bundledDiscovery` | Bundled plugin discovery mode (`allowlist` by default)    |
+| `deny`             | Plugin denylist (optional; deny wins)                     |
+| `load.paths`       | Extra plugin files/directories                            |
+| `slots`            | Exclusive slot selectors (e.g. `memory`, `contextEngine`) |
+| `entries.\<id\>`   | Per-plugin toggles + config                               |
 
 `plugins.allow` is exclusive. When it is non-empty, only listed plugins can load
 or expose tools, even if `tools.allow` contains `"*"` or a specific plugin-owned
 tool name. If a tool allowlist references plugin tools, add the owning plugin ids
 to `plugins.allow` or remove `plugins.allow`; `openclaw doctor` warns about this
 shape.
+
+`plugins.bundledDiscovery` defaults to `"allowlist"` for new configs, so a
+restrictive `plugins.allow` inventory also blocks omitted bundled provider
+plugins, including runtime web-search provider discovery. Doctor stamps older
+restrictive allowlist configs with `"compat"` during migration so upgrades keep
+legacy bundled provider behavior until the operator opts into the stricter mode.
+An empty `plugins.allow` is still treated as unset/open.
 
 Config changes made through `/plugins enable` or `/plugins disable` trigger an
 in-process Gateway plugin reload. New agent turns rebuild their tool list from

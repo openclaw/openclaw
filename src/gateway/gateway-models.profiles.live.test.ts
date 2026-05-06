@@ -5,8 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
@@ -158,8 +157,11 @@ function resolveGatewayLiveSuiteTimeoutMs(maxModels: number): number {
   if (maxModels <= 0) {
     return GATEWAY_LIVE_UNBOUNDED_TIMEOUT_MS;
   }
-  // Gateway live runs multiple probes per model; scale timeout by model cap.
-  const estimated = 5 * 60 * 1000 + maxModels * 90 * 1000;
+  // Gateway live runs multiple probes per model and may retry with another
+  // profile key before moving on, so the suite budget has to scale with the
+  // model timeout rather than only the first prompt.
+  const perModelBudgetMs = Math.max(3 * 60 * 1000, GATEWAY_LIVE_MODEL_TIMEOUT_MS * 3);
+  const estimated = 10 * 60 * 1000 + maxModels * perModelBudgetMs;
   return Math.max(
     GATEWAY_LIVE_DEFAULT_TIMEOUT_MS,
     Math.min(GATEWAY_LIVE_MAX_TIMEOUT_MS, estimated),
@@ -530,6 +532,20 @@ describe("resolveGatewayLiveModelTimeoutMs", () => {
 
   it("never goes below the probe timeout", () => {
     expect(resolveGatewayLiveModelTimeoutMs("45000", undefined, 90_000)).toBe(90_000);
+  });
+});
+
+describe("resolveGatewayLiveSuiteTimeoutMs", () => {
+  it("leaves uncapped explicit sweeps bounded by the unbounded live timeout", () => {
+    expect(resolveGatewayLiveSuiteTimeoutMs(0)).toBe(GATEWAY_LIVE_UNBOUNDED_TIMEOUT_MS);
+  });
+
+  it("scales model-capped sweeps for multi-probe retries", () => {
+    expect(resolveGatewayLiveSuiteTimeoutMs(3)).toBeGreaterThan(GATEWAY_LIVE_DEFAULT_TIMEOUT_MS);
+  });
+
+  it("caps very large model sweeps", () => {
+    expect(resolveGatewayLiveSuiteTimeoutMs(999)).toBe(GATEWAY_LIVE_MAX_TIMEOUT_MS);
   });
 });
 
@@ -1408,7 +1424,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   process.env.OPENCLAW_GATEWAY_TOKEN = token;
   const agentId = "dev";
 
-  const hostAgentDir = resolveOpenClawAgentDir();
+  const hostAgentDir = resolveDefaultAgentDir(getRuntimeConfig());
   const hostStore = ensureAuthProfileStore(hostAgentDir, {
     allowKeychainPrompt: false,
   });
@@ -1452,7 +1468,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   const toolProbePath = path.join(workspaceDir, `.openclaw-live-tool-probe.${nonceA}.txt`);
   await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
 
-  const agentDir = resolveOpenClawAgentDir();
+  const agentDir = resolveDefaultAgentDir(params.cfg);
   const sanitizedCfg: OpenClawConfig = {
     ...params.cfg,
     auth: await sanitizeAuthConfig({ cfg: params.cfg, agentDir }),
@@ -2152,7 +2168,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         const cfg = getRuntimeConfig();
         await ensureOpenClawModelsJson(cfg);
 
-        const agentDir = resolveOpenClawAgentDir();
+        const agentDir = resolveDefaultAgentDir(cfg);
         const authStorage = discoverAuthStorage(agentDir);
         const modelRegistry = discoverModels(authStorage, agentDir);
         const all = modelRegistry.getAll();
@@ -2302,7 +2318,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     const cfg = getRuntimeConfig();
     await ensureOpenClawModelsJson(cfg);
 
-    const agentDir = resolveOpenClawAgentDir();
+    const agentDir = resolveDefaultAgentDir(cfg);
     const authStorage = discoverAuthStorage(agentDir);
     const modelRegistry = discoverModels(authStorage, agentDir);
     const anthropic = modelRegistry.find("anthropic", "claude-opus-4-6") as Model<Api> | null;

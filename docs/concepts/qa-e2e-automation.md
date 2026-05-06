@@ -29,26 +29,26 @@ Current pieces:
 Every QA flow runs under `pnpm openclaw qa <subcommand>`. Many have `pnpm qa:*`
 script aliases; both forms are supported.
 
-| Command                                             | Purpose                                                                                                                                                                                      |
-| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `qa run`                                            | Bundled QA self-check; writes a Markdown report.                                                                                                                                             |
-| `qa suite`                                          | Run repo-backed scenarios against the QA gateway lane. Aliases: `pnpm openclaw qa suite --runner multipass` for a disposable Linux VM.                                                       |
-| `qa coverage`                                       | Print the markdown scenario-coverage inventory (`--json` for machine output).                                                                                                                |
-| `qa parity-report`                                  | Compare two `qa-suite-summary.json` files and write the agentic parity report.                                                                                                               |
-| `qa character-eval`                                 | Run the character QA scenario across multiple live models with a judged report. See [Reporting](#reporting).                                                                                 |
-| `qa manual`                                         | Run a one-off prompt against the selected provider/model lane.                                                                                                                               |
-| `qa ui`                                             | Start the QA debugger UI and local QA bus (alias: `pnpm qa:lab:ui`).                                                                                                                         |
-| `qa docker-build-image`                             | Build the prebaked QA Docker image.                                                                                                                                                          |
-| `qa docker-scaffold`                                | Write a docker-compose scaffold for the QA dashboard + gateway lane.                                                                                                                         |
-| `qa up`                                             | Build the QA site, start the Docker-backed stack, print the URL (alias: `pnpm qa:lab:up`; `:fast` variant adds `--use-prebuilt-image --bind-ui-dist --skip-ui-build`).                       |
-| `qa aimock`                                         | Start only the AIMock provider server.                                                                                                                                                       |
-| `qa mock-openai`                                    | Start only the scenario-aware `mock-openai` provider server.                                                                                                                                 |
-| `qa credentials doctor` / `add` / `list` / `remove` | Manage the shared Convex credential pool.                                                                                                                                                    |
-| `qa matrix`                                         | Live transport lane against a disposable Tuwunel homeserver. See [Matrix QA](/concepts/qa-matrix).                                                                                           |
-| `qa telegram`                                       | Live transport lane against a real private Telegram group.                                                                                                                                   |
-| `qa discord`                                        | Live transport lane against a real private Discord guild channel.                                                                                                                            |
-| `qa slack`                                          | Live transport lane against a real private Slack channel.                                                                                                                                    |
-| `qa mantis`                                         | Before and after verification runner for live transport bugs, with Discord status-reactions evidence, Crabbox desktop/browser smoke, and Slack-in-VNC smoke. See [Mantis](/concepts/mantis). |
+| Command                                             | Purpose                                                                                                                                                                                                                                                                 |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `qa run`                                            | Bundled QA self-check; writes a Markdown report.                                                                                                                                                                                                                        |
+| `qa suite`                                          | Run repo-backed scenarios against the QA gateway lane. Aliases: `pnpm openclaw qa suite --runner multipass` for a disposable Linux VM.                                                                                                                                  |
+| `qa coverage`                                       | Print the markdown scenario-coverage inventory (`--json` for machine output).                                                                                                                                                                                           |
+| `qa parity-report`                                  | Compare two `qa-suite-summary.json` files and write the agentic parity report.                                                                                                                                                                                          |
+| `qa character-eval`                                 | Run the character QA scenario across multiple live models with a judged report. See [Reporting](#reporting).                                                                                                                                                            |
+| `qa manual`                                         | Run a one-off prompt against the selected provider/model lane.                                                                                                                                                                                                          |
+| `qa ui`                                             | Start the QA debugger UI and local QA bus (alias: `pnpm qa:lab:ui`).                                                                                                                                                                                                    |
+| `qa docker-build-image`                             | Build the prebaked QA Docker image.                                                                                                                                                                                                                                     |
+| `qa docker-scaffold`                                | Write a docker-compose scaffold for the QA dashboard + gateway lane.                                                                                                                                                                                                    |
+| `qa up`                                             | Build the QA site, start the Docker-backed stack, print the URL (alias: `pnpm qa:lab:up`; `:fast` variant adds `--use-prebuilt-image --bind-ui-dist --skip-ui-build`).                                                                                                  |
+| `qa aimock`                                         | Start only the AIMock provider server.                                                                                                                                                                                                                                  |
+| `qa mock-openai`                                    | Start only the scenario-aware `mock-openai` provider server.                                                                                                                                                                                                            |
+| `qa credentials doctor` / `add` / `list` / `remove` | Manage the shared Convex credential pool.                                                                                                                                                                                                                               |
+| `qa matrix`                                         | Live transport lane against a disposable Tuwunel homeserver. See [Matrix QA](/concepts/qa-matrix).                                                                                                                                                                      |
+| `qa telegram`                                       | Live transport lane against a real private Telegram group.                                                                                                                                                                                                              |
+| `qa discord`                                        | Live transport lane against a real private Discord guild channel.                                                                                                                                                                                                       |
+| `qa slack`                                          | Live transport lane against a real private Slack channel.                                                                                                                                                                                                               |
+| `qa mantis`                                         | Before and after verification runner for live transport bugs, with Discord status-reactions evidence, Crabbox desktop/browser smoke, and Slack-in-VNC smoke. See [Mantis](/concepts/mantis) and [Mantis Slack Desktop Runbook](/concepts/mantis-slack-desktop-runbook). |
 
 ## Operator flow
 
@@ -111,6 +111,22 @@ pnpm openclaw qa matrix --profile fast --fail-fast
 
 The full CLI reference, profile/scenario catalog, env vars, and artifact layout for this lane live in [Matrix QA](/concepts/qa-matrix). At a glance: it provisions a disposable Tuwunel homeserver in Docker, registers temporary driver/SUT/observer users, runs the real Matrix plugin inside a child QA gateway scoped to that transport (no `qa-channel`), then writes a Markdown report, JSON summary, observed-events artifact, and combined output log under `.artifacts/qa-e2e/matrix-<timestamp>/`.
 
+The scenarios cover transport behavior that unit tests cannot prove end to end: mention gating, allow-bot policies, allowlists, top-level and threaded replies, DM routing, reaction handling, inbound edit suppression, restart replay dedupe, homeserver interruption recovery, approval metadata delivery, media handling, and Matrix E2EE bootstrap/recovery/verification flows. The E2EE CLI profile also drives `openclaw matrix encryption setup` and verification commands through the same disposable homeserver before checking gateway replies.
+
+Discord also has Mantis-only opt-in scenarios for bug reproduction. Use
+`--scenario discord-status-reactions-tool-only` for the explicit status reaction
+timeline, or `--scenario discord-thread-reply-filepath-attachment` to create a
+real Discord thread and verify that `message.thread-reply` preserves a
+`filePath` attachment. These scenarios stay out of the default live Discord lane
+because they are before/after repro probes rather than broad smoke coverage.
+The thread-attachment Mantis workflow can also add a logged-in Discord Web
+witness video when `MANTIS_DISCORD_VIEWER_CHROME_PROFILE_DIR` or
+`MANTIS_DISCORD_VIEWER_CHROME_PROFILE_TGZ_B64` is configured in the QA
+environment. That viewer profile is only for visual capture; the pass/fail
+decision still comes from the Discord REST oracle.
+
+CI uses the same command surface in `.github/workflows/qa-live-transports-convex.yml`. Scheduled and default manual runs execute the fast Matrix profile with live frontier credentials, `--fast`, and `OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000`. Manual `matrix_profile=all` fans out into the five profile shards so the exhaustive catalog can run in parallel while keeping one artifact directory per shard.
+
 For transport-real Telegram, Discord, and Slack smoke lanes:
 
 ```bash
@@ -132,11 +148,51 @@ pnpm openclaw qa mantis slack-desktop-smoke \
 
 That command leases a Crabbox desktop/browser machine, runs the Slack live lane
 inside the VM, opens Slack Web in the VNC browser, captures the desktop, and
-copies `slack-qa/` plus `slack-desktop-smoke.png` back to the Mantis artifact
-directory. Reuse `--lease-id <cbx_...>` after logging in to Slack Web manually
-through VNC. With `--gateway-setup`, Mantis leaves a persistent OpenClaw Slack
-gateway running inside the VM on port `38973`; without it, the command runs the
-normal bot-to-bot Slack QA lane and exits after artifact capture.
+copies `slack-qa/`, `slack-desktop-smoke.png`, and `slack-desktop-smoke.mp4`
+when video capture is available back to the Mantis artifact directory. Crabbox
+desktop/browser leases provide the capture tools and browser/native-build helper
+packages up front, so the scenario should only install fallbacks on older
+leases. Mantis reports total and per-phase timings in
+`mantis-slack-desktop-smoke-report.md` so slow runs show whether time went into
+lease warmup, credential acquisition, remote setup, or artifact copy. Reuse
+`--lease-id <cbx_...>` after logging in to Slack Web manually through VNC;
+reused leases also keep Crabbox's pnpm store cache warm. The default
+`--hydrate-mode source` verifies from a source checkout and runs install/build
+inside the VM. Use `--hydrate-mode prehydrated` only when the reused remote
+workspace already has `node_modules` and a built `dist/`; that mode skips the
+expensive install/build step and fails closed when the workspace is not ready.
+With `--gateway-setup`, Mantis leaves a persistent OpenClaw Slack gateway
+running inside the VM on port `38973`; without it, the command runs the normal
+bot-to-bot Slack QA lane and exits after artifact capture.
+
+The operator checklist, GitHub workflow dispatch command, evidence-comment
+contract, hydrate-mode decision table, timing interpretation, and failure
+handling steps live in [Mantis Slack Desktop Runbook](/concepts/mantis-slack-desktop-runbook).
+
+For an agent/CV style desktop task, run:
+
+```bash
+pnpm openclaw qa mantis visual-task \
+  --browser-url https://example.net \
+  --expect-text "Example Domain" \
+  --vision-model openai/gpt-5.4
+```
+
+`visual-task` leases or reuses a Crabbox desktop/browser machine, starts
+`crabbox record --while`, drives the visible browser through a nested
+`visual-driver`, captures `visual-task.png`, runs `openclaw infer image describe`
+against the screenshot when `--vision-mode image-describe` is selected, and
+writes `visual-task.mp4`, `mantis-visual-task-summary.json`,
+`mantis-visual-task-driver-result.json`, and `mantis-visual-task-report.md`.
+When `--expect-text` is set, the vision prompt asks for a structured JSON
+verdict and only passes when the model reports positive visible evidence; a
+negative response that merely quotes the target text fails the assertion.
+Use `--vision-mode metadata` for a no-model smoke that proves the desktop,
+browser, screenshot, and video plumbing without calling an image-understanding
+provider. Recording is a required artifact for `visual-task`; if Crabbox records
+no non-empty `visual-task.mp4`, the task fails even when the visual driver
+passed. On failure, Mantis keeps the lease for VNC unless the task had already
+passed and `--keep-lease` was not set.
 
 Before using pooled live credentials, run:
 
@@ -155,7 +211,7 @@ Live transport lanes share one contract instead of each inventing their own scen
 | Matrix   | x      | x              | x          | x               | x               | x              | x                | x                | x                    |              |                             |
 | Telegram | x      | x              | x          |                 |                 |                |                  |                  |                      | x            |                             |
 | Discord  | x      | x              | x          |                 |                 |                |                  |                  |                      |              | x                           |
-| Slack    | x      | x              | x          |                 |                 |                |                  |                  |                      |              |                             |
+| Slack    | x      | x              | x          | x               | x               | x              | x                | x                |                      |              |                             |
 
 This keeps `qa-channel` as the broad product-behavior suite while Matrix,
 Telegram, and future live transports share one explicit transport-contract
@@ -232,6 +288,8 @@ Scenarios (`extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime
 - `telegram-tools-compact-command`
 - `telegram-whoami-command`
 - `telegram-context-command`
+- `telegram-long-final-reuses-preview`
+- `telegram-long-final-three-chunks`
 
 Output artifacts:
 
@@ -264,7 +322,7 @@ Scenarios (`extensions/qa-lab/src/live-transports/discord/discord-live.runtime.t
 - `discord-canary`
 - `discord-mention-gating`
 - `discord-native-help-command-registration`
-- `discord-status-reactions-tool-only` — opt-in Mantis scenario. Runs by itself because it switches the SUT to always-on, tool-only guild replies with `messages.statusReactions.enabled=true`, then captures a REST reaction timeline plus an HTML/PNG visual artifact.
+- `discord-status-reactions-tool-only` — opt-in Mantis scenario. Runs by itself because it switches the SUT to always-on, tool-only guild replies with `messages.statusReactions.enabled=true`, then captures a REST reaction timeline plus HTML/PNG visual artifacts. Mantis before/after reports also preserve scenario-provided MP4 artifacts as `baseline.mp4` and `candidate.mp4`.
 
 Run the Mantis status-reaction scenario explicitly:
 
@@ -307,12 +365,187 @@ Scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts:39
 
 - `slack-canary`
 - `slack-mention-gating`
+- `slack-allowlist-block`
+- `slack-top-level-reply-shape`
+- `slack-restart-resume`
+- `slack-thread-follow-up`
+- `slack-thread-isolation`
 
 Output artifacts:
 
 - `slack-qa-report.md`
 - `slack-qa-summary.json`
 - `slack-qa-observed-messages.json` — bodies redacted unless `OPENCLAW_QA_SLACK_CAPTURE_CONTENT=1`.
+
+#### Setting up the Slack workspace
+
+The lane needs two distinct Slack apps in one workspace, plus a channel both bots are members of:
+
+- `channelId` — the `Cxxxxxxxxxx` id of a channel both bots have been invited to. Use a dedicated channel; the lane posts on every run.
+- `driverBotToken` — bot token (`xoxb-...`) of the **Driver** app.
+- `sutBotToken` — bot token (`xoxb-...`) of the **SUT** app, which must be a separate Slack app from the driver so its bot user id is distinct.
+- `sutAppToken` — app-level token (`xapp-...`) of the SUT app with `connections:write`, used by Socket Mode so the SUT app can receive events.
+
+Prefer a Slack workspace dedicated to QA over reusing a production workspace.
+
+The SUT manifest below intentionally narrows the bundled Slack plugin's production install (`extensions/slack/src/setup-shared.ts:10`) to the permissions and events covered by the live Slack QA suite. For the production-channel setup as users see it, see [Slack channel quick setup](/channels/slack#quick-setup); the QA Driver/SUT pair is intentionally separate because the lane needs two distinct bot user ids in one workspace.
+
+**1. Create the Driver app**
+
+Go to [api.slack.com/apps](https://api.slack.com/apps) → _Create New App_ → _From a manifest_ → pick the QA workspace, paste the following manifest, then _Install to Workspace_:
+
+```json
+{
+  "display_information": {
+    "name": "OpenClaw QA Driver",
+    "description": "Test driver bot for OpenClaw QA Slack live lane"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "OpenClaw QA Driver",
+      "always_online": true
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": ["chat:write", "channels:history", "groups:history", "users:read"]
+    }
+  },
+  "settings": {
+    "socket_mode_enabled": false
+  }
+}
+```
+
+Copy the _Bot User OAuth Token_ (`xoxb-...`) — that becomes `driverBotToken`. The driver only needs to post messages and identify itself; no events, no Socket Mode.
+
+**2. Create the SUT app**
+
+Repeat _Create New App → From a manifest_ in the same workspace. This QA app intentionally uses a narrower version of the bundled Slack plugin's production manifest (`extensions/slack/src/setup-shared.ts:10`): reaction scopes and events are omitted because the live Slack QA suite does not cover reaction handling yet.
+
+```json
+{
+  "display_information": {
+    "name": "OpenClaw QA SUT",
+    "description": "OpenClaw QA SUT connector for OpenClaw"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "OpenClaw QA SUT",
+      "always_online": true
+    },
+    "app_home": {
+      "home_tab_enabled": true,
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "assistant:write",
+        "channels:history",
+        "channels:read",
+        "chat:write",
+        "commands",
+        "emoji:read",
+        "files:read",
+        "files:write",
+        "groups:history",
+        "groups:read",
+        "im:history",
+        "im:read",
+        "im:write",
+        "mpim:history",
+        "mpim:read",
+        "mpim:write",
+        "pins:read",
+        "pins:write",
+        "usergroups:read",
+        "users:read"
+      ]
+    }
+  },
+  "settings": {
+    "socket_mode_enabled": true,
+    "event_subscriptions": {
+      "bot_events": [
+        "app_home_opened",
+        "app_mention",
+        "channel_rename",
+        "member_joined_channel",
+        "member_left_channel",
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "message.mpim",
+        "pin_added",
+        "pin_removed"
+      ]
+    }
+  }
+}
+```
+
+After Slack creates the app, do two things on its settings page:
+
+- _Install to Workspace_ → copy the _Bot User OAuth Token_ → that becomes `sutBotToken`.
+- _Basic Information → App-Level Tokens → Generate Token and Scopes_ → add scope `connections:write` → save → copy the `xapp-...` value → that becomes `sutAppToken`.
+
+Verify the two bots have distinct user ids by calling `auth.test` on each token. The runtime distinguishes driver and SUT by user id; reusing one app for both will fail mention-gating immediately.
+
+**3. Create the channel**
+
+In the QA workspace, create a channel (e.g. `#openclaw-qa`) and invite both bots from inside the channel:
+
+```
+/invite @OpenClaw QA Driver
+/invite @OpenClaw QA SUT
+```
+
+Copy the `Cxxxxxxxxxx` id from _channel info → About → Channel ID_ — that becomes `channelId`. A public channel works; if you use a private channel both apps already have `groups:history` so the harness's history reads will still succeed.
+
+**4. Register the credentials**
+
+Two options. Use env vars for single-machine debugging (set the four `OPENCLAW_QA_SLACK_*` variables and pass `--credential-source env`), or seed the shared Convex pool so CI and other maintainers can lease them.
+
+For the Convex pool, write the four fields to a JSON file:
+
+```json
+{
+  "channelId": "Cxxxxxxxxxx",
+  "driverBotToken": "xoxb-...",
+  "sutBotToken": "xoxb-...",
+  "sutAppToken": "xapp-..."
+}
+```
+
+With `OPENCLAW_QA_CONVEX_SITE_URL` and `OPENCLAW_QA_CONVEX_SECRET_MAINTAINER` exported in your shell, register and verify:
+
+```bash
+pnpm openclaw qa credentials add \
+  --kind slack \
+  --payload-file slack-creds.json \
+  --note "QA Slack pool seed"
+
+pnpm openclaw qa credentials list --kind slack --status all --json
+```
+
+Expect `count: 1`, `status: "active"`, no `lease` field.
+
+**5. Verify end to end**
+
+Run the lane locally to confirm both bots can talk to each other through the broker:
+
+```bash
+pnpm openclaw qa slack \
+  --credential-source convex \
+  --credential-role maintainer \
+  --output-dir .artifacts/qa-e2e/slack-local
+```
+
+A green run completes in well under 30 seconds and `slack-qa-report.md` shows both `slack-canary` and `slack-mention-gating` at status `pass`. If the lane hangs for ~90 seconds and exits with `Convex credential pool exhausted for kind "slack"`, either the pool is empty or every row is leased — `qa credentials list --kind slack --status all --json` will tell you which.
 
 ### Convex credential pool
 
@@ -322,6 +555,7 @@ Payload shapes the broker validates on `admin/add`:
 
 - Telegram (`kind: "telegram"`): `{ groupId: string, driverToken: string, sutToken: string }` — `groupId` must be a numeric chat-id string.
 - Discord (`kind: "discord"`): `{ guildId: string, channelId: string, driverBotToken: string, sutBotToken: string, sutApplicationId: string }`.
+- Slack (`kind: "slack"`): `{ channelId: string, driverBotToken: string, sutBotToken: string, sutAppToken: string }` — `channelId` must match `^[A-Z][A-Z0-9]+$` (a Slack id like `Cxxxxxxxxxx`). See [Setting up the Slack workspace](#setting-up-the-slack-workspace) for app and scope provisioning.
 
 Operational env vars and the Convex broker endpoint contract live in [Testing → Shared Telegram credentials via Convex](/help/testing#shared-telegram-credentials-via-convex-v1) (the section name predates Discord support; the broker semantics are identical for both kinds).
 

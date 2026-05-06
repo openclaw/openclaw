@@ -1,5 +1,1 @@
-export {
-  SafeOpenError,
-  openFileWithinRoot,
-  writeFileFromPathWithinRoot,
-} from "../sdk-security-runtime.js";
+export { root, FsSafeError } from "../sdk-security-runtime.js";
