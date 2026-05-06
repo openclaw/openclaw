@@ -199,11 +199,15 @@ describe("chat header controls (browser)", () => {
     await Promise.resolve();
 
     const toggle = container.querySelector<HTMLButtonElement>(".chat-controls-mobile-toggle");
+    const backdrop = container.querySelector<HTMLButtonElement>(".chat-controls-sheet-backdrop");
     const dropdown = container.querySelector<HTMLElement>(".chat-controls-dropdown");
     expect(toggle).not.toBeNull();
+    expect(backdrop).not.toBeNull();
     expect(dropdown).not.toBeNull();
     expect(toggle?.getAttribute("aria-expanded")).toBe("false");
     expect(toggle?.getAttribute("aria-controls")).toBe("chat-mobile-controls-dropdown");
+    expect(backdrop?.getAttribute("aria-label")).toBe("Dismiss");
+    expect(backdrop?.classList.contains("open")).toBe(false);
     expect(dropdown?.id).toBe("chat-mobile-controls-dropdown");
     expect(dropdown?.classList.contains("open")).toBe(false);
 
@@ -224,8 +228,21 @@ describe("chat header controls (browser)", () => {
     await Promise.resolve();
 
     const openToggle = container.querySelector<HTMLButtonElement>(".chat-controls-mobile-toggle");
+    const openBackdrop = container.querySelector<HTMLButtonElement>(
+      ".chat-controls-sheet-backdrop",
+    );
     const openDropdown = container.querySelector<HTMLElement>(".chat-controls-dropdown");
     expect(openToggle?.getAttribute("aria-expanded")).toBe("true");
+    expect(openBackdrop?.classList.contains("open")).toBe(true);
     expect(openDropdown?.classList.contains("open")).toBe(true);
+    expect(
+      Array.from(openDropdown?.querySelectorAll(".chat-controls__mobile-label") ?? []).map((el) =>
+        el.textContent?.trim(),
+      ),
+    ).toEqual(["Thinking", "Tools", "Focus", "Cron"]);
+
+    openBackdrop?.click();
+
+    expect(setChatMobileControlsOpen).toHaveBeenCalledWith(false, { restoreFocus: true });
   });
 });

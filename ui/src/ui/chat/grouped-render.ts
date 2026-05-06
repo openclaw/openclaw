@@ -1481,9 +1481,10 @@ function renderGroupedMessage(
 
   const hasActions = canCopyMarkdown || canExpand;
   const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));
+  const reserveActionSpace = hasActions && !isToolMessage;
 
   return html`
-    <div class="${bubbleClasses}">
+    <div class="${bubbleClasses} ${reserveActionSpace ? "chat-bubble--has-actions" : ""}">
       ${renderReplyPill(normalizedMessage.replyTarget)}
       ${hasActions
         ? html`<div class="chat-bubble-actions">

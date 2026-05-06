@@ -28,4 +28,18 @@ describe("chat layout styles", () => {
     expect(css).toContain("font-size: 20px;");
     expect(css).toContain("place-items: center;");
   });
+
+  it("keeps mobile composer icon controls at touch-friendly sizes", () => {
+    const css = readLayoutCss();
+
+    expect(css).toContain("@media (max-width: 768px)");
+    expect(css).toContain(
+      "(max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
+    );
+    expect(css).toContain(".agent-chat__input-btn,");
+    expect(css).toContain(".agent-chat__toolbar .btn--ghost,");
+    expect(css).toContain(".chat-send-btn");
+    expect(css).toContain("width: 44px;");
+    expect(css).toContain("height: 44px;");
+  });
 });

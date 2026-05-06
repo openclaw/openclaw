@@ -428,6 +428,18 @@ export function renderChatMobileToggle(state: AppViewState) {
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
   const hideCron = state.sessionsHideCron ?? true;
   const hiddenCronCount = hideCron ? countHiddenCronSessions(state, state.sessionsResult) : 0;
+  const thinkingLabel = disableThinkingToggle
+    ? t("chat.onboardingDisabled")
+    : t("chat.thinkingToggle");
+  const toolCallsLabel = disableThinkingToggle
+    ? t("chat.onboardingDisabled")
+    : t("chat.toolCallsToggle");
+  const focusLabel = disableFocusToggle ? t("chat.onboardingDisabled") : t("chat.focusToggle");
+  const cronLabel = hideCron
+    ? hiddenCronCount > 0
+      ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
+      : t("chat.showCronSessions")
+    : t("chat.hideCronSessions");
   const toolCallsIcon = html`
     <svg
       width="18"
@@ -494,6 +506,15 @@ export function renderChatMobileToggle(state: AppViewState) {
           ></path>
         </svg>
       </button>
+      <button
+        type="button"
+        class="chat-controls-sheet-backdrop ${mobileControlsOpen ? "open" : ""}"
+        aria-label=${t("common.dismiss")}
+        @click=${(e: Event) => {
+          e.stopPropagation();
+          state.setChatMobileControlsOpen(false, { restoreFocus: true });
+        }}
+      ></button>
       <div
         id=${controlsDropdownId}
         class="chat-controls-dropdown ${mobileControlsOpen ? "open" : ""}"
@@ -516,9 +537,11 @@ export function renderChatMobileToggle(state: AppViewState) {
                 }
               }}
               aria-pressed=${showThinking}
-              title=${t("chat.thinkingToggle")}
+              aria-label=${thinkingLabel}
+              title=${thinkingLabel}
             >
               ${icons.brain}
+              <span class="chat-controls__mobile-label">${t("chat.thinkingShort")}</span>
             </button>
             <button
               class="btn btn--sm btn--icon ${showToolCalls ? "active" : ""}"
@@ -532,9 +555,11 @@ export function renderChatMobileToggle(state: AppViewState) {
                 }
               }}
               aria-pressed=${showToolCalls}
-              title=${t("chat.toolCallsToggle")}
+              aria-label=${toolCallsLabel}
+              title=${toolCallsLabel}
             >
               ${toolCallsIcon}
+              <span class="chat-controls__mobile-label">${t("chat.toolsShort")}</span>
             </button>
             <button
               class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"
@@ -548,9 +573,11 @@ export function renderChatMobileToggle(state: AppViewState) {
                 }
               }}
               aria-pressed=${focusActive}
-              title=${t("chat.focusToggle")}
+              aria-label=${focusLabel}
+              title=${focusLabel}
             >
               ${focusIcon}
+              <span class="chat-controls__mobile-label">${t("chat.focusShort")}</span>
             </button>
             <button
               class="btn btn--sm btn--icon ${hideCron ? "active" : ""}"
@@ -558,13 +585,11 @@ export function renderChatMobileToggle(state: AppViewState) {
                 state.sessionsHideCron = !hideCron;
               }}
               aria-pressed=${hideCron}
-              title=${hideCron
-                ? hiddenCronCount > 0
-                  ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
-                  : t("chat.showCronSessions")
-                : t("chat.hideCronSessions")}
+              aria-label=${cronLabel}
+              title=${cronLabel}
             >
               ${renderCronFilterIcon(hiddenCronCount)}
+              <span class="chat-controls__mobile-label">${t("chat.cronShort")}</span>
             </button>
           </div>
         </div>

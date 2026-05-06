@@ -730,6 +730,26 @@
   background: color-mix(in srgb, var(--danger) 85%, #fff);
 }
 
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .topbar .sidebar-menu-trigger,
+  .chat-controls-mobile-toggle,
+  .agent-chat__input-btn,
+  .agent-chat__toolbar .btn--ghost,
+  .chat-send-btn {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
+
+  .agent-chat__input-btn svg,
+  .agent-chat__toolbar .btn--ghost svg,
+  .chat-send-btn svg {
+    width: 18px;
+    height: 18px;
+  }
+}
+
 .chat-queue__item--steered {
   border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
 }
