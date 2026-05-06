@@ -52,6 +52,11 @@ describe("splitShellArgs", () => {
     expect(splitShellArgs(String.raw`echo "\$HOME"`)).toEqual(["echo", "$HOME"]);
   });
 
+  it("preserves empty quoted arguments", () => {
+    expect(splitShellArgs(`cmd "" '' tail`)).toEqual(["cmd", "", "", "tail"]);
+    expect(splitShellArgs(`cmd ""#literal`)).toEqual(["cmd", "#literal"]);
+  });
+
   it("returns null for unterminated quotes", () => {
     expect(splitShellArgs(`echo "oops`)).toBeNull();
     expect(splitShellArgs(`echo 'oops`)).toBeNull();

@@ -114,6 +114,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/commands: preserve empty quoted arguments when splitting shell command strings, so `""` and `''` survive command analysis and memory backend command parsing instead of being dropped.
 - Telegram/Codex: generate DM topic labels with Codex-compatible simple-completion requests so auto-created private topics can be renamed instead of staying `New Chat`.
 - Web fetch: bound guarded dispatcher cleanup after request timeouts so timed-out fetches return tool errors instead of leaving Gateway tool lanes active. (#78439) Thanks @obviyus.
 - Gate Slack startup user allowlist resolution [AI]. (#77898) Thanks @pgondhi987.

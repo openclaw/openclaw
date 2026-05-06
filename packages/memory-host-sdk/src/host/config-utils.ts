@@ -371,16 +371,19 @@ export function splitShellArgs(raw: string): string[] | null {
   let inSingle = false;
   let inDouble = false;
   let escaped = false;
+  let tokenStarted = false;
   const pushToken = () => {
-    if (buf.length > 0) {
+    if (tokenStarted) {
       tokens.push(buf);
       buf = "";
+      tokenStarted = false;
     }
   };
   for (let i = 0; i < raw.length; i += 1) {
     const ch = raw[i];
     if (escaped) {
       buf += ch;
+      tokenStarted = true;
       escaped = false;
       continue;
     }
@@ -393,6 +396,7 @@ export function splitShellArgs(raw: string): string[] | null {
         inSingle = false;
       } else {
         buf += ch;
+        tokenStarted = true;
       }
       continue;
     }
@@ -400,24 +404,29 @@ export function splitShellArgs(raw: string): string[] | null {
       const next = raw[i + 1];
       if (ch === "\\" && next && DOUBLE_QUOTE_ESCAPES.has(next)) {
         buf += next;
+        tokenStarted = true;
         i += 1;
       } else if (ch === '"') {
         inDouble = false;
       } else {
         buf += ch;
+        tokenStarted = true;
       }
       continue;
     }
     if (ch === "'") {
+      tokenStarted = true;
       inSingle = true;
     } else if (ch === '"') {
+      tokenStarted = true;
       inDouble = true;
-    } else if (ch === "#" && buf.length === 0) {
+    } else if (ch === "#" && !tokenStarted) {
       break;
     } else if (/\s/.test(ch)) {
       pushToken();
     } else {
       buf += ch;
+      tokenStarted = true;
     }
   }
   if (escaped || inSingle || inDouble) {
