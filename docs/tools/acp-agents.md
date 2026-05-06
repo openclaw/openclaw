@@ -153,6 +153,7 @@ Quick `/acp` flow from chat:
     - Bound follow-up messages go directly to the ACP session until the binding is closed, unfocused, reset, or expired.
     - Gateway commands stay local. `/acp ...`, `/status`, and `/unfocus` are never sent as normal prompt text to a bound ACP harness.
     - `cancel` aborts the active turn when the backend supports cancellation; it does not delete the binding or session metadata.
+    - For OpenClaw-owned acpx/Codex ACP wrappers, `cancel` and `close` also clean the recorded harness process tree. Gateway startup reaps stale PPID=1 acpx/Codex ACP wrappers from OpenClaw's generated wrapper and plugin-runtime-deps paths, while leaving manually started Codex app-server and normal Codex CLI processes alone.
     - `close` ends the ACP session from OpenClaw's point of view and removes the binding. A harness may still keep its own upstream history if it supports resume.
     - Idle runtime workers are eligible for cleanup after `acp.runtime.ttlMinutes`; stored session metadata remains available for `/acp sessions`.
 
@@ -830,7 +831,7 @@ permission modes, see
 | Missing ACP metadata for bound session                                      | Stale/deleted ACP session metadata.                                                                                    | Recreate with `/acp spawn`, then rebind/focus thread.                                                                                                                    |
 | `AcpRuntimeError: Permission prompt unavailable in non-interactive mode`    | `permissionMode` blocks writes/exec in non-interactive ACP session.                                                    | Set `plugins.entries.acpx.config.permissionMode` to `approve-all` and restart gateway. See [Permission configuration](/tools/acp-agents-setup#permission-configuration). |
 | ACP session fails early with little output                                  | Permission prompts are blocked by `permissionMode`/`nonInteractivePermissions`.                                        | Check gateway logs for `AcpRuntimeError`. For full permissions, set `permissionMode=approve-all`; for graceful degradation, set `nonInteractivePermissions=deny`.        |
-| ACP session stalls indefinitely after completing work                       | Harness process finished but ACP session did not report completion.                                                    | Monitor with `ps aux \| grep acpx`; kill stale processes manually.                                                                                                       |
+| ACP session stalls indefinitely after completing work                       | Harness process finished but ACP session did not report completion.                                                    | Check `/acp status` and Gateway diagnostics; OpenClaw-owned acpx/Codex ACP orphan processes are reaped automatically on startup and cancel/close.                        |
 | Harness sees `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>`                        | Internal event envelope leaked across the ACP boundary.                                                                | Update OpenClaw and rerun the completion flow; external harnesses should receive plain completion prompts only.                                                          |
 
 ## Related

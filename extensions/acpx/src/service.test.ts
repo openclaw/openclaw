@@ -11,6 +11,12 @@ const { prepareAcpxCodexAuthConfigMock } = vi.hoisted(() => ({
     async ({ pluginConfig }: { pluginConfig: unknown }) => pluginConfig,
   ),
 }));
+const { reapStaleOpenClawOwnedAcpxOrphansMock } = vi.hoisted(() => ({
+  reapStaleOpenClawOwnedAcpxOrphansMock: vi.fn(async () => ({
+    killedPids: [] as number[],
+    inspectedPids: [] as number[],
+  })),
+}));
 const { acpxRuntimeConstructorMock, createAgentRegistryMock, createFileSessionStoreMock } =
   vi.hoisted(() => ({
     acpxRuntimeConstructorMock: vi.fn(function AcpxRuntime(options: unknown) {
@@ -59,6 +65,10 @@ vi.mock("./codex-auth-bridge.js", () => ({
   prepareAcpxCodexAuthConfig: prepareAcpxCodexAuthConfigMock,
 }));
 
+vi.mock("./process-reaper.js", () => ({
+  reapStaleOpenClawOwnedAcpxOrphans: reapStaleOpenClawOwnedAcpxOrphansMock,
+}));
+
 import { getAcpRuntimeBackend } from "../runtime-api.js";
 import { createAcpxRuntimeService } from "./service.js";
 
@@ -73,6 +83,7 @@ async function makeTempDir(): Promise<string> {
 afterEach(async () => {
   runtimeRegistry.clear();
   prepareAcpxCodexAuthConfigMock.mockClear();
+  reapStaleOpenClawOwnedAcpxOrphansMock.mockClear();
   acpxRuntimeConstructorMock.mockClear();
   createAgentRegistryMock.mockClear();
   createFileSessionStoreMock.mockClear();
@@ -151,6 +162,34 @@ describe("createAcpxRuntimeService", () => {
     await fs.access(stateDir);
     expect(probeAvailability).not.toHaveBeenCalled();
     expect(getAcpRuntimeBackend("acpx")?.healthy).toBeUndefined();
+
+    await service.stop?.(ctx);
+  });
+
+  it("reaps OpenClaw-owned stale acpx orphans during service startup", async () => {
+    const workspaceDir = await makeTempDir();
+    const stateDir = path.join(workspaceDir, "custom-state");
+    const ctx = createServiceContext(workspaceDir);
+    reapStaleOpenClawOwnedAcpxOrphansMock.mockResolvedValueOnce({
+      killedPids: [701, 702],
+      inspectedPids: [701, 702],
+    });
+    const runtime = createMockRuntime();
+    const service = createAcpxRuntimeService({
+      pluginConfig: { stateDir },
+      runtimeFactory: () => runtime as never,
+    });
+
+    await service.start(ctx);
+
+    expect(reapStaleOpenClawOwnedAcpxOrphansMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stateDir,
+      }),
+    );
+    expect(ctx.logger.info).toHaveBeenCalledWith(
+      "embedded acpx runtime reaped stale OpenClaw-owned process(es): 701, 702",
+    );
 
     await service.stop?.(ctx);
   });
