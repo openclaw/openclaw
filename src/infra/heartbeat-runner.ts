@@ -1030,16 +1030,25 @@ function resolveHeartbeatRunPrompt(params: {
   useHeartbeatResponseTool: boolean;
 }): HeartbeatPromptResolution {
   const pendingEventEntries = params.preflight.pendingEventEntries;
+  // `audience: "internal"` events route through the wrap-on-drain path in
+  // session-system-events.ts. They must NOT be selected here as cron-event
+  // prompt material or exec-completion relay payloads — that surface
+  // formats them via buildCronEventPrompt / heartbeat exec relay, which
+  // bypasses the INTERNAL_RUNTIME_CONTEXT wrap and would re-expose them on
+  // user-facing relay paths. Skip them in both selectors and let the
+  // normal drain run consume them through the wrapped path.
+  const isUserFacingEvent = (event: SystemEvent): boolean => event.audience !== "internal";
   const cronEvents = pendingEventEntries
     .filter(
       (event) =>
+        isUserFacingEvent(event) &&
         (params.preflight.isCronWake || event.contextKey?.startsWith("cron:")) &&
         isCronSystemEvent(event.text),
     )
     .map((event) => event.text);
   const execEvents = params.preflight.shouldInspectPendingEvents
     ? pendingEventEntries
-        .filter((event) => isExecCompletionEvent(event.text))
+        .filter((event) => isUserFacingEvent(event) && isExecCompletionEvent(event.text))
         .map((event) => event.text)
     : [];
   const hasExecCompletion = execEvents.length > 0;

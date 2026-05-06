@@ -275,6 +275,36 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(sendTelegram).toHaveBeenCalled();
   });
 
+  it("does not use CRON_EVENT_PROMPT for audience: 'internal' cron events", async () => {
+    // `audience: "internal"` cron-awareness events are routed through the
+    // wrap-on-drain path in session-system-events.ts; the cron-event prompt
+    // builder must NOT pull them into buildCronEventPrompt or the wrap is
+    // bypassed and the awareness text gets relayed/double-announced to the
+    // user instead of staying hidden runtime context.
+    const { result, calledCtx } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-cron-internal-",
+      replyText: "Heartbeat check-in",
+      reason: "interval",
+      target: "none",
+      enqueue: (sessionKey) => {
+        enqueueSystemEvent("Cron run completed: relayed for awareness only", {
+          sessionKey,
+          contextKey: "cron:qmd-awareness",
+          trusted: false,
+          audience: "internal",
+        });
+      },
+    });
+    expect(result.status).toBe("ran");
+    // Heartbeat path must not classify the internal event as a cron-event
+    // relay payload — provider stays "heartbeat" and the cron prompt
+    // template (which would re-expose the text on user-facing relay) is
+    // not invoked.
+    expect(calledCtx?.Provider).toBe("heartbeat");
+    expect(calledCtx?.Body).not.toContain("scheduled reminder has been triggered");
+    expect(calledCtx?.Body).not.toContain("Cron run completed: relayed for awareness only");
+  });
+
   it("drains inspected cron events after a successful run so later heartbeats do not replay them", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
       const sendTelegram = vi.fn().mockResolvedValue({
