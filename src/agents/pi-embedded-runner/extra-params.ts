@@ -637,6 +637,23 @@ function createOpenAICompletionsExtraBodyWrapper(
         log.warn(`extra_body overwriting request payload keys: ${collisions.join(", ")}`);
       }
       Object.assign(payloadObj, extraBody);
+
+      // When extra_body sets thinking to disabled after a provider wrapper may have
+      // backfilled reasoning_content, strip it to avoid DeepSeek 400 errors.
+      // See: https://github.com/openclaw/openclaw/issues/74374
+      const thinking = payloadObj.thinking;
+      if (
+        thinking &&
+        typeof thinking === "object" &&
+        (thinking as Record<string, unknown>).type === "disabled" &&
+        Array.isArray(payloadObj.messages)
+      ) {
+        for (const message of payloadObj.messages) {
+          if (message && typeof message === "object") {
+            delete (message as Record<string, unknown>).reasoning_content;
+          }
+        }
+      }
     });
   };
 }

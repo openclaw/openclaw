@@ -944,6 +944,42 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("store");
   });
 
+  it("strips reasoning_content when extra_body sets thinking to disabled (#74374)", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "deepseek",
+      applyModelId: "deepseek-v4-pro",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "deepseek/deepseek-v4-pro": {
+                params: {
+                  extra_body: { thinking: { type: "disabled" } },
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-completions",
+        provider: "deepseek",
+        id: "deepseek-v4-pro",
+        baseUrl: "https://api.deepseek.com",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [
+          { role: "user", content: "hello" },
+          { role: "assistant", content: "hi", reasoning_content: "let me think" },
+        ],
+      },
+    });
+
+    expect(payload.thinking).toEqual({ type: "disabled" });
+    const messages = payload.messages as Record<string, unknown>[];
+    expect(messages[1]).not.toHaveProperty("reasoning_content");
+  });
+
   it("forwards chat_template_kwargs params as top-level openai-completions payload fields", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "vllm",
