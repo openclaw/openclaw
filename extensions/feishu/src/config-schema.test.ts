@@ -234,6 +234,38 @@ describe("FeishuConfigSchema optimization flags", () => {
   });
 });
 
+describe("FeishuConfigSchema streaming delivery mode", () => {
+  it("accepts top-level segment streaming mode", () => {
+    const result = FeishuConfigSchema.parse({
+      streaming: true,
+      streamingMode: "segment",
+    });
+
+    expect(result.streamingMode).toBe("segment");
+  });
+
+  it("accepts account-level card streaming mode", () => {
+    const result = FeishuConfigSchema.parse({
+      accounts: {
+        main: {
+          streaming: true,
+          streamingMode: "card",
+        },
+      },
+    });
+
+    expect(result.accounts?.main?.streamingMode).toBe("card");
+  });
+
+  it("rejects invalid streaming delivery modes", () => {
+    const result = FeishuConfigSchema.safeParse({
+      streamingMode: "partial",
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("FeishuConfigSchema TTS overrides", () => {
   it("accepts top-level and account-level TTS overrides", () => {
     const result = FeishuConfigSchema.parse({
