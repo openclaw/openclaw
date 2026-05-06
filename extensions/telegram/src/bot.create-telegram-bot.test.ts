@@ -745,6 +745,74 @@ describe("createTelegramBot", () => {
     await sendModelCallback(2);
     expect(buildModelsProviderDataMock.mock.calls.at(-1)?.[1]).toBe("agent-b");
   });
+
+  it("uses the bound agent default model in Telegram model lists when no session override exists", async () => {
+    const buildModelsProviderDataMock =
+      telegramBotDepsForTest.buildModelsProviderData as unknown as ReturnType<typeof vi.fn>;
+    loadConfig.mockImplementation(() => ({
+      agents: {
+        defaults: {
+          model: "github-copilot/gpt-5.4",
+        },
+        list: [
+          {
+            id: "wenwang-agent",
+            model: "google/gemini-3.1-pro-preview",
+          },
+        ],
+      },
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+      bindings: [
+        {
+          agentId: "wenwang-agent",
+          match: { channel: "telegram", accountId: "default" },
+        },
+      ],
+    }));
+    buildModelsProviderDataMock.mockResolvedValue({
+      byProvider: new Map([
+        ["github-copilot", new Set(["gpt-5.4"])],
+        ["google", new Set(["gemini-3.1-pro-preview"])],
+      ]),
+      providers: ["github-copilot", "google"],
+      resolvedDefault: { provider: "github-copilot", model: "gpt-5.4" },
+      modelNames: new Map(),
+    });
+
+    editMessageTextSpy.mockClear();
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-model-google-1",
+        data: "mdl_list_google_1",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 25,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    const keyboard = (
+      editMessageTextSpy.mock.calls.at(-1)?.[3] as {
+        reply_markup?: { inline_keyboard?: { text?: string }[][] };
+      }
+    )?.reply_markup?.inline_keyboard;
+    const texts = (keyboard ?? []).flat().map((button) => button?.text ?? "");
+
+    expect(texts).toContain("gemini-3.1-pro-preview ✓");
+    expect(texts).not.toContain("gpt-5.4 ✓");
+  });
+
   it("wraps inbound message with Telegram envelope", async () => {
     await withEnvAsync({ TZ: "Europe/Vienna" }, async () => {
       createTelegramBot({ token: "tok" });

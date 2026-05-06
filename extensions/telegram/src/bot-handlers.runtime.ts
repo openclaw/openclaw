@@ -366,14 +366,12 @@ export const registerTelegramHandlers = ({
     });
     const store = loadSessionStore(storePath);
     const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+    const defaultModel = resolveDefaultModelForAgent({ cfg: runtimeCfg, agentId: route.agentId });
     const storedOverride = resolveStoredModelOverride({
       sessionEntry: entry,
       sessionStore: store,
       sessionKey,
-      defaultProvider: resolveDefaultModelForAgent({
-        cfg: runtimeCfg,
-        agentId: route.agentId,
-      }).provider,
+      defaultProvider: defaultModel.provider,
     });
     if (storedOverride) {
       return {
@@ -395,12 +393,11 @@ export const registerTelegramHandlers = ({
         model: `${provider}/${model}`,
       };
     }
-    const modelCfg = runtimeCfg.agents?.defaults?.model;
     return {
       agentId: route.agentId,
       sessionEntry: entry,
       sessionKey,
-      model: typeof modelCfg === "string" ? modelCfg : modelCfg?.primary,
+      model: `${defaultModel.provider}/${defaultModel.model}`,
     };
   };
 
