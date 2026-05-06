@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   deriveDeviceIdFromPublicKey,
+  importLegacyDeviceIdentityFileToSqlite,
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
   normalizeDevicePublicKeyBase64Url,
@@ -43,17 +44,23 @@ describe("device identity crypto helpers", () => {
   it("does not repair mismatched stored device ids in read-only mode", async () => {
     await withTempDir("openclaw-device-identity-readonly-", async (dir) => {
       const identityPath = path.join(dir, "identity", "device.json");
-      loadOrCreateDeviceIdentity(identityPath);
-      const stored = JSON.parse(fs.readFileSync(identityPath, "utf8")) as Record<string, unknown>;
+      const created = loadOrCreateDeviceIdentity(identityPath);
+      const stored = {
+        version: 1,
+        deviceId: created.deviceId,
+        publicKeyPem: created.publicKeyPem,
+        privateKeyPem: created.privateKeyPem,
+        createdAtMs: Date.now(),
+      };
+      fs.mkdirSync(path.dirname(identityPath), { recursive: true });
       fs.writeFileSync(
         identityPath,
         `${JSON.stringify({ ...stored, deviceId: "mismatched" }, null, 2)}\n`,
         "utf8",
       );
-      const before = fs.readFileSync(identityPath, "utf8");
+      importLegacyDeviceIdentityFileToSqlite({ ...process.env, OPENCLAW_STATE_DIR: dir });
 
       expect(loadDeviceIdentityIfPresent(identityPath)).toBeNull();
-      expect(fs.readFileSync(identityPath, "utf8")).toBe(before);
     });
   });
 

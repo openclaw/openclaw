@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   clearDeviceAuthToken,
+  loadDeviceAuthStore,
   loadDeviceAuthToken,
   storeDeviceAuthToken,
 } from "./device-auth-store.js";
@@ -46,9 +47,7 @@ describe("infra/device-auth-store", () => {
         }),
       ).toEqual(entry);
 
-      const raw = await fs.readFile(deviceAuthFile(stateDir), "utf8");
-      expect(raw.endsWith("\n")).toBe(true);
-      expect(JSON.parse(raw)).toEqual({
+      expect(loadDeviceAuthStore({ env: createEnv(stateDir) })).toEqual({
         version: 1,
         deviceId: "device-1",
         tokens: {

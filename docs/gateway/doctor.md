@@ -85,6 +85,7 @@ cat ~/.openclaw/openclaw.json
     - OAuth TLS prerequisites check for OpenAI Codex OAuth profiles.
     - Plugin/tool allowlist warnings when `plugins.allow` is restrictive but tool policy still asks for wildcard or plugin-owned tools.
     - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
+    - Legacy runtime JSON state import into SQLite for device identity/auth, bootstrap tokens, device and node pairing ledgers, web push subscriptions/VAPID keys, and APNs registrations.
     - Legacy plugin manifest contract key migration (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders` → `contracts`).
     - Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, simple `notify: true` webhook fallback jobs, `jobs-state.json` and `cron/runs/*.jsonl` import into SQLite).
     - Legacy whole-agent runtime-policy cleanup; provider/model runtime policy is the active route selector.
@@ -319,6 +320,23 @@ That stages grounded durable candidates into the short-term dreaming store while
     Doctor only auto-migrates `notify: true` jobs when it can do so without changing behavior. If a job combines legacy notify fallback with an existing non-webhook delivery mode, doctor warns and leaves that job for manual review.
 
     On Linux, doctor also warns when the user's crontab still invokes legacy `~/.openclaw/bin/ensure-whatsapp.sh`. That host-local script is not maintained by current OpenClaw and can write false `Gateway inactive` messages to `~/.openclaw/logs/whatsapp-health.log` when cron cannot reach the systemd user bus. Remove the stale crontab entry with `crontab -e`; use `openclaw channels status --probe`, `openclaw doctor`, and `openclaw gateway status` for current health checks.
+
+  </Accordion>
+  <Accordion title="Legacy runtime JSON imports">
+    Doctor checks for older runtime JSON ledgers that are now stored in
+    `~/.openclaw/state/openclaw.sqlite`. In `--fix` mode it imports each legacy
+    file into SQLite and removes the file after a successful import.
+
+    Current imports include:
+
+    - `identity/device.json`
+    - `identity/device-auth.json`
+    - `devices/bootstrap.json`
+    - `devices/pending.json` and `devices/paired.json`
+    - `nodes/pending.json` and `nodes/paired.json`
+    - `push/web-push-subscriptions.json`
+    - `push/vapid-keys.json`
+    - `push/apns-registrations.json`
 
   </Accordion>
   <Accordion title="3c. Session lock cleanup">
