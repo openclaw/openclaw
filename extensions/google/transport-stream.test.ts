@@ -4,6 +4,8 @@ import path from "node:path";
 import type { Model } from "@mariozechner/pi-ai";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+const GOOGLE_THOUGHT_SIGNATURE_SENTINEL = "skip_thought_signature_validator";
+
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
   buildGuardedModelFetchMock: vi.fn(),
   guardedFetchMock: vi.fn(),
@@ -499,6 +501,66 @@ describe("google transport stream", () => {
         {
           thoughtSignature: "call_sig_1",
           functionCall: { name: "lookup", args: { q: "hello" } },
+        },
+      ],
+    });
+  });
+
+  it("replays cross-model Gemini tool call thought signatures", () => {
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel({ id: "gemini-3-pro-preview" }), {
+      messages: [
+        {
+          role: "assistant",
+          provider: "google",
+          api: "google-generative-ai",
+          model: "gemini-3-flash-preview",
+          stopReason: "toolUse",
+          timestamp: 0,
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "lookup",
+              arguments: { q: "hello" },
+              thoughtSignature: "call_sig_1",
+            },
+          ],
+        },
+      ],
+    } as never);
+
+    expect(params.contents[0]).toMatchObject({
+      role: "model",
+      parts: [
+        {
+          thoughtSignature: "call_sig_1",
+          functionCall: { name: "lookup", args: { q: "hello" } },
+        },
+      ],
+    });
+  });
+
+  it("adds the Gemini skip-validator sentinel when replaying unsigned tool calls", () => {
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel({ id: "gemini-3-pro-preview" }), {
+      messages: [
+        {
+          role: "assistant",
+          provider: "openai",
+          api: "openai-responses",
+          model: "gpt-5.4",
+          stopReason: "toolUse",
+          timestamp: 0,
+          content: [{ type: "toolCall", id: "call_1", name: "lookup", arguments: {} }],
+        },
+      ],
+    } as never);
+
+    expect(params.contents[0]).toMatchObject({
+      role: "model",
+      parts: [
+        {
+          thoughtSignature: GOOGLE_THOUGHT_SIGNATURE_SENTINEL,
+          functionCall: { name: "lookup", args: {} },
         },
       ],
     });

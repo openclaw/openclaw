@@ -140,6 +140,35 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     expect(JSON.stringify(result)).not.toContain("call_aborted");
   });
 
+  it("preserves tool-call thought signatures across model switches", () => {
+    const messages: Context["messages"] = [
+      {
+        ...assistantToolCall("call_google", "lookup"),
+        provider: "google",
+        api: "google-generative-ai",
+        model: "gemini-3-pro-preview",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_google",
+            name: "lookup",
+            arguments: {},
+            thoughtSignature: "SIG-GOOGLE-OPAQUE",
+          },
+        ],
+      },
+    ];
+
+    const result = transformTransportMessages(
+      messages,
+      makeModel("google-generative-ai", "google", "gemini-3-flash-preview"),
+    );
+    const assistant = result[0] as Extract<Context["messages"][number], { role: "assistant" }>;
+    const toolCall = assistant.content[0] as { thoughtSignature?: string };
+
+    expect(toolCall.thoughtSignature).toBe("SIG-GOOGLE-OPAQUE");
+  });
+
   it("drops text-only aborted and errored transport assistant turns before replay", () => {
     const messages: Context["messages"] = [
       {

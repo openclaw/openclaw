@@ -47,6 +47,7 @@ import {
   resolveOpenAIStrictToolFlagForInventory,
   resolveOpenAIStrictToolSetting,
 } from "./openai-tool-schema.js";
+import { GOOGLE_THOUGHT_SIGNATURE_SENTINEL } from "./pi-embedded-helpers/google.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 import {
   buildGuardedModelFetch,
@@ -1814,13 +1815,6 @@ function injectToolCallThoughtSignatures(
       continue;
     }
     const source = msg as { api?: string; provider?: string; model?: string; content?: unknown };
-    if (
-      source.api !== model.api ||
-      source.provider !== model.provider ||
-      source.model !== model.id
-    ) {
-      continue;
-    }
     if (!Array.isArray(source.content)) {
       continue;
     }
@@ -1835,9 +1829,6 @@ function injectToolCallThoughtSignatures(
       }
     }
   }
-  if (sigById.size === 0) {
-    return;
-  }
   for (const message of outgoingMessages) {
     const toolCalls = (message as { tool_calls?: unknown }).tool_calls;
     if (!Array.isArray(toolCalls)) {
@@ -1848,10 +1839,7 @@ function injectToolCallThoughtSignatures(
       if (typeof id !== "string") {
         continue;
       }
-      const sig = sigById.get(id);
-      if (!sig) {
-        continue;
-      }
+      const sig = sigById.get(id) ?? GOOGLE_THOUGHT_SIGNATURE_SENTINEL;
       const extra =
         toolCall.extra_content && typeof toolCall.extra_content === "object"
           ? (toolCall.extra_content as Record<string, unknown>)

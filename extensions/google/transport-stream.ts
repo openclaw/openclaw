@@ -38,6 +38,8 @@ import {
   resolveGoogleVertexAuthorizedUserHeaders,
 } from "./vertex-adc.js";
 
+const GOOGLE_THOUGHT_SIGNATURE_SENTINEL = "skip_thought_signature_validator";
+
 type GoogleTransportApi = "google-generative-ai" | "google-vertex";
 
 type GoogleTransportModel = Model<GoogleTransportApi> & {
@@ -440,15 +442,17 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
           continue;
         }
         if (block.type === "toolCall") {
+          const thoughtSignature =
+            typeof block.thoughtSignature === "string" && block.thoughtSignature.trim()
+              ? block.thoughtSignature
+              : GOOGLE_THOUGHT_SIGNATURE_SENTINEL;
           parts.push({
             functionCall: {
               name: block.name,
               args: coerceTransportToolCallArguments(block.arguments),
               ...(requiresToolCallId(model.id) ? { id: block.id } : {}),
             },
-            ...(isSameProviderAndModel && block.thoughtSignature
-              ? { thoughtSignature: block.thoughtSignature }
-              : {}),
+            thoughtSignature,
           });
         }
       }
