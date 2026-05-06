@@ -23,6 +23,7 @@ import {
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   recordRealtimeVoiceBridgeEvent,
+  recordTalkDiagnosticEvent,
   recordRealtimeVoiceTranscript,
   resamplePcm,
   resolveConfiguredRealtimeVoiceProvider,
@@ -485,14 +486,17 @@ export async function startCommandAgentAudioBridge(params: {
     fullConfig: params.fullConfig,
     providers: params.providers,
   });
-  const talk = createTalkSessionController({
-    sessionId: `google-meet:${params.meetingSessionId}:agent`,
-    mode: "stt-tts",
-    transport: "gateway-relay",
-    brain: "agent-consult",
-    provider: resolved.provider.id,
-    turnIdPrefix: `google-meet:${params.meetingSessionId}:turn`,
-  });
+  const talk = createTalkSessionController(
+    {
+      sessionId: `google-meet:${params.meetingSessionId}:agent`,
+      mode: "stt-tts",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+      provider: resolved.provider.id,
+      turnIdPrefix: `google-meet:${params.meetingSessionId}:turn`,
+    },
+    { onEvent: recordTalkDiagnosticEvent },
+  );
   const recentTalkEvents: TalkEvent[] = [];
   const emitTalkEvent = (input: TalkEventInput) =>
     pushGoogleMeetTalkEvent(recentTalkEvents, talk.emit(input));
@@ -1034,13 +1038,16 @@ export async function startCommandRealtimeAudioBridge(params: {
   );
   const transcript: GoogleMeetRealtimeTranscriptEntry[] = [];
   const realtimeEvents: GoogleMeetRealtimeEventEntry[] = [];
-  const talk: TalkSessionController = createTalkSessionController({
-    sessionId: `google-meet:${params.meetingSessionId}:command-realtime`,
-    mode: "realtime",
-    transport: "gateway-relay",
-    brain: strategy === "bidi" ? "direct-tools" : "agent-consult",
-    provider: resolved.provider.id,
-  });
+  const talk: TalkSessionController = createTalkSessionController(
+    {
+      sessionId: `google-meet:${params.meetingSessionId}:command-realtime`,
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: strategy === "bidi" ? "direct-tools" : "agent-consult",
+      provider: resolved.provider.id,
+    },
+    { onEvent: recordTalkDiagnosticEvent },
+  );
   const recentTalkEvents: TalkEvent[] = [];
   const rememberTalkEvent = (event: TalkEvent | undefined): void => {
     if (event) {
