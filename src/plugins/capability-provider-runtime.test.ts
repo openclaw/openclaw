@@ -430,6 +430,66 @@ describe("resolvePluginCapabilityProviders", () => {
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
   });
 
+  it("cold-loads enabled image generation providers when another image provider is active", () => {
+    const active = createEmptyPluginRegistry();
+    active.imageGenerationProviders.push({
+      pluginId: "xai",
+      pluginName: "xai",
+      source: "test",
+      provider: {
+        id: "xai",
+        label: "xAI",
+        isConfigured: () => true,
+        generate: async () => ({
+          kind: "image",
+          images: [],
+        }),
+      },
+    } as never);
+    const loaded = createEmptyPluginRegistry();
+    loaded.imageGenerationProviders.push({
+      pluginId: "fal",
+      pluginName: "fal",
+      source: "test",
+      provider: {
+        id: "fal",
+        label: "fal",
+        isConfigured: () => true,
+        generate: async () => ({
+          kind: "image",
+          images: [],
+        }),
+      },
+    } as never);
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "fal",
+          origin: "bundled",
+          contracts: { imageGenerationProviders: ["fal"] },
+        },
+        {
+          id: "xai",
+          origin: "bundled",
+          contracts: { imageGenerationProviders: ["xai"] },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.resolveRuntimePluginRegistry.mockImplementation((options?: unknown) =>
+      options ? loaded : active,
+    );
+
+    expectResolvedCapabilityProviderIds(
+      resolvePluginCapabilityProviders({
+        key: "imageGenerationProviders",
+        cfg: { plugins: { allow: ["fal", "xai"] } } as OpenClawConfig,
+      }),
+      ["xai", "fal"],
+    );
+    expectActiveRegistryLookup(["fal", "xai"]);
+  });
+
   it("targets enabled external capability plugins without bundled fallback capture", () => {
     const loaded = createEmptyPluginRegistry();
     loaded.imageGenerationProviders.push({

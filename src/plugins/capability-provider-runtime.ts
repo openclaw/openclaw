@@ -340,6 +340,15 @@ function collectRequestedCapabilityProviderIds(params: {
   }
 }
 
+function shouldActiveRegistryShortCircuit(key: CapabilityProviderRegistryKey): boolean {
+  return (
+    key !== "memoryEmbeddingProviders" &&
+    key !== "imageGenerationProviders" &&
+    key !== "videoGenerationProviders" &&
+    key !== "musicGenerationProviders"
+  );
+}
+
 function removeActiveProviderIds(requested: Set<string>, entries: readonly unknown[]): void {
   for (const entry of entries as Array<{ provider: { id?: unknown; aliases?: unknown } }>) {
     const provider = entry.provider as { id?: unknown; aliases?: unknown };
@@ -545,7 +554,7 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
     activeProviders.length > 0
       ? collectRequestedCapabilityProviderIds({ key: params.key, cfg: params.cfg })
       : undefined;
-  if (activeProviders.length > 0 && params.key !== "memoryEmbeddingProviders") {
+  if (activeProviders.length > 0 && shouldActiveRegistryShortCircuit(params.key)) {
     if (!missingRequestedProviders) {
       return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
     }
@@ -590,10 +599,10 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   });
   if (params.key !== "memoryEmbeddingProviders") {
     const mergeLoadedProviders =
-      activeProviders.length > 0
+      activeProviders.length > 0 && missingRequestedProviders
         ? filterLoadedProvidersForRequestedConfig({
             key: params.key,
-            requested: missingRequestedProviders ?? new Set(),
+            requested: missingRequestedProviders,
             entries: loadedProviders,
           })
         : loadedProviders;
