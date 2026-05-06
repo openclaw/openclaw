@@ -25,6 +25,16 @@ const shouldSuppressFeishuTextForVoiceMediaMock = vi.hoisted(
     params.audioAsVoice === true || /\.(?:ogg|opus)(?:[?#]|$)/i.test(params.mediaUrl ?? ""),
 );
 
+function createDeferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function mergeStreamingText(
   previousText: string | undefined,
   nextText: string | undefined,
@@ -55,6 +65,13 @@ function mergeStreamingText(
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: resolveFeishuAccountMock,
   resolveFeishuRuntimeAccount: resolveFeishuAccountMock,
+}));
+vi.mock("./reply-dispatcher-runtime-api.js", () => ({
+  createReplyPrefixContext: vi.fn(() => ({
+    responsePrefix: undefined,
+    responsePrefixContextProvider: undefined,
+    prefixContext: {},
+  })),
 }));
 vi.mock("./runtime.js", () => ({ getFeishuRuntime: getFeishuRuntimeMock }));
 vi.mock("./send.js", () => ({
@@ -166,6 +183,25 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
 
     return createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+  }
+
+  function setFeishuAccountConfig(config: Record<string, unknown>) {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config,
+    });
+  }
+
+  function setupSegmentStreamingConfig(overrides: Record<string, unknown> = {}) {
+    setFeishuAccountConfig({
+      renderMode: "auto",
+      streaming: true,
+      streamingMode: "segment",
+      ...overrides,
+    });
   }
 
   function createRuntimeLogger() {
@@ -369,6 +405,404 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("uses streaming session when streamingMode is explicitly card", async () => {
+    setFeishuAccountConfig({
+      renderMode: "auto",
+      streaming: true,
+      streamingMode: "card",
+    });
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("segments partial text at tool start when streamingMode is segment", async () => {
+    setupSegmentStreamingConfig();
+    const { result, options } = createDispatcherHarness();
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "First progress update." });
+    await result.replyOptions.onToolStart?.();
+
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ text: "First progress update." }),
+    );
+
+    await options.deliver(
+      { text: "First progress update.\n\nFinal answer content." },
+      { kind: "final" },
+    );
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageFeishuMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ text: "Final answer content." }),
+    );
+  });
+
+  it("serializes segment flushes so final text cannot overtake an in-flight partial", async () => {
+    setupSegmentStreamingConfig();
+    const firstSegmentSent = createDeferred();
+    sendMessageFeishuMock.mockImplementationOnce(async () => firstSegmentSent.promise);
+    const { result, options } = createDispatcherHarness();
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "First segment." });
+    const toolStartFlush = result.replyOptions.onToolStart?.();
+    const finalDelivery = options.deliver(
+      { text: "First segment.\n\nSecond segment." },
+      { kind: "final" },
+    );
+    await vi.waitFor(() => expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1));
+
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: "First segment." }),
+    );
+
+    firstSegmentSent.resolve();
+    await toolStartFlush;
+    await finalDelivery;
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: "Second segment." }),
+    );
+  });
+
+  it("serializes media-only segment payloads behind in-flight partial flushes", async () => {
+    setupSegmentStreamingConfig();
+    const firstSegmentSent = createDeferred();
+    sendMessageFeishuMock.mockImplementationOnce(async () => firstSegmentSent.promise);
+    const { result, options } = createDispatcherHarness();
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "First segment." });
+    const toolStartFlush = result.replyOptions.onToolStart?.();
+    const mediaDelivery = options.deliver(
+      { mediaUrl: "https://example.com/a.png" },
+      { kind: "final" },
+    );
+    await vi.waitFor(() => expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1));
+
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+
+    firstSegmentSent.resolve();
+    await toolStartFlush;
+    await mediaDelivery;
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ mediaUrl: "https://example.com/a.png" }),
+    );
+  });
+
+  it("sends skipped segment voice text when final voice media degrades to a file attachment", async () => {
+    setupSegmentStreamingConfig();
+    sendMediaFeishuMock.mockResolvedValueOnce({
+      messageId: "file_msg",
+      voiceIntentDegradedToFile: true,
+    });
+    const { options } = createDispatcherHarness();
+
+    await options.deliver(
+      {
+        text: "spoken segment",
+        mediaUrl: "https://example.com/reply.mp3",
+        audioAsVoice: true,
+      },
+      { kind: "final" },
+    );
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "spoken segment",
+      }),
+    );
+  });
+
+  it("keeps skipped segment voice text in the upload failure fallback", async () => {
+    setupSegmentStreamingConfig();
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("media failed"));
+    const { options } = createDispatcherHarness();
+
+    await options.deliver(
+      {
+        text: "spoken segment",
+        mediaUrl: "https://example.com/reply.mp3",
+        audioAsVoice: true,
+      },
+      { kind: "final" },
+    );
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "spoken segment\n\n📎 https://example.com/reply.mp3",
+      }),
+    );
+  });
+
+  it("deduplicates skipped segment voice fallback text after a partial flush", async () => {
+    setupSegmentStreamingConfig();
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("media failed"));
+    const { result, options } = createDispatcherHarness();
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "Already spoken." });
+    await result.replyOptions.onToolStart?.();
+    await options.deliver(
+      {
+        text: "Already spoken.\n\nNew spoken segment.",
+        mediaUrl: "https://example.com/reply.mp3",
+        audioAsVoice: true,
+      },
+      { kind: "final" },
+    );
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        text: "Already spoken.",
+      }),
+    );
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        text: "New spoken segment.\n\n📎 https://example.com/reply.mp3",
+      }),
+    );
+  });
+
+  it("resolves segment voice fallback text after queued partial flushes", async () => {
+    setupSegmentStreamingConfig();
+    const firstSegmentSent = createDeferred();
+    sendMessageFeishuMock.mockImplementationOnce(async () => firstSegmentSent.promise);
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("media failed"));
+    const { result, options } = createDispatcherHarness();
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "Already spoken." });
+    const toolStartFlush = result.replyOptions.onToolStart?.();
+    const mediaDelivery = options.deliver(
+      {
+        text: "Already spoken.\n\nNew spoken segment.",
+        mediaUrl: "https://example.com/reply.mp3",
+        audioAsVoice: true,
+      },
+      { kind: "final" },
+    );
+    await vi.waitFor(() => expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1));
+
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+
+    firstSegmentSent.resolve();
+    await toolStartFlush;
+    await mediaDelivery;
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        text: "Already spoken.",
+      }),
+    );
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        text: "New spoken segment.\n\n📎 https://example.com/reply.mp3",
+      }),
+    );
+  });
+
+  it("does not suppress short final text only because it appears inside a prior segment", async () => {
+    setupSegmentStreamingConfig();
+    const { result, options } = createDispatcherHarness();
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "look at this first." });
+    await result.replyOptions.onToolStart?.();
+    await options.deliver({ text: "ok" }, { kind: "final" });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: "look at this first." }),
+    );
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: "ok" }),
+    );
+  });
+
+  it("skips later final payloads already delivered by segment partial flushes", async () => {
+    setupSegmentStreamingConfig();
+    const { result, options } = createDispatcherHarness();
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "Step one complete." });
+    await result.replyOptions.onToolStart?.();
+    result.replyOptions.onPartialReply?.({ text: "Step one complete.\n\nStep two complete." });
+    await result.replyOptions.onToolStart?.();
+
+    await options.deliver({ text: "Final summary." }, { kind: "final" });
+    await options.deliver({ text: "Step two complete." }, { kind: "final" });
+    await options.deliver({ text: "Step one complete." }, { kind: "final" });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(3);
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: "Step one complete." }),
+    );
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: "Step two complete." }),
+    );
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ text: "Final summary." }),
+    );
+  });
+
+  it("keeps delivered segment state when reply start fires more than once in the same turn", async () => {
+    setupSegmentStreamingConfig();
+    const { result, options } = createDispatcherHarness();
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "Opening segment." });
+    await result.replyOptions.onToolStart?.();
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "Opening segment.\n\nFollow-up segment." });
+    await result.replyOptions.onToolStart?.();
+
+    await options.deliver({ text: "Final response." }, { kind: "final" });
+    await options.deliver({ text: "Follow-up segment." }, { kind: "final" });
+    await options.deliver({ text: "Opening segment." }, { kind: "final" });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(3);
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: "Opening segment." }),
+    );
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: "Follow-up segment." }),
+    );
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ text: "Final response." }),
+    );
+  });
+
+  it("runs auto rendering independently for each segment", async () => {
+    setupSegmentStreamingConfig();
+    const { result, options } = createDispatcherHarness();
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "Plain text segment." });
+    await result.replyOptions.onToolStart?.();
+    await options.deliver(
+      {
+        text: "Plain text segment.\n\n```ts\nconst answer = 42\n```",
+      },
+      { kind: "final" },
+    );
+
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Plain text segment." }),
+    );
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "```ts\nconst answer = 42\n```" }),
+    );
+  });
+
+  it("flushes segment partial text on idle and suppresses an identical later final", async () => {
+    setupSegmentStreamingConfig();
+    const { result, options } = createDispatcherHarness();
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "idle streamed reply" });
+    await options.onIdle?.();
+    await options.deliver({ text: "idle streamed reply" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "idle streamed reply" }),
+    );
+  });
+
+  it("keeps segment tool payloads separate from assistant text segmentation", async () => {
+    setupSegmentStreamingConfig();
+    const { result, options } = createDispatcherHarness();
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "Assistant progress." });
+    await options.deliver({ text: "Using web_search..." }, { kind: "tool" });
+    await options.deliver({ text: "Assistant progress.\n\nAssistant final." }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(3);
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: "Assistant progress." }),
+    );
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: "Using web_search..." }),
+    );
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ text: "Assistant final." }),
+    );
+  });
+
+  it("sends segment mention targets only with the first text segment", async () => {
+    setupSegmentStreamingConfig();
+    const mentions = [{ openId: "ou_1", name: "User", key: "@_user_1" }];
+    const { result, options } = createDispatcherHarness({
+      mentionTargets: mentions,
+    });
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "First segment." });
+    await result.replyOptions.onToolStart?.();
+    await options.deliver({ text: "First segment.\n\nSecond segment." }, { kind: "final" });
+
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(1, expect.objectContaining({ mentions }));
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ mentions: undefined }),
+    );
+  });
+
+  it("omits reasoning preview callbacks for segment streaming", () => {
+    setupSegmentStreamingConfig();
+    const { result } = createDispatcherHarness({
+      allowReasoningPreview: true,
+    });
+
+    expect(result.replyOptions.onReasoningStream).toBeUndefined();
+    expect(result.replyOptions.onReasoningEnd).toBeUndefined();
   });
 
   it("closes streaming with block text when final reply is missing", async () => {
