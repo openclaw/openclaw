@@ -20,8 +20,8 @@ const BASE_AVAILABLE_COMMANDS: AvailableCommand[] = [
   { name: "restart", description: "Restart the gateway (if enabled)." },
   { name: "activation", description: "Set group activation (mention|always)." },
   { name: "send", description: "Set send mode (on|off|inherit)." },
-  { name: "reset", description: "Reset the session (/new)." },
-  { name: "new", description: "Reset the session (/reset)." },
+  { name: "reset", description: "Reset the current session in place." },
+  { name: "new", description: "Start a new session." },
   {
     name: "think",
     description: "Set thinking level (off|minimal|low|medium|high|xhigh).",
