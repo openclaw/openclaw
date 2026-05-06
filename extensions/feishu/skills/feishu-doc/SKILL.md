@@ -43,7 +43,7 @@ Appends markdown to end of document.
 ### Create Document
 
 ```json
-{ "action": "create", "title": "New Document", "owner_open_id": "ou_xxx" }
+{ "action": "create", "title": "New Document" }
 ```
 
 With folder:
@@ -52,12 +52,30 @@ With folder:
 {
   "action": "create",
   "title": "New Document",
-  "folder_token": "fldcnXXX",
-  "owner_open_id": "ou_xxx"
+  "folder_token": "fldcnXXX"
 }
 ```
 
-**Important:** Always pass `owner_open_id` with the requesting user's `open_id` (from inbound metadata `sender_id`) so the user automatically gets `full_access` permission on the created document. Without this, only the bot app has access.
+**Important:**
+
+- By default, the requesting user (from inbound metadata `sender_id`) automatically gets `full_access` permission. Set `grant_to_requester: false` to disable.
+- `create` action **only creates the document with title**, it does NOT write content.
+- To add content after creation, use `write` or `append` with the returned `doc_token`.
+
+**Workflow for creating document with content:**
+
+```javascript
+// Step 1: Create document
+const result = await feishu_doc({ action: "create", title: "My Document" });
+const doc_token = result.document_id;
+
+// Step 2: Write content
+await feishu_doc({
+  action: "write",
+  doc_token: doc_token,
+  content: "# Title\n\nYour markdown content here...",
+});
+```
 
 ### List Blocks
 
