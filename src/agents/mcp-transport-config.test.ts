@@ -163,4 +163,56 @@ describe("resolveMcpTransportConfig", () => {
       url: "https://mcp.example.com/http",
     });
   });
+
+  it("rejects mixed command+url config with a clear diagnostic and no silent stdio fallback", () => {
+    const resolved = resolveMcpTransportConfig("probe", {
+      command: "node",
+      args: ["./server.mjs"],
+      url: "https://mcp.example.com/http",
+      transport: "streamable-http",
+    });
+
+    expect(resolved).toBeNull();
+    expect(logWarn).toHaveBeenCalledWith(
+      'bundle-mcp: skipped server "probe" because both "command" and "url" are set; pick one transport (stdio via "command" or HTTP via "url" with transport "streamable-http").',
+    );
+  });
+
+  it("rejects mixed command+url config without an explicit transport hint", () => {
+    const resolved = resolveMcpTransportConfig("probe", {
+      command: "node",
+      url: "https://mcp.example.com/sse",
+    });
+
+    expect(resolved).toBeNull();
+    expect(logWarn).toHaveBeenCalledWith(
+      'bundle-mcp: skipped server "probe" because both "command" and "url" are set; pick one transport (stdio via "command" or HTTP via "url").',
+    );
+  });
+
+  it("treats whitespace-only url alongside a real command as a stdio config", () => {
+    const resolved = resolveMcpTransportConfig("probe", {
+      command: "node",
+      url: "   ",
+    });
+
+    expect(resolved).toMatchObject({
+      kind: "stdio",
+      transportType: "stdio",
+      command: "node",
+    });
+  });
+
+  it("sanitizes the requested transport in the mixed-config warning", () => {
+    const resolved = resolveMcpTransportConfig("probe", {
+      command: "node",
+      url: "https://mcp.example.com/http",
+      transport: "streamable-http\nWARN forged\u001b[31m",
+    });
+
+    expect(resolved).toBeNull();
+    expect(logWarn).toHaveBeenCalledWith(
+      'bundle-mcp: skipped server "probe" because both "command" and "url" are set; pick one transport (stdio via "command" or HTTP via "url" with transport "streamable-httpwarn forged").',
+    );
+  });
 });
