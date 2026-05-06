@@ -14,11 +14,7 @@ This repository is the *core fork* (the runtime + loader). Plugins live in a sep
 ## Repos
 
 - **Core fork:** `openclaw-polytropos` (this repo)
-- **Plugins monorepo:** `polytropos-plugins`
-
-Canonical local dev root (per our workflow):
-
-- `/home/ec2-user/polytropos-dev/`
+- **Plugins monorepo:** [`polytropos-plugins`](https://github.com/JoshuaCWebDeveloper/polytropos-plugins)
 
 ---
 
