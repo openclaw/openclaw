@@ -93,6 +93,9 @@ These are the standard files OpenClaw expects inside the workspace:
   <Accordion title="skills/ — workspace skills (optional)">
     Workspace-specific skills. Highest-precedence skill location for that workspace. Overrides project agent skills, personal agent skills, managed skills, bundled skills, and `skills.load.extraDirs` when names collide.
   </Accordion>
+  <Accordion title="capabilities/ — workspace capability descriptors (optional)">
+    Markdown descriptors for local integrations, bridge queues, task flows, ACP delegation paths, and durable operating procedures. They are guidance only; they do not grant tool access or change Gateway policy. See [Workspace capabilities](/concepts/workspace-capabilities).
+  </Accordion>
   <Accordion title="canvas/ — Canvas UI files (optional)">
     Canvas UI files for node displays (for example `canvas/index.html`).
   </Accordion>

@@ -1119,6 +1119,7 @@
                   "concepts/context",
                   "concepts/context-engine",
                   "concepts/agent-workspace",
+                  "concepts/workspace-capabilities",
                   "concepts/soul",
                   "concepts/oauth",
                   "start/bootstrapping",
