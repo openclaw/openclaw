@@ -23,6 +23,7 @@ import {
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import { updateSessionStore } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
 import { resolveOpenClawAgentDir } from "../plugin-sdk/agent-dir-compat.js";
@@ -829,7 +830,10 @@ export async function noteStateIntegrity(
   for (const other of findOtherStateDirs(stateDir)) {
     extraStateDirs.add(other);
   }
-  if (extraStateDirs.size > 0) {
+  if (
+    extraStateDirs.size > 0 &&
+    !isTruthyEnvValue(process.env.OPENCLAW_IGNORE_SPLIT_STATE_WARNING)
+  ) {
     warnings.push(
       [
         "- Multiple state directories detected. This can split session history.",
