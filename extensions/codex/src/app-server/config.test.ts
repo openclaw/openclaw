@@ -45,6 +45,21 @@ describe("Codex app-server config", () => {
     );
   });
 
+  it("resolves the turn completion idle timeout separately from request timeout", () => {
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {
+        appServer: {
+          requestTimeoutMs: 7_000,
+          turnCompletionIdleTimeoutMs: 120_000,
+        },
+      },
+      env: {},
+    });
+
+    expect(runtime.requestTimeoutMs).toBe(7_000);
+    expect(runtime.turnCompletionIdleTimeoutMs).toBe(120_000);
+  });
+
   it("ignores app-server environment clearing for websocket transports", () => {
     const runtime = resolveCodexAppServerRuntimeOptions({
       pluginConfig: {

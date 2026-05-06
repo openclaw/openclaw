@@ -130,6 +130,11 @@
             "minimum": 1,
             "default": 60000
           },
+          "turnCompletionIdleTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 60000
+          },
           "approvalPolicy": {
             "type": "string",
             "enum": ["never", "on-request", "on-failure", "untrusted"]
@@ -268,6 +273,11 @@
     "appServer.requestTimeoutMs": {
       "label": "Request Timeout",
       "help": "Maximum time to wait for Codex app-server control-plane requests.",
+      "advanced": true
+    },
+    "appServer.turnCompletionIdleTimeoutMs": {
+      "label": "Turn Completion Idle Timeout",
+      "help": "Maximum idle time to wait for turn/completed after Codex app-server turn activity; separate from control-plane requestTimeoutMs.",
       "advanced": true
     },
     "appServer.approvalPolicy": {
