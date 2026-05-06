@@ -66,6 +66,26 @@ describe("resolveOutboundTarget defaultTo config fallback", () => {
     expect(res).toEqual({ ok: true, to: "room-one" });
   });
 
+  it("allows bootstrapping a configured channel plugin before reporting unsupported", () => {
+    const cfg: OpenClawConfig = {
+      channels: { alpha: { allowFrom: ["room-one"] } },
+    };
+
+    const res = resolveOutboundTarget({
+      channel: "alpha",
+      to: "room-one",
+      cfg,
+      mode: "explicit",
+    });
+
+    expect(res).toEqual({ ok: true, to: "room-one" });
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
+      channel: "alpha",
+      cfg,
+      allowBootstrap: true,
+    });
+  });
+
   it("uses a second plugin defaultTo when no explicit target is provided", () => {
     const cfg: OpenClawConfig = {
       channels: { beta: { defaultTo: "Beta:Default Room" } },
