@@ -10,6 +10,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { closePluginStateSqliteStore } from "../plugin-state/plugin-state-store.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { deleteDrainManifest, writeDrainManifest } from "./server-drain-manifest.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
 const GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS = 1_000;
@@ -195,6 +196,12 @@ export function createGatewayCloseHandler(params: {
   transcriptUnsub: (() => void) | null;
   lifecycleUnsub: (() => void) | null;
   chatRunState: { clear: () => void };
+  chatRunRegistry?: {
+    entries: () => ReadonlyArray<{
+      runId: string;
+      runs: ReadonlyArray<{ sessionKey: string; clientRunId: string }>;
+    }>;
+  } | null;
   clients: Set<{ socket: { close: (code: number, reason: string) => void } }>;
   configReloader: { stop: () => Promise<void> };
   wss: WebSocketServer;
@@ -207,6 +214,7 @@ export function createGatewayCloseHandler(params: {
   }): Promise<ShutdownResult> => {
     const start = Date.now();
     const warnings: string[] = [];
+    let drainManifestSessionCount: number | undefined;
     try {
       const reasonRaw = normalizeOptionalString(opts?.reason) ?? "";
       const reason = reasonRaw || "gateway stopping";
@@ -328,6 +336,17 @@ export function createGatewayCloseHandler(params: {
       }
       if (params.lifecycleUnsub) {
         await shutdownStep("lifecycle-unsub", () => params.lifecycleUnsub!(), warnings);
+      }
+      // Write drain manifest of active sessions before clearing. The manifest
+      // must survive shutdown when active runs existed so boot recovery can act.
+      if (params.chatRunRegistry) {
+        try {
+          drainManifestSessionCount = writeDrainManifest(params.chatRunRegistry);
+        } catch (err) {
+          drainManifestSessionCount = -1;
+          shutdownLog.warn(`failed to write drain manifest: ${String(err)}`);
+          recordShutdownWarning(warnings, "drain-manifest-write");
+        }
       }
       params.chatRunState.clear();
       let clientCloseFailures = 0;
@@ -451,6 +470,17 @@ export function createGatewayCloseHandler(params: {
         params.releasePluginRouteRegistry?.();
       } catch {
         /* ignore */
+      }
+    }
+
+    // Clean shutdown with no active runs — remove any stale drain manifest.
+    // If active runs existed (or manifest writing failed), keep the manifest so
+    // the boot-time consumer can detect and recover interrupted work.
+    if (drainManifestSessionCount === 0) {
+      try {
+        deleteDrainManifest();
+      } catch (err) {
+        shutdownLog.warn(`failed to delete drain manifest on clean shutdown: ${String(err)}`);
       }
     }
 
