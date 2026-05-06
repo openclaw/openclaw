@@ -18,6 +18,7 @@ overrides:
   basic-ftp: 5.3.0
   file-type: 22.0.1
   form-data: 2.5.4
+  ip-address: 10.2.0
   minimatch: 10.2.5
   path-to-regexp: 8.4.0
   qs: 6.14.2
@@ -104,8 +105,8 @@ importers:
         specifier: ^0.6.0
         version: 0.6.0
       '@openclaw/fs-safe':
-        specifier: ^0.1.1
-        version: 0.1.1
+        specifier: github:openclaw/fs-safe#3c508734af0b
+        version: https://codeload.github.com/openclaw/fs-safe/tar.gz/3c508734af0baaad4f61cf70619bea98c783043b
       '@slack/bolt':
         specifier: ^4.7.2
         version: 4.7.2(@types/express@5.0.6)
@@ -3233,8 +3234,9 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@openclaw/fs-safe@0.1.1':
-    resolution: {integrity: sha512-+50LBpW7nKWzu3wJb4C5X9BQAcAxmj3oNRd/ZqZK+YO1ZdiikOPZ6fy5ta631xsV13+m+Ap5s0Gb3zPSl+0kOQ==}
+  '@openclaw/fs-safe@https://codeload.github.com/openclaw/fs-safe/tar.gz/3c508734af0baaad4f61cf70619bea98c783043b':
+    resolution: {tarball: https://codeload.github.com/openclaw/fs-safe/tar.gz/3c508734af0baaad4f61cf70619bea98c783043b}
+    version: 0.1.2
     engines: {node: '>=20.11'}
 
   '@opentelemetry/api-logs@0.216.0':
@@ -5745,10 +5747,6 @@ packages:
 
   inline-style-parser@0.2.7:
     resolution: {integrity: sha512-Nb2ctOyNR8DqQoR0OwRG95uNWIC0C1lCgf5Naz5H6Ji72KZ8OcFZLz2P5sNgwlyoJ8Yif11oMuYs5pBQa86csA==}
-
-  ip-address@10.1.0:
-    resolution: {integrity: sha512-XXADHxXmvT9+CRxhXg56LJovE+bmWnEWB78LB83VZTprKTmaC5QfruXocxzTZ2Kl0DNwKuBdlIhjL8LeY8Sf8Q==}
-    engines: {node: '>= 12'}
 
   ip-address@10.2.0:
     resolution: {integrity: sha512-/+S6j4E9AHvW9SWMSEY9Xfy66O5PWvVEJ08O0y5JGyEKQpojb0K0GKpz/v5HJ/G0vi3D2sjGK78119oXZeE0qA==}
@@ -10005,7 +10003,7 @@ snapshots:
   '@openai/codex@0.128.0-win32-x64':
     optional: true
 
-  '@openclaw/fs-safe@0.1.1':
+  '@openclaw/fs-safe@https://codeload.github.com/openclaw/fs-safe/tar.gz/3c508734af0baaad4f61cf70619bea98c783043b':
     optionalDependencies:
       jszip: 3.10.1
       tar: 7.5.13
@@ -12199,7 +12197,7 @@ snapshots:
   express-rate-limit@8.4.1(express@5.2.1):
     dependencies:
       express: 5.2.1
-      ip-address: 10.1.0
+      ip-address: 10.2.0
 
   express@5.2.1:
     dependencies:
@@ -12745,8 +12743,6 @@ snapshots:
   inherits@2.0.4: {}
 
   inline-style-parser@0.2.7: {}
-
-  ip-address@10.1.0: {}
 
   ip-address@10.2.0: {}
 

@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 
 /** Default cooldown between reflections per session (5 minutes). */
 export const DEFAULT_COOLDOWN_MS = 300_000;
@@ -93,11 +93,7 @@ export async function storeSessionLearning(params: {
     learnings = learnings.slice(-10);
   }
 
-  await replaceFileAtomic({
-    filePath: learningsFile,
-    content: JSON.stringify(learnings, null, 2),
-    tempPrefix: ".msteams-learnings",
-  });
+  await writeJsonFileAtomically(learningsFile, learnings);
   if (!exists && legacyLearningsFile !== learningsFile) {
     await fs.rm(legacyLearningsFile, { force: true }).catch(() => undefined);
   }

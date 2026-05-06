@@ -6,8 +6,6 @@ read_when:
 title: "Date and time"
 ---
 
-# Date & Time
-
 OpenClaw defaults to **host-local time for transport timestamps** and **user timezone only in the system prompt**.
 Provider timestamps are preserved so tools keep their native semantics (current time is available via `session_status`).
 

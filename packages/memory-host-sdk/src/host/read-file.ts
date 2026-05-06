@@ -6,7 +6,13 @@ import {
   resolveMemorySearchConfig,
   type OpenClawConfig,
 } from "./config-utils.js";
-import { isFileMissingError, isPathInside, readRegularFile, statRegularFile } from "./fs-utils.js";
+import {
+  isFileMissingError,
+  isPathInside,
+  readRegularFile,
+  root,
+  statRegularFile,
+} from "./fs-utils.js";
 import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import {
   buildMemoryReadResult,
@@ -65,6 +71,17 @@ export async function readMemoryFile(params: {
   }
   if (!absPath.endsWith(".md")) {
     throw new Error("path required");
+  }
+  if (allowedWorkspace) {
+    try {
+      const workspaceRoot = await root(params.workspaceDir);
+      await workspaceRoot.resolve(relPath);
+    } catch (err) {
+      if (isFileMissingError(err)) {
+        return { text: "", path: relPath };
+      }
+      throw err;
+    }
   }
   const statResult = await statRegularFile(absPath);
   if (statResult.missing) {

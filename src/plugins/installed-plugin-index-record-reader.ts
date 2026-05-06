@@ -34,12 +34,8 @@ function readRecordMap(value: unknown): Record<string, PluginInstallRecord> | nu
 }
 
 function readJsonObjectFileSync(filePath: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
+  const parsed = tryReadJsonSync(filePath);
+  return isRecord(parsed) ? parsed : null;
 }
 
 function readStringRecord(value: unknown): Record<string, string> {

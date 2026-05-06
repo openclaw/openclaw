@@ -452,7 +452,7 @@ describe("applyPatch", () => {
             timing: "before-realpath",
             run: async () => {
               await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
-                /under root|unable to resolve opened file path/i,
+                /path alias under sandbox root|path escapes sandbox root|under root|unable to resolve opened file path/i,
               );
             },
           });

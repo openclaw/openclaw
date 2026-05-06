@@ -1,4 +1,5 @@
 import { configureFsSafePython } from "@openclaw/fs-safe/config";
+export { root } from "@openclaw/fs-safe/root";
 export { isPathInside } from "@openclaw/fs-safe/path";
 export {
   readRegularFile,
@@ -21,6 +22,7 @@ export function isFileMissingError(
     err &&
     typeof err === "object" &&
     "code" in err &&
-    (err as Partial<NodeJS.ErrnoException>).code === "ENOENT",
+    ((err as Partial<NodeJS.ErrnoException>).code === "ENOENT" ||
+      (err as { code?: unknown }).code === "not-found"),
   );
 }

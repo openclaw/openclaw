@@ -459,7 +459,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
     try {
       await handleTeamsMessage(context as MSTeamsTurnContext);
     } catch (err) {
-      deps.runtime.error?.(`msteams handler failed: ${formatUnknownError(err)}`);
+      deps.runtime.error(`msteams handler failed: ${formatUnknownError(err)}`);
     }
     await next();
   });
@@ -520,7 +520,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
     try {
       await handleReaction(context as MSTeamsTurnContext, "added");
     } catch (err) {
-      deps.runtime.error?.(`msteams reaction handler failed: ${String(err)}`);
+      deps.runtime.error(`msteams reaction handler failed: ${String(err)}`);
     }
     await next();
   });
@@ -529,7 +529,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
     try {
       await handleReaction(context as MSTeamsTurnContext, "removed");
     } catch (err) {
-      deps.runtime.error?.(`msteams reaction handler failed: ${String(err)}`);
+      deps.runtime.error(`msteams reaction handler failed: ${String(err)}`);
     }
     await next();
   });

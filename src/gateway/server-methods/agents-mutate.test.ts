@@ -49,6 +49,13 @@ const mocks = vi.hoisted(() => ({
     realPath: "/workspace/test-agent/AGENTS.md",
     stat: { size: 0, mtimeMs: 0 },
   })),
+  rootStat: vi.fn(async (_params?: unknown) => ({
+    isFile: true,
+    isSymbolicLink: false,
+    mtimeMs: 0,
+    nlink: 1,
+    size: 0,
+  })),
   rootWrite: vi.fn(async (_params?: unknown) => {}),
 }));
 
@@ -119,6 +126,7 @@ vi.mock("../../infra/fs-safe.js", async () => {
     root: vi.fn(async (rootDir: string) => ({
       open: async (relativePath: string, options?: Record<string, unknown>) =>
         await mocks.rootOpen({ rootDir, relativePath, ...options }),
+      stat: async (relativePath: string) => await mocks.rootStat({ rootDir, relativePath }),
       read: async (relativePath: string, options?: Record<string, unknown>) =>
         await mocks.rootRead({ rootDir, relativePath, ...options }),
       write: async (
@@ -190,18 +198,28 @@ beforeEach(() => {
     realPath: "/workspace/test-agent/AGENTS.md",
     stat: { size: 0, mtimeMs: 0 },
   });
+  mocks.rootStat.mockResolvedValue({
+    isFile: true,
+    isSymbolicLink: false,
+    mtimeMs: 0,
+    nlink: 1,
+    size: 0,
+  });
   mocks.rootWrite.mockResolvedValue(undefined);
 });
 
 function makeRootForTest(overrides?: {
   open?: (params: Record<string, unknown>) => Promise<unknown>;
   read?: (params: Record<string, unknown>) => Promise<unknown>;
+  stat?: (params: Record<string, unknown>) => Promise<unknown>;
   write?: (params: Record<string, unknown>) => Promise<unknown>;
 }) {
   return async (rootDir: string) =>
     ({
       open: async (relativePath: string, options?: Record<string, unknown>) =>
         await (overrides?.open ?? mocks.rootOpen)({ rootDir, relativePath, ...options }),
+      stat: async (relativePath: string) =>
+        await (overrides?.stat ?? mocks.rootStat)({ rootDir, relativePath }),
       read: async (relativePath: string, options?: Record<string, unknown>) =>
         await (overrides?.read ?? mocks.rootRead)({ rootDir, relativePath, ...options }),
       write: async (
@@ -1156,19 +1174,19 @@ describe("agents.files.list", () => {
     const rootOpen = vi.fn(async () => {
       throw createErrnoError("EACCES");
     });
-    agentsTesting.setDepsForTests({ root: makeRootForTest({ open: rootOpen }) });
-    mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
-      if (args[0] === "/workspace/main/AGENTS.md") {
-        return makeFileStat({ size: 17, mtimeMs: 4567 });
+    const rootStat = vi.fn(async ({ relativePath }: Record<string, unknown>) => {
+      if (relativePath === "AGENTS.md") {
+        return {
+          isFile: true,
+          isSymbolicLink: false,
+          mtimeMs: 4567,
+          nlink: 1,
+          size: 17,
+        };
       }
       throw createEnoentError();
     });
-    mocks.fsStat.mockImplementation(async (...args: unknown[]) => {
-      if (args[0] === "/workspace/main/AGENTS.md") {
-        return makeFileStat({ size: 17, mtimeMs: 4567 });
-      }
-      throw createEnoentError();
-    });
+    agentsTesting.setDepsForTests({ root: makeRootForTest({ open: rootOpen, stat: rootStat }) });
 
     const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
     await promise;
