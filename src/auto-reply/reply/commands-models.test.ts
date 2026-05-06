@@ -19,10 +19,15 @@ const modelAuthLabelMocks = vi.hoisted(() => ({
 const modelProviderAuthMocks = vi.hoisted(() => {
   const state = {
     authenticatedProviders: new Set(["anthropic", "google", "openai"]),
+    authenticatedProvidersByAgentDir: new Map<string, Set<string>>(),
     createProviderAuthChecker: vi.fn(),
   };
   state.createProviderAuthChecker.mockImplementation(
-    () => (provider: string) => state.authenticatedProviders.has(provider),
+    (params: { agentDir?: string }) => (provider: string) =>
+      (
+        state.authenticatedProvidersByAgentDir.get(params.agentDir ?? "") ??
+        state.authenticatedProviders
+      ).has(provider),
   );
   return state;
 });
@@ -40,8 +45,11 @@ vi.mock("../../agents/model-auth-label.js", () => ({
 
 vi.mock("../../agents/model-provider-auth.js", () => ({
   createProviderAuthChecker: modelProviderAuthMocks.createProviderAuthChecker,
-  hasAuthForModelProvider: ({ provider }: { provider: string }) =>
-    modelProviderAuthMocks.authenticatedProviders.has(provider),
+  hasAuthForModelProvider: ({ provider, agentDir }: { provider: string; agentDir?: string }) =>
+    (
+      modelProviderAuthMocks.authenticatedProvidersByAgentDir.get(agentDir ?? "") ??
+      modelProviderAuthMocks.authenticatedProviders
+    ).has(provider),
 }));
 
 const telegramModelsTestPlugin: ChannelPlugin = {
@@ -110,6 +118,7 @@ beforeEach(() => {
   modelAuthLabelMocks.resolveModelAuthLabel.mockReset();
   modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue(undefined);
   modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "google", "openai"]);
+  modelProviderAuthMocks.authenticatedProvidersByAgentDir.clear();
   modelProviderAuthMocks.createProviderAuthChecker.mockClear();
   setActivePluginRegistry(
     createTestRegistry([
@@ -187,7 +196,7 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("Switch: /model <provider/model>");
     expect(result?.reply?.text).not.toContain("Add: /models add");
     expect(modelProviderAuthMocks.createProviderAuthChecker).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: "/tmp" }),
+      expect.objectContaining({ agentDir: expect.any(String), workspaceDir: "/tmp" }),
     );
   });
 
@@ -206,6 +215,41 @@ describe("handleModelsCommand", () => {
     expect(allListResult?.reply?.text).toContain("Models (openai) — showing 1-2 of 2 (page 1/1)");
     expect(allListResult?.reply?.text).toContain("- openai/gpt-4.1");
     expect(allListResult?.reply?.text).toContain("- openai/gpt-4.1-mini");
+  });
+
+  it("keeps providers authenticated in the target worker agent visible for /models", async () => {
+    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic"]);
+    modelProviderAuthMocks.authenticatedProvidersByAgentDir.set(
+      "/tmp/worker-agent",
+      new Set(["anthropic", "openai"]),
+    );
+    const params = buildParams("/models", {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+        },
+        list: [{ id: "worker", agentDir: "/tmp/worker-agent" }],
+      },
+    });
+    params.sessionKey = "agent:worker:discord:direct:user-1";
+    params.workspaceDir = "/tmp/current-workspace";
+    params.sessionStore = {
+      "agent:worker:discord:direct:user-1": {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+        spawnedWorkspaceDir: "/tmp/spawned-workspace",
+      },
+    };
+
+    const result = await handleModelsCommand(params, true);
+
+    expect(result?.reply?.text).toContain("- openai (2)");
+    expect(modelProviderAuthMocks.createProviderAuthChecker).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/worker-agent",
+        workspaceDir: "/tmp/spawned-workspace",
+      }),
+    );
   });
 
   it("hides legacy runtime providers from /models provider lists", async () => {
@@ -249,6 +293,61 @@ describe("handleModelsCommand", () => {
       label: "OpenClaw Pi Default",
       description: "Use the built-in OpenClaw Pi runtime.",
     });
+  });
+
+  it("uses the target agent auth dir when building provider data for agentId callers", async () => {
+    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic"]);
+    modelProviderAuthMocks.authenticatedProvidersByAgentDir.set(
+      "/tmp/worker-agent",
+      new Set(["anthropic", "openai"]),
+    );
+
+    const data = await buildModelsProviderData(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-5" },
+          },
+          list: [{ id: "worker", agentDir: "/tmp/worker-agent" }],
+        },
+      } as OpenClawConfig,
+      "worker",
+    );
+
+    expect(data.providers).toContain("openai");
+    expect(modelProviderAuthMocks.createProviderAuthChecker).toHaveBeenCalledWith(
+      expect.objectContaining({ agentDir: "/tmp/worker-agent" }),
+    );
+  });
+
+  it("preserves explicit agentDir and workspaceDir overrides for provider data auth filtering", async () => {
+    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic"]);
+    modelProviderAuthMocks.authenticatedProvidersByAgentDir.set(
+      "/tmp/override-agent",
+      new Set(["anthropic", "google"]),
+    );
+
+    const data = await buildModelsProviderData(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-5" },
+          },
+          list: [{ id: "worker", agentDir: "/tmp/configured-worker-agent" }],
+        },
+      } as OpenClawConfig,
+      "worker",
+      { agentDir: "/tmp/override-agent", workspaceDir: "/tmp/override-workspace" },
+    );
+
+    expect(data.providers).toContain("google");
+    expect(data.providers).not.toContain("openai");
+    expect(modelProviderAuthMocks.createProviderAuthChecker).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/override-agent",
+        workspaceDir: "/tmp/override-workspace",
+      }),
+    );
   });
 
   it("keeps the telegram provider picker browse-only", async () => {

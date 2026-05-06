@@ -68,12 +68,13 @@ type ParsedModelsCommand =
 export async function buildModelsProviderData(
   cfg: OpenClawConfig,
   agentId?: string,
-  options: { view?: "default" | "all"; workspaceDir?: string } = {},
+  options: { agentDir?: string; view?: "default" | "all"; workspaceDir?: string } = {},
 ): Promise<ModelsProviderData> {
   const resolvedDefault = resolveDefaultModelForAgent({
     cfg,
     agentId,
   });
+  const agentDir = options.agentDir ?? (agentId ? resolveAgentDir(cfg, agentId) : undefined);
 
   const catalog = await loadModelCatalog({ config: cfg });
   const visibleCatalog = resolveVisibleModelCatalog({
@@ -82,6 +83,7 @@ export async function buildModelsProviderData(
     defaultProvider: resolvedDefault.provider,
     defaultModel: resolvedDefault.model,
     agentId,
+    agentDir,
     workspaceDir:
       options.workspaceDir ??
       (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
@@ -357,8 +359,9 @@ export async function resolveModelsCommandReply(params: {
     params.cfg,
     params.agentId,
     {
-      ...(parsed.action === "list" && parsed.all ? { view: "all" as const } : {}),
+      agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
+      ...(parsed.action === "list" && parsed.all ? { view: "all" as const } : {}),
     },
   );
   const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
