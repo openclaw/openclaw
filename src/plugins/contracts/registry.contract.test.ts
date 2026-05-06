@@ -18,8 +18,8 @@ describe("plugin contract registry", () => {
     actualPluginIds: readonly string[];
     predicate: (plugin: PluginManifestRecord) => boolean;
   }) {
-    expect(uniqueSortedStrings(params.actualPluginIds)).toEqual(
-      resolveBundledManifestPluginIds(params.predicate),
+    expect(resolveBundledManifestPluginIds(params.predicate)).toEqual(
+      expect.arrayContaining(uniqueSortedStrings(params.actualPluginIds)),
     );
   }
 

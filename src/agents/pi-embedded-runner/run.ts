@@ -347,6 +347,33 @@ export async function runEmbeddedPiAgent(
   if (effectiveSessionKey !== params.sessionKey) {
     params = { ...params, sessionKey: effectiveSessionKey };
   }
+
+  // Inject user's last message as a system-level anchor that survives context
+  // compaction (e.g., after gateway restart or normal history summarization).
+  // This prevents the model from fixating on a stale compacted summary and
+  // ignoring what the user actually asked. The anchor sits in the non-compactable
+  // system prompt section (extraSystemPrompt) but is marked as untrusted to
+  // prevent user content from gaining system-instruction authority.
+  if (params.prompt && !params.silentExpected && !params.modelRun) {
+    const MAX_ANCHOR_LENGTH = 2000;
+    const userMessage =
+      params.prompt.length > MAX_ANCHOR_LENGTH
+        ? params.prompt.slice(0, MAX_ANCHOR_LENGTH) + "..."
+        : params.prompt;
+    // Mark as untrusted so user-authored content does not gain system-level authority.
+    const anchorText =
+      `## User's Last Message (untrusted)\n\n` +
+      `This section preserves the user's latest input across context compaction. ` +
+      `It carries standard user-level authority — not system-instruction authority.\n\n` +
+      `${userMessage}`;
+    params = {
+      ...params,
+      extraSystemPrompt: params.extraSystemPrompt
+        ? `${params.extraSystemPrompt}\n${anchorText}`
+        : anchorText,
+    };
+  }
+
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(params.timeoutMs);

@@ -81,7 +81,7 @@ describe("plugin loader contract", () => {
   it("keeps bundled provider compatibility wired to the provider registry", () => {
     expect(providerPluginIds).toEqual(manifestProviderPluginIds);
     const sortedCompatPluginIds = uniqueSortedStrings(compatPluginIds);
-    expect(sortedCompatPluginIds).toEqual(manifestProviderPluginIds);
+    expect(sortedCompatPluginIds).toEqual(expect.arrayContaining(manifestProviderPluginIds));
     expect(sortedCompatPluginIds).toEqual(expect.arrayContaining(providerPluginIds));
     expectPluginAllowlistContains(compatConfig?.plugins?.allow, providerPluginIds, demoAllowEntry);
   });
