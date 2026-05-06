@@ -38,6 +38,7 @@ export interface RateLimitConfig {
 export const AUTH_RATE_LIMIT_SCOPE_DEFAULT = "default";
 export const AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET = "shared-secret";
 export const AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN = "device-token";
+export const AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN = "bootstrap-token";
 export const AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH = "hook-auth";
 const BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX = "browser-origin:";
 

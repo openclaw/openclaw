@@ -1,6 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import {
+  AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   type AuthRateLimiter,
@@ -156,30 +157,58 @@ export async function resolveConnectAuthDecision(params: {
   let authOk = params.state.authOk;
   let authMethod = params.state.authMethod;
 
+  // Deferred bootstrap failure: only charged if the overall handshake still
+  // fails after all fallback paths run. A device with a stale bootstrap token
+  // but a valid device token must not accumulate bootstrap failures.
+  let pendingBootstrapFailure = false;
+
   const bootstrapTokenCandidate = params.state.bootstrapTokenCandidate;
   if (params.hasDeviceIdentity && params.deviceId && params.publicKey && bootstrapTokenCandidate) {
-    const tokenCheck = await params.verifyBootstrapToken({
-      deviceId: params.deviceId,
-      publicKey: params.publicKey,
-      token: bootstrapTokenCandidate,
-      role: params.role,
-      scopes: params.scopes,
-    });
-    if (tokenCheck.ok) {
-      // Prefer an explicit valid bootstrap token even when another auth path
-      // (for example tailscale serve header auth) already succeeded. QR pairing
-      // relies on the server classifying the handshake as bootstrap-token so the
-      // initial node pairing can be silently auto-approved and the bootstrap
-      // token can be revoked after approval.
-      authOk = true;
-      authMethod = "bootstrap-token";
-    } else if (!authOk) {
-      authResult = { ok: false, reason: tokenCheck.reason ?? "bootstrap_token_invalid" };
+    let bootstrapRateLimited = false;
+    if (params.rateLimiter) {
+      const bootstrapRateCheck = params.rateLimiter.check(
+        params.clientIp,
+        AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN,
+      );
+      if (!bootstrapRateCheck.allowed) {
+        bootstrapRateLimited = true;
+        authResult = {
+          ok: false,
+          reason: "rate_limited",
+          rateLimited: true,
+          retryAfterMs: bootstrapRateCheck.retryAfterMs,
+        };
+      }
+    }
+    if (!bootstrapRateLimited) {
+      const tokenCheck = await params.verifyBootstrapToken({
+        deviceId: params.deviceId,
+        publicKey: params.publicKey,
+        token: bootstrapTokenCandidate,
+        role: params.role,
+        scopes: params.scopes,
+      });
+      if (tokenCheck.ok) {
+        // Prefer an explicit valid bootstrap token even when another auth path
+        // (for example tailscale serve header auth) already succeeded. QR pairing
+        // relies on the server classifying the handshake as bootstrap-token so the
+        // initial node pairing can be silently auto-approved and the bootstrap
+        // token can be revoked after approval.
+        authOk = true;
+        authMethod = "bootstrap-token";
+        params.rateLimiter?.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN);
+      } else if (!authOk) {
+        authResult = { ok: false, reason: tokenCheck.reason ?? "bootstrap_token_invalid" };
+        pendingBootstrapFailure = true;
+      }
     }
   }
 
   const deviceTokenCandidate = params.state.deviceTokenCandidate;
   if (!params.hasDeviceIdentity || !params.deviceId || authOk || !deviceTokenCandidate) {
+    if (pendingBootstrapFailure) {
+      params.rateLimiter?.recordFailure(params.clientIp, AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN);
+    }
     return { authResult, authOk, authMethod };
   }
 
@@ -213,6 +242,8 @@ export async function resolveConnectAuthDecision(params: {
       if (params.state.sharedAuthProvided) {
         params.rateLimiter?.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
       }
+      // Bootstrap failure deferred above is discarded — device-token success
+      // proves legitimacy; charging the bootstrap scope would be a false positive.
     } else {
       authResult = {
         ok: false,
@@ -222,6 +253,9 @@ export async function resolveConnectAuthDecision(params: {
             : (authResult.reason ?? "device_token_mismatch"),
       };
       params.rateLimiter?.recordFailure(params.clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+      if (pendingBootstrapFailure) {
+        params.rateLimiter?.recordFailure(params.clientIp, AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN);
+      }
     }
   }
 
