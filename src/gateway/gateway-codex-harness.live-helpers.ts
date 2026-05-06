@@ -86,6 +86,7 @@ export const EXPECTED_CODEX_STATUS_COMMAND_TEXT = [
   "model `codex/",
   "session `agent:dev:live-codex-harness`",
   "Model/status card shown above",
+  "OpenClaw status shown above.",
   "Status shown above.",
 ] as const;
 
