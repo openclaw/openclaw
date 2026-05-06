@@ -53,7 +53,7 @@ import {
   resolveModelRequestTimeoutMs,
 } from "./provider-transport-fetch.js";
 import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
-import { transformTransportMessages } from "./transport-message-transform.js";
+import { transformTransportMessages, injectLoopHintIfNeeded } from "./transport-message-transform.js";
 import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
@@ -1880,7 +1880,13 @@ export function buildOpenAICompletionsParams(
         systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
       }
     : context;
-  const messages = convertMessages(model as never, completionsContext, compat as never);
+  // Inject loop hint before convertMessages so it gets serialized into
+  // the completion request for Qwen/openai-completions transport (#73781).
+  const completionsMessages = injectLoopHintIfNeeded(completionsContext.messages);
+  const completionsCtx = completionsContext.messages !== completionsMessages
+    ? { ...completionsContext, messages: completionsMessages }
+    : completionsContext;
+  const messages = convertMessages(model as never, completionsCtx, compat as never);
   injectToolCallThoughtSignatures(messages as unknown[], context, model);
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const params: Record<string, unknown> = {

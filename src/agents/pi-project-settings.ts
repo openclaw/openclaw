@@ -61,5 +61,19 @@ export function createPreparedEmbeddedPiSettingsManager(params: {
     cfg: params.cfg,
     contextTokenBudget: params.contextTokenBudget,
   });
-  return settingsManager;
+  // Disable SDK auto-retry via in-memory override so we don't persist the
+  // setting to disk (#73781). Build a flat snapshot from effective settings
+  // (including compaction overrides applied above) and patch retry.enabled=false.
+  const flat = {
+    ...settingsManager.getGlobalSettings(),
+    ...settingsManager.getProjectSettings(),
+  };
+  flat.retry = { ...flat.retry, enabled: false };
+  // Preserve compaction overrides that were applied via applyOverrides above.
+  flat.compaction = {
+    ...flat.compaction,
+    reserveTokens: settingsManager.getCompactionReserveTokens(),
+    keepRecentTokens: settingsManager.getCompactionKeepRecentTokens(),
+  };
+  return SettingsManager.inMemory(flat);
 }
