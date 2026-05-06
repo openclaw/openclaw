@@ -2,4 +2,4 @@
 
 export * from "../infra/heartbeat-events.js";
 export * from "../infra/heartbeat-visibility.js";
-export { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+export { requestHeartbeat } from "../infra/heartbeat-wake.js";

@@ -19,7 +19,7 @@ import {
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
-import { requestHeartbeatNow } from "openclaw/plugin-sdk/heartbeat-runtime";
+import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import {
   createInternalHookEvent,
   fireAndForgetHook,
@@ -501,7 +501,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       .filter(Boolean)
       .join(":");
     enqueueSystemEvent(text, { sessionKey: route.sessionKey, contextKey, trusted: false });
-    requestHeartbeatNow({ coalesceMs: 500, sessionKey: route.sessionKey });
+    requestHeartbeat({
+      source: "notifications-event",
+      intent: "event",
+      coalesceMs: 500,
+      sessionKey: route.sessionKey,
+    });
     return true;
   }
 
