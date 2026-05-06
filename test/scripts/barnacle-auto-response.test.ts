@@ -859,4 +859,153 @@ describe("barnacle-auto-response", () => {
     );
     expect(calls.update).toContainEqual(expect.objectContaining({ state: "closed" }));
   });
+
+  it("removes stale candidate labels when PR body becomes meaningful", async () => {
+    const { calls, github } = barnacleGithub([file("src/gateway/foo.ts")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext(
+        {
+          body: [
+            "- Problem: gateway crashes on startup",
+            "- Why it matters: users cannot use the app",
+            "- What changed: add a null check in config loader",
+          ].join("\n"),
+        },
+        [candidateLabels.blankTemplate],
+        { action: "ready_for_review" },
+      ),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).toContainEqual(
+      expect.objectContaining({ name: candidateLabels.blankTemplate }),
+    );
+    expect(calls.addLabels).toContainEqual(
+      expect.objectContaining({
+        labels: expect.arrayContaining([candidateLabels.needsRealBehaviorProof]),
+      }),
+    );
+  });
+
+  it("recomputes candidate labels on ready_for_review", async () => {
+    const { calls, github } = barnacleGithub([
+      file("ui/src/app.ts"),
+      file("src/gateway/server.ts"),
+      file("extensions/slack/src/index.ts"),
+      file("docs/plugins/community.md"),
+    ]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext(
+        {
+          body: "Updating the plugin system to improve session handling.",
+        },
+        [candidateLabels.blankTemplate],
+        { action: "ready_for_review" },
+      ),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).toContainEqual(
+      expect.objectContaining({ name: candidateLabels.blankTemplate }),
+    );
+    expect(calls.addLabels).toContainEqual(
+      expect.objectContaining({
+        labels: expect.arrayContaining([candidateLabels.dirtyCandidate]),
+      }),
+    );
+  });
+
+  it("removes stale candidate labels on ready_for_review when body becomes meaningful", async () => {
+    const { calls, github } = barnacleGithub([file("src/gateway/foo.ts")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext(
+        {
+          body: [
+            "- Problem: gateway crashes on startup",
+            "- Why it matters: users cannot use the app",
+            "- What changed: add a null check in config loader",
+          ].join("\n"),
+        },
+        [candidateLabels.blankTemplate],
+        { action: "ready_for_review" },
+      ),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).toContainEqual(
+      expect.objectContaining({ name: candidateLabels.blankTemplate }),
+    );
+    expect(calls.addLabels).toContainEqual(
+      expect.objectContaining({
+        labels: expect.arrayContaining([candidateLabels.needsRealBehaviorProof]),
+      }),
+    );
+  });
+
+  it("respects bad-barnacle when removing stale candidate labels", async () => {
+    const { calls, github } = barnacleGithub([file("src/gateway/foo.ts")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext(
+        {
+          body: [
+            "- Problem: gateway crashes on startup",
+            "- Why it matters: users cannot use the app",
+            "- What changed: add a null check in config loader",
+          ].join("\n"),
+        },
+        [candidateLabels.blankTemplate, "bad-barnacle"],
+        { action: "ready_for_review" },
+      ),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).toEqual([]);
+    expect(calls.addLabels).toEqual([]);
+  });
+
+  it("does not mutate maintainer-authored PRs on ready_for_review", async () => {
+    const { calls, github } = barnacleGithub([
+      file("ui/src/app.ts"),
+      file("src/gateway/server.ts"),
+    ]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext(
+        {
+          body: [
+            "- Problem: gateway crashes",
+            "- Why it matters: users lose sessions",
+            "- What changed: fix config loader",
+          ].join("\n"),
+          author_association: "OWNER",
+          user: { login: "maintainer" },
+        },
+        [candidateLabels.blankTemplate, candidateLabels.dirtyCandidate],
+        { action: "ready_for_review" },
+      ),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).toEqual([]);
+    expect(calls.addLabels).toEqual([]);
+  });
 });

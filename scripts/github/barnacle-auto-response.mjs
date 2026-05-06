@@ -804,8 +804,15 @@ async function applyPullRequestCandidateLabels(github, context, core, pullReques
   ) {
     staleProofLabels.push(PROOF_SUFFICIENT_LABEL);
   }
+
+  const staleCandidateLabels = candidateLabelValues.filter(
+    (label) => labelSet.has(label) && !classifiedLabels.includes(label),
+  );
+
   await removeLabels(github, context, pullRequest.number, staleProofLabels, labelSet);
+  await removeLabels(github, context, pullRequest.number, staleCandidateLabels, labelSet);
   await addMissingLabels(github, context, core, pullRequest.number, classifiedLabels, labelSet);
+  return [...staleProofLabels, ...staleCandidateLabels];
 }
 
 function isAutomationUser(user, fallbackLogin = "") {
@@ -821,9 +828,11 @@ function isGitHubAppPullRequestAuthor(pullRequest) {
   return isAutomationUser(pullRequest.user);
 }
 
-function candidateActionRuleForLabelSet(labelSet, preferredLabel = "") {
+function candidateActionRuleForLabelSet(labelSet, preferredLabel = "", staleCandidateLabels = []) {
   const preferredRule = candidateActionRules.find(
-    (rule) => rule.label === preferredLabel && labelSet.has(rule.label),
+    (rule) =>
+      rule.label === preferredLabel &&
+      (labelSet.has(rule.label) || staleCandidateLabels.includes(rule.label)),
   );
   if (preferredRule) {
     return preferredRule;
@@ -838,6 +847,7 @@ async function applyPullRequestCandidateAction({
   labelSet,
   hasTriggerLabel,
   isLabelEvent,
+  staleCandidateLabels,
 }) {
   if (isAutomationActor(context)) {
     return false;
@@ -852,6 +862,7 @@ async function applyPullRequestCandidateAction({
   const rule = candidateActionRuleForLabelSet(
     labelSet,
     isCandidateLabelEvent ? eventLabel : undefined,
+    staleCandidateLabels,
   );
   if (!rule) {
     return false;
@@ -1011,9 +1022,15 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
   const isLabelEvent = context.payload.action === "labeled";
   const isPrCandidateEvent =
     pullRequest &&
-    ["opened", "edited", "synchronize", "reopened", "labeled", "unlabeled"].includes(
-      context.payload.action,
-    );
+    [
+      "opened",
+      "edited",
+      "synchronize",
+      "reopened",
+      "labeled",
+      "unlabeled",
+      "ready_for_review",
+    ].includes(context.payload.action);
   if (!hasTriggerLabel && !isLabelEvent && !isPrCandidateEvent) {
     return;
   }
@@ -1069,7 +1086,13 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
       core.info(`Skipping active PR limit for GitHub App-authored PR #${pullRequest.number}.`);
     }
 
-    await applyPullRequestCandidateLabels(github, context, core, pullRequest, labelSet);
+    const staleCandidateLabels = await applyPullRequestCandidateLabels(
+      github,
+      context,
+      core,
+      pullRequest,
+      labelSet,
+    );
 
     if (labelSet.has(dirtyLabel)) {
       await github.rest.issues.createComment({
@@ -1118,9 +1141,17 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
       labelSet,
       hasTriggerLabel,
       isLabelEvent,
+      staleCandidateLabels,
     });
     if (handledCandidateAction) {
       return;
+    }
+
+    if (staleCandidateLabels.length > 0) {
+      await removeLabels(github, context, pullRequest.number, staleCandidateLabels, labelSet);
+      core.info(
+        `Removed stale candidate labels from #${pullRequest.number}: ${staleCandidateLabels.join(", ")}`,
+      );
     }
   }
 
