@@ -2,6 +2,7 @@ import {
   resolveOutboundMediaUrls,
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
+  type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -38,7 +39,7 @@ import {
 import {
   DM_GROUP_ACCESS_REASON,
   createChannelPairingController,
-  createChannelReplyPipeline,
+  deriveDurableFinalDeliveryRequirements,
   evictOldHistoryKeys,
   evaluateSupplementalContextVisibility,
   logAckFailure,
@@ -60,6 +61,7 @@ import {
   resolveBlueBubblesMessageId,
   resolveReplyContextFromCache,
 } from "./monitor-reply-cache.js";
+import { fetchBlueBubblesReplyContext } from "./monitor-reply-fetch.js";
 import {
   hasBlueBubblesSelfChatCopy,
   rememberBlueBubblesSelfChatCopy,
@@ -354,6 +356,52 @@ export function logVerbose(
   }
 }
 
+type BlueBubblesInboundChatResolveTarget =
+  | { readonly kind: "chat_id"; readonly chatId: number }
+  | { readonly kind: "chat_identifier"; readonly chatIdentifier: string }
+  | { readonly kind: "handle"; readonly address: string };
+
+/**
+ * Builds the fallback target used to look up a chatGuid when an inbound
+ * webhook arrives without one.
+ *
+ * Critically, group inbounds that lack every chat identifier (chatGuid /
+ * chatId / chatIdentifier all missing) MUST NOT fall through to the
+ * sender's handle. Resolving a group via the sender handle yields that
+ * sender's DM chatGuid, which then poisons every downstream action keyed
+ * off it: ack reactions land in the DM, the read receipt marks the DM,
+ * and the outbound reply cache stores the wrong chat — so a later short
+ * id resolved against that cache cannot detect the cross-chat reuse and
+ * the agent's react/reply silently target the DM instead of the group.
+ *
+ * Returns null in that unresolvable group case so the caller can skip
+ * actions that need a chatGuid rather than acting on a wrong one. DMs
+ * always resolve via the sender handle (the chat is, by definition, the
+ * conversation with that handle).
+ */
+export function buildBlueBubblesInboundChatResolveTarget(params: {
+  isGroup: boolean;
+  chatId?: number | null;
+  chatIdentifier?: string | null;
+  senderId: string;
+}): BlueBubblesInboundChatResolveTarget | null {
+  if (params.isGroup) {
+    if (typeof params.chatId === "number" && Number.isFinite(params.chatId)) {
+      return { kind: "chat_id", chatId: params.chatId };
+    }
+    const trimmedIdentifier = params.chatIdentifier?.trim();
+    if (trimmedIdentifier) {
+      return { kind: "chat_identifier", chatIdentifier: trimmedIdentifier };
+    }
+    return null;
+  }
+  const trimmedSender = params.senderId.trim();
+  if (!trimmedSender) {
+    return null;
+  }
+  return { kind: "handle", address: trimmedSender };
+}
+
 function logGroupAllowlistHint(params: {
   runtime: BlueBubblesRuntimeEnv;
   reason: string;
@@ -583,9 +631,22 @@ function buildInboundHistorySnapshot(params: {
 }
 
 function sanitizeForLog(value: unknown, maxLen = 200): string {
-  const cleaned = String(value).replace(/[\r\n\t\p{C}]/gu, " ");
+  let cleaned = String(value).replace(/[\r\n\t\p{C}]/gu, " ");
+  // Redact common secret-bearing patterns before logging. BlueBubbles uses
+  // query-string auth (`?password=...`, `?guid=...`, or `?token=...`) by
+  // default, so attachment download failures and similar errors can carry the
+  // API password in the captured request URL; other libraries occasionally
+  // surface `Authorization: Bearer ...` headers in error chains. Strip both
+  // before they reach the log sink (CWE-532).
+  cleaned = cleaned.replace(
+    /([?&](?:password|guid|token|api[_-]?key|secret)=)[^&\s"]+/gi,
+    "$1<redacted>",
+  );
+  cleaned = cleaned.replace(/(authorization\s*:\s*(?:bearer|basic)\s+)[^\s"]+/gi, "$1<redacted>");
   return cleaned.length > maxLen ? cleaned.slice(0, maxLen) + "..." : cleaned;
 }
+
+export const _sanitizeBlueBubblesLogValueForTest = sanitizeForLog;
 
 /**
  * Signal object threaded through `processMessageAfterDedupe` so the outer
@@ -754,7 +815,7 @@ async function processMessageAfterDedupe(
       logVerbose(
         core,
         runtime,
-        `attachment retry failed for msgId=${message.messageId}: ${String(err)}`,
+        `attachment retry failed for msgId=${sanitizeForLog(message.messageId)}: ${sanitizeForLog(err)}`,
       );
     }
   }
@@ -848,18 +909,22 @@ async function processMessageAfterDedupe(
   }
 
   if (isSelfChatMessage && hasBlueBubblesSelfChatCopy(selfChatLookup)) {
-    logVerbose(core, runtime, `drop: reflected self-chat duplicate sender=${message.senderId}`);
+    logVerbose(
+      core,
+      runtime,
+      `drop: reflected self-chat duplicate sender=${sanitizeForLog(message.senderId)}`,
+    );
     return;
   }
 
   if (!rawBody) {
-    logVerbose(core, runtime, `drop: empty text sender=${message.senderId}`);
+    logVerbose(core, runtime, `drop: empty text sender=${sanitizeForLog(message.senderId)}`);
     return;
   }
   logVerbose(
     core,
     runtime,
-    `msg sender=${message.senderId} group=${isGroup} textLen=${text.length} attachments=${attachments.length} chatGuid=${message.chatGuid ?? ""} chatId=${message.chatId ?? ""}`,
+    `msg sender=${sanitizeForLog(message.senderId)} group=${isGroup} textLen=${text.length} attachments=${attachments.length} chatGuid=${sanitizeForLog(message.chatGuid ?? "")} chatId=${sanitizeForLog(message.chatId ?? "")}`,
   );
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
@@ -955,8 +1020,14 @@ async function processMessageAfterDedupe(
         senderIdLine: `Your BlueBubbles sender id: ${message.senderId}`,
         meta: { name: message.senderName },
         onCreated: () => {
-          runtime.log?.(`[bluebubbles] pairing request sender=${message.senderId} created=true`);
-          logVerbose(core, runtime, `bluebubbles pairing request sender=${message.senderId}`);
+          runtime.log?.(
+            `[bluebubbles] pairing request sender=${sanitizeForLog(message.senderId)} created=true`,
+          );
+          logVerbose(
+            core,
+            runtime,
+            `bluebubbles pairing request sender=${sanitizeForLog(message.senderId)}`,
+          );
         },
         sendPairingReply: async (text) => {
           await sendMessageBlueBubbles(message.senderId, text, {
@@ -969,10 +1040,10 @@ async function processMessageAfterDedupe(
           logVerbose(
             core,
             runtime,
-            `bluebubbles pairing reply failed for ${message.senderId}: ${String(err)}`,
+            `bluebubbles pairing reply failed for ${sanitizeForLog(message.senderId)}: ${sanitizeForLog(err)}`,
           );
           runtime.error?.(
-            `[bluebubbles] pairing reply failed sender=${message.senderId}: ${String(err)}`,
+            `[bluebubbles] pairing reply failed sender=${sanitizeForLog(message.senderId)}: ${sanitizeForLog(err)}`,
           );
         },
       });
@@ -1103,7 +1174,7 @@ async function processMessageAfterDedupe(
       logVerbose(
         core,
         runtime,
-        `bluebubbles: participant fallback lookup failed chat=${peerId}: ${String(err)}`,
+        `bluebubbles: participant fallback lookup failed chat=${sanitizeForLog(peerId)}: ${sanitizeForLog(err)}`,
       );
     }
   }
@@ -1166,11 +1237,17 @@ async function processMessageAfterDedupe(
             mediaTypes.push(saved.contentType);
           }
         } catch (err) {
-          logVerbose(
-            core,
-            runtime,
-            `attachment download failed guid=${attachment.guid} err=${String(err)}`,
+          // Promote to runtime.error so silently-dropped inbound images are
+          // visible at default log level, while keeping verbose detail for
+          // debug sessions. Sanitize both fields — BB attachment GUIDs are
+          // user-influenced and the error chain can carry the password
+          // (see sanitizeForLog above).
+          const safeGuid = sanitizeForLog(attachment.guid, 80);
+          const safeErr = sanitizeForLog(err);
+          runtime.error?.(
+            `[bluebubbles] attachment download failed guid=${safeGuid} err=${safeErr}`,
           );
+          logVerbose(core, runtime, `attachment download failed guid=${safeGuid} err=${safeErr}`);
         }
       }
     }
@@ -1206,6 +1283,49 @@ async function processMessageAfterDedupe(
           core,
           runtime,
           `reply-context cache hit replyToId=${replyToId} sender=${replyToSender ?? ""} body="${preview}"`,
+        );
+      }
+    }
+  }
+
+  // Opt-in fallback: if the in-memory cache missed and the BB credentials are
+  // available, ask the BlueBubbles HTTP API for the original message. Useful
+  // when multiple OpenClaw instances share one BB account, after a restart,
+  // or when the cache TTL has evicted the message. Best-effort, never throws.
+  if (
+    replyToId &&
+    (!replyToBody || !replyToSender) &&
+    baseUrl &&
+    password &&
+    account.config.replyContextApiFallback === true
+  ) {
+    const fetched = await fetchBlueBubblesReplyContext({
+      accountId: account.accountId,
+      replyToId,
+      baseUrl,
+      password,
+      accountConfig: account.config,
+      chatGuid: message.chatGuid,
+      chatIdentifier: message.chatIdentifier,
+      chatId: message.chatId,
+    });
+    if (fetched) {
+      if (!replyToBody && fetched.body) {
+        replyToBody = fetched.body;
+      }
+      if (!replyToSender && fetched.sender) {
+        replyToSender = fetched.sender;
+      }
+      if (core.logging.shouldLogVerbose()) {
+        // Run the body preview through sanitizeForLog so the redaction regex
+        // (?password=, ?token=, Authorization: …) catches credential-shaped
+        // strings that may appear in user message bodies, matching the
+        // hygiene of adjacent verbose log lines in this file.
+        const preview = sanitizeForLog((fetched.body ?? "").replace(/\s+/g, " "), 120);
+        logVerbose(
+          core,
+          runtime,
+          `reply-context API fallback replyToId=${sanitizeForLog(replyToId)} sender=${sanitizeForLog(fetched.sender ?? "")} body="${preview}"`,
         );
       }
     }
@@ -1295,13 +1415,13 @@ async function processMessageAfterDedupe(
   });
   let chatGuidForActions = chatGuid;
   if (!chatGuidForActions && baseUrl && password) {
-    const resolveTarget =
-      isGroup && (chatId || chatIdentifier)
-        ? chatId
-          ? ({ kind: "chat_id", chatId } as const)
-          : ({ kind: "chat_identifier", chatIdentifier: chatIdentifier ?? "" } as const)
-        : ({ kind: "handle", address: message.senderId } as const);
-    if (resolveTarget.kind !== "chat_identifier" || resolveTarget.chatIdentifier) {
+    const resolveTarget = buildBlueBubblesInboundChatResolveTarget({
+      isGroup,
+      chatId,
+      chatIdentifier,
+      senderId: message.senderId,
+    });
+    if (resolveTarget) {
       chatGuidForActions =
         (await resolveChatGuidForTarget({
           baseUrl,
@@ -1309,6 +1429,12 @@ async function processMessageAfterDedupe(
           target: resolveTarget,
           allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
         })) ?? undefined;
+    } else {
+      logVerbose(
+        core,
+        runtime,
+        `cannot resolve chatGuid for group inbound (chatGuid/chatId/chatIdentifier all missing); senderId=${sanitizeForLog(message.senderId)}`,
+      );
     }
   }
 
@@ -1348,7 +1474,7 @@ async function processMessageAfterDedupe(
             logVerbose(
               core,
               runtime,
-              `ack reaction failed chatGuid=${chatGuidForActions} msg=${ackMessageId}: ${String(err)}`,
+              `ack reaction failed chatGuid=${sanitizeForLog(chatGuidForActions)} msg=${sanitizeForLog(ackMessageId)}: ${sanitizeForLog(err)}`,
             );
             return false;
           },
@@ -1363,9 +1489,9 @@ async function processMessageAfterDedupe(
         cfg: config,
         accountId: account.accountId,
       });
-      logVerbose(core, runtime, `marked read chatGuid=${chatGuidForActions}`);
+      logVerbose(core, runtime, `marked read chatGuid=${sanitizeForLog(chatGuidForActions)}`);
     } catch (err) {
-      runtime.error?.(`[bluebubbles] mark read failed: ${String(err)}`);
+      runtime.error?.(`[bluebubbles] mark read failed: ${sanitizeForLog(err)}`);
     }
   } else if (!sendReadReceipts) {
     logVerbose(core, runtime, "mark read skipped (sendReadReceipts=false)");
@@ -1415,6 +1541,45 @@ async function processMessageAfterDedupe(
       .replace(REPLY_DIRECTIVE_TAG_RE, " ")
       .replace(/[ \t]+/g, " ")
       .trim();
+  };
+  const resolveReplyToMessageGuidForPayload = (payload: { replyToId?: string | null }): string => {
+    const rawReplyToId =
+      privateApiEnabled && typeof payload.replyToId === "string" ? payload.replyToId.trim() : "";
+    if (!rawReplyToId) {
+      return "";
+    }
+    return (
+      resolveBlueBubblesMessageId(rawReplyToId, {
+        requireKnownShortId: true,
+        chatContext: {
+          chatGuid: chatGuidForActions ?? chatGuid,
+          chatIdentifier,
+          chatId,
+        },
+      }) || ""
+    );
+  };
+  const prepareBlueBubblesReplyPayload = (payload: ReplyPayload): ReplyPayload => {
+    const tableMode = core.channel.text.resolveMarkdownTableMode({
+      cfg: config,
+      channel: "bluebubbles",
+      accountId: account.accountId,
+    });
+    const text = sanitizeReplyDirectiveText(
+      core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
+    );
+    return {
+      ...payload,
+      text,
+      ...(typeof payload.replyToId === "string" && !privateApiEnabled ? { replyToId: "" } : {}),
+    };
+  };
+  const canUseDurableBlueBubblesFinalDelivery = (payload: { text?: string }): boolean => {
+    const textLimit =
+      account.config.textChunkLimit && account.config.textChunkLimit > 0
+        ? account.config.textChunkLimit
+        : DEFAULT_TEXT_LIMIT;
+    return (payload.text ?? "").length <= textLimit;
   };
 
   // History: in-memory rolling map with bounded API backfill retries
@@ -1507,7 +1672,7 @@ async function processMessageAfterDedupe(
         logVerbose(
           core,
           runtime,
-          `history backfill failed for ${historyIdentifier}: ${String(err)} (retries left=${Math.max(remainingAttempts, 0)} next_in_ms=${nextBackoffMs})`,
+          `history backfill failed for ${sanitizeForLog(historyIdentifier)}: ${sanitizeForLog(err)} (retries left=${Math.max(remainingAttempts, 0)} next_in_ms=${nextBackoffMs})`,
         );
       }
     }
@@ -1598,76 +1763,232 @@ async function processMessageAfterDedupe(
         cfg: config,
         accountId: account.accountId,
       }).catch((err) => {
-        runtime.error?.(`[bluebubbles] typing restart failed: ${String(err)}`);
+        runtime.error?.(`[bluebubbles] typing restart failed: ${sanitizeForLog(err)}`);
       });
     }, typingRestartDelayMs);
   };
   try {
-    const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
-      cfg: config,
-      agentId: route.agentId,
+    const typingCallbacks = {
+      onReplyStart: async () => {
+        if (!chatGuidForActions) {
+          return;
+        }
+        if (!baseUrl || !password) {
+          return;
+        }
+        streamingActive = true;
+        clearTypingRestartTimer();
+        try {
+          await sendBlueBubblesTyping(chatGuidForActions, true, {
+            cfg: config,
+            accountId: account.accountId,
+          });
+        } catch (err) {
+          runtime.error?.(`[bluebubbles] typing start failed: ${sanitizeForLog(err)}`);
+        }
+      },
+      onIdle: () => {
+        if (!chatGuidForActions) {
+          return;
+        }
+        if (!baseUrl || !password) {
+          return;
+        }
+        // Intentionally no-op for block streaming. We stop typing in finally
+        // after the run completes to avoid flicker between paragraph blocks.
+      },
+    };
+    await core.channel.turn.run({
       channel: "bluebubbles",
       accountId: account.accountId,
-      typingCallbacks: {
-        onReplyStart: async () => {
-          if (!chatGuidForActions) {
-            return;
-          }
-          if (!baseUrl || !password) {
-            return;
-          }
-          streamingActive = true;
-          clearTypingRestartTimer();
-          try {
-            await sendBlueBubblesTyping(chatGuidForActions, true, {
-              cfg: config,
-              accountId: account.accountId,
-            });
-          } catch (err) {
-            runtime.error?.(`[bluebubbles] typing start failed: ${String(err)}`);
-          }
-        },
-        onIdle: () => {
-          if (!chatGuidForActions) {
-            return;
-          }
-          if (!baseUrl || !password) {
-            return;
-          }
-          // Intentionally no-op for block streaming. We stop typing in finally
-          // after the run completes to avoid flicker between paragraph blocks.
-        },
-      },
-    });
-    await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-      ctx: ctxPayload,
-      cfg: config,
-      dispatcherOptions: {
-        ...replyPipeline,
-        deliver: async (payload, info) => {
-          const rawReplyToId =
-            privateApiEnabled && typeof payload.replyToId === "string"
-              ? payload.replyToId.trim()
-              : "";
-          // Resolve short ID (e.g., "5") to full UUID
-          const replyToMessageGuid = rawReplyToId
-            ? resolveBlueBubblesMessageId(rawReplyToId, { requireKnownShortId: true })
-            : "";
-          const mediaList = resolveOutboundMediaUrls(payload);
-          if (mediaList.length > 0) {
-            const tableMode = core.channel.text.resolveMarkdownTableMode({
-              cfg: config,
-              channel: "bluebubbles",
-              accountId: account.accountId,
-            });
-            const text = sanitizeReplyDirectiveText(
-              core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
-            );
-            await sendMediaWithLeadingCaption({
-              mediaUrls: mediaList,
-              caption: text,
-              send: async ({ mediaUrl, caption }) => {
-                const cachedBody = (caption ?? "").trim() || "<media:attachment>";
+      raw: ctxPayload,
+      adapter: {
+        ingest: () => ({
+          id: String(ctxPayload.MessageSid ?? message.messageId),
+          timestamp: message.timestamp,
+          rawText: rawBody,
+          textForAgent: rawBody,
+          textForCommands: commandBody,
+          raw: ctxPayload,
+        }),
+        resolveTurn: () => ({
+          cfg: config,
+          channel: "bluebubbles",
+          accountId: account.accountId,
+          agentId: route.agentId,
+          routeSessionKey: route.sessionKey,
+          storePath,
+          ctxPayload,
+          recordInboundSession: core.channel.session.recordInboundSession,
+          dispatchReplyWithBufferedBlockDispatcher:
+            core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+          delivery: {
+            preparePayload: (payload) => prepareBlueBubblesReplyPayload(payload),
+            durable: (payload, info) => {
+              if (info.kind !== "final" || !canUseDurableBlueBubblesFinalDelivery(payload)) {
+                return false;
+              }
+              const replyToMessageGuid = resolveReplyToMessageGuidForPayload(payload);
+              return {
+                to: outboundTarget,
+                replyToId:
+                  typeof payload.replyToId === "string" ? payload.replyToId.trim() || null : null,
+                deps: {
+                  bluebubblesMessageLifecycle: {
+                    beforeSendAttempt: (ctx: { kind: string; text?: string }) => {
+                      const snippet =
+                        ctx.kind === "media"
+                          ? (ctx.text ?? "").trim() || "<media:attachment>"
+                          : (ctx.text ?? "").trim();
+                      return rememberPendingOutboundMessageId({
+                        accountId: account.accountId,
+                        sessionKey: route.sessionKey,
+                        outboundTarget,
+                        chatGuid: chatGuidForActions ?? chatGuid,
+                        chatIdentifier,
+                        chatId,
+                        snippet,
+                      });
+                    },
+                    afterSendSuccess: (ctx: {
+                      kind: string;
+                      text?: string;
+                      result?: { messageId?: string };
+                      attemptToken?: unknown;
+                    }) => {
+                      const snippet =
+                        ctx.kind === "media"
+                          ? (ctx.text ?? "").trim() || "<media:attachment>"
+                          : (ctx.text ?? "").trim();
+                      if (
+                        maybeEnqueueOutboundMessageId(ctx.result?.messageId, snippet) &&
+                        typeof ctx.attemptToken === "number"
+                      ) {
+                        forgetPendingOutboundMessageId(ctx.attemptToken);
+                      }
+                    },
+                    afterSendFailure: (ctx: { attemptToken?: unknown }) => {
+                      if (typeof ctx.attemptToken === "number") {
+                        forgetPendingOutboundMessageId(ctx.attemptToken);
+                      }
+                    },
+                  },
+                },
+                requiredCapabilities: deriveDurableFinalDeliveryRequirements({
+                  payload,
+                  replyToId: replyToMessageGuid || null,
+                  afterSendSuccess: true,
+                }),
+              };
+            },
+            onDelivered: (_payload, info, result) => {
+              if (!result?.deliveryIntent) {
+                return;
+              }
+              if (result.visibleReplySent === true) {
+                sentMessage = true;
+                statusSink?.({ lastOutboundAt: Date.now() });
+                if (info.kind === "block") {
+                  restartTypingSoon();
+                }
+              }
+            },
+            deliver: async (payload, info) => {
+              const rawReplyToId =
+                privateApiEnabled && typeof payload.replyToId === "string"
+                  ? payload.replyToId.trim()
+                  : "";
+              // Resolve short ID (e.g., "5") to full UUID, scoped to the chat
+              // this deliver path is already routing for (cross-chat guard).
+              const replyToMessageGuid = rawReplyToId
+                ? resolveBlueBubblesMessageId(rawReplyToId, {
+                    requireKnownShortId: true,
+                    chatContext: {
+                      chatGuid: chatGuidForActions ?? chatGuid,
+                      chatIdentifier,
+                      chatId,
+                    },
+                  })
+                : "";
+              const mediaList = resolveOutboundMediaUrls(payload);
+              if (mediaList.length > 0) {
+                const tableMode = core.channel.text.resolveMarkdownTableMode({
+                  cfg: config,
+                  channel: "bluebubbles",
+                  accountId: account.accountId,
+                });
+                const text = sanitizeReplyDirectiveText(
+                  core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
+                );
+                await sendMediaWithLeadingCaption({
+                  mediaUrls: mediaList,
+                  caption: text,
+                  send: async ({ mediaUrl, caption }) => {
+                    const cachedBody = (caption ?? "").trim() || "<media:attachment>";
+                    const pendingId = rememberPendingOutboundMessageId({
+                      accountId: account.accountId,
+                      sessionKey: route.sessionKey,
+                      outboundTarget,
+                      chatGuid: chatGuidForActions ?? chatGuid,
+                      chatIdentifier,
+                      chatId,
+                      snippet: cachedBody,
+                    });
+                    let result: Awaited<ReturnType<typeof sendBlueBubblesMedia>>;
+                    try {
+                      result = await sendBlueBubblesMedia({
+                        cfg: config,
+                        to: outboundTarget,
+                        mediaUrl,
+                        caption: caption ?? undefined,
+                        replyToId: replyToMessageGuid || null,
+                        accountId: account.accountId,
+                        asVoice: payload.audioAsVoice === true,
+                      });
+                    } catch (err) {
+                      forgetPendingOutboundMessageId(pendingId);
+                      throw err;
+                    }
+                    if (maybeEnqueueOutboundMessageId(result.messageId, cachedBody)) {
+                      forgetPendingOutboundMessageId(pendingId);
+                    }
+                    sentMessage = true;
+                    statusSink?.({ lastOutboundAt: Date.now() });
+                    if (info.kind === "block") {
+                      restartTypingSoon();
+                    }
+                  },
+                });
+                return;
+              }
+
+              const textLimit =
+                account.config.textChunkLimit && account.config.textChunkLimit > 0
+                  ? account.config.textChunkLimit
+                  : DEFAULT_TEXT_LIMIT;
+              const chunkMode = account.config.chunkMode ?? "length";
+              const tableMode = core.channel.text.resolveMarkdownTableMode({
+                cfg: config,
+                channel: "bluebubbles",
+                accountId: account.accountId,
+              });
+              const text = sanitizeReplyDirectiveText(
+                core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
+              );
+              const chunks =
+                chunkMode === "newline"
+                  ? resolveTextChunksWithFallback(
+                      text,
+                      core.channel.text.chunkTextWithMode(text, textLimit, chunkMode),
+                    )
+                  : resolveTextChunksWithFallback(
+                      text,
+                      core.channel.text.chunkMarkdownText(text, textLimit),
+                    );
+              if (!chunks.length) {
+                return;
+              }
+              for (const chunk of chunks) {
                 const pendingId = rememberPendingOutboundMessageId({
                   accountId: account.accountId,
                   sessionKey: route.sessionKey,
@@ -1675,23 +1996,20 @@ async function processMessageAfterDedupe(
                   chatGuid: chatGuidForActions ?? chatGuid,
                   chatIdentifier,
                   chatId,
-                  snippet: cachedBody,
+                  snippet: chunk,
                 });
-                let result: Awaited<ReturnType<typeof sendBlueBubblesMedia>>;
+                let result: Awaited<ReturnType<typeof sendMessageBlueBubbles>>;
                 try {
-                  result = await sendBlueBubblesMedia({
+                  result = await sendMessageBlueBubbles(outboundTarget, chunk, {
                     cfg: config,
-                    to: outboundTarget,
-                    mediaUrl,
-                    caption: caption ?? undefined,
-                    replyToId: replyToMessageGuid || null,
                     accountId: account.accountId,
+                    replyToMessageGuid: replyToMessageGuid || undefined,
                   });
                 } catch (err) {
                   forgetPendingOutboundMessageId(pendingId);
                   throw err;
                 }
-                if (maybeEnqueueOutboundMessageId(result.messageId, cachedBody)) {
+                if (maybeEnqueueOutboundMessageId(result.messageId, chunk)) {
                   forgetPendingOutboundMessageId(pendingId);
                 }
                 sentMessage = true;
@@ -1699,93 +2017,44 @@ async function processMessageAfterDedupe(
                 if (info.kind === "block") {
                   restartTypingSoon();
                 }
-              },
-            });
-            return;
-          }
-
-          const textLimit =
-            account.config.textChunkLimit && account.config.textChunkLimit > 0
-              ? account.config.textChunkLimit
-              : DEFAULT_TEXT_LIMIT;
-          const chunkMode = account.config.chunkMode ?? "length";
-          const tableMode = core.channel.text.resolveMarkdownTableMode({
-            cfg: config,
-            channel: "bluebubbles",
-            accountId: account.accountId,
-          });
-          const text = sanitizeReplyDirectiveText(
-            core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
-          );
-          const chunks =
-            chunkMode === "newline"
-              ? resolveTextChunksWithFallback(
-                  text,
-                  core.channel.text.chunkTextWithMode(text, textLimit, chunkMode),
-                )
-              : resolveTextChunksWithFallback(
-                  text,
-                  core.channel.text.chunkMarkdownText(text, textLimit),
-                );
-          if (!chunks.length) {
-            return;
-          }
-          for (const chunk of chunks) {
-            const pendingId = rememberPendingOutboundMessageId({
-              accountId: account.accountId,
-              sessionKey: route.sessionKey,
-              outboundTarget,
-              chatGuid: chatGuidForActions ?? chatGuid,
-              chatIdentifier,
-              chatId,
-              snippet: chunk,
-            });
-            let result: Awaited<ReturnType<typeof sendMessageBlueBubbles>>;
-            try {
-              result = await sendMessageBlueBubbles(outboundTarget, chunk, {
-                cfg: config,
-                accountId: account.accountId,
-                replyToMessageGuid: replyToMessageGuid || undefined,
-              });
-            } catch (err) {
-              forgetPendingOutboundMessageId(pendingId);
-              throw err;
-            }
-            if (maybeEnqueueOutboundMessageId(result.messageId, chunk)) {
-              forgetPendingOutboundMessageId(pendingId);
-            }
-            sentMessage = true;
-            statusSink?.({ lastOutboundAt: Date.now() });
-            if (info.kind === "block") {
-              restartTypingSoon();
-            }
-          }
-        },
-        onReplyStart: typingCallbacks?.onReplyStart,
-        onIdle: typingCallbacks?.onIdle,
-        onError: (err, info) => {
-          // Flag the outer dedupe wrapper so it releases the claim instead
-          // of committing. Without this, a transient BlueBubbles send failure
-          // would permanently block replay-retry for 7 days and the user
-          // would never receive a reply to that message.
-          //
-          // Only the terminal `final` delivery represents the user-visible
-          // answer. The dispatcher continues past `tool` / `block` failures
-          // and may still deliver `final` successfully — releasing the
-          // dedupe claim for those would invite a replay that re-runs tool
-          // side effects and resends partially-delivered content.
-          if (info.kind === "final") {
-            dedupeSignal.deliveryFailed = true;
-          }
-          runtime.error?.(`BlueBubbles ${info.kind} reply failed: ${String(err)}`);
-        },
-      },
-      replyOptions: {
-        onModelSelected,
-        disableBlockStreaming:
-          typeof account.config.blockStreaming === "boolean"
-            ? !account.config.blockStreaming
-            : undefined,
+              }
+            },
+            onError: (err, info) => {
+              // Flag the outer dedupe wrapper so it releases the claim instead
+              // of committing. Without this, a transient BlueBubbles send failure
+              // would permanently block replay-retry for 7 days and the user
+              // would never receive a reply to that message.
+              //
+              // Only the terminal `final` delivery represents the user-visible
+              // answer. The dispatcher continues past `tool` / `block` failures
+              // and may still deliver `final` successfully — releasing the
+              // dedupe claim for those would invite a replay that re-runs tool
+              // side effects and resends partially-delivered content.
+              if (info.kind === "final") {
+                dedupeSignal.deliveryFailed = true;
+              }
+              runtime.error?.(`BlueBubbles ${info.kind} reply failed: ${sanitizeForLog(err)}`);
+            },
+          },
+          replyPipeline: {
+            typingCallbacks,
+          },
+          dispatcherOptions: {
+            onReplyStart: typingCallbacks.onReplyStart,
+            onIdle: typingCallbacks.onIdle,
+          },
+          replyOptions: {
+            disableBlockStreaming:
+              typeof account.config.blockStreaming === "boolean"
+                ? !account.config.blockStreaming
+                : undefined,
+          },
+          record: {
+            onRecordError: (err) => {
+              runtime.error?.(`[bluebubbles] failed updating session meta: ${sanitizeForLog(err)}`);
+            },
+          },
+        }),
       },
     });
   } finally {
@@ -1845,6 +2114,31 @@ export async function processReaction(
     accountId: account.accountId,
   });
   if (reaction.fromMe) {
+    return;
+  }
+
+  // Group reaction with no chat identifiers cannot be routed safely. The
+  // peerId fallback below would degrade to the literal string "group", and
+  // resolveBlueBubblesConversationRoute would then synthesize a session key
+  // unrelated to any real binding — worse, an isGroup=false misclassification
+  // upstream would have routed this to the sender's DM session, surfacing
+  // a group tapback inside an unrelated 1:1 transcript. Drop+log instead.
+  // Treat whitespace-only chatGuid/chatIdentifier as missing — a webhook
+  // sender that supplies " " or "\t" must not be able to satisfy the guard
+  // and have peerId degrade to the literal "group" anyway.
+  const trimmedReactionChatGuid = reaction.chatGuid?.trim();
+  const trimmedReactionChatIdentifier = reaction.chatIdentifier?.trim();
+  if (
+    reaction.isGroup &&
+    !trimmedReactionChatGuid &&
+    reaction.chatId == null &&
+    !trimmedReactionChatIdentifier
+  ) {
+    logVerbose(
+      core,
+      runtime,
+      `dropping group reaction with no chat identifiers (senderId=${sanitizeForLog(reaction.senderId)} messageId=${sanitizeForLog(reaction.messageId)} action=${sanitizeForLog(reaction.action)})`,
+    );
     return;
   }
 

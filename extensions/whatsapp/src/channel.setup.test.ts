@@ -1,7 +1,7 @@
+import { createQueuedWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createQueuedWizardPrompter } from "../../../test/helpers/plugins/setup-wizard.js";
 import { WHATSAPP_AUTH_UNSTABLE_CODE } from "./auth-store.js";
 import { whatsappSetupPlugin } from "./channel.setup.js";
 import { checkWhatsAppHeartbeatReady } from "./heartbeat.js";
@@ -170,6 +170,23 @@ describe("whatsapp setup wizard", () => {
     expect(result.accountId).toBe(DEFAULT_ACCOUNT_ID);
     expect(hoisted.loginWeb).not.toHaveBeenCalled();
     expectWhatsAppOwnerAllowlistSetup(result.cfg, harness);
+  });
+
+  it("rejects invalid owner numbers during prompt validation", async () => {
+    const harness = createWhatsAppOwnerAllowlistHarness(createQueuedWizardPrompter);
+
+    await runConfigureWithHarness({
+      harness,
+      forceAllowFrom: true,
+    });
+
+    const prompt = harness.text.mock.calls[0]?.[0] as
+      | { validate?: (value: string) => string | undefined }
+      | undefined;
+    expect(prompt?.validate).toEqual(expect.any(Function));
+    expect(prompt?.validate?.("abc")).toBe("Invalid number: abc");
+    expect(prompt?.validate?.("whatsapp:")).toBe("Invalid number: whatsapp:");
+    expect(prompt?.validate?.("+1 (555) 555-0123")).toBeUndefined();
   });
 
   it("supports disabled DM policy for separate-phone setup", async () => {

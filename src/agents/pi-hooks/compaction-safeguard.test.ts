@@ -1433,6 +1433,13 @@ describe("compaction-safeguard recent-turn preservation", () => {
       preparation: {
         messagesToSummarize: [
           { role: "user", content: "older context", timestamp: 1 },
+          {
+            role: "custom",
+            customType: "openclaw.runtime-context",
+            content: "secret runtime context",
+            display: false,
+            timestamp: 1.5,
+          } as unknown as AgentMessage,
           { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
           { role: "user", content: "latest ask status", timestamp: 3 },
           {
@@ -1831,6 +1838,9 @@ describe("compaction-safeguard recent-turn preservation", () => {
         },
       }),
     );
+    const providerMessages = providerSummarize.mock.calls[0]?.[0]?.messages ?? [];
+    expect(JSON.stringify(providerMessages)).not.toContain("openclaw.runtime-context");
+    expect(JSON.stringify(providerMessages)).not.toContain("secret runtime context");
     expect(compaction.summary).toContain("provider summary body");
     expect(compaction.summary).toContain("**Turn Context (split turn):**");
     expect(compaction.summary).toContain("prefix request that was split out");
@@ -2025,6 +2035,138 @@ describe("compaction-safeguard double-compaction guard", () => {
     // Should NOT take the boundary fast-path — falls through to normal compaction
     // (which cancels due to no API key, but that's the expected normal path)
     expect(result).toEqual({ cancel: true });
+  });
+
+  it("does not write boundary when visible custom turn-prefix content is real conversation", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [
+          {
+            role: "custom" as const,
+            customType: "cron-request",
+            content: "prepare the daily report",
+            display: true,
+            timestamp: 1,
+          },
+          {
+            role: "assistant" as const,
+            content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+            timestamp: 2,
+          },
+          {
+            role: "toolResult" as const,
+            toolCallId: "call-1",
+            toolName: "read",
+            content: [{ type: "text", text: "report source data" }],
+            timestamp: 3,
+          },
+        ] as AgentMessage[],
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 38085,
+        fileOps: { read: [], edited: [], written: [] },
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: null,
+    });
+
+    expect(result).toEqual({ cancel: true });
+    expect(getApiKeyAndHeadersMock).toHaveBeenCalled();
+  });
+
+  it("falls back to visible custom session branch entries before writing an empty boundary", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("branch summary");
+
+    const now = Date.now();
+    const sessionManager = {
+      ...stubSessionManager(),
+      getBranch: () => [
+        {
+          type: "custom_message",
+          id: "custom-1",
+          parentId: null,
+          timestamp: new Date(now).toISOString(),
+          customType: "cron-request",
+          content: "prepare the daily report",
+          display: true,
+        },
+        {
+          type: "message",
+          id: "assistant-1",
+          parentId: "custom-1",
+          timestamp: new Date(now + 1).toISOString(),
+          message: {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+            timestamp: now + 1,
+          },
+        },
+        {
+          type: "message",
+          id: "tool-1",
+          parentId: "assistant-1",
+          timestamp: new Date(now + 2).toISOString(),
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "read",
+            content: [{ type: "text", text: "report source data" }],
+            timestamp: now + 2,
+          },
+        },
+      ],
+    } as ExtensionContext["sessionManager"];
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 38085,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4000 },
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: "test-key",
+    });
+
+    const compaction = expectCompactionResult(result);
+    expect(compaction.summary).toContain("branch summary");
+    expect(compaction.summary).not.toContain("No prior history.");
+    expect(mockSummarizeInStages).toHaveBeenCalled();
+    const summaryCall = mockSummarizeInStages.mock.calls[0]?.[0];
+    expect(summaryCall?.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "custom",
+          customType: "cron-request",
+          content: "prepare the daily report",
+        }),
+        expect.objectContaining({
+          role: "toolResult",
+          toolName: "read",
+        }),
+      ]),
+    );
   });
 
   it("continues when messages include real conversation content", async () => {

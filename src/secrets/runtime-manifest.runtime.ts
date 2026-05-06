@@ -1,1 +1,4 @@
-export { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+export {
+  listPluginOriginsFromMetadataSnapshot,
+  loadPluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";

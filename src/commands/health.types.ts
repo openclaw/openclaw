@@ -20,10 +20,27 @@ export type AgentHealthSummary = {
   sessions: HealthSummary["sessions"];
 };
 
+export type PluginHealthErrorSummary = {
+  id: string;
+  origin: string;
+  activated: boolean;
+  activationSource?: string;
+  activationReason?: string;
+  failurePhase?: string;
+  error: string;
+};
+
+export type PluginHealthSummary = {
+  loaded: string[];
+  errors: PluginHealthErrorSummary[];
+};
+
 export type HealthSummary = {
   ok: true;
   ts: number;
   durationMs: number;
+  eventLoop?: import("../gateway/server/event-loop-health.js").GatewayEventLoopHealth;
+  plugins?: PluginHealthSummary;
   channels: Record<string, ChannelHealthSummary>;
   channelOrder: string[];
   channelLabels: Record<string, string>;

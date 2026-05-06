@@ -9,7 +9,7 @@ title: "Audio and voice notes"
 
 ## What works
 
-- **Media understanding (audio)**: If audio understanding is enabled (or auto‑detected), OpenClaw:
+- **Media understanding (audio)**: If audio understanding is enabled (or auto-detected), OpenClaw:
   1. Locates the first audio attachment (local path or URL) and downloads it if needed.
   2. Enforces `maxBytes` before sending to each model entry.
   3. Runs the first eligible model entry in order (provider or CLI).
@@ -20,7 +20,7 @@ title: "Audio and voice notes"
 
 ## Auto-detection (default)
 
-If you **don’t configure models** and `tools.media.audio.enabled` is **not** set to `false`,
+If you **don't configure models** and `tools.media.audio.enabled` is **not** set to `false`,
 OpenClaw auto-detects in this order and stops at the first working option:
 
 1. **Active reply model** when its provider supports audio understanding.
@@ -144,7 +144,7 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 }
 ```
 
-## Notes & limits
+## Notes and limits
 
 - Provider auth follows the standard model auth order (auth profiles, env vars, `models.providers.*.apiKey`).
 - Groq setup details: [Groq](/providers/groq).
@@ -163,6 +163,7 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 - `tools.media.audio.echoTranscript` is off by default; enable it to send transcript confirmation back to the originating chat before agent processing.
 - `tools.media.audio.echoFormat` customizes the echo text (placeholder: `{transcript}`).
 - CLI stdout is capped (5MB); keep CLI output concise.
+- CLI `args` should use `{{MediaPath}}` for the local audio file path. Run `openclaw doctor --fix` to migrate deprecated `{input}` placeholders from older `audio.transcription.command` configs.
 
 ### Proxy environment support
 
@@ -170,12 +171,14 @@ Provider-based audio transcription honors standard outbound proxy env vars:
 
 - `HTTPS_PROXY`
 - `HTTP_PROXY`
+- `ALL_PROXY`
 - `https_proxy`
 - `http_proxy`
+- `all_proxy`
 
 If no proxy env vars are set, direct egress is used. If proxy config is malformed, OpenClaw logs a warning and falls back to direct fetch.
 
-## Mention Detection in Groups
+## Mention detection in groups
 
 When `requireMention: true` is set for a group chat, OpenClaw now transcribes audio **before** checking for mentions. This allows voice notes to be processed even when they contain mentions.
 

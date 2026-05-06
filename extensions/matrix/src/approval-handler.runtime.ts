@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import type {
   ChannelApprovalCapabilityHandlerContext,
   PendingApprovalView,
@@ -11,7 +12,14 @@ import {
   type ExecApprovalReplyDecision,
 } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { buildPluginApprovalResolvedReplyPayload } from "openclaw/plugin-sdk/approval-runtime";
-import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
+import type {
+  ExecApprovalRequest,
+  PluginApprovalRequest,
+} from "openclaw/plugin-sdk/approval-runtime";
+import {
+  listMessageReceiptPlatformIds,
+  resolveMessageReceiptPrimaryId,
+} from "openclaw/plugin-sdk/channel-message";
 import {
   buildMatrixApprovalReactionHint,
   listMatrixApprovalReactionBindings,
@@ -26,13 +34,20 @@ import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { deleteMatrixMessage, editMatrixMessage } from "./matrix/actions/messages.js";
 import { repairMatrixDirectRooms } from "./matrix/direct-management.js";
 import type { MatrixClient } from "./matrix/sdk.js";
-import { reactMatrixMessage, sendMessageMatrix } from "./matrix/send.js";
+import {
+  reactMatrixMessage,
+  sendMessageMatrix,
+  sendSingleTextMessageMatrix,
+} from "./matrix/send.js";
 import { resolveMatrixTargetIdentity } from "./matrix/target-ids.js";
 import type { CoreConfig } from "./types.js";
 
+// OpenClaw Matrix custom event content for capable clients; body and reactions remain fallback.
+const MATRIX_APPROVAL_METADATA_KEY = "com.openclaw.approval" as const;
+
 type PendingMessage = {
   roomId: string;
-  messageIds: readonly string[];
+  platformMessageIds: readonly string[];
   reactionEventId: string;
 };
 type PreparedMatrixTarget = {
@@ -40,10 +55,58 @@ type PreparedMatrixTarget = {
   roomId: string;
   threadId?: string;
 };
+type MatrixApprovalMetadataAction = {
+  decision: ExecApprovalReplyDecision;
+  label: string;
+  style: PendingApprovalView["actions"][number]["style"];
+  command: string;
+};
+type MatrixApprovalMetadataBase = {
+  version: 1;
+  type: "approval.request";
+  id: string;
+  state: "pending";
+  kind: PendingApprovalView["approvalKind"];
+  phase: "pending";
+  title: string;
+  description?: string;
+  expiresAtMs: number;
+  metadata: PendingApprovalView["metadata"];
+  allowedDecisions: ExecApprovalReplyDecision[];
+  actions: MatrixApprovalMetadataAction[];
+};
+type MatrixExecApprovalMetadata = MatrixApprovalMetadataBase & {
+  kind: "exec";
+  ask?: string;
+  agentId?: string;
+  commandText: string;
+  commandPreview?: string;
+  cwd?: string;
+  envKeys?: readonly string[];
+  host?: string;
+  nodeId?: string;
+  sessionKey?: string;
+};
+type MatrixPluginApprovalSeverity = Extract<
+  PendingApprovalView,
+  { approvalKind: "plugin" }
+>["severity"];
+type MatrixPluginApprovalMetadata = MatrixApprovalMetadataBase & {
+  kind: "plugin";
+  agentId?: string;
+  pluginId?: string;
+  toolName?: string;
+  severity: MatrixPluginApprovalSeverity;
+};
+type MatrixApprovalMetadata = MatrixExecApprovalMetadata | MatrixPluginApprovalMetadata;
+type MatrixApprovalExtraContent = {
+  [MATRIX_APPROVAL_METADATA_KEY]: MatrixApprovalMetadata;
+};
 type PendingApprovalContent = {
   approvalId: string;
   text: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
+  extraContent: MatrixApprovalExtraContent;
 };
 type ReactionTargetRef = {
   roomId: string;
@@ -61,9 +124,13 @@ type MatrixPrepareTargetParams = {
   rawTarget: MatrixRawApprovalTarget;
 };
 
+const MATRIX_APPROVAL_DELIVERY_ATTEMPTS = 3;
+const MATRIX_APPROVAL_DELIVERY_RETRY_DELAY_MS = 250;
+
 export type MatrixApprovalHandlerDeps = {
   nowMs?: () => number;
   sendMessage?: typeof sendMessageMatrix;
+  sendSingleTextMessage?: typeof sendSingleTextMessageMatrix;
   reactMessage?: typeof reactMatrixMessage;
   editMessage?: typeof editMatrixMessage;
   deleteMessage?: typeof deleteMatrixMessage;
@@ -88,7 +155,9 @@ function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext):
 }
 
 function normalizePendingMessageIds(entry: PendingMessage): string[] {
-  return Array.from(new Set(entry.messageIds.map((messageId) => messageId.trim()).filter(Boolean)));
+  return Array.from(
+    new Set(entry.platformMessageIds.map((messageId) => messageId.trim()).filter(Boolean)),
+  );
 }
 
 function normalizeReactionTargetRef(params: ReactionTargetRef): ReactionTargetRef | null {
@@ -103,6 +172,31 @@ function normalizeReactionTargetRef(params: ReactionTargetRef): ReactionTargetRe
 function normalizeThreadId(value?: string | number | null): string | undefined {
   const trimmed = value == null ? "" : String(value).trim();
   return trimmed || undefined;
+}
+
+function isSingleMatrixMessageLimitError(error: unknown): boolean {
+  return (
+    error instanceof Error && error.message.includes("Matrix single-message text exceeds limit")
+  );
+}
+
+async function retryMatrixApprovalDelivery<T>(
+  operation: () => Promise<T>,
+  params: { shouldRetry?: (error: unknown) => boolean } = {},
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MATRIX_APPROVAL_DELIVERY_ATTEMPTS; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt === MATRIX_APPROVAL_DELIVERY_ATTEMPTS || params.shouldRetry?.(error) === false) {
+        break;
+      }
+      await sleep(MATRIX_APPROVAL_DELIVERY_RETRY_DELAY_MS * attempt);
+    }
+  }
+  throw lastError;
 }
 
 async function prepareTarget(
@@ -123,11 +217,14 @@ async function prepareTarget(
       accountId: resolved.accountId,
     });
     const repairDirectRooms = resolved.context.deps?.repairDirectRooms ?? repairMatrixDirectRooms;
-    const repaired = await repairDirectRooms({
-      client: resolved.context.client,
-      remoteUserId: target.id,
-      encrypted: account.config.encryption === true,
-    });
+    const repaired = await retryMatrixApprovalDelivery(
+      async () =>
+        await repairDirectRooms({
+          client: resolved.context.client,
+          remoteUserId: target.id,
+          encrypted: account.config.encryption === true,
+        }),
+    );
     if (!repaired.activeRoomId) {
       return null;
     }
@@ -141,6 +238,56 @@ async function prepareTarget(
     to: `room:${target.id}`,
     roomId: target.id,
     threadId,
+  };
+}
+
+function buildMatrixApprovalMetadata(params: {
+  view: PendingApprovalView;
+  allowedDecisions: readonly ExecApprovalReplyDecision[];
+}): MatrixApprovalMetadata {
+  const base: MatrixApprovalMetadataBase = {
+    version: 1,
+    type: "approval.request",
+    id: params.view.approvalId,
+    state: "pending",
+    kind: params.view.approvalKind,
+    phase: params.view.phase,
+    title: params.view.title,
+    expiresAtMs: params.view.expiresAtMs,
+    metadata: params.view.metadata,
+    allowedDecisions: Array.from(params.allowedDecisions),
+    actions: params.view.actions.map((action) => ({
+      decision: action.decision,
+      label: action.label,
+      style: action.style,
+      command: action.command,
+    })),
+    ...(params.view.description != null ? { description: params.view.description } : {}),
+  };
+
+  if (params.view.approvalKind === "plugin") {
+    return {
+      ...base,
+      kind: "plugin",
+      severity: params.view.severity,
+      ...(params.view.agentId != null ? { agentId: params.view.agentId } : {}),
+      ...(params.view.pluginId != null ? { pluginId: params.view.pluginId } : {}),
+      ...(params.view.toolName != null ? { toolName: params.view.toolName } : {}),
+    };
+  }
+
+  return {
+    ...base,
+    kind: "exec",
+    commandText: params.view.commandText,
+    ...(params.view.ask != null ? { ask: params.view.ask } : {}),
+    ...(params.view.agentId != null ? { agentId: params.view.agentId } : {}),
+    ...(params.view.commandPreview != null ? { commandPreview: params.view.commandPreview } : {}),
+    ...(params.view.cwd != null ? { cwd: params.view.cwd } : {}),
+    ...(params.view.envKeys != null ? { envKeys: params.view.envKeys } : {}),
+    ...(params.view.host != null ? { host: params.view.host } : {}),
+    ...(params.view.nodeId != null ? { nodeId: params.view.nodeId } : {}),
+    ...(params.view.sessionKey != null ? { sessionKey: params.view.sessionKey } : {}),
   };
 }
 
@@ -189,6 +336,12 @@ function buildPendingApprovalContent(params: {
     approvalId: params.view.approvalId,
     text: hint ? (text ? `${hint}\n\n${text}` : hint) : text,
     allowedDecisions,
+    extraContent: {
+      [MATRIX_APPROVAL_METADATA_KEY]: buildMatrixApprovalMetadata({
+        view: params.view,
+        allowedDecisions,
+      }),
+    },
   };
 }
 
@@ -287,28 +440,59 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
           : null,
       );
     },
-    deliverPending: async ({ cfg, accountId, context, preparedTarget, pendingPayload }) => {
+    deliverPending: async ({ cfg, accountId, context, preparedTarget, pendingPayload, view }) => {
       const resolved = resolveHandlerContext({ cfg, accountId, context });
       if (!resolved) {
         return null;
       }
-      const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageMatrix;
+      const sendSingleTextMessage =
+        resolved.context.deps?.sendSingleTextMessage ?? sendSingleTextMessageMatrix;
       const reactMessage = resolved.context.deps?.reactMessage ?? reactMatrixMessage;
-      const result = await sendMessage(preparedTarget.to, pendingPayload.text, {
-        cfg: cfg as CoreConfig,
-        accountId: resolved.accountId,
-        client: resolved.context.client,
-        threadId: preparedTarget.threadId,
-      });
-      const messageIds = Array.from(
-        new Set(
-          (result.messageIds ?? [result.messageId])
-            .map((messageId) => messageId.trim())
-            .filter(Boolean),
-        ),
-      );
+      let result;
+      try {
+        result = await retryMatrixApprovalDelivery(
+          async () =>
+            await sendSingleTextMessage(preparedTarget.to, pendingPayload.text, {
+              cfg: cfg as CoreConfig,
+              accountId: resolved.accountId,
+              client: resolved.context.client,
+              threadId: preparedTarget.threadId,
+              extraContent: pendingPayload.extraContent,
+            }),
+          { shouldRetry: (error) => !isSingleMatrixMessageLimitError(error) },
+        );
+      } catch (error) {
+        if (!isSingleMatrixMessageLimitError(error)) {
+          throw error;
+        }
+        const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageMatrix;
+        result = await retryMatrixApprovalDelivery(
+          async () =>
+            await sendMessage(preparedTarget.to, pendingPayload.text, {
+              cfg: cfg as CoreConfig,
+              accountId: resolved.accountId,
+              client: resolved.context.client,
+              threadId: preparedTarget.threadId,
+              extraContent: pendingPayload.extraContent,
+            }),
+        );
+      }
+      const receiptMessageIds = listMessageReceiptPlatformIds(result.receipt);
+      const platformMessageIds = receiptMessageIds.length
+        ? receiptMessageIds
+        : [result.messageId.trim()].filter(Boolean);
       const reactionEventId =
-        result.primaryMessageId?.trim() || messageIds[0] || result.messageId.trim();
+        resolveMessageReceiptPrimaryId(result.receipt) ||
+        result.primaryMessageId?.trim() ||
+        platformMessageIds[0] ||
+        result.messageId.trim();
+      registerMatrixApprovalReactionTarget({
+        roomId: result.roomId,
+        eventId: reactionEventId,
+        approvalId: pendingPayload.approvalId,
+        allowedDecisions: pendingPayload.allowedDecisions,
+        ttlMs: view.expiresAtMs - Date.now(),
+      });
       await Promise.allSettled(
         listMatrixApprovalReactionBindings(pendingPayload.allowedDecisions).map(
           async ({ emoji }) => {
@@ -322,7 +506,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       );
       return {
         roomId: result.roomId,
-        messageIds,
+        platformMessageIds,
         reactionEventId,
       };
     },
@@ -373,10 +557,10 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
     },
   },
   interactions: {
-    bindPending: ({ entry, pendingPayload }) => {
+    bindPending: (params) => {
       const target = normalizeReactionTargetRef({
-        roomId: entry.roomId,
-        eventId: entry.reactionEventId,
+        roomId: params.entry.roomId,
+        eventId: params.entry.reactionEventId,
       });
       if (!target) {
         return null;
@@ -384,13 +568,14 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       registerMatrixApprovalReactionTarget({
         roomId: target.roomId,
         eventId: target.eventId,
-        approvalId: pendingPayload.approvalId,
-        allowedDecisions: pendingPayload.allowedDecisions,
+        approvalId: params.pendingPayload.approvalId,
+        allowedDecisions: params.pendingPayload.allowedDecisions,
+        ttlMs: params.view.expiresAtMs - Date.now(),
       });
       return target;
     },
-    unbindPending: ({ binding }) => {
-      const target = normalizeReactionTargetRef(binding);
+    unbindPending: (params) => {
+      const target = normalizeReactionTargetRef(params.binding);
       if (!target) {
         return;
       }

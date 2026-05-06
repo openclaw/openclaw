@@ -18,6 +18,10 @@ import {
 } from "./components/selectors.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
+import {
+  TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
+  TUI_SESSION_PICKER_LIMIT,
+} from "./tui-session-list-policy.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
   AgentSummary,
@@ -55,7 +59,7 @@ type CommandHandlerContext = {
 };
 
 function isBtwCommand(text: string): boolean {
-  return /^\/btw(?::|\s|$)/i.test(text.trim());
+  return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
 }
 
 export function createCommandHandlers(context: CommandHandlerContext) {
@@ -163,9 +167,35 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     });
   };
 
+  const openContextModeSelector = () => {
+    const items = [
+      {
+        value: "list",
+        label: "list",
+        description: "Short context breakdown",
+      },
+      {
+        value: "detail",
+        label: "detail",
+        description: "Per-file, per-tool, per-skill, and system prompt size",
+      },
+      {
+        value: "json",
+        label: "json",
+        description: "Machine-readable context report",
+      },
+    ];
+    const selector = createSearchableSelectList(items, 9);
+    openSelector(selector, async (value) => {
+      await sendMessage(`/context ${value}`);
+    });
+  };
+
   const openSessionSelector = async () => {
     try {
       const result = await client.listSessions({
+        limit: TUI_SESSION_PICKER_LIMIT,
+        activeMinutes: TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
         includeGlobal: false,
         includeUnknown: false,
         includeDerivedTitles: true,
@@ -331,6 +361,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "agents":
         await openAgentSelector();
         break;
+      case "context":
+        if (!args) {
+          openContextModeSelector();
+        } else {
+          await sendMessage(raw);
+        }
+        break;
       case "crestodian":
         chatLog.addSystem(
           args ? `returning to Crestodian with request: ${args}` : "returning to Crestodian",
@@ -372,11 +409,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "think":
         if (!args) {
-          const levels = formatThinkingLevels(
-            state.sessionInfo.modelProvider,
-            state.sessionInfo.model,
-            "|",
-          );
+          const levels =
+            state.sessionInfo.thinkingLevels?.map((level) => level.label).join("|") ||
+            formatThinkingLevels(state.sessionInfo.modelProvider, state.sessionInfo.model, "|");
           chatLog.addSystem(`usage: /think <${levels}>`);
           break;
         }
@@ -605,6 +640,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       tui.requestRender();
       await client.sendChat({
         sessionKey: state.currentSessionKey,
+        sessionId: state.currentSessionId,
         message: text,
         thinking: opts.thinking,
         deliver: deliverDefault,
@@ -612,6 +648,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         runId,
       });
       if (!isBtw) {
+        state.pendingChatRunId = runId;
         setActivityStatus("waiting");
         tui.requestRender();
       }
@@ -624,6 +661,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       }
       if (!isBtw) {
         state.pendingOptimisticUserMessage = false;
+        state.pendingChatRunId = null;
         state.activeChatRunId = null;
       }
       chatLog.addSystem(`${isBtw ? "btw failed" : "send failed"}: ${String(err)}`);

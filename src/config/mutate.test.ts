@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { ConfigMutationConflictError, mutateConfigFile, replaceConfigFile } from "./mutate.js";
+import { registerRuntimeConfigWriteListener, resetConfigRuntimeState } from "./runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
 const ioMocks = vi.hoisted(() => ({
@@ -42,20 +43,28 @@ function createSnapshot(params: {
 
 describe("config mutate helpers", () => {
   const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-config-mutate-" });
+  const originalNixMode = process.env.OPENCLAW_NIX_MODE;
 
   beforeAll(async () => {
     await suiteRootTracker.setup();
   });
 
   afterAll(async () => {
+    if (originalNixMode === undefined) {
+      delete process.env.OPENCLAW_NIX_MODE;
+    } else {
+      process.env.OPENCLAW_NIX_MODE = originalNixMode;
+    }
     await suiteRootTracker.cleanup();
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetConfigRuntimeState();
     ioMocks.resolveConfigSnapshotHash.mockImplementation(
       (snapshot: { hash?: string }) => snapshot.hash ?? null,
     );
+    delete process.env.OPENCLAW_NIX_MODE;
   });
 
   it("mutates source config with optimistic hash protection", async () => {
@@ -85,6 +94,8 @@ describe("config mutate helpers", () => {
       port: 18789,
       auth: { mode: "token" },
     });
+    expect(result.afterWrite).toEqual({ mode: "auto" });
+    expect(result.followUp).toEqual({ mode: "auto", requiresRestart: false });
     expect(ioMocks.writeConfigFile).toHaveBeenCalledWith(
       {
         gateway: {
@@ -92,7 +103,7 @@ describe("config mutate helpers", () => {
           auth: { mode: "token" },
         },
       },
-      { expectedConfigPath: snapshot.path },
+      { expectedConfigPath: snapshot.path, afterWrite: { mode: "auto" } },
     );
   });
 
@@ -111,6 +122,50 @@ describe("config mutate helpers", () => {
         nextConfig: { gateway: { port: 19002 } },
       }),
     ).rejects.toBeInstanceOf(ConfigMutationConflictError);
+    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("refuses replace writes in Nix mode before touching disk", async () => {
+    process.env.OPENCLAW_NIX_MODE = "1";
+    const snapshot = createSnapshot({
+      hash: "hash-1",
+      sourceConfig: { gateway: { port: 18789 } },
+    });
+    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
+      snapshot,
+      writeOptions: { expectedConfigPath: snapshot.path },
+    });
+
+    await expect(
+      replaceConfigFile({
+        nextConfig: { gateway: { port: 19001 } },
+      }),
+    ).rejects.toThrow(
+      "Agent-first Nix setup: https://github.com/openclaw/nix-openclaw#quick-start",
+    );
+
+    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("refuses mutate writes in Nix mode before touching disk", async () => {
+    process.env.OPENCLAW_NIX_MODE = "1";
+    const snapshot = createSnapshot({
+      hash: "hash-1",
+      sourceConfig: { gateway: { port: 18789 } },
+    });
+    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
+      snapshot,
+      writeOptions: { expectedConfigPath: snapshot.path },
+    });
+
+    await expect(
+      mutateConfigFile({
+        mutate(draft) {
+          draft.gateway = { ...draft.gateway, port: 19001 };
+        },
+      }),
+    ).rejects.toThrow("OpenClaw Nix overview: https://docs.openclaw.ai/install/nix");
+
     expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
@@ -133,6 +188,37 @@ describe("config mutate helpers", () => {
       {
         baseSnapshot: snapshot,
         expectedConfigPath: snapshot.path,
+        afterWrite: { mode: "auto" },
+      },
+    );
+  });
+
+  it("returns explicit restart follow-up intent for replace writes", async () => {
+    const snapshot = createSnapshot({
+      hash: "hash-restart",
+      sourceConfig: { gateway: { auth: { mode: "token" } } },
+    });
+
+    const result = await replaceConfigFile({
+      baseHash: snapshot.hash,
+      nextConfig: { gateway: { auth: { mode: "token", token: "minted" } } },
+      snapshot,
+      afterWrite: { mode: "restart", reason: "plugin auth changed" },
+      writeOptions: { expectedConfigPath: snapshot.path },
+    });
+
+    expect(result.afterWrite).toEqual({ mode: "restart", reason: "plugin auth changed" });
+    expect(result.followUp).toEqual({
+      mode: "restart",
+      reason: "plugin auth changed",
+      requiresRestart: true,
+    });
+    expect(ioMocks.writeConfigFile).toHaveBeenCalledWith(
+      { gateway: { auth: { mode: "token", token: "minted" } } },
+      {
+        baseSnapshot: snapshot,
+        expectedConfigPath: snapshot.path,
+        afterWrite: { mode: "restart", reason: "plugin auth changed" },
       },
     );
   });
@@ -162,29 +248,81 @@ describe("config mutate helpers", () => {
         },
       },
     });
-
-    await replaceConfigFile({
-      baseHash: snapshot.hash,
-      snapshot,
-      writeOptions: { expectedConfigPath: snapshot.path },
-      nextConfig: {
+    const refreshedSnapshot = createSnapshot({
+      hash: "hash-include-refreshed",
+      path: configPath,
+      parsed: { plugins: { $include: "./config/plugins.json5" } },
+      sourceConfig: {
         plugins: {
           entries: {
             old: { enabled: true },
             demo: { enabled: true },
           },
-          installs: {
-            demo: {
-              source: "npm",
-              spec: "demo",
-              installPath: "/tmp/demo",
-            },
-          },
         },
       },
     });
+    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
+      snapshot: refreshedSnapshot,
+      writeOptions: { expectedConfigPath: configPath },
+    });
+    const notifications: unknown[] = [];
+    const unregister = registerRuntimeConfigWriteListener((event) => {
+      notifications.push(event);
+    });
+
+    try {
+      await replaceConfigFile({
+        baseHash: snapshot.hash,
+        snapshot,
+        afterWrite: { mode: "restart", reason: "test include refresh" },
+        writeOptions: {
+          expectedConfigPath: snapshot.path,
+          unsetPaths: [["plugins", "installs"]],
+        },
+        nextConfig: {
+          plugins: {
+            entries: {
+              old: { enabled: true },
+              demo: { enabled: true },
+            },
+            installs: {
+              demo: {
+                source: "npm",
+                spec: "demo",
+                installPath: "/tmp/demo",
+              },
+            },
+          },
+        },
+      });
+    } finally {
+      unregister();
+    }
 
     expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(notifications).toMatchObject([
+      {
+        configPath,
+        persistedHash: "hash-include-refreshed",
+        sourceConfig: {
+          plugins: {
+            entries: {
+              old: { enabled: true },
+              demo: { enabled: true },
+            },
+          },
+        },
+        runtimeConfig: {
+          plugins: {
+            entries: {
+              old: { enabled: true },
+              demo: { enabled: true },
+            },
+          },
+        },
+        afterWrite: { mode: "restart", reason: "test include refresh" },
+      },
+    ]);
     await expect(fs.readFile(configPath, "utf-8")).resolves.toContain(
       '"$include": "./config/plugins.json5"',
     );
@@ -194,7 +332,7 @@ describe("config mutate helpers", () => {
       installs?: Record<string, unknown>;
     };
     expect(persistedPlugins.entries?.demo).toEqual({ enabled: true });
-    expect(persistedPlugins.installs?.demo).toMatchObject({ source: "npm", spec: "demo" });
+    expect(persistedPlugins.installs).toBeUndefined();
   });
 
   it("falls back to the root writer when a plugins include write is not isolated", async () => {
@@ -225,6 +363,7 @@ describe("config mutate helpers", () => {
       {
         baseSnapshot: snapshot,
         expectedConfigPath: snapshot.path,
+        afterWrite: { mode: "auto" },
       },
     );
   });

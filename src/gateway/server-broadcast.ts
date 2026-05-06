@@ -9,7 +9,6 @@ import {
 import type {
   GatewayBroadcastFn,
   GatewayBroadcastOpts,
-  GatewayBroadcastStateVersion,
   GatewayBroadcastToConnIdsFn,
 } from "./server-broadcast-types.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
@@ -33,9 +32,11 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   presence: [],
   shutdown: [],
   tick: [],
+  "talk.event": [READ_SCOPE],
   "talk.mode": [WRITE_SCOPE],
   "update.available": [],
   "voicewake.changed": [READ_SCOPE],
+  "voicewake.routing.changed": [READ_SCOPE],
   "device.pair.requested": [PAIRING_SCOPE],
   "device.pair.resolved": [PAIRING_SCOPE],
   "node.pair.requested": [PAIRING_SCOPE],
@@ -48,14 +49,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
 // Events that node-role sessions must receive even when the event's operator
 // scope would otherwise reject non-operator roles. Nodes act on these updates
 // (e.g. reconfiguring wake-word triggers).
-const NODE_ALLOWED_EVENTS = new Set<string>(["voicewake.changed"]);
-
-export type {
-  GatewayBroadcastFn,
-  GatewayBroadcastOpts,
-  GatewayBroadcastStateVersion,
-  GatewayBroadcastToConnIdsFn,
-} from "./server-broadcast-types.js";
+const NODE_ALLOWED_EVENTS = new Set<string>(["voicewake.changed", "voicewake.routing.changed"]);
 
 function hasEventScope(client: GatewayWsClient, event: string): boolean {
   const required = EVENT_SCOPE_GUARDS[event];

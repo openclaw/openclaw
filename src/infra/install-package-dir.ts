@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { fileExists } from "./archive.js";
+import { pathExists } from "./fs-safe.js";
 import { assertCanonicalPathWithinBase } from "./install-safe-path.js";
+import { tryReadJson, writeJson } from "./json-files.js";
+import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
 
 const INSTALL_BASE_CHANGED_ERROR_MESSAGE = "install base directory changed during install";
 const INSTALL_BASE_CHANGED_ABORT_WARNING =
@@ -24,23 +26,11 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
 
 async function sanitizeManifestForNpmInstall(targetDir: string): Promise<void> {
   const manifestPath = path.join(targetDir, "package.json");
-  let manifestRaw = "";
-  try {
-    manifestRaw = await fs.readFile(manifestPath, "utf-8");
-  } catch {
+  const parsed = await tryReadJson<unknown>(manifestPath);
+  if (!isObjectRecord(parsed)) {
     return;
   }
-
-  let manifest: Record<string, unknown>;
-  try {
-    const parsed = JSON.parse(manifestRaw) as unknown;
-    if (!isObjectRecord(parsed)) {
-      return;
-    }
-    manifest = parsed;
-  } catch {
-    return;
-  }
+  const manifest = parsed;
 
   const devDependencies = manifest.devDependencies;
   if (!isObjectRecord(devDependencies)) {
@@ -60,7 +50,7 @@ async function sanitizeManifestForNpmInstall(targetDir: string): Promise<void> {
   } else {
     manifest.devDependencies = Object.fromEntries(filteredEntries);
   }
-  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+  await writeJson(manifestPath, manifest, { trailingNewline: true });
 }
 
 async function hideProjectNpmConfigForInstall(targetDir: string): Promise<HiddenProjectConfigFile> {
@@ -119,8 +109,8 @@ async function assertInstallBaseStable(params: {
   installBaseDir: string;
   expectedRealPath: string;
 }): Promise<void> {
-  const baseLstat = await fs.lstat(params.installBaseDir);
-  if (!baseLstat.isDirectory() || baseLstat.isSymbolicLink()) {
+  const baseStat = await fs.stat(params.installBaseDir);
+  if (!baseStat.isDirectory()) {
     throw new Error(INSTALL_BASE_CHANGED_ERROR_MESSAGE);
   }
   const currentRealPath = await fs.realpath(params.installBaseDir);
@@ -169,11 +159,17 @@ export async function installPackageDir(params: {
 }): Promise<{ ok: true } | { ok: false; error: string; code?: string }> {
   params.logger?.info?.(`Installing to ${params.targetDir}…`);
   const installBaseDir = path.dirname(params.targetDir);
-  await fs.mkdir(installBaseDir, { recursive: true });
-  await assertInstallBoundaryPaths({
-    installBaseDir,
-    candidatePaths: [params.targetDir],
-  });
+  let initialInstallBaseRealPath: string;
+  try {
+    await fs.mkdir(installBaseDir, { recursive: true });
+    initialInstallBaseRealPath = await fs.realpath(installBaseDir);
+    await assertInstallBoundaryPaths({
+      installBaseDir,
+      candidatePaths: [params.targetDir],
+    });
+  } catch (err) {
+    return { ok: false, error: `${params.copyErrorPrefix}: ${String(err)}` };
+  }
   let installBaseRealPath: string;
   let canonicalTargetDir: string;
   try {
@@ -181,7 +177,13 @@ export async function installPackageDir(params: {
       installBaseDir,
       targetDir: params.targetDir,
     }));
+    if (installBaseRealPath !== initialInstallBaseRealPath) {
+      throw new Error(INSTALL_BASE_CHANGED_ERROR_MESSAGE);
+    }
   } catch (err) {
+    if (isInstallBaseChangedError(err)) {
+      params.logger?.warn?.(INSTALL_BASE_CHANGED_ABORT_WARNING);
+    }
     return { ok: false, error: `${params.copyErrorPrefix}: ${String(err)}` };
   }
 
@@ -245,10 +247,14 @@ export async function installPackageDir(params: {
           return await runCommandWithTimeout(
             // Plugins install into isolated directories, so omitting peer deps can strip
             // runtime requirements that npm would otherwise materialize for the package.
-            ["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"],
+            // Verified on Blacksmith Ubuntu/Node 24/npm 11: `--silent` can make npm fail
+            // with empty stdout/stderr for bad specs like `workspace:^`; `--loglevel=error`
+            // stays quiet on success while preserving the actionable npm failure text.
+            ["npm", ...createSafeNpmInstallArgs({ omitDev: true, loglevel: "error" })],
             {
               timeoutMs: Math.max(params.timeoutMs, 300_000),
               cwd: stageDir,
+              env: createSafeNpmInstallEnv(process.env),
             },
           );
         } finally {
@@ -274,7 +280,7 @@ export async function installPackageDir(params: {
     }
   }
 
-  if (params.mode === "update" && (await fileExists(canonicalTargetDir))) {
+  if (params.mode === "update" && (await pathExists(canonicalTargetDir))) {
     const backupRoot = path.join(installBaseRealPath, ".openclaw-install-backups");
     backupDir = path.join(backupRoot, `${path.basename(canonicalTargetDir)}-${Date.now()}`);
     try {

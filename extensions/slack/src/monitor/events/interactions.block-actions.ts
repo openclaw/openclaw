@@ -1,10 +1,8 @@
 import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
-import {
-  enqueueSystemEvent,
-  parseExecApprovalCommandText,
-} from "openclaw/plugin-sdk/infra-runtime";
+import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   isSlackExecApprovalApprover,
@@ -64,7 +62,7 @@ type InteractionSelectionFields = {
   routedChannelId?: string;
 };
 
-export type InteractionSummary = InteractionSelectionFields & {
+type InteractionSummary = InteractionSelectionFields & {
   interactionType?: "block_action" | "view_submission" | "view_closed";
   actionId: string;
   userId?: string;

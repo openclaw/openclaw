@@ -3,21 +3,26 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 
+const pluginMetadataSnapshotMocks = vi.hoisted(() => ({
+  isPluginMetadataSnapshotCompatible: vi.fn(),
+  loadPluginMetadataSnapshot: vi.fn(),
+}));
+
 vi.mock("../infra/boundary-file-read.js", async () => {
   const fs = await import("node:fs");
   return {
-    openBoundaryFileSync: ({ absolutePath }: { absolutePath: string }) => ({
+    openRootFileSync: ({ absolutePath }: { absolutePath: string }) => ({
       ok: true,
       fd: fs.openSync(absolutePath, "r"),
     }),
   };
 });
 
-vi.mock("../plugins/manifest-registry.js", async () => {
+vi.mock("../plugins/manifest-registry-installed.js", async () => {
   const fs = await import("node:fs");
   const path = await import("node:path");
   return {
-    loadPluginManifestRegistry: (params: { workspaceDir?: string }) => {
+    loadPluginManifestRegistryForInstalledIndex: (params: { workspaceDir?: string }) => {
       const rootDir = path.join(
         params.workspaceDir ?? "",
         ".openclaw",
@@ -42,6 +47,82 @@ vi.mock("../plugins/manifest-registry.js", async () => {
         ],
       };
     },
+  };
+});
+
+vi.mock("../plugins/plugin-registry.js", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const loadRegistry = (params: { workspaceDir?: string }) => {
+    const rootDir = path.join(
+      params.workspaceDir ?? "",
+      ".openclaw",
+      "extensions",
+      "claude-bundle",
+    );
+    if (!fs.existsSync(path.join(rootDir, ".claude-plugin", "plugin.json"))) {
+      return { plugins: [], diagnostics: [] };
+    }
+    const resolvedRootDir = fs.realpathSync(rootDir);
+    return {
+      diagnostics: [],
+      plugins: [
+        {
+          id: "claude-bundle",
+          origin: "workspace",
+          format: "bundle",
+          bundleFormat: "claude",
+          settingsFiles: ["settings.json"],
+          rootDir: resolvedRootDir,
+        },
+      ],
+    };
+  };
+  return {
+    loadPluginManifestRegistryForPluginRegistry: loadRegistry,
+    loadPluginRegistrySnapshot: () => ({ plugins: [] }),
+  };
+});
+
+vi.mock("../plugins/plugin-metadata-snapshot.js", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const loadRegistry = (params: { workspaceDir?: string }) => {
+    const rootDir = path.join(
+      params.workspaceDir ?? "",
+      ".openclaw",
+      "extensions",
+      "claude-bundle",
+    );
+    if (!fs.existsSync(path.join(rootDir, ".claude-plugin", "plugin.json"))) {
+      return { plugins: [], diagnostics: [] };
+    }
+    const resolvedRootDir = fs.realpathSync(rootDir);
+    return {
+      diagnostics: [],
+      plugins: [
+        {
+          id: "claude-bundle",
+          origin: "workspace",
+          format: "bundle",
+          bundleFormat: "claude",
+          settingsFiles: ["settings.json"],
+          rootDir: resolvedRootDir,
+        },
+      ],
+    };
+  };
+  pluginMetadataSnapshotMocks.isPluginMetadataSnapshotCompatible.mockImplementation(() => false);
+  pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot.mockImplementation(
+    (params: { workspaceDir?: string }) => ({
+      manifestRegistry: loadRegistry(params),
+      normalizePluginId: (id: string) => id.trim(),
+    }),
+  );
+  return {
+    isPluginMetadataSnapshotCompatible:
+      pluginMetadataSnapshotMocks.isPluginMetadataSnapshotCompatible,
+    loadPluginMetadataSnapshot: pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot,
   };
 });
 
@@ -91,6 +172,8 @@ const tempDirs = createTrackedTempDirs();
 
 afterEach(async () => {
   await tempDirs.cleanup();
+  pluginMetadataSnapshotMocks.isPluginMetadataSnapshotCompatible.mockClear();
+  pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot.mockClear();
 });
 
 async function createWorkspaceBundle(params: {
@@ -111,6 +194,87 @@ async function createWorkspaceBundle(params: {
 }
 
 describe("loadEnabledBundlePiSettingsSnapshot", () => {
+  it("reuses a compatible plugin metadata snapshot without loading a fresh one", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-workspace-");
+    const pluginRoot = await createWorkspaceBundle({ workspaceDir });
+    const resolvedPluginRoot = await fs.realpath(pluginRoot);
+    await fs.writeFile(
+      path.join(pluginRoot, "settings.json"),
+      JSON.stringify({ hideThinkingBlock: true }),
+      "utf-8",
+    );
+
+    pluginMetadataSnapshotMocks.isPluginMetadataSnapshotCompatible.mockReturnValueOnce(true);
+    pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot.mockClear();
+
+    const snapshot = loadEnabledBundlePiSettingsSnapshot({
+      cwd: workspaceDir,
+      cfg: {
+        plugins: {
+          entries: {
+            "claude-bundle": { enabled: true },
+          },
+        },
+      },
+      pluginMetadataSnapshot: {
+        manifestRegistry: {
+          diagnostics: [],
+          plugins: [
+            {
+              id: "claude-bundle",
+              origin: "workspace",
+              format: "bundle",
+              bundleFormat: "claude",
+              settingsFiles: ["settings.json"],
+              rootDir: resolvedPluginRoot,
+            },
+          ],
+        },
+        normalizePluginId: (id: string) => id.trim(),
+      } as unknown as Parameters<
+        typeof loadEnabledBundlePiSettingsSnapshot
+      >[0]["pluginMetadataSnapshot"],
+    });
+
+    expect(snapshot.hideThinkingBlock).toBe(true);
+    expect(pluginMetadataSnapshotMocks.isPluginMetadataSnapshotCompatible).toHaveBeenCalledOnce();
+    expect(pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a fresh plugin metadata load for an incompatible snapshot", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-workspace-");
+    const pluginRoot = await createWorkspaceBundle({ workspaceDir });
+    await fs.writeFile(
+      path.join(pluginRoot, "settings.json"),
+      JSON.stringify({ hideThinkingBlock: true }),
+      "utf-8",
+    );
+
+    pluginMetadataSnapshotMocks.isPluginMetadataSnapshotCompatible.mockReturnValueOnce(false);
+    pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot.mockClear();
+
+    const snapshot = loadEnabledBundlePiSettingsSnapshot({
+      cwd: workspaceDir,
+      cfg: {
+        plugins: {
+          entries: {
+            "claude-bundle": { enabled: true },
+          },
+        },
+      },
+      pluginMetadataSnapshot: {
+        manifestRegistry: { diagnostics: [], plugins: [] },
+        normalizePluginId: (id: string) => id.trim(),
+      } as unknown as Parameters<
+        typeof loadEnabledBundlePiSettingsSnapshot
+      >[0]["pluginMetadataSnapshot"],
+    });
+
+    expect(snapshot.hideThinkingBlock).toBe(true);
+    expect(pluginMetadataSnapshotMocks.isPluginMetadataSnapshotCompatible).toHaveBeenCalledOnce();
+    expect(pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
+  });
+
   it("loads sanitized settings and MCP defaults from enabled bundle plugins", async () => {
     const workspaceDir = await tempDirs.make("openclaw-workspace-");
     const pluginRoot = await createWorkspaceBundle({ workspaceDir });

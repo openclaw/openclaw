@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { captureEnv } from "openclaw/plugin-sdk/testing";
-import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/testing";
+import { captureEnv } from "openclaw/plugin-sdk/test-env";
+import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { optimizeImageToPng } from "openclaw/plugin-sdk/web-media";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -352,6 +352,10 @@ describe("local media root guard", () => {
     const actualLstat = await fs.lstat(tinyPngFile);
     const actualStat = await fs.stat(tinyPngFile);
     const zeroDev = typeof actualLstat.dev === "bigint" ? 0n : 0;
+    // Resolve before mocking platform: under `win32` the helper returns the
+    // os.tmpdir() fallback rather than the POSIX `/tmp/openclaw` root that
+    // actually holds `tinyPngFile` on this Linux test runner (#60713).
+    const realTmpRoot = resolvePreferredOpenClawTmpDir();
 
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const lstatSpy = vi
@@ -361,7 +365,7 @@ describe("local media root guard", () => {
 
     try {
       const result = await loadWebMedia(tinyPngFile, 1024 * 1024, {
-        localRoots: [resolvePreferredOpenClawTmpDir()],
+        localRoots: [realTmpRoot],
       });
       expect(result.kind).toBe("image");
       expect(result.buffer.length).toBeGreaterThan(0);

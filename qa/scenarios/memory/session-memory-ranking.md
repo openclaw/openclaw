@@ -127,6 +127,18 @@ steps:
                 - ref: transcriptPath
                 - expr: "[JSON.stringify({ type: 'session', id: config.transcriptId, timestamp: new Date(now - 120000).toISOString() }), JSON.stringify({ type: 'message', message: { role: 'user', timestamp: new Date(now - 90000).toISOString(), content: [{ type: 'text', text: config.transcriptQuestion }] } }), JSON.stringify({ type: 'message', message: { role: 'assistant', timestamp: new Date(now - 60000).toISOString(), content: [{ type: 'text', text: config.transcriptAnswer }] } })].join('\\n') + '\\n'"
                 - utf8
+            - call: readRawQaSessionStore
+              saveAs: sessionStore
+              args:
+                - ref: env
+            - set: sessionStorePath
+              value:
+                expr: "path.join(env.gateway.tempRoot, 'state', 'agents', 'qa', 'sessions', 'sessions.json')"
+            - call: fs.writeFile
+              args:
+                - ref: sessionStorePath
+                - expr: "JSON.stringify({ ...sessionStore, ['agent:qa:seed-session-memory-ranking']: { sessionId: config.transcriptId, updatedAt: now, sessionFile: transcriptPath, origin: { label: 'QA seeded session memory ranking transcript' } } }, null, 2)"
+                - utf8
             - call: forceMemoryIndex
               args:
                 - env:

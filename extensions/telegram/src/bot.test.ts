@@ -1,11 +1,12 @@
 import { rm } from "node:fs/promises";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "openclaw/plugin-sdk/plugin-runtime";
+import { loadSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { mockPinnedHostnameResolution } from "../../../src/test-helpers/ssrf.js";
 import type { TelegramInteractiveHandlerContext } from "./interactive-dispatch.js";
 const {
   answerCallbackQuerySpy,
@@ -30,7 +31,6 @@ const {
   wasSentByBot,
 } = await import("./bot.create-telegram-bot.test-harness.js");
 
-let loadSessionStore: typeof import("../../../src/config/sessions.js").loadSessionStore;
 let createTelegramBotBase: typeof import("./bot-core.js").createTelegramBotCore;
 let setTelegramBotRuntimeForTest: typeof import("./bot-core.js").setTelegramBotRuntimeForTest;
 let createTelegramBot: (
@@ -72,7 +72,7 @@ function waitForReplyCalls(count: number) {
 }
 
 async function loadEnvelopeTimestampHelpers() {
-  return await import("../../../test/helpers/envelope-timestamp.js");
+  return await import("openclaw/plugin-sdk/channel-test-helpers");
 }
 
 async function loadInboundContextContract() {
@@ -82,7 +82,6 @@ async function loadInboundContextContract() {
 const ORIGINAL_TZ = process.env.TZ;
 describe("createTelegramBot", () => {
   beforeAll(async () => {
-    ({ loadSessionStore } = await import("../../../src/config/sessions.js"));
     ({ createTelegramBotCore: createTelegramBotBase, setTelegramBotRuntimeForTest } =
       await import("./bot-core.js"));
   });
@@ -1062,6 +1061,9 @@ describe("createTelegramBot", () => {
       expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain(
         `${CHECK_MARK_EMOJI} Model reset to default`,
       );
+      expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain(
+        "Session selection cleared. Runtime unchanged. New replies use the agent's configured default.",
+      );
 
       const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
       expect(entry?.providerOverride).toBeUndefined();
@@ -1206,6 +1208,9 @@ describe("createTelegramBot", () => {
       expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain(
         `${CHECK_MARK_EMOJI} Model reset to default`,
       );
+      expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain(
+        "Session selection cleared. Runtime unchanged. New replies use the agent's configured default.",
+      );
 
       const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
       expect(entry?.providerOverride).toBeUndefined();
@@ -1276,7 +1281,7 @@ describe("createTelegramBot", () => {
       expect(editMessageTextSpy).toHaveBeenCalledWith(
         1234,
         17,
-        `${CHECK_MARK_EMOJI} Model changed to <b>openai/gpt-5.4</b>\n\nThis model will be used for your next message.`,
+        `${CHECK_MARK_EMOJI} Model changed to <b>openai/gpt-5.4</b>\n\nSession-only model selection. Runtime unchanged. Use /model openai/gpt-5.4 --runtime &lt;runtime&gt; to switch harnesses. The agent default in openclaw.json is unchanged; /reset or a new session may return to that default.`,
         expect.objectContaining({ parse_mode: "HTML" }),
       );
 
@@ -1502,7 +1507,9 @@ describe("createTelegramBot", () => {
           from: { first_name: "Ada" },
         },
         quote: {
-          text: "summarize this",
+          text: " summarize this\n",
+          position: 8,
+          entities: [{ type: "bold", offset: 1, length: 9 }],
         },
       },
       me: { username: "openclaw_bot" },
@@ -1516,6 +1523,11 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToId).toBe("9001");
     expect(payload.ReplyToBody).toBe("summarize this");
     expect(payload.ReplyToSender).toBe("Ada");
+    const telegramPayload = payload as Record<string, unknown>;
+    expect(telegramPayload.ReplyToQuoteText).toBe(" summarize this\n");
+    expect(telegramPayload.ReplyToQuotePosition).toBe(8);
+    expect(telegramPayload.ReplyToQuoteEntities).toEqual([{ type: "bold", offset: 1, length: 9 }]);
+    expect(telegramPayload.ReplyToQuoteSourceText).toBe("Can you summarize this?");
   });
 
   it("keeps reply linkage while omitting filtered binary reply captions", async () => {
@@ -1782,7 +1794,7 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToSender).toBe("unknown sender");
   });
 
-  it("uses external_reply quote text for partial replies", async () => {
+  it("uses top-level quote text for external partial replies", async () => {
     onSpy.mockClear();
     sendMessageSpy.mockClear();
     replySpy.mockClear();
@@ -1795,13 +1807,13 @@ describe("createTelegramBot", () => {
         chat: { id: 7, type: "private" },
         text: "Sure, see below",
         date: 1736380800,
+        quote: {
+          text: "summarize this",
+        },
         external_reply: {
           message_id: 9002,
           text: "Can you summarize this?",
           from: { first_name: "Ada" },
-          quote: {
-            text: "summarize this",
-          },
         },
       },
       me: { username: "openclaw_bot" },
@@ -1815,6 +1827,7 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToId).toBe("9002");
     expect(payload.ReplyToBody).toBe("summarize this");
     expect(payload.ReplyToSender).toBe("Ada");
+    expect((payload as Record<string, unknown>).ReplyToIsExternal).toBe(true);
   });
 
   it("propagates forwarded origin from external_reply targets", async () => {
@@ -2227,7 +2240,7 @@ describe("createTelegramBot", () => {
       undefined,
     );
   });
-  it("sets command target session key for dm topic commands", async () => {
+  it("keeps unconfigured dm topic commands on the flat dm session", async () => {
     onSpy.mockClear();
     sendMessageSpy.mockClear();
     commandSpy.mockClear();
@@ -2266,7 +2279,7 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replySpy.mock.calls[0][0];
-    expect(payload.CommandTargetSessionKey).toBe("agent:main:main:thread:12345:99");
+    expect(payload.CommandTargetSessionKey).toBe("agent:main:main");
   });
 
   it("allows native DM commands for paired users", async () => {
@@ -2422,7 +2435,7 @@ describe("createTelegramBot", () => {
 
     loadConfig.mockReturnValue({
       channels: {
-        telegram: { dmPolicy: "open", reactionNotifications: "all" },
+        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
       },
     });
 
@@ -2514,6 +2527,34 @@ describe("createTelegramBot", () => {
       expectedEnqueueCalls: 1,
     },
     {
+      name: "blocks reaction in open mode when wildcard access was constrained",
+      updateId: 515,
+      channelConfig: { dmPolicy: "open", allowFrom: ["12345"], reactionNotifications: "all" },
+      reaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 42,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
+      },
+      expectedEnqueueCalls: 0,
+    },
+    {
+      name: "allows reaction in open mode with explicit wildcard access",
+      updateId: 516,
+      channelConfig: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
+      reaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 42,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
+      },
+      expectedEnqueueCalls: 1,
+    },
+    {
       name: "blocks reaction in group allowlist mode for unauthorized sender",
       updateId: 513,
       channelConfig: {
@@ -2593,7 +2634,7 @@ describe("createTelegramBot", () => {
 
     loadConfig.mockReturnValue({
       channels: {
-        telegram: { dmPolicy: "open" },
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
       },
     });
 
@@ -2624,7 +2665,7 @@ describe("createTelegramBot", () => {
 
     loadConfig.mockReturnValue({
       channels: {
-        telegram: { dmPolicy: "open", reactionNotifications: "all" },
+        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
       },
     });
 
@@ -2659,7 +2700,7 @@ describe("createTelegramBot", () => {
 
     loadConfig.mockReturnValue({
       channels: {
-        telegram: { dmPolicy: "open", reactionNotifications: "own" },
+        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "own" },
       },
     });
 
@@ -2690,7 +2731,7 @@ describe("createTelegramBot", () => {
 
     loadConfig.mockReturnValue({
       channels: {
-        telegram: { dmPolicy: "open", reactionNotifications: "own" },
+        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "own" },
       },
     });
 
@@ -2721,7 +2762,7 @@ describe("createTelegramBot", () => {
 
     loadConfig.mockReturnValue({
       channels: {
-        telegram: { dmPolicy: "open", reactionNotifications: "all" },
+        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
       },
     });
 
@@ -2751,7 +2792,7 @@ describe("createTelegramBot", () => {
 
     loadConfig.mockReturnValue({
       channels: {
-        telegram: { dmPolicy: "open", reactionNotifications: "all" },
+        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
       },
     });
 
@@ -2781,7 +2822,7 @@ describe("createTelegramBot", () => {
 
     loadConfig.mockReturnValue({
       channels: {
-        telegram: { dmPolicy: "open", reactionNotifications: "all" },
+        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
       },
     });
 

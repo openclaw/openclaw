@@ -1,8 +1,7 @@
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
-import { captureHttpExchange } from "../../proxy-capture/runtime.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
-import { shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
+import { hasProxyEnvConfigured, shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
 import {
   fetchWithRuntimeDispatcher,
@@ -67,6 +66,7 @@ export type GuardedFetchOptions = {
   allowCrossOriginUnsafeRedirectReplay?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
+  requireHttps?: boolean;
   policy?: SsrFPolicy;
   lookupFn?: LookupFn;
   dispatcherPolicy?: PinnedDispatcherPolicy;
@@ -85,6 +85,7 @@ export type GuardedFetchResult = {
   response: Response;
   finalUrl: string;
   release: () => Promise<void>;
+  refreshTimeout?: () => void;
 };
 
 type GuardedFetchPresetOptions = Omit<
@@ -93,6 +94,11 @@ type GuardedFetchPresetOptions = Omit<
 >;
 
 const DEFAULT_MAX_REDIRECTS = 3;
+const OPENCLAW_DEBUG_PROXY_ENABLED = "OPENCLAW_DEBUG_PROXY_ENABLED";
+
+function isTruthyEnvValue(value: string | undefined): boolean {
+  return value === "1" || value === "true" || value === "yes" || value === "on";
+}
 
 export function withStrictGuardedFetchMode(params: GuardedFetchPresetOptions): GuardedFetchOptions {
   return { ...params, mode: GUARDED_FETCH_MODE.STRICT };
@@ -118,6 +124,10 @@ function resolveGuardedFetchMode(params: GuardedFetchOptions): GuardedFetchMode 
     return GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY;
   }
   return GUARDED_FETCH_MODE.STRICT;
+}
+
+function isManagedProxyActive(): boolean {
+  return process.env["OPENCLAW_PROXY_ACTIVE"] === "1";
 }
 
 function assertExplicitProxySupportsPinnedDns(
@@ -188,21 +198,20 @@ async function assertExplicitProxyAllowed(
   if (!["http:", "https:"].includes(parsedProxyUrl.protocol)) {
     throw new Error("Explicit proxy URL must use http or https");
   }
+  const proxyPolicy: SsrFPolicy | undefined =
+    policy || dispatcherPolicy.allowPrivateProxy === true
+      ? {
+          ...policy,
+          // The proxy hostname is operator-configured, not user input. Target-scoped
+          // allowlists must not reject a configured proxy host before the request
+          // target gets checked against that same allowlist below.
+          hostnameAllowlist: undefined,
+          ...(dispatcherPolicy.allowPrivateProxy === true ? { allowPrivateNetwork: true } : {}),
+        }
+      : undefined;
   await resolvePinnedHostnameWithPolicy(parsedProxyUrl.hostname, {
     lookupFn,
-    policy:
-      dispatcherPolicy.allowPrivateProxy === true
-        ? {
-            // The proxy hostname is operator-configured, not user input.
-            // Clear the target-scoped hostnameAllowlist so configured proxies
-            // like localhost or internal hosts aren't rejected by an allowlist
-            // that was built for the target URL (for example api.example.test).
-            // Private-network IP checks still apply via allowPrivateNetwork.
-            ...policy,
-            allowPrivateNetwork: true,
-            hostnameAllowlist: undefined,
-          }
-        : policy,
+    policy: proxyPolicy,
   });
 }
 
@@ -225,6 +234,36 @@ export function retainSafeHeadersForCrossOriginRedirectHeaders(
   headers?: HeadersInit,
 ): Record<string, string> | undefined {
   return retainSafeRedirectHeaders(headers);
+}
+
+async function captureGuardedFetchExchange(params: {
+  url: string;
+  method: string;
+  requestHeaders?: Headers | Record<string, string> | undefined;
+  requestBody?: BodyInit | Buffer | string | null;
+  response: Response;
+  transport?: "http" | "sse";
+  capture: GuardedFetchOptions["capture"];
+  auditContext?: string;
+}): Promise<void> {
+  if (params.capture === false || !isTruthyEnvValue(process.env[OPENCLAW_DEBUG_PROXY_ENABLED])) {
+    return;
+  }
+  const { captureHttpExchange } = await import("../../proxy-capture/runtime.js");
+  captureHttpExchange({
+    url: params.url,
+    method: params.method,
+    requestHeaders: params.requestHeaders,
+    requestBody: params.requestBody,
+    response: params.response,
+    transport: params.transport,
+    flowId: params.capture?.flowId,
+    meta: {
+      captureOrigin: "guarded-fetch",
+      ...(params.auditContext ? { auditContext: params.auditContext } : {}),
+      ...params.capture?.meta,
+    },
+  });
 }
 
 function retainSafeHeadersForCrossOriginRedirect(init?: RequestInit): RequestInit | undefined {
@@ -310,9 +349,11 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       : DEFAULT_MAX_REDIRECTS;
   const mode = resolveGuardedFetchMode(params);
 
-  const { signal, cleanup } = buildTimeoutAbortSignal({
+  const { signal, cleanup, refresh } = buildTimeoutAbortSignal({
     timeoutMs: params.timeoutMs,
     signal: params.signal,
+    operation: "fetchWithSsrFGuard",
+    url: params.url,
   });
 
   let released = false;
@@ -342,6 +383,10 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       await release();
       throw new Error("Invalid URL: must be http or https");
     }
+    if (params.requireHttps === true && parsedUrl.protocol !== "https:") {
+      await release();
+      throw new Error("URL must use https");
+    }
 
     let dispatcher: Dispatcher | null = null;
     try {
@@ -357,8 +402,23 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       const canUseTrustedEnvProxy =
         mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY &&
         shouldUseEnvHttpProxyForUrl(parsedUrl.toString());
+      const canUseManagedProxy =
+        mode === GUARDED_FETCH_MODE.STRICT && isManagedProxyActive() && hasProxyEnvConfigured();
       const timeoutMs = resolveDispatcherTimeoutMs(params.timeoutMs);
+
+      // Trusted env-proxy and pinDns=false can skip local DNS pinning, so keep
+      // the pre-DNS hostname/IP policy checks from the pinned path.
+      if (canUseTrustedEnvProxy || params.pinDns === false) {
+        assertHostnameAllowedWithPolicy(parsedUrl.hostname, params.policy);
+      }
+
       if (canUseTrustedEnvProxy) {
+        dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
+      } else if (canUseManagedProxy) {
+        await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+          lookupFn: params.lookupFn,
+          policy: params.policy,
+        });
         dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
       } else if (usesTrustedExplicitProxyMode) {
         // Explicit proxy targets are still checked against the caller's hostname
@@ -407,23 +467,17 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
         : await defaultFetch(parsedUrl.toString(), init);
 
-      if (params.capture !== false) {
-        captureHttpExchange({
-          url: parsedUrl.toString(),
-          method: currentInit?.method ?? "GET",
-          requestHeaders: currentInit?.headers as Headers | Record<string, string> | undefined,
-          requestBody:
-            (currentInit as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ?? null,
-          response,
-          transport: "http",
-          flowId: params.capture?.flowId,
-          meta: {
-            captureOrigin: "guarded-fetch",
-            ...(params.auditContext ? { auditContext: params.auditContext } : {}),
-            ...params.capture?.meta,
-          },
-        });
-      }
+      await captureGuardedFetchExchange({
+        url: parsedUrl.toString(),
+        method: currentInit?.method ?? "GET",
+        requestHeaders: currentInit?.headers as Headers | Record<string, string> | undefined,
+        requestBody:
+          (currentInit as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ?? null,
+        response,
+        transport: "http",
+        capture: params.capture,
+        auditContext: params.auditContext,
+      });
 
       if (isRedirectStatus(response.status)) {
         const location = response.headers.get("location");
@@ -461,6 +515,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         response,
         finalUrl: currentUrl,
         release: async () => release(dispatcher),
+        refreshTimeout: refresh,
       };
     } catch (err) {
       if (err instanceof SsrFBlockedError) {

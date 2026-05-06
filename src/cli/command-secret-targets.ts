@@ -1,6 +1,7 @@
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../routing/session-key.js";
+import { loadChannelSecretContractApi } from "../secrets/channel-contract-api.js";
 import {
   discoverConfigSecretTargetsByIds,
   listSecretTargetRegistryEntries,
@@ -27,6 +28,7 @@ const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
   ...STATIC_MODEL_TARGET_IDS,
   "agents.defaults.memorySearch.remote.apiKey",
   "agents.list[].memorySearch.remote.apiKey",
+  "agents.list[].tts.providers.*.apiKey",
   "messages.tts.providers.*.apiKey",
   "skills.entries.*.apiKey",
   "tools.web.search.apiKey",
@@ -114,6 +116,20 @@ function getConfiguredChannelSecretTargetIds(
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   const targetIds = new Set<string>();
+  const channels = config.channels;
+  if (channels && typeof channels === "object" && !Array.isArray(channels)) {
+    for (const channelId of Object.keys(channels)) {
+      if (channelId === "defaults") {
+        continue;
+      }
+      const contract = loadChannelSecretContractApi({ channelId, config, env });
+      for (const entry of contract?.secretTargetRegistryEntries ?? []) {
+        if (isScopedChannelSecretTargetEntry({ entry, pluginChannelId: channelId })) {
+          targetIds.add(entry.id);
+        }
+      }
+    }
+  }
   for (const plugin of listReadOnlyChannelPluginsForConfig(config, {
     env,
     includePersistedAuthState: false,

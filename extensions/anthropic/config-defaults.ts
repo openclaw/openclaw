@@ -140,7 +140,7 @@ function isAnthropicCacheRetentionTarget(
 }
 
 function usesClaudeCliModelSelection(config: OpenClawConfig): boolean {
-  if (config.agents?.defaults?.embeddedHarness?.runtime === CLAUDE_CLI_BACKEND_ID) {
+  if (config.agents?.defaults?.agentRuntime?.id === CLAUDE_CLI_BACKEND_ID) {
     return true;
   }
   const primary = resolveModelPrimaryValue(
@@ -165,7 +165,7 @@ function toCanonicalAnthropicModelRef(ref: string): string {
     : ref;
 }
 
-export function normalizeAnthropicProviderConfig<T extends { api?: string; models?: unknown[] }>(
+function normalizeAnthropicProviderConfig<T extends { api?: string; models?: unknown[] }>(
   providerConfig: T,
 ): T {
   if (

@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -12,6 +11,7 @@ import {
   type DevicePairingPendingRequest,
   type PairedDevice,
 } from "../infra/device-pairing.js";
+import { JsonFileReadError, tryReadJsonSync } from "../infra/json-files.js";
 import type { DeviceAuthStore } from "../shared/device-auth.js";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
@@ -390,14 +390,7 @@ function collectPairedRecordIssues(snapshot: DoctorPairingSnapshot): string[] {
 }
 
 function readJsonFile(filePath: string): unknown {
-  try {
-    if (!fs.existsSync(filePath)) {
-      return null;
-    }
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch {
-    return null;
-  }
+  return tryReadJsonSync(filePath);
 }
 
 function readLocalIdentity(env: NodeJS.ProcessEnv = process.env): StoredDeviceIdentity | null {
@@ -473,6 +466,16 @@ function collectLocalDeviceAuthIssues(snapshot: DoctorPairingSnapshot): string[]
     if (!role) {
       continue;
     }
+    const pairedToken = findTokenSummary(paired, role);
+    if (!pairedToken) {
+      if (approvedRoles.has(role)) {
+        continue;
+      }
+      lines.push(
+        `- Local cached ${role} device auth for ${deviceLabel} no longer has a matching active gateway token, and that role is no longer approved for this device. Reconnect with shared gateway auth to refresh local auth, or remove the stale cached ${role} auth entry.`,
+      );
+      continue;
+    }
     const rotateCommand = formatCliArgs([
       "openclaw",
       "devices",
@@ -482,16 +485,6 @@ function collectLocalDeviceAuthIssues(snapshot: DoctorPairingSnapshot): string[]
       "--role",
       role,
     ]);
-    const pairedToken = findTokenSummary(paired, role);
-    if (!pairedToken) {
-      if (approvedRoles.has(role)) {
-        continue;
-      }
-      lines.push(
-        `- Local cached ${role} device auth for ${deviceLabel} no longer has a matching active gateway token. Reconnect with shared gateway auth to refresh it, or rotate with ${rotateCommand}.`,
-      );
-      continue;
-    }
     const gatewayIssuedAtMs = pairedToken.rotatedAtMs ?? pairedToken.createdAtMs;
     if (entry.updatedAtMs < gatewayIssuedAtMs) {
       lines.push(
@@ -510,11 +503,25 @@ function collectLocalDeviceAuthIssues(snapshot: DoctorPairingSnapshot): string[]
   return lines;
 }
 
+function formatPairingStoreReadIssue(error: JsonFileReadError): string {
+  const problem = error.reason === "parse" ? "contains invalid JSON" : "could not be read";
+  return `- Device pairing store ${error.filePath} ${problem}. OpenClaw refused to treat it as empty to avoid overwriting approved pairings. Fix the JSON or file permissions, or move it aside and re-pair devices.`;
+}
+
 export async function noteDevicePairingHealth(params: {
   cfg: OpenClawConfig;
   healthOk: boolean;
 }): Promise<void> {
-  const snapshot = await loadDoctorPairingSnapshot(params);
+  let snapshot: DoctorPairingSnapshot | null;
+  try {
+    snapshot = await loadDoctorPairingSnapshot(params);
+  } catch (error) {
+    if (error instanceof JsonFileReadError) {
+      note(formatPairingStoreReadIssue(error), "Device pairing");
+      return;
+    }
+    throw error;
+  }
   if (!snapshot) {
     return;
   }

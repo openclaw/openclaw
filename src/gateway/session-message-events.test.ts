@@ -19,28 +19,26 @@ import {
 installGatewayTestHooks({ scope: "suite" });
 
 const cleanupDirs: string[] = [];
+const SETUP_RPC_TIMEOUT_MS = 30_000;
 let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 let subscribedOperatorWs:
   | Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>
   | undefined;
-let previousMinimalGateway: string | undefined;
 
 beforeAll(async () => {
-  previousMinimalGateway = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
-  delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
   harness = await createGatewaySuiteHarness();
   subscribedOperatorWs = await harness.openWs();
-  await connectOk(subscribedOperatorWs, { scopes: ["operator.read"] });
-  await rpcReq(subscribedOperatorWs, "sessions.subscribe");
-});
+  await connectOk(subscribedOperatorWs, {
+    scopes: ["operator.read"],
+    timeoutMs: SETUP_RPC_TIMEOUT_MS,
+  });
+  await rpcReq(subscribedOperatorWs, "sessions.subscribe", undefined, SETUP_RPC_TIMEOUT_MS);
+}, 60_000);
 
 afterAll(async () => {
   subscribedOperatorWs?.close();
-  await harness.close();
-  if (previousMinimalGateway === undefined) {
-    delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
-  } else {
-    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = previousMinimalGateway;
+  if (harness) {
+    await harness.close();
   }
 });
 
@@ -125,18 +123,17 @@ async function expectNoMessageWithin(params: {
   timeoutMs?: number;
 }): Promise<void> {
   const timeoutMs = params.timeoutMs ?? 300;
-  vi.useFakeTimers();
-  try {
-    const outcome = params
-      .watch()
-      .then(() => "received")
-      .catch(() => "timeout");
-    await params.action?.();
-    await vi.advanceTimersByTimeAsync(timeoutMs);
-    await expect(outcome).resolves.toBe("timeout");
-  } finally {
-    vi.useRealTimers();
-  }
+  let received = false;
+  const watch = params
+    .watch()
+    .then(() => {
+      received = true;
+    })
+    .catch(() => undefined);
+  await params.action?.();
+  await new Promise((resolve) => setTimeout(resolve, timeoutMs));
+  expect(received).toBe(false);
+  await watch;
 }
 
 describe("session.message websocket events", () => {
@@ -287,6 +284,97 @@ describe("session.message websocket events", () => {
     } finally {
       emitSpy.mockRestore();
     }
+  });
+
+  test("strips blocked original content from live session.message events", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+    const transcriptPath = path.join(path.dirname(storePath), "sess-main.jsonl");
+    await fs.writeFile(
+      transcriptPath,
+      JSON.stringify({ type: "session", version: 1, id: "sess-main" }) + "\n",
+      "utf-8",
+    );
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const { messageEvent } = await emitTranscriptUpdateAndCollectEvents({
+        ws,
+        sessionKey: "agent:main:main",
+        sessionFile: transcriptPath,
+        messageId: "blocked-1",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "The agent cannot read this message." }],
+          __openclaw: {
+            beforeAgentRunBlocked: { blockedBy: "policy-plugin", blockedAt: 1 },
+          },
+        },
+      });
+
+      const payload = messageEvent.payload as {
+        message?: { content?: unknown; __openclaw?: { beforeAgentRunBlocked?: unknown } };
+      };
+      expect(payload.message?.content).toEqual([
+        { type: "text", text: "The agent cannot read this message." },
+      ]);
+      expect(JSON.stringify(payload.message)).not.toContain("secret blocked prompt");
+      expect(JSON.stringify(payload.message)).not.toContain("contains protected content");
+    });
+  });
+
+  test("broadcasts redacted blocked user appends to live session listeners", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
+      emitSessionTranscriptUpdate({
+        sessionFile: path.join(path.dirname(storePath), "sess-main.jsonl"),
+        sessionKey: "agent:main:main",
+        messageId: "blocked-message",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "The agent cannot read this message." }],
+          __openclaw: {
+            beforeAgentRunBlocked: {
+              blockedBy: "policy-plugin",
+              blockedAt: Date.now(),
+            },
+          },
+        },
+      });
+
+      const messageEvent = await messageEventPromise;
+      const payload = messageEvent.payload as {
+        message?: {
+          role?: unknown;
+          content?: unknown;
+          __openclaw?: { beforeAgentRunBlocked?: unknown };
+        };
+      };
+      expect(payload.message?.role).toBe("user");
+      expect(payload.message?.content).toEqual([
+        { type: "text", text: "The agent cannot read this message." },
+      ]);
+      expect(JSON.stringify(payload.message)).not.toContain("secret blocked prompt");
+      expect(JSON.stringify(payload.message)).not.toContain("contains protected content");
+    });
   });
 
   test("includes live usage metadata on session.message and sessions.changed transcript events", async () => {

@@ -12,11 +12,15 @@ A **node** is a companion device (macOS/iOS/Android/headless) that connects to t
 Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL;
 historical only for current nodes).
 
-macOS can also run in **node mode**: the menubar app connects to the Gateway’s WS server and exposes its local canvas/camera commands as a node (so `openclaw nodes …` works against this Mac).
+macOS can also run in **node mode**: the menubar app connects to the Gateway's
+WS server and exposes its local canvas/camera commands as a node (so
+`openclaw nodes …` works against this Mac). In remote gateway mode, browser
+automation is handled by the CLI node host (`openclaw node run` or the
+installed node service), not by the native app node.
 
 Notes:
 
-- Nodes are **peripherals**, not gateways. They don’t run the gateway service.
+- Nodes are **peripherals**, not gateways. They don't run the gateway service.
 - Telegram/WhatsApp/etc. messages land on the **gateway**, not on nodes.
 - Troubleshooting runbook: [/nodes/troubleshooting](/nodes/troubleshooting)
 
@@ -45,8 +49,10 @@ Notes:
 - The device pairing record is the durable approved-role contract. Token
   rotation stays inside that contract; it cannot upgrade a paired node into a
   different role that pairing approval never granted.
-- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/rename`) is a separate gateway-owned
+- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) is a separate gateway-owned
   node pairing store; it does **not** gate the WS `connect` handshake.
+- `openclaw nodes remove --node <id|name|ip>` deletes stale entries from that
+  separate gateway-owned node pairing store.
 - Approval scope follows the pending request's declared commands:
   - commandless request: `operator.pairing`
   - non-exec node commands: `operator.pairing` + `operator.write`
@@ -112,6 +118,7 @@ Notes:
 
 ```bash
 openclaw node install --host <gateway-host> --port 18789 --display-name "Build Node"
+openclaw node start
 openclaw node restart
 ```
 
@@ -179,7 +186,33 @@ Low-level (raw RPC):
 openclaw nodes invoke --node <idOrNameOrIp> --command canvas.eval --params '{"javaScript":"location.href"}'
 ```
 
-Higher-level helpers exist for the common “give the agent a MEDIA attachment” workflows.
+Higher-level helpers exist for the common "give the agent a MEDIA attachment" workflows.
+
+## Command policy
+
+Node commands must pass two gates before they can be invoked:
+
+1. The node must declare the command in its WebSocket `connect.commands` list.
+2. The gateway's platform policy must allow the declared command.
+
+Windows and macOS companion nodes allow safe declared commands such as
+`canvas.*`, `camera.list`, `location.get`, and `screen.snapshot` by default.
+Trusted nodes that advertise the `talk` capability or declare `talk.*` commands
+also allow declared push-to-talk commands (`talk.ptt.start`, `talk.ptt.stop`,
+`talk.ptt.cancel`, `talk.ptt.once`) by default, independent of platform label.
+Dangerous or privacy-heavy commands such as `camera.snap`, `camera.clip`, and
+`screen.record` still require explicit opt-in with
+`gateway.nodes.allowCommands`. `gateway.nodes.denyCommands` always wins over
+defaults and extra allowlist entries.
+
+Plugin-owned node commands can add a Gateway node-invoke policy. That policy
+runs after the allowlist check and before forwarding to the node, so raw
+`node.invoke`, CLI helpers, and dedicated agent tools share the same plugin
+permission boundary. Dangerous plugin node commands still require explicit
+`gateway.nodes.allowCommands` opt-in.
+
+After a node changes its declared command list, reject the old device pairing
+and approve the new request so the gateway stores the updated command snapshot.
 
 ## Screenshots (canvas snapshots)
 
@@ -271,7 +304,7 @@ openclaw nodes location get --node <idOrNameOrIp> --accuracy precise --max-age 1
 Notes:
 
 - Location is **off by default**.
-- “Always” requires system permission; background fetch is best-effort.
+- "Always" requires system permission; background fetch is best-effort.
 - The response includes lat/lon, accuracy (meters), and timestamp.
 
 ## SMS (Android nodes)

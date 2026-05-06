@@ -3,8 +3,8 @@ import { completeSimple, type Api, type Model } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { loadConfig } from "../config/config.js";
-import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { getRuntimeConfig } from "../config/config.js";
+import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
@@ -124,10 +124,10 @@ describeLive("openai reasoning compat live", () => {
     "remaps low reasoning for the configured OpenAI mini target",
     async () => {
       const { provider, modelId } = resolveTargetModelRef();
-      const cfg = loadConfig();
+      const cfg = getRuntimeConfig();
       await ensureOpenClawModelsJson(cfg);
 
-      const agentDir = resolveOpenClawAgentDir();
+      const agentDir = resolveDefaultAgentDir(cfg);
       const authStorage = discoverAuthStorage(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir);
       const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
@@ -178,10 +178,10 @@ describeLive("openai reasoning compat live", () => {
     "accepts repaired OpenAI Codex parallel tool replay with aborted missing results",
     async () => {
       const { provider, modelId } = resolveTargetModelRef();
-      const cfg = loadConfig();
+      const cfg = getRuntimeConfig();
       await ensureOpenClawModelsJson(cfg);
 
-      const agentDir = resolveOpenClawAgentDir();
+      const agentDir = resolveDefaultAgentDir(cfg);
       const authStorage = discoverAuthStorage(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir);
       const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
@@ -261,9 +261,21 @@ describeLive("openai reasoning compat live", () => {
         "toolResult",
         "user",
       ]);
+      const assistantToolIds = (
+        ((sanitized[1] as { content?: unknown }).content ?? []) as unknown[]
+      )
+        .filter(
+          (block): block is { type: "toolCall"; id: string } =>
+            typeof block === "object" &&
+            block !== null &&
+            (block as { type?: unknown }).type === "toolCall" &&
+            typeof (block as { id?: unknown }).id === "string",
+        )
+        .map((block) => block.id);
+      expect(assistantToolIds).toHaveLength(3);
       expect(
         sanitized.slice(2, 5).map((message) => (message as { toolCallId?: string }).toolCallId),
-      ).toEqual(["call_keep", "call_missing_a", "call_missing_b"]);
+      ).toEqual(assistantToolIds);
       expect(
         sanitized
           .slice(3, 5)

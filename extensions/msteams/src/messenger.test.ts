@@ -1,8 +1,9 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { SILENT_REPLY_TOKEN, type PluginRuntime } from "openclaw/plugin-sdk/msteams";
+import { SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-chunking";
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 const graphUploadMockState = vi.hoisted(() => ({
   uploadAndShareOneDrive: vi.fn(),
@@ -571,6 +572,94 @@ describe("msteams messenger", () => {
       expect(proactiveSent).toEqual(["hello"]);
       // Falls back to activityId when threadId is missing
       expect(reference.conversation?.id).toBe("19:abc@thread.tacv2;messageid=legacy-activity-id");
+    });
+
+    it("sends no-context thread replies proactively with the channel thread root", async () => {
+      let capturedReference: unknown;
+      const sent: string[] = [];
+      const channelRef: StoredConversationReference = {
+        activityId: "current-msg",
+        user: { id: "user123", name: "User" },
+        agent: { id: "bot123", name: "Bot" },
+        conversation: {
+          id: "19:abc@thread.tacv2",
+          conversationType: "channel",
+        },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com",
+        threadId: "thread-root-msg-id",
+      };
+
+      const adapter: MSTeamsAdapter = {
+        continueConversation: async (_appId, reference, logic) => {
+          capturedReference = reference;
+          await logic({
+            sendActivity: createRecordedSendActivity(sent),
+            updateActivity: noopUpdateActivity,
+            deleteActivity: noopDeleteActivity,
+          });
+        },
+        process: async () => {},
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
+      };
+
+      const ids = await sendMSTeamsMessages({
+        replyStyle: "thread",
+        adapter,
+        appId: "app123",
+        conversationRef: channelRef,
+        messages: [{ text: "hello" }],
+      });
+
+      expect(sent).toEqual(["hello"]);
+      expect(ids).toEqual(["id:hello"]);
+      const ref = capturedReference as { conversation?: { id?: string }; activityId?: string };
+      expect(ref.conversation?.id).toBe("19:abc@thread.tacv2;messageid=thread-root-msg-id");
+      expect(ref.activityId).toBeUndefined();
+    });
+
+    it("uses activityId for no-context thread replies when threadId is absent", async () => {
+      let capturedReference: unknown;
+      const sent: string[] = [];
+      const channelRef: StoredConversationReference = {
+        activityId: "legacy-activity-id",
+        user: { id: "user123", name: "User" },
+        agent: { id: "bot123", name: "Bot" },
+        conversation: {
+          id: "19:abc@thread.tacv2",
+          conversationType: "channel",
+        },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com",
+      };
+
+      const adapter: MSTeamsAdapter = {
+        continueConversation: async (_appId, reference, logic) => {
+          capturedReference = reference;
+          await logic({
+            sendActivity: createRecordedSendActivity(sent),
+            updateActivity: noopUpdateActivity,
+            deleteActivity: noopDeleteActivity,
+          });
+        },
+        process: async () => {},
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
+      };
+
+      await sendMSTeamsMessages({
+        replyStyle: "thread",
+        adapter,
+        appId: "app123",
+        conversationRef: channelRef,
+        messages: [{ text: "hello" }],
+      });
+
+      const ref = capturedReference as { conversation?: { id?: string }; activityId?: string };
+      expect(sent).toEqual(["hello"]);
+      expect(ref.conversation?.id).toBe("19:abc@thread.tacv2;messageid=legacy-activity-id");
+      expect(ref.activityId).toBeUndefined();
     });
 
     it("does not add thread suffix for top-level replyStyle even with threadId set", async () => {

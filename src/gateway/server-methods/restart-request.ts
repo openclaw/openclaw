@@ -1,3 +1,4 @@
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 type RestartDeliveryContext = {
@@ -29,10 +30,7 @@ function parseRestartDeliveryContext(params: unknown): {
     deliveryContext.channel || deliveryContext.to || deliveryContext.accountId
       ? deliveryContext
       : undefined;
-  const threadId =
-    typeof context.threadId === "number" && Number.isFinite(context.threadId)
-      ? String(Math.trunc(context.threadId))
-      : normalizeOptionalString(context.threadId);
+  const threadId = stringifyRouteThreadId(context.threadId);
   return { deliveryContext: normalizedContext, threadId };
 }
 
@@ -41,15 +39,19 @@ export function parseRestartRequestParams(params: unknown): {
   deliveryContext: RestartDeliveryContext | undefined;
   threadId: string | undefined;
   note: string | undefined;
+  continuationMessage: string | undefined;
   restartDelayMs: number | undefined;
 } {
   const sessionKey = normalizeOptionalString((params as { sessionKey?: unknown }).sessionKey);
   const { deliveryContext, threadId } = parseRestartDeliveryContext(params);
   const note = normalizeOptionalString((params as { note?: unknown }).note);
+  const continuationMessage = normalizeOptionalString(
+    (params as { continuationMessage?: unknown }).continuationMessage,
+  );
   const restartDelayMsRaw = (params as { restartDelayMs?: unknown }).restartDelayMs;
   const restartDelayMs =
     typeof restartDelayMsRaw === "number" && Number.isFinite(restartDelayMsRaw)
       ? Math.max(0, Math.floor(restartDelayMsRaw))
       : undefined;
-  return { sessionKey, deliveryContext, threadId, note, restartDelayMs };
+  return { sessionKey, deliveryContext, threadId, note, continuationMessage, restartDelayMs };
 }

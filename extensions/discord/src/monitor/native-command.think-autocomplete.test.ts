@@ -1,10 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ChannelType, type AutocompleteInteraction } from "@buape/carbon";
-import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import {
+  createEmptyPluginRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { ChannelType, type AutocompleteInteraction } from "../internal/discord.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 type ConversationRuntimeModule = typeof import("openclaw/plugin-sdk/conversation-binding-runtime");
@@ -92,7 +96,7 @@ vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async () => {
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   normalizeProviderId: (value: string) => value.trim().toLowerCase(),
-  resolveDefaultModelForAgent: (params: { cfg: ReturnType<typeof loadConfig> }) => {
+  resolveDefaultModelForAgent: (params: { cfg: OpenClawConfig }) => {
     const configuredModel = params.cfg.agents?.defaults?.model;
     const primary =
       typeof configuredModel === "string"
@@ -123,18 +127,47 @@ const STORE_PATH = path.join(
 const SESSION_KEY = "agent:main:main";
 let findCommandByNativeName: typeof import("openclaw/plugin-sdk/command-auth").findCommandByNativeName;
 let resolveCommandArgChoices: typeof import("openclaw/plugin-sdk/command-auth").resolveCommandArgChoices;
-let resolveDiscordNativeChoiceContext: typeof import("./native-command-ui.js").resolveDiscordNativeChoiceContext;
+let resolveDiscordNativeChoiceContext: typeof import("./native-command-model-picker-ui.js").resolveDiscordNativeChoiceContext;
+
+function installProviderThinkingRegistryForTest(): void {
+  const registry = createEmptyPluginRegistry();
+  registry.providers.push({
+    pluginId: "discord-test",
+    source: "test",
+    provider: {
+      id: "discord-test-thinking",
+      label: "Discord Test Thinking",
+      aliases: ["anthropic", "openai-codex"],
+      auth: [],
+      isBinaryThinking: (context) =>
+        providerThinkingMocks.resolveProviderBinaryThinking({
+          provider: context.provider,
+          context,
+        }),
+      supportsXHighThinking: (context) =>
+        providerThinkingMocks.resolveProviderXHighThinking({
+          provider: context.provider,
+          context,
+        }),
+      resolveThinkingProfile: (context) =>
+        providerThinkingMocks.resolveProviderThinkingProfile({
+          provider: context.provider,
+          context,
+        }),
+      resolveDefaultThinkingLevel: (context) =>
+        providerThinkingMocks.resolveProviderDefaultThinkingLevel({
+          provider: context.provider,
+          context,
+        }),
+    },
+  });
+  setActivePluginRegistry(registry);
+}
 
 async function loadDiscordThinkAutocompleteModulesForTest() {
-  vi.resetModules();
-  vi.doMock("../../../../src/plugins/provider-thinking.js", () => ({
-    resolveProviderBinaryThinking: providerThinkingMocks.resolveProviderBinaryThinking,
-    resolveProviderDefaultThinkingLevel: providerThinkingMocks.resolveProviderDefaultThinkingLevel,
-    resolveProviderThinkingProfile: providerThinkingMocks.resolveProviderThinkingProfile,
-    resolveProviderXHighThinking: providerThinkingMocks.resolveProviderXHighThinking,
-  }));
+  installProviderThinkingRegistryForTest();
   const commandAuth = await import("openclaw/plugin-sdk/command-auth");
-  const nativeCommandUi = await import("./native-command-ui.js");
+  const nativeCommandUi = await import("./native-command-model-picker-ui.js");
   return {
     findCommandByNativeName: commandAuth.findCommandByNativeName,
     resolveCommandArgChoices: commandAuth.resolveCommandArgChoices,
@@ -183,6 +216,7 @@ describe("discord native /think autocomplete", () => {
         ? true
         : undefined,
     );
+    installProviderThinkingRegistryForTest();
     fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
     fs.writeFileSync(
       STORE_PATH,
@@ -216,7 +250,7 @@ describe("discord native /think autocomplete", () => {
       session: {
         store: STORE_PATH,
       },
-    } as ReturnType<typeof loadConfig>;
+    } as OpenClawConfig;
   }
 
   it("uses the session override context for /think choices", async () => {
@@ -230,12 +264,14 @@ describe("discord native /think autocomplete", () => {
       channel: { id: "D1", type: ChannelType.DM },
       user: { id: "U1" },
       guild: undefined,
-      client: {},
+      client: { fetchChannel: async () => ({ id: "D1", type: ChannelType.DM }) },
     } as unknown as AutocompleteInteraction & {
       respond: (choices: Array<{ name: string; value: string }>) => Promise<void>;
     };
 
-    const command = findCommandByNativeName("think", "discord");
+    const command = findCommandByNativeName("think", "discord", {
+      includeBundledChannelFallback: false,
+    });
     expect(command).toBeTruthy();
     const levelArg = command?.args?.find((entry) => entry.name === "level");
     expect(levelArg).toBeTruthy();
@@ -260,6 +296,7 @@ describe("discord native /think autocomplete", () => {
       cfg,
       provider: context?.provider,
       model: context?.model,
+      catalog: [],
     });
     const values = choices.map((choice) => choice.value);
     expect(values).toContain("xhigh");
@@ -298,7 +335,7 @@ describe("discord native /think autocomplete", () => {
       channel: { id: "C1", type: ChannelType.GuildText },
       user: { id: "U1" },
       guild: { id: "G1" },
-      client: {},
+      client: { fetchChannel: async () => ({ id: "C1", type: ChannelType.GuildText }) },
     } as unknown as AutocompleteInteraction & {
       respond: (choices: Array<{ name: string; value: string }>) => Promise<void>;
     };
@@ -309,7 +346,9 @@ describe("discord native /think autocomplete", () => {
       accountId: "default",
       threadBindings: createNoopThreadBindingManager("default"),
     });
-    const command = findCommandByNativeName("think", "discord");
+    const command = findCommandByNativeName("think", "discord", {
+      includeBundledChannelFallback: false,
+    });
     const levelArg = command?.args?.find((entry) => entry.name === "level");
     expect(command).toBeTruthy();
     expect(levelArg).toBeTruthy();
@@ -323,6 +362,7 @@ describe("discord native /think autocomplete", () => {
       cfg,
       provider: context?.provider,
       model: context?.model,
+      catalog: [],
     });
     const values = choices.map((choice) => choice.value);
     expect(values).toContain("max");
@@ -346,7 +386,7 @@ describe("discord native /think autocomplete", () => {
       channel: { id: "C1", type: ChannelType.GuildText },
       user: { id: "U1" },
       guild: { id: "G1" },
-      client: {},
+      client: { fetchChannel: async () => ({ id: "C1", type: ChannelType.GuildText }) },
     } as unknown as AutocompleteInteraction & {
       respond: (choices: Array<{ name: string; value: string }>) => Promise<void>;
     };
@@ -361,7 +401,9 @@ describe("discord native /think autocomplete", () => {
     expect(context).toBeNull();
     expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
 
-    const command = findCommandByNativeName("think", "discord");
+    const command = findCommandByNativeName("think", "discord", {
+      includeBundledChannelFallback: false,
+    });
     const levelArg = command?.args?.find((entry) => entry.name === "level");
     expect(command).toBeTruthy();
     expect(levelArg).toBeTruthy();
@@ -374,6 +416,7 @@ describe("discord native /think autocomplete", () => {
       cfg,
       provider: context?.provider,
       model: context?.model,
+      catalog: [],
     });
     const values = choices.map((choice) => choice.value);
     expect(values).not.toContain("xhigh");

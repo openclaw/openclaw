@@ -4,9 +4,11 @@ import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  type HarnessContextEngine as ContextEngine,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ContextEngine } from "../../../../src/context-engine/types.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
 import { createCodexTestModel } from "./test-support.js";
@@ -28,6 +30,7 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
     disableTools: true,
     timeoutMs: 5_000,
     authStorage: {} as never,
+    authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
   } as EmbeddedRunAttemptParams;
 }
@@ -73,7 +76,7 @@ function threadStartResult(threadId = "thread-1") {
       status: { type: "idle" },
       path: null,
       cwd: tempDir || "/tmp/openclaw-codex-test",
-      cliVersion: "0.118.0",
+      cliVersion: "0.125.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -168,16 +171,7 @@ function createStartedThreadHarness(
   };
 }
 
-type MockContextEngine = ContextEngine & {
-  bootstrap: ReturnType<typeof vi.fn>;
-  assemble: ReturnType<typeof vi.fn>;
-  maintain: ReturnType<typeof vi.fn>;
-  afterTurn?: ReturnType<typeof vi.fn>;
-  ingestBatch?: ReturnType<typeof vi.fn>;
-  ingest?: ReturnType<typeof vi.fn>;
-};
-
-function createContextEngine(overrides: Partial<ContextEngine> = {}): MockContextEngine {
+function createContextEngine(overrides: Partial<ContextEngine> = {}): ContextEngine {
   const engine: ContextEngine = {
     info: {
       id: "lossless-claw",
@@ -199,7 +193,7 @@ function createContextEngine(overrides: Partial<ContextEngine> = {}): MockContex
     })),
     ...overrides,
   };
-  return engine as MockContextEngine;
+  return engine;
 }
 
 describe("runCodexAppServerAttempt context-engine lifecycle", () => {
@@ -219,6 +213,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     SessionManager.open(sessionFile).appendMessage(
       assistantMessage("existing context", Date.now()) as never,
     );
+    const openSpy = vi.spyOn(SessionManager, "open");
     const contextEngine = createContextEngine();
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
@@ -272,6 +267,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
     await harness.completeTurn();
     await run;
+    expect(openSpy).not.toHaveBeenCalled();
   });
 
   it("calls afterTurn with the mirrored transcript and runs turn maintenance", async () => {

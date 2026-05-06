@@ -21,6 +21,7 @@ For local integrations only, the Gateway exposes a small loopback HTTP API:
 - Actions: `POST /navigate`, `POST /act`
 - Hooks: `POST /hooks/file-chooser`, `POST /hooks/dialog`
 - Downloads: `POST /download`, `POST /wait/download`
+- Permissions: `POST /permissions/grant`
 - Debugging: `GET /console`, `POST /pdf`
 - Debugging: `GET /errors`, `GET /requests`, `POST /trace/start`, `POST /trace/stop`, `POST /highlight`
 - Network: `POST /response/body`
@@ -69,12 +70,16 @@ Other runtime failures may still return `{ "error": "<message>" }` without a
 ### Playwright requirement
 
 Some features (navigate/act/AI snapshot/role snapshot, element screenshots,
-PDF) require Playwright. If Playwright isn’t installed, those endpoints return
+PDF) require Playwright. If Playwright isn't installed, those endpoints return
 a clear 501 error.
 
 What still works without Playwright:
 
 - ARIA snapshots
+- Role-style accessibility snapshots (`--interactive`, `--compact`,
+  `--depth`, `--efficient`) when a per-tab CDP WebSocket is available. This is
+  a fallback for inspection and ref discovery; Playwright remains the primary
+  action engine.
 - Page screenshots for the managed `openclaw` browser when a per-tab CDP
   WebSocket is available
 - Page screenshots for `existing-session` / Chrome MCP profiles
@@ -84,17 +89,17 @@ What still needs Playwright:
 
 - `navigate`
 - `act`
-- AI snapshots / role snapshots
+- AI snapshots that depend on Playwright's native AI snapshot format
 - CSS-selector element screenshots (`--element`)
 - full browser PDF export
 
 Element screenshots also reject `--full-page`; the route returns `fullPage is
 not supported for element screenshots`.
 
-If you see `Playwright is not available in this gateway build`, repair the
-bundled browser plugin runtime dependencies so `playwright-core` is installed,
-then restart the gateway. For packaged installs, run `openclaw doctor --fix`.
-For Docker, also install the Chromium browser binaries as shown below.
+If you see `Playwright is not available in this gateway build`, the packaged
+Gateway is missing the core browser runtime dependency. Reinstall or update
+OpenClaw, then restart the gateway. For Docker, also install the Chromium
+browser binaries as shown below.
 
 #### Docker Playwright install
 
@@ -221,6 +226,11 @@ Notes:
 - Download, trace, and upload paths are constrained to OpenClaw temp roots: `/tmp/openclaw{,/downloads,/uploads}` (fallback: `${os.tmpdir()}/openclaw/...`).
 - `upload` can also set file inputs directly via `--input-ref` or `--element`.
 
+Stable tab ids and labels survive Chromium raw-target replacement when OpenClaw
+can prove the replacement tab, such as same URL or a single old tab becoming a
+single new tab after form submission. Raw target ids are still volatile; prefer
+`suggestedTargetId` from `tabs` in scripts.
+
 Snapshot flags at a glance:
 
 - `--format ai` (default with Playwright): AI snapshot with numeric refs (`aria-ref="<n>"`).
@@ -232,12 +242,12 @@ Snapshot flags at a glance:
 
 ## Snapshots and refs
 
-OpenClaw supports two “snapshot” styles:
+OpenClaw supports two "snapshot" styles:
 
 - **AI snapshot (numeric refs)**: `openclaw browser snapshot` (default; `--format ai`)
   - Output: a text snapshot that includes numeric refs.
   - Actions: `openclaw browser click 12`, `openclaw browser type 23 "hello"`.
-  - Internally, the ref is resolved via Playwright’s `aria-ref`.
+  - Internally, the ref is resolved via Playwright's `aria-ref`.
 
 - **Role snapshot (role refs like `e12`)**: `openclaw browser snapshot --interactive` (or `--compact`, `--depth`, `--selector`, `--frame`)
   - Output: a role-based list/tree with `[ref=e12]` (and optional `[nth=1]`).
@@ -251,13 +261,19 @@ OpenClaw supports two “snapshot” styles:
   - Output: the accessibility tree as structured nodes.
   - Actions: `openclaw browser click ax12` works when the snapshot path can bind
     the ref through Playwright and Chrome backend DOM ids.
-  - If Playwright is unavailable, ARIA snapshots can still be useful for
-    inspection, but refs may not be actionable. Re-snapshot with `--format ai`
-    or `--interactive` when you need action refs.
+- If Playwright is unavailable, ARIA snapshots can still be useful for
+  inspection, but refs may not be actionable. Re-snapshot with `--format ai`
+  or `--interactive` when you need action refs.
+- Docker proof for the raw-CDP fallback path: `pnpm test:docker:browser-cdp-snapshot`
+  starts Chromium with CDP, runs `browser doctor --deep`, and verifies role
+  snapshots include link URLs, cursor-promoted clickables, and iframe metadata.
 
 Ref behavior:
 
 - Refs are **not stable across navigations**; if something fails, re-run `snapshot` and use a fresh ref.
+- `/act` returns the current raw `targetId` after action-triggered replacement
+  when it can prove the replacement tab. Keep using stable tab ids/labels for
+  follow-up commands.
 - If the role snapshot was taken with `--frame`, role refs are scoped to that iframe until the next role snapshot.
 - Unknown or stale `axN` refs fail fast instead of falling through to
   Playwright's `aria-ref` selector. Run a fresh snapshot on the same tab when
@@ -288,7 +304,7 @@ openclaw browser wait "#main" \
 
 ## Debug workflows
 
-When an action fails (e.g. “not visible”, “strict mode violation”, “covered”):
+When an action fails (e.g. "not visible", "strict mode violation", "covered"):
 
 1. `openclaw browser snapshot --interactive`
 2. Use `click <ref>` / `type <ref>` (prefer role refs in interactive mode)
@@ -318,7 +334,7 @@ Role snapshots in JSON include `refs` plus a small `stats` block (lines/chars/re
 
 ## State and environment knobs
 
-These are useful for “make the site behave like X” workflows:
+These are useful for "make the site behave like X" workflows:
 
 - Cookies: `cookies`, `cookies set`, `cookies clear`
 - Storage: `storage local|session get|set|clear`
@@ -358,7 +374,7 @@ Strict-mode example (block private/internal destinations by default):
 
 ## Related
 
-- [Browser](/tools/browser) — overview, configuration, profiles, security
-- [Browser login](/tools/browser-login) — signing in to sites
+- [Browser](/tools/browser) - overview, configuration, profiles, security
+- [Browser login](/tools/browser-login) - signing in to sites
 - [Browser Linux troubleshooting](/tools/browser-linux-troubleshooting)
 - [Browser WSL2 troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting)

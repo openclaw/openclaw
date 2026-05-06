@@ -9,7 +9,23 @@ const require = createRequire(import.meta.url);
 const rootAliasPath = fileURLToPath(new URL("../../plugin-sdk/root-alias.cjs", import.meta.url));
 const rootSdk = require(rootAliasPath) as Record<string, unknown>;
 const rootAliasSource = fs.readFileSync(rootAliasPath, "utf-8");
+const compatPath = fileURLToPath(new URL("../../plugin-sdk/compat.ts", import.meta.url));
 const packageJsonPath = fileURLToPath(new URL("../../../package.json", import.meta.url));
+const legacyRootExportNames = [
+  "registerContextEngine",
+  "buildMemorySystemPromptAddition",
+  "delegateCompactionToRuntime",
+  "optionalStringEnum",
+  "stringEnum",
+  "buildChannelConfigSchema",
+  "normalizeAccountId",
+  "createReplyPrefixContext",
+  "createReplyPrefixOptions",
+  "createTypingCallbacks",
+  "createChannelReplyPipeline",
+  "resolveChannelSourceReplyDeliveryMode",
+  "resolvePreferredOpenClawTmpDir",
+] as const;
 
 type EmptySchema = {
   safeParse: (value: unknown) =>
@@ -151,6 +167,52 @@ function expectDiagnosticEventAccessor(lazyModule: ReturnType<typeof loadRootAli
       () => undefined,
     ),
   ).toBe("function");
+}
+
+function collectRuntimeExports(filePath: string, seen = new Set<string>()): Set<string> {
+  const normalizedPath = path.resolve(filePath);
+  if (seen.has(normalizedPath)) {
+    return new Set();
+  }
+  seen.add(normalizedPath);
+  const source = fs.readFileSync(normalizedPath, "utf-8");
+  const exportNames = new Set<string>();
+
+  for (const match of source.matchAll(/export\s+(?:const|function|class)\s+([A-Za-z_$][\w$]*)/g)) {
+    exportNames.add(match[1]);
+  }
+  for (const match of source.matchAll(/export\s+(?!type\b)\{([\s\S]*?)\}\s+from\s+"([^"]+)";/g)) {
+    const names = match[1]
+      .split(",")
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0 && !part.startsWith("type "))
+      .map(
+        (part) =>
+          part
+            .split(/\s+as\s+/u)
+            .at(-1)
+            ?.trim() ?? part,
+      );
+    for (const name of names) {
+      exportNames.add(name);
+    }
+  }
+  for (const match of source.matchAll(/export\s+\*\s+from\s+"([^"]+)";/g)) {
+    const specifier = match[1];
+    if (!specifier.startsWith(".")) {
+      continue;
+    }
+    const nestedPath = path.resolve(
+      path.dirname(normalizedPath),
+      specifier.replace(/\.(?:mjs|js)$/u, ".ts"),
+    );
+    const nestedExports = collectRuntimeExports(nestedPath, seen);
+    for (const name of nestedExports) {
+      exportNames.add(name);
+    }
+  }
+
+  return exportNames;
 }
 
 describe("plugin-sdk root alias", () => {
@@ -457,45 +519,50 @@ describe("plugin-sdk root alias", () => {
     expect(exportName in lazyModule.moduleExports).toBe(true);
   });
 
-  it("loads legacy root exports through the merged root wrapper", { timeout: 240_000 }, () => {
+  it("forwards legacy root exports through the merged root wrapper", () => {
+    const monolithicExports = Object.fromEntries(
+      legacyRootExportNames.map((name) => [name, () => name]),
+    );
+    const lazyModule = loadRootAliasWithStubs({ monolithicExports });
+
+    expect(typeof rootSdk.emptyPluginConfigSchema).toBe("function");
     expect(typeof rootSdk.resolveControlCommandGate).toBe("function");
     expect(typeof rootSdk.onDiagnosticEvent).toBe("function");
+
+    for (const name of legacyRootExportNames) {
+      expect(typeof lazyModule.moduleExports[name]).toBe("function");
+    }
+    expect(lazyModule.jitiLoadCalls).toBe(1);
+    expect(Object.keys(lazyModule.moduleExports)).toEqual(
+      expect.arrayContaining([...legacyRootExportNames]),
+    );
     expect(typeof rootSdk.default).toBe("object");
     expect(rootSdk.default).toBe(rootSdk);
     expect(rootSdk.__esModule).toBe(true);
   });
 
-  it("does not publish removed channel-specific plugin-sdk subpaths", () => {
+  it("keeps legacy root export names present in the compat source", () => {
+    const compatExports = collectRuntimeExports(compatPath);
+    for (const name of legacyRootExportNames) {
+      expect(compatExports.has(name)).toBe(true);
+    }
+  });
+
+  it("does not publish private local-only plugin-sdk subpaths", () => {
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
       exports?: Record<string, unknown>;
     };
+    const privateSubpathsPath = path.join(
+      path.dirname(packageJsonPath),
+      "scripts",
+      "lib",
+      "plugin-sdk-private-local-only-subpaths.json",
+    );
+    const privateSubpaths = JSON.parse(fs.readFileSync(privateSubpathsPath, "utf-8")) as string[];
 
-    expect(packageJson.exports?.["./plugin-sdk/discord"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/slack"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/signal"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/telegram-core"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/discord-runtime-surface"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/discord-thread-bindings"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/discord-timeouts"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/discord-account"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/discord-session-key"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/discord-surface"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/whatsapp"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/signal-account"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/signal-surface"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/slack-account"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/slack-runtime-surface"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/slack-surface"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/slack-target-parser"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/slack-targets"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/telegram-account"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/telegram-allow-from"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/telegram-surface"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/whatsapp-auth-presence"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/whatsapp-core"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/whatsapp-shared"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/whatsapp-surface"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/whatsapp-targets"]).toBeUndefined();
+    for (const subpath of privateSubpaths) {
+      expect(packageJson.exports?.[`./plugin-sdk/${subpath}`]).toBeUndefined();
+    }
   });
 
   it("preserves reflection semantics for lazily resolved exports", { timeout: 240_000 }, () => {

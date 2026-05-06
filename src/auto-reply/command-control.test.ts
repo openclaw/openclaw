@@ -202,6 +202,49 @@ describe("resolveCommandAuthorization", () => {
     expect(auth.isAuthorizedSender).toBe(false);
   });
 
+  it("allows channel-validated native commands when plugin owner enforcement has no owner allowlist", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          plugin: {
+            ...createOutboundTestPlugin({
+              id: "discord",
+              outbound: { deliveryMode: "direct" },
+            }),
+            commands: { enforceOwnerForCommands: true },
+            config: {
+              listAccountIds: () => ["default"],
+              resolveAccount: () => ({}),
+              resolveAllowFrom: () => ["*"],
+              formatAllowFrom,
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    const cfg = {
+      channels: { discord: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "discord",
+        Surface: "discord",
+        ChatType: "direct",
+        From: "discord:123",
+        SenderId: "123",
+        CommandSource: "native",
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.senderIsOwner).toBe(false);
+    expect(auth.isAuthorizedSender).toBe(true);
+  });
+
   it("uses explicit owner allowlist when allowFrom is empty", () => {
     const cfg = {
       commands: { ownerAllowFrom: ["whatsapp:+15551234567"] },
@@ -311,6 +354,88 @@ describe("resolveCommandAuthorization", () => {
 
     expect(auth.providerId).toBeUndefined();
     expect(auth.isAuthorizedSender).toBe(true);
+  });
+
+  it("does not apply channel-prefixed owner wildcards to webchat command contexts", () => {
+    const cfg = {
+      commands: { ownerAllowFrom: ["discord:*"] },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "webchat",
+        Surface: "webchat",
+        OriginatingChannel: "webchat",
+        SenderId: "123456789012345678",
+        GatewayClientScopes: ["operator.write"],
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.providerId).toBeUndefined();
+    expect(auth.senderIsOwner).toBe(false);
+  });
+
+  it("does not apply channel-prefixed owner identities to webchat command contexts", () => {
+    const cfg = {
+      commands: { ownerAllowFrom: ["discord:123456789012345678"] },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "webchat",
+        Surface: "webchat",
+        OriginatingChannel: "webchat",
+        SenderId: "123456789012345678",
+        GatewayClientScopes: ["operator.write"],
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.providerId).toBeUndefined();
+    expect(auth.senderIsOwner).toBe(false);
+  });
+
+  it("applies channel-prefixed owner identities to matching providers", () => {
+    const cfg = {
+      commands: { ownerAllowFrom: ["discord:123456789012345678"] },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "discord",
+        Surface: "discord",
+        From: "discord:123456789012345678",
+        SenderId: "123456789012345678",
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.providerId).toBe("discord");
+    expect(auth.senderIsOwner).toBe(true);
+  });
+
+  it("does not apply channel-prefixed owner wildcards to mismatched providers", () => {
+    const cfg = {
+      commands: { ownerAllowFrom: ["telegram:*"] },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "discord",
+        Surface: "discord",
+        From: "discord:123456789012345678",
+        SenderId: "123456789012345678",
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.providerId).toBe("discord");
+    expect(auth.senderIsOwner).toBe(false);
   });
 
   it("preserves external channel command auth in mixed webchat contexts", () => {

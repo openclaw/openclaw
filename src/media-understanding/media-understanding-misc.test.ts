@@ -2,6 +2,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as fsSafe from "../infra/fs-safe.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { MediaAttachmentCache } from "./attachments.js";
@@ -92,6 +93,23 @@ describe("media understanding attachments SSRF", () => {
 
   it("reads local attachments inside configured roots", async () => {
     await withLocalAttachmentCache("openclaw-media-cache-allowed-", async ({ cache }) => {
+      const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
+      expect(result.buffer.toString()).toBe("ok");
+    });
+  });
+
+  it("resolves relative attachment paths against the provided workspaceDir", async () => {
+    await withTempDir({ prefix: "openclaw-media-cache-workspace-" }, async (base) => {
+      const workspaceDir = path.join(base, "workspace");
+      const attachmentPath = path.join(workspaceDir, "media", "inbound", "report.pdf");
+      await fs.mkdir(path.dirname(attachmentPath), { recursive: true });
+      await fs.writeFile(attachmentPath, "ok");
+
+      const cache = new MediaAttachmentCache([{ index: 0, path: "media/inbound/report.pdf" }], {
+        localPathRoots: [workspaceDir],
+        workspaceDir,
+      });
+
       const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
       expect(result.buffer.toString()).toBe("ok");
     });
@@ -205,13 +223,11 @@ describe("media understanding attachments SSRF", () => {
       const cache = new MediaAttachmentCache([{ index: 0, path: attachmentPath }], {
         localPathRoots: [allowedRoot],
       });
-      const originalRealpath = fs.realpath.bind(fs);
-
-      vi.spyOn(fs, "realpath").mockImplementation(async (candidatePath) => {
-        if (String(candidatePath) === attachmentPath) {
+      vi.spyOn(fsSafe, "openLocalFileSafely").mockImplementation(async (params) => {
+        if (params.filePath === attachmentPath) {
           throw new Error("EACCES");
         }
-        return await originalRealpath(candidatePath);
+        throw new Error(`Unexpected attachment path: ${params.filePath}`);
       });
 
       await expect(

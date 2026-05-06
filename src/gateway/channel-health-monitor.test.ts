@@ -131,7 +131,7 @@ async function expectRestartedChannel(
   accountId = "default",
 ) {
   const monitor = await startAndRunCheck(manager);
-  expect(manager.stopChannel).toHaveBeenCalledWith(channel, accountId);
+  expect(manager.stopChannel).toHaveBeenCalledWith(channel, accountId, { manual: false });
   expect(manager.startChannel).toHaveBeenCalledWith(channel, accountId);
   monitor.stop();
 }
@@ -169,6 +169,25 @@ describe("channel-health-monitor", () => {
     const manager = createMockChannelManager();
     const monitor = await startAndRunCheck(manager, { startupGraceMs: 1_000 });
     expect(manager.getRuntimeSnapshot).toHaveBeenCalled();
+    monitor.stop();
+  });
+
+  it("keeps running after a runtime snapshot failure", async () => {
+    const manager = createMockChannelManager({
+      getRuntimeSnapshot: vi
+        .fn()
+        .mockImplementationOnce(() => {
+          throw new Error("snapshot failed");
+        })
+        .mockReturnValue({ channels: {}, channelAccounts: {} }),
+    });
+    const monitor = startDefaultMonitor(manager);
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+    await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+
+    expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
+    expect(manager.startChannel).not.toHaveBeenCalled();
     monitor.stop();
   });
 
@@ -267,9 +286,9 @@ describe("channel-health-monitor", () => {
       },
     );
     const monitor = await startAndRunCheck(manager);
-    expect(manager.stopChannel).toHaveBeenCalledWith("discord", "default");
+    expect(manager.stopChannel).toHaveBeenCalledWith("discord", "default", { manual: false });
     expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
-    expect(manager.stopChannel).not.toHaveBeenCalledWith("discord", "quiet");
+    expect(manager.stopChannel).not.toHaveBeenCalledWith("discord", "quiet", { manual: false });
     expect(manager.startChannel).not.toHaveBeenCalledWith("discord", "quiet");
     monitor.stop();
   });
@@ -289,7 +308,7 @@ describe("channel-health-monitor", () => {
       },
     });
     const monitor = await startAndRunCheck(manager);
-    expect(manager.stopChannel).toHaveBeenCalledWith("whatsapp", "default");
+    expect(manager.stopChannel).toHaveBeenCalledWith("whatsapp", "default", { manual: false });
     expect(manager.resetRestartAttempts).toHaveBeenCalledWith("whatsapp", "default");
     expect(manager.startChannel).toHaveBeenCalledWith("whatsapp", "default");
     monitor.stop();
@@ -437,6 +456,31 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
+  it("counts failed restart attempts toward cooldown and hourly caps", async () => {
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: managedStoppedAccount("keeps crashing"),
+        },
+      },
+      {
+        startChannel: vi.fn(async () => {
+          throw new Error("startup failed");
+        }),
+      },
+    );
+    const monitor = startDefaultMonitor(manager, {
+      checkIntervalMs: 1_000,
+      cooldownCycles: 1,
+      maxRestartsPerHour: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(5_001);
+
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
+    monitor.stop();
+  });
+
   it("runs checks single-flight when restart work is still in progress", async () => {
     let releaseStart: (() => void) | undefined;
     const startGate = new Promise<void>((resolve) => {
@@ -569,7 +613,7 @@ describe("channel-health-monitor", () => {
       const monitor = await startAndRunCheck(manager, {
         staleEventThresholdMs: customThreshold,
       });
-      expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default");
+      expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default", { manual: false });
       expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");
       monitor.stop();
     });

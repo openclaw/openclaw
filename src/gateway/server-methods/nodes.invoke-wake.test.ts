@@ -14,7 +14,7 @@ type MockNodeCommandPolicyParams = {
 };
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
   resolveNodeCommandAllowlist: vi.fn<() => Set<string>>(() => new Set()),
   isNodeCommandAllowed: vi.fn<
     (params: MockNodeCommandPolicyParams) => { ok: true } | { ok: false; reason: string }
@@ -32,8 +32,8 @@ const mocks = vi.hoisted(() => ({
   shouldClearStoredApnsRegistration: vi.fn(() => false),
 }));
 
-vi.mock("../../config/config.js", () => ({
-  loadConfig: mocks.loadConfig,
+vi.mock("../../config/io.js", () => ({
+  getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
 vi.mock("../node-command-policy.js", () => ({
@@ -134,7 +134,7 @@ function mockDirectWakeConfig(nodeId: string, overrides: WakeResultOverrides = {
 }
 
 function mockRelayWakeConfig(nodeId: string, overrides: WakeResultOverrides = {}) {
-  mocks.loadConfig.mockReturnValue({
+  mocks.getRuntimeConfig.mockReturnValue({
     gateway: {
       push: {
         apns: {
@@ -200,6 +200,7 @@ async function invokeNode(params: {
       nodeRegistry: params.nodeRegistry,
       execApprovalManager: undefined,
       logGateway,
+      getRuntimeConfig: () => mocks.getRuntimeConfig(),
     } as never,
     client: null,
     req: { type: "req", id: "req-node-invoke", method: "node.invoke" },
@@ -229,7 +230,7 @@ async function pullPending(nodeId: string, commands?: string[]) {
   await nodeHandlers["node.pending.pull"]({
     params: {},
     respond: respond as never,
-    context: {} as never,
+    context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,
     client: createNodeClient(nodeId, commands) as never,
     req: { type: "req", id: "req-node-pending", method: "node.pending.pull" },
     isWebchatConnect: () => false,
@@ -242,7 +243,7 @@ async function ackPending(nodeId: string, ids: string[], commands?: string[]) {
   await nodeHandlers["node.pending.ack"]({
     params: { ids },
     respond: respond as never,
-    context: {} as never,
+    context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,
     client: createNodeClient(nodeId, commands) as never,
     req: { type: "req", id: "req-node-pending-ack", method: "node.pending.ack" },
     isWebchatConnect: () => false,
@@ -252,8 +253,8 @@ async function ackPending(nodeId: string, ids: string[], commands?: string[]) {
 
 describe("node.invoke APNs wake path", () => {
   beforeEach(() => {
-    mocks.loadConfig.mockClear();
-    mocks.loadConfig.mockReturnValue({});
+    mocks.getRuntimeConfig.mockClear();
+    mocks.getRuntimeConfig.mockReturnValue({});
     mocks.resolveNodeCommandAllowlist.mockClear();
     mocks.resolveNodeCommandAllowlist.mockReturnValue(new Set());
     mocks.isNodeCommandAllowed.mockClear();
@@ -402,6 +403,66 @@ describe("node.invoke APNs wake path", () => {
     const call = respond.mock.calls[0] as RespondCall | undefined;
     expect(call?.[0]).toBe(true);
     expect(call?.[1]).toMatchObject({ ok: true, nodeId: "ios-node-reconnect" });
+  });
+
+  it("broadcasts canonical Talk capture events for successful PTT node commands", async () => {
+    const respond = vi.fn();
+    const broadcast = vi.fn();
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "android-talk-node",
+        commands: ["talk.ptt.start"],
+        capabilities: ["talk"],
+        platform: "android",
+      })),
+      invoke: vi.fn().mockResolvedValue({
+        ok: true,
+        payloadJSON: '{"captureId":"capture-1"}',
+      }),
+    };
+
+    await nodeHandlers["node.invoke"]({
+      params: {
+        nodeId: "android-talk-node",
+        command: "talk.ptt.start",
+        idempotencyKey: "idem-talk-ptt-start",
+      },
+      respond: respond as never,
+      context: {
+        nodeRegistry,
+        execApprovalManager: undefined,
+        logGateway: { info: vi.fn(), warn: vi.fn() },
+        getRuntimeConfig: () => mocks.getRuntimeConfig(),
+        broadcast,
+      } as never,
+      client: null,
+      req: { type: "req", id: "req-talk-ptt", method: "node.invoke" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(broadcast).toHaveBeenCalledWith(
+      "talk.event",
+      expect.objectContaining({
+        nodeId: "android-talk-node",
+        command: "talk.ptt.start",
+        talkEvent: expect.objectContaining({
+          type: "capture.started",
+          sessionId: "node:android-talk-node:talk:capture-1",
+          captureId: "capture-1",
+          seq: expect.any(Number),
+          mode: "stt-tts",
+          transport: "managed-room",
+          brain: "agent-consult",
+          final: false,
+          payload: expect.objectContaining({
+            nodeId: "android-talk-node",
+            command: "talk.ptt.start",
+          }),
+        }),
+      }),
+      { dropIfSlow: true },
+    );
   });
 
   it("clears stale registrations after an invalid device token wake failure", async () => {

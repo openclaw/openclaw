@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -41,6 +42,26 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     expect(Buffer.from(block.source?.data ?? "", "base64")).toEqual(
       Buffer.from([0xff, 0xfb, 0x90, 0x00]),
     );
+  });
+
+  it("suppresses reasoning payload audio", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-webchat-audio-"));
+    const audioPath = path.join(tmpDir, "clip.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+
+    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
+      [
+        {
+          text: "Reasoning:\n_step_",
+          mediaUrl: audioPath,
+          trustedLocalMedia: true,
+          isReasoning: true,
+        },
+      ],
+      { localRoots: [tmpDir] },
+    );
+
+    expect(blocks).toHaveLength(0);
   });
 
   it("skips remote URLs", async () => {
@@ -96,8 +117,7 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
   });
 
   it("drops tool-result file:// URLs with remote hosts before touching the filesystem", async () => {
-    const statSpy = vi.spyOn(fs, "statSync");
-    const readSpy = vi.spyOn(fs, "readFileSync");
+    const openSpy = vi.spyOn(fsPromises, "open");
 
     const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads([
       {
@@ -108,11 +128,9 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     ]);
 
     expect(blocks).toHaveLength(0);
-    expect(statSpy).not.toHaveBeenCalled();
-    expect(readSpy).not.toHaveBeenCalled();
+    expect(openSpy).not.toHaveBeenCalled();
 
-    statSpy.mockRestore();
-    readSpy.mockRestore();
+    openSpy.mockRestore();
   });
 
   it("rejects a local audio file outside configured localRoots", async () => {
@@ -154,19 +172,11 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     expect((blocks[0] as { type?: string }).type).toBe("audio");
   });
 
-  it("does not read file contents when stat reports size over the cap", async () => {
+  it("skips local audio when the opened file stat is over the cap", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-webchat-audio-"));
     const audioPath = path.join(tmpDir, "huge.mp3");
     fs.writeFileSync(audioPath, Buffer.from([0x02]));
-
-    const origStat = fs.statSync.bind(fs);
-    const statSpy = vi.spyOn(fs, "statSync").mockImplementation((p: fs.PathLike) => {
-      if (String(p) === audioPath) {
-        return { isFile: () => true, size: 16 * 1024 * 1024 } as fs.Stats;
-      }
-      return origStat(p);
-    });
-    const readSpy = vi.spyOn(fs, "readFileSync");
+    fs.truncateSync(audioPath, 16 * 1024 * 1024);
 
     const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
       [{ mediaUrl: audioPath, trustedLocalMedia: true }],
@@ -174,10 +184,6 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     );
 
     expect(blocks).toHaveLength(0);
-    expect(readSpy).not.toHaveBeenCalled();
-
-    statSpy.mockRestore();
-    readSpy.mockRestore();
   });
 
   it("rejects untrusted local audio paths", async () => {
@@ -210,6 +216,18 @@ describe("buildWebchatAssistantMessageFromReplyPayloads", () => {
         { type: "input_image", image_url: "data:image/png;base64,cG5n" },
       ],
     });
+  });
+
+  it("suppresses reasoning payload media transcripts", async () => {
+    const message = await buildWebchatAssistantMessageFromReplyPayloads([
+      {
+        text: "Reasoning:\n_step_",
+        mediaUrl: "data:image/png;base64,cG5n",
+        isReasoning: true,
+      },
+    ]);
+
+    expect(message).toBeNull();
   });
 
   it("suppresses control tokens and falls back to synthetic image text", async () => {

@@ -1,5 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { listRegisteredPluginAgentPromptGuidance } from "./command-registry-state.js";
 import {
   __testing,
   clearPluginCommands,
@@ -10,7 +12,9 @@ import {
   matchPluginCommand,
   registerPluginCommand,
 } from "./commands.js";
+import { createPluginRegistry, type PluginRecord } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
+import type { PluginRuntime } from "./runtime/types.js";
 
 type CommandsModule = typeof import("./commands.js");
 
@@ -27,6 +31,59 @@ function createVoiceCommand(overrides: Partial<Parameters<typeof registerPluginC
     handler: async () => ({ text: "ok" }),
     ...overrides,
   };
+}
+
+function createBundledPluginRecord(id: string): PluginRecord {
+  return {
+    id,
+    name: id,
+    source: `bundled:${id}`,
+    rootDir: `/bundled/${id}`,
+    origin: "bundled",
+    enabled: true,
+    status: "loaded",
+    toolNames: [],
+    hookNames: [],
+    channelIds: [],
+    cliBackendIds: [],
+    providerIds: [],
+    speechProviderIds: [],
+    realtimeTranscriptionProviderIds: [],
+    realtimeVoiceProviderIds: [],
+    mediaUnderstandingProviderIds: [],
+    imageGenerationProviderIds: [],
+    videoGenerationProviderIds: [],
+    musicGenerationProviderIds: [],
+    webFetchProviderIds: [],
+    webSearchProviderIds: [],
+    migrationProviderIds: [],
+    memoryEmbeddingProviderIds: [],
+    agentHarnessIds: [],
+    gatewayMethods: [],
+    cliCommands: [],
+    services: [],
+    gatewayDiscoveryServiceIds: [],
+    commands: [],
+    httpRoutes: 0,
+    hookCount: 0,
+    configSchema: false,
+  } as PluginRecord;
+}
+
+function registerHostTrustedReservedCommandForTest(
+  command: Parameters<typeof registerPluginCommand>[1],
+) {
+  const pluginRegistry = createPluginRegistry({
+    logger: {
+      info() {},
+      warn() {},
+      error() {},
+      debug() {},
+    },
+    runtime: {} as PluginRuntime,
+    activateGlobalSideEffects: true,
+  });
+  pluginRegistry.registerCommand(createBundledPluginRecord(command.name), command);
 }
 
 function registerVoiceCommandForTest(
@@ -249,6 +306,32 @@ describe("registerPluginCommand", () => {
         error: "Command description must be a string",
       },
     },
+    {
+      name: "rejects invalid agent prompt guidance",
+      command: {
+        name: "demo",
+        description: "Demo",
+        agentPromptGuidance: "use /demo" as unknown as string[],
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error: "Agent prompt guidance must be an array of strings",
+      },
+    },
+    {
+      name: "rejects invalid channel scopes",
+      command: {
+        name: "demo",
+        description: "Demo",
+        channels: ["telegram", "   "],
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error: "Command channel 2 cannot be empty",
+      },
+    },
   ] as const)("$name", ({ command, expected }) => {
     expect(registerPluginCommand("demo-plugin", command)).toEqual(expected);
   });
@@ -257,6 +340,7 @@ describe("registerPluginCommand", () => {
     const result = registerPluginCommand("demo-plugin", {
       name: "  demo_cmd  ",
       description: "  Demo command  ",
+      agentPromptGuidance: ["  Use /demo_cmd for demo routing.  "],
       handler: async () => ({ text: "ok" }),
     });
     expect(result).toEqual({ ok: true });
@@ -275,6 +359,7 @@ describe("registerPluginCommand", () => {
         acceptsArgs: false,
       },
     ]);
+    expect(listRegisteredPluginAgentPromptGuidance()).toEqual(["Use /demo_cmd for demo routing."]);
   });
 
   it("matches underscore aliases for hyphenated command names", () => {
@@ -312,6 +397,31 @@ describe("registerPluginCommand", () => {
     ]);
   });
 
+  it("scopes plugin command matches and native specs to configured channels", () => {
+    const result = registerVoiceCommandForTest({
+      channels: [" Telegram "],
+      description: "Demo command",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(matchPluginCommand("/voice", { channel: "telegram" })).toMatchObject({
+      command: expect.objectContaining({
+        name: "voice",
+        channels: ["telegram"],
+      }),
+    });
+    expect(matchPluginCommand("/voice", { channel: "discord" })).toBeNull();
+    expect(matchPluginCommand("/voice")).toMatchObject({
+      command: expect.objectContaining({ name: "voice" }),
+    });
+    expectProviderCommandSpecCases([
+      { provider: undefined, expectedNames: ["voice"] },
+      { provider: "telegram", expectedNames: ["voice"] },
+      { provider: "discord", expectedNames: [] },
+    ]);
+    expect(listProviderPluginCommandSpecs("discord")).toEqual([]);
+  });
+
   it("allows Slack to resolve provider-native plugin specs without changing shared native gating", () => {
     const result = registerVoiceCommandForTest({
       nativeNames: {
@@ -325,6 +435,43 @@ describe("registerPluginCommand", () => {
     expect(listProviderPluginCommandSpecs("slack")).toEqual([
       {
         name: "talkvoice",
+        description: "Demo command",
+        acceptsArgs: false,
+      },
+    ]);
+  });
+
+  it("requires config before using read-only manifest command defaults", () => {
+    setActivePluginRegistry(createTestRegistry([]));
+    registerVoiceCommandForTest({
+      nativeNames: {
+        discord: "discordvoice",
+      },
+      description: "Demo command",
+    });
+    const env = {
+      ...process.env,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
+      OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
+    };
+
+    expect(getPluginCommandSpecs("discord", { env })).toEqual([]);
+    expect(
+      getPluginCommandSpecs("discord", {
+        env,
+        config: {
+          plugins: {
+            entries: {
+              discord: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual([
+      {
+        name: "discordvoice",
         description: "Demo command",
         acceptsArgs: false,
       },
@@ -345,6 +492,35 @@ describe("registerPluginCommand", () => {
     });
   });
 
+  it("exposes native description localizations on plugin command specs", () => {
+    const result = registerVoiceCommandForTest({
+      description: "Demo command",
+      descriptionLocalizations: { ko: "데모 명령" },
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(listProviderPluginCommandSpecs("discord")).toEqual([
+      {
+        name: "voice",
+        description: "Demo command",
+        descriptionLocalizations: { ko: "데모 명령" },
+        acceptsArgs: false,
+      },
+    ]);
+  });
+
+  it("rejects empty native description localizations", () => {
+    const result = registerVoiceCommandForTest({
+      description: "Demo command",
+      descriptionLocalizations: { ko: "   " },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'Description localization "ko" cannot be empty',
+    });
+  });
+
   it("rejects empty native progress metadata", () => {
     const result = registerVoiceCommandForTest({
       nativeProgressMessages: { telegram: "   " },
@@ -355,6 +531,257 @@ describe("registerPluginCommand", () => {
       ok: false,
       error: 'Native progress message "telegram" cannot be empty',
     });
+  });
+
+  it("keeps reserved command bypass scoped to the primary command name", () => {
+    const result = registerPluginCommand(
+      "status",
+      createVoiceCommand({
+        name: "status",
+        nativeNames: {
+          telegram: "help",
+        },
+      }),
+      { allowReservedCommandNames: true },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error:
+        'Native command alias "telegram" invalid: Command name "help" is reserved by a built-in command',
+    });
+  });
+
+  it("reserves the bundled Codex command name", () => {
+    const result = registerPluginCommand("demo-plugin", {
+      name: "codex",
+      description: "Fake Codex command",
+      handler: async () => ({ text: "ok" }),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'Command name "codex" is reserved by a built-in command',
+    });
+  });
+
+  it("rejects reserved ownership on non-reserved direct command registrations", () => {
+    const result = registerPluginCommand(
+      "demo-plugin",
+      {
+        name: "voice",
+        description: "Voice command",
+        ownership: "reserved",
+        handler: async () => ({ text: "ok" }),
+      },
+      { allowReservedCommandNames: true },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: "Reserved command ownership is only available to bundled reserved commands",
+    });
+  });
+
+  it("does not expose owner status to normal plugin commands", async () => {
+    let observedOwnerStatus: boolean | undefined;
+    registerPluginCommand("demo-plugin", {
+      name: "voice",
+      description: "Voice command",
+      handler: async (ctx) => {
+        observedOwnerStatus = ctx.senderIsOwner;
+        return { text: "ok" };
+      },
+    });
+    const match = matchPluginCommand("/voice");
+    expect(match).toBeTruthy();
+
+    await executePluginCommand({
+      command: match!.command,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      commandBody: "/voice",
+      config: {},
+    });
+
+    expect(observedOwnerStatus).toBeUndefined();
+  });
+
+  it("allows command owners to run scoped plugin commands without gateway scopes", async () => {
+    let observedOwnerStatus: boolean | undefined;
+    const handler = vi.fn(async (ctx: { senderIsOwner?: boolean }) => {
+      observedOwnerStatus = ctx.senderIsOwner;
+      return { text: "ok" };
+    });
+    registerPluginCommand("demo-plugin", {
+      name: "pairlike",
+      description: "Scoped command",
+      requiredScopes: ["operator.pairing"],
+      handler,
+    });
+    const match = matchPluginCommand("/pairlike");
+    expect(match).toBeTruthy();
+
+    const result = await executePluginCommand({
+      command: match!.command,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      commandBody: "/pairlike",
+      config: {},
+    });
+
+    expect(result).toEqual({ text: "ok" });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(observedOwnerStatus).toBe(true);
+  });
+
+  it("rejects command owners when explicit gateway scopes miss the required scope", async () => {
+    const handler = vi.fn(async () => ({ text: "ok" }));
+    registerPluginCommand("demo-plugin", {
+      name: "pairlike",
+      description: "Scoped command",
+      requiredScopes: ["operator.pairing"],
+      handler,
+    });
+    const match = matchPluginCommand("/pairlike");
+    expect(match).toBeTruthy();
+
+    const result = await executePluginCommand({
+      command: match!.command,
+      channel: "webchat",
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      commandBody: "/pairlike",
+      gatewayClientScopes: ["operator.write"],
+      config: {},
+    });
+
+    expect(result).toEqual({ text: "⚠️ This command requires gateway scope: operator.pairing." });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-owner scoped plugin commands without gateway scopes", async () => {
+    const handler = vi.fn(async () => ({ text: "ok" }));
+    registerPluginCommand("demo-plugin", {
+      name: "pairlike",
+      description: "Scoped command",
+      requiredScopes: ["operator.pairing"],
+      handler,
+    });
+    const match = matchPluginCommand("/pairlike");
+    expect(match).toBeTruthy();
+
+    const result = await executePluginCommand({
+      command: match!.command,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      senderIsOwner: false,
+      commandBody: "/pairlike",
+      config: {},
+    });
+
+    expect(result).toEqual({ text: "⚠️ This command requires gateway scope: operator.pairing." });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("skips direct plugin command execution on unsupported channels", async () => {
+    let handlerCalled = false;
+    const handler = async () => {
+      handlerCalled = true;
+      return { text: "ok" };
+    };
+
+    const result = await executePluginCommand({
+      command: {
+        name: "voice",
+        description: "Voice command",
+        channels: ["qqbot"],
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "discord",
+      isAuthorizedSender: true,
+      commandBody: "/voice",
+      config: {},
+    });
+
+    expect(result).toEqual({ continueAgent: true });
+    expect(handlerCalled).toBe(false);
+  });
+
+  it("does not allow direct reserved command registrations to claim owner status", () => {
+    const result = registerPluginCommand(
+      "codex",
+      {
+        name: "codex",
+        description: "Codex command",
+        ownership: "reserved",
+        handler: async () => ({ text: "ok" }),
+      },
+      { allowReservedCommandNames: true },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: "Reserved command ownership is only available to bundled reserved commands",
+    });
+    expect(matchPluginCommand("/codex")).toBeNull();
+  });
+
+  it("exposes owner status only to host-trusted reserved command owners", async () => {
+    let observedOwnerStatus: boolean | undefined;
+    registerHostTrustedReservedCommandForTest({
+      name: "codex",
+      description: "Codex command",
+      ownership: "reserved",
+      handler: async (ctx) => {
+        observedOwnerStatus = ctx.senderIsOwner;
+        return { text: "ok" };
+      },
+    });
+    const match = matchPluginCommand("/codex");
+    expect(match).toBeTruthy();
+
+    await executePluginCommand({
+      command: match!.command,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      commandBody: "/codex",
+      config: {},
+    });
+
+    expect(observedOwnerStatus).toBe(true);
+  });
+
+  it("rejects mismatched reserved command owners", () => {
+    const pluginRegistry = createPluginRegistry({
+      logger: {
+        info() {},
+        warn() {},
+        error() {},
+        debug() {},
+      },
+      runtime: {} as PluginRuntime,
+      activateGlobalSideEffects: true,
+    });
+    pluginRegistry.registerCommand(createBundledPluginRecord("bundled-plugin"), {
+      name: "codex",
+      description: "Codex command",
+      ownership: "reserved",
+      handler: async () => ({ text: "ok" }),
+    });
+
+    expect(pluginRegistry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "bundled-plugin",
+        message:
+          'command registration failed: Reserved command ownership requires plugin id "bundled-plugin" to match reserved command name "codex"',
+      }),
+    );
   });
 
   it("shares plugin commands across duplicate module instances", async () => {
@@ -613,6 +1040,27 @@ describe("registerPluginCommand", () => {
       sessionKey: "agent:main:whatsapp:direct:123",
       sessionId: "session-123",
     });
+  });
+
+  it("normalizes undefined plugin command handler results to an empty reply payload", async () => {
+    const handler = async () => undefined as never;
+
+    const result = await executePluginCommand({
+      command: {
+        name: "silentcheck",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "telegram",
+      senderId: "U123",
+      isAuthorizedSender: true,
+      commandBody: "/silentcheck",
+      config: {} as never,
+    });
+
+    expect(result).toEqual({});
   });
 
   it("passes the effective default account to plugin command handlers when accountId is omitted", async () => {

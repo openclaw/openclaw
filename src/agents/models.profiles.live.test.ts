@@ -1,10 +1,11 @@
 import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
-import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { resolveDefaultAgentDir } from "./agent-scope.js";
+import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import {
   collectAnthropicApiKeys,
   isAnthropicBillingError,
@@ -291,6 +292,7 @@ function isAudioOnlyModelErrorMessage(raw: string): boolean {
 function isUnsupportedReasoningEffortErrorMessage(raw: string): boolean {
   return (
     /does not support parameter reasoningeffort/i.test(raw) ||
+    /invalid reasoning effort/i.test(raw) ||
     /unsupported value:\s*'low'.*reasoning\.effort.*supported values are:\s*'medium'/i.test(raw)
   );
 }
@@ -303,6 +305,24 @@ function isUnsupportedPlanErrorMessage(raw: string): boolean {
   return /current token plan (?:does )?not support (?:this )?model/i.test(raw);
 }
 
+function isOpenRouterOpaqueBadRequestErrorMessage(raw: string): boolean {
+  const msg = raw.toLowerCase();
+  return (
+    msg.includes("provider returned error") &&
+    msg.includes('"code":400') &&
+    msg.includes('"msg":"bad request"')
+  );
+}
+
+describe("isUnsupportedReasoningEffortErrorMessage", () => {
+  it("matches provider-native reasoning effort rejections", () => {
+    expect(isUnsupportedReasoningEffortErrorMessage('Error: 400 "Invalid reasoning effort."')).toBe(
+      true,
+    );
+    expect(isUnsupportedReasoningEffortErrorMessage("Error: 400 model not found")).toBe(false);
+  });
+});
+
 describe("isUnsupportedPlanErrorMessage", () => {
   it("matches provider plan-gated models", () => {
     expect(isUnsupportedPlanErrorMessage("current token plan does not support this model")).toBe(
@@ -310,6 +330,17 @@ describe("isUnsupportedPlanErrorMessage", () => {
     );
     expect(isUnsupportedPlanErrorMessage("your current token plan not support model")).toBe(true);
     expect(isUnsupportedPlanErrorMessage("model not found")).toBe(false);
+  });
+});
+
+describe("isOpenRouterOpaqueBadRequestErrorMessage", () => {
+  it("matches opaque OpenRouter upstream bad requests", () => {
+    expect(
+      isOpenRouterOpaqueBadRequestErrorMessage(
+        'Error: 400 Provider returned error {"code":400,"msg":"bad request","request_id":"abc"}',
+      ),
+    ).toBe(true);
+    expect(isOpenRouterOpaqueBadRequestErrorMessage("Error: 400 bad request")).toBe(false);
   });
 });
 
@@ -689,7 +720,7 @@ describeLive("live models (profile keys)", () => {
     async () => {
       logProgress("[live-models] loading config");
       const cfg = await withLiveStageTimeout(
-        Promise.resolve().then(() => loadConfig()),
+        Promise.resolve().then(() => getRuntimeConfig()),
         "[live-models] load config",
       );
       logProgress("[live-models] preparing models.json");
@@ -710,8 +741,20 @@ describeLive("live models (profile keys)", () => {
         logProgress(`[live-models] anthropic keys loaded: ${anthropicKeys.length}`);
       }
 
-      const agentDir = resolveOpenClawAgentDir();
-      const authStorage = discoverAuthStorage(agentDir);
+      const providers = parseProviderFilter(process.env.OPENCLAW_LIVE_PROVIDERS);
+      const providerList = providers ? [...providers] : null;
+      const agentDir = resolveDefaultAgentDir(cfg);
+      const authStorage = discoverAuthStorage(agentDir, {
+        config: cfg,
+        env: process.env,
+        ...(providerList
+          ? {
+              externalCli: externalCliDiscoveryForProviders({ cfg, providers: providerList }),
+              skipExternalAuthProfiles: true,
+              syntheticAuthProviderRefs: [],
+            }
+          : {}),
+      });
       logProgress("[live-models] loading model registry");
       const models = await withLiveStageTimeout(
         Promise.resolve().then(() => discoverModels(authStorage, agentDir).getAll()),
@@ -723,7 +766,6 @@ describeLive("live models (profile keys)", () => {
       const useExplicit = Boolean(rawModels) && !useModern;
       const filter = useExplicit ? parseModelFilter(rawModels) : null;
       const allowNotFoundSkip = useModern;
-      const providers = parseProviderFilter(process.env.OPENCLAW_LIVE_PROVIDERS);
       const perModelTimeoutMs = toInt(process.env.OPENCLAW_LIVE_MODEL_TIMEOUT_MS, 30_000);
       const maxModels = resolveHighSignalLiveModelLimit({
         rawMaxModels: process.env.OPENCLAW_LIVE_MAX_MODELS,
@@ -1149,6 +1191,15 @@ describeLive("live models (profile keys)", () => {
             if (allowNotFoundSkip && isProviderUnavailableErrorMessage(message)) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (provider unavailable)`);
+              break;
+            }
+            if (
+              allowNotFoundSkip &&
+              model.provider === "openrouter" &&
+              isOpenRouterOpaqueBadRequestErrorMessage(message)
+            ) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (openrouter upstream bad request)`);
               break;
             }
             if (allowNotFoundSkip && isModelNotFoundErrorMessage(message)) {

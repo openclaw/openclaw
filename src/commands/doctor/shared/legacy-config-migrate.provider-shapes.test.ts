@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS } from "./legacy-config-migrations.runtime.tts.js";
+import { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
 
 function migrateLegacyConfig(raw: unknown): {
   config: OpenClawConfig | null;
@@ -21,6 +22,83 @@ function migrateLegacyConfig(raw: unknown): {
 }
 
 describe("legacy migrate provider-shaped config", () => {
+  it("moves legacy realtime Talk selectors into talk.realtime without treating speech config as runtime fallback", () => {
+    const changes: string[] = [];
+    const migrated = normalizeLegacyTalkConfig(
+      {
+        talk: {
+          provider: "openai",
+          providers: {
+            openai: {
+              apiKey: "test-key",
+              custom: true,
+            },
+          },
+          mode: "realtime",
+          transport: "gateway-relay",
+          brain: "agent-consult",
+          model: "gpt-realtime",
+          voice: "alloy",
+        } as never,
+      },
+      changes,
+    );
+
+    expect(changes).toContain(
+      "Moved legacy realtime Talk provider/model fields into talk.realtime.",
+    );
+    expect(migrated.talk).toEqual({
+      provider: "openai",
+      providers: {
+        openai: {
+          apiKey: "test-key",
+          custom: true,
+        },
+      },
+      realtime: {
+        provider: "openai",
+        providers: {
+          openai: {
+            apiKey: "test-key",
+            custom: true,
+          },
+        },
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        model: "gpt-realtime",
+        voice: "alloy",
+      },
+    });
+  });
+
+  it("does not copy plain Talk speech provider config into talk.realtime", () => {
+    const changes: string[] = [];
+    const migrated = normalizeLegacyTalkConfig(
+      {
+        talk: {
+          provider: "elevenlabs",
+          providers: {
+            elevenlabs: {
+              voiceId: "voice-1",
+            },
+          },
+        },
+      },
+      changes,
+    );
+
+    expect(changes).toEqual([]);
+    expect(migrated.talk).toEqual({
+      provider: "elevenlabs",
+      providers: {
+        elevenlabs: {
+          voiceId: "voice-1",
+        },
+      },
+    });
+  });
+
   it("moves messages.tts.<provider> keys into messages.tts.providers", () => {
     const res = migrateLegacyConfig({
       messages: {
@@ -78,6 +156,88 @@ describe("legacy migrate provider-shaped config", () => {
           lang: "en-US",
           rate: "+4%",
           voice: "en-US-AvaNeural",
+        },
+      },
+    });
+  });
+
+  it("moves legacy tts enabled toggles to auto mode in known config locations", () => {
+    const res = migrateLegacyConfig({
+      messages: {
+        tts: {
+          enabled: true,
+        },
+      },
+      agents: {
+        defaults: {
+          tts: {
+            enabled: false,
+          },
+        },
+        list: [
+          {
+            id: "voice-agent",
+            tts: {
+              enabled: true,
+              auto: "tagged",
+            },
+          },
+        ],
+      },
+      channels: {
+        discord: {
+          tts: {
+            enabled: true,
+          },
+          accounts: {
+            primary: {
+              tts: {
+                enabled: false,
+              },
+            },
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          "voice-call": {
+            config: {
+              tts: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toEqual([
+      'Moved messages.tts.enabled → messages.tts.auto "always".',
+      'Moved agents.defaults.tts.enabled → agents.defaults.tts.auto "off".',
+      "Removed agents.list[0].tts.enabled because agents.list[0].tts.auto is already set.",
+      'Moved channels.discord.tts.enabled → channels.discord.tts.auto "always".',
+      'Moved channels.discord.accounts.primary.tts.enabled → channels.discord.accounts.primary.tts.auto "off".',
+      'Moved plugins.entries.voice-call.config.tts.enabled → plugins.entries.voice-call.config.tts.auto "always".',
+    ]);
+    expect(res.config).toMatchObject({
+      messages: { tts: { auto: "always" } },
+      agents: {
+        defaults: { tts: { auto: "off" } },
+        list: [{ id: "voice-agent", tts: { auto: "tagged" } }],
+      },
+      channels: {
+        discord: {
+          tts: { auto: "always" },
+          accounts: { primary: { tts: { auto: "off" } } },
+        },
+      },
+      plugins: {
+        entries: {
+          "voice-call": {
+            config: {
+              tts: { auto: "always" },
+            },
+          },
         },
       },
     });

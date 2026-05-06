@@ -22,7 +22,7 @@ describe("diagnostic stability recorder", () => {
     resetDiagnosticEventsForTest();
   });
 
-  it("records a bounded payload-free projection of diagnostic events", () => {
+  it("records a bounded payload-free projection of diagnostic events", async () => {
     startDiagnosticStabilityRecorder();
 
     emitDiagnosticEvent({
@@ -41,13 +41,29 @@ describe("diagnostic stability recorder", () => {
       count: 3,
       message: "message that should not be stored",
     });
+    emitDiagnosticEvent({
+      type: "talk.event",
+      sessionId: "talk-session-secret",
+      turnId: "talk-turn-secret",
+      captureId: "talk-capture-secret",
+      talkEventType: "latency.metrics",
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+      provider: "openai",
+      final: true,
+      durationMs: 12,
+      byteLength: 345,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
     const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
 
-    expect(snapshot.count).toBe(2);
+    expect(snapshot.count).toBe(3);
     expect(snapshot.summary.byType).toMatchObject({
       "webhook.error": 1,
       "tool.loop": 1,
+      "talk.event": 1,
     });
     expect(snapshot.events[0]).toMatchObject({
       type: "webhook.error",
@@ -66,6 +82,20 @@ describe("diagnostic stability recorder", () => {
     expect(snapshot.events[1]).not.toHaveProperty("message");
     expect(snapshot.events[1]).not.toHaveProperty("sessionId");
     expect(snapshot.events[1]).not.toHaveProperty("sessionKey");
+    expect(snapshot.events[2]).toMatchObject({
+      type: "talk.event",
+      talkEventType: "latency.metrics",
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+      provider: "openai",
+      final: true,
+      durationMs: 12,
+      bytes: 345,
+    });
+    expect(snapshot.events[2]).not.toHaveProperty("sessionId");
+    expect(snapshot.events[2]).not.toHaveProperty("turnId");
+    expect(snapshot.events[2]).not.toHaveProperty("captureId");
   });
 
   it("keeps stable reason codes but drops free-form reason text", () => {
@@ -97,6 +127,45 @@ describe("diagnostic stability recorder", () => {
     expect(snapshot.events[1]).not.toHaveProperty("reason");
   });
 
+  it("summarizes assembled context diagnostics without prompt text", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "context.assembled",
+      runId: "run-secret",
+      sessionId: "session-secret",
+      provider: "openai",
+      model: "gpt-5.4",
+      channel: "telegram",
+      trigger: "user-message",
+      messageCount: 4,
+      historyTextChars: 1200,
+      historyImageBlocks: 1,
+      maxMessageTextChars: 800,
+      systemPromptChars: 300,
+      promptChars: 100,
+      promptImages: 1,
+      contextTokenBudget: 200_000,
+      reserveTokens: 20_000,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+
+    expect(snapshot.events[0]).toMatchObject({
+      type: "context.assembled",
+      provider: "openai",
+      model: "gpt-5.4",
+      channel: "telegram",
+      count: 4,
+      context: { limit: 200_000 },
+    });
+    expect(snapshot.events[0]).not.toHaveProperty("runId");
+    expect(snapshot.events[0]).not.toHaveProperty("sessionId");
+    expect(snapshot.events[0]).not.toHaveProperty("promptChars");
+    expect(snapshot.events[0]).not.toHaveProperty("systemPromptChars");
+  });
+
   it("sanitizes tool and model diagnostic error categories", async () => {
     startDiagnosticStabilityRecorder();
 
@@ -113,7 +182,18 @@ describe("diagnostic stability recorder", () => {
       provider: "openai",
       model: "gpt-5.4",
       durationMs: 1,
+      requestPayloadBytes: 1234,
+      responseStreamBytes: 567,
+      timeToFirstByteMs: 89,
       errorCategory: "TypeError",
+      failureKind: "terminated",
+      memory: {
+        rssBytes: 100,
+        heapTotalBytes: 80,
+        heapUsedBytes: 40,
+        externalBytes: 20,
+        arrayBuffersBytes: 10,
+      },
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -128,8 +208,21 @@ describe("diagnostic stability recorder", () => {
       type: "model.call.error",
       provider: "openai",
       model: "gpt-5.4",
+      durationMs: 1,
+      requestBytes: 1234,
+      responseBytes: 567,
+      timeToFirstByteMs: 89,
       reason: "TypeError",
+      failureKind: "terminated",
+      memory: {
+        rssBytes: 100,
+        heapTotalBytes: 80,
+        heapUsedBytes: 40,
+        externalBytes: 20,
+        arrayBuffersBytes: 10,
+      },
     });
+    expect(JSON.stringify(snapshot.events[1])).not.toContain("call-1");
   });
 
   it("summarizes memory and large payload events", () => {

@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { expectGeneratedTokenPersistedToGatewayAuth } from "../test-utils/auth-token-assertions.js";
 import { KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS } from "./known-weak-gateway-secrets.js";
 import {
   assertGatewayAuthNotKnownWeak,
@@ -12,8 +11,12 @@ const mocks = vi.hoisted(() => ({
   replaceConfigFile: vi.fn(async (_params: { nextConfig: OpenClawConfig }) => {}),
 }));
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+vi.mock("../config/mutate.js", () => ({
+  replaceConfigFile: mocks.replaceConfigFile,
+}));
+
+vi.mock("../config/mutate.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/mutate.js")>("../config/mutate.js");
   return {
     ...actual,
     replaceConfigFile: mocks.replaceConfigFile,
@@ -92,7 +95,7 @@ describe("ensureGatewayStartupAuth", () => {
     };
   }
 
-  it("generates and persists a token when startup auth is missing", async () => {
+  it("generates a runtime token without persisting when startup auth is missing", async () => {
     const result = await ensureGatewayStartupAuth({
       cfg: {},
       env: {} as NodeJS.ProcessEnv,
@@ -100,17 +103,11 @@ describe("ensureGatewayStartupAuth", () => {
     });
 
     expect(result.generatedToken).toMatch(/^[0-9a-f]{48}$/);
-    expect(result.persistedGeneratedToken).toBe(true);
+    expect(result.persistedGeneratedToken).toBe(false);
     expect(result.auth.mode).toBe("token");
-    expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
-    const persistedParams = mocks.replaceConfigFile.mock.calls[0]?.[0] as
-      | { nextConfig: OpenClawConfig }
-      | undefined;
-    expectGeneratedTokenPersistedToGatewayAuth({
-      generatedToken: result.generatedToken,
-      authToken: result.auth.token,
-      persistedConfig: persistedParams?.nextConfig,
-    });
+    expect(result.auth.token).toBe(result.generatedToken);
+    expect(result.cfg.gateway?.auth?.token).toBe(result.generatedToken);
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it("does not generate when token already exists", async () => {

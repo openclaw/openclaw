@@ -27,8 +27,8 @@ Only clients that explicitly call `node.pair.*` use this flow.
 1. A node connects to the Gateway WS and requests pairing.
 2. The Gateway stores a **pending request** and emits `node.pair.requested`.
 3. You approve or reject the request (CLI or UI).
-4. On approval, the Gateway issues a **new token** (tokens are rotated on re‑pair).
-5. The node reconnects using the token and is now “paired”.
+4. On approval, the Gateway issues a **new token** (tokens are rotated on re-pair).
+5. The node reconnects using the token and is now "paired".
 
 Pending requests expire automatically after **5 minutes**.
 
@@ -39,6 +39,7 @@ openclaw nodes pending
 openclaw nodes approve <requestId>
 openclaw nodes reject <requestId>
 openclaw nodes status
+openclaw nodes remove --node <id|name|ip>
 openclaw nodes rename --node <id|name|ip> --name "Living Room iPad"
 ```
 
@@ -48,16 +49,17 @@ openclaw nodes rename --node <id|name|ip> --name "Living Room iPad"
 
 Events:
 
-- `node.pair.requested` — emitted when a new pending request is created.
-- `node.pair.resolved` — emitted when a request is approved/rejected/expired.
+- `node.pair.requested` - emitted when a new pending request is created.
+- `node.pair.resolved` - emitted when a request is approved/rejected/expired.
 
 Methods:
 
-- `node.pair.request` — create or reuse a pending request.
-- `node.pair.list` — list pending + paired nodes (`operator.pairing`).
-- `node.pair.approve` — approve a pending request (issues token).
-- `node.pair.reject` — reject a pending request.
-- `node.pair.verify` — verify `{ nodeId, token }`.
+- `node.pair.request` - create or reuse a pending request.
+- `node.pair.list` - list pending + paired nodes (`operator.pairing`).
+- `node.pair.approve` - approve a pending request (issues token).
+- `node.pair.reject` - reject a pending request.
+- `node.pair.remove` - remove a stale paired node entry.
+- `node.pair.verify` - verify `{ nodeId, token }`.
 
 Notes:
 
@@ -67,6 +69,8 @@ Notes:
   metadata and the latest allowlisted declared command snapshot for operator visibility.
 - Approval **always** generates a fresh token; no token is ever returned from
   `node.pair.request`.
+- Operator scope levels and approval-time checks are summarized in
+  [Operator scopes](/gateway/operator-scopes).
 - Requests may include `silent: true` as a hint for auto-approval flows.
 - `node.pair.approve` uses the pending request's declared commands to enforce
   extra approval scopes:
@@ -75,15 +79,13 @@ Notes:
   - `system.run` / `system.run.prepare` / `system.which` request:
     `operator.pairing` + `operator.admin`
 
-Important:
+<Warning>
+Node pairing is a trust and identity flow plus token issuance. It does **not** pin the live node command surface per node.
 
-- Node pairing is a trust/identity flow plus token issuance.
-- It does **not** pin the live node command surface per node.
-- Live node commands come from what the node declares on connect after the
-  gateway's global node command policy (`gateway.nodes.allowCommands` /
-  `denyCommands`) is applied.
-- Per-node `system.run` allow/ask policy lives on the node in
-  `exec.approvals.node.*`, not in the pairing record.
+- Live node commands come from what the node declares on connect after the gateway's global node command policy (`gateway.nodes.allowCommands` and `denyCommands`) is applied.
+- Per-node `system.run` allow and ask policy lives on the node in `exec.approvals.node.*`, not in the pairing record.
+
+</Warning>
 
 ## Node command gating (2026.3.31+)
 
@@ -106,6 +108,11 @@ This means:
 
 Node-originated summaries and related session events are restricted to the intended trusted surface. Notification-driven or node-triggered flows that previously relied on broader host or session tool access may need adjustment. This hardening ensures that node events cannot escalate into host-level tool access beyond what the node's trust boundary permits.
 
+Durable node presence updates follow the same identity boundary. The `node.presence.alive` event is
+accepted only from authenticated node device sessions and updates pairing metadata only when the
+device/node identity is already paired. Self-declared `client.id` values are not enough to write
+last-seen state.
+
 ## Auto-approval (macOS app)
 
 The macOS app can optionally attempt a **silent approval** when:
@@ -113,7 +120,7 @@ The macOS app can optionally attempt a **silent approval** when:
 - the request is marked `silent`, and
 - the app can verify an SSH connection to the gateway host using the same user.
 
-If silent approval fails, it falls back to the normal “Approve/Reject” prompt.
+If silent approval fails, it falls back to the normal "Approve/Reject" prompt.
 
 ## Trusted-CIDR device auto-approval
 
@@ -148,11 +155,12 @@ Security boundary:
 When an already paired device reconnects with only non-sensitive metadata
 changes (for example, display name or client platform hints), OpenClaw treats
 that as a `metadata-upgrade`. Silent auto-approval is narrow: it applies only
-to trusted local CLI/helper reconnects that already proved possession of the
-shared token or password over loopback. Browser/Control UI clients and remote
-clients still use the explicit re-approval flow. Scope upgrades (read to
-write/admin) and public key changes are **not** eligible for metadata-upgrade
-auto-approval — they stay as explicit re-approval requests.
+to trusted non-browser local reconnects that already proved possession of local
+or shared credentials, including same-host native app reconnects after OS
+version metadata changes. Browser/Control UI clients and remote clients still
+use the explicit re-approval flow. Scope upgrades (read to write/admin) and
+public key changes are **not** eligible for metadata-upgrade auto-approval -
+they stay as explicit re-approval requests.
 
 ## QR pairing helpers
 
@@ -191,7 +199,7 @@ Security notes:
 
 - The transport is **stateless**; it does not store membership.
 - If the Gateway is offline or pairing is disabled, nodes cannot pair.
-- If the Gateway is in remote mode, pairing still happens against the remote Gateway’s store.
+- If the Gateway is in remote mode, pairing still happens against the remote Gateway's store.
 
 ## Related
 

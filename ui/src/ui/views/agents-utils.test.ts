@@ -5,6 +5,7 @@ import {
   buildAgentContext,
   resolveConfiguredCronModelSuggestions,
   resolveAgentAvatarUrl,
+  resolveAssistantTextAvatar,
   resolveChatAvatarRenderUrl,
   resolveEffectiveModelFallbacks,
   sortLocaleStrings,
@@ -122,6 +123,15 @@ describe("assistantAvatarFallbackUrl", () => {
   });
 });
 
+describe("resolveAssistantTextAvatar", () => {
+  it("rejects unsafe invisible controls in assistant text avatars", () => {
+    expect(resolveAssistantTextAvatar("VC")).toBe("VC");
+    expect(resolveAssistantTextAvatar("\u{1F43E}")).toBe("\u{1F43E}");
+    expect(resolveAssistantTextAvatar("V\u202eC")).toBeNull();
+    expect(resolveAssistantTextAvatar("V\u200bC")).toBeNull();
+  });
+});
+
 describe("resolveAgentAvatarUrl", () => {
   it("prefers a runtime avatar URL over non-URL identity avatars", () => {
     expect(
@@ -194,6 +204,7 @@ describe("buildAgentContext", () => {
           primary: "openai/gpt-5.5",
           fallbacks: ["openai-codex/gpt-5.2-codex"],
         },
+        agentRuntime: { id: "claude-cli", fallback: "none", source: "agent" },
       },
       null,
       null,
@@ -203,6 +214,7 @@ describe("buildAgentContext", () => {
 
     expect(context.workspace).toBe("/tmp/agent-workspace");
     expect(context.model).toBe("openai/gpt-5.5 (+1 fallback)");
+    expect(context.runtime).toBe("claude-cli (fallback none)");
     expect(context.isDefault).toBe(true);
   });
 
@@ -228,5 +240,27 @@ describe("buildAgentContext", () => {
 
     expect(context.workspace).toBe("/tmp/default-workspace");
     expect(context.model).toBe("openai/gpt-5.5 (+1 fallback)");
+  });
+
+  it("prefers per-agent configured identity over runtime global identity in agent panels", () => {
+    const context = buildAgentContext(
+      {
+        id: "fs-daying",
+        name: "File-system agent",
+        identity: { name: "大颖", emoji: "⚙️" },
+      },
+      null,
+      null,
+      "main",
+      {
+        agentId: "fs-daying",
+        name: "AI大管家",
+        avatar: "M",
+        emoji: "🤖",
+      },
+    );
+
+    expect(context.identityName).toBe("大颖");
+    expect(context.identityAvatar).toBe("⚙️");
   });
 });

@@ -1,14 +1,26 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCommandHandlers } from "./tui-command-handlers.js";
+import {
+  TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
+  TUI_SESSION_PICKER_LIMIT,
+} from "./tui-session-list-policy.js";
 
 type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<void>);
 type RunAuthFlow = NonNullable<Parameters<typeof createCommandHandlers>[0]["runAuthFlow"]>;
+type SelectableOverlay = {
+  onSelect?: (item: { value: string; label?: string; description?: string }) => void;
+};
 type SetActivityStatusMock = ReturnType<typeof vi.fn> & ((text: string) => void);
 type SetSessionMock = ReturnType<typeof vi.fn> & ((key: string) => Promise<void>);
+
+async function flushAsyncSelect() {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
 
 function createHarness(params?: {
   sendChat?: ReturnType<typeof vi.fn>;
   getGatewayStatus?: ReturnType<typeof vi.fn>;
+  listSessions?: ReturnType<typeof vi.fn>;
   patchSession?: ReturnType<typeof vi.fn>;
   resetSession?: ReturnType<typeof vi.fn>;
   runAuthFlow?: RunAuthFlow;
@@ -21,9 +33,11 @@ function createHarness(params?: {
   activeChatRunId?: string | null;
   pendingOptimisticUserMessage?: boolean;
   opts?: { local?: boolean };
+  currentSessionId?: string | null;
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
   const getGatewayStatus = params?.getGatewayStatus ?? vi.fn().mockResolvedValue({});
+  const listSessions = params?.listSessions ?? vi.fn().mockResolvedValue({ sessions: [] });
   const patchSession = params?.patchSession ?? vi.fn().mockResolvedValue({});
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
   const setSession = params?.setSession ?? (vi.fn().mockResolvedValue(undefined) as SetSessionMock);
@@ -37,6 +51,8 @@ function createHarness(params?: {
   const refreshSessionInfo = params?.refreshSessionInfo ?? vi.fn().mockResolvedValue(undefined);
   const applySessionInfoFromPatch = params?.applySessionInfoFromPatch ?? vi.fn();
   const setActivityStatus = params?.setActivityStatus ?? (vi.fn() as SetActivityStatusMock);
+  const openOverlay = vi.fn();
+  const closeOverlay = vi.fn();
   const requestExit = vi.fn();
   const runAuthFlow: RunAuthFlow | undefined =
     params?.runAuthFlow ??
@@ -46,21 +62,23 @@ function createHarness(params?: {
   const state = {
     currentAgentId: "main",
     currentSessionKey: "agent:main:main",
+    currentSessionId: params?.currentSessionId ?? null,
     activeChatRunId: params?.activeChatRunId ?? null,
     pendingOptimisticUserMessage: params?.pendingOptimisticUserMessage ?? false,
+    pendingChatRunId: null as string | null,
     isConnected: params?.isConnected ?? true,
     sessionInfo: {},
   };
 
-  const { handleCommand } = createCommandHandlers({
-    client: { sendChat, getGatewayStatus, patchSession, resetSession } as never,
+  const { handleCommand, openSessionSelector } = createCommandHandlers({
+    client: { sendChat, getGatewayStatus, listSessions, patchSession, resetSession } as never,
     chatLog: { addUser, addSystem } as never,
     tui: { requestRender } as never,
     opts: params?.opts ?? {},
     state: state as never,
     deliverDefault: false,
-    openOverlay: vi.fn(),
-    closeOverlay: vi.fn(),
+    openOverlay,
+    closeOverlay,
     refreshSessionInfo: refreshSessionInfo as never,
     loadHistory,
     setSession,
@@ -80,7 +98,11 @@ function createHarness(params?: {
   return {
     handleCommand,
     getGatewayStatus,
+    listSessions,
     sendChat,
+    openSessionSelector,
+    openOverlay,
+    closeOverlay,
     patchSession,
     resetSession,
     setSession,
@@ -100,6 +122,31 @@ function createHarness(params?: {
 }
 
 describe("tui command handlers", () => {
+  it("bounds session picker hydration to recent TUI sessions", async () => {
+    const listSessions = vi.fn().mockResolvedValue({
+      sessions: [
+        {
+          key: "agent:main:main",
+          displayName: "main",
+          updatedAt: Date.now(),
+        },
+      ],
+    });
+    const { openSessionSelector } = createHarness({ listSessions });
+
+    await openSessionSelector();
+
+    expect(listSessions).toHaveBeenCalledWith({
+      limit: TUI_SESSION_PICKER_LIMIT,
+      activeMinutes: TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
+      includeGlobal: false,
+      includeUnknown: false,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+      agentId: "main",
+    });
+  });
+
   it("renders the sending indicator before chat.send resolves", async () => {
     let resolveSend: (value: { runId: string }) => void = () => {
       throw new Error("sendChat promise resolver was not initialized");
@@ -115,7 +162,7 @@ describe("tui command handlers", () => {
       setActivityStatus,
     });
 
-    const pending = handleCommand("/context");
+    const pending = handleCommand("/context detail");
     await Promise.resolve();
 
     expect(setActivityStatus).toHaveBeenCalledWith("sending");
@@ -131,17 +178,87 @@ describe("tui command handlers", () => {
   it("forwards unknown slash commands to the gateway", async () => {
     const { handleCommand, sendChat, addUser, addSystem, requestRender } = createHarness();
 
-    await handleCommand("/context");
+    await handleCommand("/unregistered-command");
 
     expect(addSystem).not.toHaveBeenCalled();
-    expect(addUser).toHaveBeenCalledWith("/context");
+    expect(addUser).toHaveBeenCalledWith("/unregistered-command");
     expect(sendChat).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:main:main",
-        message: "/context",
+        message: "/unregistered-command",
       }),
     );
     expect(requestRender).toHaveBeenCalled();
+  });
+
+  it("passes the current backing session id when sending to the gateway", async () => {
+    const { handleCommand, sendChat } = createHarness({
+      currentSessionId: "session-before-relaunch",
+    });
+
+    await handleCommand("/status");
+
+    expect(sendChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        sessionId: "session-before-relaunch",
+        message: "/status",
+      }),
+    );
+  });
+
+  it("opens a context mode selector for /context without sending immediately", async () => {
+    const { handleCommand, sendChat, openOverlay } = createHarness();
+
+    await handleCommand("/context");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(openOverlay).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends the selected context mode through the gateway command path", async () => {
+    const { handleCommand, sendChat, openOverlay, closeOverlay } = createHarness();
+
+    await handleCommand("/context");
+    const selector = openOverlay.mock.calls[0]?.[0] as SelectableOverlay | undefined;
+    selector?.onSelect?.({ value: "detail", label: "detail" });
+    await flushAsyncSelect();
+
+    expect(sendChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        message: "/context detail",
+      }),
+    );
+    expect(closeOverlay).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards /context list directly", async () => {
+    const { handleCommand, sendChat, openOverlay } = createHarness();
+
+    await handleCommand("/context list");
+
+    expect(openOverlay).not.toHaveBeenCalled();
+    expect(sendChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        message: "/context list",
+      }),
+    );
+  });
+
+  it("forwards /context help directly", async () => {
+    const { handleCommand, sendChat, openOverlay } = createHarness();
+
+    await handleCommand("/context help");
+
+    expect(openOverlay).not.toHaveBeenCalled();
+    expect(sendChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        message: "/context help",
+      }),
+    );
   });
 
   it("forwards /status to the shared gateway command path", async () => {
@@ -202,11 +319,34 @@ describe("tui command handlers", () => {
   it("defers local run binding until gateway events provide a real run id", async () => {
     const { handleCommand, noteLocalRunId, state } = createHarness();
 
-    await handleCommand("/context");
+    await handleCommand("/context detail");
 
     expect(noteLocalRunId).not.toHaveBeenCalled();
     expect(state.activeChatRunId).toBeNull();
     expect(state.pendingOptimisticUserMessage).toBe(true);
+  });
+
+  it("tracks the in-flight runId so escape can abort during the wait", async () => {
+    const sendChat = vi.fn().mockResolvedValue({ runId: "ignored" });
+    const { handleCommand, state } = createHarness({ sendChat });
+
+    await handleCommand("hello");
+
+    const sentRunId = (sendChat.mock.calls[0]?.[0] as { runId: string }).runId;
+    expect(typeof sentRunId).toBe("string");
+    expect(sentRunId.length).toBeGreaterThan(0);
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.pendingChatRunId).toBe(sentRunId);
+  });
+
+  it("clears the pending runId if sendChat fails", async () => {
+    const sendChat = vi.fn().mockRejectedValue(new Error("boom"));
+    const { handleCommand, state } = createHarness({ sendChat });
+
+    await handleCommand("hello");
+
+    expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(false);
   });
 
   it("sends /btw without hijacking the active main run", async () => {
@@ -228,6 +368,25 @@ describe("tui command handlers", () => {
     expect(sendChat).toHaveBeenCalledWith(
       expect.objectContaining({
         message: "/btw what changed?",
+      }),
+    );
+  });
+
+  it("sends /side without hijacking the active main run", async () => {
+    const { handleCommand, sendChat, addUser, noteLocalRunId, noteLocalBtwRunId, state } =
+      createHarness({
+        activeChatRunId: "run-main",
+      });
+
+    await handleCommand("/side what changed?");
+
+    expect(addUser).not.toHaveBeenCalled();
+    expect(noteLocalRunId).not.toHaveBeenCalled();
+    expect(noteLocalBtwRunId).toHaveBeenCalledTimes(1);
+    expect(state.activeChatRunId).toBe("run-main");
+    expect(sendChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "/side what changed?",
       }),
     );
   });
@@ -261,7 +420,7 @@ describe("tui command handlers", () => {
       setActivityStatus,
     });
 
-    await handleCommand("/context");
+    await handleCommand("/context detail");
 
     expect(addSystem).toHaveBeenCalledWith("send failed: Error: gateway down");
     expect(setActivityStatus).toHaveBeenLastCalledWith("error");
@@ -288,7 +447,7 @@ describe("tui command handlers", () => {
       isConnected: false,
     });
 
-    await handleCommand("/context");
+    await handleCommand("/context detail");
 
     expect(sendChat).not.toHaveBeenCalled();
     expect(addUser).not.toHaveBeenCalled();

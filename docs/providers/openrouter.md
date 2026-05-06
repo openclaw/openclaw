@@ -4,6 +4,7 @@ read_when:
   - You want a single API key for many LLMs
   - You want to run models via OpenRouter in OpenClaw
   - You want to use OpenRouter for image generation
+  - You want to use OpenRouter for video generation
 title: "OpenRouter"
 ---
 
@@ -53,12 +54,10 @@ available providers and models, see [/concepts/model-providers](/concepts/model-
 
 Bundled fallback examples:
 
-| Model ref                            | Notes                         |
-| ------------------------------------ | ----------------------------- |
-| `openrouter/auto`                    | OpenRouter automatic routing  |
-| `openrouter/moonshotai/kimi-k2.6`    | Kimi K2.6 via MoonshotAI      |
-| `openrouter/openrouter/healer-alpha` | OpenRouter Healer Alpha route |
-| `openrouter/openrouter/hunter-alpha` | OpenRouter Hunter Alpha route |
+| Model ref                         | Notes                        |
+| --------------------------------- | ---------------------------- |
+| `openrouter/auto`                 | OpenRouter automatic routing |
+| `openrouter/moonshotai/kimi-k2.6` | Kimi K2.6 via MoonshotAI     |
 
 ## Image generation
 
@@ -71,13 +70,41 @@ OpenRouter can also back the `image_generate` tool. Use an OpenRouter image mode
     defaults: {
       imageGenerationModel: {
         primary: "openrouter/google/gemini-3.1-flash-image-preview",
+        timeoutMs: 180_000,
       },
     },
   },
 }
 ```
 
-OpenClaw sends image requests to OpenRouter's chat completions image API with `modalities: ["image", "text"]`. Gemini image models receive supported `aspectRatio` and `resolution` hints through OpenRouter's `image_config`.
+OpenClaw sends image requests to OpenRouter's chat completions image API with `modalities: ["image", "text"]`. Gemini image models receive supported `aspectRatio` and `resolution` hints through OpenRouter's `image_config`. Use `agents.defaults.imageGenerationModel.timeoutMs` for slower OpenRouter image models; the `image_generate` tool's per-call `timeoutMs` parameter still wins.
+
+## Video generation
+
+OpenRouter can also back the `video_generate` tool through its asynchronous `/videos` API. Use an OpenRouter video model under `agents.defaults.videoGenerationModel`:
+
+```json5
+{
+  env: { OPENROUTER_API_KEY: "sk-or-..." },
+  agents: {
+    defaults: {
+      videoGenerationModel: {
+        primary: "openrouter/google/veo-3.1-fast",
+      },
+    },
+  },
+}
+```
+
+OpenClaw submits text-to-video and image-to-video jobs to OpenRouter, polls
+the returned `polling_url`, and downloads the completed video from
+OpenRouter's `unsigned_urls` or the documented job content endpoint.
+Reference images are sent as first/last frame images by default; images
+tagged with `reference_image` are sent as OpenRouter input references. The
+bundled `google/veo-3.1-fast` default advertises the currently supported 4/6/8
+second durations, `720P`/`1080P` resolutions, and `16:9`/`9:16` aspect
+ratios. Video-to-video is not registered for OpenRouter because the upstream
+video generation API currently accepts text and image references.
 
 ## Text-to-speech
 
@@ -112,11 +139,11 @@ OpenRouter uses a Bearer token with your API key under the hood.
 On real OpenRouter requests (`https://openrouter.ai/api/v1`), OpenClaw also adds
 OpenRouter's documented app-attribution headers:
 
-| Header                    | Value                 |
-| ------------------------- | --------------------- |
-| `HTTP-Referer`            | `https://openclaw.ai` |
-| `X-OpenRouter-Title`      | `OpenClaw`            |
-| `X-OpenRouter-Categories` | `cli-agent`           |
+| Header                    | Value                                                                                                  |
+| ------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `HTTP-Referer`            | `https://openclaw.ai`                                                                                  |
+| `X-OpenRouter-Title`      | `OpenClaw`                                                                                             |
+| `X-OpenRouter-Categories` | `cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent` |
 
 <Warning>
 If you repoint the OpenRouter provider at some other proxy or base URL, OpenClaw
@@ -126,16 +153,67 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
 ## Advanced configuration
 
 <AccordionGroup>
+  <Accordion title="Response caching">
+    OpenRouter response caching is opt-in. Enable it per OpenRouter model with
+    model params:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          models: {
+            "openrouter/auto": {
+              params: {
+                responseCache: true,
+                responseCacheTtlSeconds: 300,
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    OpenClaw sends `X-OpenRouter-Cache: true` and, when configured,
+    `X-OpenRouter-Cache-TTL`. `responseCacheClear: true` forces a refresh for
+    the current request and stores the replacement response. Snake_case aliases
+    (`response_cache`, `response_cache_ttl_seconds`, and
+    `response_cache_clear`) are also accepted.
+
+    This is separate from provider prompt caching and from OpenRouter's
+    Anthropic `cache_control` markers. It is only applied on verified
+    `openrouter.ai` routes, not custom proxy base URLs.
+
+  </Accordion>
+
   <Accordion title="Anthropic cache markers">
     On verified OpenRouter routes, Anthropic model refs keep the
     OpenRouter-specific Anthropic `cache_control` markers that OpenClaw uses for
     better prompt-cache reuse on system/developer prompt blocks.
   </Accordion>
 
+  <Accordion title="Anthropic reasoning prefill">
+    On verified OpenRouter routes, Anthropic model refs with reasoning enabled
+    drop trailing assistant prefill turns before the request reaches OpenRouter,
+    matching Anthropic's requirement that reasoning conversations end with a user
+    turn.
+  </Accordion>
+
   <Accordion title="Thinking / reasoning injection">
     On supported non-`auto` routes, OpenClaw maps the selected thinking level to
     OpenRouter proxy reasoning payloads. Unsupported model hints and
-    `openrouter/auto` skip that reasoning injection.
+    `openrouter/auto` skip that reasoning injection. Hunter Alpha also skips
+    proxy reasoning for stale configured model refs because OpenRouter could
+    return final answer text in reasoning fields for that retired route.
+  </Accordion>
+
+  <Accordion title="DeepSeek V4 reasoning replay">
+    On verified OpenRouter routes, `openrouter/deepseek/deepseek-v4-flash` and
+    `openrouter/deepseek/deepseek-v4-pro` fill missing `reasoning_content` on
+    replayed assistant turns so thinking/tool conversations keep DeepSeek V4's
+    required follow-up shape. OpenClaw sends OpenRouter-supported
+    `reasoning_effort` values for these routes; `xhigh` is the highest advertised
+    level, and stale `max` overrides are mapped to `xhigh`.
   </Accordion>
 
   <Accordion title="OpenAI-only request shaping">

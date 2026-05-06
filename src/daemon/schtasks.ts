@@ -37,7 +37,7 @@ function resolveTaskName(env: GatewayServiceEnv): string {
 
 function shouldFallbackToStartupEntry(params: { code: number; detail: string }): boolean {
   return (
-    /access is denied/i.test(params.detail) ||
+    /(?:access is denied|acceso denegado)/i.test(params.detail) ||
     params.code === 124 ||
     /schtasks timed out/i.test(params.detail) ||
     /schtasks produced no output/i.test(params.detail)
@@ -150,6 +150,13 @@ export async function readScheduledTaskCommand(
       programArguments: parseCmdScriptCommandLine(commandLine),
       ...(workingDirectory ? { workingDirectory } : {}),
       ...(Object.keys(environment).length > 0 ? { environment } : {}),
+      ...(Object.keys(environment).length > 0
+        ? {
+            environmentValueSources: Object.fromEntries(
+              Object.keys(environment).map((key) => [key, "inline"]),
+            ),
+          }
+        : {}),
       sourcePath: scriptPath,
     };
   } catch {

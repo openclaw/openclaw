@@ -5,8 +5,8 @@ import {
   abortAgentHarnessRun,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness";
+import { AUTH_PROFILE_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AUTH_PROFILE_RUNTIME_CONTRACT } from "../../../../test/helpers/agents/auth-profile-runtime-contract.js";
 import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
 import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 import { createCodexTestModel } from "./test-support.js";
@@ -26,6 +26,7 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
     disableTools: true,
     timeoutMs: 5_000,
     authStorage: {} as never,
+    authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
   } as EmbeddedRunAttemptParams;
 }
@@ -43,7 +44,7 @@ function threadStartResult(threadId = "thread-auth-contract") {
       status: { type: "idle" },
       path: null,
       cwd: "",
-      cliVersion: "0.118.0",
+      cliVersion: "0.125.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -80,30 +81,35 @@ function turnStartResult(turnId = "turn-auth-contract") {
 
 function createCodexAuthProfileHarness(params: { startMethod: "thread/start" | "thread/resume" }) {
   const seenAuthProfileIds: Array<string | undefined> = [];
+  const seenAgentDirs: Array<string | undefined> = [];
   const requests: Array<{ method: string; params: unknown }> = [];
   let notify: (notification: unknown) => Promise<void> = async () => undefined;
-  __testing.setCodexAppServerClientFactoryForTests(async (_startOptions, authProfileId) => {
-    seenAuthProfileIds.push(authProfileId);
-    return {
-      request: vi.fn(async (method: string, requestParams?: unknown) => {
-        requests.push({ method, params: requestParams });
-        if (method === params.startMethod) {
-          return threadStartResult();
-        }
-        if (method === "turn/start") {
-          return turnStartResult();
-        }
-        throw new Error(`unexpected method: ${method}`);
-      }),
-      addNotificationHandler: (handler: (notification: unknown) => Promise<void>) => {
-        notify = handler;
-        return () => undefined;
-      },
-      addRequestHandler: () => () => undefined,
-    } as never;
-  });
+  __testing.setCodexAppServerClientFactoryForTests(
+    async (_startOptions, authProfileId, agentDir) => {
+      seenAuthProfileIds.push(authProfileId);
+      seenAgentDirs.push(agentDir);
+      return {
+        request: vi.fn(async (method: string, requestParams?: unknown) => {
+          requests.push({ method, params: requestParams });
+          if (method === params.startMethod) {
+            return threadStartResult();
+          }
+          if (method === "turn/start") {
+            return turnStartResult();
+          }
+          throw new Error(`unexpected method: ${method}`);
+        }),
+        addNotificationHandler: (handler: (notification: unknown) => Promise<void>) => {
+          notify = handler;
+          return () => undefined;
+        },
+        addRequestHandler: () => () => undefined,
+      } as never;
+    },
+  );
   return {
     seenAuthProfileIds,
+    seenAgentDirs,
     async waitForMethod(method: string) {
       await vi.waitFor(() => expect(requests.some((entry) => entry.method === method)).toBe(true), {
         interval: 1,
@@ -140,6 +146,7 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
     const sessionFile = path.join(tmpDir, "session.jsonl");
     const params = createParams(sessionFile, tmpDir);
     params.authProfileId = AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId;
+    params.agentDir = tmpDir;
 
     const run = runCodexAppServerAttempt(params);
     await vi.waitFor(
@@ -149,6 +156,7 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
         ]),
       { interval: 1 },
     );
+    expect(harness.seenAgentDirs).toEqual([tmpDir]);
     await harness.waitForMethod("turn/start");
     await harness.completeTurn();
     await run;

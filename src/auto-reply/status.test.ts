@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
-import { withTempHome } from "../../test/helpers/temp-home.js";
 import { MODEL_CONTEXT_TOKEN_CACHE } from "../agents/context-cache.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
@@ -101,6 +101,66 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("verbose");
     expect(normalized).toContain("elevated");
     expect(normalized).toContain("Queue: collect");
+  });
+
+  it("does not render stale totalTokens as current context usage", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/pi:opus",
+        contextTokens: 1_000_000,
+      },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+        inputTokens: 3_800_000,
+        outputTokens: 20_000,
+        totalTokens: 3_800_000,
+        totalTokensFresh: false,
+        contextTokens: 1_000_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      now: 10 * 60_000,
+    });
+    const normalized = normalizeTestText(text);
+
+    expect(normalized).toContain("Context: ?/1.0m");
+    expect(normalized).not.toContain("Context: 3.8m/1.0m");
+  });
+
+  it("shows sanitized TTS provider details in the voice status line", async () => {
+    await withTempHome(async () => {
+      const text = buildStatusMessage({
+        config: {
+          messages: {
+            tts: {
+              auto: "always",
+              provider: "openai",
+              providers: {
+                openai: {
+                  displayName: "NeuTTS local",
+                  baseUrl: "http://user:secret@127.0.0.1:18801/v1?token=hidden#fragment",
+                  model: "neutts-nano",
+                  voice: "clara",
+                },
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        agent: {},
+        now: 0,
+      });
+      const normalized = normalizeTestText(text);
+
+      expect(normalized).toContain(
+        "Voice: always · provider=openai · name=NeuTTS local · model=neutts-nano · voice=clara · endpoint=custom(http://127.0.0.1:18801/v1)",
+      );
+      expect(normalized).not.toContain("secret");
+      expect(normalized).not.toContain("token=hidden");
+      expect(normalized).not.toContain("fragment");
+    });
   });
 
   it("shows the model runtime for CLI-backed providers", () => {
@@ -539,6 +599,51 @@ describe("buildStatusMessage", () => {
 
     expect(normalized).toContain("Model: openai/gpt-4.1");
     expect(normalized).toContain("channel override");
+  });
+
+  it("uses the channel override model context window instead of stale persisted context", () => {
+    const text = buildStatusMessage({
+      config: {
+        channels: {
+          modelByChannel: {
+            discord: {
+              "123": "minimax-portal/MiniMax-M2.7",
+            },
+          },
+        },
+        models: {
+          providers: {
+            "minimax-portal": {
+              models: [{ id: "MiniMax-M2.7", contextWindow: 200_000 }],
+            },
+            anthropic: {
+              models: [{ id: "claude-opus-4-6", contextWindow: 1_048_576 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "minimax-portal/MiniMax-M2.7",
+        contextTokens: 1_048_576,
+      },
+      sessionEntry: {
+        sessionId: "channel-context-window",
+        updatedAt: 0,
+        channel: "discord",
+        groupId: "123",
+        totalTokens: 49_000,
+        contextTokens: 1_048_576,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+    const normalized = normalizeTestText(text);
+
+    expect(normalized).toContain("Model: minimax-portal/MiniMax-M2.7");
+    expect(normalized).toContain("channel override");
+    expect(normalized).toContain("Context: 49k/200k");
+    expect(normalized).not.toContain("Context: 49k/1.0m");
   });
 
   it("shows 1M context window when anthropic context1m is enabled", () => {
@@ -1400,6 +1505,53 @@ describe("buildStatusMessage", () => {
     );
   });
 
+  it("does not render stale context usage from transcript fallback", async () => {
+    await withTempHome(
+      async (dir) => {
+        const sessionId = "sess-stale-transcript-context";
+        writeTranscriptUsageLog({
+          dir,
+          agentId: "main",
+          sessionId,
+          usage: {
+            input: 3_800_000,
+            output: 20_000,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 3_820_000,
+          },
+        });
+
+        const text = buildStatusMessage({
+          agent: {
+            model: "anthropic/claude-opus-4-6",
+            contextTokens: 1_000_000,
+          },
+          sessionEntry: {
+            sessionId,
+            updatedAt: 0,
+            inputTokens: 3_800_000,
+            outputTokens: 20_000,
+            totalTokens: 3_800_000,
+            totalTokensFresh: false,
+            contextTokens: 1_000_000,
+          },
+          sessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          queue: { mode: "collect", depth: 0 },
+          includeTranscriptUsage: true,
+          modelAuth: "api-key",
+        });
+        const normalized = normalizeTestText(text);
+
+        expect(normalized).toContain("Context: ?/1.0m");
+        expect(normalized).not.toContain("Context: 3.8m/1.0m");
+        expect(normalized).not.toContain("Context: 3.82m/1.0m");
+      },
+      { prefix: "openclaw-status-" },
+    );
+  });
+
   it("reads transcript usage for non-default agents", async () => {
     await withTempHome(
       async (dir) => {
@@ -1813,6 +1965,54 @@ describe("buildStatusMessage", () => {
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Context: 25k/1.0m");
     expect(normalized).not.toContain("Context: 25k/200k");
+  });
+
+  it("does not let agent contextTokens inflate status above the model window", () => {
+    MODEL_CONTEXT_TOKEN_CACHE.set("openai/gpt-5.5", 272_000);
+
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-5.5",
+        contextTokens: 1_000_000,
+      },
+      sessionEntry: {
+        sessionId: "sess-openai-codex-cap-context",
+        updatedAt: 0,
+        totalTokens: 25_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "oauth",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Context: 25k/272k");
+    expect(normalized).not.toContain("Context: 25k/1.0m");
+  });
+
+  it("uses runtime context tokens to cap status when the sync cache is cold", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-5.5",
+        contextTokens: 1_000_000,
+      },
+      explicitConfiguredContextTokens: 1_000_000,
+      runtimeContextTokens: 272_000,
+      sessionEntry: {
+        sessionId: "sess-openai-codex-runtime-cap-context",
+        updatedAt: 0,
+        totalTokens: 25_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "oauth",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Context: 25k/272k");
+    expect(normalized).not.toContain("Context: 25k/1.0m");
   });
 
   it("does not synthesize a 32k fallback window when the active runtime model is unknown", () => {

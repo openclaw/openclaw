@@ -5,7 +5,9 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded-runner/runs.js";
-import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
+import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
+import { enqueueCommitmentExtraction } from "../../commitments/runtime.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   loadSessionStore,
   resolveSessionPluginStatusLines,
@@ -15,11 +17,16 @@ import {
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
+import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
-import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import {
+  createChildDiagnosticTraceContext,
+  freezeDiagnosticTraceContext,
+} from "../../infra/diagnostic-trace-context.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
+import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   estimateUsageCost,
@@ -31,15 +38,21 @@ import {
   buildFallbackNotice,
   resolveFallbackTransition,
 } from "../fallback-state.js";
+import {
+  markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
+import {
+  buildKnownAgentRunFailureReplyPayload,
+  runAgentTurnWithFallback,
+} from "./agent-runner-execution.js";
 import {
   createShouldEmitToolOutput,
   createShouldEmitToolResult,
-  finalizeWithFollowup,
   isAudioPayload,
   signalTypingIfNeeded,
 } from "./agent-runner-helpers.js";
@@ -57,11 +70,14 @@ import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-repl
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
+import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import {
   enqueueFollowupRun,
   refreshQueuedFollowupSession,
+  resolvePiSteeringModeForQueueMode,
+  scheduleFollowupDrain,
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
@@ -74,10 +90,17 @@ import {
 } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
+import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+
+function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): ReplyPayload[] {
+  return payloads.map((payload) =>
+    setReplyPayloadMetadata(payload, { beforeAgentRunBlocked: true }),
+  );
+}
 
 function buildInlinePluginStatusPayload(params: {
   entry: SessionEntry | undefined;
@@ -565,53 +588,6 @@ async function accumulateSessionUsageFromTranscript(params: {
   }
 }
 
-function resolveRequestPromptTokens(params: {
-  lastCallUsage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-  };
-  promptTokens?: number;
-  usage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-  };
-}): number | undefined {
-  const lastCall = params.lastCallUsage;
-  if (lastCall) {
-    const input = lastCall.input ?? 0;
-    const cacheRead = lastCall.cacheRead ?? 0;
-    const cacheWrite = lastCall.cacheWrite ?? 0;
-    const sum = input + cacheRead + cacheWrite;
-    if (sum > 0) {
-      return sum;
-    }
-  }
-  if (
-    typeof params.promptTokens === "number" &&
-    Number.isFinite(params.promptTokens) &&
-    params.promptTokens > 0
-  ) {
-    return params.promptTokens;
-  }
-  const usage = params.usage;
-  if (usage) {
-    const input = usage.input ?? 0;
-    const cacheRead = usage.cacheRead ?? 0;
-    const cacheWrite = usage.cacheWrite ?? 0;
-    const sum = input + cacheRead + cacheWrite;
-    if (sum > 0) {
-      return sum;
-    }
-  }
-  return undefined;
-}
-
 function formatRequestContextTraceBlock(params: {
   provider?: string;
   model?: string;
@@ -782,7 +758,7 @@ function buildInlineRawTracePayload(params: {
   if (params.entry?.traceLevel !== "raw") {
     return undefined;
   }
-  const resolvedPromptTokens = resolveRequestPromptTokens({
+  const resolvedPromptTokens = deriveContextPromptTokens({
     lastCallUsage: params.lastCallUsage,
     promptTokens: params.promptTokens,
     usage: params.usage,
@@ -834,6 +810,79 @@ function buildInlineRawTracePayload(params: {
   };
 }
 
+function joinCommitmentAssistantText(payloads: ReplyPayload[]): string {
+  return payloads
+    .filter((payload) => !payload.isError && !payload.isReasoning && !payload.isCompactionNotice)
+    .map((payload) => payload.text?.trim())
+    .filter((text): text is string => Boolean(text))
+    .join("\n")
+    .trim();
+}
+
+function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string {
+  return payloads
+    .filter((payload) => payload.isReasoning !== true)
+    .map((payload) => payload.text)
+    .filter((text): text is string => Boolean(text))
+    .join("\n\n");
+}
+
+function enqueueCommitmentExtractionForTurn(params: {
+  cfg: OpenClawConfig;
+  commandBody: string;
+  isHeartbeat: boolean;
+  followupRun: FollowupRun;
+  sessionCtx: TemplateContext;
+  sessionKey?: string;
+  replyToChannel?: string;
+  payloads: ReplyPayload[];
+  runId: string;
+}): void {
+  if (params.isHeartbeat) {
+    return;
+  }
+  const userText =
+    params.commandBody.trim() ||
+    params.sessionCtx.BodyStripped?.trim() ||
+    params.sessionCtx.BodyForCommands?.trim() ||
+    params.sessionCtx.CommandBody?.trim() ||
+    params.sessionCtx.RawBody?.trim() ||
+    params.sessionCtx.Body?.trim() ||
+    "";
+  const assistantText = joinCommitmentAssistantText(params.payloads);
+  const sessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
+  const channel =
+    params.replyToChannel ??
+    params.followupRun.run.messageProvider ??
+    params.sessionCtx.Surface ??
+    params.sessionCtx.Provider;
+  if (!userText || !assistantText || !sessionKey || !channel) {
+    return;
+  }
+  const to = resolveOriginMessageTo({
+    originatingTo: params.sessionCtx.OriginatingTo,
+    to: params.sessionCtx.To,
+  });
+  enqueueCommitmentExtraction({
+    cfg: params.cfg,
+    agentId: params.followupRun.run.agentId,
+    sessionKey,
+    channel,
+    ...(params.sessionCtx.AccountId ? { accountId: params.sessionCtx.AccountId } : {}),
+    ...(to ? { to } : {}),
+    ...(params.sessionCtx.MessageThreadId !== undefined
+      ? { threadId: String(params.sessionCtx.MessageThreadId) }
+      : {}),
+    ...(params.followupRun.run.senderId ? { senderId: params.followupRun.run.senderId } : {}),
+    userText,
+    assistantText,
+    ...(params.sessionCtx.MessageSidFull || params.sessionCtx.MessageSid
+      ? { sourceMessageId: params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid }
+      : {}),
+    sourceRunId: params.runId,
+  });
+}
+
 function refreshSessionEntryFromStore(params: {
   storePath?: string;
   sessionKey?: string;
@@ -880,6 +929,7 @@ export async function runReplyAgent(params: {
   defaultModel: string;
   agentCfgContextTokens?: number;
   resolvedVerboseLevel: VerboseLevel;
+  toolProgressDetail?: "explain" | "raw";
   isNewSession: boolean;
   blockStreamingEnabled: boolean;
   blockReplyChunking?: {
@@ -917,6 +967,7 @@ export async function runReplyAgent(params: {
     defaultModel,
     agentCfgContextTokens,
     resolvedVerboseLevel,
+    toolProgressDetail,
     isNewSession,
     blockStreamingEnabled,
     blockReplyChunking,
@@ -932,6 +983,10 @@ export async function runReplyAgent(params: {
   let activeSessionEntry = sessionEntry;
   const activeSessionStore = sessionStore;
   let activeIsNewSession = isNewSession;
+  const effectiveResetTriggered = resetTriggered === true;
+  const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
+  const effectiveShouldSteer = !effectiveResetTriggered && shouldSteer;
+  const effectiveShouldFollowup = !effectiveResetTriggered && shouldFollowup;
 
   const isHeartbeat = opts?.isHeartbeat === true;
   const typingSignals = createTypingSignaler({
@@ -969,12 +1024,15 @@ export async function runReplyAgent(params: {
     }
   };
 
-  if (shouldSteer && isStreaming) {
+  if (effectiveShouldSteer && isStreaming) {
     const steerSessionId =
       (sessionKey ? replyRunRegistry.resolveSessionId(sessionKey) : undefined) ??
       followupRun.run.sessionId;
-    const steered = queueEmbeddedPiMessage(steerSessionId, followupRun.prompt);
-    if (steered && !shouldFollowup) {
+    const steered = queueEmbeddedPiMessage(steerSessionId, followupRun.prompt, {
+      steeringMode: resolvePiSteeringModeForQueueMode(resolvedQueue.mode),
+      ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
+    });
+    if (steered && !effectiveShouldFollowup) {
       await touchActiveSessionEntry();
       typing.cleanup();
       return undefined;
@@ -984,8 +1042,9 @@ export async function runReplyAgent(params: {
   const activeRunQueueAction = resolveActiveRunQueueAction({
     isActive,
     isHeartbeat,
-    shouldFollowup,
-    queueMode: resolvedQueue.mode,
+    shouldFollowup: effectiveShouldFollowup,
+    queueMode: activeRunQueueMode,
+    resetTriggered: effectiveResetTriggered,
   });
 
   const queuedRunFollowupTurn = createFollowupRunner({
@@ -1016,11 +1075,16 @@ export async function runReplyAgent(params: {
     );
     // Re-check liveness after enqueue so a stale active snapshot cannot leave
     // the followup queue idle if the original run already finished.
-    if (!isRunActive?.()) {
-      finalizeWithFollowup(undefined, queueKey, queuedRunFollowupTurn);
+    const queuedBehindActiveRun = isRunActive?.() === true;
+    if (!queuedBehindActiveRun) {
+      scheduleFollowupDrain(queueKey, queuedRunFollowupTurn);
     }
     await touchActiveSessionEntry();
-    typing.cleanup();
+    if (queuedBehindActiveRun) {
+      await typingSignals.signalToolStart();
+    } else {
+      typing.cleanup();
+    }
     return undefined;
   }
 
@@ -1084,19 +1148,27 @@ export async function runReplyAgent(params: {
       createReplyOperation({
         sessionId: followupRun.run.sessionId,
         sessionKey: replySessionKey ?? "",
-        resetTriggered: resetTriggered === true,
+        resetTriggered: effectiveResetTriggered,
         upstreamAbortSignal: opts?.abortSignal,
       });
   } catch (error) {
     if (error instanceof ReplyRunAlreadyActiveError) {
       typing.cleanup();
-      return {
+      return markReplyPayloadForSourceSuppressionDelivery({
         text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
-      };
+      });
     }
     throw error;
   }
   let runFollowupTurn = queuedRunFollowupTurn;
+  let shouldDrainQueuedFollowupsAfterClear = false;
+  const returnWithQueuedFollowupDrain = <T>(value: T): T => {
+    shouldDrainQueuedFollowupsAfterClear = true;
+    return value;
+  };
+  const drainQueuedFollowupsAfterClear = () => {
+    scheduleFollowupDrain(queueKey, runFollowupTurn);
+  };
   const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
   let preflightCompactionApplied = false;
 
@@ -1224,6 +1296,7 @@ export async function runReplyAgent(params: {
       activeSessionStore,
       storePath,
       resolvedVerboseLevel,
+      toolProgressDetail,
       replyMediaContext,
     });
 
@@ -1231,7 +1304,7 @@ export async function runReplyAgent(params: {
       if (!replyOperation.result) {
         replyOperation.fail("run_failed", new Error("reply operation exited with final payload"));
       }
-      return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
+      return returnWithQueuedFollowupDrain(runOutcome.payload);
     }
 
     const {
@@ -1274,7 +1347,10 @@ export async function runReplyAgent(params: {
       blockReplyPipeline.stop();
     }
     if (pendingToolTasks.size > 0) {
-      await Promise.allSettled(pendingToolTasks);
+      await drainPendingToolTasks({
+        tasks: pendingToolTasks,
+        onTimeout: logVerbose,
+      });
     }
 
     const usage = runResult.meta?.agentMeta?.usage;
@@ -1355,14 +1431,13 @@ export async function runReplyAgent(params: {
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
       cliSessionBinding,
-      usageIsContextSnapshot: isCliProvider(providerUsed, cfg),
     });
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
     if (payloadArray.length === 0) {
-      return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+      return returnWithQueuedFollowupDrain(undefined);
     }
 
     const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
@@ -1394,7 +1469,7 @@ export async function runReplyAgent(params: {
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     if (replyPayloads.length === 0) {
-      return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+      return returnWithQueuedFollowupDrain(undefined);
     }
 
     const successfulCronAdds = runResult.successfulCronAdds ?? 0;
@@ -1418,6 +1493,18 @@ export async function runReplyAgent(params: {
         ? appendUnscheduledReminderNote(replyPayloads)
         : replyPayloads;
 
+    enqueueCommitmentExtractionForTurn({
+      cfg,
+      commandBody,
+      isHeartbeat,
+      followupRun,
+      sessionCtx,
+      sessionKey,
+      replyToChannel,
+      payloads: replyPayloads,
+      runId,
+    });
+
     await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 
     if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
@@ -1425,22 +1512,32 @@ export async function runReplyAgent(params: {
       const output = usage.output ?? 0;
       const cacheRead = usage.cacheRead ?? 0;
       const cacheWrite = usage.cacheWrite ?? 0;
-      const promptTokens = input + cacheRead + cacheWrite;
-      const totalTokens = usage.total ?? promptTokens + output;
+      const usagePromptTokens = input + cacheRead + cacheWrite;
+      const totalTokens = usage.total ?? usagePromptTokens + output;
+      const contextUsedTokens = deriveContextPromptTokens({
+        lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+        promptTokens,
+        usage,
+      });
       const costConfig = resolveModelCostConfig({
         provider: providerUsed,
         model: modelUsed,
         config: cfg,
       });
       const costUsd = estimateUsageCost({ usage, cost: costConfig });
-      emitDiagnosticEvent({
+      emitTrustedDiagnosticEvent({
         type: "model.usage",
         ...(runResult.diagnosticTrace
-          ? { trace: freezeDiagnosticTraceContext(runResult.diagnosticTrace) }
+          ? {
+              trace: freezeDiagnosticTraceContext(
+                createChildDiagnosticTraceContext(runResult.diagnosticTrace),
+              ),
+            }
           : {}),
         sessionKey,
         sessionId: followupRun.run.sessionId,
         channel: replyToChannel,
+        agentId: followupRun.run.agentId,
         provider: providerUsed,
         model: modelUsed,
         usage: {
@@ -1448,13 +1545,13 @@ export async function runReplyAgent(params: {
           output,
           cacheRead,
           cacheWrite,
-          promptTokens,
+          promptTokens: usagePromptTokens,
           total: totalTokens,
         },
         lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
         context: {
           limit: contextTokensUsed,
-          used: totalTokens,
+          ...(contextUsedTokens !== undefined ? { used: contextUsedTokens } : {}),
         },
         costUsd,
         durationMs: Date.now() - runStartedAt,
@@ -1466,7 +1563,9 @@ export async function runReplyAgent(params: {
       (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
     const responseUsageMode = resolveResponseUsageMode(responseUsageRaw);
     if (responseUsageMode !== "off" && hasNonzeroUsage(usage)) {
-      const authMode = resolveModelAuthMode(providerUsed, cfg);
+      const authMode = resolveModelAuthMode(providerUsed, cfg, undefined, {
+        workspaceDir: followupRun.run.workspaceDir,
+      });
       const showCost = authMode === "api-key";
       const costConfig = showCost
         ? resolveModelCostConfig({
@@ -1568,9 +1667,11 @@ export async function runReplyAgent(params: {
         sessionKey,
         storePath,
         amount: autoCompactionCount,
+        compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
         lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
         contextTokensUsed,
         newSessionId: runResult.meta?.agentMeta?.sessionId,
+        newSessionFile: runResult.meta?.agentMeta?.sessionFile,
       });
       const refreshedSessionEntry =
         sessionKey && activeSessionStore ? activeSessionStore[sessionKey] : undefined;
@@ -1593,7 +1694,7 @@ export async function runReplyAgent(params: {
         })
           .then((contextContent) => {
             if (contextContent) {
-              enqueueSystemEvent(contextContent, { sessionKey });
+              enqueueSystemEvent(contextContent, { sessionKey, trusted: true });
             }
           })
           .catch(() => {
@@ -1607,14 +1708,17 @@ export async function runReplyAgent(params: {
       }
     }
     const prefixPayloads = [...verboseNotices];
-    const rawUserText =
-      runResult.meta?.finalPromptText ??
-      sessionCtx.CommandBody ??
-      sessionCtx.RawBody ??
-      sessionCtx.BodyForAgent ??
-      sessionCtx.Body;
-    const rawAssistantText =
-      runResult.meta?.finalAssistantRawText ?? runResult.meta?.finalAssistantVisibleText;
+    const isHookBlockedRun = runResult.meta?.error?.kind === "hook_block";
+    const rawUserText = isHookBlockedRun
+      ? runResult.meta?.finalPromptText
+      : (runResult.meta?.finalPromptText ??
+        sessionCtx.CommandBody ??
+        sessionCtx.RawBody ??
+        sessionCtx.BodyForAgent ??
+        sessionCtx.Body);
+    const rawAssistantText = isHookBlockedRun
+      ? undefined
+      : (runResult.meta?.finalAssistantRawText ?? runResult.meta?.finalAssistantVisibleText);
     const traceAuthorized = followupRun.run.traceAuthorized === true;
     const executionTrace = mergeExecutionTrace({
       fallbackAttempts,
@@ -1627,7 +1731,9 @@ export async function runReplyAgent(params: {
       authMode:
         runResult.meta?.requestShaping?.authMode ??
         (cfg?.models?.providers && providerUsed in cfg.models.providers
-          ? (resolveModelAuthMode(providerUsed, cfg) ?? undefined)
+          ? (resolveModelAuthMode(providerUsed, cfg, undefined, {
+              workspaceDir: followupRun.run.workspaceDir,
+            }) ?? undefined)
           : undefined),
       thinking:
         runResult.meta?.requestShaping?.thinking ??
@@ -1744,49 +1850,103 @@ export async function runReplyAgent(params: {
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
+    if (isHookBlockedRun) {
+      finalPayloads = markBeforeAgentRunBlockedPayloads(finalPayloads);
+    }
 
-    return finalizeWithFollowup(
+    // Capture only policy-visible final payloads in session store to support
+    // durable delivery retries. Hidden reasoning, message-tool-only replies,
+    // and sendPolicy-denied replies must not become heartbeat-replayable text.
+    if (sessionKey && storePath && finalPayloads.length > 0) {
+      const sendPolicy = resolveSendPolicy({
+        cfg,
+        entry: activeSessionEntry,
+        sessionKey: params.runtimePolicySessionKey ?? sessionKey,
+        channel:
+          sessionCtx.OriginatingChannel ??
+          sessionCtx.Surface ??
+          sessionCtx.Provider ??
+          activeSessionEntry?.channel,
+        chatType: activeSessionEntry?.chatType,
+      });
+      const sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({
+        cfg,
+        ctx: sessionCtx,
+        requested: opts?.sourceReplyDeliveryMode,
+        sendPolicy,
+      });
+      const pendingText = sourceReplyPolicy.suppressDelivery
+        ? ""
+        : buildPendingFinalDeliveryText(finalPayloads);
+      if (pendingText) {
+        await updateSessionStoreEntry({
+          storePath,
+          sessionKey,
+          update: async () => ({
+            pendingFinalDelivery: true,
+            pendingFinalDeliveryText: pendingText,
+            pendingFinalDeliveryCreatedAt: Date.now(),
+            updatedAt: Date.now(),
+          }),
+        });
+      }
+    }
+
+    const result = returnWithQueuedFollowupDrain(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
-      queueKey,
-      runFollowupTurn,
     );
+
+    return result;
   } catch (error) {
     if (
       replyOperation.result?.kind === "aborted" &&
       replyOperation.result.code === "aborted_for_restart"
     ) {
-      return finalizeWithFollowup(
-        { text: "⚠️ Gateway is restarting. Please wait a few seconds and try again." },
-        queueKey,
-        runFollowupTurn,
+      return returnWithQueuedFollowupDrain(
+        markReplyPayloadForSourceSuppressionDelivery({
+          text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+        }),
       );
     }
     if (replyOperation.result?.kind === "aborted") {
-      return finalizeWithFollowup({ text: SILENT_REPLY_TOKEN }, queueKey, runFollowupTurn);
+      return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
     }
     if (error instanceof GatewayDrainingError) {
       replyOperation.fail("gateway_draining", error);
-      return finalizeWithFollowup(
-        { text: "⚠️ Gateway is restarting. Please wait a few seconds and try again." },
-        queueKey,
-        runFollowupTurn,
+      return returnWithQueuedFollowupDrain(
+        markReplyPayloadForSourceSuppressionDelivery({
+          text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+        }),
       );
     }
     if (error instanceof CommandLaneClearedError) {
       replyOperation.fail("command_lane_cleared", error);
-      return finalizeWithFollowup(
-        { text: "⚠️ Gateway is restarting. Please wait a few seconds and try again." },
-        queueKey,
-        runFollowupTurn,
+      return returnWithQueuedFollowupDrain(
+        markReplyPayloadForSourceSuppressionDelivery({
+          text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+        }),
       );
+    }
+    const knownFailurePayload = buildKnownAgentRunFailureReplyPayload({
+      err: error,
+      sessionCtx,
+      resolvedVerboseLevel,
+    });
+    if (knownFailurePayload) {
+      replyOperation.fail("run_failed", error);
+      return returnWithQueuedFollowupDrain(knownFailurePayload);
     }
     replyOperation.fail("run_failed", error);
     // Keep the followup queue moving even when an unexpected exception escapes
     // the run path; the caller still receives the original error.
-    finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+    returnWithQueuedFollowupDrain(undefined);
     throw error;
   } finally {
-    replyOperation.complete();
+    if (shouldDrainQueuedFollowupsAfterClear) {
+      replyOperation.completeThen(drainQueuedFollowupsAfterClear);
+    } else {
+      replyOperation.complete();
+    }
     blockReplyPipeline?.stop();
     typing.markRunComplete();
     // Safety net: the dispatcher's onIdle callback normally fires

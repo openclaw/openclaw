@@ -231,7 +231,9 @@ describe("local-heavy-check-runtime", () => {
     expect(args).toEqual([
       "--type-aware",
       "--tsconfig",
-      "tsconfig.oxlint.json",
+      "config/tsconfig/oxlint.json",
+      "--allow",
+      "eslint/no-underscore-dangle",
       "--report-unused-disable-directives-severity",
       "error",
       "--threads=1",
@@ -244,10 +246,27 @@ describe("local-heavy-check-runtime", () => {
     expect(args).toEqual([
       "--type-aware",
       "--tsconfig",
-      "tsconfig.oxlint.json",
+      "config/tsconfig/oxlint.json",
+      "--allow",
+      "eslint/no-underscore-dangle",
       "--report-unused-disable-directives-severity",
       "error",
       "--threads=1",
+    ]);
+  });
+
+  it("honors an explicit oxlint thread count", () => {
+    const { args } = applyLocalOxlintPolicy(["--threads=8"], makeEnv(), ROOMY_HOST);
+
+    expect(args).toEqual([
+      "--threads=8",
+      "--type-aware",
+      "--tsconfig",
+      "config/tsconfig/oxlint.json",
+      "--allow",
+      "eslint/no-underscore-dangle",
+      "--report-unused-disable-directives-severity",
+      "error",
     ]);
   });
 
@@ -263,7 +282,9 @@ describe("local-heavy-check-runtime", () => {
     expect(args).toEqual([
       "--type-aware",
       "--tsconfig",
-      "tsconfig.oxlint.json",
+      "config/tsconfig/oxlint.json",
+      "--allow",
+      "eslint/no-underscore-dangle",
       "--report-unused-disable-directives-severity",
       "error",
     ]);

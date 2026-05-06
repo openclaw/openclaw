@@ -7,8 +7,7 @@ read_when:
 title: "Debugging"
 ---
 
-This page covers debugging helpers for streaming output, especially when a
-provider mixes reasoning into normal text.
+Debugging helpers for streaming output, especially when a provider mixes reasoning into normal text.
 
 ## Runtime debug overrides
 
@@ -44,144 +43,62 @@ Use `/trace` for plugin diagnostics such as Active Memory debug summaries.
 Keep using `/verbose` for normal verbose status/tool output, and keep using
 `/debug` for runtime-only config overrides.
 
-## Temporary CLI debug timing
+## Plugin lifecycle trace
 
-OpenClaw keeps `src/cli/debug-timing.ts` as a small helper for local
-investigation. It is intentionally not wired into CLI startup, command routing,
-or any command by default. Use it only while debugging a slow command, then
-remove the import and spans before landing the behavior change.
+Use `OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1` when plugin lifecycle commands feel slow
+and you need a built-in phase breakdown for plugin metadata, discovery, registry,
+runtime mirror, config mutation, and refresh work. The trace is opt-in and writes
+to stderr, so JSON command output remains parseable.
 
-Use this when a command is slow and you need a quick phase breakdown before
-deciding whether to use a CPU profiler or fix a specific subsystem.
-
-### Add temporary spans
-
-Add the helper near the code you are investigating. For example, while debugging
-`openclaw models list`, a temporary patch in
-`src/commands/models/list.list-command.ts` might look like this:
-
-```ts
-// Temporary debugging only. Remove before landing.
-import { createCliDebugTiming } from "../../cli/debug-timing.js";
-
-const timing = createCliDebugTiming({ command: "models list" });
-
-const authStore = timing.time("debug:models:list:auth_store", () => ensureAuthProfileStore());
-
-const loaded = await timing.timeAsync(
-  "debug:models:list:registry",
-  () => loadListModelRegistry(cfg, { sourceConfig }),
-  (result) => ({
-    models: result.models.length,
-    discoveredKeys: result.discoveredKeys.size,
-  }),
-);
-```
-
-Guidelines:
-
-- Prefix temporary phase names with `debug:`.
-- Add only a few spans around suspected slow sections.
-- Prefer broad phases such as `registry`, `auth_store`, or `rows` over helper
-  names.
-- Use `time()` for synchronous work and `timeAsync()` for promises.
-- Keep stdout clean. The helper writes to stderr, so command JSON output stays
-  parseable.
-- Remove temporary imports and spans before opening the final fix PR.
-- Include the timing output or a short summary in the issue or PR that explains
-  the optimization.
-
-### Run with readable output
-
-Readable mode is best for live debugging:
+Example:
 
 ```bash
-OPENCLAW_DEBUG_TIMING=1 pnpm openclaw models list --all --provider moonshot
+OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1 openclaw plugins install tokenjuice --force
 ```
 
-Example output from a temporary `models list` investigation:
+Example output:
 
 ```text
-OpenClaw CLI debug timing: models list
-     0ms     +0ms start all=true json=false local=false plain=false provider="moonshot"
-     2ms     +2ms debug:models:list:import_runtime duration=2ms
-    17ms    +14ms debug:models:list:load_config duration=14ms sourceConfig=true
-  20.3s  +20.3s debug:models:list:auth_store duration=20.3s
-  20.3s     +0ms debug:models:list:resolve_agent_dir duration=0ms agentDir=true
-  20.3s     +0ms debug:models:list:resolve_provider_filter duration=0ms
-  25.3s   +5.0s debug:models:list:ensure_models_json duration=5.0s
-  31.2s   +5.9s debug:models:list:load_model_registry duration=5.9s models=869 availableKeys=38 discoveredKeys=868 availabilityError=false
-  31.2s     +0ms debug:models:list:resolve_configured_entries duration=0ms entries=1
-  31.2s     +0ms debug:models:list:build_configured_lookup duration=0ms entries=1
-  33.6s   +2.4s debug:models:list:read_registry_models duration=2.4s models=871
-  35.2s   +1.5s debug:models:list:append_discovered_rows duration=1.5s seenKeys=0 rows=0
-  36.9s   +1.7s debug:models:list:append_catalog_supplement_rows duration=1.7s seenKeys=5 rows=5
-
-Model                                      Input       Ctx   Local Auth  Tags
-moonshot/kimi-k2-thinking                  text        256k  no    no
-moonshot/kimi-k2-thinking-turbo            text        256k  no    no
-moonshot/kimi-k2-turbo                     text        250k  no    no
-moonshot/kimi-k2.5                         text+image  256k  no    no
-moonshot/kimi-k2.6                         text+image  256k  no    no
-
-  36.9s     +0ms debug:models:list:print_model_table duration=0ms rows=5
-  36.9s     +0ms complete rows=5
+[plugins:lifecycle] phase="config read" ms=6.83 status=ok command="install"
+[plugins:lifecycle] phase="slot selection" ms=94.31 status=ok command="install" pluginId="tokenjuice"
+[plugins:lifecycle] phase="registry refresh" ms=51.56 status=ok command="install" reason="source-changed"
 ```
 
-Findings from this output:
+Use this for plugin lifecycle investigation before reaching for a CPU profiler.
+If the command is running from a source checkout, prefer measuring the built
+runtime with `node dist/entry.js ...` after `pnpm build`; `pnpm openclaw ...`
+also measures source-runner overhead.
 
-| Phase                                    |       Time | What it means                                                                                           |
-| ---------------------------------------- | ---------: | ------------------------------------------------------------------------------------------------------- |
-| `debug:models:list:auth_store`           |      20.3s | The auth-profile store load is the largest cost and should be investigated first.                       |
-| `debug:models:list:ensure_models_json`   |       5.0s | Syncing `models.json` is expensive enough to inspect for caching or skip conditions.                    |
-| `debug:models:list:load_model_registry`  |       5.9s | Registry construction and provider availability work are also meaningful costs.                         |
-| `debug:models:list:read_registry_models` |       2.4s | Reading all registry models is not free and may matter for `--all`.                                     |
-| row append phases                        | 3.2s total | Building five displayed rows still takes several seconds, so the filtering path deserves a closer look. |
-| `debug:models:list:print_model_table`    |        0ms | Rendering is not the bottleneck.                                                                        |
+## CLI startup and command profiling
 
-Those findings are enough to guide the next patch without keeping timing code in
-production paths.
-
-### Run with JSON output
-
-Use JSON mode when you want to save or compare timing data:
+Use the checked-in startup benchmark when a command feels slow:
 
 ```bash
-OPENCLAW_DEBUG_TIMING=json pnpm openclaw models list --all --provider moonshot \
-  2> .artifacts/models-list-timing.jsonl
+pnpm test:startup:bench:smoke
+pnpm tsx scripts/bench-cli-startup.ts --preset real --case status --runs 3
+pnpm tsx scripts/bench-cli-startup.ts --preset real --cpu-prof-dir .artifacts/cli-cpu
 ```
 
-Each stderr line is one JSON object:
-
-```json
-{
-  "command": "models list",
-  "phase": "debug:models:list:registry",
-  "elapsedMs": 31200,
-  "deltaMs": 5900,
-  "durationMs": 5900,
-  "models": 869,
-  "discoveredKeys": 868
-}
-```
-
-### Clean up before landing
-
-Before opening the final PR:
+For one-off profiling through the normal source runner, set
+`OPENCLAW_RUN_NODE_CPU_PROF_DIR`:
 
 ```bash
-rg 'createCliDebugTiming|debug:[a-z0-9_-]+:' src/commands src/cli \
-  --glob '!src/cli/debug-timing.*' \
-  --glob '!*.test.ts'
+OPENCLAW_RUN_NODE_CPU_PROF_DIR=.artifacts/cli-cpu pnpm openclaw status
 ```
 
-The command should return no temporary instrumentation call sites unless the PR
-is explicitly adding a permanent diagnostics surface. For normal performance
-fixes, keep only the behavior change, tests, and a short note with the timing
-evidence.
+The source runner adds Node CPU profile flags and writes a `.cpuprofile` for the
+command. Use this before adding temporary instrumentation to command code.
 
-For deeper CPU hotspots, use Node profiling (`--cpu-prof`) or an external
-profiler instead of adding more timing wrappers.
+For startup stalls that look like synchronous filesystem or module-loader work,
+add Node's sync I/O trace flag through the source runner:
+
+```bash
+OPENCLAW_TRACE_SYNC_IO=1 pnpm openclaw gateway --force
+```
+
+`pnpm gateway:watch` enables this flag by default for the watched Gateway child.
+Set `OPENCLAW_TRACE_SYNC_IO=0` to suppress Node sync I/O trace output in watch
+mode.
 
 ## Gateway watch mode
 
@@ -191,11 +108,72 @@ For fast iteration, run the gateway under the file watcher:
 pnpm gateway:watch
 ```
 
-This maps to:
+By default, this starts or restarts a tmux session named
+`openclaw-gateway-watch-main` (or a profile/port-specific variant such as
+`openclaw-gateway-watch-dev-19001`) and auto-attaches from interactive terminals.
+Non-interactive shells, CI, and agent exec calls stay detached and print attach
+instructions instead. Attach manually when needed:
+
+```bash
+tmux attach -t openclaw-gateway-watch-main
+```
+
+The tmux pane runs the raw watcher:
 
 ```bash
 node scripts/watch-node.mjs gateway --force
 ```
+
+Use foreground mode when tmux is not wanted:
+
+```bash
+pnpm gateway:watch:raw
+# or
+OPENCLAW_GATEWAY_WATCH_TMUX=0 pnpm gateway:watch
+```
+
+Disable auto-attach while keeping tmux management:
+
+```bash
+OPENCLAW_GATEWAY_WATCH_ATTACH=0 pnpm gateway:watch
+```
+
+Profile watched Gateway CPU time when debugging startup/runtime hotspots:
+
+```bash
+pnpm gateway:watch --benchmark
+```
+
+The watch wrapper consumes `--benchmark` before invoking the Gateway and writes
+one V8 `.cpuprofile` per Gateway child exit under
+`.artifacts/gateway-watch-profiles/`. Stop or restart the watched gateway to
+flush the current profile, then open it with Chrome DevTools or Speedscope:
+
+```bash
+npx speedscope .artifacts/gateway-watch-profiles/*.cpuprofile
+```
+
+Use `--benchmark-dir <path>` when you want profiles somewhere else.
+Use `--benchmark-no-force` when you want the benchmarked child to skip the
+default `--force` port cleanup and fail fast if the Gateway port is already in
+use.
+Benchmark mode suppresses sync-I/O trace spam by default. Set
+`OPENCLAW_TRACE_SYNC_IO=1` with `--benchmark` when you explicitly want both CPU
+profiles and Node sync-I/O stack traces. In benchmark mode those trace blocks
+are written to `gateway-watch-output.log` under the benchmark directory and
+filtered from the terminal pane; normal Gateway logs remain visible.
+
+The tmux wrapper carries common non-secret runtime selectors such as
+`OPENCLAW_PROFILE`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_STATE_DIR`,
+`OPENCLAW_GATEWAY_PORT`, and `OPENCLAW_SKIP_CHANNELS` into the pane. Put
+provider credentials in your normal profile/config, or use raw foreground mode
+for one-off ephemeral secrets.
+If the watched Gateway exits during startup, the watcher runs
+`openclaw doctor --fix --non-interactive` once and restarts the Gateway child.
+Use `OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR=0` when you want the original startup
+failure without the dev-only repair pass.
+The managed tmux pane also defaults to colored Gateway logs for readability;
+set `FORCE_COLOR=0` when starting `pnpm gateway:watch` to disable ANSI output.
 
 The watcher restarts on build-relevant files under `src/`, extension source files,
 extension `package.json` and `openclaw.plugin.json` metadata, `tsconfig.json`,
@@ -204,8 +182,9 @@ gateway without forcing a `tsdown` rebuild; source and config changes still
 rebuild `dist` first.
 
 Add any gateway CLI flags after `gateway:watch` and they will be passed through on
-each restart. Re-running the same watch command for the same repo/flag set now
-replaces the older watcher instead of leaving duplicate watcher parents behind.
+each restart. Re-running the same watch command respawns the named tmux pane, and
+the raw watcher still keeps its single-watcher lock so duplicate watcher parents
+are replaced instead of piling up.
 
 ## Dev profile + dev gateway (--dev)
 
@@ -224,7 +203,7 @@ pnpm gateway:dev
 OPENCLAW_PROFILE=dev openclaw tui
 ```
 
-If you don’t have a global install yet, run the CLI via `pnpm openclaw ...`.
+If you don't have a global install yet, run the CLI via `pnpm openclaw ...`.
 
 What this does:
 
@@ -240,7 +219,7 @@ What this does:
    - Sets `agent.skipBootstrap=true` (no BOOTSTRAP.md).
    - Seeds the workspace files if missing:
      `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`.
-   - Default identity: **C3‑PO** (protocol droid).
+   - Default identity: **C3-PO** (protocol droid).
    - Skips channel providers in dev mode (`OPENCLAW_SKIP_CHANNELS=1`).
 
 Reset flow (fresh start):
@@ -249,21 +228,26 @@ Reset flow (fresh start):
 pnpm gateway:dev:reset
 ```
 
-Note: `--dev` is a **global** profile flag and gets eaten by some runners.
-If you need to spell it out, use the env var form:
+<Note>
+`--dev` is a **global** profile flag and gets eaten by some runners. If you need to spell it out, use the env var form:
 
 ```bash
 OPENCLAW_PROFILE=dev openclaw gateway --dev --reset
 ```
 
+</Note>
+
 `--reset` wipes config, credentials, sessions, and the dev workspace (using
 `trash`, not `rm`), then recreates the default dev setup.
 
-Tip: if a non‑dev gateway is already running (launchd/systemd), stop it first:
+<Tip>
+If a non-dev gateway is already running (launchd or systemd), stop it first:
 
 ```bash
 openclaw gateway stop
 ```
+
+</Tip>
 
 ## Raw stream logging (OpenClaw)
 
@@ -313,7 +297,7 @@ Default file:
 
 `~/.pi-mono/logs/raw-openai-completions.jsonl`
 
-> Note: this is only emitted by processes using pi-mono’s
+> Note: this is only emitted by processes using pi-mono's
 > `openai-completions` provider.
 
 ## Safety notes
@@ -321,6 +305,38 @@ Default file:
 - Raw stream logs can include full prompts, tool output, and user data.
 - Keep logs local and delete them after debugging.
 - If you share logs, scrub secrets and PII first.
+
+## Debugging in VSCode
+
+Source maps are required to enable debugging in VSCode-based IDEs because many of the generated files end up with hashed names as part of the build process. The included `launch.json` configurations target the Gateway service, but can be adapted quickly for other purposes:
+
+1. **Rebuild and Debug Gateway** - Debugs the Gateway service after creating a new build
+2. **Debug Gateway** - Debugs the Gateway service of a pre-existing build
+
+### Setup
+
+The default **Rebuild and Debug Gateway** configuration is batteries-included, it will automatically delete the `/dist` folder and rebuild the project with debugging enabled:
+
+1. Open the **Run and Debug** panel from the Activity Bar or press `Ctrl`+`Shift`+`D`
+2. In the IDE, ensure **Rebuild and Debug Gateway** is selected in the configuration dropdown and then press the **Start Debugging** button
+
+Alternatively - if you prefer to manage the build and debug processes manually:
+
+1. Open a terminal and enable source maps:
+   - **Linux/macOS**: `export OUTPUT_SOURCE_MAPS=1`
+   - **Windows (PowerShell)**: `$env:OUTPUT_SOURCE_MAPS="1"`
+   - **Windows (CMD)**: `set OUTPUT_SOURCE_MAPS=1`
+2. In the same terminal, rebuild the project: `pnpm clean:dist && pnpm build`
+3. In the IDE, select the **Debug Gateway** option in the **Run and Debug** configuration dropdown and then press the **Start Debugging** button
+
+You can now set breakpoints in your TypeScript source files (`src/` directory) and the debugger will correctly map breakpoints to the compiled JavaScript via source maps. You'll be able to inspect variables, step through code, and examine call stacks as expected.
+
+### Notes
+
+- If using the **"Rebuild and Debug Gateway"** option - each time the debugger is launched it will completely delete the `/dist` folder and run a full `pnpm build` with source maps enabled before starting the Gateway
+- If using the **"Debug Gateway"** option - debug sessions can be started and stopped at any time without affecting the `/dist` folder, but you must use a separate terminal process to both enable debugging and manage the build cycle
+- Modify the `launch.json` settings for `args` to debug other sections of the project
+- If you need to use the built OpenClaw CLI for other tasks (i.e. `dashboard --no-open` if your debug session spawns a new auth token), you can execute it in another terminal as `node ./openclaw.mjs` or create a shell alias like `alias openclaw-build="node $(pwd)/openclaw.mjs"`
 
 ## Related
 

@@ -1,11 +1,11 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   installOpenClawOwnedToolHooks,
   resetOpenClawOwnedToolHooks,
   textToolResult,
-} from "../../test/helpers/agents/openclaw-owned-tool-runtime-contract.js";
+} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 import {
   handleToolExecutionEnd,
@@ -291,6 +291,8 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
         tool: "message",
         provider: "telegram",
         to: "chat-1",
+        text: "hello from Pi",
+        mediaUrls: ["/tmp/pi-reply.png"],
       }),
     ]);
     await vi.waitFor(() => {
@@ -352,8 +354,9 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
     expect(result).toEqual(
       expect.objectContaining({
         details: expect.objectContaining({
-          status: "error",
-          error: "blocked by policy",
+          status: "blocked",
+          deniedReason: "plugin-before-tool-call",
+          reason: "blocked by policy",
         }),
       }),
     );
@@ -375,6 +378,14 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
           toolName: "message",
           toolCallId,
           params: originalParams,
+          result: expect.objectContaining({
+            content: [{ type: "text", text: "blocked by policy" }],
+            details: {
+              status: "blocked",
+              deniedReason: "plugin-before-tool-call",
+              reason: "blocked by policy",
+            },
+          }),
           error: "blocked by policy",
         }),
         expect.objectContaining({

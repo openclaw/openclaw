@@ -8,37 +8,69 @@ import {
   createReplyOperation,
   replyRunRegistry,
 } from "../auto-reply/reply/reply-run-registry.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPreparedCliAgent } from "./cli-runner.js";
 import {
   createManagedRun,
   enqueueSystemEventMock,
-  requestHeartbeatNowMock,
+  requestHeartbeatMock,
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
 import { executePreparedCliRun } from "./cli-runner/execute.js";
 import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
+import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import * as sessionHistoryModule from "./cli-runner/session-history.js";
 import { MAX_CLI_SESSION_HISTORY_MESSAGES } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 
-vi.mock("../plugins/hook-runner-global.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugins/hook-runner-global.js")>(
-    "../plugins/hook-runner-global.js",
-  );
-  return {
-    ...actual,
-    getGlobalHookRunner: vi.fn(() => null),
-  };
-});
+vi.mock("../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: vi.fn(() => null),
+}));
+
+vi.mock("../tts/tts.js", () => ({
+  buildTtsSystemPromptHint: vi.fn(() => undefined),
+}));
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
+const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
+
+type HookRunnerGlobalStateForTest = {
+  hookRunner: unknown;
+  registry: unknown;
+};
+
+function setHookRunnerForTest(hookRunner: unknown): void {
+  mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const state = (globalStore[hookRunnerGlobalStateKey] as
+    | HookRunnerGlobalStateForTest
+    | undefined) ?? {
+    hookRunner: null,
+    registry: null,
+  };
+  state.hookRunner = hookRunner;
+  state.registry = null;
+  globalStore[hookRunnerGlobalStateKey] = state;
+}
 
 function createSessionFile(params?: { history?: Array<{ role: "user"; content: string }> }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-hooks-"));
   vi.stubEnv("OPENCLAW_STATE_DIR", dir);
   const sessionFile = path.join(dir, "agents", "main", "sessions", "s1.jsonl");
+  const storePath = path.join(path.dirname(sessionFile), "sessions.json");
   fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+  fs.writeFileSync(
+    storePath,
+    JSON.stringify({
+      "agent:main:main": {
+        sessionId: "s1",
+        sessionFile,
+        updatedAt: Date.now(),
+      },
+    }),
+    "utf-8",
+  );
   fs.writeFileSync(
     sessionFile,
     `${JSON.stringify({
@@ -67,13 +99,15 @@ function createSessionFile(params?: { history?: Array<{ role: "user"; content: s
       "utf-8",
     );
   }
-  return { dir, sessionFile };
+  return { dir, sessionFile, storePath };
 }
 
 function buildPreparedContext(params?: {
   sessionKey?: string;
   cliSessionId?: string;
   runId?: string;
+  lane?: string;
+  openClawHistoryPrompt?: string;
 }): PreparedCliRunContext {
   const backend = {
     command: "codex",
@@ -96,6 +130,7 @@ function buildPreparedContext(params?: {
       thinkLevel: "low",
       timeoutMs: 1_000,
       runId: params?.runId ?? "run-2",
+      lane: params?.lane,
     },
     started: Date.now(),
     workspaceDir: "/tmp",
@@ -115,6 +150,9 @@ function buildPreparedContext(params?: {
     systemPrompt: "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     bootstrapPromptWarningLines: [],
+    ...(params?.openClawHistoryPrompt
+      ? { openClawHistoryPrompt: params.openClawHistoryPrompt }
+      : {}),
     authEpochVersion: 2,
   };
 }
@@ -123,6 +161,7 @@ describe("runCliAgent reliability", () => {
   afterEach(() => {
     replyRunTesting.resetReplyRunRegistry();
     mockGetGlobalHookRunner.mockReset();
+    setHookRunnerForTest(null);
     vi.unstubAllEnvs();
   });
 
@@ -146,6 +185,36 @@ describe("runCliAgent reliability", () => {
         "thread-123",
       ),
     ).rejects.toThrow("produced no output");
+  });
+
+  it("adds request attribution to CLI watchdog failover errors", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "no-output-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 200,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: true,
+      }),
+    );
+
+    await expect(
+      executePreparedCliRun(
+        buildPreparedContext({
+          cliSessionId: "thread-123",
+          lane: "custom-lane",
+          runId: "run-attribution",
+        }),
+        "thread-123",
+      ),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      sessionId: "s1",
+      lane: "custom-lane",
+    });
   });
 
   it("enqueues a system event and heartbeat wake on no-output watchdog timeout for session runs", async () => {
@@ -178,7 +247,9 @@ describe("runCliAgent reliability", () => {
     expect(String(notice)).toContain("produced no output");
     expect(String(notice)).toContain("interactive input or an approval prompt");
     expect(opts).toMatchObject({ sessionKey: "agent:main:main" });
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+    expect(requestHeartbeatMock).toHaveBeenCalledWith({
+      source: "cli-watchdog",
+      intent: "event",
       reason: "cli:watchdog:stall",
       sessionKey: "agent:main:main",
     });
@@ -213,7 +284,7 @@ describe("runCliAgent reliability", () => {
       runLlmOutput: vi.fn(async () => undefined),
       runAgentEnd: vi.fn(async () => undefined),
     };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    setHookRunnerForTest(hookRunner);
     supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
@@ -324,6 +395,56 @@ describe("runCliAgent reliability", () => {
     });
   });
 
+  it("seeds fresh CLI sessions from the OpenClaw transcript", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const result = await runPreparedCliAgent(
+      buildPreparedContext({
+        openClawHistoryPrompt:
+          "Continue this conversation using the OpenClaw transcript below.\n\nUser: earlier ask\n\nAssistant: earlier answer\n\n<next_user_message>\nhi\n</next_user_message>",
+      }),
+    );
+
+    expect(result.meta.finalPromptText).toContain("User: earlier ask");
+    expect(result.meta.finalPromptText).toContain("Assistant: earlier answer");
+  });
+
+  it("keeps resumed CLI sessions on native resume history", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const result = await runPreparedCliAgent(
+      buildPreparedContext({
+        cliSessionId: "cli-session",
+        openClawHistoryPrompt: "User: earlier ask",
+      }),
+    );
+
+    expect(result.meta.finalPromptText).not.toContain("User: earlier ask");
+    expect(result.meta.finalPromptText).toContain("hi");
+  });
+
   it("reports CLI reply backends as streaming until the managed run finishes", async () => {
     const operation = createReplyOperation({
       sessionKey: "agent:main:main",
@@ -418,7 +539,7 @@ describe("runCliAgent reliability", () => {
       runLlmOutput: vi.fn(async () => undefined),
       runAgentEnd: vi.fn(async () => undefined),
     };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    setHookRunnerForTest(hookRunner);
     const { dir, sessionFile } = createSessionFile();
 
     supervisorSpawnMock.mockResolvedValueOnce(
@@ -511,6 +632,100 @@ describe("runCliAgent reliability", () => {
     }
   });
 
+  it("blocks CLI runs before llm_input and model execution when before_agent_run blocks", async () => {
+    supervisorSpawnMock.mockClear();
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) =>
+        ["before_agent_run", "llm_input", "agent_end"].includes(hookName),
+      ),
+      runBeforeAgentRun: vi.fn(async () => ({
+        pluginId: "policy-plugin",
+        decision: {
+          outcome: "block" as const,
+          reason: "matched secret prompt: secret prompt",
+          message: "The agent cannot read this message.",
+        },
+      })),
+      runLlmInput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+    setHookRunnerForTest(hookRunner);
+    const { dir, sessionFile } = createSessionFile({
+      history: [{ role: "user", content: "earlier context" }],
+    });
+
+    try {
+      const result = await runPreparedCliAgent({
+        ...buildPreparedContext({ sessionKey: "agent:main:main", runId: "run-blocked-cli" }),
+        params: {
+          ...buildPreparedContext({ sessionKey: "agent:main:main", runId: "run-blocked-cli" })
+            .params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "secret prompt",
+        },
+      });
+
+      expect(result.payloads).toEqual([
+        {
+          text: "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+          isError: true,
+        },
+      ]);
+      expect(result.meta.livenessState).toBe("blocked");
+      expect(supervisorSpawnMock).not.toHaveBeenCalled();
+      expect(hookRunner.runLlmInput).not.toHaveBeenCalled();
+      expect(hookRunner.runBeforeAgentRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: "secret prompt",
+          messages: expect.arrayContaining([
+            expect.objectContaining({ role: "user", content: "earlier context" }),
+          ]),
+        }),
+        expect.objectContaining({
+          runId: "run-blocked-cli",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
+      });
+      expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error:
+            "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+          messages: expect.arrayContaining([
+            expect.objectContaining({
+              role: "user",
+              content:
+                "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+            }),
+          ]),
+        }),
+        expect.any(Object),
+      );
+      expect(JSON.stringify(hookRunner.runAgentEnd.mock.calls)).not.toContain("secret prompt");
+
+      const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
+      const blockedLine = JSON.parse(lines[lines.length - 1]);
+      expect(blockedLine.message.content[0].text).toBe(
+        "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+      );
+      expect(JSON.stringify(blockedLine)).not.toContain("secret prompt");
+      expect(JSON.stringify(blockedLine)).not.toContain("matched secret prompt");
+      expect(blockedLine.message.__openclaw.beforeAgentRunBlocked).toMatchObject({
+        blockedBy: "policy-plugin",
+      });
+      expect(blockedLine.message.__openclaw.beforeAgentRunBlocked).not.toHaveProperty("reason");
+      expect(Object.hasOwn(blockedLine.message.__openclaw, "beforeAgentRunBlocked")).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("does not emit llm_output when the CLI run returns no assistant text", async () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "llm_output"),
@@ -518,7 +733,7 @@ describe("runCliAgent reliability", () => {
       runLlmOutput: vi.fn(async () => undefined),
       runAgentEnd: vi.fn(async () => undefined),
     };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    setHookRunnerForTest(hookRunner);
 
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
@@ -546,7 +761,7 @@ describe("runCliAgent reliability", () => {
       runLlmOutput: vi.fn(async () => undefined),
       runAgentEnd: vi.fn(async () => undefined),
     };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    setHookRunnerForTest(hookRunner);
 
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
@@ -590,7 +805,7 @@ describe("runCliAgent reliability", () => {
       runLlmOutput: vi.fn(async () => undefined),
       runAgentEnd: vi.fn(async () => undefined),
     };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    setHookRunnerForTest(hookRunner);
     const { dir, sessionFile } = createSessionFile({
       history: Array.from({ length: MAX_CLI_SESSION_HISTORY_MESSAGES + 5 }, (_, index) => ({
         role: "user" as const,
@@ -671,7 +886,7 @@ describe("runCliAgent reliability", () => {
       runLlmOutput: vi.fn(async () => undefined),
       runAgentEnd: vi.fn(async () => undefined),
     };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    setHookRunnerForTest(hookRunner);
     const historySpy = vi.spyOn(sessionHistoryModule, "loadCliSessionHistoryMessages");
 
     supervisorSpawnMock.mockResolvedValueOnce(
@@ -698,6 +913,68 @@ describe("runCliAgent reliability", () => {
       historySpy.mockRestore();
     }
   });
+
+  it("builds fresh-session history reseed prompts from hook-mutated prompts", async () => {
+    const { dir, sessionFile } = createSessionFile({
+      history: [{ role: "user", content: "earlier ask" }],
+    });
+    fs.appendFileSync(
+      sessionFile,
+      `${JSON.stringify({
+        type: "compaction",
+        id: "compaction-1",
+        parentId: "msg-0",
+        timestamp: new Date(2).toISOString(),
+        summary: "compacted earlier ask",
+        firstKeptEntryId: "msg-0",
+        tokensBefore: 10_000,
+      })}\n`,
+      "utf-8",
+    );
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: dir,
+          cliBackends: {
+            "codex-cli": {
+              command: "codex",
+              args: ["exec"],
+              output: "text",
+              input: "arg",
+              sessionMode: "existing",
+            },
+          },
+        },
+      },
+    };
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+      runBeforePromptBuild: vi.fn(async () => ({ prependContext: "hook context" })),
+      runBeforeAgentStart: vi.fn(async () => undefined),
+    };
+    setHookRunnerForTest(hookRunner);
+
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "s1",
+        sessionFile,
+        workspaceDir: dir,
+        config,
+        prompt: "current ask",
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        timeoutMs: 1_000,
+        runId: "run-history-hook",
+      });
+
+      expect(context.params.prompt).toBe("hook context\n\ncurrent ask");
+      expect(context.openClawHistoryPrompt).toContain("Compaction summary: compacted earlier ask");
+      expect(context.openClawHistoryPrompt).toContain("hook context");
+      expect(context.openClawHistoryPrompt).toContain("current ask");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("resolveCliNoOutputTimeoutMs", () => {
@@ -717,5 +994,15 @@ describe("resolveCliNoOutputTimeoutMs", () => {
       useResume: true,
     });
     expect(timeoutMs).toBe(42_000);
+  });
+
+  it("lets explicit cron timeouts lift the default resume no-output ceiling", () => {
+    const timeoutMs = resolveCliNoOutputTimeoutMs({
+      backend: { command: "codex" },
+      timeoutMs: 600_000,
+      useResume: true,
+      trigger: "cron",
+    });
+    expect(timeoutMs).toBe(480_000);
   });
 });

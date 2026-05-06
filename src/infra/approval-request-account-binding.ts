@@ -1,5 +1,6 @@
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
+import { resolveMaintenanceConfigFromInput } from "../config/sessions/store-maintenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
@@ -9,14 +10,14 @@ import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
-export type ApprovalRequestLike = ExecApprovalRequest | PluginApprovalRequest;
+type ApprovalRequestLike = ExecApprovalRequest | PluginApprovalRequest;
 
 type ApprovalRequestSessionBinding = {
   channel?: string;
   accountId?: string;
 };
 
-export type PersistedApprovalRequestSessionEntry = {
+type PersistedApprovalRequestSessionEntry = {
   sessionKey: string;
   entry: SessionEntry;
 };
@@ -36,7 +37,9 @@ export function resolvePersistedApprovalRequestSessionEntry(params: {
   const parsed = parseAgentSessionKey(sessionKey);
   const agentId = parsed?.agentId ?? params.request.request.agentId ?? "main";
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
-  const store = loadSessionStore(storePath);
+  const store = loadSessionStore(storePath, {
+    maintenanceConfig: resolveMaintenanceConfigFromInput(params.cfg.session?.maintenance),
+  });
   const entry = store[sessionKey];
   if (!entry) {
     return null;

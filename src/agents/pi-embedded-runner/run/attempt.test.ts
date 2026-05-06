@@ -1,18 +1,18 @@
 import { streamSimple } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
+import { resolveBootstrapContextTargets } from "./attempt-bootstrap-routing.js";
 import {
   buildContextEnginePromptCacheInfo,
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
   composeSystemPromptWithHookContext,
   decodeHtmlEntitiesInObject,
-  applyEmbeddedAttemptToolsAllow,
   isPrimaryBootstrapRun,
   mergeOrphanedTrailingUserPrompt,
+  normalizeMessagesForLlmBoundary,
   prependSystemPromptAddition,
   remapInjectedContextFilesToWorkspace,
   resetEmbeddedAgentBaseStreamFnCacheForTest,
@@ -20,15 +20,16 @@ import {
   resolveAttemptFsWorkspaceOnly,
   resolveEmbeddedAgentStreamFn,
   resolveUnknownToolGuardThreshold,
-  shouldCreateBundleMcpRuntimeForAttempt,
+  shouldRunLlmOutputHooksForAttempt,
+  resolveAttemptToolPolicyMessageProvider,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
-  shouldStripBootstrapFromEmbeddedContext,
   shouldWarnOnOrphanedUserRepair,
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
+import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
 
 type FakeWrappedStream = {
   result: () => Promise<unknown>;
@@ -63,41 +64,153 @@ async function invokeWrappedTestStream(
   return await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
 }
 
-describe("applyEmbeddedAttemptToolsAllow", () => {
-  it("keeps explicit toolsAllow authoritative after force-added tools are built", () => {
-    const tools = [{ name: "exec" }, { name: "read" }, { name: "message" }];
-
+describe("buildEmbeddedAttemptToolRunContext", () => {
+  it("carries runtime toolsAllow into coding tool construction", () => {
     expect(
-      applyEmbeddedAttemptToolsAllow(tools, ["exec", "read"]).map((tool) => tool.name),
-    ).toEqual(["exec", "read"]);
+      buildEmbeddedAttemptToolRunContext({
+        trigger: "manual",
+        jobId: "job-1",
+        memoryFlushWritePath: "memory/log.md",
+        toolsAllow: ["memory_search", "memory_get"],
+      }),
+    ).toMatchObject({
+      trigger: "manual",
+      jobId: "job-1",
+      memoryFlushWritePath: "memory/log.md",
+      runtimeToolAllowlist: ["memory_search", "memory_get"],
+    });
   });
 });
 
-describe("shouldCreateBundleMcpRuntimeForAttempt", () => {
-  it("skips bundle MCP when tools are disabled or unavailable", () => {
-    expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: false })).toBe(false);
-    expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true, disableTools: true })).toBe(
-      false,
+describe("normalizeMessagesForLlmBoundary", () => {
+  it("strips tool result details before provider conversion", () => {
+    const input = [
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "exec",
+        content: [{ type: "text", text: "visible output" }],
+        details: { aggregated: "hidden diagnostics" },
+        isError: false,
+        timestamp: 1,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as unknown as Array<Record<string, unknown>>;
+
+    expect(output[0]).not.toHaveProperty("details");
+    expect(output[0]?.content).toEqual([{ type: "text", text: "visible output" }]);
+    expect(input[0]).toHaveProperty("details");
+  });
+
+  it("keeps historical runtime-context transcript entries out of the LLM boundary", () => {
+    const input = [
+      {
+        role: "custom",
+        customType: "openclaw.runtime-context",
+        content: "old secret runtime context",
+        display: false,
+        timestamp: 0,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "visible ask" }],
+        timestamp: 1,
+      },
+      {
+        role: "custom",
+        customType: "openclaw.runtime-context",
+        content: "secret runtime context",
+        display: false,
+        timestamp: 2,
+      },
+      {
+        role: "custom",
+        customType: "other-extension-context",
+        content: "normal custom context",
+        display: false,
+        timestamp: 3,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as unknown as Array<Record<string, unknown>>;
+
+    expect(output).toHaveLength(3);
+    expect(output).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ content: "old secret runtime context" })]),
+    );
+    expect(output).toEqual(
+      expect.arrayContaining([expect.objectContaining({ content: "secret runtime context" })]),
+    );
+    expect(output).toEqual(
+      expect.arrayContaining([expect.objectContaining({ customType: "other-extension-context" })]),
     );
   });
 
-  it("creates bundle MCP only when the allowlist can reach bundle MCP tool names", () => {
-    expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true })).toBe(true);
-    expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true, toolsAllow: [] })).toBe(
-      true,
+  it("keeps only safe blocked metadata at the LLM boundary", () => {
+    const input = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+          },
+        ],
+        timestamp: 1,
+        __openclaw: {
+          beforeAgentRunBlocked: {
+            blockedBy: "policy-plugin",
+            blockedAt: 1,
+          },
+        },
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as Array<Record<string, unknown>>;
+
+    expect(output[0]?.content).toEqual([
+      {
+        type: "text",
+        text: "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+      },
+    ]);
+    expect(output[0]).toHaveProperty("__openclaw.beforeAgentRunBlocked");
+    expect(output[0]).not.toHaveProperty("__openclaw.beforeAgentRunBlocked.reason");
+    expect(JSON.stringify(output)).not.toContain("secret prompt");
+    expect(JSON.stringify(output)).not.toContain("matched secret prompt");
+    expect(input[0]).toHaveProperty("__openclaw");
+  });
+});
+
+describe("resolveAttemptToolPolicyMessageProvider", () => {
+  it("prefers explicit tool-policy provider over transport channel", () => {
+    expect(
+      resolveAttemptToolPolicyMessageProvider({
+        messageChannel: "discord",
+        messageProvider: "discord-voice",
+      }),
+    ).toBe("discord-voice");
+  });
+
+  it("falls back to message channel when provider is omitted", () => {
+    expect(resolveAttemptToolPolicyMessageProvider({ messageChannel: "discord" })).toBe("discord");
+  });
+});
+
+describe("shouldRunLlmOutputHooksForAttempt", () => {
+  it("skips llm_output after before_agent_run blocks before model submission", () => {
+    expect(shouldRunLlmOutputHooksForAttempt({ promptErrorSource: "hook:before_agent_run" })).toBe(
+      false,
     );
-    expect(
-      shouldCreateBundleMcpRuntimeForAttempt({
-        toolsEnabled: true,
-        toolsAllow: ["memory_search", "memory_get"],
-      }),
-    ).toBe(false);
-    expect(
-      shouldCreateBundleMcpRuntimeForAttempt({
-        toolsEnabled: true,
-        toolsAllow: ["strict__strict_probe"],
-      }),
-    ).toBe(true);
+    expect(shouldRunLlmOutputHooksForAttempt({ promptErrorSource: "prompt" })).toBe(true);
+    expect(shouldRunLlmOutputHooksForAttempt({ promptErrorSource: null })).toBe(true);
   });
 });
 
@@ -105,8 +218,13 @@ describe("resolvePromptBuildHookResult", () => {
   function createLegacyOnlyHookRunner() {
     return {
       hasHooks: vi.fn(
-        (hookName: "before_prompt_build" | "before_agent_start") =>
-          hookName === "before_agent_start",
+        (
+          hookName:
+            | "agent_turn_prepare"
+            | "heartbeat_prompt_contribution"
+            | "before_prompt_build"
+            | "before_agent_start",
+        ) => hookName === "before_agent_start",
       ),
       runBeforePromptBuild: vi.fn(async () => undefined),
       runBeforeAgentStart: vi.fn(async () => ({ prependContext: "from-hook" })),
@@ -116,6 +234,7 @@ describe("resolvePromptBuildHookResult", () => {
   it("reuses precomputed legacy before_agent_start result without invoking hook again", async () => {
     const hookRunner = createLegacyOnlyHookRunner();
     const result = await resolvePromptBuildHookResult({
+      config: {},
       prompt: "hello",
       messages: [],
       hookCtx: {},
@@ -126,6 +245,7 @@ describe("resolvePromptBuildHookResult", () => {
     expect(hookRunner.runBeforeAgentStart).not.toHaveBeenCalled();
     expect(result).toEqual({
       prependContext: "from-cache",
+      appendContext: undefined,
       systemPrompt: "legacy-system",
       prependSystemContext: undefined,
       appendSystemContext: undefined,
@@ -136,6 +256,7 @@ describe("resolvePromptBuildHookResult", () => {
     const hookRunner = createLegacyOnlyHookRunner();
     const messages = [{ role: "user", content: "ctx" }];
     const result = await resolvePromptBuildHookResult({
+      config: {},
       prompt: "hello",
       messages,
       hookCtx: {},
@@ -152,17 +273,20 @@ describe("resolvePromptBuildHookResult", () => {
       hasHooks: vi.fn(() => true),
       runBeforePromptBuild: vi.fn(async () => ({
         prependContext: "prompt context",
+        appendContext: "prompt append context",
         prependSystemContext: "prompt prepend",
         appendSystemContext: "prompt append",
       })),
       runBeforeAgentStart: vi.fn(async () => ({
         prependContext: "legacy context",
+        appendContext: "legacy append context",
         prependSystemContext: "legacy prepend",
         appendSystemContext: "legacy append",
       })),
     };
 
     const result = await resolvePromptBuildHookResult({
+      config: {},
       prompt: "hello",
       messages: [],
       hookCtx: {},
@@ -170,8 +294,46 @@ describe("resolvePromptBuildHookResult", () => {
     });
 
     expect(result.prependContext).toBe("prompt context\n\nlegacy context");
+    expect(result.appendContext).toBe("prompt append context\n\nlegacy append context");
     expect(result.prependSystemContext).toBe("prompt prepend\n\nlegacy prepend");
     expect(result.appendSystemContext).toBe("prompt append\n\nlegacy append");
+  });
+
+  it("applies heartbeat prompt contributions only during heartbeat turns", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "heartbeat_prompt_contribution"),
+      runHeartbeatPromptContribution: vi.fn(async () => ({
+        prependContext: "heartbeat prepend",
+        appendContext: "heartbeat append",
+      })),
+      runBeforePromptBuild: vi.fn(async () => undefined),
+      runBeforeAgentStart: vi.fn(async () => undefined),
+    };
+
+    const heartbeatResult = await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "hello",
+      messages: [],
+      hookCtx: { trigger: "heartbeat", sessionKey: "agent:main:main" },
+      hookRunner,
+    });
+
+    expect(hookRunner.runHeartbeatPromptContribution).toHaveBeenCalledTimes(1);
+    expect(heartbeatResult.prependContext).toBe("heartbeat prepend");
+    expect(heartbeatResult.appendContext).toBe("heartbeat append");
+
+    hookRunner.runHeartbeatPromptContribution.mockClear();
+    const userResult = await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "hello",
+      messages: [],
+      hookCtx: { trigger: "user", sessionKey: "agent:main:main" },
+      hookRunner,
+    });
+
+    expect(hookRunner.runHeartbeatPromptContribution).not.toHaveBeenCalled();
+    expect(userResult.prependContext).toBeUndefined();
+    expect(userResult.appendContext).toBeUndefined();
   });
 });
 
@@ -209,40 +371,23 @@ describe("composeSystemPromptWithHookContext", () => {
     ).toBe("append only");
   });
 
-  it("keeps hook-composed system prompt stable when bootstrap warnings only change the user prompt", () => {
+  it("keeps bootstrap truncation notices in the system prompt instead of the user prompt", () => {
     const baseSystemPrompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       contextFiles: [{ path: "AGENTS.md", content: "Follow AGENTS guidance." }],
       toolNames: ["read"],
+      bootstrapTruncationNotice:
+        "[Bootstrap truncation warning]\nSome workspace bootstrap files were truncated before Project Context injection.\nTreat Project Context as partial and read the relevant files directly if details seem missing.",
     });
     const composedSystemPrompt = composeSystemPromptWithHookContext({
       baseSystemPrompt,
       appendSystemContext: "hook system context",
     });
-    const turns = [
-      {
-        systemPrompt: composedSystemPrompt,
-        prompt: appendBootstrapPromptWarning("hello", ["AGENTS.md: 200 raw -> 0 injected"]),
-      },
-      {
-        systemPrompt: composedSystemPrompt,
-        prompt: appendBootstrapPromptWarning("hello again", []),
-      },
-      {
-        systemPrompt: composedSystemPrompt,
-        prompt: appendBootstrapPromptWarning("hello once more", [
-          "AGENTS.md: 200 raw -> 0 injected",
-        ]),
-      },
-    ];
 
-    expect(turns[0]?.systemPrompt).toBe(turns[1]?.systemPrompt);
-    expect(turns[1]?.systemPrompt).toBe(turns[2]?.systemPrompt);
-    expect(turns[0]?.prompt.startsWith("hello")).toBe(true);
-    expect(turns[1]?.prompt).toBe("hello again");
-    expect(turns[2]?.prompt.startsWith("hello once more")).toBe(true);
-    expect(turns[0]?.prompt).toContain("[Bootstrap truncation warning]");
-    expect(turns[2]?.prompt).toContain("[Bootstrap truncation warning]");
+    expect(composedSystemPrompt).toContain("[Bootstrap truncation warning]");
+    expect(composedSystemPrompt).toContain("Treat Project Context as partial");
+    expect(composedSystemPrompt).toContain("hook system context");
+    expect("hello").not.toContain("[Bootstrap truncation warning]");
   });
 });
 
@@ -263,11 +408,20 @@ describe("resolvePromptModeForSession", () => {
   });
 });
 
-describe("shouldStripBootstrapFromEmbeddedContext", () => {
-  it("never injects raw BOOTSTRAP.md into embedded system context", () => {
-    expect(shouldStripBootstrapFromEmbeddedContext({ bootstrapMode: "full" })).toBe(true);
-    expect(shouldStripBootstrapFromEmbeddedContext({ bootstrapMode: "limited" })).toBe(true);
-    expect(shouldStripBootstrapFromEmbeddedContext({ bootstrapMode: "none" })).toBe(true);
+describe("resolveBootstrapContextTargets", () => {
+  it("keeps BOOTSTRAP.md in system Project Context only for full bootstrap turns", () => {
+    expect(resolveBootstrapContextTargets({ bootstrapMode: "full" })).toEqual({
+      includeBootstrapInSystemContext: true,
+      includeBootstrapInRuntimeContext: false,
+    });
+    expect(resolveBootstrapContextTargets({ bootstrapMode: "limited" })).toEqual({
+      includeBootstrapInSystemContext: false,
+      includeBootstrapInRuntimeContext: false,
+    });
+    expect(resolveBootstrapContextTargets({ bootstrapMode: "none" })).toEqual({
+      includeBootstrapInSystemContext: false,
+      includeBootstrapInRuntimeContext: false,
+    });
   });
 });
 
@@ -1600,6 +1754,82 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     expect(baseFn).toHaveBeenCalledTimes(1);
     const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
     expect(seenContext.messages).toBe(messages);
+  });
+
+  it("strips trailing assistant prefill turns for Anthropic outbound replay", async () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "earlier question" }],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "stale assistant answer" }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+      validateAnthropicTurns: true,
+      preserveSignatures: true,
+      dropThinkingBlocks: false,
+    } as never);
+    const stream = wrapped(
+      { api: "anthropic-messages" } as never,
+      { messages } as never,
+      {} as never,
+    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    expect(seenContext.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "earlier question" }],
+      },
+    ]);
+    expect(seenContext.messages).not.toBe(messages);
+  });
+
+  it("strips trailing assistant prefill turns for Gemini outbound replay", async () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "earlier question" }],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "stale model answer" }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+      validateGeminiTurns: true,
+      preserveSignatures: true,
+      dropThinkingBlocks: false,
+    } as never);
+    const stream = wrapped(
+      { api: "google-generative-ai" } as never,
+      { messages } as never,
+      {} as never,
+    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    expect(seenContext.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "earlier question" }],
+      },
+    ]);
+    expect(seenContext.messages).not.toBe(messages);
   });
 
   it("drops signed thinking turns when sibling replay tool calls are not allowlisted", async () => {

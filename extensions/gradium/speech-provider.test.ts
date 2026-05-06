@@ -1,4 +1,4 @@
-import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/testing";
+import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildGradiumSpeechProvider } from "./speech-provider.js";
 
@@ -98,12 +98,16 @@ describe("gradium speech provider", () => {
     const result = await provider.synthesizeTelephony!({
       text: "Telephony test",
       cfg: {} as never,
-      providerConfig: { apiKey: "gsk_test123" },
+      providerConfig: { apiKey: "gsk_test123", voiceId: "default-voice" },
+      providerOverrides: { voiceId: "override-voice" },
       timeoutMs: 30_000,
     });
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(init.body as string).output_format).toBe("ulaw_8000");
+    expect(JSON.parse(init.body as string)).toMatchObject({
+      voice_id: "override-voice",
+      output_format: "ulaw_8000",
+    });
     expect(result.outputFormat).toBe("ulaw_8000");
     expect(result.sampleRate).toBe(8_000);
     expect(result.audioBuffer).toEqual(audioData);

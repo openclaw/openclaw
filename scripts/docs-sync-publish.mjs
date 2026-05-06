@@ -33,6 +33,13 @@ const GENERATED_LOCALES = [
     navMode: "overlay",
   },
   {
+    language: "zh-Hant",
+    dir: "zh-TW",
+    navFile: "zh-Hant-navigation.json",
+    tmFile: "zh-TW.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
     language: "ja",
     dir: "ja-JP",
     navFile: "ja-navigation.json",
@@ -89,6 +96,31 @@ const GENERATED_LOCALES = [
     navMode: "clone-en",
   },
   {
+    language: "vi",
+    dir: "vi",
+    navFile: "vi-navigation.json",
+    tmFile: "vi.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
+    language: "nl",
+    dir: "nl",
+    navFile: "nl-navigation.json",
+    tmFile: "nl.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
+    language: "fa",
+    dir: "fa",
+    navFile: "fa-navigation.json",
+    tmFile: "fa.tm.jsonl",
+    navMode: "clone-en",
+    // Mintlify does not currently accept `fa` in navigation.languages.
+    // Keep generated docs and translation memory so the locale stays available
+    // once the docs host accepts it.
+    navigation: false,
+  },
+  {
     language: "tr",
     dir: "tr",
     navFile: "tr-navigation.json",
@@ -122,6 +154,9 @@ const GENERATED_LOCALES = [
     navFile: "th-navigation.json",
     tmFile: "th.tm.jsonl",
     navMode: "clone-en",
+    // Mintlify does not currently accept `th` in navigation.languages.
+    // Keep generated docs and translation memory so the locale stays available
+    // once the docs host accepts it.
     navigation: false,
   },
 ];
@@ -289,6 +324,32 @@ function composeDocsConfig() {
   };
 }
 
+function pruneOrphanLocaleDocs(targetDocsDir) {
+  let pruned = 0;
+  for (const locale of GENERATED_LOCALES) {
+    const localeDir = path.join(targetDocsDir, locale.dir);
+    if (!fs.existsSync(localeDir)) {
+      continue;
+    }
+    for (const filePath of walkMarkdownFiles(localeDir)) {
+      const relativeToLocale = path.relative(localeDir, filePath);
+      // The English source file lives at docs/<relativeToLocale> with either .md or .mdx.
+      const englishBase = path.join(SOURCE_DOCS_DIR, relativeToLocale);
+      const englishMd = englishBase.replace(/\.mdx?$/i, ".md");
+      const englishMdx = englishBase.replace(/\.mdx?$/i, ".mdx");
+      if (fs.existsSync(englishMd) || fs.existsSync(englishMdx)) {
+        continue;
+      }
+      fs.rmSync(filePath, { force: true });
+      pruned += 1;
+    }
+  }
+
+  if (pruned > 0) {
+    console.log(`Pruned ${pruned} orphan localized doc(s) with no matching English source file.`);
+  }
+}
+
 function repairGeneratedLocaleDocs(targetDocsDir) {
   let repaired = 0;
   for (const locale of GENERATED_LOCALES) {
@@ -345,6 +406,7 @@ function syncDocsTree(targetRoot) {
     }
   }
 
+  pruneOrphanLocaleDocs(targetDocsDir);
   repairGeneratedLocaleDocs(targetDocsDir);
   writeJson(path.join(targetDocsDir, "docs.json"), composeDocsConfig());
 }

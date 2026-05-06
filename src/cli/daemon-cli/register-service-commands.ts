@@ -1,24 +1,22 @@
 import type { Command } from "commander";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
-import type { DaemonInstallOptions, GatewayRpcOpts } from "./types.js";
+import type { DaemonInstallOptions, DaemonLifecycleOptions, GatewayRpcOpts } from "./types.js";
 
-let daemonInstallModulePromise: Promise<typeof import("./install.runtime.js")> | undefined;
-let daemonLifecycleModulePromise: Promise<typeof import("./lifecycle.runtime.js")> | undefined;
-let daemonStatusModulePromise: Promise<typeof import("./status.runtime.js")> | undefined;
+const daemonInstallModuleLoader = createLazyImportLoader(() => import("./install.runtime.js"));
+const daemonLifecycleModuleLoader = createLazyImportLoader(() => import("./lifecycle.runtime.js"));
+const daemonStatusModuleLoader = createLazyImportLoader(() => import("./status.runtime.js"));
 
 function loadDaemonInstallModule() {
-  daemonInstallModulePromise ??= import("./install.runtime.js");
-  return daemonInstallModulePromise;
+  return daemonInstallModuleLoader.load();
 }
 
 function loadDaemonLifecycleModule() {
-  daemonLifecycleModulePromise ??= import("./lifecycle.runtime.js");
-  return daemonLifecycleModulePromise;
+  return daemonLifecycleModuleLoader.load();
 }
 
 function loadDaemonStatusModule() {
-  daemonStatusModulePromise ??= import("./status.runtime.js");
-  return daemonStatusModulePromise;
+  return daemonStatusModuleLoader.load();
 }
 
 function resolveInstallOptions(
@@ -43,6 +41,15 @@ function resolveRpcOptions(cmdOpts: GatewayRpcOpts, command?: Command): GatewayR
     ...cmdOpts,
     token: cmdOpts.token ?? parentToken,
     password: cmdOpts.password ?? parentPassword,
+  };
+}
+
+function resolveRestartOptions(cmdOpts: DaemonLifecycleOptions, command?: Command) {
+  const parentForce = inheritOptionFromParent<boolean>(command, "force");
+  return {
+    ...cmdOpts,
+    force: Boolean(cmdOpts.force || parentForce),
+    safe: Boolean(cmdOpts.safe),
   };
 }
 
@@ -77,6 +84,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .option("--port <port>", "Gateway port")
     .option("--runtime <runtime>", "Daemon runtime (node|bun). Default: node")
     .option("--token <token>", "Gateway token (token auth)")
+    .option("--wrapper <path>", "Executable wrapper for generated service ProgramArguments")
     .option("--force", "Reinstall/overwrite if already installed", false)
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts, command) => {
@@ -114,9 +122,15 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
   parent
     .command("restart")
     .description("Restart the Gateway service (launchd/systemd/schtasks)")
+    .option("--force", "Restart immediately without waiting for active gateway work", false)
+    .option("--safe", "Request an OpenClaw-aware restart after active work drains", false)
+    .option(
+      "--wait <duration>",
+      "Wait duration before forcing restart (ms, 10s, 5m; 0 waits indefinitely)",
+    )
     .option("--json", "Output JSON", false)
-    .action(async (cmdOpts) => {
+    .action(async (cmdOpts, command) => {
       const { runDaemonRestart } = await loadDaemonLifecycleModule();
-      await runDaemonRestart(cmdOpts);
+      await runDaemonRestart(resolveRestartOptions(cmdOpts, command));
     });
 }

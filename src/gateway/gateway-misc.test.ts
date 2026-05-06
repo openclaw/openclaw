@@ -8,6 +8,11 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import {
+  _resetActiveManagedProxyStateForTests,
+  registerActiveManagedProxyUrl,
+  stopActiveManagedProxyRegistration,
+} from "../infra/net/proxy/active-proxy-state.js";
 import { defaultVoiceWakeTriggers } from "../infra/voicewake.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 import {
@@ -35,7 +40,13 @@ function makeControlUiResponse() {
 }
 
 const wsMockState = vi.hoisted(() => ({
-  last: null as { url: unknown; opts: unknown } | null,
+  last: null as {
+    url: unknown;
+    opts: unknown;
+    noProxyDuringConstruction: unknown;
+    httpProxyDuringConstruction: unknown;
+    httpsProxyDuringConstruction: unknown;
+  } | null,
 }));
 
 vi.mock("ws", () => ({
@@ -45,7 +56,23 @@ vi.mock("ws", () => ({
     send = vi.fn();
 
     constructor(url: unknown, opts: unknown) {
-      wsMockState.last = { url, opts };
+      const agent = (global as Record<string, unknown>)["GLOBAL_AGENT"];
+      wsMockState.last = {
+        url,
+        opts,
+        noProxyDuringConstruction:
+          typeof agent === "object" && agent !== null
+            ? (agent as Record<string, unknown>)["NO_PROXY"]
+            : undefined,
+        httpProxyDuringConstruction:
+          typeof agent === "object" && agent !== null
+            ? (agent as Record<string, unknown>)["HTTP_PROXY"]
+            : undefined,
+        httpsProxyDuringConstruction:
+          typeof agent === "object" && agent !== null
+            ? (agent as Record<string, unknown>)["HTTPS_PROXY"]
+            : undefined,
+      };
     }
   },
 }));
@@ -59,6 +86,8 @@ describe("GatewayClient", () => {
 
   beforeEach(() => {
     wsMockState.last = null;
+    _resetActiveManagedProxyStateForTests();
+    delete (global as Record<string, unknown>)["GLOBAL_AGENT"];
   });
 
   async function withControlUiRoot(
@@ -84,6 +113,95 @@ describe("GatewayClient", () => {
 
     expect(last?.url).toBe("ws://127.0.0.1:1");
     expect(last?.opts).toEqual(expect.objectContaining({ maxPayload: 25 * 1024 * 1024 }));
+  });
+
+  test("does not pass an explicit direct agent for loopback control-plane WebSocket connections", () => {
+    const client = new GatewayClient({ url: "ws://127.0.0.1:1" });
+    client.start();
+    const last = wsMockState.last as { opts: { agent?: unknown } } | null;
+
+    expect(last?.opts.agent).toBeUndefined();
+  });
+
+  test("does not pass an explicit direct agent for IPv6 loopback control-plane WebSocket connections", () => {
+    const client = new GatewayClient({ url: "ws://[::1]:1" });
+    client.start();
+    const last = wsMockState.last as { opts: { agent?: unknown } } | null;
+
+    expect(last?.opts.agent).toBeUndefined();
+  });
+
+  test("does not pass an explicit direct agent for localhost hostnames", () => {
+    const client = new GatewayClient({ url: "ws://localhost:1" });
+    client.start();
+    const last = wsMockState.last as { opts: { agent?: unknown } } | null;
+
+    expect(last?.opts.agent).toBeUndefined();
+  });
+
+  test("does not force a direct agent for remote Gateway WebSocket connections", () => {
+    const client = new GatewayClient({
+      url: "wss://gateway.example.com",
+      tlsFingerprint: "SHA256:AA:BB",
+    });
+    client.start();
+    const last = wsMockState.last as { opts: { agent?: unknown } } | null;
+
+    expect(last?.opts.agent).toBeUndefined();
+  });
+
+  test("scopes Gateway loopback NO_PROXY to WebSocket construction", () => {
+    const agent = { NO_PROXY: "corp.example.com" };
+    (global as Record<string, unknown>)["GLOBAL_AGENT"] = agent;
+    const registration = registerActiveManagedProxyUrl(
+      new URL("http://127.0.0.1:3128"),
+      "gateway-only",
+    );
+
+    try {
+      const client = new GatewayClient({ url: "ws://127.0.0.1:18789" });
+      client.start();
+      const last = wsMockState.last as { noProxyDuringConstruction: unknown } | null;
+
+      expect(last?.noProxyDuringConstruction).toBe("corp.example.com,127.0.0.1:18789");
+      expect(agent.NO_PROXY).toBe("corp.example.com");
+    } finally {
+      stopActiveManagedProxyRegistration(registration);
+      delete (global as Record<string, unknown>)["GLOBAL_AGENT"];
+    }
+  });
+
+  test("uses a scoped direct construction path for IPv6 loopback in Gateway-only proxy mode", () => {
+    const agent = {
+      NO_PROXY: "corp.example.com",
+      HTTP_PROXY: "http://127.0.0.1:3128",
+      HTTPS_PROXY: "http://127.0.0.1:3128",
+    };
+    (global as Record<string, unknown>)["GLOBAL_AGENT"] = agent;
+    const registration = registerActiveManagedProxyUrl(
+      new URL("http://127.0.0.1:3128"),
+      "gateway-only",
+    );
+
+    try {
+      const client = new GatewayClient({ url: "ws://[::1]:18789" });
+      client.start();
+      const last = wsMockState.last as {
+        noProxyDuringConstruction: unknown;
+        httpProxyDuringConstruction: unknown;
+        httpsProxyDuringConstruction: unknown;
+      } | null;
+
+      expect(last?.noProxyDuringConstruction).toBe("corp.example.com,[::1]:18789");
+      expect(last?.httpProxyDuringConstruction).toBeNull();
+      expect(last?.httpsProxyDuringConstruction).toBeNull();
+      expect(agent.NO_PROXY).toBe("corp.example.com");
+      expect(agent.HTTP_PROXY).toBe("http://127.0.0.1:3128");
+      expect(agent.HTTPS_PROXY).toBe("http://127.0.0.1:3128");
+    } finally {
+      stopActiveManagedProxyRegistration(registration);
+      delete (global as Record<string, unknown>)["GLOBAL_AGENT"];
+    }
   });
 
   it("returns 404 for missing static asset paths instead of SPA fallback", async () => {
@@ -284,7 +402,8 @@ describe("gateway broadcaster", () => {
     expect(readSocket.send).toHaveBeenCalledTimes(0);
 
     broadcastToConnIds("tick", { ts: 1 }, new Set(["c-read"]));
-    expect(readSocket.send).toHaveBeenCalledTimes(1);
+    broadcastToConnIds("talk.event", { type: "session.ready" }, new Set(["c-read"]));
+    expect(readSocket.send).toHaveBeenCalledTimes(2);
     expect(approvalsSocket.send).toHaveBeenCalledTimes(1);
     expect(pairingSocket.send).toHaveBeenCalledTimes(1);
   });
@@ -354,6 +473,7 @@ describe("gateway broadcaster", () => {
     broadcast("cron", { jobId: "job-1" });
     broadcast("talk.mode", { enabled: true });
     broadcast("voicewake.changed", { triggers: ["hello"] });
+    broadcast("voicewake.routing.changed", { config: { routes: [] } });
     broadcast("heartbeat", { ts: 1 });
     broadcast("presence", { presence: [] });
     broadcast("health", { ok: true });
@@ -372,6 +492,7 @@ describe("gateway broadcaster", () => {
     ]);
     expect(nodeSocket.sent.map((frame) => frame.event)).toEqual([
       "voicewake.changed",
+      "voicewake.routing.changed",
       "heartbeat",
       "presence",
       "health",
@@ -382,6 +503,7 @@ describe("gateway broadcaster", () => {
     expect(readSocket.sent.map((frame) => frame.event)).toEqual([
       "cron",
       "voicewake.changed",
+      "voicewake.routing.changed",
       "heartbeat",
       "presence",
       "health",
@@ -393,6 +515,7 @@ describe("gateway broadcaster", () => {
       "cron",
       "talk.mode",
       "voicewake.changed",
+      "voicewake.routing.changed",
       "heartbeat",
       "presence",
       "health",
@@ -404,6 +527,7 @@ describe("gateway broadcaster", () => {
       "cron",
       "talk.mode",
       "voicewake.changed",
+      "voicewake.routing.changed",
       "heartbeat",
       "presence",
       "health",
@@ -673,6 +797,31 @@ describe("resolveNodeCommandAllowlist", () => {
     expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("screen.record");
     expect(allow.has("screen.snapshot")).toBe(true);
     expect(allow.has("screen.record")).toBe(false);
+  });
+
+  it("allows safe Windows companion commands by default but keeps dangerous media gated", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {},
+      {
+        platform: "Windows_NT",
+        deviceFamily: "Windows",
+      },
+    );
+
+    expect(allow.has("canvas.present")).toBe(true);
+    expect(allow.has("canvas.a2ui.pushJSONL")).toBe(true);
+    expect(allow.has("camera.list")).toBe(true);
+    expect(allow.has("location.get")).toBe(true);
+    expect(allow.has("device.info")).toBe(true);
+    expect(allow.has("device.status")).toBe(true);
+    expect(allow.has("screen.snapshot")).toBe(true);
+    expect(allow.has("system.run")).toBe(true);
+    expect(allow.has("system.which")).toBe(true);
+    expect(allow.has("system.notify")).toBe(true);
+
+    for (const cmd of DEFAULT_DANGEROUS_NODE_COMMANDS) {
+      expect(allow.has(cmd)).toBe(false);
+    }
   });
 
   it("can explicitly allow dangerous commands via allowCommands", () => {

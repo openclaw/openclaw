@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  onInternalDiagnosticEvent,
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
@@ -90,7 +91,7 @@ describe("before_tool_call loop detection behavior", () => {
     run: (emitted: DiagnosticEventPayload[], flush: () => Promise<void>) => Promise<void>,
   ) {
     const emitted: DiagnosticEventPayload[] = [];
-    const stop = onDiagnosticEvent((evt) => {
+    const stop = onInternalDiagnosticEvent((evt) => {
       if (evt.type.startsWith("tool.execution.")) {
         emitted.push(evt);
       }
@@ -180,6 +181,17 @@ describe("before_tool_call loop detection behavior", () => {
     expect(loopEvent?.toolName).toBe(params.toolName);
   }
 
+  function expectToolLoopBlockedResult(result: unknown, expectedReason: string) {
+    expect(result).toMatchObject({
+      content: [{ type: "text", text: expect.stringContaining(expectedReason) }],
+      details: {
+        status: "blocked",
+        deniedReason: "tool-loop",
+        reason: expect.stringContaining(expectedReason),
+      },
+    });
+  }
+
   it("blocks known poll loops when no progress repeats", async () => {
     const { tool, params } = createNoProgressProcessFixture("sess-1");
 
@@ -187,9 +199,8 @@ describe("before_tool_call loop detection behavior", () => {
       await expect(tool.execute(`poll-${i}`, params, undefined, undefined)).resolves.toBeDefined();
     }
 
-    await expect(
-      tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined),
-    ).rejects.toThrow("CRITICAL");
+    const result = await tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
+    expectToolLoopBlockedResult(result, "CRITICAL");
   });
 
   it("does nothing when loopDetection.enabled is false", async () => {
@@ -239,9 +250,39 @@ describe("before_tool_call loop detection behavior", () => {
       await expect(tool.execute(`read-${i}`, params, undefined, undefined)).resolves.toBeDefined();
     }
 
+    const result = await tool.execute(
+      `read-${GLOBAL_CIRCUIT_BREAKER_THRESHOLD}`,
+      params,
+      undefined,
+      undefined,
+    );
+    expectToolLoopBlockedResult(result, "global circuit breaker");
+  });
+
+  it("does not carry loop history across run ids", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "same output" }],
+      details: { ok: true },
+    });
+    const params = { path: "/tmp/file" };
+    const firstRunTool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      ...enabledLoopDetectionContext,
+      runId: "heartbeat-1",
+    });
+    const secondRunTool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      ...enabledLoopDetectionContext,
+      runId: "heartbeat-2",
+    });
+
+    for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+      await expect(
+        firstRunTool.execute(`old-run-${i}`, params, undefined, undefined),
+      ).resolves.toBeDefined();
+    }
+
     await expect(
-      tool.execute(`read-${GLOBAL_CIRCUIT_BREAKER_THRESHOLD}`, params, undefined, undefined),
-    ).rejects.toThrow("global circuit breaker");
+      secondRunTool.execute("new-run-0", params, undefined, undefined),
+    ).resolves.toBeDefined();
   });
 
   it("coalesces repeated generic warning events into threshold buckets", async () => {
@@ -288,14 +329,13 @@ describe("before_tool_call loop detection behavior", () => {
       const { readTool, listTool } = createPingPongTools();
       await runPingPongSequence(readTool, listTool, CRITICAL_THRESHOLD - 1);
 
-      await expect(
-        listTool.execute(
-          `list-${CRITICAL_THRESHOLD - 1}`,
-          { dir: "/workspace" },
-          undefined,
-          undefined,
-        ),
-      ).rejects.toThrow("CRITICAL");
+      const result = await listTool.execute(
+        `list-${CRITICAL_THRESHOLD - 1}`,
+        { dir: "/workspace" },
+        undefined,
+        undefined,
+      );
+      expectToolLoopBlockedResult(result, "CRITICAL");
 
       const loopEvent = emitted.at(-1);
       expectCriticalLoopEvent(loopEvent, {
@@ -338,9 +378,8 @@ describe("before_tool_call loop detection behavior", () => {
         await tool.execute(`poll-${i}`, params, undefined, undefined);
       }
 
-      await expect(
-        tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined),
-      ).rejects.toThrow("CRITICAL");
+      const result = await tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
+      expectToolLoopBlockedResult(result, "CRITICAL");
 
       const loopEvent = emitted.at(-1);
       expectCriticalLoopEvent(loopEvent, {
@@ -391,7 +430,12 @@ describe("before_tool_call loop detection behavior", () => {
         paramsSummary: {
           kind: "object",
         },
-        trace,
+        trace: {
+          traceId: trace.traceId,
+          parentSpanId: trace.spanId,
+          spanId: expect.any(String),
+          traceFlags: trace.traceFlags,
+        },
       });
       expect(emitted[0]?.trace).not.toBe(trace);
       expect(Object.isFrozen(emitted[0]?.trace)).toBe(true);
@@ -432,6 +476,43 @@ describe("before_tool_call loop detection behavior", () => {
         errorCategory: "Error",
       });
       expect(JSON.stringify(emitted[1])).not.toContain("sk-1234567890abcdef1234567890abcdef");
+    });
+  });
+
+  it("emits blocked diagnostics without error severity for intentional hook vetoes", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      block: true,
+      blockReason: "blocked by policy",
+    });
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "nope" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+
+    await withToolExecutionEvents(async (emitted, flush) => {
+      const result = await tool.execute("tool-call-blocked", { path: "/tmp/file" });
+      await flush();
+
+      expect(result).toEqual({
+        content: [{ type: "text", text: "blocked by policy" }],
+        details: {
+          status: "blocked",
+          deniedReason: "plugin-before-tool-call",
+          reason: "blocked by policy",
+        },
+      });
+      expect(execute).not.toHaveBeenCalled();
+      expect(emitted.map((evt) => evt.type)).toEqual(["tool.execution.blocked"]);
+      expect(emitted[0]).toMatchObject({
+        type: "tool.execution.blocked",
+        toolName: "read",
+        toolCallId: "tool-call-blocked",
+        deniedReason: "plugin-before-tool-call",
+        reason: "blocked by policy",
+      });
     });
   });
 
@@ -877,6 +958,33 @@ describe("before_tool_call requireApproval handling", () => {
     });
 
     expect(onResolution).toHaveBeenCalledWith("allow-once");
+  });
+
+  it("allows allow-always decisions for tool approvals", async () => {
+    const onResolution = vi.fn();
+
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Needs durable approval",
+        description: "Check this durable approval",
+        onResolution,
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-allow-always", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({
+      id: "server-id-allow-always",
+      decision: "allow-always",
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "echo ok" },
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result).toEqual({ blocked: false, params: { command: "echo ok" } });
+    expect(onResolution).toHaveBeenCalledWith("allow-always");
   });
 
   it("does not await onResolution before returning approval outcome", async () => {

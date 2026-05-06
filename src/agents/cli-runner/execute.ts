@@ -1,12 +1,13 @@
+import crypto from "node:crypto";
 import { shouldLogVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
-import { requestHeartbeatNow as requestHeartbeatNowImpl } from "../../infra/heartbeat-wake.js";
+import { requestHeartbeat as requestHeartbeatImpl } from "../../infra/heartbeat-wake.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system-events.js";
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
 import { scopedHeartbeatWakeOptions } from "../../routing/session-key.js";
-import { prependBootstrapPromptWarning } from "../bootstrap-budget.js";
+import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
 import {
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
@@ -41,7 +42,7 @@ import type { PreparedCliRunContext } from "./types.js";
 const executeDeps = {
   getProcessSupervisor: getProcessSupervisorImpl,
   enqueueSystemEvent: enqueueSystemEventImpl,
-  requestHeartbeatNow: requestHeartbeatNowImpl,
+  requestHeartbeat: requestHeartbeatImpl,
 };
 
 export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDeps>): void {
@@ -164,6 +165,44 @@ function buildCliEnvMcpLog(childEnv: Record<string, string>): string {
   ].join(" ");
 }
 
+function fingerprintCliSessionId(sessionId?: string): string {
+  const trimmed = sessionId?.trim();
+  if (!trimmed) {
+    return "none";
+  }
+  return crypto.createHash("sha256").update(trimmed).digest("hex").slice(0, 12);
+}
+
+export function buildCliExecLogLine(params: {
+  provider: string;
+  model: string;
+  promptChars: number;
+  trigger?: string;
+  useResume: boolean;
+  cliSessionId?: string;
+  resolvedSessionId?: string;
+  reusableSessionId?: string;
+  invalidatedReason?: string;
+  hasHistoryPrompt: boolean;
+}): string {
+  const reuseState = params.reusableSessionId
+    ? "reusable"
+    : params.invalidatedReason
+      ? `invalidated:${params.invalidatedReason}`
+      : "none";
+  return [
+    `cli exec: provider=${params.provider}`,
+    `model=${params.model}`,
+    `promptChars=${params.promptChars}`,
+    `trigger=${params.trigger ?? "unknown"}`,
+    `useResume=${params.useResume ? "true" : "false"}`,
+    `session=${params.cliSessionId ? "present" : "none"}`,
+    `resumeSession=${params.useResume ? fingerprintCliSessionId(params.resolvedSessionId) : "none"}`,
+    `reuse=${reuseState}`,
+    `historyPrompt=${params.hasHistoryPrompt ? "present" : "none"}`,
+  ].join(" ");
+}
+
 export function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
   const hostKeys = listPresentCliAuthEnvKeys(process.env);
   const childKeys = listPresentCliAuthEnvKeys(childEnv);
@@ -205,8 +244,11 @@ export async function executePreparedCliRun(
         })
       : undefined;
 
+  const basePrompt = cliSessionIdToUse
+    ? params.prompt
+    : (context.openClawHistoryPrompt ?? params.prompt);
   let prompt = applyPluginTextReplacements(
-    prependBootstrapPromptWarning(params.prompt, context.bootstrapPromptWarningLines, {
+    appendBootstrapPromptWarning(basePrompt, context.bootstrapPromptWarningLines, {
       preserveExactPrompt: context.heartbeatPrompt,
     }),
     context.backendResolved.textTransforms?.input,
@@ -237,12 +279,24 @@ export async function executePreparedCliRun(
     skillsSnapshot: params.skillsSnapshot,
   });
   let claudeSkillsPluginCleanupOwned = false;
+  const baseArgsWithSkills =
+    claudeSkillsPlugin.args.length > 0
+      ? [...resolvedArgs, ...claudeSkillsPlugin.args]
+      : resolvedArgs;
+  const executionBaseArgs =
+    context.backendResolved.resolveExecutionArgs?.({
+      config: params.config,
+      workspaceDir: context.workspaceDir,
+      provider: params.provider,
+      modelId: context.modelId,
+      authProfileId: context.effectiveAuthProfileId,
+      thinkingLevel: params.thinkLevel,
+      useResume,
+      baseArgs: baseArgsWithSkills,
+    }) ?? baseArgsWithSkills;
   const args = buildCliArgs({
     backend,
-    baseArgs:
-      claudeSkillsPlugin.args.length > 0
-        ? [...resolvedArgs, ...claudeSkillsPlugin.args]
-        : resolvedArgs,
+    baseArgs: Array.from(executionBaseArgs),
     modelId: context.normalizedModel,
     sessionId: resolvedSessionId,
     systemPrompt: systemPromptArg,
@@ -270,7 +324,18 @@ export async function executePreparedCliRun(
         : undefined;
       try {
         cliBackendLog.info(
-          `cli exec: provider=${params.provider} model=${context.normalizedModel} promptChars=${params.prompt.length}`,
+          buildCliExecLogLine({
+            provider: params.provider,
+            model: context.normalizedModel,
+            promptChars: basePrompt.length,
+            trigger: params.trigger,
+            useResume,
+            cliSessionId: cliSessionIdToUse,
+            resolvedSessionId,
+            reusableSessionId: context.reusableCliSession.sessionId,
+            invalidatedReason: context.reusableCliSession.invalidatedReason,
+            hasHistoryPrompt: Boolean(context.openClawHistoryPrompt),
+          }),
         );
         const logOutputText =
           isTruthyEnvValue(process.env[CLI_BACKEND_LOG_OUTPUT_ENV]) ||
@@ -330,6 +395,7 @@ export async function executePreparedCliRun(
           backend,
           timeoutMs: params.timeoutMs,
           useResume,
+          trigger: params.trigger,
         });
         const hasJsonlOutput = backend.output === "jsonl";
         if (shouldUseClaudeLiveSession(context)) {
@@ -337,6 +403,8 @@ export async function executePreparedCliRun(
             throw new Error("Claude live session requires JSONL streaming parser");
           }
           claudeSkillsPluginCleanupOwned = true;
+          const ownedPreparedBackendCleanup = context.preparedBackend.cleanup;
+          context.preparedBackend.cleanup = undefined;
           const liveResult = await runClaudeLiveSessionTurn({
             context,
             args,
@@ -361,7 +429,13 @@ export async function executePreparedCliRun(
                 },
               });
             },
-            cleanup: claudeSkillsPlugin.cleanup,
+            cleanup: async () => {
+              try {
+                await claudeSkillsPlugin.cleanup();
+              } finally {
+                await ownedPreparedBackendCleanup?.();
+              }
+            },
           });
           const rawText = liveResult.output.text;
           return {
@@ -484,14 +558,20 @@ export async function executePreparedCliRun(
                 "For Claude Code, prefer --permission-mode bypassPermissions --print.",
               ].join(" ");
               executeDeps.enqueueSystemEvent(stallNotice, { sessionKey: params.sessionKey });
-              executeDeps.requestHeartbeatNow(
-                scopedHeartbeatWakeOptions(params.sessionKey, { reason: "cli:watchdog:stall" }),
+              executeDeps.requestHeartbeat(
+                scopedHeartbeatWakeOptions(params.sessionKey, {
+                  source: "cli-watchdog",
+                  intent: "event",
+                  reason: "cli:watchdog:stall",
+                }),
               );
             }
             throw new FailoverError(timeoutReason, {
               reason: "timeout",
               provider: params.provider,
               model: context.modelId,
+              sessionId: params.sessionId,
+              lane: params.lane,
               status: resolveFailoverStatus("timeout"),
             });
           }
@@ -501,6 +581,8 @@ export async function executePreparedCliRun(
               reason: "timeout",
               provider: params.provider,
               model: context.modelId,
+              sessionId: params.sessionId,
+              lane: params.lane,
               status: resolveFailoverStatus("timeout"),
             });
           }
@@ -515,6 +597,8 @@ export async function executePreparedCliRun(
             reason,
             provider: params.provider,
             model: context.modelId,
+            sessionId: params.sessionId,
+            lane: params.lane,
             status,
           });
         }

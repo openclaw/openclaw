@@ -1,24 +1,40 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
-import {
-  isJavaScriptModulePath,
-  resolveCompiledBundledModulePath,
-  resolveExistingPluginModulePath,
-  resolvePluginModuleCandidates,
-} from "./module-loader.js";
+import { isJavaScriptModulePath } from "../../plugins/native-module-require.js";
+import type { PluginModuleLoaderFactory } from "../../plugins/plugin-module-loader-cache.js";
+import { resolveExistingPluginModulePath } from "./module-loader.js";
 
 const tempDirs: string[] = [];
+const pluginModuleLoaderJitiFactoryOverrideKey = Symbol.for(
+  "openclaw.pluginModuleLoaderJitiFactoryOverride",
+);
+const testRequire = createRequire(import.meta.url);
 
 afterEach(() => {
   for (const tempDir of tempDirs.splice(0)) {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+  vi.restoreAllMocks();
   vi.resetModules();
   vi.doUnmock("jiti");
+  delete (
+    globalThis as typeof globalThis & {
+      [pluginModuleLoaderJitiFactoryOverrideKey]?: PluginModuleLoaderFactory;
+    }
+  )[pluginModuleLoaderJitiFactoryOverrideKey];
 });
+
+function stubPluginModuleLoaderJitiFactory(createJiti: PluginModuleLoaderFactory): void {
+  (
+    globalThis as typeof globalThis & {
+      [pluginModuleLoaderJitiFactoryOverrideKey]?: PluginModuleLoaderFactory;
+    }
+  )[pluginModuleLoaderJitiFactoryOverrideKey] = createJiti;
+}
 
 function createTempDir(): string {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-module-loader-"));
@@ -27,38 +43,12 @@ function createTempDir(): string {
 }
 
 describe("channel plugin module loader helpers", () => {
-  it("prefers compiled bundled dist output when present", () => {
-    const rootDir = createTempDir();
-    const runtimePath = path.join(rootDir, "dist-runtime", "entry.js");
-    const compiledPath = path.join(rootDir, "dist", "entry.js");
-    fs.mkdirSync(path.dirname(compiledPath), { recursive: true });
-    fs.writeFileSync(compiledPath, "export {};\n", "utf8");
-
-    expect(resolveCompiledBundledModulePath(runtimePath)).toBe(compiledPath);
-  });
-
-  it("keeps dist-runtime path when compiled bundled output is absent", () => {
-    const rootDir = createTempDir();
-    const runtimePath = path.join(rootDir, "dist-runtime", "entry.js");
-
-    expect(resolveCompiledBundledModulePath(runtimePath)).toBe(runtimePath);
-  });
-
-  it("resolves plugin module candidates and picks the first existing extension", () => {
+  it("resolves extensionless plugin module specifiers to the first existing extension", () => {
     const rootDir = createTempDir();
     const expectedPath = path.join(rootDir, "src", "checker.mts");
     fs.mkdirSync(path.dirname(expectedPath), { recursive: true });
     fs.writeFileSync(expectedPath, "export const ok = true;\n", "utf8");
 
-    expect(resolvePluginModuleCandidates(rootDir, "./src/checker")).toEqual([
-      path.join(rootDir, "src", "checker"),
-      path.join(rootDir, "src", "checker.ts"),
-      path.join(rootDir, "src", "checker.mts"),
-      path.join(rootDir, "src", "checker.js"),
-      path.join(rootDir, "src", "checker.mjs"),
-      path.join(rootDir, "src", "checker.cts"),
-      path.join(rootDir, "src", "checker.cjs"),
-    ]);
     expect(resolveExistingPluginModulePath(rootDir, "./src/checker")).toBe(expectedPath);
   });
 
@@ -68,8 +58,9 @@ describe("channel plugin module loader helpers", () => {
     expect(isJavaScriptModulePath("/tmp/entry.ts")).toBe(false);
   });
 
-  it("uses native require for eligible JavaScript modules before falling back to Jiti", async () => {
+  it("uses native require for eligible JavaScript modules without creating Jiti", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ ok: false })));
+    vi.resetModules();
     vi.doMock("jiti", () => ({
       createJiti,
     }));
@@ -86,44 +77,58 @@ describe("channel plugin module loader helpers", () => {
       loaderModule.loadChannelPluginModule({
         modulePath,
         rootDir,
-        shouldTryNativeRequire: () => true,
       }),
     ).toEqual({ ok: true });
     expect(createJiti).not.toHaveBeenCalled();
   });
 
-  it("keeps Windows dist loads off Jiti native import", async () => {
-    const createJiti = vi.fn(() => vi.fn(() => ({ ok: true })));
-    vi.doMock("jiti", () => ({
-      createJiti,
+  it("loads TypeScript channel plugin modules through Jiti when native loading is unavailable", async () => {
+    const loadWithJiti = vi.fn((target: string) => ({
+      loadedBy: "jiti",
+      target,
     }));
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const createJiti = vi.fn(() => loadWithJiti);
+    const sourceExtensions = [".ts", ".tsx", ".mts", ".cts"] as const;
+    const sourceHooks = new Map<string, NodeJS.RequireExtensions[string] | undefined>();
+    for (const extension of sourceExtensions) {
+      sourceHooks.set(extension, testRequire.extensions[extension]);
+      delete testRequire.extensions[extension];
+    }
+    vi.resetModules();
+    stubPluginModuleLoaderJitiFactory(createJiti as unknown as PluginModuleLoaderFactory);
+    const loaderModule = await importFreshModule<typeof import("./module-loader.js")>(
+      import.meta.url,
+      "./module-loader.js?scope=source-ts-jiti-fallback",
+    );
+    const rootDir = createTempDir();
+    const modulePath = path.join(rootDir, "extensions", "demo", "index.ts");
+    fs.mkdirSync(path.dirname(modulePath), { recursive: true });
+    fs.writeFileSync(modulePath, 'throw new Error("native source load failed");\n', "utf8");
 
     try {
-      const loaderModule = await importFreshModule<typeof import("./module-loader.js")>(
-        import.meta.url,
-        "./module-loader.js?scope=windows-dist-jiti",
-      );
-      const rootDir = createTempDir();
-      const modulePath = path.join(rootDir, "dist", "extensions", "demo", "index.js");
-      fs.mkdirSync(path.dirname(modulePath), { recursive: true });
-      fs.writeFileSync(modulePath, "export {};\n", "utf8");
-
       expect(
         loaderModule.loadChannelPluginModule({
           modulePath,
           rootDir,
-          shouldTryNativeRequire: () => false,
         }),
-      ).toEqual({ ok: true });
+      ).toEqual({
+        loadedBy: "jiti",
+        target: fs.realpathSync.native(modulePath),
+      });
+      expect(createJiti).toHaveBeenCalledOnce();
       expect(createJiti).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({
-          tryNative: false,
-        }),
+        expect.stringContaining("module-loader.ts"),
+        expect.objectContaining({ tryNative: false }),
       );
+      expect(loadWithJiti).toHaveBeenCalledWith(fs.realpathSync.native(modulePath));
     } finally {
-      platformSpy.mockRestore();
+      for (const [extension, hook] of sourceHooks) {
+        if (hook) {
+          testRequire.extensions[extension] = hook;
+        } else {
+          delete testRequire.extensions[extension];
+        }
+      }
     }
   });
 });

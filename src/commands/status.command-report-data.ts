@@ -118,13 +118,23 @@ export async function buildStatusCommandReportData(
     { key: "Kind", header: "Kind", minWidth: 6 },
     { key: "Age", header: "Age", minWidth: 9 },
     { key: "Model", header: "Model", minWidth: 14 },
+    { key: "Runtime", header: "Runtime", minWidth: 14 },
     { key: "Tokens", header: "Tokens", minWidth: 16 },
     ...(params.opts.verbose ? [{ key: "Cache", header: "Cache", minWidth: 16, flex: true }] : []),
   ] satisfies TableColumn[];
-  const securityAudit = params.securityAudit ?? {
-    summary: { critical: 0, warn: 0, info: 0 },
-    findings: [],
-  };
+  const securityAuditLines = params.securityAudit
+    ? buildStatusSecurityAuditLines({
+        securityAudit: params.securityAudit,
+        theme: params.theme,
+        shortenText: params.shortenText,
+        formatCliCommand: params.formatCliCommand,
+      })
+    : [
+        params.theme.muted(
+          `Skipped in fast status. Full report: ${params.formatCliCommand("openclaw security audit")}`,
+        ),
+        params.theme.muted(`Deep probe: ${params.formatCliCommand("openclaw status --deep")}`),
+      ];
 
   return {
     heading: params.theme.heading,
@@ -146,12 +156,7 @@ export async function buildStatusCommandReportData(
       muted: params.theme.muted,
       formatCliCommand: params.formatCliCommand,
     }),
-    securityAuditLines: buildStatusSecurityAuditLines({
-      securityAudit,
-      theme: params.theme,
-      shortenText: params.shortenText,
-      formatCliCommand: params.formatCliCommand,
-    }),
+    securityAuditLines,
     channelsColumns: statusChannelsTableColumns,
     channelsRows: buildStatusChannelsTableRows({
       rows: params.channels.rows,

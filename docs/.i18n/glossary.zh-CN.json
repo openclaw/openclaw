@@ -4,6 +4,10 @@
     "target": "OpenClaw"
   },
   {
+    "source": "ClawHub",
+    "target": "ClawHub"
+  },
+  {
     "source": "OpenAI",
     "target": "OpenAI"
   },
@@ -12,12 +16,60 @@
     "target": "OpenAI provider"
   },
   {
+    "source": "Mantis",
+    "target": "Mantis"
+  },
+  {
+    "source": "OpenClaw App SDK",
+    "target": "OpenClaw 应用 SDK"
+  },
+  {
+    "source": "OpenClaw App SDK API design",
+    "target": "OpenClaw 应用 SDK API 设计"
+  },
+  {
+    "source": "Message lifecycle refactor",
+    "target": "消息生命周期重构"
+  },
+  {
+    "source": "Channel message API",
+    "target": "频道消息 API"
+  },
+  {
+    "source": "Talk mode",
+    "target": "Talk 模式"
+  },
+  {
+    "source": "Azure Speech",
+    "target": "Azure Speech"
+  },
+  {
+    "source": "Azure Speech provider",
+    "target": "Azure Speech provider"
+  },
+  {
+    "source": "Web tools",
+    "target": "Web 工具"
+  },
+  {
     "source": "Status",
     "target": "Status"
   },
   {
     "source": "Gateway",
     "target": "Gateway 网关"
+  },
+  {
+    "source": "Gateway RPC reference",
+    "target": "Gateway RPC 参考"
+  },
+  {
+    "source": "Secure file operations",
+    "target": "安全文件操作"
+  },
+  {
+    "source": "Sessions",
+    "target": "会话"
   },
   {
     "source": "Pi",
@@ -42,6 +94,14 @@
   {
     "source": "Agent loop",
     "target": "Agent loop"
+  },
+  {
+    "source": "Steering queue",
+    "target": "Steering queue"
+  },
+  {
+    "source": "Steer",
+    "target": "Steer"
   },
   {
     "source": "Models",
@@ -88,12 +148,20 @@
     "target": "Chutes"
   },
   {
+    "source": "DeepInfra",
+    "target": "DeepInfra"
+  },
+  {
     "source": "Qwen",
     "target": "Qwen"
   },
   {
     "source": "Feishu",
     "target": "Feishu"
+  },
+  {
+    "source": "Yuanbao",
+    "target": "腾讯元宝"
   },
   {
     "source": "WeChat",
@@ -112,6 +180,10 @@
     "target": "BytePlus（国际版）"
   },
   {
+    "source": "Volcengine TTS HTTP API",
+    "target": "Volcengine TTS HTTP API"
+  },
+  {
     "source": "Amazon Bedrock Mantle",
     "target": "Amazon Bedrock Mantle"
   },
@@ -122,6 +194,26 @@
   {
     "source": "Moonshot AI",
     "target": "Moonshot AI"
+  },
+  {
+    "source": "Model providers",
+    "target": "模型提供商"
+  },
+  {
+    "source": "Model Providers",
+    "target": "模型提供商"
+  },
+  {
+    "source": "NVIDIA",
+    "target": "NVIDIA"
+  },
+  {
+    "source": "NVIDIA API key",
+    "target": "NVIDIA API key"
+  },
+  {
+    "source": "Provider directory",
+    "target": "提供商目录"
   },
   {
     "source": "Additional bundled variants",
@@ -138,6 +230,50 @@
   {
     "source": "Capability Cookbook",
     "target": "能力扩展手册"
+  },
+  {
+    "source": "WhatsApp group messages",
+    "target": "WhatsApp 群组消息"
+  },
+  {
+    "source": "Oracle Cloud",
+    "target": "Oracle Cloud"
+  },
+  {
+    "source": "Install overview",
+    "target": "安装概览"
+  },
+  {
+    "source": "VPS hosting",
+    "target": "VPS 托管"
+  },
+  {
+    "source": "Linux server",
+    "target": "Linux 服务器"
+  },
+  {
+    "source": "Platforms",
+    "target": "平台"
+  },
+  {
+    "source": "Adding capabilities (redirect)",
+    "target": "添加能力（重定向）"
+  },
+  {
+    "source": "Adding capabilities (contributor guide)",
+    "target": "添加能力（贡献者指南）"
+  },
+  {
+    "source": "Plugin internals",
+    "target": "插件内部机制"
+  },
+  {
+    "source": "SDK overview",
+    "target": "SDK 概览"
+  },
+  {
+    "source": "Creating skills",
+    "target": "创建技能"
   },
   {
     "source": "Setup Wizard Reference",
@@ -216,6 +352,42 @@
     "target": "分块流式传输"
   },
   {
+    "source": "Progress drafts",
+    "target": "进度草稿"
+  },
+  {
+    "source": "Streaming and chunking",
+    "target": "流式传输和分块"
+  },
+  {
+    "source": "Messages",
+    "target": "消息"
+  },
+  {
+    "source": "Channel configuration",
+    "target": "频道配置"
+  },
+  {
+    "source": "Discord",
+    "target": "Discord"
+  },
+  {
+    "source": "Matrix",
+    "target": "Matrix"
+  },
+  {
+    "source": "Microsoft Teams",
+    "target": "Microsoft Teams"
+  },
+  {
+    "source": "Slack",
+    "target": "Slack"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
     "source": "Discovery + transports",
     "target": "设备发现 + 传输协议"
   },
@@ -242,6 +414,38 @@
   {
     "source": "Memory Wiki",
     "target": "Memory Wiki"
+  },
+  {
+    "source": "Memory overview",
+    "target": "记忆概览"
+  },
+  {
+    "source": "Active memory",
+    "target": "主动记忆"
+  },
+  {
+    "source": "Commitments",
+    "target": "跟进承诺"
+  },
+  {
+    "source": "Inferred Commitments",
+    "target": "推断式跟进承诺"
+  },
+  {
+    "source": "Inferred commitments",
+    "target": "推断式跟进承诺"
+  },
+  {
+    "source": "Heartbeat",
+    "target": "Heartbeat"
+  },
+  {
+    "source": "Scheduled tasks",
+    "target": "定时任务"
+  },
+  {
+    "source": "Configuration reference",
+    "target": "配置参考"
   },
   {
     "source": "wiki",
@@ -332,6 +536,10 @@
     "target": "Ollama Web 搜索"
   },
   {
+    "source": "Memory LanceDB",
+    "target": "Memory LanceDB"
+  },
+  {
     "source": "onboarding",
     "target": "新手引导"
   },
@@ -366,6 +574,26 @@
   {
     "source": "Plugin SDK",
     "target": "插件 SDK"
+  },
+  {
+    "source": "Plugins",
+    "target": "插件"
+  },
+  {
+    "source": "Manage plugins",
+    "target": "管理插件"
+  },
+  {
+    "source": "Plugin path ownership",
+    "target": "插件路径所有权"
+  },
+  {
+    "source": "Docker permissions",
+    "target": "Docker 权限"
+  },
+  {
+    "source": "Plugin manifest",
+    "target": "插件清单"
   },
   {
     "source": "Building plugins",
@@ -424,6 +652,38 @@
     "target": "设置"
   },
   {
+    "source": "Migrate",
+    "target": "迁移"
+  },
+  {
+    "source": "Migrating",
+    "target": "迁移"
+  },
+  {
+    "source": "Migrating from Hermes",
+    "target": "从 Hermes 迁移"
+  },
+  {
+    "source": "Migrating from Claude",
+    "target": "从 Claude 迁移"
+  },
+  {
+    "source": "Agent workspace",
+    "target": "Agent 工作区"
+  },
+  {
+    "source": "Migration",
+    "target": "迁移"
+  },
+  {
+    "source": "Hermes",
+    "target": "Hermes"
+  },
+  {
+    "source": "Archive-only",
+    "target": "仅归档"
+  },
+  {
     "source": "Channel Plugin SDK",
     "target": "渠道插件 SDK"
   },
@@ -448,12 +708,36 @@
     "target": "测试"
   },
   {
+    "source": "Update and plugin tests",
+    "target": "更新和插件测试"
+  },
+  {
+    "source": "Testing updates and plugins",
+    "target": "更新和插件测试"
+  },
+  {
+    "source": "Testing: updates and plugins",
+    "target": "更新和插件测试"
+  },
+  {
     "source": "Async Exec Duplicate Completion Investigation",
     "target": "Async Exec Duplicate Completion Investigation"
   },
   {
     "source": "QA Refactor",
     "target": "QA 重构"
+  },
+  {
+    "source": "Matrix QA",
+    "target": "Matrix QA"
+  },
+  {
+    "source": "QA overview",
+    "target": "QA overview"
+  },
+  {
+    "source": "QA channel",
+    "target": "QA channel"
   },
   {
     "source": "Rich Output Protocol",
@@ -468,6 +752,18 @@
     "target": "Codex Harness Context Engine Port"
   },
   {
+    "source": "Plugin refactor plan",
+    "target": "插件重构计划"
+  },
+  {
+    "source": "Retry policy",
+    "target": "重试策略"
+  },
+  {
+    "source": "Channel turn kernel",
+    "target": "频道轮次内核"
+  },
+  {
     "source": "/gateway/configuration#strict-validation",
     "target": "/gateway/configuration#strict-validation"
   },
@@ -478,5 +774,9 @@
   {
     "source": "/cli/config",
     "target": "/cli/config"
+  },
+  {
+    "source": "fs-safe Cleanup Plan",
+    "target": "fs-safe Cleanup Plan"
   }
 ]
