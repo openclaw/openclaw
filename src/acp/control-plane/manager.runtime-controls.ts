@@ -93,18 +93,18 @@ export async function applyManagerRuntimeControls(params: {
             control: "session/set_config_option",
           });
         }
-        for (const [key, value] of configOptions) {
-          if (advertisedKeys.size > 0 && !advertisedKeys.has(key)) {
-            throw new AcpRuntimeError(
-              "ACP_BACKEND_UNSUPPORTED_CONTROL",
-              `ACP backend "${backend}" does not accept config key "${key}".`,
-            );
+        // Only send options the backend explicitly advertised; if backend did not
+        // advertise its supported keys, skip sending any to avoid sending unsupported
+        // options to backends like Claude ACP that reject unknown keys.
+        if (advertisedKeys.size > 0) {
+          const filteredOptions = configOptions.filter(([key]) => advertisedKeys.has(key));
+          for (const [key, value] of filteredOptions) {
+            await params.runtime.setConfigOption({
+              handle: params.handle,
+              key,
+              value,
+            });
           }
-          await params.runtime.setConfigOption({
-            handle: params.handle,
-            key,
-            value,
-          });
         }
       }
     },
