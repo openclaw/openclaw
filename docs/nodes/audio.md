@@ -9,7 +9,7 @@ title: "Audio and voice notes"
 
 ## What works
 
-- **Media understanding (audio)**: If audio understanding is enabled (or auto‑detected), OpenClaw:
+- **Media understanding (audio)**: If audio understanding is enabled (or auto-detected), OpenClaw:
   1. Locates the first audio attachment (local path or URL) and downloads it if needed.
   2. Enforces `maxBytes` before sending to each model entry.
   3. Runs the first eligible model entry in order (provider or CLI).
@@ -20,7 +20,7 @@ title: "Audio and voice notes"
 
 ## Auto-detection (default)
 
-If you **don’t configure models** and `tools.media.audio.enabled` is **not** set to `false`,
+If you **don't configure models** and `tools.media.audio.enabled` is **not** set to `false`,
 OpenClaw auto-detects in this order and stops at the first working option:
 
 1. **Active reply model** when its provider supports audio understanding.

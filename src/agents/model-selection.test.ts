@@ -23,6 +23,79 @@ import {
   resolveModelRefFromString,
 } from "./model-selection.js";
 
+const manifestNormalizationSnapshot = vi.hoisted(() => ({
+  configFingerprint: "model-selection-test-normalizers",
+  plugins: [
+    {
+      id: "model-selection-test-normalizers",
+      modelIdNormalization: {
+        providers: {
+          anthropic: {
+            aliases: {
+              "opus-4.6": "claude-opus-4-6",
+              "opus-4.5": "claude-opus-4-5",
+              "sonnet-4.6": "claude-sonnet-4-6",
+              "sonnet-4.5": "claude-sonnet-4-5",
+            },
+          },
+          google: {
+            aliases: {
+              "gemini-3-pro": "gemini-3-pro-preview",
+              "gemini-3-flash": "gemini-3-flash-preview",
+              "gemini-3.1-pro": "gemini-3.1-pro-preview",
+              "gemini-3.1-flash-lite": "gemini-3.1-flash-lite-preview",
+              "gemini-3.1-flash": "gemini-3-flash-preview",
+              "gemini-3.1-flash-preview": "gemini-3-flash-preview",
+            },
+          },
+          "google-vertex": {
+            aliases: {
+              "gemini-3-pro": "gemini-3-pro-preview",
+              "gemini-3-flash": "gemini-3-flash-preview",
+              "gemini-3.1-pro": "gemini-3.1-pro-preview",
+              "gemini-3.1-flash-lite": "gemini-3.1-flash-lite-preview",
+              "gemini-3.1-flash": "gemini-3-flash-preview",
+              "gemini-3.1-flash-preview": "gemini-3-flash-preview",
+            },
+          },
+          xai: {
+            aliases: {
+              "grok-4.20-experimental-beta-0304-reasoning": "grok-4.20-beta-latest-reasoning",
+            },
+          },
+          openrouter: {
+            prefixWhenBare: "openrouter",
+          },
+          huggingface: {
+            stripPrefixes: ["huggingface/"],
+          },
+          "vercel-ai-gateway": {
+            aliases: {
+              "opus-4.6": "claude-opus-4-6",
+              "opus-4.5": "claude-opus-4-5",
+              "sonnet-4.6": "claude-sonnet-4-6",
+              "sonnet-4.5": "claude-sonnet-4-5",
+            },
+            prefixWhenBareAfterAliasStartsWith: [
+              {
+                modelPrefix: "claude-",
+                prefix: "anthropic",
+              },
+            ],
+          },
+          nvidia: {
+            prefixWhenBare: "nvidia",
+          },
+        },
+      },
+    },
+  ],
+}));
+
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: () => manifestNormalizationSnapshot,
+}));
+
 vi.mock("./provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
 }));

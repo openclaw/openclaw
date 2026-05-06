@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -415,25 +415,14 @@ function readPackageManifest(
   rejectHardlinks = true,
   rootRealPath?: string,
 ): PackageManifest | null {
-  const manifestPath = path.join(dir, "package.json");
-  const opened = openRootFileSync({
-    absolutePath: manifestPath,
-    rootPath: dir,
+  const result = readRootJsonObjectSync({
+    rootDir: dir,
     ...(rootRealPath !== undefined ? { rootRealPath } : {}),
+    relativePath: "package.json",
     boundaryLabel: "plugin package directory",
     rejectHardlinks,
   });
-  if (!opened.ok) {
-    return null;
-  }
-  try {
-    const raw = fs.readFileSync(opened.fd, "utf-8");
-    return JSON.parse(raw) as PackageManifest;
-  } catch {
-    return null;
-  } finally {
-    fs.closeSync(opened.fd);
-  }
+  return result.ok ? (result.value as PackageManifest) : null;
 }
 
 function readTrustedPackageManifest(dir: string): PackageManifest | null {

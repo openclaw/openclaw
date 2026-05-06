@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { collectChannelDoctorStaleConfigMutations } from "../commands/doctor/shared/channel-doctor.js";
-import { readConfigFileSnapshot } from "../config/config.js";
+import { assertConfigWriteAllowedInCurrentMode, readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { installHooksFromNpmSpec, installHooksFromPath } from "../hooks/install.js";
 import { resolveArchiveKind } from "../infra/archive.js";
@@ -14,6 +14,7 @@ import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
+  installPluginFromNpmPackArchive,
   installPluginFromNpmSpec,
   installPluginFromPath,
 } from "../plugins/install.js";
@@ -49,6 +50,7 @@ import {
   createHookPackInstallLogger,
   createPluginInstallLogger,
   formatPluginInstallWithHookFallbackError,
+  parseNpmPackPrefixPath,
   parseNpmPrefixSpec,
 } from "./plugins-command-helpers.js";
 import { persistHookPackInstall, persistPluginInstall } from "./plugins-install-persist.js";
@@ -379,6 +381,54 @@ async function tryInstallPluginOrHookPackFromNpmSpec(params: {
   return { ok: true };
 }
 
+async function tryInstallPluginFromNpmPackArchive(params: {
+  snapshot: ConfigSnapshotForInstallPersist;
+  installMode: "install" | "update";
+  archivePath: string;
+  safetyOverrides: InstallSafetyOverrides;
+  extensionsDir: string;
+  runtime?: RuntimeEnv;
+}): Promise<{ ok: true } | { ok: false }> {
+  const result = await installPluginFromNpmPackArchive({
+    ...params.safetyOverrides,
+    mode: params.installMode,
+    archivePath: params.archivePath,
+    extensionsDir: params.extensionsDir,
+    logger: createPluginInstallLogger(params.runtime),
+  });
+  if (!result.ok) {
+    (params.runtime ?? defaultRuntime).error(result.error);
+    return { ok: false };
+  }
+
+  await persistPluginInstall({
+    snapshot: params.snapshot,
+    pluginId: result.pluginId,
+    install: {
+      source: "npm",
+      spec: result.npmResolution?.resolvedSpec ?? result.manifestName ?? result.pluginId,
+      sourcePath: params.archivePath,
+      installPath: result.targetDir,
+      ...(result.version ? { version: result.version } : {}),
+      ...(result.npmResolution?.name ? { resolvedName: result.npmResolution.name } : {}),
+      ...(result.npmResolution?.version ? { resolvedVersion: result.npmResolution.version } : {}),
+      ...(result.npmResolution?.resolvedSpec
+        ? { resolvedSpec: result.npmResolution.resolvedSpec }
+        : {}),
+      ...(result.npmResolution?.integrity ? { integrity: result.npmResolution.integrity } : {}),
+      ...(result.npmResolution?.shasum ? { shasum: result.npmResolution.shasum } : {}),
+      ...(result.npmResolution?.resolvedAt ? { resolvedAt: result.npmResolution.resolvedAt } : {}),
+      artifactKind: "npm-pack",
+      artifactFormat: "tgz",
+      ...(result.npmResolution?.integrity ? { npmIntegrity: result.npmResolution.integrity } : {}),
+      ...(result.npmResolution?.shasum ? { npmShasum: result.npmResolution.shasum } : {}),
+      ...(result.npmTarballName ? { npmTarballName: result.npmTarballName } : {}),
+    },
+    runtime: params.runtime,
+  });
+  return { ok: true };
+}
+
 async function tryInstallPluginFromGitSpec(params: {
   snapshot: ConfigSnapshotForInstallPersist;
   installMode: "install" | "update";
@@ -514,6 +564,8 @@ export async function runPluginInstallCommand(params: {
   };
   runtime?: RuntimeEnv;
 }) {
+  assertConfigWriteAllowedInCurrentMode();
+
   const runtime = params.runtime ?? defaultRuntime;
   const shorthand = !params.opts.marketplace
     ? await tracePluginLifecyclePhaseAsync(
@@ -748,6 +800,26 @@ export async function runPluginInstallCommand(params: {
       runtime,
     });
     if (!npmPrefixResult.ok) {
+      return runtime.exit(1);
+    }
+    return;
+  }
+
+  const npmPackPath = parseNpmPackPrefixPath(raw);
+  if (npmPackPath !== null) {
+    if (!npmPackPath) {
+      runtime.error("unsupported npm-pack: spec: missing pack archive path");
+      return runtime.exit(1);
+    }
+    const npmPackResult = await tryInstallPluginFromNpmPackArchive({
+      snapshot,
+      installMode,
+      archivePath: npmPackPath,
+      safetyOverrides,
+      extensionsDir,
+      runtime,
+    });
+    if (!npmPackResult.ok) {
       return runtime.exit(1);
     }
     return;

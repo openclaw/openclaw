@@ -152,14 +152,28 @@ export async function ensureMediaDir() {
   return mediaDir;
 }
 
-function isMissingPathError(err: unknown): err is NodeJS.ErrnoException {
-  return err instanceof Error && "code" in err && err.code === "ENOENT";
+function findErrorWithCode(err: unknown, code: string): NodeJS.ErrnoException | undefined {
+  if (!(err instanceof Error)) {
+    return undefined;
+  }
+  if ("code" in err && err.code === code) {
+    return err as NodeJS.ErrnoException;
+  }
+  return findErrorWithCode(err.cause, code);
+}
+
+function isMissingPathError(err: unknown): boolean {
+  return findErrorWithCode(err, "ENOENT") !== undefined;
 }
 
 async function retryAfterRecreatingDir<T>(dir: string, run: () => Promise<T>): Promise<T> {
   try {
     return await run();
   } catch (err) {
+    const noSpaceError = findErrorWithCode(err, "ENOSPC");
+    if (noSpaceError) {
+      throw noSpaceError;
+    }
     if (!isMissingPathError(err)) {
       throw err;
     }

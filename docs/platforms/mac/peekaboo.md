@@ -8,9 +8,9 @@ read_when:
 title: "Peekaboo bridge"
 ---
 
-OpenClaw can host **PeekabooBridge** as a local, permission‑aware UI automation
+OpenClaw can host **PeekabooBridge** as a local, permission-aware UI automation
 broker. This lets the `peekaboo` CLI drive UI automation while reusing the
-macOS app’s TCC permissions.
+macOS app's TCC permissions.
 
 ## What this is (and is not)
 
@@ -76,11 +76,11 @@ export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
 ## Snapshot behavior (automation)
 
 Snapshots are stored in memory and expire automatically after a short window.
-If you need longer retention, re‑capture from the client.
+If you need longer retention, re-capture from the client.
 
 ## Troubleshooting
 
-- If `peekaboo` reports “bridge client is not authorized”, ensure the client is
+- If `peekaboo` reports "bridge client is not authorized", ensure the client is
   properly signed or run the host with `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1`
   in **debug** mode only.
 - If no hosts are found, open one of the host apps (Peekaboo.app or OpenClaw.app)

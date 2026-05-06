@@ -32,6 +32,10 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveExternalAuthProfilesWithPlugins: () => [],
 }));
 
+vi.mock("./provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
+}));
+
 const authSourceCheckMock = vi.hoisted(() => ({
   hasAnyAuthProfileStoreSource: vi.fn(() => false),
 }));
@@ -689,6 +693,28 @@ describe("runWithModelFallback", () => {
       classifyEmbeddedPiRunResultForModelFallback({
         provider: "openai-codex",
         model: "gpt-5.4",
+        result: runResult,
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps before_agent_run hook blocks out of empty-result fallback", () => {
+    const runResult: EmbeddedPiRunResult = {
+      payloads: [{ text: "Blocked by before-run policy.", isError: true }],
+      meta: {
+        durationMs: 1,
+        livenessState: "blocked",
+        error: {
+          kind: "hook_block",
+          message: "Blocked by before-run policy.",
+        },
+      },
+    };
+
+    expect(
+      classifyEmbeddedPiRunResultForModelFallback({
+        provider: "atlassian-ai-gateway-openai",
+        model: "gpt-5.5-2026-04-23",
         result: runResult,
       }),
     ).toBeNull();
