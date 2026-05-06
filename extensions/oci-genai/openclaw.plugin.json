@@ -1,0 +1,63 @@
+{
+  "id": "oci-genai",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": false,
+  "providers": ["oci"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "oci-openai-compat",
+      "hosts": [
+        "inference.generativeai.us-chicago-1.oci.oraclecloud.com",
+        "inference.generativeai.us-ashburn-1.oci.oraclecloud.com",
+        "inference.generativeai.us-phoenix-1.oci.oraclecloud.com",
+        "inference.generativeai.uk-london-1.oci.oraclecloud.com",
+        "inference.generativeai.eu-frankfurt-1.oci.oraclecloud.com"
+      ]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "oci": {
+        "family": "oci-openai-compat"
+      }
+    }
+  },
+  "modelCatalog": {
+    "providers": {
+      "oci": {
+        "baseUrl": "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/openai/v1",
+        "api": "openai-completions",
+        "models": []
+      }
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "region": {
+        "type": "string",
+        "description": "OCI region for inference (e.g. us-chicago-1, us-phoenix-1, eu-frankfurt-1)."
+      },
+      "compartmentId": {
+        "type": "string",
+        "description": "OCID of the compartment for native (non-openai-compat) requests."
+      },
+      "profileName": {
+        "type": "string",
+        "description": "Profile name in ~/.oci/config (e.g. DEFAULT or API_FREE_TIER)."
+      },
+      "configFile": {
+        "type": "string",
+        "description": "Override path to the OCI config file. Defaults to ~/.oci/config."
+      },
+      "authType": {
+        "type": "string",
+        "enum": ["api_key", "instance_principal", "resource_principal"],
+        "description": "Auth mechanism. api_key reads from configFile/profileName; instance_principal and resource_principal are workload-identity flows for OCI compute / OKE / Functions."
+      }
+    }
+  }
+}
