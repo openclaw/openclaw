@@ -185,7 +185,6 @@ Docs: https://docs.openclaw.ai
 - MCP: include serialized conversation/message payloads in the primary text content for `conversations_list` and `messages_read`, while preserving `structuredContent` for capable clients. Fixes #77024.
 - Media: treat `EPERM` from the post-write media fsync step as best-effort, allowing WebChat and channel uploads to finish on Windows filesystems that reject `fsync` after a successful write. Fixes #76844.
 - Media/Telegram: send in-limit original images when optional image optimization is unavailable, so Telegram MEDIA replies and message-tool image sends do not fail just because `sharp` is missing. Fixes #77081. (#77117) Thanks @pfrederiksen.
-- Telegram: periodically re-probe the primary fetch transport after sticky fallback success, so recovered networks can leave IPv4 or pinned-IP fallback without a gateway restart. Fixes #77088.
 - Diagnostics: include last progress, cron job/run ids, stopped cron job name, and the last assistant transcript snippet in stalled-session and stuck-session recovery logs so cron stalls show what was stopped.
 - Streaming channels: add `streaming.preview.commandText: "status"` / `streaming.progress.commandText: "status"` to hide command/exec text in preview progress lines while keeping the released raw command text default. Fixes #77072.
 - Agents/cron: let explicit cron `timeoutSeconds` drive both CLI no-output and embedded LLM idle watchdogs instead of being capped by resume defaults. Fixes #76289.
