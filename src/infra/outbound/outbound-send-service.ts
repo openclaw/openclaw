@@ -376,8 +376,8 @@ export async function executeLocationAction(params: {
   to: string;
   latitude: number;
   longitude: number;
-  name?: string;
-  address?: string;
+  locationName?: string;
+  locationAddress?: string;
 }): Promise<{
   handledBy: "plugin" | "core";
   payload: unknown;
@@ -398,8 +398,8 @@ export async function executeLocationAction(params: {
     to: params.to,
     latitude: params.latitude,
     longitude: params.longitude,
-    name: params.name,
-    address: params.address,
+    locationName: params.locationName,
+    locationAddress: params.locationAddress,
     channel: params.ctx.channel,
     accountId: params.ctx.accountId ?? undefined,
     dryRun: params.ctx.dryRun,

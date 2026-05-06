@@ -253,8 +253,8 @@ export async function sendLocationWhatsApp(
   location: {
     latitude: number;
     longitude: number;
-    name?: string;
-    address?: string;
+    locationName?: string;
+    locationAddress?: string;
     accuracyInMeters?: number;
   },
   options: { verbose: boolean; accountId?: string; cfg: OpenClawConfig },
@@ -279,8 +279,8 @@ export async function sendLocationWhatsApp(
     logger.info(
       {
         jid: redactedJid,
-        hasName: Boolean(location.name),
-        hasAddress: Boolean(location.address),
+        hasName: Boolean(location.locationName),
+        hasAddress: Boolean(location.locationAddress),
         hasAccuracy: typeof location.accuracyInMeters === "number",
       },
       "sending location",
@@ -289,8 +289,8 @@ export async function sendLocationWhatsApp(
       await active.sendComposingTo(to);
     }
     const result = await active.sendLocation(to, location.latitude, location.longitude, {
-      name: location.name,
-      address: location.address,
+      locationName: location.locationName,
+      locationAddress: location.locationAddress,
       accuracyInMeters: location.accuracyInMeters,
     });
     const messageId = result?.messageId ?? "unknown";

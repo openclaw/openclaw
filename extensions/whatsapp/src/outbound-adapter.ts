@@ -40,8 +40,8 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
     to,
     latitude,
     longitude,
-    name,
-    address,
+    locationName,
+    locationAddress,
     accuracyInMeters,
     accountId,
   }) =>
@@ -49,7 +49,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
       await loadWhatsAppSendModule()
     ).sendLocationWhatsApp(
       to,
-      { latitude, longitude, name, address, accuracyInMeters },
+      { latitude, longitude, locationName, locationAddress, accuracyInMeters },
       {
         verbose: shouldLogVerbose(),
         accountId: accountId ?? undefined,

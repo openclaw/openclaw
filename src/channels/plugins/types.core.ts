@@ -786,8 +786,8 @@ export type ChannelLocationContext = {
   to: string;
   latitude: number;
   longitude: number;
-  name?: string;
-  address?: string;
+  locationName?: string;
+  locationAddress?: string;
   accuracyInMeters?: number;
   accountId?: string | null;
 };

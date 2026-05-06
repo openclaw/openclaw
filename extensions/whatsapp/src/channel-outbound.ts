@@ -38,14 +38,14 @@ export const whatsappChannelOutbound = {
     to,
     latitude,
     longitude,
-    name,
-    address,
+    locationName,
+    locationAddress,
     accuracyInMeters,
     accountId,
   }) =>
     await sendLocationWhatsApp(
       to,
-      { latitude, longitude, name, address, accuracyInMeters },
+      { latitude, longitude, locationName, locationAddress, accuracyInMeters },
       {
         verbose: getWhatsAppRuntime().logging.shouldLogVerbose(),
         accountId: accountId ?? undefined,

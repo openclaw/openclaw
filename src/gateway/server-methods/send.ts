@@ -512,8 +512,8 @@ export const sendHandlers: GatewayRequestHandlers = {
             to: deliveryTarget,
             latitude,
             longitude,
-            name: normalizeOptionalString(request.locationName),
-            address: normalizeOptionalString(request.locationAddress),
+            locationName: normalizeOptionalString(request.locationName),
+            locationAddress: normalizeOptionalString(request.locationAddress),
             accuracyInMeters: parseFiniteNumber(request.accuracyInMeters),
             accountId,
           });

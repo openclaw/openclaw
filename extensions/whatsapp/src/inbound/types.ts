@@ -43,7 +43,7 @@ export type ActiveWebListener = {
     to: string,
     latitude: number,
     longitude: number,
-    options?: { name?: string; address?: string; accuracyInMeters?: number },
+    options?: { locationName?: string; locationAddress?: string; accuracyInMeters?: number },
   ) => Promise<WhatsAppSendResult>;
   sendComposingTo: (to: string) => Promise<void>;
   close?: () => Promise<void>;

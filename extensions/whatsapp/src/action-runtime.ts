@@ -105,8 +105,8 @@ export async function handleWhatsAppAction(
       {
         latitude,
         longitude,
-        name: locationName ?? undefined,
-        address: locationAddress ?? undefined,
+        locationName: locationName ?? undefined,
+        locationAddress: locationAddress ?? undefined,
         accuracyInMeters: accuracyInMeters ?? undefined,
       },
       {

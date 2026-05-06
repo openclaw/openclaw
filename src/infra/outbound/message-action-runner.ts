@@ -950,7 +950,7 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
 }
 
 async function handleLocationAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
-  const { cfg, params, channel, accountId, dryRun, gateway, abortSignal } = ctx;
+  const { cfg, params, channel, accountId, dryRun, gateway, abortSignal, agentId } = ctx;
   throwIfAborted(abortSignal);
   const action: ChannelMessageActionName = "location";
   const to = readStringParam(params, "to", { required: true });
@@ -979,6 +979,34 @@ async function handleLocationAction(ctx: ResolvedActionContext): Promise<Message
   const locationName = readStringParam(params, "locationName");
   const locationAddress = readStringParam(params, "locationAddress");
 
+  const gatewayPluginAction = await runGatewayPluginMessageActionOrNull({
+    cfg,
+    params,
+    channel,
+    action,
+    accountId,
+    dryRun,
+    gateway,
+    input: {
+      ...ctx.input,
+      agentId,
+      abortSignal,
+    },
+    agentId,
+    result: (payload) => ({
+      kind: "location",
+      channel,
+      action,
+      to,
+      handledBy: "plugin",
+      payload,
+      dryRun,
+    }),
+  });
+  if (gatewayPluginAction) {
+    return gatewayPluginAction;
+  }
+
   throwIfAborted(abortSignal);
   const location = await executeLocationAction({
     ctx: {
@@ -992,8 +1020,8 @@ async function handleLocationAction(ctx: ResolvedActionContext): Promise<Message
     to,
     latitude,
     longitude,
-    name: locationName ?? undefined,
-    address: locationAddress ?? undefined,
+    locationName: locationName ?? undefined,
+    locationAddress: locationAddress ?? undefined,
   });
 
   return {

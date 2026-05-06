@@ -511,8 +511,8 @@ type MessageLocationParams = {
   to: string;
   latitude: number;
   longitude: number;
-  name?: string;
-  address?: string;
+  locationName?: string;
+  locationAddress?: string;
   accuracyInMeters?: number;
   channel?: string;
   accountId?: string;
@@ -526,8 +526,8 @@ export type MessageLocationResult = {
   to: string;
   latitude: number;
   longitude: number;
-  name?: string;
-  address?: string;
+  locationName?: string;
+  locationAddress?: string;
   via: "gateway";
   result?: {
     messageId: string;
@@ -554,8 +554,8 @@ export async function sendLocation(params: MessageLocationParams): Promise<Messa
       to: params.to,
       latitude: params.latitude,
       longitude: params.longitude,
-      name: params.name,
-      address: params.address,
+      locationName: params.locationName,
+      locationAddress: params.locationAddress,
       via: "gateway",
       dryRun: true,
     };
@@ -573,8 +573,8 @@ export async function sendLocation(params: MessageLocationParams): Promise<Messa
       to: params.to,
       latitude: params.latitude,
       longitude: params.longitude,
-      name: params.name,
-      address: params.address,
+      locationName: params.locationName,
+      locationAddress: params.locationAddress,
       accuracyInMeters: params.accuracyInMeters,
       channel,
       accountId: params.accountId,
@@ -587,8 +587,8 @@ export async function sendLocation(params: MessageLocationParams): Promise<Messa
     to: params.to,
     latitude: params.latitude,
     longitude: params.longitude,
-    name: params.name,
-    address: params.address,
+    locationName: params.locationName,
+    locationAddress: params.locationAddress,
     via: "gateway",
     result,
   };

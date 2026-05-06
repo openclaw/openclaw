@@ -213,8 +213,8 @@ describe("handleWhatsAppAction", () => {
       {
         latitude: 18.4861,
         longitude: -69.9312,
-        name: "Santo Domingo",
-        address: "Distrito Nacional",
+        locationName: "Santo Domingo",
+        locationAddress: "Distrito Nacional",
         accuracyInMeters: undefined,
       },
       expect.objectContaining({

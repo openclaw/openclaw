@@ -524,7 +524,12 @@ describe("web outbound", () => {
   it("sends native locations via active listener", async () => {
     const result = await sendLocationWhatsApp(
       "+1555",
-      { latitude: 18.4861, longitude: -69.9312, name: "Santo Domingo" },
+      {
+        latitude: 18.4861,
+        longitude: -69.9312,
+        locationName: "Santo Domingo",
+        locationAddress: "Distrito Nacional",
+      },
       { verbose: false, cfg: WHATSAPP_TEST_CFG },
     );
 
@@ -534,8 +539,8 @@ describe("web outbound", () => {
     });
     expect(sendComposingTo).toHaveBeenCalledWith("+1555");
     expect(sendLocation).toHaveBeenCalledWith("+1555", 18.4861, -69.9312, {
-      name: "Santo Domingo",
-      address: undefined,
+      locationName: "Santo Domingo",
+      locationAddress: "Distrito Nacional",
       accuracyInMeters: undefined,
     });
   });
@@ -549,8 +554,8 @@ describe("web outbound", () => {
 
     expect(sendComposingTo).not.toHaveBeenCalled();
     expect(sendLocation).toHaveBeenCalledWith("120363401234567890@newsletter", 18.4861, -69.9312, {
-      name: undefined,
-      address: undefined,
+      locationName: undefined,
+      locationAddress: undefined,
       accuracyInMeters: undefined,
     });
   });

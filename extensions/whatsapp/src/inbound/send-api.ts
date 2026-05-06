@@ -165,15 +165,15 @@ export function createWebSendApi(params: {
       to: string,
       latitude: number,
       longitude: number,
-      options?: { name?: string; address?: string; accuracyInMeters?: number },
+      options?: { locationName?: string; locationAddress?: string; accuracyInMeters?: number },
     ): Promise<WhatsAppSendResult> => {
       const jid = toWhatsappJid(to);
       const locationPayload: Record<string, unknown> = {
         degreesLatitude: latitude,
         degreesLongitude: longitude,
       };
-      if (options?.name) locationPayload.name = options.name;
-      if (options?.address) locationPayload.address = options.address;
+      if (options?.locationName) locationPayload.locationName = options.locationName;
+      if (options?.locationAddress) locationPayload.locationAddress = options.locationAddress;
       if (options?.accuracyInMeters != null) {
         locationPayload.accuracyInMeters = options.accuracyInMeters;
       }
