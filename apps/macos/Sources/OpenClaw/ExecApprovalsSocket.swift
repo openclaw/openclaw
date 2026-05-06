@@ -453,7 +453,7 @@ private enum ExecHostExecutor {
             return errorResponse
         }
 
-        var env = context.env ?? ProcessInfo.processInfo.environment
+        var env = context.env
         if let agentId = request.agentId, !agentId.isEmpty {
             env["OPENCLAW_AGENT_ID"] = agentId
         }
