@@ -267,6 +267,24 @@ candidate contains redacted secret placeholders such as `***`.
 
   </Accordion>
 
+  <Accordion title="Tune session tracker reconciliation">
+    Reconcile the gateway's in-memory diagnostic session tracker against persisted session and task state:
+
+    ```json5
+    {
+      gateway: {
+        sessionTracker: {
+          reconcileEverySeconds: 300,
+        },
+      },
+    }
+    ```
+
+    - Set `gateway.sessionTracker.reconcileEverySeconds: 0` to disable reconciliation.
+    - The default interval is `300` seconds.
+
+  </Accordion>
+
   <Accordion title="Tune gateway WebSocket handshake timeout">
     Give local clients more time to complete the pre-auth WebSocket handshake on
     loaded or low-powered hosts:

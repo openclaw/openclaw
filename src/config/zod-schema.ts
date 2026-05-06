@@ -889,6 +889,12 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        sessionTracker: z
+          .object({
+            reconcileEverySeconds: z.number().int().min(0).optional(),
+          })
+          .strict()
+          .optional(),
         handshakeTimeoutMs: z.number().int().min(1).optional(),
         channelHealthCheckMinutes: z.number().int().min(0).optional(),
         channelStaleEventThresholdMinutes: z.number().int().min(1).optional(),

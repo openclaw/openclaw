@@ -92,6 +92,7 @@ import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
 
+// eslint-disable-next-line no-underscore-dangle -- Legacy test reset hook exported under this name.
 export async function __resetModelCatalogCacheForTest(): Promise<void> {
   const { __resetModelCatalogCacheForTest: resetModelCatalogCacheForTest } =
     await import("./server-model-catalog.js");

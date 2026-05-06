@@ -1,5 +1,8 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { getRuntimeConfig } from "../config/config.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { loadSessionStore } from "../config/sessions/store-load.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   areDiagnosticsEnabledForProcess,
@@ -8,6 +11,10 @@ import {
   type DiagnosticPhaseSnapshot,
   type DiagnosticLivenessWarningReason,
 } from "../infra/diagnostic-events.js";
+import {
+  findLatestTaskForRelatedSessionKey,
+  isTerminalTaskStatus,
+} from "../tasks/task-registry.js";
 import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
 import {
   getCurrentDiagnosticPhase,
@@ -925,6 +932,123 @@ export function logActiveRuns() {
 }
 
 let heartbeatInterval: NodeJS.Timeout | null = null;
+let lastTrackerReconcileAt = 0;
+
+const DEFAULT_TRACKER_RECONCILE_SECONDS = 300;
+
+export function resolveTrackerReconcileIntervalMs(config?: OpenClawConfig): number {
+  const raw = config?.gateway?.sessionTracker?.reconcileEverySeconds;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return DEFAULT_TRACKER_RECONCILE_SECONDS * 1000;
+  }
+  const seconds = Math.floor(raw);
+  if (seconds <= 0) {
+    return 0;
+  }
+  return seconds * 1000;
+}
+
+function findPersistedSessionEntry(
+  store: Record<string, SessionEntry>,
+  state: SessionRef,
+): SessionEntry | undefined {
+  for (const key of [state.sessionKey, state.sessionId]) {
+    if (!key) {
+      continue;
+    }
+    const entry = store[key];
+    if (entry) {
+      return entry;
+    }
+  }
+  if (!state.sessionId) {
+    return undefined;
+  }
+  return Object.values(store).find((entry) => entry.sessionId === state.sessionId);
+}
+
+function resolvePersistedSessionTerminalReason(
+  entry: SessionEntry | undefined,
+): string | undefined {
+  if (!entry) {
+    return undefined;
+  }
+  if (entry.endedAt != null) {
+    return "sessions_json_ended_at";
+  }
+  if (
+    entry.status === "failed" ||
+    entry.status === "done" ||
+    entry.status === "killed" ||
+    entry.status === "timeout"
+  ) {
+    return `sessions_json_status_${entry.status}`;
+  }
+  return undefined;
+}
+
+function resolveTaskRegistryTerminalReason(sessionKey: string | undefined): string | undefined {
+  if (!sessionKey) {
+    return undefined;
+  }
+  try {
+    const task = findLatestTaskForRelatedSessionKey(sessionKey);
+    if (task && isTerminalTaskStatus(task.status)) {
+      return `task_registry_status_${task.status}`;
+    }
+  } catch (err) {
+    diag.debug(
+      `tracker reconcile: task lookup failed sessionKey=${sessionKey} error=${String(err)}`,
+    );
+  }
+  return undefined;
+}
+
+export function reconcileDiagnosticSessionTracker(config?: OpenClawConfig): void {
+  if (!areDiagnosticsEnabledForProcess() || !isDiagnosticsEnabled(config)) {
+    return;
+  }
+  let store: Record<string, SessionEntry>;
+  try {
+    store = loadSessionStore(resolveStorePath());
+  } catch (err) {
+    diag.debug(`tracker reconcile: session store unavailable error=${String(err)}`);
+    return;
+  }
+
+  let checked = 0;
+  let evicted = 0;
+  for (const [key, state] of Array.from(diagnosticSessionStates.entries())) {
+    checked += 1;
+    const persistedReason = resolvePersistedSessionTerminalReason(
+      findPersistedSessionEntry(store, {
+        sessionId: state.sessionId,
+        sessionKey: state.sessionKey,
+      }),
+    );
+    const taskReason = resolveTaskRegistryTerminalReason(state.sessionKey);
+    const reason = persistedReason ?? taskReason;
+    if (!reason) {
+      continue;
+    }
+    diagnosticSessionStates.delete(key);
+    evicted += 1;
+    diag.info(
+      `tracker reconcile: evicting terminal session sessionKey=${
+        state.sessionKey ?? "unknown"
+      } sessionId=${state.sessionId ?? "unknown"} reason=${reason}`,
+    );
+  }
+  if (evicted > 0) {
+    emitDiagnosticEvent({
+      type: "session.tracker.reconciled",
+      evicted,
+    });
+    markActivity();
+    return;
+  }
+  diag.debug(`tracker reconcile: no stale entries (checked ${checked})`);
+}
 
 export function startDiagnosticHeartbeat(
   config?: OpenClawConfig,
@@ -1044,6 +1168,11 @@ export function startDiagnosticHeartbeat(
         }
       }
     }
+    const reconcileIntervalMs = resolveTrackerReconcileIntervalMs(heartbeatConfig);
+    if (reconcileIntervalMs > 0 && now - lastTrackerReconcileAt >= reconcileIntervalMs) {
+      lastTrackerReconcileAt = now;
+      reconcileDiagnosticSessionTracker(heartbeatConfig);
+    }
   }, 30_000);
   heartbeatInterval.unref?.();
 }
@@ -1071,6 +1200,7 @@ export function resetDiagnosticStateForTest(): void {
   webhookStats.processed = 0;
   webhookStats.errors = 0;
   webhookStats.lastReceived = 0;
+  lastTrackerReconcileAt = 0;
   stopDiagnosticHeartbeat();
   resetDiagnosticMemoryForTest();
   resetDiagnosticPhasesForTest();

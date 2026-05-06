@@ -19,6 +19,7 @@ import {
   shouldAutoDeliverTaskTerminalUpdate,
   shouldSuppressDuplicateTerminalDelivery,
 } from "./task-executor-policy.js";
+export { isTerminalTaskStatus } from "./task-executor-policy.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   getTaskFlowById,

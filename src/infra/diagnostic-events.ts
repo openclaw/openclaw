@@ -212,6 +212,11 @@ export type DiagnosticSessionRecoveryCompletedEvent = DiagnosticSessionRecoveryB
   stale?: boolean;
 };
 
+export type DiagnosticSessionTrackerReconciledEvent = DiagnosticBaseEvent & {
+  type: "session.tracker.reconciled";
+  evicted: number;
+};
+
 export type DiagnosticLaneEnqueueEvent = DiagnosticBaseEvent & {
   type: "queue.lane.enqueue";
   lane: string;
@@ -572,6 +577,7 @@ export type DiagnosticEventPayload =
   | DiagnosticSessionStuckEvent
   | DiagnosticSessionRecoveryRequestedEvent
   | DiagnosticSessionRecoveryCompletedEvent
+  | DiagnosticSessionTrackerReconciledEvent
   | DiagnosticLaneEnqueueEvent
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent

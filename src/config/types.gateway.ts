@@ -430,6 +430,11 @@ export type GatewayWebchatConfig = {
   chatHistoryMaxChars?: number;
 };
 
+export type GatewaySessionTrackerConfig = {
+  /** Interval in seconds to reconcile in-memory tracker against persisted session state. Default: 300. Set to 0 to disable. */
+  reconcileEverySeconds?: number;
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -474,6 +479,8 @@ export type GatewayConfig = {
   tools?: GatewayToolsConfig;
   /** WebChat display/history settings. */
   webchat?: GatewayWebchatConfig;
+  /** In-memory session tracker reconciliation settings. */
+  sessionTracker?: GatewaySessionTrackerConfig;
   /**
    * Pre-auth Gateway WebSocket handshake timeout in milliseconds.
    * Env var OPENCLAW_HANDSHAKE_TIMEOUT_MS takes precedence. Default: 15000.

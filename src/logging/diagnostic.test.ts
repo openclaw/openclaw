@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { loadSessionStore } from "../config/sessions/store-load.js";
 import {
   emitDiagnosticEvent,
   onDiagnosticEvent,
@@ -33,10 +35,27 @@ import {
   diagnosticLogger,
   markDiagnosticSessionProgress,
   resetDiagnosticStateForTest,
+  resolveTrackerReconcileIntervalMs,
   resolveStuckSessionAbortMs,
   resolveStuckSessionWarnMs,
   startDiagnosticHeartbeat,
 } from "./diagnostic.js";
+
+vi.mock("../config/sessions/store-load.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions/store-load.js")>();
+  return {
+    ...actual,
+    loadSessionStore: vi.fn(() => ({})),
+  };
+});
+
+vi.mock("../config/sessions/paths.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions/paths.js")>();
+  return {
+    ...actual,
+    resolveStorePath: vi.fn(() => "/tmp/openclaw-test-sessions.json"),
+  };
+});
 
 function createEmitMemorySampleMock() {
   return vi.fn(() => ({
@@ -163,6 +182,99 @@ describe("diagnostic session activity aliases", () => {
     expect(getDiagnosticSessionActivitySnapshot({ sessionId: "s1" }).activeWorkKind).toBe(
       "embedded_run",
     );
+  });
+});
+
+describe("diagnostic session tracker reconciliation", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    resetDiagnosticStateForTest();
+    resetDiagnosticEventsForTest();
+    vi.mocked(resolveStorePath).mockReturnValue("/tmp/openclaw-test-sessions.json");
+    vi.mocked(loadSessionStore).mockReturnValue({});
+  });
+
+  afterEach(() => {
+    resetDiagnosticEventsForTest();
+    resetDiagnosticStateForTest();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("evicts terminal persisted sessions from the tracker on the heartbeat tick", () => {
+    const terminalKey = "agent:main:slack:channel:terminal";
+    const activeKey = "agent:main:slack:channel:active";
+    const events: DiagnosticEventPayload[] = [];
+    const infoSpy = vi.spyOn(diagnosticLogger, "info").mockImplementation(() => undefined);
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    vi.mocked(loadSessionStore).mockReturnValue({
+      [terminalKey]: {
+        sessionId: "run-terminal",
+        updatedAt: 1,
+        endedAt: 12345,
+        status: "done",
+      },
+      [activeKey]: {
+        sessionId: "run-active",
+        updatedAt: 1,
+        status: "running",
+      },
+    });
+
+    try {
+      startDiagnosticHeartbeat(
+        {
+          gateway: { sessionTracker: { reconcileEverySeconds: 5 } },
+          diagnostics: { enabled: true },
+        },
+        { emitMemorySample: createEmitMemorySampleMock() },
+      );
+      logSessionStateChange({
+        sessionId: "run-terminal",
+        sessionKey: terminalKey,
+        state: "processing",
+      });
+      logSessionStateChange({
+        sessionId: "run-active",
+        sessionKey: activeKey,
+        state: "processing",
+      });
+      vi.advanceTimersByTime(30_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(diagnosticSessionStates.has(terminalKey)).toBe(false);
+    expect(diagnosticSessionStates.has(activeKey)).toBe(true);
+    expect(resolveStorePath).toHaveBeenCalledTimes(1);
+    expect(loadSessionStore).toHaveBeenCalledWith("/tmp/openclaw-test-sessions.json");
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "session.tracker.reconciled",
+        evicted: 1,
+      }),
+    );
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `tracker reconcile: evicting terminal session sessionKey=${terminalKey}`,
+      ),
+    );
+  });
+
+  it("resolves the configured tracker reconciliation interval", () => {
+    expect(resolveTrackerReconcileIntervalMs()).toBe(300_000);
+    expect(
+      resolveTrackerReconcileIntervalMs({
+        gateway: { sessionTracker: { reconcileEverySeconds: 5 } },
+      }),
+    ).toBe(5_000);
+    expect(
+      resolveTrackerReconcileIntervalMs({
+        gateway: { sessionTracker: { reconcileEverySeconds: 0 } },
+      }),
+    ).toBe(0);
   });
 });
 

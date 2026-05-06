@@ -95,6 +95,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Explicit gateway-level tool allowlist when you want a narrow set of tools available at runtime. Use this for locked-down environments where tool scope must be tightly controlled.",
   "gateway.tools.deny":
     "Explicit gateway-level tool denylist to block risky tools even if lower-level policies allow them. Use deny rules for emergency response and defense-in-depth hardening.",
+  "gateway.sessionTracker":
+    "In-memory session tracker reconciliation controls. Tune only when gateway diagnostics need a different stale-runtime cleanup cadence.",
+  "gateway.sessionTracker.reconcileEverySeconds":
+    "Seconds between checks that compare in-memory diagnostic session tracker entries with persisted session/task state. Set 0 to disable. Default: 300.",
   "gateway.handshakeTimeoutMs":
     "Pre-auth Gateway WebSocket handshake timeout in milliseconds. Use higher values on loaded or low-powered hosts where local clients can connect during startup warmup. OPENCLAW_HANDSHAKE_TIMEOUT_MS still takes precedence.",
   "gateway.channelHealthCheckMinutes":

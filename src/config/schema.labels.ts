@@ -119,6 +119,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.tools": "Gateway Tool Exposure Policy",
   "gateway.tools.allow": "Gateway Tool Allowlist",
   "gateway.tools.deny": "Gateway Tool Denylist",
+  "gateway.sessionTracker": "Gateway Session Tracker",
+  "gateway.sessionTracker.reconcileEverySeconds": "Gateway Session Tracker Reconcile Interval (s)",
   "gateway.handshakeTimeoutMs": "Gateway Handshake Timeout",
   "gateway.channelHealthCheckMinutes": "Gateway Channel Health Check Interval (min)",
   "gateway.channelStaleEventThresholdMinutes": "Gateway Channel Stale Event Threshold (min)",
