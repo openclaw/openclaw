@@ -69,7 +69,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
   if (!isSecureWebSocketUrl(url, { allowPrivateWs })) {
     throw new Error(
       [
-        `SECURITY ERROR: Gateway URL "${url}" uses plaintext ws:// to a non-loopback address.`,
+        "SECURITY ERROR: The Gateway URL uses plaintext ws:// to a non-loopback address.",
         "Both credentials and chat data would be exposed to network interception.",
         `Source: ${urlSource}`,
         `Config: ${configPath}`,

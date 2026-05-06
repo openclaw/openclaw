@@ -356,6 +356,11 @@ jobs:
           RELEASE_LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
           RELEASE_CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
+          QA_LIVE_MATRIX_ENABLED: ${{ steps.inputs.outputs.qa_live_matrix_enabled }}
+          QA_LIVE_TELEGRAM_ENABLED: ${{ steps.inputs.outputs.qa_live_telegram_enabled }}
+          QA_LIVE_DISCORD_ENABLED: ${{ steps.inputs.outputs.qa_live_discord_enabled }}
+          QA_LIVE_WHATSAPP_ENABLED: ${{ steps.inputs.outputs.qa_live_whatsapp_enabled }}
+          QA_LIVE_SLACK_ENABLED: ${{ steps.inputs.outputs.qa_live_slack_enabled }}
         run: |
           {
             echo "## Release checks"
@@ -374,7 +379,7 @@ jobs:
             if [[ -n "${RELEASE_CROSS_OS_SUITE_FILTER// }" ]]; then
               echo "- Cross-OS suite filter: \`${RELEASE_CROSS_OS_SUITE_FILTER}\`"
             fi
-            echo "- QA live lanes: Matrix \`${{ steps.inputs.outputs.qa_live_matrix_enabled }}\`, Telegram \`${{ steps.inputs.outputs.qa_live_telegram_enabled }}\`, Discord \`${{ steps.inputs.outputs.qa_live_discord_enabled }}\`, WhatsApp \`${{ steps.inputs.outputs.qa_live_whatsapp_enabled }}\`, Slack \`${{ steps.inputs.outputs.qa_live_slack_enabled }}\`"
+            echo "- QA live lanes: Matrix \`${QA_LIVE_MATRIX_ENABLED}\`, Telegram \`${QA_LIVE_TELEGRAM_ENABLED}\`, Discord \`${QA_LIVE_DISCORD_ENABLED}\`, WhatsApp \`${QA_LIVE_WHATSAPP_ENABLED}\`, Slack \`${QA_LIVE_SLACK_ENABLED}\`"
             if [[ -n "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
               echo "- Package Acceptance package spec: \`${PACKAGE_ACCEPTANCE_PACKAGE_SPEC}\`"
             else
@@ -1267,24 +1272,38 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Verify release check results
+        env:
+          PREPARE_RESULT: ${{ needs.prepare_release_package.result }}
+          INSTALL_SMOKE_RESULT: ${{ needs.install_smoke_release_checks.result }}
+          CROSS_OS_RESULT: ${{ needs.cross_os_release_checks.result }}
+          LIVE_REPO_E2E_RESULT: ${{ needs.live_repo_e2e_release_checks.result }}
+          DOCKER_E2E_RESULT: ${{ needs.docker_e2e_release_checks.result }}
+          PACKAGE_ACCEPTANCE_RESULT: ${{ needs.package_acceptance_release_checks.result }}
+          QA_PARITY_LANE_RESULT: ${{ needs.qa_lab_parity_lane_release_checks.result }}
+          QA_PARITY_REPORT_RESULT: ${{ needs.qa_lab_parity_report_release_checks.result }}
+          QA_LIVE_MATRIX_RESULT: ${{ needs.qa_live_matrix_release_checks.result }}
+          QA_LIVE_TELEGRAM_RESULT: ${{ needs.qa_live_telegram_release_checks.result }}
+          QA_LIVE_DISCORD_RESULT: ${{ needs.qa_live_discord_release_checks.result }}
+          QA_LIVE_WHATSAPP_RESULT: ${{ needs.qa_live_whatsapp_release_checks.result }}
+          QA_LIVE_SLACK_RESULT: ${{ needs.qa_live_slack_release_checks.result }}
         shell: bash
         run: |
           set -euo pipefail
           failed=0
           for item in \
-            "prepare_release_package=${{ needs.prepare_release_package.result }}" \
-            "install_smoke_release_checks=${{ needs.install_smoke_release_checks.result }}" \
-            "cross_os_release_checks=${{ needs.cross_os_release_checks.result }}" \
-            "live_repo_e2e_release_checks=${{ needs.live_repo_e2e_release_checks.result }}" \
-            "docker_e2e_release_checks=${{ needs.docker_e2e_release_checks.result }}" \
-            "package_acceptance_release_checks=${{ needs.package_acceptance_release_checks.result }}" \
-            "qa_lab_parity_lane_release_checks=${{ needs.qa_lab_parity_lane_release_checks.result }}" \
-            "qa_lab_parity_report_release_checks=${{ needs.qa_lab_parity_report_release_checks.result }}" \
-            "qa_live_matrix_release_checks=${{ needs.qa_live_matrix_release_checks.result }}" \
-            "qa_live_telegram_release_checks=${{ needs.qa_live_telegram_release_checks.result }}" \
-            "qa_live_discord_release_checks=${{ needs.qa_live_discord_release_checks.result }}" \
-            "qa_live_whatsapp_release_checks=${{ needs.qa_live_whatsapp_release_checks.result }}" \
-            "qa_live_slack_release_checks=${{ needs.qa_live_slack_release_checks.result }}"
+            "prepare_release_package=${PREPARE_RESULT}" \
+            "install_smoke_release_checks=${INSTALL_SMOKE_RESULT}" \
+            "cross_os_release_checks=${CROSS_OS_RESULT}" \
+            "live_repo_e2e_release_checks=${LIVE_REPO_E2E_RESULT}" \
+            "docker_e2e_release_checks=${DOCKER_E2E_RESULT}" \
+            "package_acceptance_release_checks=${PACKAGE_ACCEPTANCE_RESULT}" \
+            "qa_lab_parity_lane_release_checks=${QA_PARITY_LANE_RESULT}" \
+            "qa_lab_parity_report_release_checks=${QA_PARITY_REPORT_RESULT}" \
+            "qa_live_matrix_release_checks=${QA_LIVE_MATRIX_RESULT}" \
+            "qa_live_telegram_release_checks=${QA_LIVE_TELEGRAM_RESULT}" \
+            "qa_live_discord_release_checks=${QA_LIVE_DISCORD_RESULT}" \
+            "qa_live_whatsapp_release_checks=${QA_LIVE_WHATSAPP_RESULT}" \
+            "qa_live_slack_release_checks=${QA_LIVE_SLACK_RESULT}"
           do
             name="${item%%=*}"
             result="${item#*=}"
