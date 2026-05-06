@@ -119,7 +119,7 @@ describe("program routes", () => {
       listRoute?.run(["node", "openclaw", "channels", "list", "--json", "--no-usage"]),
     ).resolves.toBe(true);
     expect(channelsListCommandMock).toHaveBeenCalledWith(
-      { json: true, usage: false },
+      { json: true, usage: false, all: false },
       expect.any(Object),
     );
 
