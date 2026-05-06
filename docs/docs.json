@@ -1503,6 +1503,7 @@
                       "gateway/security/index",
                       "gateway/security/secure-file-operations",
                       "gateway/security/audit-checks",
+                      "gateway/security/exposure-runbook",
                       "gateway/operator-scopes",
                       "gateway/sandboxing",
                       "gateway/openshell",
