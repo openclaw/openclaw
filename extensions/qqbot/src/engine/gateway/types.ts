@@ -7,6 +7,7 @@
  */
 
 // ============ Logger ============
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { EngineLogger } from "../types.js";
 export type { EngineLogger };
 
@@ -245,7 +246,7 @@ interface GatewayGroupOptions {
 export interface CoreGatewayContext {
   account: GatewayAccount;
   abortSignal: AbortSignal;
-  cfg: unknown;
+  cfg: OpenClawConfig;
   onReady?: (data: unknown) => void;
   /**
    * Invoked when a RESUMED event is received after reconnect.
