@@ -19,8 +19,8 @@ import {
 describe("usage-format", () => {
   const originalAgentDir = process.env.OPENCLAW_AGENT_DIR;
   const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-  let stateDir: string;
   let agentDir: string;
+  let stateDir: string;
 
   beforeEach(async () => {
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-format-"));

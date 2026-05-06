@@ -65,6 +65,27 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     delete process.env.GOOGLE_API_KEY;
   });
 
+  it("declares realtime Talk capabilities for catalog selection", () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+
+    expect(provider.capabilities).toEqual({
+      transports: ["provider-websocket", "gateway-relay"],
+      inputAudioFormats: [
+        { encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 },
+        { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
+      ],
+      outputAudioFormats: [
+        { encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 },
+        { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
+      ],
+      supportsBrowserSession: true,
+      supportsBargeIn: true,
+      supportsToolCalls: true,
+      supportsVideoFrames: true,
+      supportsSessionResumption: true,
+    });
+  });
+
   it("normalizes provider config and cfg model-provider key fallback", () => {
     const provider = buildGoogleRealtimeVoiceProvider();
     const resolved = provider.resolveConfig?.({
@@ -294,7 +315,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     });
     expect(session).toMatchObject({
       provider: "google",
-      transport: "json-pcm-websocket",
+      transport: "provider-websocket",
       protocol: "google-live-bidi",
       clientSecret: "auth_tokens/browser-session",
       websocketUrl:
