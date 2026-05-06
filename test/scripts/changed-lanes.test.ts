@@ -853,6 +853,24 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
   });
 
+  it("routes CanvasA2UI bundle changes to core and tooling instead of all lanes", () => {
+    const result = detectChangedLanes([
+      "apps/shared/OpenClawKit/Tools/CanvasA2UI/bootstrap.js",
+      "apps/shared/OpenClawKit/Tools/CanvasA2UI/rolldown.config.mjs",
+    ]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes).toMatchObject({
+      core: true,
+      coreTests: true,
+      tooling: true,
+      all: false,
+    });
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+  });
+
   it("keeps shared Vitest wiring changes out of check test execution", () => {
     const result = detectChangedLanes(["test/vitest/vitest.shared.config.ts"]);
     const plan = createChangedCheckPlan(result);

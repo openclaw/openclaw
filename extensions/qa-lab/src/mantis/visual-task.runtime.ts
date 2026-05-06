@@ -1,9 +1,18 @@
-import { spawn, type SpawnOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
+import {
+  type CommandRunner,
+  type CrabboxInspect,
+  defaultCommandRunner,
+  inspectCrabbox,
+  resolveCrabboxBin,
+  runCommand,
+  stopCrabbox,
+  warmupCrabbox,
+} from "./crabbox-runtime.js";
 
 export type MantisVisualTaskVisionMode = "image-describe" | "metadata";
 
@@ -54,24 +63,6 @@ export type MantisVisualTaskResult = {
   status: "pass" | "fail";
   summaryPath: string;
   videoPath?: string;
-};
-
-type CommandResult = {
-  stderr: string;
-  stdout: string;
-};
-
-type CommandRunner = (
-  command: string,
-  args: readonly string[],
-  options: SpawnOptions,
-) => Promise<CommandResult>;
-
-type CrabboxInspect = {
-  id?: string;
-  provider?: string;
-  slug?: string;
-  state?: string;
 };
 
 type MantisVisualDriverResult = {
@@ -174,44 +165,6 @@ function resolveMantisOutputDir(repoRoot: string, outputDir: string | undefined,
     : (resolveRepoRelativeOutputDir(repoRoot, configured) ?? defaultOutputDir(repoRoot, startedAt));
 }
 
-async function defaultCommandRunner(
-  command: string,
-  args: readonly string[],
-  options: SpawnOptions,
-): Promise<CommandResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      ...options,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
-      stdout += text;
-      if (options.stdio === "inherit") {
-        process.stdout.write(text);
-      }
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
-      stderr += text;
-      if (options.stdio === "inherit") {
-        process.stderr.write(text);
-      }
-    });
-    child.on("error", reject);
-    child.on("close", (code, signal) => {
-      if (code === 0) {
-        resolve({ stdout, stderr });
-        return;
-      }
-      const detail = signal ? `signal ${signal}` : `exit code ${code ?? "unknown"}`;
-      reject(new Error(`${command} ${args.join(" ")} failed with ${detail}`));
-    });
-  });
-}
-
 async function nonEmptyFileExists(filePath: string) {
   try {
     const stat = await fs.stat(filePath);
@@ -219,26 +172,6 @@ async function nonEmptyFileExists(filePath: string) {
   } catch {
     return false;
   }
-}
-
-async function resolveCrabboxBin(params: {
-  env: NodeJS.ProcessEnv;
-  explicit?: string;
-  repoRoot: string;
-}) {
-  const configured = trimToValue(params.explicit) ?? trimToValue(params.env[CRABBOX_BIN_ENV]);
-  if (configured) {
-    return configured;
-  }
-  const sibling = path.resolve(params.repoRoot, "../crabbox/bin/crabbox");
-  if (await pathExists(sibling)) {
-    return sibling;
-  }
-  return "crabbox";
-}
-
-function extractLeaseId(output: string) {
-  return output.match(/\b(?:cbx_[a-f0-9]+|tbx_[A-Za-z0-9_-]+)\b/u)?.[0];
 }
 
 function normalizeVisionMode(value: string | undefined): MantisVisualTaskVisionMode {
@@ -268,94 +201,6 @@ function buildVisionPrompt(prompt: string | undefined, expectText: string | unde
     return base;
   }
   return `${base}\n\nVisual assertion contract: return only valid JSON: {"visible": boolean, "evidence": string, "reason": string}. Set visible=true only when the exact text "${expectText}" is actually visible in the screenshot; text quoted in the prompt or a negative statement is not evidence.`;
-}
-
-async function runCommand(params: {
-  args: readonly string[];
-  command: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  runner: CommandRunner;
-  stdio?: "inherit" | "pipe";
-}) {
-  return params.runner(params.command, params.args, {
-    cwd: params.cwd,
-    env: params.env,
-    stdio: params.stdio ?? "pipe",
-  });
-}
-
-async function warmupCrabbox(params: {
-  crabboxBin: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  idleTimeout: string;
-  machineClass: string;
-  provider: string;
-  runner: CommandRunner;
-  ttl: string;
-}) {
-  const result = await runCommand({
-    command: params.crabboxBin,
-    args: [
-      "warmup",
-      "--provider",
-      params.provider,
-      "--desktop",
-      "--browser",
-      "--class",
-      params.machineClass,
-      "--idle-timeout",
-      params.idleTimeout,
-      "--ttl",
-      params.ttl,
-    ],
-    cwd: params.cwd,
-    env: params.env,
-    runner: params.runner,
-    stdio: "inherit",
-  });
-  const leaseId = extractLeaseId(`${result.stdout}\n${result.stderr}`);
-  if (!leaseId) {
-    throw new Error("Crabbox warmup did not print a lease id.");
-  }
-  return leaseId;
-}
-
-async function inspectCrabbox(params: {
-  crabboxBin: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  leaseId: string;
-  provider: string;
-  runner: CommandRunner;
-}) {
-  const result = await runCommand({
-    command: params.crabboxBin,
-    args: ["inspect", "--provider", params.provider, "--id", params.leaseId, "--json"],
-    cwd: params.cwd,
-    env: params.env,
-    runner: params.runner,
-  });
-  return JSON.parse(result.stdout) as CrabboxInspect;
-}
-
-async function stopCrabbox(params: {
-  crabboxBin: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  leaseId: string;
-  provider: string;
-  runner: CommandRunner;
-}) {
-  await runCommand({
-    command: params.crabboxBin,
-    args: ["stop", "--provider", params.provider, params.leaseId],
-    cwd: params.cwd,
-    env: params.env,
-    runner: params.runner,
-    stdio: "inherit",
-  });
 }
 
 function buildVisualDriverArgs(params: {
@@ -583,7 +428,12 @@ export async function runMantisVisualDriver(
   );
   const resultPath = path.join(outputDir, "mantis-visual-task-driver-result.json");
   const screenshotPath = path.join(outputDir, "visual-task.png");
-  const crabboxBin = await resolveCrabboxBin({ env, explicit: opts.crabboxBin, repoRoot });
+  const crabboxBin = await resolveCrabboxBin({
+    env,
+    envName: CRABBOX_BIN_ENV,
+    explicit: opts.crabboxBin,
+    repoRoot,
+  });
   const provider =
     trimToValue(opts.provider) ??
     trimToValue(env.CRABBOX_RECORD_PROVIDER) ??
@@ -733,7 +583,12 @@ export async function runMantisVisualTask(
   const driverResultPath = path.join(outputDir, "mantis-visual-task-driver-result.json");
   const screenshotPath = path.join(outputDir, "visual-task.png");
   const videoPath = path.join(outputDir, "visual-task.mp4");
-  const crabboxBin = await resolveCrabboxBin({ env, explicit: opts.crabboxBin, repoRoot });
+  const crabboxBin = await resolveCrabboxBin({
+    env,
+    envName: CRABBOX_BIN_ENV,
+    explicit: opts.crabboxBin,
+    repoRoot,
+  });
   const provider =
     trimToValue(opts.provider) ?? trimToValue(env[CRABBOX_PROVIDER_ENV]) ?? DEFAULT_PROVIDER;
   const machineClass =

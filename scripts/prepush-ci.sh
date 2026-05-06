@@ -17,7 +17,6 @@ run_step() {
 run_protocol_ci_mirror() {
   local targets=(
     "dist/protocol.schema.json"
-    "apps/macos/Sources/OpenClawProtocol/GatewayModels.swift"
     "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift"
   )
   local before after
