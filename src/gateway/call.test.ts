@@ -727,6 +727,28 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.remoteFallbackNote).toBeUndefined();
   });
 
+  it("maps ssh transport remote url to loopback tunnel endpoint", () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        bind: "tailnet",
+        remote: {
+          transport: "ssh",
+          url: "ws://203.0.113.10:18789/ws",
+          sshTarget: "user@203.0.113.10",
+        },
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue("100.64.0.9");
+
+    const details = buildGatewayConnectionDetails();
+
+    expect(details.url).toBe("ws://127.0.0.1:18789/ws");
+    expect(details.urlSource).toBe("config gateway.remote.url (ssh tunnel local endpoint)");
+    expect(details.bindDetail).toBeUndefined();
+  });
+
   it("uses env OPENCLAW_GATEWAY_URL when set", () => {
     getRuntimeConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
     resolveGatewayPort.mockReturnValue(18800);
