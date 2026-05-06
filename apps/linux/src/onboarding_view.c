@@ -1,0 +1,1744 @@
+/*
+ * onboarding_view.c
+ *
+ * View/rendering layer for the OpenClaw Linux companion onboarding flow.
+ *
+ * Owns onboarding page widgets, page construction, page rebuild/reset,
+ * and live content rendering. The controller/lifecycle decisions remain
+ * in `onboarding.c`.
+ *
+ * Author: Thiago Camargo <thiagocmc@proton.me>
+ */
+
+#include "onboarding_view.h"
+
+#include <adwaita.h>
+#include <string.h>
+
+#include "gateway_client.h"
+#include "gateway_config.h"
+#include "gateway_remote_config.h"
+#include "gateway_rpc.h"
+#include "onboarding_bootstrap.h"
+#include "onboarding_bootstrap_resolver.h"
+#include "onboarding_chat_validation.h"
+#include "onboarding_cli_detect.h"
+#include "onboarding_wizard.h"
+#include "product_coordinator.h"
+#include "product_state.h"
+#include "readiness.h"
+#include "remote_endpoint.h"
+#include "remote_probe.h"
+#include "runtime_paths.h"
+#include "state.h"
+#include "chat_window.h"
+
+extern void systemd_start_gateway(void);
+
+static OnboardingViewCallbacks onboarding_view_callbacks = {0};
+static GtkWidget *onboard_gateway_explanation_label = NULL;
+static GtkWidget *onboard_gateway_stage_config_icon = NULL;
+static GtkWidget *onboard_gateway_stage_config_detail = NULL;
+static GtkWidget *onboard_gateway_stage_service_icon = NULL;
+static GtkWidget *onboard_gateway_stage_service_detail = NULL;
+static GtkWidget *onboard_gateway_stage_connection_icon = NULL;
+static GtkWidget *onboard_gateway_stage_connection_detail = NULL;
+static GtkWidget *onboard_gateway_next_action_box = NULL;
+static GtkWidget *onboard_gateway_next_action_value = NULL;
+static GtkWidget *onboard_whats_next_guidance_label = NULL;
+static GtkWidget *onboard_whats_next_dashboard_button = NULL;
+static GtkWidget *onboard_environment_checks_box = NULL;
+static GtkWidget *onboard_cli_install_status_label = NULL;
+static GtkWidget *onboard_chat_validation_status_label = NULL;
+static GtkWidget *onboard_bootstrap_setup_status_label = NULL;
+static GtkWidget *onboard_bootstrap_setup_output_label = NULL;
+static GtkWidget *onboard_bootstrap_install_status_label = NULL;
+static GtkWidget *onboard_bootstrap_install_output_label = NULL;
+static GtkWidget *onboard_start_gateway_status_label = NULL;
+static GtkWidget *onboard_wizard_status_label = NULL;
+static GtkWidget *onboard_wizard_step_box = NULL;
+static GtkWidget *onboard_wizard_answer_widget = NULL;
+static GPtrArray *onboard_wizard_multiselect_checks = NULL;
+static OnboardingBootstrapRun *onboard_bootstrap_setup_run = NULL;
+static OnboardingBootstrapRun *onboard_bootstrap_install_run = NULL;
+static OnboardingWizardModel *onboard_wizard_model = NULL;
+static OnboardingRoute onboard_view_current_route = ONBOARDING_SHOW_SHORTENED;
+
+/* ── Remote-mode subflow state (lives across rebuilds) ── */
+static gboolean g_onboard_chose_remote = FALSE;
+static GtkWidget *onboard_remote_carousel_ref = NULL;
+static GtkWidget *onboard_remote_transport_combo = NULL;
+static GtkStringList *onboard_remote_transport_model = NULL;
+static gboolean onboard_remote_transport_programmatic = FALSE;
+static GtkWidget *onboard_remote_url_entry = NULL;
+static GtkWidget *onboard_remote_ssh_target_entry = NULL;
+static GtkWidget *onboard_remote_ssh_identity_entry = NULL;
+/*
+ * Onboarding-side gateway auth rows. Always visible across both
+ * transports; mirror gateway.remote.token / gateway.remote.password
+ * with the writer's "empty string removes the key" semantics.
+ */
+static GtkWidget *onboard_remote_token_entry = NULL;
+static GtkWidget *onboard_remote_password_entry = NULL;
+static GtkWidget *onboard_remote_status_label = NULL;
+static GtkWidget *onboard_remote_test_btn = NULL;
+static GtkWidget *onboard_remote_apply_btn = NULL;
+static GCancellable *onboard_remote_probe_cancel = NULL;
+
+static void on_next_clicked(GtkButton *button, gpointer user_data) {
+    (void)button;
+
+    GtkWidget *carousel = GTK_WIDGET(user_data);
+    double n_pages = adw_carousel_get_n_pages(ADW_CAROUSEL(carousel));
+    double pos = adw_carousel_get_position(ADW_CAROUSEL(carousel));
+    if (pos + 1 < n_pages) {
+        adw_carousel_scroll_to(ADW_CAROUSEL(carousel),
+                               GTK_WIDGET(adw_carousel_get_nth_page(ADW_CAROUSEL(carousel), pos + 1)),
+                               TRUE);
+    }
+}
+
+static void on_back_clicked(GtkButton *button, gpointer user_data) {
+    (void)button;
+
+    GtkWidget *carousel = GTK_WIDGET(user_data);
+    double pos = adw_carousel_get_position(ADW_CAROUSEL(carousel));
+    if (pos >= 1.0) {
+        adw_carousel_scroll_to(ADW_CAROUSEL(carousel),
+                               GTK_WIDGET(adw_carousel_get_nth_page(ADW_CAROUSEL(carousel), pos - 1)),
+                               TRUE);
+    }
+}
+
+static void onboard_scroll_to_next(GtkWidget *carousel) {
+    if (!carousel || !ADW_IS_CAROUSEL(carousel)) return;
+    double n_pages = adw_carousel_get_n_pages(ADW_CAROUSEL(carousel));
+    double pos = adw_carousel_get_position(ADW_CAROUSEL(carousel));
+    if (pos + 1 < n_pages) {
+        GtkWidget *target = GTK_WIDGET(adw_carousel_get_nth_page(ADW_CAROUSEL(carousel), pos + 1));
+        if (target) {
+            adw_carousel_scroll_to(ADW_CAROUSEL(carousel), target, TRUE);
+        }
+    }
+}
+
+static GtkWidget* onboarding_page_box(gboolean center) {
+    GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    gtk_widget_set_margin_start(page, 40);
+    gtk_widget_set_margin_end(page, 40);
+    gtk_widget_set_margin_top(page, 40);
+    gtk_widget_set_margin_bottom(page, 40);
+    if (center) {
+        gtk_widget_set_valign(page, GTK_ALIGN_CENTER);
+    }
+    return page;
+}
+
+static GtkWidget* onboarding_wrapped_label(const gchar *text, const gchar *css_class) {
+    GtkWidget *label = gtk_label_new(text);
+    if (css_class) {
+        gtk_widget_add_css_class(label, css_class);
+    }
+    gtk_label_set_wrap(GTK_LABEL(label), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(label), 0.0);
+    return label;
+}
+
+static void onboarding_render_environment_checks(GtkWidget *container) {
+    if (!container || !GTK_IS_BOX(container)) {
+        return;
+    }
+
+    GtkWidget *child = NULL;
+    while ((child = gtk_widget_get_first_child(container)) != NULL) {
+        gtk_box_remove(GTK_BOX(container), child);
+    }
+
+    SystemdState *sys = state_get_systemd();
+    g_autofree gchar *config_path = NULL;
+    g_autofree gchar *state_dir = NULL;
+    g_autofree gchar *profile = NULL;
+    systemd_get_runtime_context(&profile, &state_dir, &config_path);
+
+    GatewayConfig *cfg = gateway_client_get_config();
+    RuntimeEffectivePaths effective_paths = {0};
+    runtime_effective_paths_resolve(cfg, profile, state_dir, config_path, &effective_paths);
+
+    EnvironmentCheckResult result;
+    environment_check_build(sys,
+                            effective_paths.effective_config_path,
+                            effective_paths.effective_state_dir,
+                            &result);
+
+    for (int i = 0; i < result.count; i++) {
+        GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        gtk_widget_set_margin_top(row, 4);
+
+        const char *icon = result.rows[i].passed ? "✅" : "❌";
+        GtkWidget *icon_label = gtk_label_new(icon);
+        gtk_box_append(GTK_BOX(row), icon_label);
+
+        g_autofree gchar *text = g_strdup_printf("%s: %s",
+                                                 result.rows[i].label,
+                                                 result.rows[i].detail ? result.rows[i].detail : "");
+        GtkWidget *detail = gtk_label_new(text);
+        gtk_label_set_wrap(GTK_LABEL(detail), TRUE);
+        gtk_label_set_xalign(GTK_LABEL(detail), 0.0);
+        gtk_widget_set_hexpand(detail, TRUE);
+        gtk_box_append(GTK_BOX(row), detail);
+
+        gtk_box_append(GTK_BOX(container), row);
+    }
+
+    environment_check_result_clear(&result);
+    runtime_effective_paths_clear(&effective_paths);
+}
+
+static void onboarding_refresh_environment_content(void) {
+    if (!onboard_environment_checks_box) {
+        return;
+    }
+
+    onboarding_render_environment_checks(onboard_environment_checks_box);
+}
+
+static const char* stage_icon(OnboardingStageState state) {
+    switch (state) {
+    case ONBOARDING_STAGE_COMPLETE:
+        return "✅";
+    case ONBOARDING_STAGE_IN_PROGRESS:
+        return "⏳";
+    case ONBOARDING_STAGE_PENDING:
+    default:
+        return "○";
+    }
+}
+
+static const char* stage_detail_for_config(OnboardingStageState state) {
+    switch (state) {
+    case ONBOARDING_STAGE_COMPLETE:
+        return "Configuration validated";
+    case ONBOARDING_STAGE_IN_PROGRESS:
+        return "Resolving configuration issues";
+    case ONBOARDING_STAGE_PENDING:
+    default:
+        return "Configuration not ready yet";
+    }
+}
+
+static const char* stage_detail_for_service(OnboardingStageState state) {
+    switch (state) {
+    case ONBOARDING_STAGE_COMPLETE:
+        return "Service installed and active";
+    case ONBOARDING_STAGE_IN_PROGRESS:
+        return "Service install or activation in progress";
+    case ONBOARDING_STAGE_PENDING:
+    default:
+        return "Service setup pending";
+    }
+}
+
+static const char* stage_detail_for_connection(OnboardingStageState state) {
+    switch (state) {
+    case ONBOARDING_STAGE_COMPLETE:
+        return "Gateway connection established";
+    case ONBOARDING_STAGE_IN_PROGRESS:
+        return "Waiting for stable connection";
+    case ONBOARDING_STAGE_PENDING:
+    default:
+        return "Connection not attempted yet";
+    }
+}
+
+static GtkWidget* build_stage_row(const char *label,
+                                  OnboardingStageState state,
+                                  const char *detail,
+                                  GtkWidget **out_icon,
+                                  GtkWidget **out_detail) {
+    GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_margin_top(row, 2);
+
+    GtkWidget *icon = gtk_label_new(stage_icon(state));
+    if (out_icon) {
+        *out_icon = icon;
+    }
+    gtk_box_append(GTK_BOX(row), icon);
+
+    GtkWidget *text_col = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    gtk_widget_set_hexpand(text_col, TRUE);
+
+    GtkWidget *title = gtk_label_new(label);
+    gtk_widget_add_css_class(title, "heading");
+    gtk_label_set_xalign(GTK_LABEL(title), 0.0);
+    gtk_box_append(GTK_BOX(text_col), title);
+
+    GtkWidget *detail_label = gtk_label_new(detail);
+    if (out_detail) {
+        *out_detail = detail_label;
+    }
+    gtk_widget_add_css_class(detail_label, "dim-label");
+    gtk_label_set_xalign(GTK_LABEL(detail_label), 0.0);
+    gtk_label_set_wrap(GTK_LABEL(detail_label), TRUE);
+    gtk_box_append(GTK_BOX(text_col), detail_label);
+
+    gtk_box_append(GTK_BOX(row), text_col);
+    return row;
+}
+
+/* ── Remote-mode subflow helpers ── */
+
+static const gchar* onboard_remote_selected_transport(void) {
+    if (!onboard_remote_transport_combo ||
+        !ADW_IS_COMBO_ROW(onboard_remote_transport_combo)) {
+        return "direct";
+    }
+    guint sel = adw_combo_row_get_selected(ADW_COMBO_ROW(onboard_remote_transport_combo));
+    return sel == 1u ? "ssh" : "direct";
+}
+
+static void onboard_remote_set_status(const gchar *text) {
+    if (!onboard_remote_status_label || !GTK_IS_LABEL(onboard_remote_status_label)) return;
+    gtk_label_set_text(GTK_LABEL(onboard_remote_status_label), text ? text : "");
+}
+
+static const gchar* onboard_remote_entry_text(GtkWidget *entry) {
+    if (!entry || !ADW_IS_ENTRY_ROW(entry)) return "";
+    const gchar *t = gtk_editable_get_text(GTK_EDITABLE(entry));
+    return t ? t : "";
+}
+
+static void onboard_remote_apply_field_visibility(void) {
+    const gchar *t = onboard_remote_selected_transport();
+    gboolean ssh = (g_strcmp0(t, "ssh") == 0);
+    if (onboard_remote_url_entry) gtk_widget_set_visible(onboard_remote_url_entry, !ssh);
+    if (onboard_remote_ssh_target_entry) gtk_widget_set_visible(onboard_remote_ssh_target_entry, ssh);
+    if (onboard_remote_ssh_identity_entry) gtk_widget_set_visible(onboard_remote_ssh_identity_entry, ssh);
+}
+
+static void on_onboard_remote_transport_notify(GObject *object,
+                                               GParamSpec *pspec,
+                                               gpointer user_data) {
+    (void)object; (void)pspec; (void)user_data;
+    if (onboard_remote_transport_programmatic) return;
+    onboard_remote_apply_field_visibility();
+}
+
+/*
+ * Validate + normalize a user-entered URL via the Remote Connection
+ * Mode contract. Mirrors the General section: the single validator for
+ * direct URLs across the whole companion is
+ * gateway_remote_config_normalize_url(). http/https are rejected on
+ * purpose; the contract is ws/wss-only.
+ */
+static gchar* onboard_remote_validate_and_normalize_url(const gchar *url,
+                                                        gchar **out_host,
+                                                        gint *out_port,
+                                                        gboolean *out_tls,
+                                                        gchar **out_error) {
+    if (out_host) *out_host = NULL;
+    if (out_port) *out_port = 0;
+    if (out_tls) *out_tls = FALSE;
+    if (out_error) *out_error = NULL;
+
+    if (!url || url[0] == '\0') {
+        if (out_error) *out_error = g_strdup("Gateway URL is empty");
+        return NULL;
+    }
+    g_autofree gchar *trimmed = g_strstrip(g_strdup(url));
+    if (trimmed[0] == '\0') {
+        if (out_error) *out_error = g_strdup("Gateway URL is empty");
+        return NULL;
+    }
+
+    gchar *normalized = gateway_remote_config_normalize_url(url,
+                                                            out_host,
+                                                            out_port,
+                                                            out_tls);
+    if (!normalized) {
+        if (out_error) {
+            *out_error = g_strdup(
+                "URL must be wss://host[:port] or ws://loopback[:port]");
+        }
+        return NULL;
+    }
+    return normalized;
+}
+
+static gchar* onboard_remote_resolve_config_path(void) {
+    g_autofree gchar *profile = NULL;
+    g_autofree gchar *state_dir = NULL;
+    g_autofree gchar *config_path = NULL;
+    systemd_get_runtime_context(&profile, &state_dir, &config_path);
+
+    GatewayConfig *cfg = gateway_client_get_config();
+    RuntimeEffectivePaths paths = {0};
+    runtime_effective_paths_resolve(cfg, profile, state_dir, config_path, &paths);
+    gchar *out = paths.effective_config_path
+                 ? g_strdup(paths.effective_config_path) : NULL;
+    runtime_effective_paths_clear(&paths);
+    return out;
+}
+
+static void onboard_remote_probe_done(const RemoteProbeResult *result, gpointer user_data) {
+    (void)user_data;
+    g_clear_object(&onboard_remote_probe_cancel);
+    if (onboard_remote_test_btn) gtk_widget_set_sensitive(onboard_remote_test_btn, TRUE);
+    if (!result) {
+        onboard_remote_set_status("probe completed without a result");
+        return;
+    }
+    g_autofree gchar *line = NULL;
+    if (result->kind == REMOTE_PROBE_OK) {
+        line = g_strdup_printf("✅ %s%s%s",
+                               result->title ? result->title : "ok",
+                               result->detail ? " — " : "",
+                               result->detail ? result->detail : "");
+    } else {
+        line = g_strdup_printf("⚠️ %s%s%s",
+                               result->title ? result->title : "failed",
+                               result->detail ? " — " : "",
+                               result->detail ? result->detail : "");
+    }
+    onboard_remote_set_status(line);
+}
+
+static void on_onboard_remote_test_clicked(GtkButton *button, gpointer user_data) {
+    (void)button; (void)user_data;
+    if (onboard_remote_probe_cancel) {
+        g_cancellable_cancel(onboard_remote_probe_cancel);
+        g_clear_object(&onboard_remote_probe_cancel);
+    }
+    onboard_remote_probe_cancel = g_cancellable_new();
+    gtk_widget_set_sensitive(onboard_remote_test_btn, FALSE);
+    onboard_remote_set_status("Testing…");
+
+    const gchar *transport = onboard_remote_selected_transport();
+    if (g_strcmp0(transport, "ssh") == 0) {
+        const gchar *target = onboard_remote_entry_text(onboard_remote_ssh_target_entry);
+        const gchar *identity = onboard_remote_entry_text(onboard_remote_ssh_identity_entry);
+        gchar *user = NULL, *host = NULL;
+        gint port = 22;
+        if (!gateway_remote_config_parse_ssh_target(target, &user, &host, &port)) {
+            gtk_widget_set_sensitive(onboard_remote_test_btn, TRUE);
+            onboard_remote_set_status("⚠️ invalid SSH target — expected user@host[:port]");
+            g_clear_object(&onboard_remote_probe_cancel);
+            return;
+        }
+        /*
+         * Test the same gateway port the coordinator will forward to
+         * once SSH mode is applied. Onboarding usually runs before any
+         * config has loaded, so the GATEWAY_DEFAULT_PORT fallback is
+         * the common path; once an explicit gateway.port has been
+         * declared the test must honor it to avoid a spurious failure.
+         */
+        GatewayConfig *cfg = gateway_client_get_config();
+        gint gateway_port = (cfg && cfg->port > 0) ? cfg->port
+                                                   : GATEWAY_DEFAULT_PORT;
+        remote_probe_ssh_async(user, host, port,
+                               (identity && identity[0] != '\0') ? identity : NULL,
+                               gateway_port,
+                               onboard_remote_probe_cancel,
+                               onboard_remote_probe_done, NULL);
+        g_free(user); g_free(host);
+        return;
+    }
+
+    /* direct */
+    const gchar *url = onboard_remote_entry_text(onboard_remote_url_entry);
+    g_autofree gchar *host = NULL;
+    gint port = 0; gboolean tls = FALSE;
+    g_autofree gchar *err = NULL;
+    g_autofree gchar *normalized = onboard_remote_validate_and_normalize_url(
+        url, &host, &port, &tls, &err);
+    if (!normalized) {
+        gtk_widget_set_sensitive(onboard_remote_test_btn, TRUE);
+        g_autofree gchar *line = g_strdup_printf("⚠️ %s", err ? err : "invalid URL");
+        onboard_remote_set_status(line);
+        g_clear_object(&onboard_remote_probe_cancel);
+        return;
+    }
+    remote_probe_direct_async(normalized,
+                              onboard_remote_probe_cancel,
+                              onboard_remote_probe_done, NULL);
+}
+
+static void on_onboard_remote_apply_clicked(GtkButton *button, gpointer user_data) {
+    (void)button; (void)user_data;
+
+    const gchar *transport = onboard_remote_selected_transport();
+    const gchar *url = onboard_remote_entry_text(onboard_remote_url_entry);
+    const gchar *ssh_target = onboard_remote_entry_text(onboard_remote_ssh_target_entry);
+    const gchar *ssh_identity = onboard_remote_entry_text(onboard_remote_ssh_identity_entry);
+    const gchar *remote_token = onboard_remote_entry_text(onboard_remote_token_entry);
+    const gchar *remote_password = onboard_remote_entry_text(onboard_remote_password_entry);
+
+    g_autofree gchar *normalized_url = NULL;
+    if (g_strcmp0(transport, "ssh") == 0) {
+        gchar *u = NULL, *h = NULL; gint p = 22;
+        if (!gateway_remote_config_parse_ssh_target(ssh_target, &u, &h, &p)) {
+            onboard_remote_set_status("⚠️ invalid SSH target — expected user@host[:port]");
+            g_free(u); g_free(h);
+            return;
+        }
+        g_free(u); g_free(h);
+    } else {
+        g_autofree gchar *host = NULL;
+        gint port = 0; gboolean tls = FALSE;
+        g_autofree gchar *err = NULL;
+        normalized_url = onboard_remote_validate_and_normalize_url(
+            url, &host, &port, &tls, &err);
+        if (!normalized_url) {
+            g_autofree gchar *line = g_strdup_printf("⚠️ %s",
+                                                     err ? err : "invalid URL");
+            onboard_remote_set_status(line);
+            return;
+        }
+    }
+
+    g_autofree gchar *config_path = onboard_remote_resolve_config_path();
+    if (!config_path || config_path[0] == '\0') {
+        onboard_remote_set_status("⚠️ could not resolve config path");
+        return;
+    }
+
+    g_autofree gchar *write_err = NULL;
+    /*
+     * Persist the normalized URL for the direct transport so a reload
+     * via gateway_remote_config_parse accepts it unchanged. For SSH
+     * transport, pass "" so the writer REMOVES gateway.remote.url —
+     * the URL row is hidden but may still hold stale text from when
+     * the operator was editing direct settings, and a present-but-
+     * invalid url poisons the SSH config on reload.
+     */
+    const gchar *url_to_persist =
+        (g_strcmp0(transport, "ssh") == 0)
+            ? ""
+            : (normalized_url ? normalized_url : "");
+    if (!gateway_config_write_remote_settings(config_path,
+                                              "remote",
+                                              transport,
+                                              url_to_persist,
+                                              ssh_target,
+                                              ssh_identity,
+                                              remote_token,
+                                              remote_password,
+                                              &write_err)) {
+        g_autofree gchar *line = g_strdup_printf("⚠️ save failed — %s",
+                                                 write_err ? write_err : "?");
+        onboard_remote_set_status(line);
+        return;
+    }
+
+    if (!product_coordinator_request_set_connection_mode(PRODUCT_CONNECTION_MODE_REMOTE)) {
+        onboard_remote_set_status("⚠️ failed to set connection mode to remote");
+        return;
+    }
+    gateway_client_refresh();
+    onboard_remote_set_status("✅ Saved. You can advance to the final step.");
+
+    /* Auto-advance to the next onboarding step if we have a carousel reference. */
+    if (onboard_remote_carousel_ref &&
+        ADW_IS_CAROUSEL(onboard_remote_carousel_ref)) {
+        onboard_scroll_to_next(onboard_remote_carousel_ref);
+    }
+}
+
+static void on_onboard_choose_local_clicked(GtkButton *button, gpointer user_data) {
+    (void)button;
+    GtkWidget *carousel = GTK_WIDGET(user_data);
+    g_onboard_chose_remote = FALSE;
+    /* Clear any persisted REMOTE intent: leave it as LOCAL. */
+    (void)product_coordinator_request_set_connection_mode(PRODUCT_CONNECTION_MODE_LOCAL);
+    /* Rebuild the carousel with the local page set. */
+    onboarding_view_rebuild_pages(carousel, ONBOARDING_SHOW_FULL,
+                                  &onboarding_view_callbacks);
+    /* Advance to the gateway page (position 2: welcome, mode-choice, gateway). */
+    guint n_pages = (guint)adw_carousel_get_n_pages(ADW_CAROUSEL(carousel));
+    if (n_pages > 2) {
+        GtkWidget *target = GTK_WIDGET(adw_carousel_get_nth_page(ADW_CAROUSEL(carousel), 2));
+        if (target) adw_carousel_scroll_to(ADW_CAROUSEL(carousel), target, TRUE);
+    }
+}
+
+static void on_onboard_choose_remote_clicked(GtkButton *button, gpointer user_data) {
+    (void)button;
+    GtkWidget *carousel = GTK_WIDGET(user_data);
+    g_onboard_chose_remote = TRUE;
+    onboarding_view_rebuild_pages(carousel, ONBOARDING_SHOW_FULL,
+                                  &onboarding_view_callbacks);
+    /* Advance to the remote-setup page (position 2). */
+    guint n_pages = (guint)adw_carousel_get_n_pages(ADW_CAROUSEL(carousel));
+    if (n_pages > 2) {
+        GtkWidget *target = GTK_WIDGET(adw_carousel_get_nth_page(ADW_CAROUSEL(carousel), 2));
+        if (target) adw_carousel_scroll_to(ADW_CAROUSEL(carousel), target, TRUE);
+    }
+}
+
+static void on_onboard_configure_later_clicked(GtkButton *button, gpointer user_data) {
+    (void)button;
+    GtkWidget *carousel = GTK_WIDGET(user_data);
+    g_onboard_chose_remote = FALSE;
+    (void)product_coordinator_request_set_connection_mode(PRODUCT_CONNECTION_MODE_UNSPECIFIED);
+    onboarding_view_rebuild_pages(carousel, ONBOARDING_SHOW_FULL,
+                                  &onboarding_view_callbacks);
+    onboard_scroll_to_next(carousel);
+}
+
+static GtkWidget* build_mode_choice_page(GtkWidget *carousel) {
+    GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 16);
+    gtk_widget_set_margin_start(page, 40);
+    gtk_widget_set_margin_end(page, 40);
+    gtk_widget_set_margin_top(page, 40);
+    gtk_widget_set_margin_bottom(page, 40);
+    gtk_widget_set_valign(page, GTK_ALIGN_CENTER);
+
+    GtkWidget *title = gtk_label_new("How do you want to connect?");
+    gtk_widget_add_css_class(title, "title-2");
+    gtk_label_set_xalign(GTK_LABEL(title), 0.0);
+    gtk_box_append(GTK_BOX(page), title);
+
+    GtkWidget *desc = gtk_label_new(
+        "OpenClaw can run a gateway on this machine, or connect to one running on a remote host. "
+        "If you're not sure, choose Local — you can switch later from the General settings.");
+    gtk_label_set_wrap(GTK_LABEL(desc), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(desc), 0.0);
+    gtk_box_append(GTK_BOX(page), desc);
+
+    GtkWidget *btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    gtk_widget_set_halign(btn_row, GTK_ALIGN_CENTER);
+    gtk_widget_set_margin_top(btn_row, 24);
+
+    GtkWidget *local_btn = gtk_button_new_with_label("Use Local Gateway");
+    gtk_widget_add_css_class(local_btn, "pill");
+    g_signal_connect(local_btn, "clicked",
+                     G_CALLBACK(on_onboard_choose_local_clicked), carousel);
+    gtk_box_append(GTK_BOX(btn_row), local_btn);
+
+    GtkWidget *remote_btn = gtk_button_new_with_label("Use Remote Gateway");
+    gtk_widget_add_css_class(remote_btn, "pill");
+    gtk_widget_add_css_class(remote_btn, "suggested-action");
+    g_signal_connect(remote_btn, "clicked",
+                     G_CALLBACK(on_onboard_choose_remote_clicked), carousel);
+    gtk_box_append(GTK_BOX(btn_row), remote_btn);
+
+    GtkWidget *later_btn = gtk_button_new_with_label("Configure Later");
+    g_signal_connect(later_btn, "clicked",
+                     G_CALLBACK(on_onboard_configure_later_clicked), carousel);
+    gtk_box_append(GTK_BOX(btn_row), later_btn);
+
+    gtk_box_append(GTK_BOX(page), btn_row);
+
+    GtkWidget *back_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_halign(back_row, GTK_ALIGN_CENTER);
+    gtk_widget_set_margin_top(back_row, 16);
+    GtkWidget *back_btn = gtk_button_new_with_label("Back");
+    g_signal_connect(back_btn, "clicked", G_CALLBACK(on_back_clicked), carousel);
+    gtk_box_append(GTK_BOX(back_row), back_btn);
+    gtk_box_append(GTK_BOX(page), back_row);
+    return page;
+}
+
+static GtkWidget* build_remote_setup_page(GtkWidget *carousel) {
+    onboard_remote_carousel_ref = carousel;
+
+    GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    gtk_widget_set_margin_start(page, 40);
+    gtk_widget_set_margin_end(page, 40);
+    gtk_widget_set_margin_top(page, 32);
+    gtk_widget_set_margin_bottom(page, 32);
+
+    GtkWidget *title = gtk_label_new("Remote Gateway Setup");
+    gtk_widget_add_css_class(title, "title-2");
+    gtk_label_set_xalign(GTK_LABEL(title), 0.0);
+    gtk_box_append(GTK_BOX(page), title);
+
+    GtkWidget *desc = gtk_label_new(
+        "Tell the companion how to reach the remote gateway. Use Direct if the gateway URL "
+        "is reachable from this machine, or SSH to forward through an intermediate host.");
+    gtk_label_set_wrap(GTK_LABEL(desc), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(desc), 0.0);
+    gtk_box_append(GTK_BOX(page), desc);
+
+    GtkWidget *prefs = adw_preferences_group_new();
+    gtk_widget_set_margin_top(prefs, 16);
+    gtk_box_append(GTK_BOX(page), prefs);
+
+    onboard_remote_transport_combo = adw_combo_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(onboard_remote_transport_combo),
+                                  "Transport");
+    GtkStringList *m = gtk_string_list_new(NULL);
+    gtk_string_list_append(m, "Direct (gateway reachable on the network)");
+    gtk_string_list_append(m, "SSH (forward through a remote host)");
+    g_clear_object(&onboard_remote_transport_model);
+    onboard_remote_transport_model = m; /* combo takes its own ref */
+    adw_combo_row_set_model(ADW_COMBO_ROW(onboard_remote_transport_combo),
+                            G_LIST_MODEL(m));
+    onboard_remote_transport_programmatic = TRUE;
+    adw_combo_row_set_selected(ADW_COMBO_ROW(onboard_remote_transport_combo), 0);
+    onboard_remote_transport_programmatic = FALSE;
+    g_signal_connect(onboard_remote_transport_combo, "notify::selected",
+                     G_CALLBACK(on_onboard_remote_transport_notify), NULL);
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(prefs),
+                              onboard_remote_transport_combo);
+
+    onboard_remote_url_entry = adw_entry_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(onboard_remote_url_entry),
+                                  "Gateway URL");
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(prefs), onboard_remote_url_entry);
+
+    onboard_remote_ssh_target_entry = adw_entry_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(onboard_remote_ssh_target_entry),
+                                  "SSH Target (user@host[:port])");
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(prefs),
+                              onboard_remote_ssh_target_entry);
+
+    onboard_remote_ssh_identity_entry = adw_entry_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(onboard_remote_ssh_identity_entry),
+                                  "SSH Identity (private key path, optional)");
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(prefs),
+                              onboard_remote_ssh_identity_entry);
+
+    /*
+     * Gateway auth rows mirror gateway.remote.token /
+     * gateway.remote.password. Always visible across transports because
+     * either transport may need a bearer / password depending on the
+     * remote gateway's configured auth.mode.
+     */
+    onboard_remote_token_entry = adw_entry_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(onboard_remote_token_entry),
+                                  "Gateway Token (optional)");
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(prefs),
+                              onboard_remote_token_entry);
+
+    onboard_remote_password_entry = adw_password_entry_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(onboard_remote_password_entry),
+                                  "Gateway Password (optional)");
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(prefs),
+                              onboard_remote_password_entry);
+
+    onboard_remote_apply_field_visibility();
+
+    GtkWidget *btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_halign(btn_row, GTK_ALIGN_CENTER);
+    gtk_widget_set_margin_top(btn_row, 16);
+
+    GtkWidget *back_btn = gtk_button_new_with_label("Back");
+    g_signal_connect(back_btn, "clicked", G_CALLBACK(on_back_clicked), carousel);
+    gtk_box_append(GTK_BOX(btn_row), back_btn);
+
+    onboard_remote_test_btn = gtk_button_new_with_label("Test Connection");
+    g_signal_connect(onboard_remote_test_btn, "clicked",
+                     G_CALLBACK(on_onboard_remote_test_clicked), NULL);
+    gtk_box_append(GTK_BOX(btn_row), onboard_remote_test_btn);
+
+    onboard_remote_apply_btn = gtk_button_new_with_label("Save & Apply");
+    gtk_widget_add_css_class(onboard_remote_apply_btn, "suggested-action");
+    g_signal_connect(onboard_remote_apply_btn, "clicked",
+                     G_CALLBACK(on_onboard_remote_apply_clicked), NULL);
+    gtk_box_append(GTK_BOX(btn_row), onboard_remote_apply_btn);
+
+    gtk_box_append(GTK_BOX(page), btn_row);
+
+    onboard_remote_status_label = gtk_label_new("");
+    gtk_label_set_wrap(GTK_LABEL(onboard_remote_status_label), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(onboard_remote_status_label), 0.0);
+    gtk_widget_add_css_class(onboard_remote_status_label, "dim-label");
+    gtk_widget_set_margin_top(onboard_remote_status_label, 12);
+    gtk_box_append(GTK_BOX(page), onboard_remote_status_label);
+
+    return page;
+}
+
+static GtkWidget* build_welcome_page(GtkWidget *carousel) {
+    GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 16);
+    gtk_widget_set_margin_start(page, 40);
+    gtk_widget_set_margin_end(page, 40);
+    gtk_widget_set_margin_top(page, 40);
+    gtk_widget_set_margin_bottom(page, 40);
+    gtk_widget_set_valign(page, GTK_ALIGN_CENTER);
+
+    GtkWidget *title = gtk_label_new("Welcome to OpenClaw");
+    gtk_widget_add_css_class(title, "title-1");
+    gtk_box_append(GTK_BOX(page), title);
+
+    GtkWidget *subtitle = gtk_label_new("The Linux companion for your OpenClaw gateway.");
+    gtk_widget_add_css_class(subtitle, "title-3");
+    gtk_label_set_xalign(GTK_LABEL(subtitle), 0.5);
+    gtk_box_append(GTK_BOX(page), subtitle);
+
+    GtkWidget *security = gtk_label_new(
+        "OpenClaw connects to an AI agent gateway that can trigger powerful actions on your system. The companion app helps you monitor, manage, and stay informed about your gateway's status.");
+    gtk_label_set_wrap(GTK_LABEL(security), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(security), 0.0);
+    gtk_widget_set_margin_top(security, 16);
+    gtk_box_append(GTK_BOX(page), security);
+
+    GtkWidget *btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_halign(btn_row, GTK_ALIGN_CENTER);
+    gtk_widget_set_margin_top(btn_row, 24);
+
+    GtkWidget *close_btn = gtk_button_new_with_label("Close");
+    g_signal_connect(close_btn, "clicked", G_CALLBACK(onboarding_view_callbacks.close_clicked), NULL);
+    gtk_box_append(GTK_BOX(btn_row), close_btn);
+
+    GtkWidget *next_btn = gtk_button_new_with_label("Next");
+    gtk_widget_add_css_class(next_btn, "suggested-action");
+    g_signal_connect(next_btn, "clicked", G_CALLBACK(on_next_clicked), carousel);
+    gtk_box_append(GTK_BOX(btn_row), next_btn);
+
+    gtk_box_append(GTK_BOX(page), btn_row);
+    return page;
+}
+
+static void onboarding_update_gateway_content(AppState current,
+                                              const ReadinessInfo *readiness,
+                                              const OnboardingStageProgress *progress,
+                                              const ChatGateInfo *gate) {
+    if (onboard_gateway_explanation_label) {
+        if (current == STATE_NEEDS_SETUP) {
+            gtk_label_set_text(GTK_LABEL(onboard_gateway_explanation_label),
+                               "OpenClaw is not bootstrapped yet. The companion app needs a local gateway service to function.");
+        } else if (current == STATE_NEEDS_GATEWAY_INSTALL) {
+            gtk_label_set_text(GTK_LABEL(onboard_gateway_explanation_label),
+                               "A configuration exists, but the gateway service is not installed.");
+        } else if (current == STATE_NEEDS_ONBOARDING) {
+            gtk_label_set_text(GTK_LABEL(onboard_gateway_explanation_label),
+                               "Local bootstrap is incomplete. The onboarding wizard needs to finish configuring the gateway.");
+        } else if (!gate->ready) {
+            gtk_label_set_text(GTK_LABEL(onboard_gateway_explanation_label),
+                               "Gateway bootstrap is complete. Open Config -> Provider & Model Setup, configure a provider, reload models, and set a default model to unlock chat.");
+        } else {
+            gtk_label_set_text(GTK_LABEL(onboard_gateway_explanation_label),
+                               "The gateway service is installed and configured.");
+        }
+    }
+
+    if (onboard_gateway_stage_config_icon) {
+        gtk_label_set_text(GTK_LABEL(onboard_gateway_stage_config_icon), stage_icon(progress->configuration));
+    }
+    if (onboard_gateway_stage_config_detail) {
+        gtk_label_set_text(GTK_LABEL(onboard_gateway_stage_config_detail),
+                           stage_detail_for_config(progress->configuration));
+    }
+    if (onboard_gateway_stage_service_icon) {
+        gtk_label_set_text(GTK_LABEL(onboard_gateway_stage_service_icon), stage_icon(progress->service_gateway));
+    }
+    if (onboard_gateway_stage_service_detail) {
+        gtk_label_set_text(GTK_LABEL(onboard_gateway_stage_service_detail),
+                           stage_detail_for_service(progress->service_gateway));
+    }
+    if (onboard_gateway_stage_connection_icon) {
+        gtk_label_set_text(GTK_LABEL(onboard_gateway_stage_connection_icon), stage_icon(progress->connection));
+    }
+    if (onboard_gateway_stage_connection_detail) {
+        gtk_label_set_text(GTK_LABEL(onboard_gateway_stage_connection_detail),
+                           stage_detail_for_connection(progress->connection));
+    }
+
+    const gchar *next_action = gate->next_action ? gate->next_action : readiness->next_action;
+    if (onboard_gateway_next_action_value) {
+        gtk_label_set_text(GTK_LABEL(onboard_gateway_next_action_value), next_action ? next_action : "");
+    }
+    if (onboard_gateway_next_action_box) {
+        gtk_widget_set_visible(onboard_gateway_next_action_box,
+                               next_action != NULL && next_action[0] != '\0');
+    }
+}
+
+static void onboarding_update_whats_next_content(const ReadinessInfo *readiness,
+                                                 const ChatGateInfo *gate) {
+    if (onboard_whats_next_guidance_label) {
+        if (gate->ready) {
+            gtk_label_set_text(GTK_LABEL(onboard_whats_next_guidance_label),
+                               "Your gateway is running. Open the Dashboard to start interacting with your AI agent, or explore the companion app to monitor and manage your gateway.");
+        } else {
+            const gchar *guidance_text = gate->next_action ? gate->next_action : readiness->next_action;
+            g_autofree gchar *guided = g_strdup_printf(
+                "%s Then open Config -> Provider & Model Setup to finish provider/model readiness in-app.",
+                guidance_text ? guidance_text : "");
+            gtk_label_set_text(GTK_LABEL(onboard_whats_next_guidance_label), guided);
+        }
+    }
+    if (onboard_whats_next_dashboard_button) {
+        gtk_widget_set_visible(onboard_whats_next_dashboard_button, gate->ready);
+    }
+}
+
+static void onboarding_update_chat_validation_content(void) {
+    if (!onboard_chat_validation_status_label) return;
+    AppState current = state_get_current();
+    const DesktopReadinessSnapshot *snapshot = state_get_readiness_snapshot();
+    ChatGateInfo gate = {0};
+    readiness_describe_chat_gate(snapshot, &gate);
+    OnboardingChatValidationStatus status =
+        onboarding_chat_validation_status(current, &gate, state_get_systemd());
+    const gchar *title = onboarding_chat_validation_title(status);
+    const gchar *detail = gate.status ? gate.status : (gate.next_action ? gate.next_action : "");
+    g_autofree gchar *text = g_strdup_printf("%s\n%s", title, detail);
+    gtk_label_set_text(GTK_LABEL(onboard_chat_validation_status_label), text);
+}
+
+static void on_open_chat_clicked(GtkButton *button, gpointer user_data) {
+    (void)button;
+    (void)user_data;
+    chat_window_show();
+}
+
+static void on_cli_recheck_clicked(GtkButton *button, gpointer user_data) {
+    (void)button;
+    GtkWidget *carousel = GTK_WIDGET(user_data);
+    OnboardingBootstrapResolution resolution = {0};
+    gboolean available = onboarding_bootstrap_resolve_commands(&resolution);
+    if (!available) {
+        if (onboard_cli_install_status_label) {
+            gtk_label_set_text(GTK_LABEL(onboard_cli_install_status_label),
+                               resolution.missing_reason ? resolution.missing_reason : "The OpenClaw CLI is still unavailable.");
+        }
+        onboarding_bootstrap_resolution_clear(&resolution);
+        return;
+    }
+
+    onboarding_bootstrap_resolution_clear(&resolution);
+    onboarding_view_rebuild_pages(carousel,
+                                  onboard_view_current_route,
+                                  &onboarding_view_callbacks);
+    if (ADW_IS_CAROUSEL(carousel) &&
+        adw_carousel_get_n_pages(ADW_CAROUSEL(carousel)) > 2.0) {
+        GtkWidget *target = GTK_WIDGET(adw_carousel_get_nth_page(ADW_CAROUSEL(carousel), 2));
+        if (target) {
+            adw_carousel_scroll_to(ADW_CAROUSEL(carousel), target, TRUE);
+        }
+    }
+}
+
+static void bootstrap_event_to_labels(const OnboardingBootstrapEvent *event,
+                                      GtkWidget *status_label,
+                                      GtkWidget *output_label,
+                                      gboolean refresh_on_done) {
+    if (!event) return;
+    if (status_label) {
+        const gchar *text = event->message ? event->message : "";
+        if (event->kind == ONBOARDING_BOOTSTRAP_EVENT_STARTED) text = "Running…";
+        if (event->kind == ONBOARDING_BOOTSTRAP_EVENT_DONE) text = "Completed.";
+        if (event->kind == ONBOARDING_BOOTSTRAP_EVENT_CANCELLED) text = "Cancelled.";
+        gtk_label_set_text(GTK_LABEL(status_label), text);
+    }
+    if (output_label && event->output && event->output[0] != '\0') {
+        gtk_label_set_text(GTK_LABEL(output_label), event->output);
+    }
+    if (refresh_on_done && event->kind == ONBOARDING_BOOTSTRAP_EVENT_DONE) {
+        gateway_client_refresh();
+    }
+}
+
+static void setup_bootstrap_event_cb(const OnboardingBootstrapEvent *event, gpointer user_data) {
+    (void)user_data;
+    bootstrap_event_to_labels(event,
+                              onboard_bootstrap_setup_status_label,
+                              onboard_bootstrap_setup_output_label,
+                              FALSE);
+}
+
+static void install_bootstrap_event_cb(const OnboardingBootstrapEvent *event, gpointer user_data) {
+    (void)user_data;
+    bootstrap_event_to_labels(event,
+                              onboard_bootstrap_install_status_label,
+                              onboard_bootstrap_install_output_label,
+                              TRUE);
+}
+
+static void on_bootstrap_setup_clicked(GtkButton *button, gpointer user_data) {
+    (void)button;
+    (void)user_data;
+    if (onboard_bootstrap_setup_run) {
+        onboarding_bootstrap_run_cancel(onboard_bootstrap_setup_run);
+        onboarding_bootstrap_run_free(onboard_bootstrap_setup_run);
+        onboard_bootstrap_setup_run = NULL;
+    }
+    onboard_bootstrap_setup_run =
+        onboarding_bootstrap_run_step(ONBOARDING_BOOTSTRAP_STEP_SETUP,
+                                      setup_bootstrap_event_cb,
+                                      NULL);
+}
+
+static void on_bootstrap_install_clicked(GtkButton *button, gpointer user_data) {
+    (void)button;
+    (void)user_data;
+    if (onboard_bootstrap_install_run) {
+        onboarding_bootstrap_run_cancel(onboard_bootstrap_install_run);
+        onboarding_bootstrap_run_free(onboard_bootstrap_install_run);
+        onboard_bootstrap_install_run = NULL;
+    }
+    onboard_bootstrap_install_run =
+        onboarding_bootstrap_run_step(ONBOARDING_BOOTSTRAP_STEP_GATEWAY_INSTALL,
+                                      install_bootstrap_event_cb,
+                                      NULL);
+}
+
+static void on_start_gateway_clicked(GtkButton *button, gpointer user_data) {
+    (void)button;
+    (void)user_data;
+    systemd_start_gateway();
+    gateway_client_refresh();
+    if (onboard_start_gateway_status_label) {
+        gtk_label_set_text(GTK_LABEL(onboard_start_gateway_status_label),
+                           "Start requested. Waiting for the gateway to become reachable…");
+    }
+}
+
+static const gchar* wizard_step_string(JsonObject *step, const gchar *member) {
+    if (!step || !json_object_has_member(step, member)) return NULL;
+    JsonNode *node = json_object_get_member(step, member);
+    return node && JSON_NODE_HOLDS_VALUE(node) ? json_node_get_string(node) : NULL;
+}
+
+static void clear_wizard_step_box(void) {
+    if (!onboard_wizard_step_box) return;
+    GtkWidget *child = NULL;
+    while ((child = gtk_widget_get_first_child(onboard_wizard_step_box)) != NULL) {
+        gtk_box_remove(GTK_BOX(onboard_wizard_step_box), child);
+    }
+    onboard_wizard_answer_widget = NULL;
+    g_clear_pointer(&onboard_wizard_multiselect_checks, g_ptr_array_unref);
+}
+
+static void onboarding_wizard_render(void) {
+    if (!onboard_wizard_status_label || !onboard_wizard_step_box || !onboard_wizard_model) return;
+
+    OnboardingWizardStatus status = onboarding_wizard_get_status(onboard_wizard_model);
+    const gchar *error = onboarding_wizard_get_error(onboard_wizard_model);
+    const gchar *status_text = "Ready to start the setup wizard.";
+    if (onboarding_wizard_is_busy(onboard_wizard_model)) status_text = "Contacting gateway…";
+    else if (status == ONBOARDING_WIZARD_STATUS_RUNNING) status_text = "Wizard running.";
+    else if (status == ONBOARDING_WIZARD_STATUS_DONE) status_text = "Wizard completed.";
+    else if (status == ONBOARDING_WIZARD_STATUS_CANCELLED) status_text = "Wizard cancelled.";
+    else if (status == ONBOARDING_WIZARD_STATUS_ERROR) status_text = error ? error : "Wizard failed.";
+    gtk_label_set_text(GTK_LABEL(onboard_wizard_status_label), status_text);
+
+    clear_wizard_step_box();
+    JsonObject *step = onboarding_wizard_get_step(onboard_wizard_model);
+    if (!step) return;
+
+    const gchar *title = wizard_step_string(step, "title");
+    const gchar *message = wizard_step_string(step, "message");
+    const gchar *type = wizard_step_string(step, "type");
+    if (title) {
+        GtkWidget *title_label = onboarding_wrapped_label(title, "heading");
+        gtk_box_append(GTK_BOX(onboard_wizard_step_box), title_label);
+    }
+    if (message) {
+        GtkWidget *message_label = onboarding_wrapped_label(message, "dim-label");
+        gtk_box_append(GTK_BOX(onboard_wizard_step_box), message_label);
+    }
+
+    if (g_strcmp0(type, "text") == 0) {
+        GtkWidget *entry = adw_entry_row_new();
+        const gchar *placeholder = wizard_step_string(step, "placeholder");
+        adw_preferences_row_set_title(ADW_PREFERENCES_ROW(entry), placeholder ? placeholder : "Answer");
+        gtk_box_append(GTK_BOX(onboard_wizard_step_box), entry);
+        onboard_wizard_answer_widget = entry;
+    } else if (g_strcmp0(type, "confirm") == 0) {
+        GtkWidget *check = gtk_check_button_new_with_label("Confirm");
+        gtk_box_append(GTK_BOX(onboard_wizard_step_box), check);
+        onboard_wizard_answer_widget = check;
+    } else if ((g_strcmp0(type, "select") == 0 || g_strcmp0(type, "multiselect") == 0) &&
+               json_object_has_member(step, "options")) {
+        JsonNode *options_node = json_object_get_member(step, "options");
+        if (options_node && JSON_NODE_HOLDS_ARRAY(options_node)) {
+            JsonArray *options = json_node_get_array(options_node);
+            guint len = json_array_get_length(options);
+            if (g_strcmp0(type, "multiselect") == 0) {
+                onboard_wizard_multiselect_checks = g_ptr_array_new();
+                for (guint i = 0; i < len; i++) {
+                    JsonObject *option = json_array_get_object_element(options, i);
+                    const gchar *label = wizard_step_string(option, "label");
+                    GtkWidget *check = gtk_check_button_new_with_label(label ? label : "Option");
+                    gtk_box_append(GTK_BOX(onboard_wizard_step_box), check);
+                    g_ptr_array_add(onboard_wizard_multiselect_checks, check);
+                }
+            } else {
+                GtkStringList *model = gtk_string_list_new(NULL);
+                for (guint i = 0; i < len; i++) {
+                    JsonObject *option = json_array_get_object_element(options, i);
+                    const gchar *label = wizard_step_string(option, "label");
+                    gtk_string_list_append(model, label ? label : "Option");
+                }
+                GtkWidget *combo = adw_combo_row_new();
+                adw_preferences_row_set_title(ADW_PREFERENCES_ROW(combo), "Choose an option");
+                adw_combo_row_set_model(ADW_COMBO_ROW(combo), G_LIST_MODEL(model));
+                g_object_unref(model);
+                gtk_box_append(GTK_BOX(onboard_wizard_step_box), combo);
+                onboard_wizard_answer_widget = combo;
+            }
+        }
+    }
+}
+
+static void wizard_changed_cb(OnboardingWizardModel *model, gpointer user_data) {
+    (void)model;
+    (void)user_data;
+    onboarding_wizard_render();
+}
+
+static JsonNode* wizard_build_answer_value(void) {
+    JsonObject *step = onboard_wizard_model ? onboarding_wizard_get_step(onboard_wizard_model) : NULL;
+    const gchar *type = wizard_step_string(step, "type");
+    if (g_strcmp0(type, "text") == 0 && onboard_wizard_answer_widget) {
+        const gchar *text = gtk_editable_get_text(GTK_EDITABLE(onboard_wizard_answer_widget));
+        JsonNode *node = json_node_new(JSON_NODE_VALUE);
+        json_node_set_string(node, text ? text : "");
+        return node;
+    }
+    if (g_strcmp0(type, "confirm") == 0 && onboard_wizard_answer_widget) {
+        JsonNode *node = json_node_new(JSON_NODE_VALUE);
+        json_node_set_boolean(node, gtk_check_button_get_active(GTK_CHECK_BUTTON(onboard_wizard_answer_widget)));
+        return node;
+    }
+    if (g_strcmp0(type, "select") == 0 && onboard_wizard_answer_widget &&
+        step && json_object_has_member(step, "options")) {
+        JsonArray *options = json_node_get_array(json_object_get_member(step, "options"));
+        guint selected = adw_combo_row_get_selected(ADW_COMBO_ROW(onboard_wizard_answer_widget));
+        if (selected < json_array_get_length(options)) {
+            JsonObject *option = json_array_get_object_element(options, selected);
+            if (json_object_has_member(option, "value")) {
+                return json_node_copy(json_object_get_member(option, "value"));
+            }
+        }
+    }
+    if (g_strcmp0(type, "multiselect") == 0 && onboard_wizard_multiselect_checks &&
+        step && json_object_has_member(step, "options")) {
+        JsonArray *options = json_node_get_array(json_object_get_member(step, "options"));
+        JsonBuilder *builder = json_builder_new();
+        json_builder_begin_array(builder);
+        for (guint i = 0; i < onboard_wizard_multiselect_checks->len && i < json_array_get_length(options); i++) {
+            GtkWidget *check = g_ptr_array_index(onboard_wizard_multiselect_checks, i);
+            if (!gtk_check_button_get_active(GTK_CHECK_BUTTON(check))) {
+                continue;
+            }
+            JsonObject *option = json_array_get_object_element(options, i);
+            if (json_object_has_member(option, "value")) {
+                json_builder_add_value(builder, json_node_copy(json_object_get_member(option, "value")));
+            }
+        }
+        json_builder_end_array(builder);
+        JsonNode *node = json_builder_get_root(builder);
+        g_object_unref(builder);
+        return node;
+    }
+    return NULL;
+}
+
+static void on_wizard_start_clicked(GtkButton *button, gpointer user_data) {
+    (void)button;
+    (void)user_data;
+    if (!onboard_wizard_model) {
+        onboard_wizard_model = onboarding_wizard_model_new(wizard_changed_cb, NULL);
+    }
+    if (!gateway_rpc_is_ready()) {
+        if (onboard_wizard_status_label) {
+            gtk_label_set_text(GTK_LABEL(onboard_wizard_status_label),
+                               "Gateway RPC is not ready yet. Start the gateway and wait for authentication before running the wizard.");
+        }
+        return;
+    }
+    onboarding_wizard_start(onboard_wizard_model, "local");
+}
+
+static void on_wizard_continue_clicked(GtkButton *button, gpointer user_data) {
+    (void)button;
+    (void)user_data;
+    if (!onboard_wizard_model) return;
+    JsonNode *value = wizard_build_answer_value();
+    onboarding_wizard_submit(onboard_wizard_model, value);
+    if (value) json_node_unref(value);
+}
+
+static void on_wizard_cancel_clicked(GtkButton *button, gpointer user_data) {
+    (void)button;
+    (void)user_data;
+    if (onboard_wizard_model) {
+        onboarding_wizard_cancel(onboard_wizard_model);
+    }
+}
+
+void onboarding_view_refresh_live_content(void) {
+    AppState current = state_get_current();
+    ReadinessInfo readiness;
+    readiness_evaluate(current, state_get_health(), state_get_systemd(), &readiness);
+    const DesktopReadinessSnapshot *snapshot = state_get_readiness_snapshot();
+    ChatGateInfo gate = {0};
+    readiness_describe_chat_gate(snapshot, &gate);
+    OnboardingStageProgress progress;
+    readiness_build_onboarding_progress(current, state_get_health(), state_get_systemd(), &progress);
+
+    onboarding_update_gateway_content(current, &readiness, &progress, &gate);
+    onboarding_update_whats_next_content(&readiness, &gate);
+    onboarding_update_chat_validation_content();
+    onboarding_refresh_environment_content();
+}
+
+static GtkWidget* build_cli_install_page(GtkWidget *carousel) {
+    GtkWidget *page = onboarding_page_box(TRUE);
+    GtkWidget *title = gtk_label_new("Install the OpenClaw CLI");
+    gtk_widget_add_css_class(title, "title-2");
+    gtk_box_append(GTK_BOX(page), title);
+    gtk_box_append(GTK_BOX(page), onboarding_wrapped_label(
+        "The companion needs the openclaw CLI to bootstrap a local gateway. Install it, then come back and continue.",
+        NULL));
+    GtkWidget *command = onboarding_wrapped_label(
+        "curl -fsSL https://openclaw.ai/install-cli.sh | sh",
+        "accent");
+    gtk_label_set_selectable(GTK_LABEL(command), TRUE);
+    gtk_box_append(GTK_BOX(page), command);
+    onboard_cli_install_status_label = onboarding_wrapped_label(
+        "Click Recheck after installing the CLI. If you are running from a development checkout, the app will also accept node plus openclaw.mjs.",
+        "dim-label");
+    gtk_box_append(GTK_BOX(page), onboard_cli_install_status_label);
+
+    GtkWidget *btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_halign(btn_row, GTK_ALIGN_CENTER);
+    GtkWidget *back_btn = gtk_button_new_with_label("Back");
+    g_signal_connect(back_btn, "clicked", G_CALLBACK(on_back_clicked), carousel);
+    gtk_box_append(GTK_BOX(btn_row), back_btn);
+    GtkWidget *next_btn = gtk_button_new_with_label("Recheck / Continue");
+    gtk_widget_add_css_class(next_btn, "suggested-action");
+    g_signal_connect(next_btn, "clicked", G_CALLBACK(on_cli_recheck_clicked), carousel);
+    gtk_box_append(GTK_BOX(btn_row), next_btn);
+    gtk_box_append(GTK_BOX(page), btn_row);
+    return page;
+}
+
+static GtkWidget* build_bootstrap_page(GtkWidget *carousel,
+                                       const gchar *title,
+                                       const gchar *body,
+                                       const gchar *button_label,
+                                       GCallback click_cb,
+                                       GtkWidget **out_status,
+                                       GtkWidget **out_output) {
+    GtkWidget *page = onboarding_page_box(TRUE);
+    GtkWidget *title_label = gtk_label_new(title);
+    gtk_widget_add_css_class(title_label, "title-2");
+    gtk_box_append(GTK_BOX(page), title_label);
+    gtk_box_append(GTK_BOX(page), onboarding_wrapped_label(body, NULL));
+    GtkWidget *status = onboarding_wrapped_label("Ready.", "accent");
+    GtkWidget *output = onboarding_wrapped_label("", "dim-label");
+    gtk_label_set_selectable(GTK_LABEL(output), TRUE);
+    gtk_box_append(GTK_BOX(page), status);
+    gtk_box_append(GTK_BOX(page), output);
+    if (out_status) *out_status = status;
+    if (out_output) *out_output = output;
+
+    GtkWidget *btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_halign(btn_row, GTK_ALIGN_CENTER);
+    GtkWidget *back_btn = gtk_button_new_with_label("Back");
+    g_signal_connect(back_btn, "clicked", G_CALLBACK(on_back_clicked), carousel);
+    gtk_box_append(GTK_BOX(btn_row), back_btn);
+    GtkWidget *run_btn = gtk_button_new_with_label(button_label);
+    gtk_widget_add_css_class(run_btn, "suggested-action");
+    g_signal_connect(run_btn, "clicked", click_cb, NULL);
+    gtk_box_append(GTK_BOX(btn_row), run_btn);
+    GtkWidget *next_btn = gtk_button_new_with_label("Next");
+    g_signal_connect(next_btn, "clicked", G_CALLBACK(on_next_clicked), carousel);
+    gtk_box_append(GTK_BOX(btn_row), next_btn);
+    gtk_box_append(GTK_BOX(page), btn_row);
+    return page;
+}
+
+static GtkWidget* build_start_gateway_page(GtkWidget *carousel) {
+    return build_bootstrap_page(carousel,
+                                "Start Gateway",
+                                "The service is installed. Start it, then wait for the companion to refresh its gateway connection before continuing to the setup wizard.",
+                                "Start Gateway",
+                                G_CALLBACK(on_start_gateway_clicked),
+                                &onboard_start_gateway_status_label,
+                                NULL);
+}
+
+static GtkWidget* build_setup_wizard_page(GtkWidget *carousel) {
+    GtkWidget *page = onboarding_page_box(FALSE);
+    GtkWidget *title = gtk_label_new("Setup Wizard");
+    gtk_widget_add_css_class(title, "title-2");
+    gtk_box_append(GTK_BOX(page), title);
+    gtk_box_append(GTK_BOX(page), onboarding_wrapped_label(
+        "The wizard runs through the authenticated gateway RPC channel. It becomes available only after the local gateway is installed, started, and authenticated.",
+        NULL));
+    onboard_wizard_status_label = onboarding_wrapped_label("Ready to start the setup wizard.", "accent");
+    gtk_box_append(GTK_BOX(page), onboard_wizard_status_label);
+    onboard_wizard_step_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_widget_set_margin_top(onboard_wizard_step_box, 8);
+    gtk_box_append(GTK_BOX(page), onboard_wizard_step_box);
+
+    if (!onboard_wizard_model) {
+        onboard_wizard_model = onboarding_wizard_model_new(wizard_changed_cb, NULL);
+    }
+    onboarding_wizard_render();
+
+    GtkWidget *btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_halign(btn_row, GTK_ALIGN_CENTER);
+    GtkWidget *back_btn = gtk_button_new_with_label("Back");
+    g_signal_connect(back_btn, "clicked", G_CALLBACK(on_back_clicked), carousel);
+    gtk_box_append(GTK_BOX(btn_row), back_btn);
+    GtkWidget *start_btn = gtk_button_new_with_label("Start Wizard");
+    gtk_widget_add_css_class(start_btn, "suggested-action");
+    g_signal_connect(start_btn, "clicked", G_CALLBACK(on_wizard_start_clicked), NULL);
+    gtk_box_append(GTK_BOX(btn_row), start_btn);
+    GtkWidget *continue_btn = gtk_button_new_with_label("Continue");
+    g_signal_connect(continue_btn, "clicked", G_CALLBACK(on_wizard_continue_clicked), NULL);
+    gtk_box_append(GTK_BOX(btn_row), continue_btn);
+    GtkWidget *cancel_btn = gtk_button_new_with_label("Cancel Wizard");
+    g_signal_connect(cancel_btn, "clicked", G_CALLBACK(on_wizard_cancel_clicked), NULL);
+    gtk_box_append(GTK_BOX(btn_row), cancel_btn);
+    GtkWidget *next_btn = gtk_button_new_with_label("Next");
+    g_signal_connect(next_btn, "clicked", G_CALLBACK(on_next_clicked), carousel);
+    gtk_box_append(GTK_BOX(btn_row), next_btn);
+    gtk_box_append(GTK_BOX(page), btn_row);
+    return page;
+}
+
+static GtkWidget* build_chat_validation_page(GtkWidget *carousel) {
+    GtkWidget *page = onboarding_page_box(TRUE);
+    GtkWidget *title = gtk_label_new("Validate Chat");
+    gtk_widget_add_css_class(title, "title-2");
+    gtk_box_append(GTK_BOX(page), title);
+    gtk_box_append(GTK_BOX(page), onboarding_wrapped_label(
+        "Open the native chat window when the gateway is ready. This page does not create a second chat controller; it uses the standalone chat window.",
+        NULL));
+    onboard_chat_validation_status_label = onboarding_wrapped_label("", "accent");
+    gtk_box_append(GTK_BOX(page), onboard_chat_validation_status_label);
+    onboarding_update_chat_validation_content();
+
+    GtkWidget *btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_halign(btn_row, GTK_ALIGN_CENTER);
+    GtkWidget *back_btn = gtk_button_new_with_label("Back");
+    g_signal_connect(back_btn, "clicked", G_CALLBACK(on_back_clicked), carousel);
+    gtk_box_append(GTK_BOX(btn_row), back_btn);
+    GtkWidget *chat_btn = gtk_button_new_with_label("Open Chat");
+    gtk_widget_add_css_class(chat_btn, "suggested-action");
+    g_signal_connect(chat_btn, "clicked", G_CALLBACK(on_open_chat_clicked), NULL);
+    gtk_box_append(GTK_BOX(btn_row), chat_btn);
+    GtkWidget *next_btn = gtk_button_new_with_label("Next");
+    g_signal_connect(next_btn, "clicked", G_CALLBACK(on_next_clicked), carousel);
+    gtk_box_append(GTK_BOX(btn_row), next_btn);
+    gtk_box_append(GTK_BOX(page), btn_row);
+    return page;
+}
+
+static GtkWidget* build_gateway_page(GtkWidget *carousel) G_GNUC_UNUSED;
+static GtkWidget* build_gateway_page(GtkWidget *carousel) {
+    GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    gtk_widget_set_margin_start(page, 40);
+    gtk_widget_set_margin_end(page, 40);
+    gtk_widget_set_margin_top(page, 40);
+    gtk_widget_set_margin_bottom(page, 40);
+    gtk_widget_set_valign(page, GTK_ALIGN_CENTER);
+
+    GtkWidget *title = gtk_label_new("Gateway Status");
+    gtk_widget_add_css_class(title, "title-2");
+    gtk_label_set_xalign(GTK_LABEL(title), 0.0);
+    gtk_box_append(GTK_BOX(page), title);
+
+    AppState current = state_get_current();
+    SystemdState *sys = state_get_systemd();
+    HealthState *health = state_get_health();
+    const DesktopReadinessSnapshot *snapshot = state_get_readiness_snapshot();
+    ChatGateInfo gate = {0};
+    readiness_describe_chat_gate(snapshot, &gate);
+
+    ReadinessInfo readiness;
+    readiness_evaluate(current, health, sys, &readiness);
+
+    OnboardingStageProgress progress;
+    readiness_build_onboarding_progress(current, health, sys, &progress);
+
+    GtkWidget *explanation = gtk_label_new(NULL);
+    if (current == STATE_NEEDS_SETUP) {
+        gtk_label_set_text(GTK_LABEL(explanation),
+                           "OpenClaw is not bootstrapped yet. The companion app needs a local gateway service to function.");
+    } else if (current == STATE_NEEDS_GATEWAY_INSTALL) {
+        gtk_label_set_text(GTK_LABEL(explanation),
+                           "A configuration exists, but the gateway service is not installed.");
+    } else if (current == STATE_NEEDS_ONBOARDING) {
+        gtk_label_set_text(GTK_LABEL(explanation),
+                           "Local bootstrap is incomplete. The onboarding wizard needs to finish configuring the gateway.");
+    } else if (!gate.ready) {
+        gtk_label_set_text(GTK_LABEL(explanation),
+                           "Gateway bootstrap is complete. Open Config -> Provider & Model Setup, configure a provider, reload models, and set a default model to unlock chat.");
+    } else {
+        gtk_label_set_text(GTK_LABEL(explanation),
+                           "The gateway service is installed and configured.");
+    }
+    gtk_label_set_wrap(GTK_LABEL(explanation), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(explanation), 0.0);
+    gtk_box_append(GTK_BOX(page), explanation);
+    onboard_gateway_explanation_label = explanation;
+
+    GtkWidget *stage_heading = gtk_label_new("Setup progress");
+    gtk_widget_add_css_class(stage_heading, "heading");
+    gtk_label_set_xalign(GTK_LABEL(stage_heading), 0.0);
+    gtk_widget_set_margin_top(stage_heading, 12);
+    gtk_box_append(GTK_BOX(page), stage_heading);
+
+    GtkWidget *stages = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    gtk_widget_set_margin_top(stages, 4);
+    gtk_box_append(GTK_BOX(stages),
+                   build_stage_row("Configuration",
+                                   progress.configuration,
+                                   stage_detail_for_config(progress.configuration),
+                                   &onboard_gateway_stage_config_icon,
+                                   &onboard_gateway_stage_config_detail));
+    gtk_box_append(GTK_BOX(stages),
+                   build_stage_row("Service / Gateway",
+                                   progress.service_gateway,
+                                   stage_detail_for_service(progress.service_gateway),
+                                   &onboard_gateway_stage_service_icon,
+                                   &onboard_gateway_stage_service_detail));
+    gtk_box_append(GTK_BOX(stages),
+                   build_stage_row("Connection",
+                                   progress.connection,
+                                   stage_detail_for_connection(progress.connection),
+                                   &onboard_gateway_stage_connection_icon,
+                                   &onboard_gateway_stage_connection_detail));
+    gtk_box_append(GTK_BOX(page), stages);
+
+    const gchar *next_action = gate.next_action ? gate.next_action : readiness.next_action;
+    GtkWidget *action_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_widget_set_margin_top(action_box, 16);
+    gtk_widget_set_margin_bottom(action_box, 16);
+
+    GtkWidget *action_label = gtk_label_new("Next step:");
+    gtk_widget_add_css_class(action_label, "dim-label");
+    gtk_label_set_xalign(GTK_LABEL(action_label), 0.0);
+    gtk_box_append(GTK_BOX(action_box), action_label);
+
+    GtkWidget *cmd_label = gtk_label_new(next_action ? next_action : "");
+    gtk_widget_add_css_class(cmd_label, "accent");
+    gtk_label_set_wrap(GTK_LABEL(cmd_label), TRUE);
+    gtk_label_set_selectable(GTK_LABEL(cmd_label), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(cmd_label), 0.0);
+
+    GtkWidget *frame = gtk_frame_new(NULL);
+    gtk_widget_set_margin_top(frame, 4);
+    gtk_frame_set_child(GTK_FRAME(frame), cmd_label);
+    gtk_box_append(GTK_BOX(action_box), frame);
+
+    gtk_widget_set_visible(action_box, next_action != NULL && next_action[0] != '\0');
+    gtk_box_append(GTK_BOX(page), action_box);
+    onboard_gateway_next_action_box = action_box;
+    onboard_gateway_next_action_value = cmd_label;
+
+    GtkWidget *btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_halign(btn_row, GTK_ALIGN_CENTER);
+    gtk_widget_set_margin_top(btn_row, 24);
+
+    GtkWidget *back_btn = gtk_button_new_with_label("Back");
+    g_signal_connect(back_btn, "clicked", G_CALLBACK(on_back_clicked), carousel);
+    gtk_box_append(GTK_BOX(btn_row), back_btn);
+
+    GtkWidget *close_btn = gtk_button_new_with_label("Close");
+    g_signal_connect(close_btn, "clicked", G_CALLBACK(onboarding_view_callbacks.close_clicked), NULL);
+    gtk_box_append(GTK_BOX(btn_row), close_btn);
+
+    GtkWidget *next_btn = gtk_button_new_with_label("Next");
+    gtk_widget_add_css_class(next_btn, "suggested-action");
+    g_signal_connect(next_btn, "clicked", G_CALLBACK(on_next_clicked), carousel);
+    gtk_box_append(GTK_BOX(btn_row), next_btn);
+
+    gtk_box_append(GTK_BOX(page), btn_row);
+    return page;
+}
+
+static GtkWidget* build_environment_page(GtkWidget *carousel) G_GNUC_UNUSED;
+static GtkWidget* build_environment_page(GtkWidget *carousel) {
+    GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    gtk_widget_set_margin_start(page, 40);
+    gtk_widget_set_margin_end(page, 40);
+    gtk_widget_set_margin_top(page, 40);
+    gtk_widget_set_margin_bottom(page, 40);
+    gtk_widget_set_valign(page, GTK_ALIGN_CENTER);
+
+    GtkWidget *title = gtk_label_new("Environment Check");
+    gtk_widget_add_css_class(title, "title-2");
+    gtk_label_set_xalign(GTK_LABEL(title), 0.0);
+    gtk_box_append(GTK_BOX(page), title);
+
+    GtkWidget *checks_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    onboard_environment_checks_box = checks_box;
+    onboarding_render_environment_checks(checks_box);
+    gtk_box_append(GTK_BOX(page), checks_box);
+
+    GtkWidget *btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_halign(btn_row, GTK_ALIGN_CENTER);
+    gtk_widget_set_margin_top(btn_row, 24);
+
+    GtkWidget *back_btn = gtk_button_new_with_label("Back");
+    g_signal_connect(back_btn, "clicked", G_CALLBACK(on_back_clicked), carousel);
+    gtk_box_append(GTK_BOX(btn_row), back_btn);
+
+    GtkWidget *close_btn = gtk_button_new_with_label("Close");
+    g_signal_connect(close_btn, "clicked", G_CALLBACK(onboarding_view_callbacks.close_clicked), NULL);
+    gtk_box_append(GTK_BOX(btn_row), close_btn);
+
+    GtkWidget *next_btn = gtk_button_new_with_label("Next");
+    gtk_widget_add_css_class(next_btn, "suggested-action");
+    g_signal_connect(next_btn, "clicked", G_CALLBACK(on_next_clicked), carousel);
+    gtk_box_append(GTK_BOX(btn_row), next_btn);
+
+    gtk_box_append(GTK_BOX(page), btn_row);
+    return page;
+}
+
+static GtkWidget* build_whats_next_page(GtkWidget *carousel) {
+    GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 16);
+    gtk_widget_set_margin_start(page, 40);
+    gtk_widget_set_margin_end(page, 40);
+    gtk_widget_set_margin_top(page, 40);
+    gtk_widget_set_margin_bottom(page, 40);
+    gtk_widget_set_valign(page, GTK_ALIGN_CENTER);
+
+    GtkWidget *title = gtk_label_new("What's Next");
+    gtk_widget_add_css_class(title, "title-2");
+    gtk_label_set_xalign(GTK_LABEL(title), 0.5);
+    gtk_box_append(GTK_BOX(page), title);
+
+    AppState current = state_get_current();
+    ReadinessInfo readiness;
+    readiness_evaluate(current, state_get_health(), state_get_systemd(), &readiness);
+    const DesktopReadinessSnapshot *snapshot = state_get_readiness_snapshot();
+    ChatGateInfo gate = {0};
+    readiness_describe_chat_gate(snapshot, &gate);
+
+    const gchar *guidance_text = gate.next_action ? gate.next_action : readiness.next_action;
+    g_autofree gchar *guided = gate.ready
+        ? g_strdup("Your gateway is running. Open the Dashboard to start interacting with your AI agent, or explore the companion app to monitor and manage your gateway.")
+        : g_strdup_printf("%s Then open Config -> Provider & Model Setup to finish provider/model readiness in-app.",
+                          guidance_text ? guidance_text : "");
+    GtkWidget *guidance = gtk_label_new(guided);
+    gtk_widget_add_css_class(guidance, "accent");
+    gtk_label_set_wrap(GTK_LABEL(guidance), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(guidance), 0.0);
+    gtk_box_append(GTK_BOX(page), guidance);
+    onboard_whats_next_guidance_label = guidance;
+
+    GtkWidget *dash_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_halign(dash_row, GTK_ALIGN_CENTER);
+    gtk_widget_set_margin_top(dash_row, 12);
+
+    GtkWidget *dash_btn = gtk_button_new_with_label("Open Dashboard");
+    gtk_widget_add_css_class(dash_btn, "suggested-action");
+    g_signal_connect(dash_btn, "clicked", G_CALLBACK(onboarding_view_callbacks.open_dashboard_clicked), NULL);
+    gtk_box_append(GTK_BOX(dash_row), dash_btn);
+    gtk_widget_set_visible(dash_row, gate.ready);
+    gtk_box_append(GTK_BOX(page), dash_row);
+    onboard_whats_next_dashboard_button = dash_row;
+
+    GtkWidget *links_label = gtk_label_new("Documentation:");
+    gtk_widget_add_css_class(links_label, "dim-label");
+    gtk_label_set_xalign(GTK_LABEL(links_label), 0.0);
+    gtk_widget_set_margin_top(links_label, 20);
+    gtk_box_append(GTK_BOX(page), links_label);
+
+    GtkWidget *docs_link = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(docs_link),
+                         "<a href=\"https://docs.openclaw.ai\">docs.openclaw.ai</a>");
+    gtk_label_set_xalign(GTK_LABEL(docs_link), 0.0);
+    gtk_box_append(GTK_BOX(page), docs_link);
+
+    GtkWidget *btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_halign(btn_row, GTK_ALIGN_CENTER);
+    gtk_widget_set_margin_top(btn_row, 24);
+
+    GtkWidget *back_btn = gtk_button_new_with_label("Back");
+    g_signal_connect(back_btn, "clicked", G_CALLBACK(on_back_clicked), carousel);
+    gtk_box_append(GTK_BOX(btn_row), back_btn);
+
+    GtkWidget *finish_btn = gtk_button_new_with_label("Get Started");
+    gtk_widget_add_css_class(finish_btn, "pill");
+    gtk_widget_add_css_class(finish_btn, "suggested-action");
+    g_signal_connect(finish_btn, "clicked", G_CALLBACK(onboarding_view_callbacks.finish_clicked), NULL);
+    gtk_box_append(GTK_BOX(btn_row), finish_btn);
+
+    gtk_box_append(GTK_BOX(page), btn_row);
+    return page;
+}
+
+void onboarding_view_reset(void) {
+    memset(&onboarding_view_callbacks, 0, sizeof(onboarding_view_callbacks));
+    onboard_gateway_explanation_label = NULL;
+    onboard_gateway_stage_config_icon = NULL;
+    onboard_gateway_stage_config_detail = NULL;
+    onboard_gateway_stage_service_icon = NULL;
+    onboard_gateway_stage_service_detail = NULL;
+    onboard_gateway_stage_connection_icon = NULL;
+    onboard_gateway_stage_connection_detail = NULL;
+    onboard_gateway_next_action_box = NULL;
+    onboard_gateway_next_action_value = NULL;
+    onboard_whats_next_guidance_label = NULL;
+    onboard_whats_next_dashboard_button = NULL;
+    onboard_environment_checks_box = NULL;
+    onboard_cli_install_status_label = NULL;
+    onboard_chat_validation_status_label = NULL;
+    onboard_bootstrap_setup_status_label = NULL;
+    onboard_bootstrap_setup_output_label = NULL;
+    onboard_bootstrap_install_status_label = NULL;
+    onboard_bootstrap_install_output_label = NULL;
+    onboard_start_gateway_status_label = NULL;
+    onboard_wizard_status_label = NULL;
+    onboard_wizard_step_box = NULL;
+    onboard_wizard_answer_widget = NULL;
+    g_clear_pointer(&onboard_wizard_multiselect_checks, g_ptr_array_unref);
+    if (onboard_bootstrap_setup_run) {
+        onboarding_bootstrap_run_cancel(onboard_bootstrap_setup_run);
+        onboarding_bootstrap_run_free(onboard_bootstrap_setup_run);
+        onboard_bootstrap_setup_run = NULL;
+    }
+    if (onboard_bootstrap_install_run) {
+        onboarding_bootstrap_run_cancel(onboard_bootstrap_install_run);
+        onboarding_bootstrap_run_free(onboard_bootstrap_install_run);
+        onboard_bootstrap_install_run = NULL;
+    }
+    if (onboard_wizard_model) {
+        onboarding_wizard_model_free(onboard_wizard_model);
+        onboard_wizard_model = NULL;
+    }
+
+    /*
+     * Remote subflow widget pointers — null the references but keep
+     * g_onboard_chose_remote intact so a rebuild after the operator
+     * picks Remote does not flip back to Local.
+     */
+    if (onboard_remote_probe_cancel) {
+        g_cancellable_cancel(onboard_remote_probe_cancel);
+        g_clear_object(&onboard_remote_probe_cancel);
+    }
+    g_clear_object(&onboard_remote_transport_model);
+    onboard_remote_carousel_ref = NULL;
+    onboard_remote_transport_combo = NULL;
+    onboard_remote_transport_programmatic = FALSE;
+    onboard_remote_url_entry = NULL;
+    onboard_remote_ssh_target_entry = NULL;
+    onboard_remote_ssh_identity_entry = NULL;
+    onboard_remote_token_entry = NULL;
+    onboard_remote_password_entry = NULL;
+    onboard_remote_status_label = NULL;
+    onboard_remote_test_btn = NULL;
+    onboard_remote_apply_btn = NULL;
+}
+
+void onboarding_view_build_pages(GtkWidget *carousel,
+                                 OnboardingRoute route,
+                                 const OnboardingViewCallbacks *callbacks) {
+    onboarding_view_reset();
+    if (callbacks) {
+        onboarding_view_callbacks = *callbacks;
+    }
+    onboard_view_current_route = route;
+
+    ProductConnectionMode mode = product_state_get_connection_mode();
+    if (g_onboard_chose_remote) {
+        mode = PRODUCT_CONNECTION_MODE_REMOTE;
+    }
+
+    OnboardingBootstrapResolution resolution = {0};
+    gboolean bootstrap_available = onboarding_bootstrap_resolve_commands(&resolution);
+    onboarding_bootstrap_resolution_clear(&resolution);
+
+    HealthState *health = state_get_health();
+    SystemdState *sys = state_get_systemd();
+    OnboardingFlowInput input = {
+        .route = route,
+        .connection_mode = mode,
+        .app_state = state_get_current(),
+        .cli_present = bootstrap_available,
+        .sys_installed = sys ? sys->installed : FALSE,
+        .sys_active = sys ? sys->active : FALSE,
+        .has_wizard_onboard_marker = health ? health->has_wizard_onboard_marker : FALSE,
+        .wizard_should_skip = onboarding_wizard_should_skip_for_health(
+            health ? health->has_wizard_onboard_marker : FALSE),
+    };
+    OnboardingFlowPages pages;
+    onboarding_flow_pages_visible(&input, &pages);
+
+    for (guint i = 0; i < pages.count; i++) {
+        GtkWidget *page = NULL;
+        switch (pages.pages[i]) {
+        case ONBOARDING_FLOW_PAGE_WELCOME:
+            page = build_welcome_page(carousel);
+            break;
+        case ONBOARDING_FLOW_PAGE_CONNECTION:
+            page = build_mode_choice_page(carousel);
+            break;
+        case ONBOARDING_FLOW_PAGE_CLI_INSTALL:
+            page = build_cli_install_page(carousel);
+            break;
+        case ONBOARDING_FLOW_PAGE_BOOTSTRAP_SETUP:
+            page = build_bootstrap_page(carousel,
+                                        "Bootstrap OpenClaw",
+                                        "Create the baseline OpenClaw configuration and workspace by running openclaw setup.",
+                                        "Run openclaw setup",
+                                        G_CALLBACK(on_bootstrap_setup_clicked),
+                                        &onboard_bootstrap_setup_status_label,
+                                        &onboard_bootstrap_setup_output_label);
+            break;
+        case ONBOARDING_FLOW_PAGE_BOOTSTRAP_INSTALL_UNIT:
+            page = build_bootstrap_page(carousel,
+                                        "Install Gateway Service",
+                                        "Install the local gateway systemd user service by running openclaw gateway install. This also creates the gateway token used by the companion.",
+                                        "Run gateway install",
+                                        G_CALLBACK(on_bootstrap_install_clicked),
+                                        &onboard_bootstrap_install_status_label,
+                                        &onboard_bootstrap_install_output_label);
+            break;
+        case ONBOARDING_FLOW_PAGE_BOOTSTRAP_START_GATEWAY:
+            page = build_start_gateway_page(carousel);
+            break;
+        case ONBOARDING_FLOW_PAGE_SETUP_WIZARD:
+            page = build_setup_wizard_page(carousel);
+            break;
+        case ONBOARDING_FLOW_PAGE_REMOTE_SETUP:
+            page = build_remote_setup_page(carousel);
+            break;
+        case ONBOARDING_FLOW_PAGE_CHAT_VALIDATION:
+            page = build_chat_validation_page(carousel);
+            break;
+        case ONBOARDING_FLOW_PAGE_WHATS_NEXT:
+            page = build_whats_next_page(carousel);
+            break;
+        }
+        if (page) {
+            adw_carousel_append(ADW_CAROUSEL(carousel), page);
+        }
+    }
+
+    onboarding_view_refresh_live_content();
+}
+
+void onboarding_view_rebuild_pages(GtkWidget *carousel,
+                                   OnboardingRoute route,
+                                   const OnboardingViewCallbacks *callbacks) {
+    if (!carousel) {
+        return;
+    }
+
+    guint page_count = (guint)adw_carousel_get_n_pages(ADW_CAROUSEL(carousel));
+    guint current_pos = (guint)adw_carousel_get_position(ADW_CAROUSEL(carousel));
+
+    while (page_count > 0) {
+        GtkWidget *child = GTK_WIDGET(adw_carousel_get_nth_page(ADW_CAROUSEL(carousel), 0));
+        if (!child) {
+            break;
+        }
+        adw_carousel_remove(ADW_CAROUSEL(carousel), child);
+        page_count--;
+    }
+
+    onboarding_view_build_pages(carousel, route, callbacks);
+
+    guint new_count = (guint)adw_carousel_get_n_pages(ADW_CAROUSEL(carousel));
+    if (new_count > 0) {
+        guint clamped = current_pos < new_count ? current_pos : (new_count - 1);
+        GtkWidget *target = GTK_WIDGET(adw_carousel_get_nth_page(ADW_CAROUSEL(carousel), clamped));
+        if (target) {
+            adw_carousel_scroll_to(ADW_CAROUSEL(carousel), target, FALSE);
+        }
+    }
+}

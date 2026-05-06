@@ -78,6 +78,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: (cfg: unknown, agentId: string) =>
     getAgentList(cfg).find((entry) => entry.id === agentId),
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
+  resolveDefaultAgentId: () => "main",
 }));
 
 vi.mock("../../agents/workspace.js", async () => {
@@ -1040,6 +1041,47 @@ describe("agents.update", () => {
         nonBlockingRead: true,
       }),
     );
+  });
+
+  /*
+   * Regression: `agents.list` advertises the default agent id ("main")
+   * even when `cfg.agents.list` has no explicit entry. `agents.update`
+   * must accept that same id. Previously `isConfiguredAgent` only
+   * matched explicit entries, so renaming the default agent from any
+   * client (Linux / macOS / CLI / Control UI) returned
+   * `agent "main" not found`. The client sends exactly the id it got
+   * from `agents.list` — this test guards the server-side contract
+   * alignment, including materializing the implicit entry on first
+   * mutation and persisting it.
+   */
+  it("accepts the implicit default agent id and materializes an explicit entry", async () => {
+    /* Empty `agents.list` — the "main" agent exists only as the
+     * implicit default from `resolveDefaultAgentId`. */
+    mocks.loadConfigReturn = {};
+    mocks.resolveAgentWorkspaceDir.mockImplementation(() => "/workspace/main");
+
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "main",
+      name: "Renamed Default",
+    });
+    await promise;
+
+    /* No longer rejected with "not found". */
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, agentId: "main" }, undefined);
+
+    /* `applyAgentConfig` was asked to materialize the default agent
+     * entry on its first mutation, with the rename + merged identity. */
+    expect(mocks.applyAgentConfig).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        agentId: "main",
+        name: "Renamed Default",
+        identity: expect.objectContaining({ name: "Renamed Default" }),
+      }),
+    );
+
+    /* The mutation was persisted. */
+    expect(mocks.writeConfigFile).toHaveBeenCalled();
   });
 });
 

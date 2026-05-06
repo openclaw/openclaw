@@ -5,6 +5,7 @@ import {
   listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { mergeIdentityMarkdownContent } from "../../agents/identity-file.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
@@ -251,8 +252,35 @@ function respondInvalidMethodParams(
   );
 }
 
+/**
+ * Whether the gateway should treat `agentId` as a valid agent for
+ * mutation (`agents.update`) and deletion (`agents.delete`).
+ *
+ * Accepts any id that `agents.list` would advertise. Historically this
+ * helper only matched explicit `cfg.agents.list` entries, which made
+ * `agents.update` reject the implicit default agent id — the very id
+ * that `agents.list` itself exposes when no explicit entry exists —
+ * with `agent "<id>" not found`. Clients (Linux companion, Control
+ * UI, macOS companion, CLI) all correctly echo the id they received
+ * from `agents.list`, so the inconsistency is a server-side contract
+ * bug, not a client bug. Keep the two views aligned.
+ *
+ * For `agents.update`, `applyAgentConfig()` will materialize the
+ * explicit `cfg.agents.list` entry the first time the default agent
+ * is mutated (see `src/commands/agents.config.ts`). For
+ * `agents.delete`, the caller's explicit `DEFAULT_AGENT_ID` guard
+ * still prevents deleting the default, so relaxing the predicate
+ * here does not widen delete semantics.
+ */
 function isConfiguredAgent(cfg: OpenClawConfig, agentId: string): boolean {
-  return findAgentEntryIndex(listAgentEntries(cfg), agentId) >= 0;
+  const normalized = normalizeAgentId(agentId);
+  if (findAgentEntryIndex(listAgentEntries(cfg), normalized) >= 0) {
+    return true;
+  }
+  if (normalized === normalizeAgentId(resolveDefaultAgentId(cfg))) {
+    return true;
+  }
+  return false;
 }
 
 function respondAgentNotFound(respond: RespondFn, agentId: string): void {

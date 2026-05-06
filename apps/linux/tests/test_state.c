@@ -1,0 +1,1009 @@
+#include <glib.h>
+#include "../src/state.h"
+
+// Stubs for callbacks
+void notify_on_transition(AppState old_state, AppState new_state) {
+    (void)old_state;
+    (void)new_state;
+}
+void notify_on_gateway_connection_transition(gboolean connected) {
+    (void)connected;
+}
+void tray_update_from_state(AppState state) {
+    (void)state;
+}
+
+void onboarding_refresh(void) {
+    /* No-op in tests */
+}
+
+void state_on_gateway_refresh_requested(void) {}
+
+/* ── Basic systemd-only state tests ── */
+
+static void test_initial_state(void) {
+    state_init();
+    g_assert_cmpint(state_get_current(), ==, STATE_NEEDS_SETUP);
+    g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_NONE);
+}
+
+static void test_installed_inactive(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = FALSE;
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_STOPPED);
+    g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_NONE);
+}
+
+static void test_active_without_fresh_health(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+    // Startup hydration guard: systemd active + no health data → STARTING (transitional, not RUNNING)
+    g_assert_cmpint(state_get_current(), ==, STATE_STARTING);
+    g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_SERVICE_ACTIVE_NOT_PROVEN);
+}
+
+/* ── Native gateway connectivity tests ── */
+
+static void test_full_connectivity_running(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    
+    
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+    g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_EXPECTED_SERVICE_HEALTHY);
+}
+
+static void test_warning_health(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    state_update_health(&hs);
+    state_set_config_audit_fact(TRUE, 1);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING_WITH_WARNING);
+}
+
+static void test_degraded_rpc_fail(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = FALSE;
+    hs.auth_ok = TRUE;
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_DEGRADED);
+}
+
+static void test_http_ok_ws_disconnected_is_degraded(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = TRUE;
+    hs.ws_connected = FALSE;
+    state_update_health(&hs);
+
+    // HTTP reachable but WS not connected → partial health → DEGRADED
+    g_assert_cmpint(state_get_current(), ==, STATE_DEGRADED);
+}
+
+/* ── STATUS PRECEDENCE: Runtime connectivity overrides systemd ── */
+
+static void test_precedence_systemd_inactive_native_connected(void) {
+    // CRITICAL: systemd says inactive, but native client is connected → RUNNING
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = FALSE; // systemd says stopped
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_STOPPED);
+
+    // Now the native gateway client connects
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    state_update_health(&hs);
+
+    // Runtime connectivity takes precedence → RUNNING
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+    g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_HEALTHY_OUTSIDE_EXPECTED_SERVICE);
+}
+
+static void test_precedence_systemd_unavailable_native_connected(void) {
+    // CRITICAL: systemd unavailable, but native client is connected → RUNNING
+    state_init();
+    SystemdState sys = {0};
+    sys.systemd_unavailable = TRUE;
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_USER_SYSTEMD_UNAVAILABLE);
+
+    // Now the native gateway client connects
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    state_update_health(&hs);
+
+    // Runtime connectivity takes precedence → RUNNING
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+    g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_HEALTHY_OUTSIDE_EXPECTED_SERVICE);
+}
+
+static void test_precedence_systemd_active_http_down(void) {
+    // systemd says active, but HTTP unreachable → DEGRADED
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_STARTING);
+
+    // HTTP health check fails (config is valid but gateway unreachable)
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = FALSE;
+    hs.ws_connected = FALSE;
+    hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    
+    
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_DEGRADED);
+}
+
+static void test_precedence_not_installed_native_connected(void) {
+    // Systemd says not installed, but a manually started gateway is connected
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = FALSE;
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_NEEDS_SETUP);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    state_update_health(&hs);
+
+    // Runtime connectivity takes precedence → RUNNING
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+    g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_HEALTHY_OUTSIDE_EXPECTED_SERVICE);
+}
+
+static void test_precedence_native_connected_with_warning(void) {
+    // systemd inactive + native connected with config issues → RUNNING_WITH_WARNING
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = FALSE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    state_update_health(&hs);
+    state_set_config_audit_fact(TRUE, 2);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING_WITH_WARNING);
+}
+
+static void test_native_connected_with_warning_via_facts(void) {
+    state_init();
+
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    state_update_health(&hs);
+
+    state_set_config_audit_fact(TRUE, 1);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING_WITH_WARNING);
+}
+
+static void test_precedence_native_connected_auth_fail(void) {
+    // systemd inactive + native HTTP+WS connected but auth failed → DEGRADED
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = FALSE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = FALSE;
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_DEGRADED);
+}
+
+/* ── Lifecycle and generation tests ── */
+
+static void test_unit_retarget_bumps_generation(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    sys.unit_name = "unitA.service";
+    state_update_systemd(&sys);
+
+    guint64 gen1 = state_get_health_generation();
+
+    sys.unit_name = "unitB.service";
+    state_update_systemd(&sys);
+
+    guint64 gen2 = state_get_health_generation();
+    g_assert_cmpuint(gen2, >, gen1);
+}
+
+static void test_repeated_running_stopped_transitions(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_STARTING);
+
+    sys.active = FALSE;
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_STOPPED);
+
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_STARTING);
+
+    sys.active = FALSE;
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_STOPPED);
+}
+
+static void test_connection_transition_guard_first_observation_no_emit(void) {
+    GatewayConnectionTransitionTracker tracker = {0};
+    gboolean out_connected = FALSE;
+
+    gboolean emit = state_connection_transition_step(&tracker, FALSE, &out_connected);
+    g_assert_false(emit);
+    g_assert_true(tracker.initialized);
+    g_assert_false(tracker.connected);
+}
+
+static void test_connection_transition_guard_emits_only_on_edges(void) {
+    GatewayConnectionTransitionTracker tracker = {0};
+    gboolean out_connected = FALSE;
+
+    g_assert_false(state_connection_transition_step(&tracker, FALSE, &out_connected));
+    g_assert_false(state_connection_transition_step(&tracker, FALSE, &out_connected));
+
+    g_assert_true(state_connection_transition_step(&tracker, TRUE, &out_connected));
+    g_assert_true(out_connected);
+
+    g_assert_false(state_connection_transition_step(&tracker, TRUE, &out_connected));
+
+    g_assert_true(state_connection_transition_step(&tracker, FALSE, &out_connected));
+    g_assert_false(out_connected);
+}
+
+static void test_connection_transition_guard_null_tracker_safe(void) {
+    gboolean out_connected = FALSE;
+    g_assert_false(state_connection_transition_step(NULL, TRUE, &out_connected));
+}
+
+static void test_transition_into_systemd_unavailable(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_STARTING);
+
+    sys.systemd_unavailable = TRUE;
+    state_update_systemd(&sys);
+    // No native connectivity → systemd context used → UNAVAILABLE
+    g_assert_cmpint(state_get_current(), ==, STATE_USER_SYSTEMD_UNAVAILABLE);
+}
+
+static void test_repeated_unit_retargets(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+
+    sys.unit_name = "unitA.service";
+    state_update_systemd(&sys);
+    guint64 gen1 = state_get_health_generation();
+
+    sys.unit_name = "unitB.service";
+    state_update_systemd(&sys);
+    guint64 gen2 = state_get_health_generation();
+    g_assert_cmpuint(gen2, >, gen1);
+
+    sys.unit_name = "unitC.service";
+    state_update_systemd(&sys);
+    guint64 gen3 = state_get_health_generation();
+    g_assert_cmpuint(gen3, >, gen2);
+
+    // Same unit → no generation bump
+    sys.unit_name = "unitC.service";
+    state_update_systemd(&sys);
+    guint64 gen4 = state_get_health_generation();
+    g_assert_cmpuint(gen4, ==, gen3);
+}
+
+static void test_health_zero_timestamp_preserves_systemd_running(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    // Push a healthy state first
+    HealthState hs1 = {0};
+    hs1.last_updated = 12345;
+    hs1.http_ok = TRUE;
+    hs1.ws_connected = TRUE;
+    hs1.rpc_ok = TRUE;
+    hs1.auth_ok = TRUE;
+    state_update_health(&hs1);
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+
+    // Simulate zero-timestamp health update (e.g. during reinit)
+    HealthState hs_zero = {0};
+    hs_zero.last_updated = 0;
+    state_update_health(&hs_zero);
+
+    // Systemd still active + no valid health data → startup hydration guard → STARTING
+    g_assert_cmpint(state_get_current(), ==, STATE_STARTING);
+    g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_SERVICE_ACTIVE_NOT_PROVEN);
+}
+
+static void test_activation_boundary_health_persists_through_stop(void) {
+    /*
+     * Health data now persists through systemd stop. The native client is
+     * the authoritative source — a refresh is triggered on stop so the
+     * native client will discover the real state. Until then, the old
+     * health data remains and compute_state uses it.
+     */
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    // Seed connected state (degraded because rpc_ok=FALSE)
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = FALSE;
+    hs.auth_ok = TRUE;
+    state_update_health(&hs);
+    g_assert_cmpint(state_get_current(), ==, STATE_DEGRADED);
+
+    // Stop: health persists, native connectivity takes precedence → still DEGRADED
+    sys.active = FALSE;
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_DEGRADED);
+
+    // Simulate native refresh detecting gateway is gone
+    HealthState hs_down = {0};
+    hs_down.last_updated = 12346;
+    hs_down.http_ok = FALSE;
+    hs_down.ws_connected = FALSE;
+    hs_down.config_valid = TRUE;
+    hs_down.has_wizard_onboard_marker = TRUE;
+    
+    state_update_health(&hs_down);
+    // Now systemd says stopped + native says unreachable → STOPPED
+    g_assert_cmpint(state_get_current(), ==, STATE_STOPPED);
+}
+
+static void test_systemd_stop_does_not_regress_native_connected(void) {
+    /*
+     * CRITICAL: If the gateway is still reachable after systemd reports stop
+     * (e.g. started out-of-band), native connectivity must take precedence.
+     */
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    state_update_health(&hs);
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+
+    // Systemd says stopped, but native health persists → RUNNING
+    sys.active = FALSE;
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+    g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_HEALTHY_OUTSIDE_EXPECTED_SERVICE);
+}
+
+/* ── Readiness decision table tests ── */
+
+static void test_readiness_needs_setup(void) {
+    // No unit installed, no setup detected → NEEDS_SETUP
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = FALSE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.setup_detected = FALSE;
+    hs.config_valid = FALSE;
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_NEEDS_SETUP);
+}
+
+static void test_readiness_needs_gateway_install(void) {
+    // No unit installed, but setup is detected → NEEDS_GATEWAY_INSTALL
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = FALSE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.setup_detected = TRUE;
+    hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    
+    
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_NEEDS_GATEWAY_INSTALL);
+}
+
+static void test_readiness_config_invalid_when_stopped(void) {
+    // Unit installed, stopped, config invalid → CONFIG_INVALID
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = FALSE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.config_valid = FALSE;
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_CONFIG_INVALID);
+}
+
+static void test_readiness_config_invalid_when_active_unreachable(void) {
+    // Unit installed, systemd active, HTTP unreachable, config invalid → CONFIG_INVALID
+    // (config invalidity surfaces when runtime truth has not proven usability)
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = FALSE;
+    hs.config_valid = FALSE;
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_CONFIG_INVALID);
+}
+
+static void test_readiness_startup_hydration_is_starting(void) {
+    // Systemd active, no health data yet → STARTING (not RUNNING)
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_STARTING);
+}
+
+static void test_readiness_startup_hydration_to_running(void) {
+    // Hydration → STARTING, then health confirms → RUNNING
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_STARTING);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    
+    
+    state_update_health(&hs);
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+}
+
+static void test_readiness_snapshot_no_setup(void) {
+    state_init();
+
+    SystemdState sys = {0};
+    sys.installed = FALSE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.setup_detected = FALSE;
+    hs.config_valid = FALSE;
+    state_update_health(&hs);
+
+    const DesktopReadinessSnapshot *snap = state_get_readiness_snapshot();
+    g_assert_false(snap->config_present);
+    g_assert_false(snap->desktop_chat_ready);
+    g_assert_cmpint(snap->chat_block_reason, ==, CHAT_BLOCK_NO_CONFIG);
+}
+
+static void test_readiness_snapshot_minimal_bootstrap_provider_missing(void) {
+    state_init();
+
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.setup_detected = TRUE;
+    hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    hs.has_provider_config = FALSE;
+    hs.has_default_model_config = FALSE;
+    state_update_health(&hs);
+
+    const DesktopReadinessSnapshot *snap = state_get_readiness_snapshot();
+    g_assert_true(snap->config_present);
+    g_assert_true(snap->wizard_completed);
+    g_assert_false(snap->provider_configured);
+    g_assert_false(snap->desktop_chat_ready);
+    g_assert_cmpint(snap->chat_block_reason, ==, CHAT_BLOCK_PROVIDER_MISSING);
+}
+
+static void test_readiness_snapshot_provider_present_default_model_missing(void) {
+    state_init();
+
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.setup_detected = TRUE;
+    hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    hs.has_provider_config = TRUE;
+    hs.has_default_model_config = FALSE;
+    hs.model_catalog_available = TRUE;
+    hs.selected_model_resolved = FALSE;
+    hs.agents_available = TRUE;
+    state_update_health(&hs);
+
+    const DesktopReadinessSnapshot *snap = state_get_readiness_snapshot();
+    g_assert_true(snap->provider_configured);
+    g_assert_false(snap->default_model_configured);
+    g_assert_false(snap->desktop_chat_ready);
+    g_assert_cmpint(snap->chat_block_reason, ==, CHAT_BLOCK_DEFAULT_MODEL_MISSING);
+}
+
+static void test_readiness_snapshot_fully_ready(void) {
+    state_init();
+
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.setup_detected = TRUE;
+    hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    hs.has_provider_config = TRUE;
+    hs.has_default_model_config = TRUE;
+    hs.model_catalog_available = TRUE;
+    hs.selected_model_resolved = TRUE;
+    hs.agents_available = TRUE;
+    state_update_health(&hs);
+
+    const DesktopReadinessSnapshot *snap = state_get_readiness_snapshot();
+    g_assert_true(snap->desktop_chat_ready);
+    g_assert_cmpint(snap->chat_block_reason, ==, CHAT_BLOCK_NONE);
+}
+
+static void test_readiness_snapshot_provider_default_set_catalog_unavailable(void) {
+    state_init();
+
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.setup_detected = TRUE;
+    hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    hs.has_provider_config = TRUE;
+    hs.has_default_model_config = TRUE;
+    state_update_health(&hs);
+
+    state_set_model_catalog_fact(FALSE, 0, FALSE);
+    state_set_agents_fact(TRUE, 1);
+
+    const DesktopReadinessSnapshot *snap = state_get_readiness_snapshot();
+    g_assert_false(snap->model_catalog_available);
+    g_assert_false(snap->desktop_chat_ready);
+    g_assert_cmpint(snap->chat_block_reason, ==, CHAT_BLOCK_MODEL_CATALOG_EMPTY);
+}
+
+static void test_readiness_snapshot_healthy_without_dependency_refresh(void) {
+    state_init();
+
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.setup_detected = TRUE;
+    hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    hs.has_provider_config = TRUE;
+    hs.has_default_model_config = TRUE;
+    hs.configured_default_model_id = "openai/gpt-4.1";
+    state_update_health(&hs);
+
+    const DesktopReadinessSnapshot *snap = state_get_readiness_snapshot();
+    g_assert_true(snap->provider_configured);
+    g_assert_true(snap->default_model_configured);
+    g_assert_false(snap->model_catalog_available);
+    g_assert_false(snap->selected_model_resolved);
+    g_assert_false(snap->desktop_chat_ready);
+    g_assert_cmpint(snap->chat_block_reason, ==, CHAT_BLOCK_MODEL_CATALOG_EMPTY);
+}
+
+static void test_readiness_snapshot_selected_model_unresolved(void) {
+    state_init();
+
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.setup_detected = TRUE;
+    hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    hs.has_provider_config = TRUE;
+    hs.has_default_model_config = TRUE;
+    hs.configured_default_model_id = "openai/gpt-4.1";
+    state_update_health(&hs);
+
+    state_set_model_catalog_fact(TRUE, 3, FALSE);
+    state_set_agents_fact(TRUE, 1);
+
+    const DesktopReadinessSnapshot *snap = state_get_readiness_snapshot();
+    g_assert_true(snap->model_catalog_available);
+    g_assert_false(snap->selected_model_resolved);
+    g_assert_cmpint(snap->chat_block_reason, ==, CHAT_BLOCK_SELECTED_MODEL_UNRESOLVED);
+}
+
+static void test_readiness_snapshot_agents_unavailable_with_resolved_model(void) {
+    state_init();
+
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.setup_detected = TRUE;
+    hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    hs.has_provider_config = TRUE;
+    hs.has_default_model_config = TRUE;
+    hs.configured_default_model_id = "openai/gpt-4.1";
+    state_update_health(&hs);
+
+    state_set_model_catalog_fact(TRUE, 2, TRUE);
+    state_set_agents_fact(TRUE, 0);
+
+    const DesktopReadinessSnapshot *snap = state_get_readiness_snapshot();
+    g_assert_true(snap->model_catalog_available);
+    g_assert_true(snap->selected_model_resolved);
+    g_assert_false(snap->agents_available);
+    g_assert_cmpint(snap->chat_block_reason, ==, CHAT_BLOCK_AGENTS_UNAVAILABLE);
+}
+
+/* ── Wizard Marker Tests (Task 9) ── */
+
+static void test_wizard_absent_needs_onboarding(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.config_valid = TRUE;
+    hs.setup_detected = TRUE;
+    hs.has_wizard_onboard_marker = FALSE;
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_NEEDS_ONBOARDING);
+}
+
+static void test_wizard_present_service_not_installed(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = FALSE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.config_valid = TRUE;
+    hs.setup_detected = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_NEEDS_GATEWAY_INSTALL);
+}
+
+static void test_wizard_present_gateway_unreachable(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.config_valid = TRUE;
+    hs.setup_detected = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    hs.http_ok = FALSE;
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_DEGRADED);
+}
+
+static void test_wizard_present_runtime_healthy(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.config_valid = TRUE;
+    hs.setup_detected = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+}
+
+static void test_wizard_absent_model_config_present(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.config_valid = TRUE;
+    hs.setup_detected = TRUE;
+    hs.has_wizard_onboard_marker = FALSE;
+    hs.has_model_config = TRUE; /* Should be ignored */
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_NEEDS_ONBOARDING);
+}
+
+static void test_wizard_present_model_config_absent(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.config_valid = TRUE;
+    hs.setup_detected = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    hs.has_model_config = FALSE; /* Should not block readiness */
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+}
+
+int main(int argc, char **argv) {
+    g_test_init(&argc, &argv, NULL);
+
+    /* Basic systemd state tests */
+    g_test_add_func("/state/initial_state", test_initial_state);
+    g_test_add_func("/state/installed_inactive", test_installed_inactive);
+    g_test_add_func("/state/active_without_fresh_health", test_active_without_fresh_health);
+
+    /* Native gateway connectivity tests */
+    g_test_add_func("/state/full_connectivity_running", test_full_connectivity_running);
+    g_test_add_func("/state/warning_health", test_warning_health);
+    g_test_add_func("/state/degraded_rpc_fail", test_degraded_rpc_fail);
+    g_test_add_func("/state/http_ok_ws_disconnected_is_degraded", test_http_ok_ws_disconnected_is_degraded);
+
+    /* Status precedence tests (runtime connectivity overrides systemd) */
+    g_test_add_func("/state/precedence/systemd_inactive_native_connected", test_precedence_systemd_inactive_native_connected);
+    g_test_add_func("/state/precedence/systemd_unavailable_native_connected", test_precedence_systemd_unavailable_native_connected);
+    g_test_add_func("/state/precedence/systemd_active_http_down", test_precedence_systemd_active_http_down);
+    g_test_add_func("/state/precedence/not_installed_native_connected", test_precedence_not_installed_native_connected);
+    g_test_add_func("/state/precedence/native_connected_with_warning", test_precedence_native_connected_with_warning);
+    g_test_add_func("/state/precedence/native_connected_auth_fail", test_precedence_native_connected_auth_fail);
+    g_test_add_func("/state/precedence/native_connected_with_warning_via_facts", test_native_connected_with_warning_via_facts);
+
+    /* Lifecycle and generation tests */
+    g_test_add_func("/state/unit_retarget_bumps_generation", test_unit_retarget_bumps_generation);
+    g_test_add_func("/state/repeated_running_stopped_transitions", test_repeated_running_stopped_transitions);
+    g_test_add_func("/state/transition_into_systemd_unavailable", test_transition_into_systemd_unavailable);
+    g_test_add_func("/state/repeated_unit_retargets", test_repeated_unit_retargets);
+    g_test_add_func("/state/health_zero_timestamp_preserves_systemd_running", test_health_zero_timestamp_preserves_systemd_running);
+    g_test_add_func("/state/activation_boundary_health_persists_through_stop", test_activation_boundary_health_persists_through_stop);
+    g_test_add_func("/state/systemd_stop_does_not_regress_native_connected", test_systemd_stop_does_not_regress_native_connected);
+
+    /* Connection transition guard tests */
+    g_test_add_func("/state/connection_transition/first_observation_no_emit", test_connection_transition_guard_first_observation_no_emit);
+    g_test_add_func("/state/connection_transition/edge_only", test_connection_transition_guard_emits_only_on_edges);
+    g_test_add_func("/state/connection_transition/null_tracker_safe", test_connection_transition_guard_null_tracker_safe);
+
+    /* Readiness decision table tests */
+    g_test_add_func("/state/readiness/needs_setup", test_readiness_needs_setup);
+    g_test_add_func("/state/readiness/needs_gateway_install", test_readiness_needs_gateway_install);
+    g_test_add_func("/state/readiness/config_invalid_when_stopped", test_readiness_config_invalid_when_stopped);
+    g_test_add_func("/state/readiness/config_invalid_when_active_unreachable", test_readiness_config_invalid_when_active_unreachable);
+    g_test_add_func("/state/readiness/startup_hydration_is_starting", test_readiness_startup_hydration_is_starting);
+    g_test_add_func("/state/readiness/startup_hydration_to_running", test_readiness_startup_hydration_to_running);
+
+    /* Wizard Marker Tests */
+    g_test_add_func("/state/wizard_marker/absent_needs_onboarding", test_wizard_absent_needs_onboarding);
+    g_test_add_func("/state/wizard_marker/present_service_not_installed", test_wizard_present_service_not_installed);
+    g_test_add_func("/state/wizard_marker/present_gateway_unreachable", test_wizard_present_gateway_unreachable);
+    g_test_add_func("/state/wizard_marker/present_runtime_healthy", test_wizard_present_runtime_healthy);
+    g_test_add_func("/state/wizard_marker/absent_model_config_present", test_wizard_absent_model_config_present);
+    g_test_add_func("/state/wizard_marker/present_model_config_absent", test_wizard_present_model_config_absent);
+    g_test_add_func("/state/readiness_snapshot/no_setup", test_readiness_snapshot_no_setup);
+    g_test_add_func("/state/readiness_snapshot/minimal_bootstrap_provider_missing", test_readiness_snapshot_minimal_bootstrap_provider_missing);
+    g_test_add_func("/state/readiness_snapshot/provider_present_default_model_missing", test_readiness_snapshot_provider_present_default_model_missing);
+    g_test_add_func("/state/readiness_snapshot/fully_ready", test_readiness_snapshot_fully_ready);
+    g_test_add_func("/state/readiness_snapshot/provider_default_set_catalog_unavailable", test_readiness_snapshot_provider_default_set_catalog_unavailable);
+    g_test_add_func("/state/readiness_snapshot/healthy_without_dependency_refresh", test_readiness_snapshot_healthy_without_dependency_refresh);
+    g_test_add_func("/state/readiness_snapshot/selected_model_unresolved", test_readiness_snapshot_selected_model_unresolved);
+    g_test_add_func("/state/readiness_snapshot/agents_unavailable_with_resolved_model", test_readiness_snapshot_agents_unavailable_with_resolved_model);
+
+    return g_test_run();
+}

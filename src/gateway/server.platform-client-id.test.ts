@@ -21,7 +21,7 @@ function makeConnectParams(clientId: string) {
 }
 
 describe("connect params client id validation", () => {
-  test.each([GATEWAY_CLIENT_IDS.IOS_APP, GATEWAY_CLIENT_IDS.ANDROID_APP])(
+  test.each([GATEWAY_CLIENT_IDS.IOS_APP, GATEWAY_CLIENT_IDS.ANDROID_APP, GATEWAY_CLIENT_IDS.LINUX_APP])(
     "accepts %s as a valid gateway client id",
     (clientId) => {
       const ok = validateConnectParams(makeConnectParams(clientId));

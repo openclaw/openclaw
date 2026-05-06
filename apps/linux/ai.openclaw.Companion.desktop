@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=OpenClaw Companion
+Exec=openclaw-linux %U
+Terminal=false
+Categories=Utility;
+MimeType=x-scheme-handler/openclaw;
+StartupNotify=false

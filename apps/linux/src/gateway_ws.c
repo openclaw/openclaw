@@ -1,0 +1,866 @@
+/*
+ * gateway_ws.c
+ *
+ * Persistent WebSocket client for the OpenClaw Linux Companion App.
+ *
+ * Maintains a long-lived WebSocket connection to the local gateway,
+ * handling the challenge→connect→auth handshake, receive loop,
+ * reconnect with exponential backoff, tick watchdog, and keepalive.
+ *
+ * Mirrors the shared/macOS gateway protocol semantics as implemented
+ * in GatewayChannelActor (GatewayChannel.swift:165-753):
+ *   - backoff: 500ms initial, doubles to 30000ms max
+ *   - keepalive: ping at 15s intervals
+ *   - tick watchdog: tickIntervalMs * 2 tolerance
+ *   - connect timeout: 12s, challenge timeout: 6s
+ *   - client identity: role "operator", scopes from defaultOperatorConnectScopes
+ *
+ * Author: Thiago Camargo <thiagocmc@proton.me>
+ */
+
+#include "gateway_ws.h"
+#include "gateway_protocol.h"
+#include "gateway_rpc.h"
+#include "device_identity.h"
+#include "device_auth_store.h"
+#include "log.h"
+#include <libsoup/soup.h>
+#include <json-glib/json-glib.h>
+#include <string.h>
+
+/* Protocol constants from GatewayChannel.swift:177-198 */
+#define BACKOFF_INITIAL_MS       500.0
+#define BACKOFF_MAX_MS           30000.0
+#define KEEPALIVE_INTERVAL_S     15.0
+#define CONNECT_TIMEOUT_S        12.0
+#define CHALLENGE_TIMEOUT_S      6.0
+#define DEFAULT_TICK_INTERVAL_MS 30000.0
+
+/* Client identity from the established operator-client contract
+ * (GatewayChannel.swift:127-133, 374-381) */
+static const gchar *DEFAULT_CLIENT_ID   = "openclaw-linux";
+static const gchar *DEFAULT_CLIENT_MODE = "ui";
+static const gchar *DEFAULT_ROLE        = "operator";
+static const gchar * const DEFAULT_SCOPES[] = {
+    "operator.admin",
+    "operator.read",
+    "operator.write",
+    "operator.approvals",
+    "operator.pairing",
+    NULL
+};
+
+typedef struct {
+    guint id;
+    GatewayWsEventCallback callback;
+    gpointer user_data;
+} GatewayWsEventListener;
+
+typedef struct {
+    GatewayWsEventCallback callback;
+    gpointer user_data;
+} GatewayWsDispatchCallback;
+
+typedef struct {
+    SoupSession *session;
+    SoupWebsocketConnection *ws_conn;
+    GatewayWsState state;
+    GatewayWsStatusCallback callback;
+    gpointer user_data;
+
+    gchar *url;
+    gchar *auth_mode;
+    gchar *token;
+    gchar *password;
+
+    gchar *auth_source;
+    gchar *last_error;
+    gboolean rpc_ok;
+
+    /* Device identity / durable device-token lifecycle */
+    gchar *state_dir;                   /* effective state dir, owns identity+auth-store */
+    OcDeviceIdentity *identity;          /* loaded lazily on first connect */
+    gchar *last_challenge_nonce;         /* last nonce from connect.challenge */
+    gboolean pending_device_token_retry; /* emit auth.deviceToken on next connect */
+    gboolean device_token_retry_budget_used; /* one-shot consumed this session */
+    gboolean pairing_required;           /* mirrored into status */
+    gchar *pairing_request_id;           /* mirrored into status */
+
+    gdouble backoff_ms;
+    gboolean should_reconnect;
+    gboolean reconnect_paused_for_auth;
+
+    gdouble tick_interval_ms;
+    gint64 last_tick_us;
+
+    guint connect_generation;
+    GCancellable *connect_cancellable;
+
+    guint reconnect_timer_id;
+    guint tick_watchdog_timer_id;
+    guint challenge_timeout_id;
+    guint connect_timeout_id;
+
+    guint next_event_listener_id;
+    GPtrArray *event_listeners;
+} GatewayWsClient;
+
+static GatewayWsClient *ws_client = NULL;
+
+static void gateway_ws_event_listener_free(gpointer data) {
+    GatewayWsEventListener *listener = data;
+    g_free(listener);
+}
+
+static void ws_dispatch_event(const gchar *event_type, JsonNode *payload) {
+    if (!ws_client || !ws_client->event_listeners || !event_type) return;
+
+    g_autoptr(GArray) listeners_snapshot = g_array_new(FALSE, FALSE, sizeof(GatewayWsDispatchCallback));
+    for (guint i = 0; i < ws_client->event_listeners->len; i++) {
+        GatewayWsEventListener *listener = g_ptr_array_index(ws_client->event_listeners, i);
+        if (!listener || !listener->callback) continue;
+        GatewayWsDispatchCallback cb = {
+            .callback = listener->callback,
+            .user_data = listener->user_data,
+        };
+        g_array_append_val(listeners_snapshot, cb);
+    }
+
+    for (guint i = 0; i < listeners_snapshot->len; i++) {
+        GatewayWsDispatchCallback cb = g_array_index(listeners_snapshot, GatewayWsDispatchCallback, i);
+        if (!cb.callback) continue;
+        cb.callback(event_type, payload, cb.user_data);
+    }
+}
+
+static void ws_publish_status(void);
+static void ws_schedule_reconnect(void);
+static void ws_start_keepalive(void);
+static void ws_start_tick_watchdog(void);
+static void ws_stop_timers(void);
+static void ws_do_connect(void);
+static void ws_handle_message(SoupWebsocketConnection *conn, SoupWebsocketDataType type, GBytes *message, gpointer user_data);
+
+static void ws_set_state(GatewayWsState new_state) {
+    if (!ws_client) return;
+    ws_client->state = new_state;
+    ws_publish_status();
+}
+
+static void secure_clear_free(gchar *str) {
+    if (!str) return;
+    volatile gchar *p = str;
+    while (*p) {
+        *p++ = '\0';
+    }
+    g_free(str);
+}
+
+static void ws_set_error(const gchar *error) {
+    if (!ws_client) return;
+    g_free(ws_client->last_error);
+    ws_client->last_error = error ? g_strdup(error) : NULL;
+}
+
+static void ws_publish_status(void) {
+    if (!ws_client || !ws_client->callback) return;
+    GatewayWsStatus status = {
+        .state = ws_client->state,
+        .auth_source = ws_client->auth_source,
+        .last_error = ws_client->last_error,
+        .rpc_ok = ws_client->rpc_ok,
+        .pairing_required = ws_client->pairing_required,
+        .pairing_request_id = ws_client->pairing_request_id,
+    };
+    ws_client->callback(&status, ws_client->user_data);
+}
+
+static void ws_ensure_identity_loaded(void) {
+    if (!ws_client || !ws_client->state_dir || ws_client->identity) return;
+    GError *err = NULL;
+    ws_client->identity = oc_device_identity_load_or_create(ws_client->state_dir, &err);
+    if (!ws_client->identity) {
+        OC_LOG_WARN(OPENCLAW_LOG_CAT_GATEWAY,
+                    "device identity load/create failed: %s",
+                    err ? err->message : "unknown");
+        g_clear_error(&err);
+    } else {
+        OC_LOG_INFO(OPENCLAW_LOG_CAT_GATEWAY,
+                    "device identity ready deviceId=%s",
+                    ws_client->identity->device_id);
+    }
+}
+
+static void ws_emit_synthetic_event(const gchar *event_type,
+                                    const gchar *request_id) {
+    if (!event_type) return;
+    g_autoptr(JsonBuilder) b = json_builder_new();
+    json_builder_begin_object(b);
+    if (request_id) {
+        json_builder_set_member_name(b, "requestId");
+        json_builder_add_string_value(b, request_id);
+    }
+    json_builder_end_object(b);
+    g_autoptr(JsonNode) node = json_builder_get_root(b);
+    ws_dispatch_event(event_type, node);
+}
+
+static void ws_cleanup_connection(void) {
+    if (!ws_client) return;
+    ws_stop_timers();
+    
+    if (ws_client->connect_cancellable) {
+        g_cancellable_cancel(ws_client->connect_cancellable);
+        g_clear_object(&ws_client->connect_cancellable);
+    }
+
+    if (ws_client->ws_conn) {
+        if (soup_websocket_connection_get_state(ws_client->ws_conn) == SOUP_WEBSOCKET_STATE_OPEN) {
+            soup_websocket_connection_close(ws_client->ws_conn, SOUP_WEBSOCKET_CLOSE_GOING_AWAY, NULL);
+        }
+        g_clear_object(&ws_client->ws_conn);
+    }
+}
+
+static void ws_stop_timers(void) {
+    if (!ws_client) return;
+    if (ws_client->reconnect_timer_id) {
+        g_source_remove(ws_client->reconnect_timer_id);
+        ws_client->reconnect_timer_id = 0;
+    }
+    if (ws_client->tick_watchdog_timer_id) {
+        g_source_remove(ws_client->tick_watchdog_timer_id);
+        ws_client->tick_watchdog_timer_id = 0;
+    }
+    if (ws_client->challenge_timeout_id) {
+        g_source_remove(ws_client->challenge_timeout_id);
+        ws_client->challenge_timeout_id = 0;
+    }
+    if (ws_client->connect_timeout_id) {
+        g_source_remove(ws_client->connect_timeout_id);
+        ws_client->connect_timeout_id = 0;
+    }
+}
+
+static gboolean ws_on_reconnect_timer(gpointer user_data) {
+    (void)user_data;
+    if (!ws_client) return G_SOURCE_REMOVE;
+    ws_client->reconnect_timer_id = 0;
+    if (ws_client->should_reconnect && !ws_client->reconnect_paused_for_auth) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY, "ws reconnect timer fired, reconnecting");
+        ws_do_connect();
+    }
+    return G_SOURCE_REMOVE;
+}
+
+static void ws_schedule_reconnect(void) {
+    if (!ws_client || !ws_client->should_reconnect || ws_client->reconnect_paused_for_auth) return;
+    gdouble delay_s = ws_client->backoff_ms / 1000.0;
+    ws_client->backoff_ms = MIN(ws_client->backoff_ms * 2.0, BACKOFF_MAX_MS);
+    guint delay_ms = (guint)(delay_s * 1000.0);
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY, "ws scheduling reconnect in %u ms", delay_ms);
+    if (ws_client->reconnect_timer_id) g_source_remove(ws_client->reconnect_timer_id);
+    ws_client->reconnect_timer_id = g_timeout_add(delay_ms, ws_on_reconnect_timer, NULL);
+}
+
+/* B3: Clamp tick interval to sane range */
+#define TICK_INTERVAL_MIN_MS   1000.0
+#define TICK_INTERVAL_MAX_MS   300000.0
+
+static gdouble clamp_tick_interval(gdouble tick_ms) {
+    if (tick_ms <= 0) return DEFAULT_TICK_INTERVAL_MS;
+    if (tick_ms < TICK_INTERVAL_MIN_MS) return TICK_INTERVAL_MIN_MS;
+    if (tick_ms > TICK_INTERVAL_MAX_MS) return TICK_INTERVAL_MAX_MS;
+    return tick_ms;
+}
+
+static void ws_start_keepalive(void) {
+    if (!ws_client || !ws_client->ws_conn) return;
+    /* Use libsoup's native WebSocket ping control frames instead of text frames */
+    soup_websocket_connection_set_keepalive_interval(ws_client->ws_conn, (guint)KEEPALIVE_INTERVAL_S);
+}
+
+static gboolean ws_on_tick_watchdog(gpointer user_data) {
+    (void)user_data;
+    if (!ws_client || ws_client->state != GATEWAY_WS_CONNECTED) return G_SOURCE_REMOVE;
+    if (ws_client->last_tick_us > 0) {
+        gint64 now = g_get_monotonic_time();
+        gdouble delta_ms = (now - ws_client->last_tick_us) / 1000.0;
+        gdouble tolerance = ws_client->tick_interval_ms * 2.0;
+        if (delta_ms > tolerance) {
+            OC_LOG_WARN(OPENCLAW_LOG_CAT_GATEWAY, "ws tick missed (%.0f ms > %.0f ms tolerance), reconnecting", delta_ms, tolerance);
+            gateway_rpc_fail_all_pending("Tick missed; reconnecting");
+            ws_cleanup_connection();
+            ws_set_error("Tick missed; reconnecting");
+            ws_set_state(GATEWAY_WS_DISCONNECTED);
+            ws_schedule_reconnect();
+            return G_SOURCE_REMOVE;
+        }
+    }
+    return G_SOURCE_CONTINUE;
+}
+
+static void ws_start_tick_watchdog(void) {
+    if (!ws_client) return;
+    if (ws_client->tick_watchdog_timer_id) g_source_remove(ws_client->tick_watchdog_timer_id);
+    guint interval_ms = (guint)(ws_client->tick_interval_ms * 2.0);
+    ws_client->tick_watchdog_timer_id = g_timeout_add(interval_ms, ws_on_tick_watchdog, NULL);
+}
+
+static gboolean ws_on_challenge_timeout(gpointer user_data) {
+    (void)user_data;
+    if (!ws_client) return G_SOURCE_REMOVE;
+    ws_client->challenge_timeout_id = 0;
+    if (ws_client->state == GATEWAY_WS_CHALLENGE_WAIT) {
+        OC_LOG_WARN(OPENCLAW_LOG_CAT_GATEWAY, "ws challenge timeout (%.0f s)", CHALLENGE_TIMEOUT_S);
+        ws_cleanup_connection();
+        ws_set_error("Challenge timeout");
+        ws_set_state(GATEWAY_WS_DISCONNECTED);
+        ws_schedule_reconnect();
+    }
+    return G_SOURCE_REMOVE;
+}
+
+static gboolean ws_on_connect_timeout(gpointer user_data) {
+    (void)user_data;
+    if (!ws_client) return G_SOURCE_REMOVE;
+    ws_client->connect_timeout_id = 0;
+    if (ws_client->state == GATEWAY_WS_CONNECTING || ws_client->state == GATEWAY_WS_AUTHENTICATING) {
+        OC_LOG_WARN(OPENCLAW_LOG_CAT_GATEWAY, "ws connect timeout (%.0f s)", CONNECT_TIMEOUT_S);
+        ws_cleanup_connection();
+        ws_set_error("Connect timeout");
+        ws_set_state(GATEWAY_WS_DISCONNECTED);
+        ws_schedule_reconnect();
+    }
+    return G_SOURCE_REMOVE;
+}
+
+static void ws_send_connect_request(void) {
+    if (!ws_client || !ws_client->ws_conn) return;
+
+    /* Load identity lazily (first connect after set_identity_context). */
+    ws_ensure_identity_loaded();
+
+    /* Load stored device token for the operator role if identity is ready. */
+    g_autoptr(OcDeviceAuthEntry) stored = NULL;
+    if (ws_client->identity && ws_client->state_dir) {
+        stored = oc_device_auth_store_load(ws_client->state_dir,
+                                           ws_client->identity->device_id,
+                                           DEFAULT_ROLE);
+    }
+
+    g_autofree gchar *request_id = g_uuid_string_random();
+    GatewayConnectBuildParams p = {0};
+    p.request_id = request_id;
+    p.client_id = DEFAULT_CLIENT_ID;
+    p.client_mode = DEFAULT_CLIENT_MODE;
+    p.client_display_name = "OpenClaw Linux Companion";
+    p.role = DEFAULT_ROLE;
+    p.scopes = DEFAULT_SCOPES;
+    p.auth_mode = ws_client->auth_mode;
+    p.token = ws_client->token;
+    p.password = ws_client->password;
+    p.stored_token = stored ? stored->token : NULL;
+    p.retry_with_device_token = ws_client->pending_device_token_retry;
+    p.platform = "linux";
+    p.version = "dev";
+    p.device_family = "linux-companion";
+    p.identity = ws_client->identity;
+    p.connect_nonce = ws_client->last_challenge_nonce;
+    p.signed_at_ms = 0;
+
+    gchar *json = gateway_protocol_build_connect_v2(&p);
+    if (json) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY,
+                     "ws sending connect request id=%s signed=%d retry_device=%d",
+                     request_id,
+                     (ws_client->identity && ws_client->last_challenge_nonce) ? 1 : 0,
+                     ws_client->pending_device_token_retry ? 1 : 0);
+        ws_set_state(GATEWAY_WS_AUTHENTICATING);
+        soup_websocket_connection_send_text(ws_client->ws_conn, json);
+        g_free(json);
+    }
+}
+
+static void ws_handle_frame(const gchar *text) {
+    if (!ws_client) return;
+
+    GatewayFrame *frame = gateway_protocol_parse_frame(text);
+    if (!frame) return;
+
+    switch (frame->type) {
+    case GATEWAY_FRAME_EVENT:
+        ws_dispatch_event(frame->event_type, frame->payload);
+        if (g_strcmp0(frame->event_type, "connect.challenge") == 0) {
+            OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY, "ws received connect.challenge");
+            if (ws_client->challenge_timeout_id) {
+                g_source_remove(ws_client->challenge_timeout_id);
+                ws_client->challenge_timeout_id = 0;
+            }
+            g_free(ws_client->last_challenge_nonce);
+            ws_client->last_challenge_nonce =
+                gateway_protocol_extract_challenge_nonce(frame);
+            ws_send_connect_request();
+        } else if (g_strcmp0(frame->event_type, "tick") == 0) {
+            ws_client->last_tick_us = g_get_monotonic_time();
+        }
+        break;
+
+    case GATEWAY_FRAME_RES:
+        if (ws_client->state == GATEWAY_WS_AUTHENTICATING) {
+            if (frame->error) {
+                OC_LOG_WARN(OPENCLAW_LOG_CAT_GATEWAY,
+                          "ws auth rejected: code=%s detail=%s msg=%s",
+                          frame->code ? frame->code : "(none)",
+                          frame->detail_code ? frame->detail_code : "(none)",
+                          frame->error);
+
+                const gchar *detail = frame->detail_code ? frame->detail_code : "";
+                gboolean schedule_immediate = FALSE;
+
+                if (g_strcmp0(detail, "AUTH_TOKEN_MISMATCH") == 0 &&
+                    frame->detail_can_retry_with_device_token &&
+                    !ws_client->device_token_retry_budget_used &&
+                    ws_client->identity) {
+                    /* One-shot retry with stored device token. */
+                    OC_LOG_INFO(OPENCLAW_LOG_CAT_GATEWAY,
+                                "ws auth mismatch: retrying with stored device token");
+                    ws_client->pending_device_token_retry = TRUE;
+                    ws_client->device_token_retry_budget_used = TRUE;
+                    ws_client->backoff_ms = MIN(ws_client->backoff_ms, 250.0);
+                    schedule_immediate = TRUE;
+                } else if (g_strcmp0(detail, "AUTH_DEVICE_TOKEN_MISMATCH") == 0) {
+                    /* Stored device token is no longer valid — clear it. */
+                    if (ws_client->identity && ws_client->state_dir) {
+                        OC_LOG_INFO(OPENCLAW_LOG_CAT_GATEWAY,
+                                    "ws device-token mismatch: clearing stored token");
+                        oc_device_auth_store_clear(ws_client->state_dir,
+                                                   ws_client->identity->device_id,
+                                                   DEFAULT_ROLE);
+                    }
+                    ws_client->pending_device_token_retry = FALSE;
+                } else if (g_strcmp0(detail, "PAIRING_REQUIRED") == 0) {
+                    /* Gateway wants explicit operator approval. Pause reconnect;
+                     * pairing UX will call gateway_ws_resume_after_pairing_approved(). */
+                    OC_LOG_INFO(OPENCLAW_LOG_CAT_GATEWAY,
+                                "ws pairing required request_id=%s",
+                                frame->detail_request_id ? frame->detail_request_id : "(none)");
+                    ws_client->pairing_required = TRUE;
+                    g_free(ws_client->pairing_request_id);
+                    ws_client->pairing_request_id =
+                        frame->detail_request_id ? g_strdup(frame->detail_request_id) : NULL;
+                    ws_client->reconnect_paused_for_auth = TRUE;
+                    ws_emit_synthetic_event("device.pairing.required",
+                                            ws_client->pairing_request_id);
+                } else {
+                    /* Any other auth reject — do not auto-retry the device token. */
+                    ws_client->pending_device_token_retry = FALSE;
+                }
+
+                ws_set_error(frame->error);
+                ws_set_state(GATEWAY_WS_AUTH_FAILED);
+                ws_cleanup_connection();
+                if (schedule_immediate) {
+                    ws_client->should_reconnect = TRUE;
+                    ws_schedule_reconnect();
+                }
+            } else {
+                /* connect-ok */
+                gchar *auth_src = NULL;
+                gdouble tick_ms = DEFAULT_TICK_INTERVAL_MS;
+                gchar *dev_token = NULL;
+                gchar *auth_role = NULL;
+                gchar **auth_scopes = NULL;
+
+                if (!gateway_protocol_parse_hello_ok_v2(frame,
+                        &auth_src, &tick_ms, &dev_token, &auth_role, &auth_scopes)) {
+                    OC_LOG_WARN(OPENCLAW_LOG_CAT_GATEWAY, "ws protocol validation failed: malformed hello-ok response");
+                    ws_set_error("Protocol validation failed: invalid hello response");
+                    ws_set_state(GATEWAY_WS_ERROR);
+                    ws_cleanup_connection();
+                    g_free(auth_src);
+                    g_free(dev_token);
+                    g_free(auth_role);
+                    g_strfreev(auth_scopes);
+                } else {
+                    g_free(ws_client->auth_source);
+                    ws_client->auth_source = auth_src;
+                    /* B3: Clamp tick interval before use */
+                    ws_client->tick_interval_ms = clamp_tick_interval(tick_ms);
+                    ws_client->rpc_ok = TRUE;
+                    ws_client->backoff_ms = BACKOFF_INITIAL_MS;
+                    ws_client->reconnect_paused_for_auth = FALSE;
+                    ws_client->pending_device_token_retry = FALSE;
+                    ws_client->device_token_retry_budget_used = FALSE;
+                    ws_client->pairing_required = FALSE;
+                    g_clear_pointer(&ws_client->pairing_request_id, g_free);
+                    ws_client->last_tick_us = g_get_monotonic_time();
+
+                    /* Persist issued device token for durable reconnect. */
+                    if (dev_token && ws_client->identity && ws_client->state_dir) {
+                        const gchar *role = (auth_role && auth_role[0]) ? auth_role : DEFAULT_ROLE;
+                        oc_device_auth_store_save(ws_client->state_dir,
+                                                  ws_client->identity->device_id,
+                                                  role,
+                                                  dev_token,
+                                                  (const gchar * const *)auth_scopes);
+                        OC_LOG_INFO(OPENCLAW_LOG_CAT_GATEWAY,
+                                    "ws device token persisted role=%s", role);
+                    }
+
+                    if (ws_client->connect_timeout_id) {
+                        g_source_remove(ws_client->connect_timeout_id);
+                        ws_client->connect_timeout_id = 0;
+                    }
+
+                    OC_LOG_INFO(OPENCLAW_LOG_CAT_GATEWAY, "ws connected auth_source=%s tick_ms=%.0f",
+                              auth_src ? auth_src : "none", tick_ms);
+
+                    g_free(dev_token);
+                    g_free(auth_role);
+                    g_strfreev(auth_scopes);
+
+                    ws_start_keepalive();
+                    ws_start_tick_watchdog();
+                    ws_set_state(GATEWAY_WS_CONNECTED);
+                }
+            }
+        } else if (ws_client->state == GATEWAY_WS_CONNECTED) {
+            /* Post-auth response: dispatch to RPC pending-request registry */
+            if (!gateway_rpc_handle_response(frame)) {
+                OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY,
+                             "ws unmatched response id=%s (no pending request)",
+                             frame->id ? frame->id : "(none)");
+            }
+        }
+        break;
+
+    default:
+        break;
+    }
+
+    gateway_frame_free(frame);
+}
+
+static void ws_handle_message(SoupWebsocketConnection *conn, SoupWebsocketDataType type,
+                              GBytes *message, gpointer user_data) {
+    (void)user_data;
+    
+    /* B1: Ignore stale socket callbacks */
+    if (!ws_client) return;
+    if (conn != ws_client->ws_conn) return;
+    
+    if (type != SOUP_WEBSOCKET_DATA_TEXT) return;
+
+    gsize size = 0;
+    const gchar *data = g_bytes_get_data(message, &size);
+    if (!data || size == 0) return;
+
+    g_autofree gchar *text = g_strndup(data, size);
+    ws_handle_frame(text);
+}
+
+static void ws_on_closed(SoupWebsocketConnection *conn, gpointer user_data) {
+    (void)conn;
+    (void)user_data;
+    
+    /* B1: Ignore stale socket callbacks */
+    if (!ws_client) return;
+    if (conn != ws_client->ws_conn) return;
+
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY, "ws connection closed");
+    ws_client->rpc_ok = FALSE;
+    g_clear_object(&ws_client->ws_conn);
+    ws_stop_timers();
+    gateway_rpc_fail_all_pending("WebSocket connection closed");
+
+    if (ws_client->state != GATEWAY_WS_AUTH_FAILED) {
+        ws_set_error("Connection closed");
+        ws_set_state(GATEWAY_WS_DISCONNECTED);
+        ws_schedule_reconnect();
+    }
+}
+
+static void ws_on_error(SoupWebsocketConnection *conn, GError *error, gpointer user_data) {
+    (void)user_data;
+    
+    /* B1: Ignore stale socket callbacks */
+    if (!ws_client) return;
+    if (conn != ws_client->ws_conn) return;
+    
+    OC_LOG_WARN(OPENCLAW_LOG_CAT_GATEWAY, "ws error: %s", error ? error->message : "unknown");
+    ws_set_error(error ? error->message : "Unknown WebSocket error");
+}
+
+static void ws_on_connect_ready(GObject *source, GAsyncResult *res, gpointer user_data) {
+    guint generation = GPOINTER_TO_UINT(user_data);
+    g_autoptr(GError) error = NULL;
+    SoupWebsocketConnection *conn = soup_session_websocket_connect_finish(
+        SOUP_SESSION(source), res, &error);
+
+    if (!ws_client) {
+        g_clear_object(&conn);
+        return;
+    }
+
+    /* Reject stale completions from previous connect attempts */
+    if (generation != ws_client->connect_generation) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY, "ws connect ready dropped (stale generation %u != %u)", 
+                     generation, ws_client->connect_generation);
+        g_clear_object(&conn);
+        return;
+    }
+
+    if (g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY, "ws connect cancelled");
+        g_clear_object(&conn);
+        return;
+    }
+
+    if (!conn) {
+        OC_LOG_WARN(OPENCLAW_LOG_CAT_GATEWAY, "ws connect failed: %s", error ? error->message : "unknown");
+        ws_set_error(error ? error->message : "Connect failed");
+        ws_set_state(GATEWAY_WS_DISCONNECTED);
+        ws_schedule_reconnect();
+        return;
+    }
+
+    ws_client->ws_conn = conn;
+
+    /*
+     * Raise the incoming-payload ceiling.
+     *
+     * libsoup's default cap is 64 KiB. The gateway routinely emits
+     * larger single frames: bounded chat history responses, model
+     * catalogs with rich metadata, and logs.tail payloads. Hitting
+     * the default ceiling surfaces as:
+     *
+     *   ws_on_error: Received WebSocket payload from the server
+     *   larger than configured max-incoming-payload-size
+     *
+     * and libsoup then closes the connection, tearing down every
+     * in-flight RPC. 4 MiB matches typical browser limits and keeps
+     * headroom for legitimately large single frames without
+     * inviting runaway memory pressure.
+     */
+    soup_websocket_connection_set_max_incoming_payload_size(conn, 4u * 1024u * 1024u);
+
+    g_signal_connect(conn, "message", G_CALLBACK(ws_handle_message), NULL);
+    g_signal_connect(conn, "closed", G_CALLBACK(ws_on_closed), NULL);
+    g_signal_connect(conn, "error", G_CALLBACK(ws_on_error), NULL);
+
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY, "ws transport connected, waiting for challenge");
+    ws_set_state(GATEWAY_WS_CHALLENGE_WAIT);
+
+    /* Start challenge timeout */
+    ws_client->challenge_timeout_id = g_timeout_add_seconds(
+        (guint)CHALLENGE_TIMEOUT_S, ws_on_challenge_timeout, NULL);
+}
+
+static void ws_do_connect(void) {
+    if (!ws_client || !ws_client->session) return;
+
+    ws_cleanup_connection();
+    ws_set_state(GATEWAY_WS_CONNECTING);
+
+    SoupMessage *msg = soup_message_new("GET", ws_client->url);
+    if (!msg) {
+        ws_set_error("Invalid WebSocket URL");
+        ws_set_state(GATEWAY_WS_ERROR);
+        return;
+    }
+
+    /* Start overall connect timeout */
+    ws_client->connect_timeout_id = g_timeout_add_seconds(
+        (guint)CONNECT_TIMEOUT_S, ws_on_connect_timeout, NULL);
+
+    ws_client->connect_generation++;
+    guint attempt_generation = ws_client->connect_generation;
+
+    if (ws_client->connect_cancellable) {
+        g_cancellable_cancel(ws_client->connect_cancellable);
+        g_clear_object(&ws_client->connect_cancellable);
+    }
+    ws_client->connect_cancellable = g_cancellable_new();
+
+    soup_session_websocket_connect_async(
+        ws_client->session, msg, NULL, NULL,
+        G_PRIORITY_DEFAULT, ws_client->connect_cancellable,
+        ws_on_connect_ready, GUINT_TO_POINTER(attempt_generation));
+    g_object_unref(msg);
+}
+
+void gateway_ws_init(void) {
+    if (ws_client) return;
+    ws_client = g_new0(GatewayWsClient, 1);
+    ws_client->session = soup_session_new();
+    ws_client->backoff_ms = BACKOFF_INITIAL_MS;
+    ws_client->tick_interval_ms = DEFAULT_TICK_INTERVAL_MS;
+    ws_client->should_reconnect = TRUE;
+    ws_client->next_event_listener_id = 1;
+    ws_client->event_listeners = g_ptr_array_new_with_free_func(gateway_ws_event_listener_free);
+}
+
+void gateway_ws_connect(const gchar *ws_url, const gchar *auth_mode,
+                        const gchar *token, const gchar *password,
+                        GatewayWsStatusCallback callback, gpointer user_data) {
+    if (!ws_client) gateway_ws_init();
+
+    g_free(ws_client->url);
+    g_free(ws_client->auth_mode);
+    secure_clear_free(ws_client->token);
+    secure_clear_free(ws_client->password);
+    ws_client->url = g_strdup(ws_url);
+    ws_client->auth_mode = g_strdup(auth_mode);
+    ws_client->token = g_strdup(token);
+    ws_client->password = g_strdup(password);
+    ws_client->callback = callback;
+    ws_client->user_data = user_data;
+    ws_client->should_reconnect = TRUE;
+    ws_client->reconnect_paused_for_auth = FALSE;
+    ws_client->backoff_ms = BACKOFF_INITIAL_MS;
+
+    /* Fresh connect session — reset the device-token retry budget and
+     * any transient pairing state so reconnect decisions come from the
+     * new handshake, not a leftover one-shot from the last session. */
+    ws_client->pending_device_token_retry = FALSE;
+    ws_client->device_token_retry_budget_used = FALSE;
+    ws_client->pairing_required = FALSE;
+    g_clear_pointer(&ws_client->pairing_request_id, g_free);
+    g_clear_pointer(&ws_client->last_challenge_nonce, g_free);
+
+    ws_do_connect();
+}
+
+void gateway_ws_disconnect(void) {
+    if (!ws_client) return;
+    ws_client->should_reconnect = FALSE;
+    gateway_rpc_fail_all_pending("Disconnected by user");
+    ws_cleanup_connection();
+    ws_client->rpc_ok = FALSE;
+    ws_set_state(GATEWAY_WS_DISCONNECTED);
+}
+
+void gateway_ws_shutdown(void) {
+    if (!ws_client) return;
+    ws_client->should_reconnect = FALSE;
+    ws_client->callback = NULL;
+    gateway_rpc_fail_all_pending("Shutdown");
+    ws_cleanup_connection();
+    if (ws_client->event_listeners) {
+        g_ptr_array_free(ws_client->event_listeners, TRUE);
+        ws_client->event_listeners = NULL;
+    }
+    g_clear_object(&ws_client->session);
+    g_free(ws_client->url);
+    g_free(ws_client->auth_mode);
+    secure_clear_free(ws_client->token);
+    secure_clear_free(ws_client->password);
+    g_free(ws_client->auth_source);
+    g_free(ws_client->last_error);
+    g_free(ws_client->state_dir);
+    g_free(ws_client->last_challenge_nonce);
+    g_free(ws_client->pairing_request_id);
+    oc_device_identity_free(ws_client->identity);
+    g_free(ws_client);
+    ws_client = NULL;
+}
+
+void gateway_ws_set_identity_context(const gchar *state_dir) {
+    if (!ws_client) gateway_ws_init();
+    if (!ws_client) return;
+    if (g_strcmp0(ws_client->state_dir, state_dir) == 0) return;
+
+    g_free(ws_client->state_dir);
+    ws_client->state_dir = state_dir ? g_strdup(state_dir) : NULL;
+
+    /* Drop any cached identity so it is reloaded against the new state dir. */
+    oc_device_identity_free(ws_client->identity);
+    ws_client->identity = NULL;
+
+    /* Any prior retry budget referenced the previous state dir. */
+    ws_client->pending_device_token_retry = FALSE;
+    ws_client->device_token_retry_budget_used = FALSE;
+}
+
+void gateway_ws_resume_after_pairing_approved(void) {
+    if (!ws_client) return;
+    ws_client->pairing_required = FALSE;
+    g_clear_pointer(&ws_client->pairing_request_id, g_free);
+    ws_client->reconnect_paused_for_auth = FALSE;
+    ws_client->device_token_retry_budget_used = FALSE;
+    ws_client->pending_device_token_retry = FALSE;
+    ws_client->backoff_ms = BACKOFF_INITIAL_MS;
+    if (ws_client->should_reconnect) {
+        ws_schedule_reconnect();
+    }
+}
+
+guint gateway_ws_event_subscribe(GatewayWsEventCallback callback, gpointer user_data) {
+    if (!ws_client) gateway_ws_init();
+    if (!ws_client || !ws_client->event_listeners || !callback) return 0;
+
+    GatewayWsEventListener *listener = g_new0(GatewayWsEventListener, 1);
+    listener->id = ws_client->next_event_listener_id++;
+    listener->callback = callback;
+    listener->user_data = user_data;
+    g_ptr_array_add(ws_client->event_listeners, listener);
+    return listener->id;
+}
+
+void gateway_ws_event_unsubscribe(guint listener_id) {
+    if (!ws_client || !ws_client->event_listeners || listener_id == 0) return;
+
+    for (guint i = 0; i < ws_client->event_listeners->len; i++) {
+        GatewayWsEventListener *listener = g_ptr_array_index(ws_client->event_listeners, i);
+        if (listener && listener->id == listener_id) {
+            g_ptr_array_remove_index(ws_client->event_listeners, i);
+            return;
+        }
+    }
+}
+
+gboolean gateway_ws_send_text(const gchar *text) {
+    if (!ws_client || !ws_client->ws_conn || !text) return FALSE;
+    if (soup_websocket_connection_get_state(ws_client->ws_conn) != SOUP_WEBSOCKET_STATE_OPEN)
+        return FALSE;
+    soup_websocket_connection_send_text(ws_client->ws_conn, text);
+    return TRUE;
+}
+
+GatewayWsState gateway_ws_get_state(void) {
+    return ws_client ? ws_client->state : GATEWAY_WS_DISCONNECTED;
+}
+
+const gchar* gateway_ws_get_last_error(void) {
+    return ws_client ? ws_client->last_error : NULL;
+}
+
+gboolean gateway_ws_is_pairing_required(void) {
+    return ws_client ? ws_client->pairing_required : FALSE;
+}
+
+const gchar* gateway_ws_get_device_id(void) {
+    if (!ws_client) return NULL;
+    /* Identity may not be loaded yet on cold starts; return NULL so the
+     * caller can fall back to a device-id-less presentation instead of
+     * forcing an eager identity load from a UI thread. */
+    return (ws_client->identity) ? ws_client->identity->device_id : NULL;
+}
+
+const gchar* gateway_ws_get_pairing_request_id(void) {
+    return ws_client ? ws_client->pairing_request_id : NULL;
+}
+
+const gchar* gateway_ws_state_to_string(GatewayWsState state) {
+    switch (state) {
+        case GATEWAY_WS_DISCONNECTED:    return "Disconnected";
+        case GATEWAY_WS_CONNECTING:      return "Connecting";
+        case GATEWAY_WS_CHALLENGE_WAIT:  return "Waiting for Challenge";
+        case GATEWAY_WS_AUTHENTICATING:  return "Authenticating";
+        case GATEWAY_WS_CONNECTED:       return "Connected";
+        case GATEWAY_WS_AUTH_FAILED:     return "Auth Failed";
+        case GATEWAY_WS_ERROR:           return "Error";
+        default:                         return "Unknown";
+    }
+}
