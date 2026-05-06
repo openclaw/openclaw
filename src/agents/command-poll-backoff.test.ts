@@ -70,10 +70,10 @@ describe("command-poll-backoff", () => {
       recordCommandPoll(state, "cmd-123", false);
       expect(state.commandPollCounts?.get("cmd-123")?.count).toBe(2); // 3 polls = index 2
 
-      // New output resets count
+      // New output resets count to -1 so the next no-output poll lands on index 0 (5s)
       const retryMs = recordCommandPoll(state, "cmd-123", true);
       expect(retryMs).toBe(5000); // Back to first poll delay
-      expect(state.commandPollCounts?.get("cmd-123")?.count).toBe(0);
+      expect(state.commandPollCounts?.get("cmd-123")?.count).toBe(-1);
     });
 
     it("tracks different commands independently", () => {
