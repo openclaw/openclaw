@@ -690,11 +690,20 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     }
     const cron = resolveCronServiceFromStartupSource(startupCronSource);
     const configKey = runtimeConfigKey(config);
-    if (!cron && config.enabled && !unavailableCronWarningEmitted) {
-      api.logger.warn(
-        "memory-core: managed dreaming cron could not be reconciled (cron service unavailable).",
-      );
-      unavailableCronWarningEmitted = true;
+    if (!cron && config.enabled) {
+      if (params.reason === "startup") {
+        // On startup the cron service often hasn't initialized yet — this is
+        // an expected race, not an error. Silently return early and rely on the
+        // next heartbeat-triggered runtime reconcile to establish the job once
+        // the cron service is ready.
+        return config;
+      }
+      if (!unavailableCronWarningEmitted) {
+        api.logger.warn(
+          "memory-core: managed dreaming cron could not be reconciled (cron service unavailable).",
+        );
+        unavailableCronWarningEmitted = true;
+      }
     }
     if (cron) {
       unavailableCronWarningEmitted = false;

@@ -770,6 +770,58 @@ describe("gateway startup reconciliation", () => {
     }
   });
 
+  it("does not warn when cron service is unavailable on startup (expected race)", async () => {
+    clearInternalHooks();
+    const logger = createLogger();
+    const api: DreamingPluginApiTestDouble = {
+      config: { plugins: { entries: {} } },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      registerHook: (event: string, handler: Parameters<typeof registerInternalHook>[1]) => {
+        registerInternalHook(event, handler);
+      },
+      on: vi.fn(),
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      // Fire startup without providing a cron dep — simulates the race where
+      // the cron service hasn't initialized yet.
+      await triggerInternalHook(
+        createInternalHookEvent("gateway", "startup", "gateway:startup", {
+          cfg: {
+            hooks: { internal: { enabled: true } },
+            plugins: {
+              entries: {
+                "memory-core": {
+                  config: {
+                    dreaming: {
+                      enabled: true,
+                      frequency: "0 3 * * *",
+                      timezone: "UTC",
+                    },
+                  },
+                },
+              },
+            },
+          } as OpenClawConfig,
+          // No deps.cron — cron service not yet available
+          deps: {},
+        }),
+      );
+
+      // Should NOT emit the "cron service unavailable" warning on startup
+      expect(logger.warn).not.toHaveBeenCalled();
+      // Should NOT have attempted to add a cron job (no cron service available)
+      expect(logger.info).not.toHaveBeenCalledWith(
+        expect.stringContaining("created managed dreaming cron job"),
+      );
+    } finally {
+      clearInternalHooks();
+    }
+  });
+
   it("reconciles disabled->enabled config changes during runtime", async () => {
     clearInternalHooks();
     const logger = createLogger();
