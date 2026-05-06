@@ -31,6 +31,7 @@ export const SessionDefaultsSchema = Type.Object(
     mainKey: NonEmptyString,
     mainSessionKey: NonEmptyString,
     scope: Type.Optional(NonEmptyString),
+    dmScope: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );
