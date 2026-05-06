@@ -7,7 +7,6 @@ export {
   isCronRunSessionKey,
   isExecCompletionEvent,
   isHeartbeatUserMessage,
-  isSessionArchiveArtifactName,
   isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
   onSessionTranscriptUpdate,

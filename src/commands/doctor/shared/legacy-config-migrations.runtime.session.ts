@@ -10,6 +10,13 @@ function hasLegacyRotateBytes(value: unknown): boolean {
   return Boolean(maintenance && Object.prototype.hasOwnProperty.call(maintenance, "rotateBytes"));
 }
 
+function hasLegacyResetArchiveRetention(value: unknown): boolean {
+  const maintenance = getRecord(value);
+  return Boolean(
+    maintenance && Object.prototype.hasOwnProperty.call(maintenance, "resetArchiveRetention"),
+  );
+}
+
 function hasLegacyParentForkMaxTokens(value: unknown): boolean {
   const session = getRecord(value);
   return Boolean(session && Object.prototype.hasOwnProperty.call(session, "parentForkMaxTokens"));
@@ -20,6 +27,13 @@ const LEGACY_SESSION_MAINTENANCE_ROTATE_BYTES_RULE: LegacyConfigRule = {
   message:
     'session.maintenance.rotateBytes is deprecated and ignored; run "openclaw doctor --fix" to remove it.',
   match: hasLegacyRotateBytes,
+};
+
+const LEGACY_SESSION_MAINTENANCE_RESET_ARCHIVE_RETENTION_RULE: LegacyConfigRule = {
+  path: ["session", "maintenance"],
+  message:
+    'session.maintenance.resetArchiveRetention was removed with reset transcript archives; run "openclaw doctor --fix" to remove it.',
+  match: hasLegacyResetArchiveRetention,
 };
 
 const LEGACY_SESSION_PARENT_FORK_MAX_TOKENS_RULE: LegacyConfigRule = {
@@ -41,6 +55,24 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
       }
       delete maintenance.rotateBytes;
       changes.push("Removed deprecated session.maintenance.rotateBytes.");
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "session.maintenance.resetArchiveRetention",
+    describe: "Remove legacy session.maintenance.resetArchiveRetention",
+    legacyRules: [LEGACY_SESSION_MAINTENANCE_RESET_ARCHIVE_RETENTION_RULE],
+    apply: (raw, changes) => {
+      const maintenance = getRecord(getRecord(raw.session)?.maintenance);
+      if (
+        !maintenance ||
+        !Object.prototype.hasOwnProperty.call(maintenance, "resetArchiveRetention")
+      ) {
+        return;
+      }
+      delete maintenance.resetArchiveRetention;
+      changes.push(
+        "Removed session.maintenance.resetArchiveRetention; reset transcript archives are no longer used.",
+      );
     },
   }),
   defineLegacyConfigMigration({

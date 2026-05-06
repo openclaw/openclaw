@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "vitest";
+import { loadSessionStore } from "../config/sessions.js";
+import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { embeddedRunMock, rpcReq, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -197,15 +199,18 @@ test("sessions.delete emits session_end with deleted reason and no replacement",
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
   const transcriptPath = path.join(dir, "sess-delete.jsonl");
-  await fs.writeFile(
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "sess-delete",
     transcriptPath,
-    `${JSON.stringify({
-      type: "message",
-      id: "m-delete",
-      message: { role: "user", content: "delete me" },
-    })}\n`,
-    "utf-8",
-  );
+    events: [
+      {
+        type: "message",
+        id: "m-delete",
+        message: { role: "user", content: "delete me" },
+      },
+    ],
+  });
 
   await writeSessionStore({
     entries: {
@@ -227,13 +232,12 @@ test("sessions.delete emits session_end with deleted reason and no replacement",
   const [event, context] = (
     sessionLifecycleHookMocks.runSessionEnd.mock.calls as unknown as Array<[unknown, unknown]>
   )[0] ?? [undefined, undefined];
-  expect((event as { sessionId?: string } | undefined)?.sessionId).toBe("sess-delete");
-  expect((event as { sessionKey?: string } | undefined)?.sessionKey).toBe(
-    "agent:main:discord:group:delete",
-  );
-  expect((event as { reason?: string } | undefined)?.reason).toBe("deleted");
-  expect((event as { transcriptArchived?: boolean } | undefined)?.transcriptArchived).toBe(true);
-  expect((event as { sessionFile?: string } | undefined)?.sessionFile).toContain(".jsonl.deleted.");
+  expect(event).toMatchObject({
+    sessionId: "sess-delete",
+    sessionKey: "agent:main:discord:group:delete",
+    reason: "deleted",
+  });
+  expect((event as { sessionFile?: string } | undefined)?.sessionFile).toBe(transcriptPath);
   expect((event as { nextSessionId?: string } | undefined)?.nextSessionId).toBeUndefined();
   expect((context as { sessionId?: string } | undefined)?.sessionId).toBe("sess-delete");
   expect((context as { sessionKey?: string } | undefined)?.sessionKey).toBe(
@@ -363,15 +367,7 @@ test("sessions.delete returns unavailable when active run does not stop", async 
   );
   expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
 
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    { sessionId?: string }
-  >;
+  const store = loadSessionStore(storePath);
   expect(store["agent:main:discord:group:dev"]?.sessionId).toBe("sess-active");
-  const filesAfterDeleteAttempt = await fs.readdir(dir);
-  expect(
-    filesAfterDeleteAttempt.filter((fileName) => fileName.startsWith("sess-active.jsonl.deleted.")),
-  ).toEqual([]);
-
   ws.close();
 });

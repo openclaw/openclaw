@@ -16,6 +16,11 @@ import {
   readRecentCodexRateLimits,
   resetCodexRateLimitCacheForTests,
 } from "./app-server/rate-limit-cache.js";
+import {
+  readCodexAppServerBinding,
+  writeCodexAppServerBinding,
+  type CodexAppServerThreadBinding,
+} from "./app-server/session-binding.js";
 import { resetSharedCodexAppServerClientForTests } from "./app-server/shared-client.js";
 import {
   resetCodexDiagnosticsFeedbackStateForTests,
@@ -24,6 +29,7 @@ import {
 import { handleCodexCommand } from "./commands.js";
 
 let tempDir: string;
+let previousStateDir: string | undefined;
 
 function createContext(
   args: string,
@@ -71,6 +77,23 @@ function createDeps(overrides: Partial<CodexCommandDeps> = {}): Partial<CodexCom
     safeCodexControlRequest: vi.fn(),
     ...overrides,
   };
+}
+
+async function seedCodexBinding(
+  sessionFile: string,
+  binding: Partial<CodexAppServerThreadBinding> & { threadId: string },
+): Promise<void> {
+  await writeCodexAppServerBinding(sessionFile, {
+    threadId: binding.threadId,
+    cwd: binding.cwd ?? tempDir,
+    authProfileId: binding.authProfileId,
+    model: binding.model,
+    modelProvider: binding.modelProvider,
+    approvalPolicy: binding.approvalPolicy,
+    sandbox: binding.sandbox,
+    serviceTier: binding.serviceTier,
+    dynamicToolsFingerprint: binding.dynamicToolsFingerprint,
+  });
 }
 
 function readDiagnosticsConfirmationToken(
@@ -186,15 +209,19 @@ function expectedDiagnosticsTargetBlock(params: {
 describe("codex command", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-command-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tempDir;
   });
 
   afterEach(async () => {
     resetCodexDiagnosticsFeedbackStateForTests();
     resetCodexRateLimitCacheForTests();
     resetSharedCodexAppServerClientForTests();
-    clearRuntimeAuthProfileStoreSnapshots();
-    vi.unstubAllEnvs();
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
@@ -244,9 +271,9 @@ describe("codex command", () => {
         params: { threadId: "thread-123", persistExtendedHistory: true },
       },
     ]);
-    await expect(fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8")).resolves.toContain(
-      '"threadId": "thread-123"',
-    );
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-123",
+    });
   });
 
   it("rejects malformed resume commands before attaching a Codex thread", async () => {
@@ -1125,10 +1152,7 @@ describe("codex command", () => {
 
   it("starts compaction for the attached Codex thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-123", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, { schemaVersion: 1, threadId: "thread-123", cwd: "/repo" });
     const codexControlRequest = vi.fn(async () => ({}));
     const deps = createDeps({
       codexControlRequest,
@@ -1146,10 +1170,7 @@ describe("codex command", () => {
 
   it("starts review with the generated app-server target shape", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-123", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, { schemaVersion: 1, threadId: "thread-123", cwd: "/repo" });
     const codexControlRequest = vi.fn(async () => ({}));
 
     await expect(
@@ -1188,10 +1209,11 @@ describe("codex command", () => {
 
   it("escapes started thread-action ids before chat display", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-123 <@U123>", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-123 <@U123>",
+      cwd: "/repo",
+    });
     const codexControlRequest = vi.fn(async () => ({}));
 
     const result = await handleCodexCommand(createContext("compact", sessionFile), {
@@ -1331,10 +1353,7 @@ describe("codex command", () => {
 
   it("asks before sending diagnostics feedback for the attached Codex thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-123", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, { schemaVersion: 1, threadId: "thread-123", cwd: "/repo" });
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: true as const,
       value: { threadId: "thread-123" },
@@ -1429,10 +1448,11 @@ describe("codex command", () => {
 
   it("rejects malformed diagnostics confirmation commands without consuming the token", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-confirm-args", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-confirm-args",
+      cwd: "/repo",
+    });
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: true as const,
       value: { threadId: "thread-confirm-args" },
@@ -1476,10 +1496,11 @@ describe("codex command", () => {
 
   it("previews exec-approved diagnostics upload without exposing Codex ids", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-preview", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-preview",
+      cwd: "/repo",
+    });
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: true as const,
       value: { threadId: "thread-preview" },
@@ -1514,10 +1535,11 @@ describe("codex command", () => {
 
   it("sends diagnostics feedback immediately after exec approval", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-approved", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-approved",
+      cwd: "/repo",
+    });
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: true as const,
       value: { threadId: "thread-approved" },
@@ -1566,14 +1588,16 @@ describe("codex command", () => {
   it("uploads all Codex diagnostics sessions and reports their channel/thread breakdown", async () => {
     const firstSessionFile = path.join(tempDir, "session-one.jsonl");
     const secondSessionFile = path.join(tempDir, "session-two.jsonl");
-    await fs.writeFile(
-      `${firstSessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-111", cwd: "/repo" }),
-    );
-    await fs.writeFile(
-      `${secondSessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-222", cwd: "/repo" }),
-    );
+    await seedCodexBinding(firstSessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-111",
+      cwd: "/repo",
+    });
+    await seedCodexBinding(secondSessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-222",
+      cwd: "/repo",
+    });
     const safeCodexControlRequest = vi.fn(async (_config, _method, requestParams) => ({
       ok: true as const,
       value: {
@@ -1666,10 +1690,11 @@ describe("codex command", () => {
 
   it("requires an owner for Codex diagnostics feedback uploads", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-owner", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-owner",
+      cwd: "/repo",
+    });
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: true as const,
       value: { threadId: "thread-owner" },
@@ -1690,10 +1715,11 @@ describe("codex command", () => {
 
   it("refuses diagnostics confirmations without a stable sender identity", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-sender-required", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-sender-required",
+      cwd: "/repo",
+    });
 
     await expect(
       handleCodexCommand(
@@ -1709,10 +1735,11 @@ describe("codex command", () => {
 
   it("keeps diagnostics confirmation scoped to the requesting sender", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-sender", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-sender",
+      cwd: "/repo",
+    });
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: true as const,
       value: { threadId: "thread-sender" },
@@ -1796,10 +1823,11 @@ describe("codex command", () => {
 
   it("keeps diagnostics confirmation scoped to account and channel identity", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-account", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-account",
+      cwd: "/repo",
+    });
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: true as const,
       value: { threadId: "thread-account" },
@@ -1837,16 +1865,15 @@ describe("codex command", () => {
 
   it("allows private-routed diagnostics confirmations from the owner DM", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-private", cwd: "/repo" }),
-    );
-    const safeCodexControlRequest = vi.fn(
-      async (_pluginConfig: unknown, _method: string, _requestParams: unknown) => ({
-        ok: true as const,
-        value: { threadId: "thread-private" },
-      }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-private",
+      cwd: "/repo",
+    });
+    const safeCodexControlRequest = vi.fn(async () => ({
+      ok: true as const,
+      value: { threadId: "thread-private" },
+    }));
     const deps = createDeps({ safeCodexControlRequest });
 
     const request = await handleCodexCommand(
@@ -1891,10 +1918,11 @@ describe("codex command", () => {
 
   it("keeps diagnostics confirmation eviction scoped to account identity", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-confirm-scope", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-confirm-scope",
+      cwd: "/repo",
+    });
 
     const firstRequest = await handleCodexCommand(
       createContext("diagnostics", sessionFile, {
@@ -1937,16 +1965,11 @@ describe("codex command", () => {
 
   it("bounds diagnostics notes before upload", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-789", cwd: "/repo" }),
-    );
-    const safeCodexControlRequest = vi.fn(
-      async (_pluginConfig: unknown, _method: string, _requestParams: unknown) => ({
-        ok: true as const,
-        value: { threadId: "thread-789" },
-      }),
-    );
+    await seedCodexBinding(sessionFile, { schemaVersion: 1, threadId: "thread-789", cwd: "/repo" });
+    const safeCodexControlRequest = vi.fn(async () => ({
+      ok: true as const,
+      value: { threadId: "thread-789" },
+    }));
     const note = "x".repeat(2050);
     const deps = createDeps({ safeCodexControlRequest });
 
@@ -1964,10 +1987,11 @@ describe("codex command", () => {
 
   it("escapes diagnostics notes before showing approval text", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-note", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-note",
+      cwd: "/repo",
+    });
 
     const request = await handleCodexCommand(
       createContext("diagnostics <@U123> [trusted](https://evil) @here `tick`", sessionFile),
@@ -1983,10 +2007,11 @@ describe("codex command", () => {
 
   it("throttles repeated diagnostics uploads for the same thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-cooldown", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-cooldown",
+      cwd: "/repo",
+    });
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: true as const,
       value: { threadId: "thread-cooldown" },
@@ -2025,10 +2050,11 @@ describe("codex command", () => {
     const deps = createDeps({ safeCodexControlRequest });
     const sessionFile = path.join(tempDir, "global-cooldown-session.jsonl");
 
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-global-1", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-global-1",
+      cwd: "/repo",
+    });
     const request = await handleCodexCommand(createContext("diagnostics first", sessionFile), {
       deps,
     });
@@ -2046,10 +2072,11 @@ describe("codex command", () => {
       ].join("\n"),
     });
 
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-global-2", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-global-2",
+      cwd: "/repo",
+    });
     await expect(
       handleCodexCommand(createContext("diagnostics second", sessionFile), { deps }),
     ).resolves.toEqual({
@@ -2067,10 +2094,11 @@ describe("codex command", () => {
     const deps = createDeps({ safeCodexControlRequest });
     const sessionFile = path.join(tempDir, "scoped-cooldown-session.jsonl");
 
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-scope-1", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-scope-1",
+      cwd: "/repo",
+    });
     const firstRequest = await handleCodexCommand(
       createContext("diagnostics first", sessionFile, {
         accountId: "account-1",
@@ -2088,10 +2116,11 @@ describe("codex command", () => {
     );
     expectResultTextContains(firstConfirmResult, "Codex diagnostics sent to OpenAI servers:");
 
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-scope-2", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-scope-2",
+      cwd: "/repo",
+    });
     const secondRequest = await handleCodexCommand(
       createContext("diagnostics second", sessionFile, {
         accountId: "account-2",
@@ -2120,10 +2149,11 @@ describe("codex command", () => {
     const deps = createDeps({ safeCodexControlRequest });
     const sessionFile = path.join(tempDir, "delimiter-cooldown-session.jsonl");
 
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-delimiter-1", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-delimiter-1",
+      cwd: "/repo",
+    });
     const firstScope = {
       accountId: "a",
       channelId: "b",
@@ -2140,10 +2170,11 @@ describe("codex command", () => {
     );
     expectResultTextContains(firstConfirmResult, "Codex diagnostics sent to OpenAI servers:");
 
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-delimiter-2", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-delimiter-2",
+      cwd: "/repo",
+    });
     const secondScope = {
       accountId: "a|channelId:b",
       channel: "test|channel:x",
@@ -2171,10 +2202,11 @@ describe("codex command", () => {
     const sessionFile = path.join(tempDir, "long-scope-cooldown-session.jsonl");
     const sharedPrefix = "account-".repeat(40);
 
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-long-scope-1", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-long-scope-1",
+      cwd: "/repo",
+    });
     const firstScope = {
       accountId: `${sharedPrefix}first`,
       channelId: "channel-long",
@@ -2190,10 +2222,11 @@ describe("codex command", () => {
     );
     expectResultTextContains(firstConfirmResult, "Codex diagnostics sent to OpenAI servers:");
 
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-long-scope-2", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-long-scope-2",
+      cwd: "/repo",
+    });
     const secondScope = {
       accountId: `${sharedPrefix}second`,
       channelId: "channel-long",
@@ -2214,10 +2247,7 @@ describe("codex command", () => {
 
   it("sanitizes diagnostics upload errors before showing them", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "<@U123>", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, { schemaVersion: 1, threadId: "<@U123>", cwd: "/repo" });
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: false as const,
       error: "bad\n\u009b\u202e <@U123> [trusted](https://evil) @here",
@@ -2242,10 +2272,11 @@ describe("codex command", () => {
 
   it("does not throttle diagnostics retries after upload failures", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-retry", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-retry",
+      cwd: "/repo",
+    });
     const safeCodexControlRequest = vi
       .fn()
       .mockResolvedValueOnce({ ok: false as const, error: "temporary outage" })
@@ -2292,14 +2323,11 @@ describe("codex command", () => {
 
   it("omits inline diagnostics resume commands for unsafe thread ids", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({
-        schemaVersion: 1,
-        threadId: "thread-123'`\n\u009b\u202e; echo bad",
-        cwd: "/repo",
-      }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-123'`\n\u009b\u202e; echo bad",
+      cwd: "/repo",
+    });
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: true as const,
       value: { threadId: "thread-123'`\n\u009b\u202e; echo bad" },
@@ -2403,10 +2431,7 @@ describe("codex command", () => {
 
   it("returns sanitized command failures instead of leaking app-server errors", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-123", cwd: "/repo" }),
-    );
+    await seedCodexBinding(sessionFile, { schemaVersion: 1, threadId: "thread-123", cwd: "/repo" });
     const failure = () => {
       throw new Error("app-server failed <@U123> [trusted](https://evil) @here");
     };
@@ -2438,16 +2463,13 @@ describe("codex command", () => {
 
   it("binds the current conversation to a Codex app-server thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({
-        schemaVersion: 1,
-        threadId: "thread-123",
-        cwd: "/repo",
-        authProfileId: "openai-codex:work",
-        modelProvider: "openai",
-      }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-123",
+      cwd: "/repo",
+      authProfileId: "openai-codex:work",
+      modelProvider: "openai",
+    });
     const startCodexConversationThread = vi.fn(async () => ({
       kind: "codex-app-server-session" as const,
       version: 1 as const,
@@ -2872,15 +2894,12 @@ describe("codex command", () => {
 
   it("escapes current bound model status before chat display", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({
-        schemaVersion: 1,
-        threadId: "thread-model",
-        cwd: "/repo",
-        model: "model_<@U123>_[trusted](https://evil)",
-      }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-model",
+      cwd: "/repo",
+      model: "model_<@U123>_[trusted](https://evil)",
+    });
 
     const result = await handleCodexCommand(createContext("model", sessionFile), {
       deps: createDeps(),
@@ -2991,18 +3010,15 @@ describe("codex command", () => {
 
   it("describes active binding preferences", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({
-        schemaVersion: 1,
-        threadId: "thread-123",
-        cwd: "/repo",
-        model: "gpt-5.4",
-        serviceTier: "fast",
-        approvalPolicy: "never",
-        sandbox: "danger-full-access",
-      }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-123",
+      cwd: "/repo",
+      model: "gpt-5.4",
+      serviceTier: "fast",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
 
     await expect(
       handleCodexCommand(
@@ -3049,15 +3065,12 @@ describe("codex command", () => {
 
   it("escapes active binding fields before chat display", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    await fs.writeFile(
-      `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({
-        schemaVersion: 1,
-        threadId: "thread-123 <@U123>",
-        cwd: "/repo",
-        model: "gpt [trusted](https://evil)",
-      }),
-    );
+    await seedCodexBinding(sessionFile, {
+      schemaVersion: 1,
+      threadId: "thread-123 <@U123>",
+      cwd: "/repo",
+      model: "gpt [trusted](https://evil)",
+    });
 
     const result = await handleCodexCommand(
       createContext("binding", sessionFile, {

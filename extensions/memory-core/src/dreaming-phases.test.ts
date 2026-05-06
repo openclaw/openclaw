@@ -1341,35 +1341,13 @@ describe("memory-core dreaming phases", () => {
     expect(corpus).toContain("Assistant: Handled internally.");
   });
 
-  it("drops archive, cron, and heartbeat chatter from fresh session corpus output", async () => {
+  it("drops checkpoint, cron, and heartbeat chatter from fresh session corpus output", async () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
     await fs.mkdir(sessionsDir, { recursive: true });
 
-    await fs.writeFile(
-      path.join(sessionsDir, "archived.jsonl.deleted.2026-04-16T18-06-16.529Z"),
-      [
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "user",
-            timestamp: "2026-04-16T18:01:00.000Z",
-            content: "[cron:job-1 Example] Run the nightly sync",
-          },
-        }),
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "assistant",
-            timestamp: "2026-04-16T18:02:00.000Z",
-            content: "Running the nightly sync now.",
-          },
-        }),
-      ].join("\n") + "\n",
-      "utf-8",
-    );
     await fs.writeFile(
       path.join(sessionsDir, "ordinary.checkpoint.11111111-1111-4111-8111-111111111111.jsonl"),
       JSON.stringify({
@@ -1611,7 +1589,7 @@ describe("memory-core dreaming phases", () => {
     }
   });
 
-  it("dedupes reset/deleted session archives instead of double-ingesting", async () => {
+  it("dedupes refreshed session corpus instead of double-ingesting", async () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
@@ -1670,11 +1648,6 @@ describe("memory-core dreaming phases", () => {
         await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
       });
 
-      const resetPath = path.join(
-        sessionsDir,
-        "dreaming-main.jsonl.reset.2026-04-06T01-00-00.000Z",
-      );
-      await fs.writeFile(resetPath, await fs.readFile(transcriptPath, "utf-8"), "utf-8");
       const newMessage = "Keep retention at 365 days.";
       await fs.writeFile(
         transcriptPath,
@@ -1700,7 +1673,6 @@ describe("memory-core dreaming phases", () => {
       );
       const dayTwo = new Date("2026-04-06T01:05:00.000Z");
       await fs.utimes(transcriptPath, dayTwo, dayTwo);
-      await fs.utimes(resetPath, dayTwo, dayTwo);
 
       await withDreamingTestClock(async () => {
         await triggerLightDreaming(beforeAgentReply, workspaceDir, 910);

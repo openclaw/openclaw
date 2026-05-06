@@ -91,12 +91,12 @@ describe("codex conversation controls", () => {
       "Codex model set to gpt-5.5.",
     );
 
-    const raw = await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8");
     const binding = await readCodexAppServerBinding(sessionFile);
-    expect(raw).not.toContain('"modelProvider": "openai"');
-    expect(binding?.threadId).toBe("thread-1");
-    expect(binding?.authProfileId).toBe("work");
-    expect(binding?.model).toBe("gpt-5.5");
+    expect(binding).toMatchObject({
+      threadId: "thread-1",
+      authProfileId: "work",
+      model: "gpt-5.5",
+    });
     expect(binding?.modelProvider).toBeUndefined();
   });
 

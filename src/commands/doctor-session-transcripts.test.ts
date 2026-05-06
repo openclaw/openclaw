@@ -10,6 +10,7 @@ vi.mock("../terminal/note.js", () => ({
 }));
 
 import { loadSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
+import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import {
   noteSessionTranscriptHealth,
   repairBrokenSessionTranscriptFile,
@@ -184,6 +185,36 @@ describe("doctor session transcript repair", () => {
     const [message, title] = note.mock.calls[0] as [string, string];
     expect(title).toBe("Session transcripts");
     expect(message).toContain("Imported 1 transcript file into SQLite");
+  });
+
+  it("imports legacy Codex app-server binding sidecars during repair mode", async () => {
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "session.jsonl");
+    const sidecarPath = `${sessionFile}.codex-app-server.json`;
+    await fs.writeFile(
+      sidecarPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-123",
+        cwd: root,
+        model: "gpt-5.5",
+      }),
+    );
+
+    await noteSessionTranscriptHealth({ shouldRepair: true, sessionDirs: [sessionsDir] });
+
+    await expect(fs.access(sidecarPath)).rejects.toThrow();
+    expect(readOpenClawStateKvJson("codex_app_server_thread_bindings", sessionFile)).toMatchObject({
+      schemaVersion: 1,
+      threadId: "thread-123",
+      sessionFile,
+      cwd: root,
+      model: "gpt-5.5",
+    });
+    const [message, title] = note.mock.calls[0] as [string, string];
+    expect(title).toBe("Session transcripts");
+    expect(message).toContain("Imported 1 Codex app-server binding sidecar into SQLite");
   });
 
   it("ignores ordinary branch history without internal runtime context", async () => {

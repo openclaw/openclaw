@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { saveSessionStore, type SessionEntry } from "../../config/sessions.js";
+import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import type { HookRunner } from "../../plugins/hooks.js";
 import { initSessionState } from "./session.js";
 
@@ -69,8 +70,7 @@ async function writeStore(
   storePath: string,
   store: Record<string, SessionEntry | Record<string, unknown>>,
 ): Promise<void> {
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+  await saveSessionStore(storePath, store as Record<string, SessionEntry>);
 }
 
 async function writeTranscript(
@@ -79,15 +79,18 @@ async function writeTranscript(
   text = "hello",
 ): Promise<string> {
   const transcriptPath = path.join(path.dirname(storePath), `${sessionId}.jsonl`);
-  await fs.writeFile(
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId,
     transcriptPath,
-    `${JSON.stringify({
-      type: "message",
-      id: `${sessionId}-m1`,
-      message: { role: "user", content: text },
-    })}\n`,
-    "utf-8",
-  );
+    events: [
+      {
+        type: "message",
+        id: `${sessionId}-m1`,
+        message: { role: "user", content: text },
+      },
+    ],
+  });
   return transcriptPath;
 }
 
@@ -202,7 +205,7 @@ describe("session hook context wiring", () => {
 
   it("passes sessionKey to session_end hook context on reset", async () => {
     const sessionKey = "agent:main:telegram:direct:123";
-    const { storePath } = await createStoredSession({
+    const { storePath, transcriptPath } = await createStoredSession({
       prefix: "openclaw-session-hook-end",
       sessionKey,
       sessionId: "old-session",
@@ -221,10 +224,9 @@ describe("session hook context wiring", () => {
     expectFields(event, {
       sessionKey,
       reason: "new",
-      transcriptArchived: true,
     });
     expectFields(context, { sessionKey, agentId: "main", sessionId: event?.sessionId });
-    expect(event?.sessionFile).toContain(".jsonl.reset.");
+    expect(event?.sessionFile).toBe(transcriptPath);
 
     const [startEvent, startContext] = requireHookCall(
       hookRunnerMocks.runSessionStart,
@@ -280,7 +282,7 @@ describe("session hook context wiring", () => {
     expectFields(event, { reason: "new" });
   });
 
-  it("marks daily stale rollovers and exposes the archived transcript path", async () => {
+  it("marks daily stale rollovers and exposes the stable transcript path", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
@@ -297,9 +299,8 @@ describe("session hook context wiring", () => {
       const [startEvent] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
       expectFields(event, {
         reason: "daily",
-        transcriptArchived: true,
       });
-      expect(event?.sessionFile).toContain(".jsonl.reset.");
+      expect(event?.sessionFile).toContain("daily-session.jsonl");
       expect(event?.nextSessionId).toBe(startEvent?.sessionId);
     } finally {
       vi.useRealTimers();

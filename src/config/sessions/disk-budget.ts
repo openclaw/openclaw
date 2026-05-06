@@ -8,12 +8,7 @@ import {
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
 } from "../../trajectory/paths.js";
-import {
-  isCompactionCheckpointTranscriptFileName,
-  isPrimarySessionTranscriptFileName,
-  isSessionArchiveArtifactName,
-  isTrajectorySessionArtifactName,
-} from "./artifacts.js";
+import { isTrajectorySessionArtifactName } from "./artifacts.js";
 import { resolveSessionFilePath } from "./paths.js";
 import { isProtectedSessionMaintenanceEntry } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
@@ -119,7 +114,7 @@ function resolveSessionArtifactPathsForEntry(params: {
   if (!transcriptPath) {
     return [];
   }
-  const paths = [transcriptPath];
+  const paths: string[] = [];
   if (params.entry.sessionId) {
     paths.push(resolveTrajectoryPointerFilePath(transcriptPath));
     paths.push(
@@ -145,24 +140,12 @@ function resolveReferencedSessionArtifactPaths(params: {
   store: Record<string, SessionEntry>;
 }): Set<string> {
   const referenced = new Set<string>();
-  const resolvedSessionsDir = canonicalizePathForComparison(params.sessionsDir);
   for (const entry of Object.values(params.store)) {
     for (const resolved of resolveSessionArtifactCanonicalPathsForEntry({
       sessionsDir: params.sessionsDir,
       entry,
     })) {
       referenced.add(resolved);
-    }
-    for (const checkpoint of entry.compactionCheckpoints ?? []) {
-      const checkpointFile = checkpoint.preCompaction.sessionFile?.trim();
-      if (!checkpointFile) {
-        continue;
-      }
-      const resolvedCheckpointPath = canonicalizePathForComparison(checkpointFile);
-      const relative = path.relative(resolvedSessionsDir, resolvedCheckpointPath);
-      if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
-        referenced.add(resolvedCheckpointPath);
-      }
     }
   }
   return referenced;
@@ -200,21 +183,14 @@ function isUnreferencedSessionArtifactFile(
   if (referencedPaths.has(file.canonicalPath)) {
     return false;
   }
-  return (
-    isCompactionCheckpointTranscriptFileName(file.name) ||
-    isTrajectorySessionArtifactName(file.name) ||
-    isPrimarySessionTranscriptFileName(file.name)
-  );
+  return isTrajectorySessionArtifactName(file.name);
 }
 
 function isDiskBudgetRemovableSessionFile(
   file: Pick<SessionsDirFileStat, "canonicalPath" | "name">,
   referencedPaths: ReadonlySet<string>,
 ): boolean {
-  return (
-    isSessionArchiveArtifactName(file.name) ||
-    isUnreferencedSessionArtifactFile(file, referencedPaths)
-  );
+  return isUnreferencedSessionArtifactFile(file, referencedPaths);
 }
 
 async function removeFileIfExists(filePath: string): Promise<number> {

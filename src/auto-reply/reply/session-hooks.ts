@@ -55,7 +55,6 @@ export function buildSessionEndHookPayload(params: {
   durationMs?: number;
   reason?: PluginHookSessionEndReason;
   sessionFile?: string;
-  transcriptArchived?: boolean;
   nextSessionId?: string;
   nextSessionKey?: string;
 }): {
@@ -70,7 +69,6 @@ export function buildSessionEndHookPayload(params: {
       durationMs: params.durationMs,
       reason: params.reason,
       sessionFile: params.sessionFile,
-      transcriptArchived: params.transcriptArchived,
       nextSessionId: params.nextSessionId,
       nextSessionKey: params.nextSessionKey,
     },

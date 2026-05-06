@@ -62,15 +62,14 @@ src/agents/
 │   ├── model.ts                   # Model resolution via ModelRegistry
 │   ├── runs.ts                    # Active run tracking, abort, queue
 │   ├── sandbox-info.ts            # Sandbox info for system prompt
-│   ├── session-manager-cache.ts   # SessionManager instance caching
 │   ├── system-prompt.ts           # System prompt builder
 │   ├── tool-split.ts              # Split tools into builtIn vs custom
 │   ├── types.ts                   # EmbeddedPiAgentMeta, EmbeddedPiRunResult
 │   └── utils.ts                   # ThinkLevel mapping, error description
 ├── transcript/
 │   ├── session-transcript-contract.ts # OpenClaw-owned transcript/session types
-│   ├── session-manager.ts         # OpenClaw-owned file-backed SessionManager
-│   └── transcript-file-state.ts   # JSONL parse/mutate/write helpers
+│   ├── session-manager.ts         # OpenClaw-owned SQLite-backed SessionManager
+│   └── transcript-file-state.ts   # PI-compatible transcript state adapter
 ├── pi-embedded-subscribe.ts       # Session event subscription/dispatch
 ├── pi-embedded-subscribe.types.ts # SubscribeEmbeddedPiSessionParams
 ├── pi-embedded-subscribe.handlers.ts # Event handler factory
@@ -301,25 +300,15 @@ applySystemPromptOverrideToSession(session, systemPromptOverride);
 
 ## Session management
 
-### Session files
+### Session transcripts
 
-Sessions are JSONL files with tree structure (id/parentId linking). OpenClaw owns the file-backed `SessionManager` value and keeps the PI-compatible shape behind `src/agents/transcript/session-transcript-contract.ts`:
+Sessions are SQLite-backed event streams with tree structure (id/parentId linking). JSONL is legacy doctor-import/export/debug shape. OpenClaw owns the PI-compatible `SessionManager` shape behind `src/agents/transcript/session-transcript-contract.ts`:
 
 ```typescript
 const sessionManager = openTranscriptSessionManager({ sessionFile: params.sessionFile });
 ```
 
 OpenClaw wraps this with `guardSessionManager()` for tool result safety.
-
-### Session caching
-
-`session-manager-cache.ts` caches SessionManager instances to avoid repeated file parsing:
-
-```typescript
-await prewarmSessionFile(params.sessionFile);
-sessionManager = openTranscriptSessionManager({ sessionFile: params.sessionFile });
-trackSessionManagerAccess(params.sessionFile);
-```
 
 ### History limiting
 

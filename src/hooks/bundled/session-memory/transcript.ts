@@ -61,53 +61,13 @@ export async function getRecentSessionContent(
   }
 }
 
-export async function getRecentSessionContentWithResetFallback(
-  sessionFilePath: string,
-  messageCount: number = 15,
-): Promise<string | null> {
-  const primary = await getRecentSessionContent(sessionFilePath, messageCount);
-  if (primary) {
-    return primary;
-  }
-
-  try {
-    const dir = path.dirname(sessionFilePath);
-    const base = path.basename(sessionFilePath);
-    const resetPrefix = `${base}.reset.`;
-    const files = await fs.readdir(dir);
-    const resetCandidates = files.filter((name) => name.startsWith(resetPrefix)).toSorted();
-
-    if (resetCandidates.length === 0) {
-      return primary;
-    }
-
-    const latestResetPath = path.join(dir, resetCandidates[resetCandidates.length - 1]);
-    return (await getRecentSessionContent(latestResetPath, messageCount)) || primary;
-  } catch {
-    return primary;
-  }
-}
-
-function stripResetSuffix(fileName: string): string {
-  const resetIndex = fileName.indexOf(".reset.");
-  return resetIndex === -1 ? fileName : fileName.slice(0, resetIndex);
-}
-
 export async function findPreviousSessionFile(params: {
   sessionsDir: string;
-  currentSessionFile?: string;
   sessionId?: string;
 }): Promise<string | undefined> {
   try {
     const files = await fs.readdir(params.sessionsDir);
     const fileSet = new Set(files);
-
-    const baseFromReset = params.currentSessionFile
-      ? stripResetSuffix(path.basename(params.currentSessionFile))
-      : undefined;
-    if (baseFromReset && fileSet.has(baseFromReset)) {
-      return path.join(params.sessionsDir, baseFromReset);
-    }
 
     const trimmedSessionId = params.sessionId?.trim();
     if (trimmedSessionId) {
@@ -117,29 +77,12 @@ export async function findPreviousSessionFile(params: {
       }
 
       const topicVariants = files
-        .filter(
-          (name) =>
-            name.startsWith(`${trimmedSessionId}-topic-`) &&
-            name.endsWith(".jsonl") &&
-            !name.includes(".reset."),
-        )
+        .filter((name) => name.startsWith(`${trimmedSessionId}-topic-`) && name.endsWith(".jsonl"))
         .toSorted()
         .toReversed();
       if (topicVariants.length > 0) {
         return path.join(params.sessionsDir, topicVariants[0]);
       }
-    }
-
-    if (!params.currentSessionFile) {
-      return undefined;
-    }
-
-    const nonResetJsonl = files
-      .filter((name) => name.endsWith(".jsonl") && !name.includes(".reset."))
-      .toSorted()
-      .toReversed();
-    if (nonResetJsonl.length > 0) {
-      return path.join(params.sessionsDir, nonResetJsonl[0]);
     }
   } catch {
     // Ignore directory read errors.

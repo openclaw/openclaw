@@ -9,8 +9,15 @@ import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { resolveStateDir } from "../config/paths.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import {
+  writeOpenClawStateKvJson,
+  type OpenClawStateJsonValue,
+} from "../state/openclaw-state-kv.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
+
+const CODEX_APP_SERVER_BINDING_SIDECAR_SUFFIX = ".codex-app-server.json";
+const CODEX_APP_SERVER_BINDING_KV_SCOPE = "codex_app_server_thread_bindings";
 
 type TranscriptEntry = Record<string, unknown> & {
   id?: unknown;
@@ -33,6 +40,14 @@ type TranscriptMigrationResult = TranscriptRepairResult & {
   imported: boolean;
   removedSource: boolean;
   sessionId?: string;
+};
+
+type CodexAppServerBindingMigrationResult = {
+  filePath: string;
+  sessionFile: string;
+  imported: boolean;
+  removedSource: boolean;
+  reason?: string;
 };
 
 function parseTranscriptEntries(raw: string): TranscriptEntry[] {
@@ -345,6 +360,107 @@ async function listSessionTranscriptFiles(sessionDirs: string[]): Promise<string
   return files.toSorted((a, b) => a.localeCompare(b));
 }
 
+async function listCodexAppServerBindingSidecars(sessionDirs: string[]): Promise<string[]> {
+  const files: string[] = [];
+  for (const sessionsDir of sessionDirs) {
+    let entries: Dirent[] = [];
+    try {
+      entries = await fs.readdir(sessionsDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name.endsWith(CODEX_APP_SERVER_BINDING_SIDECAR_SUFFIX)) {
+        files.push(path.join(sessionsDir, entry.name));
+      }
+    }
+  }
+  return files.toSorted((a, b) => a.localeCompare(b));
+}
+
+function resolveCodexAppServerBindingSessionFile(sidecarPath: string): string {
+  return sidecarPath.slice(0, -CODEX_APP_SERVER_BINDING_SIDECAR_SUFFIX.length);
+}
+
+function normalizeCodexAppServerBindingPayload(
+  sessionFile: string,
+  value: unknown,
+): OpenClawStateJsonValue | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const parsed = value as Record<string, unknown>;
+  if (
+    parsed.schemaVersion !== 1 ||
+    typeof parsed.threadId !== "string" ||
+    !parsed.threadId.trim()
+  ) {
+    return undefined;
+  }
+  return {
+    schemaVersion: 1,
+    sessionFile,
+    threadId: parsed.threadId,
+    cwd: typeof parsed.cwd === "string" ? parsed.cwd : "",
+    authProfileId: typeof parsed.authProfileId === "string" ? parsed.authProfileId : undefined,
+    model: typeof parsed.model === "string" ? parsed.model : undefined,
+    modelProvider: typeof parsed.modelProvider === "string" ? parsed.modelProvider : undefined,
+    approvalPolicy: typeof parsed.approvalPolicy === "string" ? parsed.approvalPolicy : undefined,
+    sandbox: typeof parsed.sandbox === "string" ? parsed.sandbox : undefined,
+    serviceTier: typeof parsed.serviceTier === "string" ? parsed.serviceTier : undefined,
+    dynamicToolsFingerprint:
+      typeof parsed.dynamicToolsFingerprint === "string"
+        ? parsed.dynamicToolsFingerprint
+        : undefined,
+    createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : new Date().toISOString(),
+    updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
+  } as OpenClawStateJsonValue;
+}
+
+async function migrateCodexAppServerBindingSidecar(params: {
+  filePath: string;
+  shouldRepair: boolean;
+}): Promise<CodexAppServerBindingMigrationResult> {
+  const sessionFile = resolveCodexAppServerBindingSessionFile(params.filePath);
+  try {
+    const raw = await fs.readFile(params.filePath, "utf-8");
+    const payload = normalizeCodexAppServerBindingPayload(sessionFile, JSON.parse(raw));
+    if (!payload) {
+      return {
+        filePath: params.filePath,
+        sessionFile,
+        imported: false,
+        removedSource: false,
+        reason: "invalid binding payload",
+      };
+    }
+    if (!params.shouldRepair) {
+      return {
+        filePath: params.filePath,
+        sessionFile,
+        imported: false,
+        removedSource: false,
+      };
+    }
+    writeOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, sessionFile, payload);
+    await fs.rm(params.filePath, { force: true });
+    return {
+      filePath: params.filePath,
+      sessionFile,
+      imported: true,
+      removedSource: true,
+    };
+  } catch (error) {
+    return {
+      filePath: params.filePath,
+      sessionFile,
+      imported: false,
+      removedSource: false,
+      reason: String(error),
+    };
+  }
+}
+
 export async function noteSessionTranscriptHealth(params?: {
   shouldRepair?: boolean;
   sessionDirs?: string[];
@@ -359,7 +475,8 @@ export async function noteSessionTranscriptHealth(params?: {
   }
 
   const files = await listSessionTranscriptFiles(sessionDirs);
-  if (files.length === 0) {
+  const codexBindingSidecars = await listCodexAppServerBindingSidecars(sessionDirs);
+  if (files.length === 0 && codexBindingSidecars.length === 0) {
     return;
   }
 
@@ -367,31 +484,59 @@ export async function noteSessionTranscriptHealth(params?: {
   for (const filePath of files) {
     results.push(await migrateSessionTranscriptFileToSqlite({ filePath, shouldRepair }));
   }
+  const codexBindingResults: CodexAppServerBindingMigrationResult[] = [];
+  for (const filePath of codexBindingSidecars) {
+    codexBindingResults.push(await migrateCodexAppServerBindingSidecar({ filePath, shouldRepair }));
+  }
   const broken = results.filter((result) => result.broken);
   const imported = results.filter((result) => result.imported);
   const failed = results.filter((result) => result.reason && !result.imported);
+  const importedCodexBindings = codexBindingResults.filter((result) => result.imported);
+  const failedCodexBindings = codexBindingResults.filter(
+    (result) => result.reason && !result.imported,
+  );
 
   const repairedCount = broken.filter((result) => result.repaired).length;
   const legacyCount = results.length;
-  const lines = [
-    `- Found ${legacyCount} legacy transcript JSONL file${legacyCount === 1 ? "" : "s"} outside the SQLite session database.`,
-    ...results.slice(0, 20).map((result) => {
-      const status = result.imported
-        ? result.repaired
-          ? "imported with active-branch repair"
-          : "imported"
-        : result.broken
-          ? "needs import + repair"
-          : "needs import";
-      const reason = result.reason ? ` reason=${result.reason}` : "";
-      return `- ${shortenHomePath(result.filePath)} ${status} entries=${result.originalEntries}${reason}`;
-    }),
-  ];
+  const lines: string[] = [];
+  if (legacyCount > 0) {
+    lines.push(
+      `- Found ${legacyCount} legacy transcript JSONL file${legacyCount === 1 ? "" : "s"} outside the SQLite session database.`,
+    );
+    lines.push(
+      ...results.slice(0, 20).map((result) => {
+        const status = result.imported
+          ? result.repaired
+            ? "imported with active-branch repair"
+            : "imported"
+          : result.broken
+            ? "needs import + repair"
+            : "needs import";
+        const reason = result.reason ? ` reason=${result.reason}` : "";
+        return `- ${shortenHomePath(result.filePath)} ${status} entries=${result.originalEntries}${reason}`;
+      }),
+    );
+  }
   if (results.length > 20) {
     lines.push(`- ...and ${results.length - 20} more.`);
   }
+  if (codexBindingResults.length > 0) {
+    lines.push(
+      `- Found ${codexBindingResults.length} legacy Codex app-server binding sidecar${codexBindingResults.length === 1 ? "" : "s"} outside the SQLite state database.`,
+    );
+    lines.push(
+      ...codexBindingResults.slice(0, 20).map((result) => {
+        const status = result.imported ? "imported" : "needs import";
+        const reason = result.reason ? ` reason=${result.reason}` : "";
+        return `- ${shortenHomePath(result.filePath)} ${status}${reason}`;
+      }),
+    );
+    if (codexBindingResults.length > 20) {
+      lines.push(`- ...and ${codexBindingResults.length - 20} more.`);
+    }
+  }
   if (!shouldRepair) {
-    lines.push('- Run "openclaw doctor --fix" to import legacy transcripts into SQLite.');
+    lines.push('- Run "openclaw doctor --fix" to import legacy session files into SQLite.');
   } else if (imported.length > 0) {
     lines.push(
       `- Imported ${imported.length} transcript file${imported.length === 1 ? "" : "s"} into SQLite and removed the JSONL source${imported.length === 1 ? "" : "s"}.`,
@@ -402,9 +547,19 @@ export async function noteSessionTranscriptHealth(params?: {
       );
     }
   }
+  if (shouldRepair && importedCodexBindings.length > 0) {
+    lines.push(
+      `- Imported ${importedCodexBindings.length} Codex app-server binding sidecar${importedCodexBindings.length === 1 ? "" : "s"} into SQLite and removed the JSON source${importedCodexBindings.length === 1 ? "" : "s"}.`,
+    );
+  }
   if (failed.length > 0) {
     lines.push(
       `- Could not import ${failed.length} transcript file${failed.length === 1 ? "" : "s"}; left source file${failed.length === 1 ? "" : "s"} in place.`,
+    );
+  }
+  if (failedCodexBindings.length > 0) {
+    lines.push(
+      `- Could not import ${failedCodexBindings.length} Codex app-server binding sidecar${failedCodexBindings.length === 1 ? "" : "s"}; left source file${failedCodexBindings.length === 1 ? "" : "s"} in place.`,
     );
   }
 

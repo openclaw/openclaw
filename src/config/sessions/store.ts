@@ -20,6 +20,7 @@ import {
 } from "./store-maintenance.js";
 import { normalizeSessionStore } from "./store-normalize.js";
 import { runExclusiveSessionStoreWrite } from "./store-writer.js";
+import { deleteSqliteSessionTranscript } from "./transcript-store.sqlite.js";
 import {
   mergeSessionEntry,
   mergeSessionEntryPreserveActivity,
@@ -34,15 +35,6 @@ export {
 export { withSessionStoreWriterForTest } from "./store-writer.js";
 export { loadSessionStore } from "./store-load.js";
 export { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
-
-let sessionArchiveRuntimePromise: Promise<
-  typeof import("../../gateway/session-archive.runtime.js")
-> | null = null;
-
-function loadSessionArchiveRuntime() {
-  sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
-  return sessionArchiveRuntimePromise;
-}
 
 function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
   if (!context || context.threadId == null) {
@@ -199,31 +191,26 @@ export async function runQuotaSuspensionMaintenance(params: {
   );
 }
 
-export async function archiveRemovedSessionTranscripts(params: {
+export async function deleteRemovedSessionTranscripts(params: {
   removedSessionFiles: Iterable<[string, string | undefined]>;
   referencedSessionIds: ReadonlySet<string>;
   storePath: string;
-  reason: "deleted" | "reset";
   restrictToStoreDir?: boolean;
 }): Promise<Set<string>> {
-  const { archiveSessionTranscripts } = await loadSessionArchiveRuntime();
-  const archivedDirs = new Set<string>();
-  for (const [sessionId, sessionFile] of params.removedSessionFiles) {
+  const sqliteOptions = resolveSqliteSessionStoreOptionsForPath(params.storePath);
+  if (!sqliteOptions) {
+    return new Set();
+  }
+  for (const [sessionId] of params.removedSessionFiles) {
     if (params.referencedSessionIds.has(sessionId)) {
       continue;
     }
-    const archived = archiveSessionTranscripts({
+    deleteSqliteSessionTranscript({
+      ...sqliteOptions,
       sessionId,
-      storePath: params.storePath,
-      sessionFile,
-      reason: params.reason,
-      restrictToStoreDir: params.restrictToStoreDir,
     });
-    for (const archivedPath of archived) {
-      archivedDirs.add(path.dirname(archivedPath));
-    }
   }
-  return archivedDirs;
+  return new Set();
 }
 
 async function persistResolvedSessionEntry(params: {

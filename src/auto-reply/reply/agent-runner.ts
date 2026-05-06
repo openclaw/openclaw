@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import {
   hasConfiguredModelFallbacks,
   resolveAgentConfig,
@@ -22,8 +21,11 @@ import {
   type SessionEntry,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import {
+  hasSqliteSessionTranscriptEvents,
+  loadSqliteSessionTranscriptEvents,
+} from "../../config/sessions/transcript-store.sqlite.js";
 import type { TypingMode } from "../../config/types.js";
-import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -605,9 +607,8 @@ function formatContextManagementTraceBlock(
 }
 
 async function accumulateSessionUsageFromTranscript(params: {
+  agentId?: string;
   sessionId?: string;
-  storePath?: string;
-  sessionFile?: string;
 }): Promise<
   | {
       input?: number;
@@ -623,30 +624,20 @@ async function accumulateSessionUsageFromTranscript(params: {
     return undefined;
   }
   try {
-    const candidates = resolveSessionTranscriptCandidates(
-      sessionId,
-      params.storePath,
-      params.sessionFile,
-    );
-    let transcriptText: string | undefined;
-    for (const candidate of candidates) {
-      try {
-        transcriptText = await fs.readFile(candidate, "utf-8");
-        break;
-      } catch {
-        continue;
-      }
-    }
-    if (!transcriptText) {
+    const agentId = normalizeOptionalString(params.agentId);
+    if (!agentId || !hasSqliteSessionTranscriptEvents({ agentId, sessionId })) {
       return undefined;
     }
+    const transcriptLines = loadSqliteSessionTranscriptEvents({ agentId, sessionId }).map((entry) =>
+      JSON.stringify(entry.event),
+    );
 
     let input = 0;
     let output = 0;
     let cacheRead = 0;
     let cacheWrite = 0;
     let sawUsage = false;
-    for (const line of transcriptText.split(/\r?\n/)) {
+    for (const line of transcriptLines) {
       if (!line.trim()) {
         continue;
       }
@@ -2009,9 +2000,8 @@ export async function runReplyAgent(params: {
     const sessionUsage =
       traceAuthorized && activeSessionEntry?.traceLevel === "raw"
         ? await accumulateSessionUsageFromTranscript({
+            agentId: followupRun.run.agentId,
             sessionId: runResult.meta?.agentMeta?.sessionId ?? followupRun.run.sessionId,
-            storePath,
-            sessionFile: followupRun.run.sessionFile,
           })
         : undefined;
     const traceEnabledForSender =

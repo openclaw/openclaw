@@ -1,3 +1,4 @@
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { SessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.js";
@@ -119,8 +120,9 @@ async function handleTranscriptUpdateBroadcast(
     return;
   }
   const { entry, storePath } = loadSessionEntry(sessionKey);
+  const agentId = resolveAgentIdFromSessionKey(sessionKey);
   const messageSeq = entry?.sessionId
-    ? await readSessionMessageCountAsync(entry.sessionId, storePath, entry.sessionFile)
+    ? await readSessionMessageCountAsync(entry.sessionId, storePath, entry.sessionFile, agentId)
     : undefined;
   const sessionSnapshot = buildGatewaySessionSnapshot({
     sessionRow: loadGatewaySessionRow(sessionKey, { transcriptUsageMaxBytes: 64 * 1024 }),

@@ -7,6 +7,7 @@ import {
   formatToolProgressOutput,
   inferToolMetaFromArgs,
   normalizeUsage,
+  resolveSessionAgentIds,
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessAfterToolCallHook,
   runAgentHarnessBeforeCompactionHook,
@@ -1129,7 +1130,18 @@ export class CodexAppServerEventProjector {
   }
 
   private async readMirroredSessionMessages(): Promise<AgentMessage[]> {
-    return (await readCodexMirroredSessionHistoryMessages(this.params.sessionFile)) ?? [];
+    const { sessionAgentId } = resolveSessionAgentIds({
+      agentId: this.params.agentId,
+      config: this.params.config,
+      sessionKey: this.params.sessionKey,
+    });
+    return (
+      (await readCodexMirroredSessionHistoryMessages({
+        agentId: sessionAgentId,
+        sessionFile: this.params.sessionFile,
+        sessionId: this.params.sessionId,
+      })) ?? []
+    );
   }
 
   private createAssistantMessage(text: string): AssistantMessage {

@@ -1,5 +1,4 @@
 import path from "node:path";
-import { parseUsageCountedSessionIdFromFileName } from "../config/sessions/artifacts.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -9,7 +8,6 @@ export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-
 export type SessionTranscriptHitIdentity = {
   stem: string;
   ownerAgentId?: string;
-  archived: boolean;
 };
 
 function parseSessionsPath(hitPath: string): { base: string; ownerAgentId?: string } {
@@ -29,8 +27,6 @@ function parseSessionsPath(hitPath: string): { base: string; ownerAgentId?: stri
 /**
  * Derive transcript stem `S` from a memory search hit path for `source === "sessions"`.
  * Builtin index uses `sessions/<basename>.jsonl`; QMD exports use `<stem>.md`.
- * Archived transcripts (`.jsonl.reset.<iso>` / `.jsonl.deleted.<iso>`) resolve
- * to the same stem as the live `.jsonl` they were rotated from.
  */
 export function extractTranscriptStemFromSessionsMemoryHit(hitPath: string): string | null {
   return extractTranscriptIdentityFromSessionsMemoryHit(hitPath)?.stem ?? null;
@@ -40,17 +36,13 @@ export function extractTranscriptIdentityFromSessionsMemoryHit(
   hitPath: string,
 ): SessionTranscriptHitIdentity | null {
   const { base, ownerAgentId } = parseSessionsPath(hitPath);
-  const archivedStem = parseUsageCountedSessionIdFromFileName(base);
-  if (archivedStem && base !== `${archivedStem}.jsonl`) {
-    return { stem: archivedStem, ownerAgentId, archived: true };
-  }
   if (base.endsWith(".jsonl")) {
     const stem = base.slice(0, -".jsonl".length);
-    return stem ? { stem, ownerAgentId, archived: false } : null;
+    return stem ? { stem, ownerAgentId } : null;
   }
   if (base.endsWith(".md")) {
     const stem = base.slice(0, -".md".length);
-    return stem ? { stem, archived: false } : null;
+    return stem ? { stem } : null;
   }
   return null;
 }
@@ -63,12 +55,9 @@ export function extractTranscriptIdentityFromSessionsMemoryHit(
 export function resolveTranscriptStemToSessionKeys(params: {
   store: Record<string, SessionEntry>;
   stem: string;
-  archivedOwnerAgentId?: string;
 }): string[] {
   const { store } = params;
   const matches: string[] = [];
-  const stemAsFile = params.stem.endsWith(".jsonl") ? params.stem : `${params.stem}.jsonl`;
-  const parsedStemId = parseUsageCountedSessionIdFromFileName(stemAsFile);
 
   for (const [sessionKey, entry] of Object.entries(store)) {
     const sessionFile = normalizeOptionalString(entry.sessionFile);
@@ -80,7 +69,7 @@ export function resolveTranscriptStemToSessionKeys(params: {
         continue;
       }
     }
-    if (entry.sessionId === params.stem || (parsedStemId && entry.sessionId === parsedStemId)) {
+    if (entry.sessionId === params.stem) {
       matches.push(sessionKey);
     }
   }
@@ -88,8 +77,5 @@ export function resolveTranscriptStemToSessionKeys(params: {
   if (deduped.length > 0) {
     return deduped;
   }
-  const archivedOwnerAgentId = normalizeOptionalString(params.archivedOwnerAgentId);
-  return archivedOwnerAgentId
-    ? [`agent:${normalizeAgentId(archivedOwnerAgentId)}:${params.stem}`]
-    : [];
+  return [];
 }

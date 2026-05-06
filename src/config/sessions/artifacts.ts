@@ -1,30 +1,5 @@
-export type SessionArchiveReason = "bak" | "reset" | "deleted";
-
-const ARCHIVE_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.\d{3})?Z$/;
-const LEGACY_STORE_BACKUP_RE = /^sessions\.json\.bak\.\d+$/;
 const COMPACTION_CHECKPOINT_TRANSCRIPT_RE =
   /^(.+)\.checkpoint\.([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.jsonl$/i;
-
-function hasArchiveSuffix(fileName: string, reason: SessionArchiveReason): boolean {
-  const marker = `.${reason}.`;
-  const index = fileName.lastIndexOf(marker);
-  if (index < 0) {
-    return false;
-  }
-  const raw = fileName.slice(index + marker.length);
-  return ARCHIVE_TIMESTAMP_RE.test(raw);
-}
-
-export function isSessionArchiveArtifactName(fileName: string): boolean {
-  if (LEGACY_STORE_BACKUP_RE.test(fileName)) {
-    return true;
-  }
-  return (
-    hasArchiveSuffix(fileName, "deleted") ||
-    hasArchiveSuffix(fileName, "reset") ||
-    hasArchiveSuffix(fileName, "bak")
-  );
-}
 
 export function parseCompactionCheckpointTranscriptFileName(fileName: string): {
   sessionId: string;
@@ -65,58 +40,20 @@ export function isPrimarySessionTranscriptFileName(fileName: string): boolean {
   if (isCompactionCheckpointTranscriptFileName(fileName)) {
     return false;
   }
-  return !isSessionArchiveArtifactName(fileName);
+  return true;
 }
 
 export function isUsageCountedSessionTranscriptFileName(fileName: string): boolean {
-  if (isPrimarySessionTranscriptFileName(fileName)) {
-    return true;
-  }
-  return hasArchiveSuffix(fileName, "reset") || hasArchiveSuffix(fileName, "deleted");
+  return isPrimarySessionTranscriptFileName(fileName);
 }
 
 export function parseUsageCountedSessionIdFromFileName(fileName: string): string | null {
   if (isPrimarySessionTranscriptFileName(fileName)) {
     return fileName.slice(0, -".jsonl".length);
   }
-  for (const reason of ["reset", "deleted"] as const) {
-    const marker = `.jsonl.${reason}.`;
-    const index = fileName.lastIndexOf(marker);
-    if (index > 0 && hasArchiveSuffix(fileName, reason)) {
-      return fileName.slice(0, index);
-    }
-  }
   return null;
 }
 
-export function formatSessionArchiveTimestamp(nowMs = Date.now()): string {
+export function formatFilesystemTimestamp(nowMs = Date.now()): string {
   return new Date(nowMs).toISOString().replaceAll(":", "-");
-}
-
-function restoreSessionArchiveTimestamp(raw: string): string {
-  const [datePart, timePart] = raw.split("T");
-  if (!datePart || !timePart) {
-    return raw;
-  }
-  return `${datePart}T${timePart.replace(/-/g, ":")}`;
-}
-
-export function parseSessionArchiveTimestamp(
-  fileName: string,
-  reason: SessionArchiveReason,
-): number | null {
-  const marker = `.${reason}.`;
-  const index = fileName.lastIndexOf(marker);
-  if (index < 0) {
-    return null;
-  }
-  const raw = fileName.slice(index + marker.length);
-  if (!raw) {
-    return null;
-  }
-  if (!ARCHIVE_TIMESTAMP_RE.test(raw)) {
-    return null;
-  }
-  const timestamp = Date.parse(restoreSessionArchiveTimestamp(raw));
-  return Number.isNaN(timestamp) ? null : timestamp;
 }

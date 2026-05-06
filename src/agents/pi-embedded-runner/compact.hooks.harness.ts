@@ -725,11 +725,6 @@ export async function loadCompactHooksHarness(): Promise<{
     ),
   }));
 
-  vi.doMock("./session-manager-cache.js", () => ({
-    prewarmSessionFile: vi.fn(async () => {}),
-    trackSessionManagerAccess: vi.fn(),
-  }));
-
   vi.doMock("./system-prompt.js", () => ({
     applySystemPromptOverrideToSession: vi.fn(),
     buildEmbeddedSystemPrompt: vi.fn(() => ""),

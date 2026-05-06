@@ -1,5 +1,4 @@
 export {
-  archiveSessionTranscriptsForSessionDetailed,
   cleanupSessionBeforeMutation,
   emitGatewayBeforeResetPluginHook,
   emitGatewaySessionEndPluginHook,

@@ -12,7 +12,6 @@ import {
   isCronRunSessionKey,
   isExecCompletionEvent,
   isHeartbeatUserMessage,
-  isSessionArchiveArtifactName,
   isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
   parseUsageCountedSessionIdFromFileName,
@@ -73,27 +72,7 @@ function shouldSkipTranscriptFileForDreaming(absPath: string): boolean {
   if (isCompactionCheckpointTranscriptFileName(fileName)) {
     return true;
   }
-  // Legacy backups and `.jsonl.bak.<iso>` rotations are opaque pre-archive
-  // copies, not a user-facing session artifact; skip them too.
-  if (
-    isSessionArchiveArtifactName(fileName) &&
-    !isUsageCountedSessionTranscriptFileName(fileName)
-  ) {
-    return true;
-  }
-  // Usage-counted archives (`.jsonl.reset.<iso>` / `.jsonl.deleted.<iso>`) are
-  // the rotated-but-retained copies of real sessions and must stay indexed so
-  // `memory_search` can surface hits on post-reset / post-delete history.
   return false;
-}
-
-function isUsageCountedSessionArchiveTranscriptPath(absPath: string): boolean {
-  const fileName = path.basename(absPath);
-  return (
-    isUsageCountedSessionTranscriptFileName(fileName) &&
-    isSessionArchiveArtifactName(fileName) &&
-    parseUsageCountedSessionIdFromFileName(fileName) !== null
-  );
 }
 
 function isDreamingNarrativeBootstrapRecord(record: unknown): boolean {
@@ -280,15 +259,8 @@ function classifySessionTranscriptFromSessionStore(absPath: string): {
 } {
   const sessionsDir = path.dirname(absPath);
   const normalizedAbsPath = normalizeComparablePath(absPath);
-  const primarySessionId = parseUsageCountedSessionIdFromFileName(path.basename(absPath));
-  const normalizedPrimaryPath =
-    primarySessionId && isSessionArchiveArtifactName(path.basename(absPath))
-      ? normalizeComparablePath(path.join(sessionsDir, `${primarySessionId}.jsonl`))
-      : null;
   const classification = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
-  const hasClassifiedPath = (paths: ReadonlySet<string>) =>
-    paths.has(normalizedAbsPath) ||
-    (normalizedPrimaryPath !== null && paths.has(normalizedPrimaryPath));
+  const hasClassifiedPath = (paths: ReadonlySet<string>) => paths.has(normalizedAbsPath);
   return {
     generatedByDreamingNarrative: hasClassifiedPath(
       classification.dreamingNarrativeTranscriptPaths,
@@ -631,16 +603,6 @@ export async function buildSessionEntry(
       const rawText = collectRawSessionText(message.content);
       if (rawText === null) {
         continue;
-      }
-      if (
-        !generatedByCronRun &&
-        allowArchiveContentCronClassification &&
-        isGeneratedCronPromptMessage(normalizeSessionText(rawText), message.role)
-      ) {
-        generatedByCronRun = true;
-        collected.length = 0;
-        lineMap.length = 0;
-        messageTimestampsMs.length = 0;
       }
       const text = sanitizeSessionText(rawText, message.role);
       if (!text) {

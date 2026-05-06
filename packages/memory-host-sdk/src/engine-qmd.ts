@@ -13,7 +13,6 @@ export {
   type SessionTranscriptClassification,
 } from "./host/session-files.js";
 export {
-  isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
   parseUsageCountedSessionIdFromFileName,
 } from "./host/openclaw-runtime-session.js";

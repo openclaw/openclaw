@@ -24,6 +24,7 @@ import { resolveAndPersistSessionFile } from "../../config/sessions/session-file
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { loadSessionStore, updateSessionStore } from "../../config/sessions/store.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
+import { deleteSqliteSessionTranscript } from "../../config/sessions/transcript-store.sqlite.js";
 import {
   DEFAULT_RESET_TRIGGERS,
   type GroupKeyResolution,
@@ -32,10 +33,7 @@ import {
 } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
-import {
-  forgetActiveSessionForShutdown,
-  noteActiveSessionForShutdown,
-} from "../../gateway/active-sessions-shutdown-tracker.js";
+import { resolveStableSessionEndTranscript } from "../../gateway/session-transcript-files.fs.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { closeTrackedBrowserTabsForSessions } from "../../plugin-sdk/browser-maintenance.js";
@@ -43,7 +41,6 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -68,13 +65,6 @@ import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./sess
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
 
 const log = createSubsystemLogger("session-init");
-const sessionArchiveRuntimeLoader = createLazyImportLoader(
-  () => import("../../gateway/session-archive.runtime.js"),
-);
-
-function loadSessionArchiveRuntime() {
-  return sessionArchiveRuntimeLoader.load();
-}
 
 type ReplySessionEndReason = Extract<
   PluginHookSessionEndReason,
@@ -464,10 +454,8 @@ export async function initSessionState(params: {
     (isSystemEvent && canReuseExistingEntry) ||
     (entryFreshness?.fresh ?? false) ||
     (softResetAllowed && canReuseExistingEntry);
-  // Capture the current session entry before any reset so its transcript can be
-  // archived afterward.  We need to do this for both explicit resets (/new, /reset)
-  // and for scheduled/daily resets where the session has become stale (!freshEntry).
-  // Without this, daily-reset transcripts are left as orphaned files on disk (#35481).
+  // Capture the current session entry before any reset so hooks and cleanup can
+  // reference it. This covers explicit resets and scheduled/daily stale rollovers.
   const previousSessionEntry = (resetTriggered || !freshEntry) && entry ? { ...entry } : undefined;
   const previousSessionEndReason = resetTriggered
     ? resolveExplicitSessionEndReason(matchedResetTriggerLower)
@@ -792,27 +780,16 @@ export async function initSessionState(params: {
     }
   });
 
-  // Archive old transcript so it doesn't accumulate on disk (#14869).
+  // Resolve the previous transcript before rotating session metadata.
   let previousSessionTranscript: {
     sessionFile?: string;
-    transcriptArchived?: boolean;
   } = {};
   if (previousSessionEntry?.sessionId) {
-    const { archiveSessionTranscriptsDetailed, resolveStableSessionEndTranscript } =
-      await loadSessionArchiveRuntime();
-    const archivedTranscripts = archiveSessionTranscriptsDetailed({
-      sessionId: previousSessionEntry.sessionId,
-      storePath,
-      sessionFile: previousSessionEntry.sessionFile,
-      agentId,
-      reason: "reset",
-    });
     previousSessionTranscript = resolveStableSessionEndTranscript({
       sessionId: previousSessionEntry.sessionId,
       storePath,
       sessionFile: previousSessionEntry.sessionFile,
       agentId,
-      archivedTranscripts,
     });
     await retireSessionMcpRuntime({
       sessionId: previousSessionEntry.sessionId,
@@ -872,7 +849,6 @@ export async function initSessionState(params: {
           cfg,
           reason: previousSessionEndReason,
           sessionFile: previousSessionTranscript.sessionFile,
-          transcriptArchived: previousSessionTranscript.transcriptArchived,
           nextSessionId: effectiveSessionId,
         });
         void hookRunner.runSessionEnd(payload.event, payload.context).catch(() => {});
@@ -902,6 +878,19 @@ export async function initSessionState(params: {
       });
       void hookRunner.runSessionStart(payload.event, payload.context).catch(() => {});
     }
+  }
+
+  if (
+    previousSessionEntry?.sessionId &&
+    previousSessionEntry.sessionId !== sessionId &&
+    !Object.values(loadSessionStore(storePath)).some(
+      (candidate) => candidate.sessionId === previousSessionEntry.sessionId,
+    )
+  ) {
+    deleteSqliteSessionTranscript({
+      agentId,
+      sessionId: previousSessionEntry.sessionId,
+    });
   }
 
   return {

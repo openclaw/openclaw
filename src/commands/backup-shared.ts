@@ -6,7 +6,7 @@ import {
   resolveOAuthDir,
   resolveStateDir,
 } from "../config/config.js";
-import { formatSessionArchiveTimestamp } from "../config/sessions/artifacts.js";
+import { formatFilesystemTimestamp } from "../config/sessions/artifacts.js";
 import { pathExists, shortenHomePath } from "../utils.js";
 import { buildCleanupPlan, isPathWithin } from "./cleanup-utils.js";
 
@@ -59,7 +59,7 @@ function backupAssetPriority(kind: BackupAssetKind): number {
 }
 
 export function buildBackupArchiveRoot(nowMs = Date.now()): string {
-  return `${formatSessionArchiveTimestamp(nowMs)}-openclaw-backup`;
+  return `${formatFilesystemTimestamp(nowMs)}-openclaw-backup`;
 }
 
 export function buildBackupArchiveBasename(nowMs = Date.now()): string {

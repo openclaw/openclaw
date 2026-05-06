@@ -145,7 +145,6 @@ import { resolveModelAsync } from "./model.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
 import { createEmbeddedPiResourceLoader } from "./resource-loader.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
-import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
 import {
   resolveEmbeddedAgentBaseStreamFn,
@@ -964,7 +963,6 @@ async function compactEmbeddedPiSessionDirectOnce(
         debug: (message) => log.debug(message),
         warn: (message) => log.warn(message),
       });
-      await prewarmSessionFile(params.sessionFile);
       const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
       const sessionManager = guardSessionManager(
         openTranscriptSessionManager({
@@ -988,11 +986,11 @@ async function compactEmbeddedPiSessionDirectOnce(
         },
       );
       checkpointSnapshot = await captureCompactionCheckpointSnapshotAsync({
+        agentId: sessionAgentId,
         sessionManager,
         sessionFile: params.sessionFile,
       });
       compactionSessionManager = sessionManager;
-      trackSessionManagerAccess(params.sessionFile);
       const settingsManager = createPreparedEmbeddedPiSettingsManager({
         cwd: effectiveWorkspace,
         agentDir,

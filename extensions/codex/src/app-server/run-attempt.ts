@@ -13,6 +13,7 @@ import {
   emitAgentEvent as emitGlobalAgentEvent,
   finalizeHarnessContextEngineTurn,
   formatErrorMessage,
+  hasSqliteSessionTranscriptEvents,
   isActiveHarnessContextEngine,
   isSubagentSessionKey,
   normalizeAgentRuntimeTools,
@@ -522,8 +523,16 @@ export async function runCodexAppServerAttempt(
       runId: params.runId,
     },
   });
-  const hadSessionFile = await pathExists(params.sessionFile);
-  let historyMessages = (await readMirroredSessionHistoryMessages(params.sessionFile)) ?? [];
+  const hadSessionFile = hasSqliteSessionTranscriptEvents({
+    agentId: sessionAgentId,
+    sessionId: params.sessionId,
+  });
+  let historyMessages =
+    (await readMirroredSessionHistoryMessages({
+      agentId: sessionAgentId,
+      sessionFile: params.sessionFile,
+      sessionId: params.sessionId,
+    })) ?? [];
   const hookContext = {
     runId: params.runId,
     agentId: sessionAgentId,
@@ -552,7 +561,11 @@ export async function runCodexAppServerAttempt(
       warn: (message) => embeddedAgentLog.warn(message),
     });
     historyMessages =
-      (await readMirroredSessionHistoryMessages(params.sessionFile)) ?? historyMessages;
+      (await readMirroredSessionHistoryMessages({
+        agentId: sessionAgentId,
+        sessionFile: params.sessionFile,
+        sessionId: params.sessionId,
+      })) ?? historyMessages;
   }
   const baseDeveloperInstructions = buildDeveloperInstructions(params);
   // Build the workspace bootstrap block before finalizing developer
@@ -1678,8 +1691,11 @@ export async function runCodexAppServerAttempt(
     }
     if (activeContextEngine) {
       const finalMessages =
-        (await readMirroredSessionHistoryMessages(params.sessionFile)) ??
-        historyMessages.concat(result.messagesSnapshot);
+        (await readMirroredSessionHistoryMessages({
+          agentId: sessionAgentId,
+          sessionFile: params.sessionFile,
+          sessionId: params.sessionId,
+        })) ?? historyMessages.concat(result.messagesSnapshot);
       await finalizeHarnessContextEngineTurn({
         contextEngine: activeContextEngine,
         promptError: Boolean(finalPromptError),
@@ -2742,18 +2758,15 @@ function readString(record: JsonObject, key: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function readBoolean(record: JsonObject, key: string): boolean | undefined {
-  const value = record[key];
-  return typeof value === "boolean" ? value : undefined;
-}
-
-async function readMirroredSessionHistoryMessages(
-  sessionFile: string,
-): Promise<AgentMessage[] | undefined> {
-  const messages = await readCodexMirroredSessionHistoryMessages(sessionFile);
+async function readMirroredSessionHistoryMessages(scope: {
+  agentId: string;
+  sessionFile: string;
+  sessionId: string;
+}): Promise<AgentMessage[] | undefined> {
+  const messages = await readCodexMirroredSessionHistoryMessages(scope);
   if (!messages) {
     embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
-      sessionFile,
+      sessionFile: scope.sessionFile,
     });
   }
   return messages;

@@ -91,14 +91,17 @@ describe("session-updates lifecycle hooks", () => {
     const [endEvent, endContext] = firstSessionEndCall();
     const [startEvent, startContext] = firstSessionStartCall();
 
-    expect(endEvent?.sessionId).toBe("s1");
-    expect(endEvent?.sessionKey).toBe(sessionKey);
-    expect(endEvent?.reason).toBe("compaction");
-    expect(endEvent?.transcriptArchived).toBe(false);
-    expect(endEvent?.sessionFile).toBe(await fs.realpath(transcriptPath));
-    expect(endContext?.sessionId).toBe("s1");
-    expect(endContext?.sessionKey).toBe(sessionKey);
-    expect(endContext?.agentId).toBe("main");
+    expect(endEvent).toMatchObject({
+      sessionId: "s1",
+      sessionKey,
+      reason: "compaction",
+    });
+    expect(endEvent?.sessionFile).toBe(path.resolve(transcriptPath));
+    expect(endContext).toMatchObject({
+      sessionId: "s1",
+      sessionKey,
+      agentId: "main",
+    });
     expect(endEvent?.nextSessionId).toBe(startEvent?.sessionId);
     expect(startEvent?.sessionId).toBe("s2");
     expect(startEvent?.sessionKey).toBe(sessionKey);

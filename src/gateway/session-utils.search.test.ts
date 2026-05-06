@@ -8,7 +8,9 @@ import {
 } from "../agents/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { listSessionsFromStore } from "./session-utils.js";
 
 function createModelDefaultsConfig(params: {
@@ -58,11 +60,15 @@ function withTranscriptStoreFixture<T>(params: {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), params.prefix));
   const storePath = path.join(tmpDir, "sessions.json");
   const now = Date.now();
-  fs.writeFileSync(
-    path.join(tmpDir, `${params.transcriptId}.jsonl`),
-    [
-      JSON.stringify({ type: "session", version: 1, id: params.transcriptId }),
-      JSON.stringify({
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = tmpDir;
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: params.transcriptId,
+    transcriptPath: path.join(tmpDir, `${params.transcriptId}.jsonl`),
+    events: [
+      { type: "session", version: 1, id: params.transcriptId },
+      {
         message: {
           role: "assistant",
           provider: params.provider,
@@ -74,14 +80,19 @@ function withTranscriptStoreFixture<T>(params: {
             cost: { total: params.costTotal },
           },
         },
-      }),
-    ].join("\n"),
-    "utf-8",
-  );
+      },
+    ],
+  });
 
   try {
     return params.run({ storePath, now });
   } finally {
+    closeOpenClawStateDatabaseForTest();
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 }
