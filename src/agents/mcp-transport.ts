@@ -15,6 +15,7 @@ type ResolvedMcpTransport = {
   description: string;
   transportType: "stdio" | "sse" | "streamable-http";
   connectionTimeoutMs: number;
+  requestTimeoutMs?: number;
   detachStderr?: () => void;
 };
 
@@ -96,6 +97,7 @@ export function resolveMcpTransport(
       description: resolved.description,
       transportType: "stdio",
       connectionTimeoutMs: resolved.connectionTimeoutMs,
+      requestTimeoutMs: resolved.requestTimeoutMs,
       detachStderr: attachStderrLogging(serverName, transport),
     };
   }
@@ -107,6 +109,7 @@ export function resolveMcpTransport(
       description: resolved.description,
       transportType: "streamable-http",
       connectionTimeoutMs: resolved.connectionTimeoutMs,
+      requestTimeoutMs: resolved.requestTimeoutMs,
     };
   }
   const headers: Record<string, string> = {
@@ -122,5 +125,6 @@ export function resolveMcpTransport(
     description: resolved.description,
     transportType: "sse",
     connectionTimeoutMs: resolved.connectionTimeoutMs,
+    requestTimeoutMs: resolved.requestTimeoutMs,
   };
 }
