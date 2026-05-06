@@ -736,7 +736,7 @@ default `memory-core` path uses `memory_search`; `memory-lancedb` uses
   </Accordion>
 </AccordionGroup>
 
-## Related pages
+## Related
 
 - [Memory Search](/concepts/memory-search)
 - [Memory configuration reference](/reference/memory-config)
