@@ -2,6 +2,10 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  __testing as sessionBindingTesting,
+  registerSessionBindingAdapter,
+} from "../../infra/outbound/session-binding-service.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import {
   resolveTrajectoryFilePath,
@@ -104,6 +108,7 @@ describe("Integration: saveSessionStore with pruning", () => {
 
   afterEach(() => {
     mockLoadConfig.mockReset();
+    sessionBindingTesting.resetSessionBindingAdaptersForTests();
     clearSessionStoreCacheForTest();
     if (savedCacheTtl === undefined) {
       delete process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
@@ -305,6 +310,54 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expect(fs.stat(referencedTranscript)).resolves.toBeDefined();
     await expect(fs.stat(referencedCheckpointPath)).resolves.toBeDefined();
     await expect(fs.stat(freshOrphanTranscript)).resolves.toBeDefined();
+  });
+
+  it("sessions cleanup unbinds bindings for removed session rows only when applied", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 500,
+        },
+      },
+    });
+
+    const store: Record<string, SessionEntry> = {
+      missing: { sessionId: "missing-session", updatedAt: Date.now() },
+      fresh: { sessionId: "fresh-session", updatedAt: Date.now() },
+    };
+    const freshTranscript = path.join(testDir, "fresh-session.jsonl");
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+    await fs.writeFile(freshTranscript, "fresh", "utf-8");
+
+    const unbind = vi.fn(async () => []);
+    registerSessionBindingAdapter({
+      channel: "demo",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: () => null,
+      unbind,
+    });
+
+    await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, dryRun: true, enforce: true, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+    expect(unbind).not.toHaveBeenCalled();
+
+    await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, enforce: true, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(unbind).toHaveBeenCalledWith({
+      targetSessionKey: "missing",
+      reason: "session-cleanup",
+    });
+    expect(unbind).not.toHaveBeenCalledWith(expect.objectContaining({ targetSessionKey: "fresh" }));
   });
 
   it("sessions cleanup dry-run does not double-count artifacts already covered by disk budget", async () => {

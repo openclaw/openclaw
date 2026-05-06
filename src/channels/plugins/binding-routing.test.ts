@@ -46,17 +46,22 @@ function createBinding(overrides?: Partial<SessionBindingRecord>): SessionBindin
 function registerAdapter(record: SessionBindingRecord | null): {
   resolveByConversation: ReturnType<typeof vi.fn>;
   touch: ReturnType<typeof vi.fn>;
+  unbind: ReturnType<typeof vi.fn>;
 } {
   const resolveByConversation = vi.fn<SessionBindingAdapter["resolveByConversation"]>(() => record);
   const touch = vi.fn<NonNullable<SessionBindingAdapter["touch"]>>();
+  const unbind = vi.fn<NonNullable<SessionBindingAdapter["unbind"]>>(async () =>
+    record ? [record] : [],
+  );
   registerSessionBindingAdapter({
     channel: "demo",
     accountId: "default",
     listBySession: () => [],
     resolveByConversation,
     touch,
+    unbind,
   });
-  return { resolveByConversation, touch };
+  return { resolveByConversation, touch, unbind };
 }
 
 describe("runtime conversation binding route", () => {
@@ -70,6 +75,7 @@ describe("runtime conversation binding route", () => {
 
     const result = resolveRuntimeConversationBindingRoute({
       route: createRoute(),
+      validateBindingTarget: () => true,
       conversation: {
         channel: "demo",
         accountId: "default",
@@ -90,6 +96,35 @@ describe("runtime conversation binding route", () => {
       sessionKey: "agent:review:acp:session-1",
       lastRoutePolicy: "session",
       matchedBy: "binding.channel",
+    });
+  });
+
+  it("drops stale runtime bindings before touching or rewriting the channel route", async () => {
+    const route = createRoute();
+    const binding = createBinding();
+    const { touch, unbind } = registerAdapter(binding);
+
+    const result = resolveRuntimeConversationBindingRoute({
+      route,
+      validateBindingTarget: () => false,
+      conversation: {
+        channel: "demo",
+        accountId: "default",
+        conversationId: "room-1",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(unbind).toHaveBeenCalledWith({
+        bindingId: "binding-1",
+        targetSessionKey: "agent:review:acp:session-1",
+        reason: "stale-session-target",
+      });
+    });
+    expect(touch).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      bindingRecord: null,
+      route,
     });
   });
 
