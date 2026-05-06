@@ -1675,7 +1675,11 @@ export async function runAgentTurnWithFallback(params: {
                       ]);
                     }
                   }
-                  if (evt.stream === "item" && evt.data.suppressChannelProgress !== true) {
+                  const suppressItemChannelProgress =
+                    evt.stream === "item" &&
+                    evt.data.suppressChannelProgress === true &&
+                    Boolean(params.opts?.onToolStart);
+                  if (evt.stream === "item" && !suppressItemChannelProgress) {
                     await params.opts?.onItemEvent?.({
                       itemId: readStringValue(evt.data.itemId),
                       kind: readStringValue(evt.data.kind),
