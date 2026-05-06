@@ -454,12 +454,8 @@ private enum ExecHostExecutor {
         }
 
         var env = context.env
-        if let agentId = request.agentId, !agentId.isEmpty {
-            env["OPENCLAW_AGENT_ID"] = agentId
-        }
-        if let sessionKey = request.sessionKey, !sessionKey.isEmpty {
-            env["OPENCLAW_SESSION_KEY"] = sessionKey
-        }
+        env["OPENCLAW_AGENT_ID"] = request.agentId ?? ""
+        env["OPENCLAW_SESSION_KEY"] = request.sessionKey ?? ""
 
         return await self.runCommand(
             command: validatedRequest.command,

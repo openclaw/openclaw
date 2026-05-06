@@ -914,12 +914,8 @@ extension MacNodeRuntime {
         let timeoutSec = params.timeoutMs.flatMap { Double($0) / 1000.0 }
 
         var execEnv = env
-        if let agentId = agentId, !agentId.isEmpty {
-            execEnv["OPENCLAW_AGENT_ID"] = agentId
-        }
-        if !sessionKey.isEmpty {
-            execEnv["OPENCLAW_SESSION_KEY"] = sessionKey
-        }
+        execEnv["OPENCLAW_AGENT_ID"] = agentId ?? ""
+        execEnv["OPENCLAW_SESSION_KEY"] = sessionKey
 
         await self.emitExecEvent(
             "exec.started",
