@@ -76,6 +76,7 @@ export async function messageCommand(
       gateway: {
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
+        timeoutMs: typeof opts.timeoutMs === "number" ? opts.timeoutMs : 30_000,
       },
     });
 

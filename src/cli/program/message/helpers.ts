@@ -32,10 +32,11 @@ type MessagePluginPreloadPlan =
   | { preload: false };
 
 function normalizeMessageOptions(opts: Record<string, unknown>): Record<string, unknown> {
-  const { account, ...rest } = opts;
+  const { account, timeout, ...rest } = opts;
   return {
     ...rest,
     accountId: typeof account === "string" ? account : undefined,
+    timeoutMs: typeof timeout === "string" ? parseInt(timeout, 10) : undefined,
   };
 }
 

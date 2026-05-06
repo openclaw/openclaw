@@ -69,7 +69,8 @@ Name lookup:
 - `send`
   - Channels: WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage/Matrix/Microsoft Teams
   - Required: `--target`, plus `--message`, `--media`, or `--presentation`
-  - Optional: `--media`, `--presentation`, `--delivery`, `--pin`, `--reply-to`, `--thread-id`, `--gif-playback`, `--force-document`, `--silent`
+  - Optional: `--media`, `--presentation`, `--delivery`, `--pin`, `--reply-to`, `--thread-id`, `--gif-playback`, `--force-document`, `--silent`, `--timeout`
+  - `--timeout <ms>`: request timeout in milliseconds (default: 30000). When the timeout expires, the gateway request is aborted with a timeout error. Combine with external supervisors like `timeout(1)` — SIGTERM is also handled so they can interrupt cleanly.
   - Shared presentation payloads: `--presentation` sends semantic blocks (`text`, `context`, `divider`, `buttons`, `select`) that core renders through the selected channel's declared capabilities. See [Message Presentation](/plugins/message-presentation).
   - Generic delivery preferences: `--delivery` accepts delivery hints such as `{ "pin": true }`; `--pin` is shorthand for pinned delivery when the channel supports it.
   - Telegram only: `--force-document` (send images and GIFs as documents to avoid Telegram compression)

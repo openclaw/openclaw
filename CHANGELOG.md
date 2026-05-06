@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Fixes
+
+- CLI/message: add `--timeout <ms>` to `openclaw message send` (default 30000) so delivery requests can no longer hang indefinitely. SIGTERM/SIGINT handlers in `executeGatewayRequestWithScopes` properly clean up listeners after request settles, allowing external supervisors like `timeout(1)` to interrupt stuck requests without leaking signal handlers. Fixes #75895. Thanks @EronFan.
+
 ### Changes
 
 - PR triage: mark external pull requests with `proof: supplied` when Barnacle finds structured real behavior proof, keep stale negative proof labels in sync across CRLF-edited PR bodies, and let ClawSweeper own the stronger `proof: sufficient` judgement.
