@@ -250,6 +250,7 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
         partIndex: typeof partIndex === "number" ? partIndex : undefined,
         opts,
       });
+      await runtime.sendBlueBubblesTyping(resolvedChatGuid, false, opts);
 
       return jsonResult({ ok: true, ...(remove ? { removed: true } : { added: emoji }) });
     }

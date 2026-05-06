@@ -1742,7 +1742,16 @@ async function processMessageAfterDedupe(
   let sentMessage = false;
   let streamingActive = false;
   let typingRestartTimer: NodeJS.Timeout | undefined;
+  const pendingTypingUpdates = new Set<Promise<void>>();
   const typingRestartDelayMs = 150;
+  const trackTypingUpdate = (promise: Promise<void>) => {
+    pendingTypingUpdates.add(promise);
+    promise.then(
+      () => pendingTypingUpdates.delete(promise),
+      () => pendingTypingUpdates.delete(promise),
+    );
+    return promise;
+  };
   const clearTypingRestartTimer = () => {
     if (typingRestartTimer) {
       clearTimeout(typingRestartTimer);
@@ -1759,10 +1768,12 @@ async function processMessageAfterDedupe(
       if (!streamingActive) {
         return;
       }
-      sendBlueBubblesTyping(chatGuidForActions, true, {
-        cfg: config,
-        accountId: account.accountId,
-      }).catch((err) => {
+      trackTypingUpdate(
+        sendBlueBubblesTyping(chatGuidForActions, true, {
+          cfg: config,
+          accountId: account.accountId,
+        }),
+      ).catch((err) => {
         runtime.error?.(`[bluebubbles] typing restart failed: ${sanitizeForLog(err)}`);
       });
     }, typingRestartDelayMs);
@@ -2062,6 +2073,9 @@ async function processMessageAfterDedupe(
       Boolean(chatGuidForActions && baseUrl && password) && (streamingActive || !sentMessage);
     streamingActive = false;
     clearTypingRestartTimer();
+    if (pendingTypingUpdates.size > 0) {
+      await Promise.allSettled([...pendingTypingUpdates]);
+    }
     if (sentMessage && chatGuidForActions && ackMessageId) {
       core.channel.reactions.removeAckReactionAfterReply({
         removeAfterReply: removeAckAfterReply,
@@ -2087,10 +2101,12 @@ async function processMessageAfterDedupe(
     }
     if (shouldStopTyping && chatGuidForActions) {
       // Stop typing after streaming completes to avoid a stuck indicator.
-      sendBlueBubblesTyping(chatGuidForActions, false, {
-        cfg: config,
-        accountId: account.accountId,
-      }).catch((err) => {
+      try {
+        await sendBlueBubblesTyping(chatGuidForActions, false, {
+          cfg: config,
+          accountId: account.accountId,
+        });
+      } catch (err) {
         logTypingFailure({
           log: (msg) => logVerbose(core, runtime, msg),
           channel: "bluebubbles",
@@ -2098,7 +2114,7 @@ async function processMessageAfterDedupe(
           target: chatGuidForActions,
           error: err,
         });
-      });
+      }
     }
   }
 }

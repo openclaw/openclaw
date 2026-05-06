@@ -5,6 +5,7 @@ import {
   leaveBlueBubblesChat as leaveBlueBubblesChatImpl,
   removeBlueBubblesParticipant as removeBlueBubblesParticipantImpl,
   renameBlueBubblesChat as renameBlueBubblesChatImpl,
+  sendBlueBubblesTyping as sendBlueBubblesTypingImpl,
   setGroupIconBlueBubbles as setGroupIconBlueBubblesImpl,
   unsendBlueBubblesMessage as unsendBlueBubblesMessageImpl,
 } from "./chat.js";
@@ -22,6 +23,7 @@ export const blueBubblesActionsRuntime = {
   leaveBlueBubblesChat: leaveBlueBubblesChatImpl,
   removeBlueBubblesParticipant: removeBlueBubblesParticipantImpl,
   renameBlueBubblesChat: renameBlueBubblesChatImpl,
+  sendBlueBubblesTyping: sendBlueBubblesTypingImpl,
   setGroupIconBlueBubbles: setGroupIconBlueBubblesImpl,
   unsendBlueBubblesMessage: unsendBlueBubblesMessageImpl,
   resolveBlueBubblesMessageId: resolveBlueBubblesMessageIdImpl,

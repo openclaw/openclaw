@@ -1,7 +1,7 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { sendBlueBubblesAttachment } from "./attachments.js";
-import { editBlueBubblesMessage, setGroupIconBlueBubbles } from "./chat.js";
+import { editBlueBubblesMessage, sendBlueBubblesTyping, setGroupIconBlueBubbles } from "./chat.js";
 import { resolveBlueBubblesMessageId } from "./monitor-reply-cache.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { sendBlueBubblesReaction } from "./reactions.js";
@@ -24,6 +24,7 @@ vi.mock("./send.js", () => ({
 
 vi.mock("./chat.js", () => ({
   editBlueBubblesMessage: vi.fn().mockResolvedValue(undefined),
+  sendBlueBubblesTyping: vi.fn().mockResolvedValue(undefined),
   unsendBlueBubblesMessage: vi.fn().mockResolvedValue(undefined),
   renameBlueBubblesChat: vi.fn().mockResolvedValue(undefined),
   setGroupIconBlueBubbles: vi.fn().mockResolvedValue(undefined),
@@ -387,6 +388,11 @@ describe("bluebubblesMessageActions", () => {
           messageGuid: "msg-123",
           emoji: "❤️",
         }),
+      );
+      expect(sendBlueBubblesTyping).toHaveBeenCalledWith(
+        "iMessage;-;+15551234567",
+        false,
+        expect.objectContaining({ cfg: expect.any(Object), accountId: undefined }),
       );
       // jsonResult returns { content: [...], details: payload }
       expect(result).toMatchObject({
