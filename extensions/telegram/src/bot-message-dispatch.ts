@@ -901,6 +901,16 @@ export const dispatchTelegramMessage = async ({
         deliveryState.markDelivered();
       },
     });
+    const deliverProgressModeFinalAnswer = async (
+      payload: ReplyPayload,
+      text: string,
+    ): Promise<LaneDeliveryResult> => {
+      await answerLane.stream?.clear();
+      resetDraftLaneState(answerLane);
+      const delivered = await sendPayload(applyTextToPayload(payload, text), { durable: true });
+      answerLane.finalized = true;
+      return delivered ? { kind: "sent" } : { kind: "skipped" };
+    };
 
     if (isDmTopic) {
       try {
@@ -1042,13 +1052,18 @@ export const dispatchTelegramMessage = async ({
                       if (segment.lane === "reasoning") {
                         reasoningStepState.noteReasoningHint();
                       }
-                      const result = await deliverLaneText({
-                        laneName: segment.lane,
-                        text: segment.text,
-                        payload,
-                        infoKind: info.kind,
-                        buttons: telegramButtons,
-                      });
+                      const result =
+                        streamMode === "progress" &&
+                        segment.lane === "answer" &&
+                        info.kind === "final"
+                          ? await deliverProgressModeFinalAnswer(payload, segment.text)
+                          : await deliverLaneText({
+                              laneName: segment.lane,
+                              text: segment.text,
+                              payload,
+                              infoKind: info.kind,
+                              buttons: telegramButtons,
+                            });
                       if (info.kind === "final") {
                         emitPreviewFinalizedHook(result);
                       }
