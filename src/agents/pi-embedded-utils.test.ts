@@ -643,7 +643,7 @@ describe("formatReasoningMessage", () => {
 });
 
 describe("extractAssistantThinking", () => {
-  it("surfaces signed native reasoning even when the provider returns an empty summary", () => {
+  it("does not fabricate reasoning text when native reasoning has no summary", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
       content: [
@@ -657,9 +657,24 @@ describe("extractAssistantThinking", () => {
       timestamp: Date.now(),
     });
 
-    expect(extractAssistantThinking(msg)).toBe(
-      "Native reasoning was produced; no summary text was returned.",
-    );
+    expect(extractAssistantThinking(msg)).toBe("");
+  });
+
+  it("surfaces native reasoning when the provider returns summary text", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "thinking",
+          thinking: "Reasoning summary",
+          thinkingSignature: JSON.stringify({ type: "reasoning", id: "rs_live" }),
+        },
+        { type: "text", text: "Done." },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantThinking(msg)).toBe("Reasoning summary");
   });
 });
 
