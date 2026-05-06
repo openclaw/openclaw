@@ -134,6 +134,8 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
 
 `--model` uses the selected allowed model as that job's primary model. It is not the same as a chat-session `/model` override: configured fallback chains still apply when the job primary fails. If the requested model is not allowed or cannot be resolved, cron fails the run with an explicit validation error instead of silently falling back to the job's agent/default model selection.
 
+If older or hand-edited `jobs.json` entries store `payload.model` as `"default"`, `"null"`, a blank string, or JSON `null`, run `openclaw doctor --fix`. Doctor removes those invalid persisted override sentinels; runtime does not support them as fallback aliases. Omit the model field to use the normal agent/default model selection.
+
 Cron jobs can also carry payload-level `fallbacks`. When present, that list replaces the configured fallback chain for the job. Use `fallbacks: []` in the job payload/API when you want a strict cron run that tries only the selected model. If a job has `--model` but neither payload nor configured fallbacks, OpenClaw passes an explicit empty fallback override so the agent primary is not appended as a hidden extra retry target.
 
 Model-selection precedence for isolated jobs is:
