@@ -396,6 +396,16 @@ describe("ws connect policy", () => {
       shouldClearUnboundScopesForMissingDeviceIdentity({
         decision: { kind: "allow" },
         controlUiAuthPolicy: controlUi,
+        preserveInsecureLocalControlUiScopes: false,
+        authMethod: "trusted-proxy",
+        trustedProxyAuthOk: true,
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldClearUnboundScopesForMissingDeviceIdentity({
+        decision: { kind: "allow" },
+        controlUiAuthPolicy: controlUi,
         preserveInsecureLocalControlUiScopes: true,
         authMethod: "token",
       }),

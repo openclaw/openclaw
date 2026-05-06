@@ -322,6 +322,7 @@ Behavior:
 - When the header is present, OpenClaw honors the declared scope set.
 - When the header is present but empty, the request declares **no** operator scopes.
 - When the header is absent, normal identity-bearing HTTP APIs fall back to the standard operator default scope set.
+- Control UI WebSocket sessions that pass trusted-proxy auth keep their requested operator scopes even when device pairing is bypassed by trusted-proxy mode.
 - Gateway-auth **plugin HTTP routes** are narrower by default: when `x-openclaw-scopes` is absent, their runtime scope falls back to `operator.write`.
 - Browser-origin HTTP requests still have to pass `gateway.controlUi.allowedOrigins` (or deliberate Host-header fallback mode) even after trusted-proxy auth succeeds.
 

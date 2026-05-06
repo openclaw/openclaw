@@ -314,7 +314,7 @@ export function registerControlUiAndPairingSuite(): void {
     });
   });
 
-  test("clamps trusted-proxy control ui scopes for unpaired device identity", async () => {
+  test("preserves trusted-proxy control ui scopes for unpaired device identity", async () => {
     const { replaceConfigFile } = await import("../config/config.js");
     testState.gatewayAuth = undefined;
     testState.gatewayControlUi = {
@@ -347,14 +347,14 @@ export function registerControlUiAndPairingSuite(): void {
         const { device } = await createSignedDevice({
           token: null,
           role: "operator",
-          scopes: ["operator.admin"],
+          scopes: ["operator.read"],
           clientId: CONTROL_UI_CLIENT.id,
           clientMode: CONTROL_UI_CLIENT.mode,
           nonce: challengeNonce,
         });
         const res = await connectReq(ws, {
           skipDefaultAuth: true,
-          scopes: ["operator.admin"],
+          scopes: ["operator.read"],
           device,
           client: { ...CONTROL_UI_CLIENT },
         });
@@ -364,12 +364,15 @@ export function registerControlUiAndPairingSuite(): void {
               auth?: { scopes?: string[]; deviceToken?: string };
             }
           | undefined;
-        expect(payload?.auth?.scopes).toEqual([]);
+        expect(payload?.auth?.scopes).toEqual(["operator.read"]);
         expect(payload?.auth?.deviceToken).toBeUndefined();
+
+        const status = await rpcReq(ws, "status");
+        expect(status.ok).toBe(true);
 
         const admin = await rpcReq(ws, "set-heartbeats", { enabled: false });
         expect(admin.ok).toBe(false);
-        expect(admin.error?.message ?? "").toContain("missing scope");
+        expect(admin.error?.message ?? "").toContain("missing scope: operator.admin");
       } finally {
         ws.close();
       }
