@@ -116,6 +116,9 @@ describe("docker build cache layout", () => {
     expect(dockerfile).toContain(
       "cp -a /tmp/openclaw-prefix/lib/node_modules/. /app/node_modules/",
     );
+    expect(dockerfile).toContain(
+      "find /tmp/openclaw-prefix/lib/node_modules/openclaw -mindepth 1 -maxdepth 1 ! -name node_modules",
+    );
     expect(dockerfile).toContain("rm -rf /app/node_modules/openclaw");
     expect(dockerfile).toContain("ln -sf /app /app/node_modules/openclaw");
   });

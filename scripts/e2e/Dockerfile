@@ -48,7 +48,7 @@ COPY --from=openclaw_package --chown=appuser:appuser openclaw-current.tgz /tmp/o
 RUN npm install -g --prefix /tmp/openclaw-prefix /tmp/openclaw-current.tgz --no-fund --no-audit \
  && mkdir -p /app/node_modules \
  && cp -a /tmp/openclaw-prefix/lib/node_modules/. /app/node_modules/ \
- && cp -a /tmp/openclaw-prefix/lib/node_modules/openclaw/. /app/ \
+ && find /tmp/openclaw-prefix/lib/node_modules/openclaw -mindepth 1 -maxdepth 1 ! -name node_modules -exec cp -a {} /app/ \; \
  && mkdir -p "$HOME/.local/bin" \
  && ln -sf /app/openclaw.mjs "$HOME/.local/bin/openclaw" \
  && rm -rf /app/node_modules/openclaw \
