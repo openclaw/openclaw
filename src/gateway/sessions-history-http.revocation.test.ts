@@ -3,12 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 let transcriptUpdateHandler:
-  | ((update: {
-      sessionFile?: string;
-      message?: unknown;
-      messageId?: string;
-      forceHistoryRefresh?: boolean;
-    }) => void)
+  | ((update: { sessionFile?: string; message?: unknown; messageId?: string }) => void)
   | undefined;
 let authRevoked = false;
 let gatewayConfig: {
@@ -21,7 +16,6 @@ let gatewayConfig: {
   webchat: { chatHistoryMaxChars: 2000 },
 };
 let authCheckCalls = 0;
-let currentScopes = ["operator.read"];
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => ({
@@ -49,7 +43,7 @@ vi.mock("./http-utils.js", () => ({
     const value = req.headers[name.toLowerCase()];
     return Array.isArray(value) ? value[0] : value;
   },
-  resolveTrustedHttpOperatorScopes: () => currentScopes,
+  resolveTrustedHttpOperatorScopes: () => ["operator.read"],
   authorizeScopedGatewayHttpRequestOrReply: async () => ({
     cfg: { gateway: { webchat: { chatHistoryMaxChars: 2000 } } },
     requestAuth: { trustDeclaredOperatorScopes: true },
@@ -113,41 +107,7 @@ vi.mock("./session-history-state.js", () => ({
         messageSeq: 1,
         messageId,
       }),
-      refreshAsync: async () => ({
-        items: [
-          false
-            ? {
-                role: "user",
-                content: [{ type: "text", text: "The agent cannot read this message." }],
-                __openclaw: {
-                  beforeAgentRunBlocked: {
-                    content: [{ type: "text", text: "secret blocked prompt" }],
-                  },
-                },
-              }
-            : {
-                role: "user",
-                content: [{ type: "text", text: "The agent cannot read this message." }],
-              },
-        ],
-        nextCursor: null,
-        messages: [
-          false
-            ? {
-                role: "user",
-                content: [{ type: "text", text: "The agent cannot read this message." }],
-                __openclaw: {
-                  beforeAgentRunBlocked: {
-                    content: [{ type: "text", text: "secret blocked prompt" }],
-                  },
-                },
-              }
-            : {
-                role: "user",
-                content: [{ type: "text", text: "The agent cannot read this message." }],
-              },
-        ],
-      }),
+      refreshAsync: async () => ({ items: [], nextCursor: null, messages: [] }),
     }),
   },
 }));
@@ -206,7 +166,6 @@ afterEach(() => {
   transcriptUpdateHandler = undefined;
   authRevoked = false;
   authCheckCalls = 0;
-  currentScopes = ["operator.read"];
   gatewayConfig = {
     trustedProxies: ["10.0.0.1"],
     allowRealIpFallback: false,

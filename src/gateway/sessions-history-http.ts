@@ -23,11 +23,7 @@ import {
   getHeader,
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
-import {
-  ADMIN_SCOPE,
-  TALK_SECRETS_SCOPE,
-  authorizeOperatorScopesForMethod,
-} from "./method-scopes.js";
+import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./server-methods/chat.js";
 import {
   buildSessionHistorySnapshot,
@@ -164,9 +160,7 @@ export async function handleSessionHistoryHttpRequest(
           entry.sessionId,
           target.storePath,
           entry.sessionFile,
-          {
-            ...resolveSessionHistoryTailReadOptions(limit),
-          },
+          resolveSessionHistoryTailReadOptions(limit),
         )
       : undefined;
   // Cursor reads still need an arbitrary historical window. The common first
@@ -328,7 +322,7 @@ export async function handleSessionHistoryHttpRequest(
         closeStream();
         return;
       }
-      if (update.message !== undefined && update.forceHistoryRefresh !== true) {
+      if (update.message !== undefined) {
         if (limit === undefined && cursor === undefined) {
           const nextEvent = sseState.appendInlineMessage({
             message: update.message,
