@@ -277,10 +277,8 @@ export async function createModelSelectionState(params: {
       return defaultThinkingLevel;
     }
     const agentThinkingDefault = agentEntry?.thinkingDefault as ThinkLevel | undefined;
-    const configuredThinkingDefault = agentCfg?.thinkingDefault as ThinkLevel | undefined;
-    const explicitThinkingDefault = agentThinkingDefault ?? configuredThinkingDefault;
-    if (explicitThinkingDefault) {
-      defaultThinkingLevel = explicitThinkingDefault;
+    if (agentThinkingDefault) {
+      defaultThinkingLevel = agentThinkingDefault;
       return defaultThinkingLevel;
     }
     const catalogForThinking = await resolveThinkingCatalog();
