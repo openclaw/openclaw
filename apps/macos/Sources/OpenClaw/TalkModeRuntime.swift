@@ -16,6 +16,12 @@ actor TalkModeRuntime {
         case systemVoiceOnly
     }
 
+    enum AssistantWaitResult: Equatable, Sendable {
+        case text(String)
+        case failed(String)
+        case timedOut
+    }
+
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.runtime")
     private let ttsLogger = Logger(subsystem: "ai.openclaw", category: "talk.tts")
     private static let defaultModelIdFallback = "eleven_v3"
@@ -395,33 +401,37 @@ actor TalkModeRuntime {
                 "talk chat.send ok runId=\(response.runId, privacy: .public) " +
                     "session=\(sessionKey, privacy: .public)")
 
-            var assistantText = await self.waitForAssistantEventText(
+            let waitResult = await self.waitForAssistantResult(
                 sessionKey: sessionKey,
                 runId: response.runId,
+                since: startedAt,
                 timeoutSeconds: 45)
-            if assistantText == nil {
-                self.logger.warning("talk assistant event text missing; using history fallback")
-                assistantText = await self.waitForAssistantTextFromHistory(
-                    sessionKey: sessionKey,
-                    since: startedAt,
-                    timeoutSeconds: 12)
-            }
-            guard let assistantText
-            else {
+            switch waitResult {
+            case let .text(assistantText):
+                self.logger.info("talk assistant text len=\(assistantText.count, privacy: .public)")
+                await self.playAssistant(text: assistantText)
+                guard self.isCurrent(gen) else { return }
+                await self.resumeListeningIfNeeded()
+                return
+
+            case let .failed(message):
+                self.logger.warning(
+                    "talk chat run failed runId=\(response.runId, privacy: .public) " +
+                        "message=\(message, privacy: .public)")
+                await self.speakSystemNotice(Self.spokenFailureMessage(message))
+                guard self.isCurrent(gen) else { return }
+                await self.resumeListeningIfNeeded()
+                return
+
+            case .timedOut:
                 self.logger.warning("talk assistant text missing after timeout")
                 await self.startListening()
                 await self.startRecognition()
                 return
             }
-            guard self.isCurrent(gen) else { return }
-
-            self.logger.info("talk assistant text len=\(assistantText.count, privacy: .public)")
-            await self.playAssistant(text: assistantText)
-            guard self.isCurrent(gen) else { return }
-            await self.resumeListeningIfNeeded()
-            return
         } catch {
             self.logger.error("talk chat.send failed: \(error.localizedDescription, privacy: .public)")
+            await self.speakSystemNotice(Self.spokenFailureMessage(error.localizedDescription))
             await self.resumeListeningIfNeeded()
             return
         }
@@ -514,12 +524,126 @@ actor TalkModeRuntime {
     {
         let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
         while Date() < deadline {
+            if Task.isCancelled { return nil }
             if let text = await self.latestAssistantText(sessionKey: sessionKey, since: since) {
                 return text
             }
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            do {
+                try await Task.sleep(nanoseconds: 300_000_000)
+            } catch {
+                return nil
+            }
         }
         return nil
+    }
+
+    private func waitForAssistantResult(
+        sessionKey: String,
+        runId: String,
+        since: Double,
+        timeoutSeconds: Int) async -> AssistantWaitResult
+    {
+        await withTaskGroup(of: AssistantWaitResult.self) { group in
+            group.addTask {
+                var text = await self.waitForAssistantEventText(
+                    sessionKey: sessionKey,
+                    runId: runId,
+                    timeoutSeconds: timeoutSeconds)
+                if text == nil {
+                    text = await self.waitForAssistantTextFromHistory(
+                        sessionKey: sessionKey,
+                        since: since,
+                        timeoutSeconds: 12)
+                }
+                if let text {
+                    return .text(text)
+                }
+                return .timedOut
+            }
+            group.addTask {
+                await Self.waitForChatRunObservation(
+                    runId: runId,
+                    sessionKey: sessionKey,
+                    timeoutSeconds: timeoutSeconds) ?? .timedOut
+            }
+
+            var timedOutResults = 0
+            while let result = await group.next() {
+                switch result {
+                case .text, .failed:
+                    group.cancelAll()
+                    return result
+                case .timedOut:
+                    timedOutResults += 1
+                    if timedOutResults >= 2 {
+                        group.cancelAll()
+                        return .timedOut
+                    }
+                }
+            }
+            return .timedOut
+        }
+    }
+
+    private static func waitForChatRunObservation(
+        runId: String,
+        sessionKey: String,
+        timeoutSeconds: Int) async -> AssistantWaitResult?
+    {
+        let stream = await GatewayConnection.shared.subscribe(bufferingNewest: 200)
+        return await withTaskGroup(of: AssistantWaitResult?.self) { group in
+            group.addTask {
+                for await push in stream {
+                    if Task.isCancelled { return nil }
+                    if let observation = Self.chatRunObservation(
+                        from: push,
+                        runId: runId,
+                        sessionKey: sessionKey)
+                    {
+                        return observation
+                    }
+                }
+                return nil
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds) * 1_000_000_000)
+                return nil
+            }
+            let result = await group.next() ?? nil
+            group.cancelAll()
+            return result
+        }
+    }
+
+    static func chatRunObservation(
+        from push: GatewayPush,
+        runId: String,
+        sessionKey: String) -> AssistantWaitResult?
+    {
+        guard case let .event(evt) = push else { return nil }
+        guard evt.event == "chat", let payload = evt.payload else { return nil }
+        guard let chat = try? GatewayPayloadDecoding.decode(payload, as: OpenClawChatEventPayload.self) else {
+            return nil
+        }
+        guard chat.runId == runId else { return nil }
+        _ = sessionKey
+
+        switch chat.state {
+        case "error":
+            let message = chat.errorMessage?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return .failed(message?.isEmpty == false ? message! : "The chat run failed.")
+        case "final":
+            guard let message = chat.message,
+                  let decoded = try? GatewayPayloadDecoding.decode(message, as: OpenClawChatMessage.self)
+            else {
+                return nil
+            }
+            guard let text = Self.assistantText(from: decoded) else { return nil }
+            return .text(text)
+        default:
+            return nil
+        }
     }
 
     private func latestAssistantText(sessionKey: String, since: Double? = nil) async -> String? {
@@ -537,12 +661,56 @@ actor TalkModeRuntime {
                 return TalkHistoryTimestamp.isAfter(timestamp, sinceSeconds: since)
             }
             guard let assistant else { return nil }
-            let text = assistant.content.compactMap(\.text).joined(separator: "\n")
-            let trimmed = text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
+            return Self.assistantText(from: assistant)
         } catch {
             self.logger.error("talk history fetch failed: \(error.localizedDescription, privacy: .public)")
             return nil
+        }
+    }
+
+    private static func assistantText(from message: OpenClawChatMessage) -> String? {
+        let text = message.content.compactMap(\.text).joined(separator: "\n")
+        let trimmed = text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func spokenFailureMessage(_ raw: String) -> String {
+        let message = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowercased = message.lowercased()
+        if lowercased.contains("authentication token") ||
+            lowercased.contains("auth profile") ||
+            lowercased.contains("401")
+        {
+            return "I heard you, but my chat login is stale. Refresh OpenClaw auth or switch me to a working API key model."
+        }
+        if lowercased.contains("credit") ||
+            lowercased.contains("quota") ||
+            lowercased.contains("billing") ||
+            lowercased.contains("payment")
+        {
+            return "I heard you, but the chat model needs available API credits before I can answer."
+        }
+        if message.isEmpty {
+            return "I heard you, but I could not get a reply from the chat model."
+        }
+        return "I heard you, but I could not get a reply. \(message)"
+    }
+
+    private func speakSystemNotice(_ text: String) async {
+        let input = TalkPlaybackInput(
+            generation: self.lifecycleGeneration,
+            provider: Self.systemTalkProvider,
+            cleanedText: text,
+            directive: nil,
+            apiKey: nil,
+            voiceId: nil,
+            voicePreset: nil,
+            language: nil,
+            synthTimeoutSeconds: 12)
+        do {
+            try await self.playSystemVoice(input: input)
+        } catch {
+            self.ttsLogger.error("talk system notice failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
