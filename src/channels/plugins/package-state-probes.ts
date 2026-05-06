@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -31,8 +33,49 @@ export type ChannelPackageStateMetadataKey = "configuredState" | "persistedAuthS
 const log = createSubsystemLogger("channels");
 const sourcePackageStateLoaderCache: PluginModuleLoaderCache = new Map();
 
+const SOURCE_EXT_RE = /\.(c|m)?tsx?$/iu;
+const SOURCE_EXT_TO_BUILT: Readonly<Record<string, string>> = {
+  ".ts": ".js",
+  ".mts": ".mjs",
+  ".cts": ".cjs",
+  ".tsx": ".js",
+};
+
 function isSourceModulePath(modulePath: string): boolean {
-  return /\.(?:c|m)?tsx?$/iu.test(modulePath);
+  return SOURCE_EXT_RE.test(modulePath);
+}
+
+/**
+ * Given a resolved module path that points to a source TypeScript file under an
+ * `extensions/` directory, returns the equivalent built `.js` path under `dist/extensions/`
+ * if it exists on disk. Falls through to the original path if no built artifact is found.
+ *
+ * This prevents bundled-channel package-state probes from loading source `.ts` files that
+ * contain `openclaw/plugin-sdk/*` self-imports, which fail package resolution in a dev checkout
+ * because the source files require a built dist SDK, not the raw source tree.
+ */
+function resolveBuiltArtifactPath(modulePath: string): string {
+  const ext = path.extname(modulePath).toLowerCase();
+  const builtExt = SOURCE_EXT_TO_BUILT[ext];
+  if (!builtExt) {
+    return modulePath;
+  }
+  // Map: .../extensions/<chan>/auth-presence.ts → .../dist/extensions/<chan>/auth-presence.js
+  const sep = path.sep === "\\" ? /[\\/]extensions[\\/]/u : /\/extensions\//u;
+  const match = modulePath.match(sep);
+  if (!match || match.index === undefined) {
+    return modulePath;
+  }
+  const distPath =
+    modulePath.slice(0, match.index) +
+    path.sep +
+    "dist" +
+    path.sep +
+    "extensions" +
+    path.sep +
+    modulePath.slice(match.index + match[0].length, modulePath.length - ext.length) +
+    builtExt;
+  return fs.existsSync(distPath) ? distPath : modulePath;
 }
 
 function loadChannelPackageStateModule(params: { modulePath: string; rootDir: string }): unknown {
@@ -119,8 +162,11 @@ function resolveChannelPackageStateChecker(params: {
   }
 
   try {
+    const resolvedPath = resolveBuiltArtifactPath(
+      resolveExistingPluginModulePath(params.entry.rootDir, metadata.specifier!),
+    );
     const moduleExport = loadChannelPackageStateModule({
-      modulePath: resolveExistingPluginModulePath(params.entry.rootDir, metadata.specifier!),
+      modulePath: resolvedPath,
       rootDir: params.entry.rootDir,
     }) as Record<string, unknown>;
     const checker = moduleExport[metadata.exportName!] as ChannelPackageStateChecker | undefined;
