@@ -187,6 +187,9 @@ export function formatPluginInstallWithHookFallbackError(
   ) {
     return formattedPluginError;
   }
+  if (isMissingHookPackManifestError(hookError)) {
+    return formattedPluginError;
+  }
   return `${formattedPluginError}\nAlso not a valid hook pack: ${formattedHookError}`;
 }
 
@@ -206,6 +209,10 @@ function formatPluginInstallAttemptError(error: string): string {
 function isMissingGitForNpmDependencyError(error: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(error);
   return /\bspawn\s+git\b/u.test(normalized) && /\benoent\b/u.test(normalized);
+}
+
+function isMissingHookPackManifestError(error: string): boolean {
+  return error.trim() === "package.json missing openclaw.hooks";
 }
 
 export function logHookPackRestartHint(runtime: RuntimeEnv = defaultRuntime) {
