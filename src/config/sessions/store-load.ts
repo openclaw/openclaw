@@ -88,15 +88,15 @@ function collectSessionStoreRecoveryCandidates(storePath: string): {
         const stat = fs.statSync(tmpPath);
         if (stat.size <= 0) continue;
         const ageMs = now - stat.mtimeMs;
-        if (ageMs < SESSION_STORE_RECOVERY_STALE_MS) {
+        const isFresh = ageMs < SESSION_STORE_RECOVERY_STALE_MS;
+        if (isFresh) {
           freshTmpCount++;
-          continue; // Skip fresh tmp — likely an in-progress write
         }
         rawTmpCandidates.push({
           path: tmpPath,
           mtimeMs: stat.mtimeMs,
           source: "tmp",
-          sourceRank: 2,
+          sourceRank: isFresh ? 1 : 2,
         });
       } catch {
         // stat failed — skip

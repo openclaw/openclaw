@@ -179,11 +179,11 @@ describe("session store recovery", () => {
     });
   });
 
-  it("fresh tmp is skipped, not used as candidate", async () => {
+  it("fresh tmp used as fallback when no stale or bak exists", async () => {
     await withTempDir({ prefix: "pr2-" }, async (dir) => {
       const sp = path.join(dir, "sessions.json");
       await fs.writeFile(sp, "{bad", "utf-8");
-      // Fresh tmp — should be skipped entirely
+      // Fresh tmp — lowest sourceRank but still available as fallback
       const fresh = `${sp}.fresh.tmp`;
       await fs.writeFile(
         fresh,
@@ -194,21 +194,24 @@ describe("session store recovery", () => {
         "utf-8",
       );
       const store = loadSessionStore(sp, { skipCache: true });
-      // No recovery — fresh tmp is skipped, no .bak or stale tmp
-      expect(Object.keys(store)).toHaveLength(0);
+      // Recovery succeeds from fresh tmp when no .bak or stale tmp exists
+      expect(Object.keys(store)).toHaveLength(2);
+      expect(store.f1?.sessionId).toBe("a");
+      expect(store.f2?.sessionId).toBe("b");
     });
   });
 
-  it("fresh tmp skipped; stale tmp still used", async () => {
+  it("stale tmp preferred over fresh tmp (sourceRank 2 > 1)", async () => {
     await withTempDir({ prefix: "pr2-" }, async (dir) => {
       const sp = path.join(dir, "sessions.json");
       await fs.writeFile(sp, "{bad", "utf-8");
-      // Fresh tmp — skipped
+      // Fresh tmp — sourceRank=1 (lowest priority, still available as fallback)
       const fresh = `${sp}.fresh.tmp`;
       await fs.writeFile(fresh, makeStore([["f1", "x"]]), "utf-8");
-      // Stale tmp — used
+      // Stale tmp — sourceRank=2 (higher priority, wins)
       await makeStaleTmp(sp, "stale", [["s1", "a"]], 10000);
       const store = loadSessionStore(sp, { skipCache: true });
+      // Stale tmp wins because sourceRank=2 > fresh sourceRank=1
       expect(store.s1?.sessionId).toBe("a");
     });
   });
