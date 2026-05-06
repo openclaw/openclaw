@@ -19,6 +19,7 @@ Related docs:
 
 ```bash
 openclaw channels list
+openclaw channels list --all
 openclaw channels status
 openclaw channels capabilities
 openclaw channels capabilities --channel discord --target channel:123
@@ -26,6 +27,8 @@ openclaw channels capabilities --channel discord --target channel:<voice-channel
 openclaw channels resolve --channel slack "#general" "@jane"
 openclaw channels logs --channel all
 ```
+
+`channels list` shows chat channels only: configured accounts by default, with `installed`, `configured`, and `enabled` status tags per account. Pass `--all` to also surface bundled channels that have no configured account yet and installable catalog channels that are not yet on disk. Auth providers (OAuth + API keys) are no longer printed here; use `openclaw models auth list` for model provider auth profiles.
 
 ## Status / capabilities / resolve / logs
 
