@@ -225,6 +225,7 @@ const UNKNOWN_STATUS_DETAIL =
   "Task status is locale-dependent and no numeric Last Run Result was available.";
 const SCHEDULED_TASK_FALLBACK_POLL_MS = 250;
 const SCHEDULED_TASK_FALLBACK_TIMEOUT_MS = 15_000;
+const SCHEDULED_TASK_EARLY_EXIT_FALLBACK_TIMEOUT_MS = 2_000;
 
 export function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
   status: GatewayServiceRuntime["status"];
@@ -673,7 +674,7 @@ async function shouldFallbackScheduledTaskLaunch(params: {
   scriptPath: string;
 }): Promise<boolean> {
   const readLaunchObservation = async (): Promise<{
-    state: "running" | "not-yet-run" | "other";
+    state: "running" | "not-yet-run" | "stopped-success" | "other";
     signature: string;
   }> => {
     const runtime = await readScheduledTaskRuntime(params.env).catch(() => null);
@@ -689,6 +690,14 @@ async function shouldFallbackScheduledTaskLaunch(params: {
     if (normalizedResult && NOT_YET_RUN_RESULT_CODES.has(normalizedResult)) {
       return {
         state: "not-yet-run",
+        signature: [runtime?.state, runtime?.lastRunTime, runtime?.lastRunResult, runtime?.detail]
+          .filter(Boolean)
+          .join("|"),
+      };
+    }
+    if (normalizedResult === "0x0") {
+      return {
+        state: "stopped-success",
         signature: [runtime?.state, runtime?.lastRunTime, runtime?.lastRunResult, runtime?.detail]
           .filter(Boolean)
           .join("|"),
@@ -781,6 +790,27 @@ async function shouldFallbackScheduledTaskLaunch(params: {
   };
 
   const initial = await readLaunchObservation();
+  if (initial.state === "stopped-success") {
+    const deadline = Date.now() + SCHEDULED_TASK_EARLY_EXIT_FALLBACK_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      if (await hasLaunchEvidence()) {
+        return false;
+      }
+      await sleep(SCHEDULED_TASK_FALLBACK_POLL_MS);
+      if (Date.now() >= deadline) {
+        break;
+      }
+      const current = await readLaunchObservation();
+      if (current.state === "running" || current.state === "not-yet-run") {
+        return false;
+      }
+      if (current.state !== "stopped-success") {
+        return false;
+      }
+    }
+    return !(await hasLaunchEvidence());
+  }
+
   if (initial.state !== "not-yet-run") {
     return false;
   }

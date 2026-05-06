@@ -165,6 +165,12 @@ function notYetRunTaskQueryOutput() {
   ].join("\r\n");
 }
 
+function cleanExitTaskQueryOutput() {
+  return ["Status: Ready", "Last Run Time: 5/2/2026 2:41:39 PM", "Last Run Result: 0", ""].join(
+    "\r\n",
+  );
+}
+
 beforeEach(() => {
   resetSchtasksBaseMocks();
   findVerifiedGatewayListenerPidsOnPortSync.mockReset();
@@ -261,6 +267,22 @@ describe("Windows startup fallback", () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       fastForwardTaskStartWait();
       addAcceptedRunNeverStartsResponses();
+
+      await installGatewayScheduledTask(env);
+
+      expectStartupFallbackSpawn();
+    });
+  });
+
+  it("launches through the Startup-style launcher when schtasks /Run exits cleanly without a listener", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      fastForwardTaskStartWait();
+      addStartupFallbackMissingResponses([
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: cleanExitTaskQueryOutput(), stderr: "" },
+      ]);
 
       await installGatewayScheduledTask(env);
 
