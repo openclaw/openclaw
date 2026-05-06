@@ -1,8 +1,9 @@
 ## Summary
 
 - Problem: `openclaw config set` dry-run validation could reject new bundled channel config keys when generated bundled-channel metadata lagged behind the plugin-owned schema.
+- Problem: the scheduled live/E2E workflow also failed before dispatching its reusable workflow because the caller did not grant the callee's `prepare_docker_e2e_image` job `actions: read`.
 - Why it matters: bundled plugins own their channel schemas, and config writes should validate against the live plugin contract instead of a stale core/generated copy.
-- What changed: config-set dry runs now use plugin-aware raw validation, and plugin channel validation no longer seeds schemas from `bundled-channel-config-metadata.generated.ts` before reading the live manifest registry.
+- What changed: config-set dry runs now use plugin-aware raw validation, plugin channel validation no longer seeds schemas from `bundled-channel-config-metadata.generated.ts` before reading the live manifest registry, and scheduled live/E2E checks now pass `actions: read` to the reusable workflow call.
 - What did NOT change (scope boundary): this PR does not move the remaining maintained bundled schema exports out of `openclaw/plugin-sdk/bundled-channel-config-schema`; that larger schema-ownership cleanup can happen separately.
 
 ## Change Type (select all)
@@ -12,7 +13,7 @@
 - [ ] Refactor required for the fix
 - [ ] Docs
 - [ ] Security hardening
-- [ ] Chore/infra
+- [x] Chore/infra
 
 ## Scope (select all touched areas)
 
@@ -23,7 +24,7 @@
 - [x] Integrations
 - [x] API / contracts
 - [x] UI / DX
-- [ ] CI/CD / infra
+- [x] CI/CD / infra
 
 ## Linked Issue/PR
 
@@ -84,12 +85,12 @@ openclaw config set -> plugin-aware raw validation -> live plugin channel schema
 
 ## Security Impact (required)
 
-- New permissions/capabilities? (`Yes/No`) No
+- New permissions/capabilities? (`Yes/No`) Yes, the scheduled live/E2E reusable workflow caller now grants `actions: read`, matching the callee job's existing least-privilege requirement.
 - Secrets/tokens handling changed? (`Yes/No`) No
 - New/changed network calls? (`Yes/No`) No
 - Command/tool execution surface changed? (`Yes/No`) No
 - Data access scope changed? (`Yes/No`) No
-- If any `Yes`, explain risk + mitigation: N/A
+- If any `Yes`, explain risk + mitigation: `actions: read` only permits reading workflow/action metadata needed by the reusable workflow; the caller already had `contents: read`, `packages: write`, and secret pass-through for the live/E2E lanes.
 
 ## Repro + Verification
 
@@ -126,9 +127,9 @@ openclaw config set -> plugin-aware raw validation -> live plugin channel schema
 
 What you personally verified (not just CI), and how:
 
-- Verified scenarios: reviewed the config-set dry-run path and plugin channel validation schema collection path; ran `git diff --check`.
-- Edge cases checked: generated metadata remains available for existing unsupported SecretRef policy guidance, but is no longer used as the plugin validation fallback.
-- What you did **not** verify: targeted Vitest/pnpm checks, because Node/pnpm tooling is absent from this environment.
+- Verified scenarios: reviewed the config-set dry-run path and plugin channel validation schema collection path; ran `git diff --check`; parsed `.github/workflows/openclaw-scheduled-live-checks.yml` and confirmed both top-level and reusable-call job permissions include `actions: read`.
+- Edge cases checked: generated metadata remains available for existing unsupported SecretRef policy guidance, but is no longer used as the plugin validation fallback; scheduled live/E2E workflow permissions remain least-privilege and only add the callee-required `actions: read`.
+- What you did **not** verify: `scripts/check-workflows.mjs`, because this shell does not have `actionlint` or Go available for its fallback.
 
 ## Review Conversations
 
