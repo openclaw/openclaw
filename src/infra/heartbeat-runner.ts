@@ -1147,17 +1147,29 @@ function selectSystemEventsConsumedByHeartbeat(params: {
   if (!preflight.shouldInspectPendingEvents || preflight.pendingEventEntries.length === 0) {
     return [];
   }
+  // `audience: "internal"` events route exclusively through the
+  // wrap-on-drain path in session-system-events.ts. The heartbeat run
+  // must NOT consume them — doing so would silently drop the event from
+  // the queue without the INTERNAL_RUNTIME_CONTEXT wrap ever firing,
+  // losing exactly the hidden agent-awareness this audience is meant to
+  // preserve. Leave them queued for the next normal drain to pick up via
+  // the wrapped path. Counterpart to the cron/exec selector filter in
+  // resolveHeartbeatRunPrompt.
+  const isUserFacingEvent = (event: SystemEvent): boolean => event.audience !== "internal";
   if (params.hasExecCompletion) {
-    return preflight.pendingEventEntries.filter((event) => isExecCompletionEvent(event.text));
+    return preflight.pendingEventEntries.filter(
+      (event) => isUserFacingEvent(event) && isExecCompletionEvent(event.text),
+    );
   }
   if (params.hasCronEvents) {
     return preflight.pendingEventEntries.filter(
       (event) =>
+        isUserFacingEvent(event) &&
         (preflight.isCronWake || event.contextKey?.startsWith("cron:")) &&
         isCronSystemEvent(event.text),
     );
   }
-  return preflight.pendingEventEntries;
+  return preflight.pendingEventEntries.filter(isUserFacingEvent);
 }
 
 export async function runHeartbeatOnce(opts: {

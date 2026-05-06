@@ -305,6 +305,52 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(calledCtx?.Body).not.toContain("Cron run completed: relayed for awareness only");
   });
 
+  it("leaves audience: 'internal' events queued after a heartbeat run so the wrapped drain path can consume them", async () => {
+    // Counterpart to the cron-event-prompt skip above. Excluding internal
+    // events from the relay selectors is only half the contract — they must
+    // also be excluded from selectSystemEventsConsumedByHeartbeat so the
+    // heartbeat doesn't silently drain them from the queue. Otherwise the
+    // event is consumed without ever reaching drainFormattedSystemEvents
+    // and the INTERNAL_RUNTIME_CONTEXT wrap never fires — exactly the
+    // hidden agent-awareness this audience field is meant to preserve.
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "155462274" });
+      const getReplySpy = vi.fn().mockResolvedValue({ text: "Heartbeat check-in" });
+      const { cfg, sessionKey } = await createConfig({ tmpDir, storePath });
+      const { peekSystemEventEntries } = await import("./system-events.js");
+
+      enqueueSystemEvent("Cron run completed: relayed for awareness only", {
+        sessionKey,
+        contextKey: "cron:qmd-awareness",
+        trusted: false,
+        audience: "internal",
+      });
+
+      // Pre-condition: the internal event is in the queue.
+      expect(peekSystemEventEntries(sessionKey)).toHaveLength(1);
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        reason: "interval",
+        deps: {
+          getReplyFromConfig: getReplySpy,
+          telegram: sendTelegram,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+
+      // Post-condition: the heartbeat run did not consume the internal
+      // event. It stays queued for the next normal drain, which routes it
+      // through the wrap-on-drain integration in session-system-events.ts.
+      const remaining = peekSystemEventEntries(sessionKey);
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0].audience).toBe("internal");
+      expect(remaining[0].text).toBe("Cron run completed: relayed for awareness only");
+    });
+  });
+
   it("drains inspected cron events after a successful run so later heartbeats do not replay them", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
       const sendTelegram = vi.fn().mockResolvedValue({
