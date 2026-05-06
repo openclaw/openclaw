@@ -6,9 +6,11 @@ import {
   ensureAuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  discoverCopilotModels: vi.fn<() => Promise<ModelDefinitionConfig[]>>(async () => []),
   githubCopilotLoginCommand: vi.fn(),
   resolveCopilotApiToken: vi.fn(),
 }));
@@ -18,6 +20,16 @@ vi.mock("./register.runtime.js", () => ({
   resolveCopilotApiToken: mocks.resolveCopilotApiToken,
   githubCopilotLoginCommand: mocks.githubCopilotLoginCommand,
   fetchCopilotUsage: vi.fn(),
+}));
+
+vi.mock("./discovery.js", () => ({
+  COPILOT_IDE_HEADERS: {
+    "User-Agent": "GitHubCopilotChat/0.35.0",
+    "Editor-Version": "vscode/1.107.0",
+    "Editor-Plugin-Version": "copilot-chat/0.35.0",
+    "Copilot-Integration-Id": "vscode-chat",
+  },
+  discoverCopilotModels: mocks.discoverCopilotModels,
 }));
 
 import plugin from "./index.js";
@@ -136,9 +148,93 @@ describe("github-copilot plugin", () => {
     expect(result).toEqual({
       provider: {
         baseUrl: "https://api.githubcopilot.live",
+        headers: {
+          "User-Agent": "GitHubCopilotChat/0.35.0",
+          "Editor-Version": "vscode/1.107.0",
+          "Editor-Plugin-Version": "copilot-chat/0.35.0",
+          "Copilot-Integration-Id": "vscode-chat",
+        },
         models: [],
       },
     });
+  });
+
+  it("discovers Copilot models with configured base URL and headers", async () => {
+    mocks.resolveCopilotApiToken.mockResolvedValueOnce({
+      token: "copilot_api_token",
+      baseUrl: "https://api.githubcopilot.live",
+    });
+    mocks.discoverCopilotModels.mockResolvedValueOnce([
+      {
+        id: "gpt-new",
+        name: "gpt-new",
+        api: "openai-responses",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 8192,
+      },
+    ]);
+    const provider = registerProviderWithPluginConfig({});
+
+    const result = await provider.catalog.run({
+      config: {
+        models: {
+          providers: {
+            "github-copilot": {
+              baseUrl: "https://copilot-proxy.example.com",
+              headers: {
+                "X-Proxy-Auth": "proxy-token",
+              },
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/agent",
+      env: { GH_TOKEN: "gh_test_token" },
+      resolveProviderApiKey: () => ({ apiKey: "gh_test_token" }),
+    } as never);
+
+    expect(mocks.discoverCopilotModels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: "https://copilot-proxy.example.com",
+        copilotToken: "copilot_api_token",
+        extraHeaders: {
+          "X-Proxy-Auth": "proxy-token",
+        },
+      }),
+    );
+    expect(result?.provider.models).toEqual([
+      expect.objectContaining({
+        id: "gpt-new",
+      }),
+    ]);
+  });
+
+  it("skips Copilot model discovery when models are explicitly configured", async () => {
+    mocks.resolveCopilotApiToken.mockResolvedValueOnce({
+      token: "copilot_api_token",
+      baseUrl: "https://api.githubcopilot.live",
+    });
+    const provider = registerProviderWithPluginConfig({});
+
+    await provider.catalog.run({
+      config: {
+        models: {
+          providers: {
+            "github-copilot": {
+              models: [{ id: "custom-model", name: "Custom" }],
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/agent",
+      env: { GH_TOKEN: "gh_test_token" },
+      resolveProviderApiKey: () => ({ apiKey: "gh_test_token" }),
+    } as never);
+
+    expect(mocks.discoverCopilotModels).not.toHaveBeenCalled();
   });
 
   it("offers to reuse an existing token profile during interactive onboarding", async () => {

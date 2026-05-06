@@ -7,6 +7,7 @@ import {
 } from "../testing.js";
 
 const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
+const discoverCopilotModelsMock = vi.hoisted(() => vi.fn(async () => []));
 const buildVllmProviderMock = vi.hoisted(() => vi.fn());
 const buildSglangProviderMock = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStoreMock = vi.hoisted(() => vi.fn());
@@ -45,6 +46,7 @@ type DiscoveryContractOptions = {
   loadMinimax?: ProviderDiscoveryContractPluginLoader;
   loadModelStudio?: ProviderDiscoveryContractPluginLoader;
   loadCloudflareAiGateway?: ProviderDiscoveryContractPluginLoader;
+  githubCopilotDiscoveryModuleId?: string;
   githubCopilotRegisterRuntimeModuleId?: string;
   vllmApiModuleId?: string;
   sglangApiModuleId?: string;
@@ -162,6 +164,17 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
         };
       });
     }
+    if (options.githubCopilotDiscoveryModuleId) {
+      vi.doMock(options.githubCopilotDiscoveryModuleId, () => ({
+        COPILOT_IDE_HEADERS: {
+          "User-Agent": "GitHubCopilotChat/0.35.0",
+          "Editor-Version": "vscode/1.107.0",
+          "Editor-Plugin-Version": "copilot-chat/0.35.0",
+          "Copilot-Integration-Id": "vscode-chat",
+        },
+        discoverCopilotModels: discoverCopilotModelsMock,
+      }));
+    }
     if (options.vllmApiModuleId) {
       vi.doMock(options.vllmApiModuleId, async () => {
         return {
@@ -232,6 +245,7 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
   afterEach(() => {
     vi.restoreAllMocks();
     resolveCopilotApiTokenMock.mockReset();
+    discoverCopilotModelsMock.mockReset();
     buildVllmProviderMock.mockReset();
     buildSglangProviderMock.mockReset();
     ensureAuthProfileStoreMock.mockReset();
@@ -241,6 +255,7 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
 }
 
 export function describeGithubCopilotProviderDiscoveryContract(params: {
+  discoveryModuleId: string;
   load: ProviderDiscoveryContractPluginLoader;
   registerRuntimeModuleId: string;
 }) {
@@ -250,6 +265,7 @@ export function describeGithubCopilotProviderDiscoveryContract(params: {
     installDiscoveryHooks(state, {
       providerIds: ["github-copilot"],
       loadGithubCopilot: params.load,
+      githubCopilotDiscoveryModuleId: params.discoveryModuleId,
       githubCopilotRegisterRuntimeModuleId: params.registerRuntimeModuleId,
     });
 
@@ -269,6 +285,12 @@ export function describeGithubCopilotProviderDiscoveryContract(params: {
       ).resolves.toEqual({
         provider: {
           baseUrl: "https://api.individual.githubcopilot.com",
+          headers: {
+            "User-Agent": "GitHubCopilotChat/0.35.0",
+            "Editor-Version": "vscode/1.107.0",
+            "Editor-Plugin-Version": "copilot-chat/0.35.0",
+            "Copilot-Integration-Id": "vscode-chat",
+          },
           models: [],
         },
       });
@@ -292,6 +314,12 @@ export function describeGithubCopilotProviderDiscoveryContract(params: {
       ).resolves.toEqual({
         provider: {
           baseUrl: "https://copilot-proxy.example.com",
+          headers: {
+            "User-Agent": "GitHubCopilotChat/0.35.0",
+            "Editor-Version": "vscode/1.107.0",
+            "Editor-Plugin-Version": "copilot-chat/0.35.0",
+            "Copilot-Integration-Id": "vscode-chat",
+          },
           models: [],
         },
       });

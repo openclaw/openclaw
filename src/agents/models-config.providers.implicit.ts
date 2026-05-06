@@ -34,6 +34,24 @@ const PROVIDER_IMPLICIT_MERGERS: Partial<
   >
 > = {
   ollama: ({ implicit }) => implicit,
+  "github-copilot": ({ existing, implicit }) => {
+    const headers =
+      implicit.headers || existing?.headers
+        ? {
+            ...implicit.headers,
+            ...existing?.headers,
+          }
+        : undefined;
+    return {
+      ...implicit,
+      ...existing,
+      ...(headers ? { headers } : {}),
+      models:
+        Array.isArray(existing?.models) && existing.models.length > 0
+          ? existing.models
+          : implicit.models,
+    };
+  },
 };
 
 const PLUGIN_DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
