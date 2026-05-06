@@ -156,6 +156,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "update-channel-switch",
       "upgrade-survivor",
       "published-upgrade-survivor",
+      "update-restart-auth",
     ]);
     expect(packageUpdateCore.lanes).toEqual(
       expect.arrayContaining([
@@ -186,6 +187,11 @@ describe("scripts/lib/docker-e2e-plan", () => {
         }),
         expect.objectContaining({
           name: "published-upgrade-survivor",
+          stateScenario: "upgrade-survivor",
+        }),
+        expect.objectContaining({
+          name: "update-restart-auth",
+          command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-restart-auth",
           stateScenario: "upgrade-survivor",
         }),
       ]),

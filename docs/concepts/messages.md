@@ -206,6 +206,7 @@ parent stays quiet until the child completion event delivers the real reply.
 
 ## Related
 
+- [Message lifecycle refactor](/concepts/message-lifecycle-refactor) - target durable send and receive design
 - [Streaming](/concepts/streaming) — real-time message delivery
 - [Retry](/concepts/retry) — message delivery retry behavior
 - [Queue](/concepts/queue) — message processing queue

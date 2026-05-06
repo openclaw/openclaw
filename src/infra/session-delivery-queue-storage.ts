@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ChatType } from "../channels/chat-type.js";
 import { resolveStateDir } from "../config/paths.js";
+import { replaceFileAtomic } from "./replace-file.js";
 import { generateSecureUuid } from "./secure-random.js";
 
 const QUEUE_DIRNAME = "session-delivery-queue";
@@ -86,12 +87,12 @@ async function unlinkStaleTmpBestEffort(filePath: string, now: number): Promise<
 }
 
 async function writeQueueEntry(filePath: string, entry: QueuedSessionDelivery): Promise<void> {
-  const tmp = `${filePath}.${process.pid}.tmp`;
-  await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
-    encoding: "utf-8",
+  await replaceFileAtomic({
+    filePath,
+    content: JSON.stringify(entry, null, 2),
     mode: 0o600,
+    tempPrefix: ".session-delivery-queue",
   });
-  await fs.promises.rename(tmp, filePath);
 }
 
 async function readQueueEntry(filePath: string): Promise<QueuedSessionDelivery> {

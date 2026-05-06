@@ -588,6 +588,13 @@ API key auth, and dynamic model resolution.
         api.registerRealtimeVoiceProvider({
           id: "acme-ai",
           label: "Acme Realtime Voice",
+          capabilities: {
+            transports: ["gateway-relay"],
+            inputAudioFormats: [{ encoding: "pcm16", sampleRateHz: 24000, channels: 1 }],
+            outputAudioFormats: [{ encoding: "pcm16", sampleRateHz: 24000, channels: 1 }],
+            supportsBargeIn: true,
+            supportsToolCalls: true,
+          },
           isConfigured: ({ providerConfig }) => Boolean(providerConfig.apiKey),
           createBridge: (req) => ({
             // Set this only if the provider accepts multiple tool responses for
@@ -606,9 +613,11 @@ API key auth, and dynamic model resolution.
         });
         ```
 
-        Implement `handleBargeIn` when a transport can detect that a human is
-        interrupting assistant playback and the provider supports truncating or
-        clearing the active audio response.
+        Declare `capabilities` so `talk.catalog` can expose valid modes,
+        transports, audio formats, and feature flags to browser and native Talk
+        clients. Implement `handleBargeIn` when a transport can detect that a
+        human is interrupting assistant playback and the provider supports
+        truncating or clearing the active audio response.
       </Tab>
       <Tab title="Media understanding">
         ```typescript

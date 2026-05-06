@@ -3,12 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "typebox";
-import { openBoundaryFile, type BoundaryFileOpenResult } from "../infra/boundary-file-read.js";
-import {
-  mkdirPathWithinRoot,
-  removePathWithinRoot,
-  writeFileWithinRoot,
-} from "../infra/fs-safe.js";
+import { openRootFile, type RootFileOpenResult } from "../infra/boundary-file-read.js";
+import { root as fsRoot } from "../infra/fs-safe.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
 import { toRelativeSandboxPath, resolvePathFromInput } from "./path-policy.js";
@@ -244,12 +240,13 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
     };
   }
   const workspaceOnly = options.workspaceOnly !== false;
+  const rootPromise = workspaceOnly ? fsRoot(options.cwd) : undefined;
   return {
     readFile: async (filePath) => {
       if (!workspaceOnly) {
         return await fs.readFile(filePath, "utf8");
       }
-      const opened = await openBoundaryFile({
+      const opened = await openRootFile({
         absolutePath: filePath,
         rootPath: options.cwd,
         boundaryLabel: "workspace root",
@@ -267,12 +264,7 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
         return;
       }
       const relative = toRelativeSandboxPath(options.cwd, filePath);
-      await writeFileWithinRoot({
-        rootDir: options.cwd,
-        relativePath: relative,
-        data: content,
-        encoding: "utf8",
-      });
+      await (await rootPromise)?.write(relative, content, { encoding: "utf8" });
     },
     remove: async (filePath) => {
       if (!workspaceOnly) {
@@ -280,10 +272,7 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
         return;
       }
       const relative = toRelativeSandboxPath(options.cwd, filePath);
-      await removePathWithinRoot({
-        rootDir: options.cwd,
-        relativePath: relative,
-      });
+      await (await rootPromise)?.remove(relative);
     },
     mkdirp: async (dir) => {
       if (!workspaceOnly) {
@@ -291,11 +280,15 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
         return;
       }
       const relative = toRelativeSandboxPath(options.cwd, dir, { allowRoot: true });
-      await mkdirPathWithinRoot({
-        rootDir: options.cwd,
-        relativePath: relative,
-        allowRoot: true,
-      });
+      const root = await rootPromise;
+      if (!root) {
+        return;
+      }
+      if (relative === "" || relative === ".") {
+        await root.ensureRoot();
+        return;
+      }
+      await root.mkdir(relative);
     },
   };
 }
@@ -352,9 +345,9 @@ async function resolvePatchPath(
 }
 
 function assertBoundaryRead(
-  opened: BoundaryFileOpenResult,
+  opened: RootFileOpenResult,
   targetPath: string,
-): asserts opened is Extract<BoundaryFileOpenResult, { ok: true }> {
+): asserts opened is Extract<RootFileOpenResult, { ok: true }> {
   if (opened.ok) {
     return;
   }
