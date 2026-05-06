@@ -663,7 +663,7 @@ See [Session Pruning](/concepts/session-pruning) for behavior details.
     defaults: {
       blockStreamingDefault: "off", // on | off
       blockStreamingBreak: "text_end", // text_end | message_end
-      blockStreamingChunk: { minChars: 800, maxChars: 1200 },
+      blockStreamingChunk: { minChars: 800, maxChars: 1200, breakPreference: "paragraph" }, // paragraph | newline | sentence
       blockStreamingCoalesce: { idleMs: 1000 },
       humanDelay: { mode: "natural" }, // off | natural | custom (use minMs/maxMs)
     },
