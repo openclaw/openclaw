@@ -148,6 +148,10 @@
             "enum": ["user", "auto_review", "guardian_subagent"]
           },
           "serviceTier": { "type": ["string", "null"], "enum": ["fast", "flex", null] },
+          "personality": {
+            "type": "string",
+            "enum": ["none", "friendly", "pragmatic"]
+          },
           "defaultWorkspaceDir": {
             "type": "string"
           }
@@ -298,6 +302,11 @@
     "appServer.serviceTier": {
       "label": "Service Tier",
       "help": "Optional Codex app-server service tier. Use fast, flex, or null.",
+      "advanced": true
+    },
+    "appServer.personality": {
+      "label": "Personality",
+      "help": "Optional native Codex app-server personality override sent to thread start, resume, and turns.",
       "advanced": true
     },
     "appServer.defaultWorkspaceDir": {

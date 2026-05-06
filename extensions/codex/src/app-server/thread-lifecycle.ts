@@ -220,6 +220,7 @@ export function buildThreadStartParams(
     serviceName: "OpenClaw",
     ...(options.config ? { config: options.config } : {}),
     developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
+    ...(options.appServer.personality ? { personality: options.appServer.personality } : {}),
     dynamicTools: options.dynamicTools,
     experimentalRawEvents: true,
     persistExtendedHistory: true,
@@ -253,6 +254,7 @@ export function buildThreadResumeParams(
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
     ...(options.config ? { config: options.config } : {}),
     developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
+    ...(options.appServer.personality ? { personality: options.appServer.personality } : {}),
     persistExtendedHistory: true,
   };
 }
@@ -275,6 +277,7 @@ export function buildTurnStartParams(
     sandboxPolicy: codexSandboxPolicyForTurn(options.appServer.sandbox, options.cwd),
     model: params.modelId,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+    ...(options.appServer.personality ? { personality: options.appServer.personality } : {}),
     effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
     collaborationMode: buildTurnCollaborationMode(params),
   };

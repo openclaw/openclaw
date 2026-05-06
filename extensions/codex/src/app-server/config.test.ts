@@ -23,6 +23,7 @@ describe("Codex app-server config", () => {
           approvalsReviewer: "guardian_subagent",
           serviceTier: "flex",
           turnCompletionIdleTimeoutMs: 120_000,
+          personality: "friendly",
         },
       },
       env: {
@@ -38,6 +39,7 @@ describe("Codex app-server config", () => {
         approvalsReviewer: "guardian_subagent",
         serviceTier: "flex",
         turnCompletionIdleTimeoutMs: 120_000,
+        personality: "friendly",
         start: expect.objectContaining({
           transport: "websocket",
           url: "ws://127.0.0.1:39175",
@@ -100,6 +102,15 @@ describe("Codex app-server config", () => {
       }),
     );
     expect(runtime).not.toHaveProperty("serviceTier");
+  });
+
+  it("falls back to the environment Codex personality when config omits it", () => {
+    expect(
+      resolveCodexAppServerRuntimeOptions({
+        pluginConfig: {},
+        env: { OPENCLAW_CODEX_APP_SERVER_PERSONALITY: "pragmatic" },
+      }).personality,
+    ).toBe("pragmatic");
   });
 
   it("rejects malformed plugin config instead of treating freeform strings as control values", () => {
@@ -429,5 +440,6 @@ describe("Codex app-server config", () => {
     expect(appServerProperties.approvalPolicy?.default).toBeUndefined();
     expect(appServerProperties.sandbox?.default).toBeUndefined();
     expect(appServerProperties.approvalsReviewer?.default).toBeUndefined();
+    expect(appServerProperties.personality?.default).toBeUndefined();
   });
 });

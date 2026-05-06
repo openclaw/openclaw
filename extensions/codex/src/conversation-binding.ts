@@ -219,6 +219,7 @@ async function attachExistingThread(params: {
       ...((params.serviceTier ?? runtime.serviceTier)
         ? { serviceTier: params.serviceTier ?? runtime.serviceTier }
         : {}),
+      ...(runtime.personality ? { personality: runtime.personality } : {}),
       persistExtendedHistory: true,
     },
     { timeoutMs: runtime.requestTimeoutMs },
@@ -283,6 +284,7 @@ async function createThread(params: {
       ...((params.serviceTier ?? runtime.serviceTier)
         ? { serviceTier: params.serviceTier ?? runtime.serviceTier }
         : {}),
+      ...(runtime.personality ? { personality: runtime.personality } : {}),
       developerInstructions:
         "This Codex thread is bound to an OpenClaw conversation. Answer normally; OpenClaw will deliver your final response back to the conversation.",
       experimentalRawEvents: true,
@@ -393,6 +395,7 @@ async function runBoundTurn(params: {
         ...((binding.serviceTier ?? runtime.serviceTier)
           ? { serviceTier: binding.serviceTier ?? runtime.serviceTier }
           : {}),
+        ...(runtime.personality ? { personality: runtime.personality } : {}),
       },
       { timeoutMs: runtime.requestTimeoutMs },
     );

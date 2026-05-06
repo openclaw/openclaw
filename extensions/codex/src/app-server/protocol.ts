@@ -1,6 +1,7 @@
 export type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject;
 export type JsonObject = { [key: string]: JsonValue };
 export type CodexServiceTier = string;
+export type CodexPersonality = "none" | "friendly" | "pragmatic";
 
 export type CodexAppServerRequestMethod = keyof CodexAppServerRequestResultMap | (string & {});
 export type CodexAppServerRequestParams<M extends CodexAppServerRequestMethod> =

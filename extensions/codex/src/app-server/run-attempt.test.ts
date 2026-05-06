@@ -453,7 +453,10 @@ describe("runCodexAppServerAttempt", () => {
   it("starts Codex threads without duplicate OpenClaw workspace tools by default", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    const appServer = createThreadLifecycleAppServerOptions();
+    const appServer = {
+      ...createThreadLifecycleAppServerOptions(),
+      personality: "friendly" as const,
+    };
     const request = vi.fn(async (method: string, _params: unknown) => {
       if (method === "thread/start") {
         return threadStartResult();
@@ -491,6 +494,7 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(dynamicToolNames).toContain("message");
     expect(dynamicToolNames).toContain("web_search");
+    expect(startRequest?.[1]).toEqual(expect.objectContaining({ personality: "friendly" }));
     expect(dynamicToolNames).not.toEqual(
       expect.arrayContaining([
         "read",
@@ -1097,12 +1101,14 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("make the default webpage openclaw");
   });
 
-  it("passes OpenClaw bootstrap files through Codex developer instructions", async () => {
+  it("passes OpenClaw bootstrap files through Codex developer instructions only", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Follow AGENTS guidance.");
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Soul voice goes here.");
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), "User preferences go here.");
+    await fs.writeFile(path.join(workspaceDir, "TOOLS.md"), "Tool notes go here.");
     const harness = createStartedThreadHarness();
 
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
@@ -1112,18 +1118,16 @@ describe("runCodexAppServerAttempt", () => {
     await run;
 
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
-    const params = threadStart?.params as {
-      config?: { instructions?: string };
-      developerInstructions?: string;
-    };
-    const config = params.config;
-
-    // Regression for #77363: persona/style bootstrap (SOUL.md) must reach the
-    // explicit developerInstructions field, not config.instructions.
-    expect(params.developerInstructions).toContain("Soul voice goes here.");
-    expect(params.developerInstructions).toContain("Codex loads AGENTS.md natively");
-    expect(params.developerInstructions).not.toContain("Follow AGENTS guidance.");
+    const threadStartParams = threadStart?.params as
+      | { config?: { instructions?: string }; developerInstructions?: string }
+      | undefined;
+    const config = threadStartParams?.config;
     expect(config?.instructions).toBeUndefined();
+    expect(threadStartParams?.developerInstructions).toContain("OpenClaw Workspace Bootstrap");
+    expect(threadStartParams?.developerInstructions).toContain("Follow AGENTS guidance.");
+    expect(threadStartParams?.developerInstructions).toContain("Soul voice goes here.");
+    expect(threadStartParams?.developerInstructions).toContain("User preferences go here.");
+    expect(threadStartParams?.developerInstructions).toContain("Tool notes go here.");
   });
 
   it("fires llm_input, llm_output, and agent_end hooks for codex turns", async () => {
@@ -2759,7 +2763,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/start"]);
   });
 
-  it("passes configured app-server policy, sandbox, service tier, and model on resume", async () => {
+  it("passes configured app-server policy, sandbox, service tier, personality, and model on resume", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
@@ -2772,6 +2776,7 @@ describe("runCodexAppServerAttempt", () => {
           approvalsReviewer: "guardian_subagent",
           sandbox: "danger-full-access",
           serviceTier: "fast",
+          personality: "friendly",
         },
       },
     });
@@ -2786,6 +2791,7 @@ describe("runCodexAppServerAttempt", () => {
       approvalsReviewer: "guardian_subagent",
       sandbox: "danger-full-access",
       serviceTier: "fast",
+      personality: "friendly",
       developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
       persistExtendedHistory: true,
     });
@@ -2798,6 +2804,7 @@ describe("runCodexAppServerAttempt", () => {
             approvalsReviewer: "guardian_subagent",
             sandboxPolicy: { type: "dangerFullAccess" },
             serviceTier: "fast",
+            personality: "friendly",
             model: "gpt-5.4-codex",
           }),
         },
@@ -2849,6 +2856,7 @@ describe("runCodexAppServerAttempt", () => {
       approvalsReviewer: "guardian_subagent" as const,
       sandbox: "danger-full-access" as const,
       serviceTier: "flex" as const,
+      personality: "friendly" as const,
     };
 
     expect(buildThreadResumeParams(params, { threadId: "thread-1", appServer })).toEqual({
@@ -2858,6 +2866,7 @@ describe("runCodexAppServerAttempt", () => {
       approvalsReviewer: "guardian_subagent",
       sandbox: "danger-full-access",
       serviceTier: "flex",
+      personality: "friendly",
       developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
       persistExtendedHistory: true,
     });
@@ -2880,6 +2889,7 @@ describe("runCodexAppServerAttempt", () => {
             developer_instructions: null,
           },
         },
+        personality: "friendly",
       }),
     );
   });

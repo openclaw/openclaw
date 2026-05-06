@@ -29,6 +29,8 @@ import {
 
 let tempDir: string;
 
+const friendlyPluginConfig = { appServer: { personality: "friendly" } };
+
 describe("codex conversation binding", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-binding-"));
@@ -55,6 +57,129 @@ describe("codex conversation binding", () => {
     agentRuntimeMocks.resolveAuthProfileOrder.mockReturnValue([]);
     agentRuntimeMocks.resolveDefaultAgentDir.mockReturnValue("/agent");
     agentRuntimeMocks.resolveProviderIdForAuth.mockImplementation((provider: string) => provider);
+  });
+
+  it("passes configured personality when creating a bound Codex thread", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const request = vi.fn(async () => ({
+      thread: { id: "thread-1", cwd: tempDir },
+      model: "gpt-5.5",
+      modelProvider: "openai",
+    }));
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+
+    await startCodexConversationThread({
+      pluginConfig: friendlyPluginConfig,
+      sessionFile,
+      workspaceDir: tempDir,
+    });
+
+    expect(request).toHaveBeenCalledWith(
+      "thread/start",
+      expect.objectContaining({ personality: "friendly" }),
+      expect.anything(),
+    );
+  });
+
+  it("passes configured personality when attaching an existing bound Codex thread", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const request = vi.fn(async () => ({
+      thread: { id: "thread-1", cwd: tempDir },
+      model: "gpt-5.5",
+      modelProvider: "openai",
+    }));
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+
+    await startCodexConversationThread({
+      pluginConfig: friendlyPluginConfig,
+      sessionFile,
+      workspaceDir: tempDir,
+      threadId: "thread-1",
+    });
+
+    expect(request).toHaveBeenCalledWith(
+      "thread/resume",
+      expect.objectContaining({ personality: "friendly" }),
+      expect.anything(),
+    );
+  });
+
+  it("passes configured personality on bound Codex turns", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-1",
+        cwd: tempDir,
+        model: "gpt-5.5",
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+      }),
+    );
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method === "turn/start") {
+        setImmediate(() =>
+          notificationHandler?.({
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                items: [{ type: "agentMessage", id: "message-1", text: "done" }],
+              },
+            },
+          }),
+        );
+        return { turn: { id: "turn-1" } };
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request,
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "run this",
+        channel: "discord",
+        isGroup: true,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "discord",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel-1",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      { pluginConfig: friendlyPluginConfig },
+    );
+
+    expect(result).toEqual({ handled: true, reply: { text: "done" } });
+    expect(request).toHaveBeenCalledWith(
+      "turn/start",
+      expect.objectContaining({ personality: "friendly" }),
+      expect.anything(),
+    );
   });
 
   it("uses the default Codex auth profile and omits the public OpenAI provider for new binds", async () => {
