@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeCronPayloadModelOverride } from "../model-override.js";
 import type { CronJob } from "../types.js";
 import {
   DEFAULT_MODEL,
@@ -110,7 +111,7 @@ export async function resolveCronModelSelection(
   }
 
   const modelOverrideRaw = params.payload.kind === "agentTurn" ? params.payload.model : undefined;
-  const modelOverride = typeof modelOverrideRaw === "string" ? modelOverrideRaw.trim() : undefined;
+  const modelOverride = normalizeCronPayloadModelOverride(modelOverrideRaw);
   if (modelOverride !== undefined && modelOverride.length > 0) {
     const resolvedOverride = resolveAllowedModelRef({
       cfg: params.cfgWithAgentDefaults,

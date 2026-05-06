@@ -113,6 +113,8 @@ Cron `--model` is a **job primary**, not a chat-session `/model` override. That 
 - An empty per-job fallback list (`fallbacks: []` in the job payload/API) makes the cron run strict.
 - When a job has `--model` but no fallback list is configured, OpenClaw passes an explicit empty fallback override so the agent primary is not appended as a hidden retry target.
 
+When a cron job's payload model is omitted, `null`, blank, or the literal `default`, OpenClaw treats it as unset and continues to the stored cron-session model override or agent/default model selection.
+
 ### Isolated cron model precedence
 
 Isolated cron resolves the active model in this order:

@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { hasCronPayloadModelOverride as hasCronPayloadModelOverrideValue } from "../model-override.js";
 import type { CronJob } from "../types.js";
 import { resolveEffectiveModelFallbacks } from "./run-execution.runtime.js";
 
@@ -9,8 +10,7 @@ export function resolveCronFallbacksOverride(params: {
 }): string[] | undefined {
   const payload = params.job.payload.kind === "agentTurn" ? params.job.payload : undefined;
   const payloadFallbacks = Array.isArray(payload?.fallbacks) ? payload.fallbacks : undefined;
-  const hasCronPayloadModelOverride =
-    typeof payload?.model === "string" && payload.model.trim().length > 0;
+  const hasCronPayloadModelOverride = hasCronPayloadModelOverrideValue(payload?.model);
   return (
     payloadFallbacks ??
     resolveEffectiveModelFallbacks({

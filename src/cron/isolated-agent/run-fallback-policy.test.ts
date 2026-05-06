@@ -83,4 +83,30 @@ describe("resolveCronFallbacksOverride", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("leaves fallback selection unset for inherited cron model sentinels", () => {
+    expect(
+      resolveCronFallbacksOverride({
+        cfg: makeConfig(["openai/gpt-5.4"]),
+        agentId: "main",
+        job: makeJob({
+          kind: "agentTurn",
+          message: "summarize",
+          model: "default",
+        }),
+      }),
+    ).toBeUndefined();
+
+    expect(
+      resolveCronFallbacksOverride({
+        cfg: makeConfig(["openai/gpt-5.4"]),
+        agentId: "main",
+        job: makeJob({
+          kind: "agentTurn",
+          message: "summarize",
+          model: " null ",
+        }),
+      }),
+    ).toBeUndefined();
+  });
 });

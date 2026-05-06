@@ -48,7 +48,7 @@ const DEFAULT_MESSAGE = "do it";
 type AgentTurnPayload = {
   kind: "agentTurn";
   message: string;
-  model?: string;
+  model?: string | null;
 };
 
 type SelectModelOptions = {
@@ -520,6 +520,27 @@ describe("cron model formatting and precedence edge cases", () => {
       await expectDefaultSelectedModel({
         payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "" },
       });
+    });
+
+    it("default model sentinel treated as unset", async () => {
+      await expectDefaultSelectedModel({
+        payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "default" },
+      });
+      expect(resolveAllowedModelRefMock).not.toHaveBeenCalled();
+    });
+
+    it("string null model sentinel treated as unset", async () => {
+      await expectDefaultSelectedModel({
+        payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: " null " },
+      });
+      expect(resolveAllowedModelRefMock).not.toHaveBeenCalled();
+    });
+
+    it("null model value treated as unset", async () => {
+      await expectDefaultSelectedModel({
+        payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: null },
+      });
+      expect(resolveAllowedModelRefMock).not.toHaveBeenCalled();
     });
 
     it("whitespace-only session modelOverride is ignored", async () => {
