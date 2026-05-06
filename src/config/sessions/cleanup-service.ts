@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveStoredSessionOwnerAgentId } from "../../gateway/session-store-key.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { getLogger } from "../../logging/logger.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -315,6 +316,7 @@ export async function runSessionsCleanup(params: {
       const appliedReportRef: { current: SessionMaintenanceApplyReport | null } = {
         current: null,
       };
+      const prunedMissingKeys: string[] = [];
       const missingApplied = await updateSessionStore(
         target.storePath,
         async (store) => {
@@ -324,6 +326,9 @@ export async function runSessionsCleanup(params: {
           return pruneMissingTranscriptEntries({
             store,
             storePath: target.storePath,
+            onPruned: (key) => {
+              prunedMissingKeys.push(key);
+            },
           });
         },
         {
@@ -336,6 +341,17 @@ export async function runSessionsCleanup(params: {
           },
         },
       );
+      // Conversation bindings must be cleared alongside the session store entries they
+      // point to. Without this, a binding that survives a missing-transcript prune routes
+      // every subsequent message to a phantom session key, silently spawning ephemeral
+      // in-memory sessions that are never persisted. The session-reset path already calls
+      // unbind via emitSessionUnboundLifecycleEvent; this mirrors that contract here.
+      for (const key of prunedMissingKeys) {
+        await getSessionBindingService().unbind({
+          targetSessionKey: key,
+          reason: "cleanup-missing-transcript",
+        });
+      }
       const afterStore = loadSessionStore(target.storePath, { skipCache: true });
       const unreferencedArtifacts =
         mode === "warn"

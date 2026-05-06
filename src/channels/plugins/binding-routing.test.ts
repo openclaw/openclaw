@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __testing,
+  getSessionBindingService,
   registerSessionBindingAdapter,
   type SessionBindingAdapter,
   type SessionBindingRecord,
@@ -117,6 +118,104 @@ describe("runtime conversation binding route", () => {
     expect(result.bindingRecord).toBe(binding);
     expect(result.boundSessionKey).toBeUndefined();
     expect(result.route).toBe(route);
+  });
+
+  it("drops a stale binding and unbinds when targetSessionExists returns false", () => {
+    const binding = createBinding();
+    const { touch } = registerAdapter(binding);
+    const unbind = vi.spyOn(getSessionBindingService(), "unbind");
+    const targetSessionExists = vi.fn<(key: string) => boolean>(() => false);
+    const route = createRoute();
+
+    const result = resolveRuntimeConversationBindingRoute({
+      route,
+      conversation: {
+        channel: "demo",
+        accountId: "default",
+        conversationId: "room-1",
+      },
+      targetSessionExists,
+    });
+
+    expect(targetSessionExists).toHaveBeenCalledWith("agent:review:acp:session-1");
+    expect(touch).not.toHaveBeenCalled();
+    expect(unbind).toHaveBeenCalledWith({
+      targetSessionKey: "agent:review:acp:session-1",
+      reason: "stale-target",
+    });
+    expect(result.bindingRecord).toBeNull();
+    expect(result.boundSessionKey).toBeUndefined();
+    expect(result.route).toBe(route);
+
+    unbind.mockRestore();
+  });
+
+  it("skips targetSessionExists check for plugin-owned bindings", () => {
+    const route = createRoute();
+    const binding = createBinding({
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "demo-plugin",
+        pluginRoot: "/tmp/demo-plugin",
+      },
+    });
+    registerAdapter(binding);
+    const targetSessionExists = vi.fn<(key: string) => boolean>(() => false);
+
+    const result = resolveRuntimeConversationBindingRoute({
+      route,
+      conversation: {
+        channel: "demo",
+        accountId: "default",
+        conversationId: "room-1",
+      },
+      targetSessionExists,
+    });
+
+    expect(targetSessionExists).not.toHaveBeenCalled();
+    expect(result.bindingRecord).toBe(binding);
+    expect(result.route).toBe(route);
+  });
+
+  it("routes normally when targetSessionExists returns true", () => {
+    const binding = createBinding();
+    const { touch } = registerAdapter(binding);
+    const targetSessionExists = vi.fn<(key: string) => boolean>(() => true);
+
+    const result = resolveRuntimeConversationBindingRoute({
+      route: createRoute(),
+      conversation: {
+        channel: "demo",
+        accountId: "default",
+        conversationId: "room-1",
+      },
+      targetSessionExists,
+    });
+
+    expect(targetSessionExists).toHaveBeenCalledWith("agent:review:acp:session-1");
+    expect(touch).toHaveBeenCalledWith("binding-1", undefined);
+    expect(result.boundSessionKey).toBe("agent:review:acp:session-1");
+    expect(result.route).toMatchObject({ sessionKey: "agent:review:acp:session-1" });
+  });
+
+  it("suppresses and does not propagate a stale-target unbind rejection", async () => {
+    const binding = createBinding();
+    registerAdapter(binding);
+    const unbind = vi
+      .spyOn(getSessionBindingService(), "unbind")
+      .mockRejectedValue(new Error("adapter write failed"));
+    const route = createRoute();
+
+    const result = resolveRuntimeConversationBindingRoute({
+      route,
+      conversation: { channel: "demo", accountId: "default", conversationId: "room-1" },
+      targetSessionExists: () => false,
+    });
+
+    expect(result.route).toBe(route);
+    await expect(Promise.resolve()).resolves.not.toThrow();
+
+    unbind.mockRestore();
   });
 });
 
