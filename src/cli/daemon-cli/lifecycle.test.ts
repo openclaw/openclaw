@@ -122,6 +122,7 @@ describe("runDaemonRestart health checks", () => {
     json?: boolean;
     safe?: boolean;
     force?: boolean;
+    skipDeferral?: boolean;
   }) => Promise<boolean>;
   let runDaemonStop: (opts?: { json?: boolean; disable?: boolean }) => Promise<void>;
   let envSnapshot: ReturnType<typeof captureEnv>;
