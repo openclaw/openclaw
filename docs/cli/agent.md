@@ -34,6 +34,7 @@ Related:
 - `--reply-channel <channel>`: delivery channel override
 - `--reply-account <id>`: delivery account override
 - `--local`: run the embedded agent directly (after plugin registry preload)
+- `--no-fallback`: fail when Gateway dispatch fails instead of running embedded fallback
 - `--deliver`: send the reply back to the selected channel/target
 - `--timeout <seconds>`: override agent timeout (default 600 or config value)
 - `--json`: output JSON
@@ -53,6 +54,7 @@ openclaw agent --agent ops --message "Run locally" --local
 ## Notes
 
 - Gateway mode falls back to the embedded agent when the Gateway request fails. Use `--local` to force embedded execution up front.
+- Use `--no-fallback` or `OPENCLAW_AGENT_NO_FALLBACK=1` for diagnostics and CI probes that must prove the Gateway path worked.
 - `--local` still preloads the plugin registry first, so plugin-provided providers, tools, and channels stay available during embedded runs.
 - `--local` and embedded fallback runs are treated as one-shot runs. Bundled MCP loopback resources and warm Claude stdio sessions opened for that local process are retired after the reply, so scripted invocations do not keep local child processes alive.
 - Gateway-backed runs leave Gateway-owned MCP loopback resources under the running Gateway process; older clients may still send the historical cleanup flag, but the Gateway accepts it as a compatibility no-op.

@@ -123,15 +123,23 @@ vi.mock("../gateway/call.js", () => ({
 vi.mock("./agent.js", () => ({ agentCommand }));
 
 let originalForceConsoleToStderr = false;
+let originalNoFallbackEnv: string | undefined;
 
 beforeEach(() => {
   vi.clearAllMocks();
   originalForceConsoleToStderr = loggingState.forceConsoleToStderr;
   loggingState.forceConsoleToStderr = false;
+  originalNoFallbackEnv = process.env.OPENCLAW_AGENT_NO_FALLBACK;
+  delete process.env.OPENCLAW_AGENT_NO_FALLBACK;
 });
 
 afterEach(() => {
   loggingState.forceConsoleToStderr = originalForceConsoleToStderr;
+  if (originalNoFallbackEnv === undefined) {
+    delete process.env.OPENCLAW_AGENT_NO_FALLBACK;
+  } else {
+    process.env.OPENCLAW_AGENT_NO_FALLBACK = originalNoFallbackEnv;
+  }
 });
 
 describe("agentCliCommand", () => {
@@ -266,6 +274,35 @@ describe("agentCliCommand", () => {
 
       await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toThrow(
         "missing scope: operator.admin",
+      );
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("EMBEDDED FALLBACK"));
+    });
+  });
+
+  it("fails closed when --no-fallback is set and gateway dispatch fails", async () => {
+    await withTempStore(async () => {
+      callGateway.mockRejectedValue(createGatewayClosedError());
+
+      await expect(
+        agentCliCommand({ message: "hi", to: "+1555", noFallback: true }, runtime),
+      ).rejects.toThrow("embedded fallback is disabled");
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("EMBEDDED FALLBACK"));
+    });
+  });
+
+  it("fails closed when OPENCLAW_AGENT_NO_FALLBACK is enabled and gateway times out", async () => {
+    await withTempStore(async () => {
+      process.env.OPENCLAW_AGENT_NO_FALLBACK = "1";
+      callGateway.mockRejectedValue(createGatewayTimeoutError());
+
+      await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toThrow(
+        "embedded fallback is disabled",
       );
 
       expect(callGateway).toHaveBeenCalledTimes(1);
