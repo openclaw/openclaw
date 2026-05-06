@@ -14,11 +14,12 @@ export type HookDecisionPass = {
 export const BLOCK_MESSAGE_PREFIX = "Your message could not be sent";
 
 /**
- * Content is blocked. `reason` is internal; `message` is user-facing.
+ * Content is blocked. `reason` is internal plugin-local detail; core must not log,
+ * persist, broadcast, or expose it verbatim. `message` is user-facing detail.
  */
 export type HookDecisionBlock = {
   outcome: "block";
-  /** Internal reason for logging/observability. Never shown to user. */
+  /** Internal plugin-local reason. Do not log, persist, broadcast, or expose verbatim. */
   reason: string;
   /** Optional user-facing detail included in the block response envelope. */
   message?: string;
