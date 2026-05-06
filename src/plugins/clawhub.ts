@@ -265,44 +265,68 @@ function normalizeArtifactResolverFiles(
   return files as NonNullable<ClawHubPackageVersion["version"]>["files"];
 }
 
-type ClawHubResolvedArtifactWire = {
-  artifactKind?: string | null;
-  kind?: string | null;
-  artifactSha256?: string | null;
-  sha256?: string | null;
-  npmIntegrity?: string | null;
-  npmShasum?: string | null;
-  downloadUrl?: string | null;
-};
+type ClawHubTopLevelArtifactLike =
+  | ClawHubResolvedArtifact
+  | ClawHubPackageArtifactSummary
+  | null
+  | undefined;
+
+function readTopLevelArtifactKind(artifact: ClawHubTopLevelArtifactLike): string | null {
+  if (!artifact) {
+    return null;
+  }
+  const record = artifact as Record<string, unknown>;
+  return (
+    normalizeOptionalString(record.artifactKind) ?? normalizeOptionalString(record.kind) ?? null
+  );
+}
+
+function readTopLevelArtifactSha256(artifact: ClawHubTopLevelArtifactLike): string | null {
+  if (!artifact) {
+    return null;
+  }
+  const record = artifact as Record<string, unknown>;
+  return (
+    normalizeOptionalString(record.artifactSha256) ?? normalizeOptionalString(record.sha256) ?? null
+  );
+}
 
 function resolveTopLevelNpmPackArtifact(
-  artifact: ClawHubResolvedArtifact | null | undefined,
+  artifact: ClawHubTopLevelArtifactLike,
 ): ClawHubPackageArtifactSummary | null {
-  const wire = artifact as ClawHubResolvedArtifactWire | null | undefined;
-  const artifactKind = wire?.artifactKind ?? wire?.kind;
-  if (artifactKind !== "npm-pack") {
+  if (readTopLevelArtifactKind(artifact) !== "npm-pack") {
     return null;
   }
-  if (typeof wire?.npmIntegrity !== "string") {
-    return null;
-  }
+  const record = artifact as Record<string, unknown>;
   return {
     kind: "npm-pack",
     format: "tgz",
-    sha256: wire.artifactSha256 ?? wire.sha256 ?? null,
-    npmIntegrity: wire.npmIntegrity,
-    npmShasum: wire.npmShasum ?? null,
-    downloadUrl: wire.downloadUrl ?? null,
+    sha256: readTopLevelArtifactSha256(artifact),
+    npmIntegrity: normalizeOptionalString(record.npmIntegrity) ?? null,
+    npmShasum: normalizeOptionalString(record.npmShasum) ?? null,
+    npmTarballName: normalizeOptionalString(record.npmTarballName) ?? null,
+    downloadUrl:
+      normalizeOptionalString(record.downloadUrl) ??
+      normalizeOptionalString(record.tarballUrl) ??
+      null,
   };
 }
 
 function resolveTopLevelLegacyArchiveVerification(
-  artifact: ClawHubResolvedArtifact | null | undefined,
+  artifact: ClawHubTopLevelArtifactLike,
 ): ClawHubArchiveVerification | null {
-  const wire = artifact as ClawHubResolvedArtifactWire | null | undefined;
-  const artifactKind = wire?.artifactKind ?? wire?.kind;
-  const artifactSha256 = wire?.artifactSha256 ?? wire?.sha256;
-  if (artifactKind !== "legacy-zip" || typeof artifactSha256 !== "string") {
+  if (readTopLevelArtifactKind(artifact) !== "legacy-zip") {
+    return null;
+  }
+  // Current summary-shaped legacy zip resolver responses expose `sha256`,
+  // but that digest identifies the ClawHub artifact record, not necessarily
+  // the downloadable archive bytes. Only trust the older resolver field that
+  // explicitly describes archive integrity here; otherwise fall back to the
+  // version metadata `sha256hash`/`files[]` path.
+  const artifactSha256 = artifact
+    ? normalizeOptionalString((artifact as Record<string, unknown>).artifactSha256)
+    : null;
+  if (!artifactSha256) {
     return null;
   }
   const integrity = normalizeClawHubSha256Integrity(artifactSha256);
@@ -842,6 +866,7 @@ async function resolveCompatiblePackageVersion(params: {
     );
   }
   let artifactResponse: ClawHubPackageArtifactResolverResponse;
+  let artifactResponseNeedsVersionVerificationFallback = false;
   try {
     artifactResponse = await fetchClawHubPackageArtifact({
       name: params.detail.package?.name ?? "",
@@ -850,6 +875,7 @@ async function resolveCompatiblePackageVersion(params: {
       token: params.token,
       timeoutMs: params.timeoutMs,
     });
+    artifactResponseNeedsVersionVerificationFallback = true;
   } catch (error) {
     if (isMissingArtifactResolverRoute(error)) {
       try {
@@ -896,7 +922,7 @@ async function resolveCompatiblePackageVersion(params: {
     isClawHubPackageFamily(artifactFamily)
       ? artifactFamily
       : (params.detail.package?.family ?? "code-plugin");
-  const versionRecord: NonNullable<ClawHubPackageVersion["version"]> = {
+  let versionRecord: NonNullable<ClawHubPackageVersion["version"]> = {
     version: resolvedVersion,
     createdAt: typeof artifactVersion.createdAt === "number" ? artifactVersion.createdAt : 0,
     changelog: typeof artifactVersion.changelog === "string" ? artifactVersion.changelog : "",
@@ -907,7 +933,7 @@ async function resolveCompatiblePackageVersion(params: {
     artifact: artifactVersion.artifact,
     clawpack: artifactVersion.clawpack ?? undefined,
   };
-  const versionDetail: ClawHubPackageVersion = {
+  let versionDetail: ClawHubPackageVersion = {
     package: artifactResponse.package
       ? {
           name: artifactResponse.package.name ?? params.detail.package?.name ?? "",
@@ -918,14 +944,64 @@ async function resolveCompatiblePackageVersion(params: {
       : null,
     version: versionRecord,
   };
-  const clawpack =
+  let clawpack =
     resolveClawHubNpmPackArtifact(versionRecord) ??
     resolveTopLevelNpmPackArtifact(artifactResponse.artifact);
-  const verificationState = resolveClawHubArchiveVerification(
+  let verificationState = resolveClawHubArchiveVerification(
     versionDetail,
     params.detail.package?.name ?? "unknown",
     resolvedVersion,
   );
+  let topLevelLegacyVerification = resolveTopLevelLegacyArchiveVerification(
+    artifactResponse.artifact,
+  );
+  if (
+    artifactResponseNeedsVersionVerificationFallback &&
+    verificationState.ok &&
+    !verificationState.verification &&
+    !topLevelLegacyVerification &&
+    artifactResponse.artifact &&
+    !resolveClawHubClawPackArtifactSha256(clawpack)
+  ) {
+    try {
+      const fallbackVersionDetail = await fetchClawHubPackageVersion({
+        name: params.detail.package?.name ?? "",
+        version: resolvedVersion,
+        baseUrl: params.baseUrl,
+        token: params.token,
+        timeoutMs: params.timeoutMs,
+      });
+      const fallbackVersion = fallbackVersionDetail.version;
+      if (fallbackVersion) {
+        versionRecord = {
+          ...versionRecord,
+          ...fallbackVersion,
+          version: normalizeOptionalString(fallbackVersion.version) ?? resolvedVersion,
+        };
+        versionDetail = {
+          package: versionDetail.package,
+          version: versionRecord,
+        };
+        clawpack =
+          resolveClawHubNpmPackArtifact(versionRecord) ??
+          resolveTopLevelNpmPackArtifact(artifactResponse.artifact);
+        verificationState = resolveClawHubArchiveVerification(
+          versionDetail,
+          params.detail.package?.name ?? "unknown",
+          resolvedVersion,
+        );
+        topLevelLegacyVerification = resolveTopLevelLegacyArchiveVerification(
+          artifactResponse.artifact,
+        );
+      }
+    } catch (versionError) {
+      return mapClawHubRequestError(versionError, {
+        stage: "version",
+        name: params.detail.package?.name ?? "unknown",
+        version: resolvedVersion,
+      });
+    }
+  }
   if (!verificationState.ok) {
     if (!resolveClawHubClawPackArtifactSha256(clawpack)) {
       return verificationState;
@@ -939,9 +1015,6 @@ async function resolveCompatiblePackageVersion(params: {
       clawpack,
     };
   }
-  const topLevelLegacyVerification = resolveTopLevelLegacyArchiveVerification(
-    artifactResponse.artifact,
-  );
   return {
     ok: true,
     version: resolvedVersion,

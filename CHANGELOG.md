@@ -221,6 +221,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/streaming: reuse the active preview as the first chunk for long text finals, so multi-chunk replies no longer create a transient extra bubble that appears and then disappears. Thanks @vincentkoc.
 - Telegram/streaming: sanitize tool-progress draft preview backticks before shared compaction, so long backtick-heavy progress text still renders inside the safe code-formatted preview instead of collapsing to an ellipsis.
 - Telegram: clean up tool-only draft previews after assistant message boundaries so transient `Surfacing...` tool-status bubbles do not linger when no matching final preview arrives. Thanks @BunsDev.
+- Plugins/install: supplement ClawHub artifact resolver responses with version metadata when legacy zip verification fields are omitted, so valid ClawHub packages such as ZeroAPI no longer fail as missing archive integrity. Thanks @dorukardahan.
 - Telegram: let explicit forum-topic `requireMention` settings override persisted `/activate` and `/deactivate` state, so per-topic mention gates work consistently. Fixes #49864. Thanks @Panniantong.
 - Telegram: keep reply-dispatch lazy provider runtime chunks behind stable dist names and delete `/reasoning stream` previews after final delivery so package updates and live reasoning drafts do not leave Telegram turns broken or noisy. Thanks @BunsDev.
 - Telegram: render shared interactive reply buttons in reply delivery so plugin approval messages show inline keyboards. (#76238) Thanks @keshavbotagent.
