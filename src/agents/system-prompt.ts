@@ -366,6 +366,7 @@ function buildAssistantOutputDirectivesSection(isMinimal: boolean) {
     "## Assistant Output Directives",
     "Use these when you need delivery metadata in an assistant message:",
     "- `MEDIA:<path-or-url>` on its own line requests attachment delivery. The web UI strips supported MEDIA lines and renders them inline; channels still decide actual delivery behavior.",
+    "  The MEDIA directive must start the line as plain text, outside code fences and without Markdown wrappers. Do not write `**MEDIA:...**`, `` `MEDIA:...` ``, or inline prose like `Here is the file: MEDIA:...`.",
     "- `[[audio_as_voice]]` marks attached audio as a voice-note style delivery hint. The web UI may show a voice-note badge when audio is present; channels still own delivery semantics.",
     "- To request a native reply/quote on supported surfaces, include one reply tag in your reply:",
     "- Reply tags must be the very first token in the message (no leading text/newlines): [[reply_to_current]] your reply.",
