@@ -2,6 +2,7 @@ import { spawn, type SpawnOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 import {
   acquireQaCredentialLease,
@@ -17,6 +18,7 @@ export type MantisSlackDesktopSmokeOptions = {
   env?: NodeJS.ProcessEnv;
   fastMode?: boolean;
   gatewaySetup?: boolean;
+  hydrateMode?: MantisSlackDesktopHydrateMode;
   idleTimeout?: string;
   keepLease?: boolean;
   leaseId?: string;
@@ -32,6 +34,8 @@ export type MantisSlackDesktopSmokeOptions = {
   slackUrl?: string;
   ttl?: string;
 };
+
+export type MantisSlackDesktopHydrateMode = "prehydrated" | "source";
 
 export type MantisSlackDesktopSmokeResult = {
   outputDir: string;
@@ -95,17 +99,33 @@ type MantisSlackDesktopSmokeSummary = {
   };
   error?: string;
   finishedAt: string;
+  hydrateMode: MantisSlackDesktopHydrateMode;
   outputDir: string;
   remoteOutputDir: string;
   slackUrl?: string;
   startedAt: string;
   status: "pass" | "fail";
+  timings: MantisPhaseTimings;
   warning?: string;
+};
+
+type MantisPhaseTiming = {
+  durationMs: number;
+  finishedAt: string;
+  name: string;
+  startedAt: string;
+  status: "accepted" | "fail" | "pass";
+};
+
+type MantisPhaseTimings = {
+  phases: MantisPhaseTiming[];
+  totalMs: number;
 };
 
 type SlackDesktopRemoteMetadata = {
   gatewayAlive?: boolean;
   gatewayPid?: string;
+  hydrateMode?: string;
   openedUrl?: string;
   qaExitCode?: number;
 };
@@ -119,6 +139,7 @@ const DEFAULT_CREDENTIAL_ROLE = "maintainer";
 const DEFAULT_PROVIDER_MODE = "live-frontier";
 const DEFAULT_MODEL = "openai/gpt-5.4";
 const DEFAULT_SLACK_CHANNEL_ID = "C0AUXUC5AGN";
+const DEFAULT_HYDRATE_MODE: MantisSlackDesktopHydrateMode = "source";
 const CRABBOX_BIN_ENV = "OPENCLAW_MANTIS_CRABBOX_BIN";
 const CRABBOX_PROVIDER_ENV = "OPENCLAW_MANTIS_CRABBOX_PROVIDER";
 const CRABBOX_CLASS_ENV = "OPENCLAW_MANTIS_CRABBOX_CLASS";
@@ -126,6 +147,7 @@ const CRABBOX_LEASE_ID_ENV = "OPENCLAW_MANTIS_CRABBOX_LEASE_ID";
 const CRABBOX_KEEP_ENV = "OPENCLAW_MANTIS_KEEP_VM";
 const CRABBOX_IDLE_TIMEOUT_ENV = "OPENCLAW_MANTIS_CRABBOX_IDLE_TIMEOUT";
 const CRABBOX_TTL_ENV = "OPENCLAW_MANTIS_CRABBOX_TTL";
+const HYDRATE_MODE_ENV = "OPENCLAW_MANTIS_HYDRATE_MODE";
 const SLACK_URL_ENV = "OPENCLAW_MANTIS_SLACK_URL";
 const SLACK_CHANNEL_ID_ENV = "OPENCLAW_MANTIS_SLACK_CHANNEL_ID";
 
@@ -137,6 +159,58 @@ function trimToValue(value: string | undefined) {
 function isTruthyOptIn(value: string | undefined) {
   const normalized = value?.trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function normalizeHydrateMode(
+  value: string | undefined,
+): MantisSlackDesktopHydrateMode | undefined {
+  const normalized = trimToValue(value)?.toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "source" || normalized === "prehydrated") {
+    return normalized;
+  }
+  throw new Error(`Unsupported Mantis Slack desktop hydrate mode: ${value}`);
+}
+
+function createPhaseTimer(startedAt: Date) {
+  const phases: MantisPhaseTiming[] = [];
+  const origin = startedAt.getTime();
+  function recordPhase(name: string, phaseStarted: Date, status: MantisPhaseTiming["status"]) {
+    const phaseFinished = new Date();
+    phases.push({
+      durationMs: phaseFinished.getTime() - phaseStarted.getTime(),
+      finishedAt: phaseFinished.toISOString(),
+      name,
+      startedAt: phaseStarted.toISOString(),
+      status,
+    });
+  }
+  async function timePhase<T>(name: string, run: () => Promise<T>): Promise<T> {
+    const phaseStarted = new Date();
+    try {
+      const result = await run();
+      recordPhase(name, phaseStarted, "pass");
+      return result;
+    } catch (error) {
+      recordPhase(name, phaseStarted, "fail");
+      throw error;
+    }
+  }
+  function snapshot(now = new Date()): MantisPhaseTimings {
+    return {
+      phases: [...phases],
+      totalMs: now.getTime() - origin,
+    };
+  }
+  function updatePhaseStatus(name: string, status: MantisPhaseTiming["status"]) {
+    const phase = phases.findLast((entry) => entry.name === name);
+    if (phase) {
+      phase.status = status;
+    }
+  }
+  return { recordPhase, snapshot, timePhase, updatePhaseStatus };
 }
 
 function defaultOutputDir(repoRoot: string, startedAt: Date) {
@@ -182,15 +256,6 @@ async function defaultCommandRunner(
   });
 }
 
-async function pathExists(filePath: string) {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function readRemoteMetadata(
   outputDir: string,
 ): Promise<SlackDesktopRemoteMetadata | undefined> {
@@ -208,6 +273,7 @@ async function readRemoteMetadata(
       gatewayAlive:
         typeof candidate.gatewayAlive === "boolean" ? candidate.gatewayAlive : undefined,
       gatewayPid: typeof candidate.gatewayPid === "string" ? candidate.gatewayPid : undefined,
+      hydrateMode: typeof candidate.hydrateMode === "string" ? candidate.hydrateMode : undefined,
       openedUrl: typeof candidate.openedUrl === "string" ? candidate.openedUrl : undefined,
       qaExitCode: typeof candidate.qaExitCode === "number" ? candidate.qaExitCode : undefined,
     };
@@ -215,7 +281,6 @@ async function readRemoteMetadata(
     return undefined;
   }
 }
-
 async function resolveCrabboxBin(params: {
   env: NodeJS.ProcessEnv;
   explicit?: string;
@@ -359,6 +424,7 @@ function renderRemoteScript(params: {
   credentialRole: string;
   credentialSource: string;
   fastMode: boolean;
+  hydrateMode: MantisSlackDesktopHydrateMode;
   primaryModel: string;
   providerMode: string;
   remoteOutputDir: string;
@@ -375,6 +441,7 @@ function renderRemoteScript(params: {
   const primaryModel = shellQuote(params.primaryModel);
   const alternateModel = shellQuote(params.alternateModel);
   const fastMode = params.fastMode ? "1" : "0";
+  const hydrateMode = shellQuote(params.hydrateMode);
   const setupGateway = params.setupGateway ? "1" : "0";
   const slackChannelId = shellQuote(params.slackChannelId);
   const scenarioArgs = params.scenarioIds.flatMap((id) => ["--scenario", shellQuote(id)]).join(" ");
@@ -387,6 +454,7 @@ provider_mode=${providerMode}
 primary_model=${primaryModel}
 alternate_model=${alternateModel}
 fast_mode=${fastMode}
+hydrate_mode=${hydrateMode}
 setup_gateway=${setupGateway}
 slack_channel_id=${slackChannelId}
 rm -rf "$out"
@@ -496,8 +564,31 @@ qa_status=0
   set -e
   echo "remote pwd: $(pwd)"
   sudo corepack enable || sudo npm install -g pnpm@10.33.2
-  pnpm install --frozen-lockfile
-  pnpm build
+  if [ "$hydrate_mode" = "source" ]; then
+    if ! command -v make >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+      sudo apt-get update -y >>"$out/apt.log" 2>&1 || true
+      sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential python3 >>"$out/apt.log" 2>&1 || true
+    fi
+    if [ -d /var/cache/crabbox ]; then
+      export PNPM_STORE_DIR="\${PNPM_STORE_DIR:-/var/cache/crabbox/pnpm}"
+      mkdir -p "$PNPM_STORE_DIR" >/dev/null 2>&1 || true
+      pnpm config set store-dir "$PNPM_STORE_DIR" >/dev/null 2>&1 || true
+    fi
+    pnpm install --frozen-lockfile --prefer-offline
+    pnpm build
+  elif [ "$hydrate_mode" = "prehydrated" ]; then
+    test -d node_modules || {
+      echo "hydrate-mode=prehydrated requires node_modules in the remote workspace." >&2
+      exit 3
+    }
+    test -d dist || {
+      echo "hydrate-mode=prehydrated requires a built dist/ directory in the remote workspace." >&2
+      exit 3
+    }
+  else
+    echo "Unsupported hydrate mode: $hydrate_mode" >&2
+    exit 3
+  fi
   if [ "$setup_gateway" = "1" ]; then
     export OPENCLAW_HOME="$HOME/.openclaw-mantis/slack-openclaw"
     mkdir -p "$OPENCLAW_HOME"
@@ -570,6 +661,7 @@ cat >"$out/remote-metadata.json" <<MANTIS_REMOTE_METADATA
   "credentialSource": "$credential_source",
   "credentialRole": "$credential_role",
   "providerMode": "$provider_mode",
+  "hydrateMode": "$hydrate_mode",
   "capturedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 MANTIS_REMOTE_METADATA
@@ -595,6 +687,14 @@ function renderReport(summary: MantisSlackDesktopSmokeSummary) {
     `- Created by run: ${summary.crabbox.createdLease}`,
     `- State: ${summary.crabbox.state ?? "unknown"}`,
     `- VNC: \`${summary.crabbox.vncCommand}\``,
+    `- Hydrate mode: ${summary.hydrateMode}`,
+    "",
+    "## Timings",
+    "",
+    `- Total: ${Math.round(summary.timings.totalMs / 100) / 10}s`,
+    ...summary.timings.phases.map(
+      (phase) => `- ${phase.name}: ${Math.round(phase.durationMs / 100) / 10}s (${phase.status})`,
+    ),
     "",
     "## Artifacts",
     "",
@@ -772,6 +872,7 @@ export async function runMantisSlackDesktopSmoke(
 ): Promise<MantisSlackDesktopSmokeResult> {
   const env = buildCrabboxEnv(opts.env ?? process.env);
   const startedAt = (opts.now ?? (() => new Date()))();
+  const timer = createPhaseTimer(startedAt);
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const outputDir = await ensureRepoBoundDirectory(
     repoRoot,
@@ -797,6 +898,10 @@ export async function runMantisSlackDesktopSmoke(
   const primaryModel = trimToValue(opts.primaryModel) ?? DEFAULT_MODEL;
   const alternateModel = trimToValue(opts.alternateModel) ?? primaryModel;
   const fastMode = opts.fastMode ?? true;
+  const hydrateMode =
+    normalizeHydrateMode(opts.hydrateMode) ??
+    normalizeHydrateMode(env[HYDRATE_MODE_ENV]) ??
+    DEFAULT_HYDRATE_MODE;
   const gatewaySetup = opts.gatewaySetup ?? false;
   const scenarioIds = opts.scenarioIds ?? [];
   const slackChannelId =
@@ -824,33 +929,44 @@ export async function runMantisSlackDesktopSmoke(
   try {
     leaseId =
       leaseId ??
-      (await warmupCrabbox({
+      (await timer.timePhase("crabbox.warmup", () =>
+        warmupCrabbox({
+          crabboxBin,
+          cwd: repoRoot,
+          env,
+          idleTimeout,
+          machineClass,
+          provider,
+          runner,
+          ttl,
+        }),
+      ));
+    if (!leaseId) {
+      throw new Error("Crabbox lease id was not resolved.");
+    }
+    const resolvedLeaseId = leaseId;
+    const inspected = await timer.timePhase("crabbox.inspect", () =>
+      inspectCrabbox({
         crabboxBin,
         cwd: repoRoot,
         env,
-        idleTimeout,
-        machineClass,
+        leaseId: resolvedLeaseId,
         provider,
         runner,
-        ttl,
-      }));
-    const inspected = await inspectCrabbox({
-      crabboxBin,
-      cwd: repoRoot,
-      env,
-      leaseId,
-      provider,
-      runner,
-    });
-    const preparedCredentialEnv = await prepareGatewayCredentialEnv({
-      credentialRole,
-      credentialSource,
-      env,
-      gatewaySetup,
-    });
+      }),
+    );
+    const preparedCredentialEnv = await timer.timePhase("credentials.prepare", () =>
+      prepareGatewayCredentialEnv({
+        credentialRole,
+        credentialSource,
+        env,
+        gatewaySetup,
+      }),
+    );
     credentialLease = preparedCredentialEnv.credentialLease;
     leaseHeartbeat = preparedCredentialEnv.leaseHeartbeat;
     let remoteRunError: unknown;
+    const remoteRunStartedAt = new Date();
     await runCommand({
       command: crabboxBin,
       args: [
@@ -858,7 +974,7 @@ export async function runMantisSlackDesktopSmoke(
         "--provider",
         provider,
         "--id",
-        leaseId,
+        resolvedLeaseId,
         "--desktop",
         "--browser",
         "--shell",
@@ -868,6 +984,7 @@ export async function runMantisSlackDesktopSmoke(
           credentialRole,
           credentialSource,
           fastMode,
+          hydrateMode,
           primaryModel,
           providerMode,
           remoteOutputDir,
@@ -881,19 +998,27 @@ export async function runMantisSlackDesktopSmoke(
       env,
       runner,
       stdio: "inherit",
-    }).catch((error: unknown) => {
-      remoteRunError = error;
-      return { stdout: "", stderr: "" };
-    });
+    }).then(
+      () => {
+        timer.recordPhase("crabbox.remote_run", remoteRunStartedAt, "pass");
+      },
+      (error: unknown) => {
+        timer.recordPhase("crabbox.remote_run", remoteRunStartedAt, "fail");
+        remoteRunError = error;
+        return { stdout: "", stderr: "" };
+      },
+    );
     leaseHeartbeat?.throwIfFailed();
-    await copyRemoteArtifacts({
-      cwd: repoRoot,
-      env,
-      inspect: inspected,
-      outputDir,
-      remoteOutputDir,
-      runner,
-    });
+    await timer.timePhase("artifacts.copy", () =>
+      copyRemoteArtifacts({
+        cwd: repoRoot,
+        env,
+        inspect: inspected,
+        outputDir,
+        remoteOutputDir,
+        runner,
+      }),
+    );
     screenshotPath = path.join(outputDir, "slack-desktop-smoke.png");
     videoPath = path.join(outputDir, "slack-desktop-smoke.mp4");
     if (!(await pathExists(videoPath))) {
@@ -906,15 +1031,15 @@ export async function runMantisSlackDesktopSmoke(
     }
     const gatewaySetupCompleted =
       gatewaySetup && remoteMetadata?.qaExitCode === 0 && remoteMetadata.gatewayAlive === true;
+    if (remoteRunError && gatewaySetupCompleted) {
+      timer.updatePhaseStatus("crabbox.remote_run", "accepted");
+    }
     if (remoteRunError && !gatewaySetupCompleted) {
       throw remoteRunError;
     }
     if (gatewaySetup && !gatewaySetupCompleted) {
       throw new Error("Slack desktop gateway setup did not report a live OpenClaw gateway.");
     }
-    const ignoredRemoteRunError = remoteRunError
-      ? `Crabbox returned a non-zero command status after the gateway setup completed: ${formatErrorMessage(remoteRunError)}`
-      : undefined;
     summary = {
       artifacts: {
         reportPath,
@@ -926,19 +1051,20 @@ export async function runMantisSlackDesktopSmoke(
       crabbox: {
         bin: crabboxBin,
         createdLease,
-        id: leaseId,
+        id: resolvedLeaseId,
         provider,
         slug: inspected.slug,
         state: inspected.state,
-        vncCommand: `${crabboxBin} vnc --provider ${provider} --id ${leaseId} --open`,
+        vncCommand: `${crabboxBin} vnc --provider ${provider} --id ${resolvedLeaseId} --open`,
       },
       finishedAt: new Date().toISOString(),
+      hydrateMode: normalizeHydrateMode(remoteMetadata?.hydrateMode) ?? hydrateMode,
       outputDir,
       remoteOutputDir,
       slackUrl: trimToValue(remoteMetadata?.openedUrl) ?? slackUrl,
       startedAt: startedAt.toISOString(),
       status: "pass",
-      warning: ignoredRemoteRunError,
+      timings: timer.snapshot(),
     };
     return {
       outputDir,
@@ -968,11 +1094,13 @@ export async function runMantisSlackDesktopSmoke(
       },
       error: formatErrorMessage(error),
       finishedAt: new Date().toISOString(),
+      hydrateMode,
       outputDir,
       remoteOutputDir,
       slackUrl,
       startedAt: startedAt.toISOString(),
       status: "fail",
+      timings: timer.snapshot(),
     };
     await fs.writeFile(path.join(outputDir, "error.txt"), `${summary.error}\n`, "utf8");
     return {
@@ -986,6 +1114,7 @@ export async function runMantisSlackDesktopSmoke(
   } finally {
     if (summary) {
       summary.finishedAt = new Date().toISOString();
+      summary.timings = timer.snapshot();
       await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
       await fs.writeFile(reportPath, renderReport(summary), "utf8");
     }
