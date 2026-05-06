@@ -612,6 +612,7 @@ describe("generateAndAppendDreamNarrative", () => {
       model: "anthropic/claude-sonnet-4-6",
     });
     expect(subagent.waitForRun).toHaveBeenCalledOnce();
+    expect(subagent.waitForRun.mock.calls[0][0]).toMatchObject({ timeoutMs: 60_000 });
     expect(subagent.deleteSession).toHaveBeenCalledOnce();
 
     const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
@@ -744,6 +745,25 @@ describe("generateAndAppendDreamNarrative", () => {
       .then(() => true)
       .catch(() => false);
     expect(exists).toBe(false);
+  });
+
+  it("uses a configured narrative timeout when provided", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("The longer wait let the diary finish.");
+    const logger = createMockLogger();
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "rem", snippets: ["some memory"] },
+      timeoutMs: 120_000,
+      logger,
+    });
+
+    expect(subagent.waitForRun).toHaveBeenCalledWith({
+      runId: "run-123",
+      timeoutMs: 120_000,
+    });
   });
 
   it("handles subagent timeout gracefully", async () => {
