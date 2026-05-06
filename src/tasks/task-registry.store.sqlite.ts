@@ -6,6 +6,11 @@ import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { resolveTaskRegistryDir, resolveTaskRegistrySqlitePath } from "./task-registry.paths.js";
 import type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
+import {
+  normalizeSqliteNumber,
+  parseOptionalJsonValue,
+  serializeOptionalJson,
+} from "./task-store.sqlite-shared.js";
 
 type TaskRegistryRow = {
   task_id: string;
@@ -69,34 +74,11 @@ const TASK_REGISTRY_DIR_MODE = 0o700;
 const TASK_REGISTRY_FILE_MODE = 0o600;
 const TASK_REGISTRY_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
 
-function normalizeNumber(value: number | bigint | null): number | undefined {
-  if (typeof value === "bigint") {
-    return Number(value);
-  }
-  return typeof value === "number" ? value : undefined;
-}
-
-function serializeJson(value: unknown): string | null {
-  return value == null ? null : JSON.stringify(value);
-}
-
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Persisted JSON columns are typed by the receiving field.
-function parseJsonValue<T>(raw: string | null): T | undefined {
-  if (!raw?.trim()) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return undefined;
-  }
-}
-
 function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
-  const startedAt = normalizeNumber(row.started_at);
-  const endedAt = normalizeNumber(row.ended_at);
-  const lastEventAt = normalizeNumber(row.last_event_at);
-  const cleanupAfter = normalizeNumber(row.cleanup_after);
+  const startedAt = normalizeSqliteNumber(row.started_at);
+  const endedAt = normalizeSqliteNumber(row.ended_at);
+  const lastEventAt = normalizeSqliteNumber(row.last_event_at);
+  const cleanupAfter = normalizeSqliteNumber(row.cleanup_after);
   const requesterSessionKey =
     row.scope_kind === "system" ? "" : row.requester_session_key?.trim() || row.owner_key;
   return {
@@ -117,7 +99,7 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
     status: row.status,
     deliveryStatus: row.delivery_status,
     notifyPolicy: row.notify_policy,
-    createdAt: normalizeNumber(row.created_at) ?? 0,
+    createdAt: normalizeSqliteNumber(row.created_at) ?? 0,
     ...(startedAt != null ? { startedAt } : {}),
     ...(endedAt != null ? { endedAt } : {}),
     ...(lastEventAt != null ? { lastEventAt } : {}),
@@ -130,8 +112,8 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
 }
 
 function rowToTaskDeliveryState(row: TaskDeliveryStateRow): TaskDeliveryState {
-  const requesterOrigin = parseJsonValue<DeliveryContext>(row.requester_origin_json);
-  const lastNotifiedEventAt = normalizeNumber(row.last_notified_event_at);
+  const requesterOrigin = parseOptionalJsonValue<DeliveryContext>(row.requester_origin_json);
+  const lastNotifiedEventAt = normalizeSqliteNumber(row.last_notified_event_at);
   return {
     taskId: row.task_id,
     ...(requesterOrigin ? { requesterOrigin } : {}),
@@ -173,7 +155,7 @@ function bindTaskRecordBase(record: TaskRecord) {
 function bindTaskDeliveryState(state: TaskDeliveryState) {
   return {
     task_id: state.taskId,
-    requester_origin_json: serializeJson(state.requesterOrigin),
+    requester_origin_json: serializeOptionalJson(state.requesterOrigin),
     last_notified_event_at: state.lastNotifiedEventAt ?? null,
   };
 }

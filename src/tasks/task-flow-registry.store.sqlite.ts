@@ -9,6 +9,11 @@ import {
 } from "./task-flow-registry.paths.js";
 import type { TaskFlowRegistryStoreSnapshot } from "./task-flow-registry.store.types.js";
 import type { TaskFlowRecord, TaskFlowSyncMode, JsonValue } from "./task-flow-registry.types.js";
+import {
+  normalizeSqliteNumber,
+  parseOptionalJsonValue,
+  serializeOptionalJson,
+} from "./task-store.sqlite-shared.js";
 
 type FlowRegistryRow = {
   flow_id: string;
@@ -51,29 +56,6 @@ const FLOW_REGISTRY_DIR_MODE = 0o700;
 const FLOW_REGISTRY_FILE_MODE = 0o600;
 const FLOW_REGISTRY_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
 
-function normalizeNumber(value: number | bigint | null): number | undefined {
-  if (typeof value === "bigint") {
-    return Number(value);
-  }
-  return typeof value === "number" ? value : undefined;
-}
-
-function serializeJson(value: unknown): string | null {
-  return value === undefined ? null : JSON.stringify(value);
-}
-
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Persisted JSON columns are typed by the receiving field.
-function parseJsonValue<T>(raw: string | null): T | undefined {
-  if (!raw?.trim()) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return undefined;
-  }
-}
-
 function rowToSyncMode(row: FlowRegistryRow): TaskFlowSyncMode {
   if (row.sync_mode === "task_mirrored" || row.sync_mode === "managed") {
     return row.sync_mode;
@@ -82,18 +64,18 @@ function rowToSyncMode(row: FlowRegistryRow): TaskFlowSyncMode {
 }
 
 function rowToFlowRecord(row: FlowRegistryRow): TaskFlowRecord {
-  const endedAt = normalizeNumber(row.ended_at);
-  const cancelRequestedAt = normalizeNumber(row.cancel_requested_at);
-  const requesterOrigin = parseJsonValue<DeliveryContext>(row.requester_origin_json);
-  const stateJson = parseJsonValue<JsonValue>(row.state_json);
-  const waitJson = parseJsonValue<JsonValue>(row.wait_json);
+  const endedAt = normalizeSqliteNumber(row.ended_at);
+  const cancelRequestedAt = normalizeSqliteNumber(row.cancel_requested_at);
+  const requesterOrigin = parseOptionalJsonValue<DeliveryContext>(row.requester_origin_json);
+  const stateJson = parseOptionalJsonValue<JsonValue>(row.state_json);
+  const waitJson = parseOptionalJsonValue<JsonValue>(row.wait_json);
   return {
     flowId: row.flow_id,
     syncMode: rowToSyncMode(row),
     ownerKey: row.owner_key,
     ...(requesterOrigin ? { requesterOrigin } : {}),
     ...(row.controller_id ? { controllerId: row.controller_id } : {}),
-    revision: normalizeNumber(row.revision) ?? 0,
+    revision: normalizeSqliteNumber(row.revision) ?? 0,
     status: row.status,
     notifyPolicy: row.notify_policy,
     goal: row.goal,
@@ -103,8 +85,8 @@ function rowToFlowRecord(row: FlowRegistryRow): TaskFlowRecord {
     ...(stateJson !== undefined ? { stateJson } : {}),
     ...(waitJson !== undefined ? { waitJson } : {}),
     ...(cancelRequestedAt != null ? { cancelRequestedAt } : {}),
-    createdAt: normalizeNumber(row.created_at) ?? 0,
-    updatedAt: normalizeNumber(row.updated_at) ?? 0,
+    createdAt: normalizeSqliteNumber(row.created_at) ?? 0,
+    updatedAt: normalizeSqliteNumber(row.updated_at) ?? 0,
     ...(endedAt != null ? { endedAt } : {}),
   };
 }
@@ -114,7 +96,7 @@ function bindFlowRecord(record: TaskFlowRecord) {
     flow_id: record.flowId,
     sync_mode: record.syncMode,
     owner_key: record.ownerKey,
-    requester_origin_json: serializeJson(record.requesterOrigin),
+    requester_origin_json: serializeOptionalJson(record.requesterOrigin),
     controller_id: record.controllerId ?? null,
     revision: record.revision,
     status: record.status,
@@ -123,8 +105,8 @@ function bindFlowRecord(record: TaskFlowRecord) {
     current_step: record.currentStep ?? null,
     blocked_task_id: record.blockedTaskId ?? null,
     blocked_summary: record.blockedSummary ?? null,
-    state_json: serializeJson(record.stateJson),
-    wait_json: serializeJson(record.waitJson),
+    state_json: serializeOptionalJson(record.stateJson, { preserveNull: true }),
+    wait_json: serializeOptionalJson(record.waitJson, { preserveNull: true }),
     cancel_requested_at: record.cancelRequestedAt ?? null,
     created_at: record.createdAt,
     updated_at: record.updatedAt,

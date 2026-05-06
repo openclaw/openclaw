@@ -3,6 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { Type, type TSchema } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
+import { parseFeishuDocumentLink } from "./document-link.js";
 import { createFeishuToolClient } from "./tool-account.js";
 
 // ============ Helpers ============
@@ -78,26 +79,17 @@ const FIELD_TYPE_NAMES: Record<number, string> = {
 
 /** Parse bitable URL and extract tokens */
 function parseBitableUrl(url: string): { token: string; tableId?: string; isWiki: boolean } | null {
-  try {
-    const u = new URL(url);
-    const tableId = u.searchParams.get("table") ?? undefined;
-
-    // Wiki format: /wiki/XXXXX?table=YYY
-    const wikiMatch = u.pathname.match(/\/wiki\/([A-Za-z0-9]+)/);
-    if (wikiMatch) {
-      return { token: wikiMatch[1], tableId, isWiki: true };
-    }
-
-    // Base format: /base/XXXXX?table=YYY
-    const baseMatch = u.pathname.match(/\/base\/([A-Za-z0-9]+)/);
-    if (baseMatch) {
-      return { token: baseMatch[1], tableId, isWiki: false };
-    }
-
-    return null;
-  } catch {
+  const parsed = parseFeishuDocumentLink(url);
+  if (!parsed) {
     return null;
   }
+  if (parsed.urlKind === "wiki") {
+    return { token: parsed.token, tableId: parsed.tableId, isWiki: true };
+  }
+  if (parsed.urlKind === "base" || parsed.urlKind === "bitable") {
+    return { token: parsed.token, tableId: parsed.tableId, isWiki: false };
+  }
+  return null;
 }
 
 /** Get app_token from wiki node_token */
@@ -122,7 +114,9 @@ async function getAppTokenFromWiki(client: Lark.Client, nodeToken: string): Prom
 async function getBitableMeta(client: Lark.Client, url: string) {
   const parsed = parseBitableUrl(url);
   if (!parsed) {
-    throw new Error("Invalid URL format. Expected /base/XXX or /wiki/XXX URL");
+    throw new Error(
+      "Invalid URL format. Expected /base/XXX, /bitable/XXX, or /wiki/XXX URL (with optional /space prefix)",
+    );
   }
 
   let appToken: string;
@@ -480,7 +474,8 @@ async function updateRecord(
 
 const GetMetaSchema = Type.Object({
   url: Type.String({
-    description: "Bitable URL. Supports both formats: /base/XXX?table=YYY or /wiki/XXX?table=YYY",
+    description:
+      "Bitable URL. Supports /base/XXX, /bitable/XXX, or /wiki/XXX with optional /space prefix and optional ?table=YYY",
   }),
 });
 
