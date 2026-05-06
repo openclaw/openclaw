@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { maybeRepairLegacyCronStore, noteLegacyWhatsAppCrontabHealthCheck } from "./doctor-cron.js";
 
 type TerminalNote = (message: string, title?: string) => void;
@@ -14,13 +15,23 @@ vi.mock("../terminal/note.js", () => ({
 }));
 
 let tempRoot: string | null = null;
+let originalOpenClawStateDir: string | undefined;
 
 async function makeTempStorePath() {
   tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-cron-"));
+  originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = path.join(tempRoot, "state");
   return path.join(tempRoot, "cron", "jobs.json");
 }
 
 afterEach(async () => {
+  closeOpenClawStateDatabaseForTest();
+  if (originalOpenClawStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
+  }
+  originalOpenClawStateDir = undefined;
   noteMock.mockClear();
   if (tempRoot) {
     await fs.rm(tempRoot, { recursive: true, force: true });
@@ -145,6 +156,97 @@ describe("maybeRepairLegacyCronStore", () => {
 
     expectNoteContaining("Legacy cron job storage detected", "Cron");
     expectNoteContaining("Cron store normalized", "Doctor changes");
+  });
+
+  it("imports legacy cron runtime state sidecars into SQLite", async () => {
+    const storePath = await makeTempStorePath();
+    const statePath = storePath.replace(/\.json$/, "-state.json");
+    await writeCronStore(storePath, [
+      {
+        id: "stateful-job",
+        name: "Stateful job",
+        enabled: true,
+        createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "tick" },
+        state: {},
+      },
+    ]);
+    await fs.writeFile(
+      statePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: {
+            "stateful-job": {
+              updatedAtMs: Date.parse("2026-02-01T00:01:00.000Z"),
+              state: { nextRunAtMs: Date.parse("2026-02-01T00:02:00.000Z") },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const { loadCronStore } = await import("../cron/store.js");
+    const loaded = await loadCronStore(storePath);
+    expect(loaded.jobs[0]?.updatedAtMs).toBe(Date.parse("2026-02-01T00:01:00.000Z"));
+    expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(Date.parse("2026-02-01T00:02:00.000Z"));
+    await expect(fs.stat(statePath)).rejects.toThrow();
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("Imported 1 cron runtime state row into SQLite"),
+      "Doctor changes",
+    );
+  });
+
+  it("imports legacy cron run-log files into SQLite", async () => {
+    const storePath = await makeTempStorePath();
+    const logPath = path.join(path.dirname(storePath), "runs", "stateful-job.jsonl");
+    await writeCronStore(storePath, [
+      {
+        id: "stateful-job",
+        name: "Stateful job",
+        enabled: true,
+        createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "tick" },
+        state: {},
+      },
+    ]);
+    await fs.mkdir(path.dirname(logPath), { recursive: true });
+    await fs.writeFile(
+      logPath,
+      `${JSON.stringify({ ts: 1, jobId: "stateful-job", action: "finished", status: "ok" })}\n`,
+      "utf-8",
+    );
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const { readCronRunLogEntriesFromSqliteSync } = await import("../cron/run-log.js");
+    expect(readCronRunLogEntriesFromSqliteSync(storePath, { jobId: "stateful-job" })).toEqual([
+      expect.objectContaining({ ts: 1, status: "ok" }),
+    ]);
+    await expect(fs.stat(logPath)).rejects.toThrow();
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("Imported 1 cron run-log row from 1 legacy run-log file"),
+      "Doctor changes",
+    );
   });
 
   it("repairs malformed persisted cron ids before list rendering sees them", async () => {

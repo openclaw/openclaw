@@ -12,7 +12,7 @@ import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronJobActive } from "../cron/active-jobs.js";
-import { readCronRunLogEntriesSync, resolveCronRunLogPath } from "../cron/run-log.js";
+import { readCronRunLogEntriesFromSqliteSync } from "../cron/run-log.js";
 import type { CronRunLogEntry } from "../cron/run-log.js";
 import { loadCronStoreSync, resolveCronStorePath } from "../cron/store.js";
 import type { CronJob, CronStoreFile } from "../cron/types.js";
@@ -103,8 +103,7 @@ type TaskRegistryMaintenanceRuntime = {
   isCronRuntimeAuthoritative: () => boolean;
   resolveCronStorePath: typeof resolveCronStorePath;
   loadCronStoreSync: typeof loadCronStoreSync;
-  resolveCronRunLogPath: typeof resolveCronRunLogPath;
-  readCronRunLogEntriesSync: typeof readCronRunLogEntriesSync;
+  readCronRunLogEntriesSync: typeof readCronRunLogEntriesFromSqliteSync;
 };
 
 const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
@@ -143,8 +142,7 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   isCronRuntimeAuthoritative: () => configuredCronRuntimeAuthoritative,
   resolveCronStorePath: () => configuredCronStorePath ?? resolveCronStorePath(),
   loadCronStoreSync,
-  resolveCronRunLogPath,
-  readCronRunLogEntriesSync,
+  readCronRunLogEntriesSync: readCronRunLogEntriesFromSqliteSync,
 };
 
 let taskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime =
@@ -331,11 +329,7 @@ function getCronRunLogEntries(context: CronRecoveryContext, jobId: string): Cron
   }
   let entries: CronRunLogEntry[] = [];
   try {
-    const logPath = taskRegistryMaintenanceRuntime.resolveCronRunLogPath({
-      storePath: context.storePath,
-      jobId,
-    });
-    entries = taskRegistryMaintenanceRuntime.readCronRunLogEntriesSync(logPath, {
+    entries = taskRegistryMaintenanceRuntime.readCronRunLogEntriesSync(context.storePath, {
       jobId,
       limit: 5000,
     });

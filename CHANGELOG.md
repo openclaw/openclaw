@@ -508,6 +508,7 @@ Docs: https://docs.openclaw.ai
 - Slack: keep Socket Mode's native reconnect enabled so transient ping/pong misses can recover without forcing a full provider rebuild. Fixes #77933. Thanks @bmoran1022 and @brokemac79.
 - Cron: preserve cron timeout results when an isolated agent turn's `cron-nested` lane watchdog fires, preventing internal command-lane or model-fallback timeout text from being persisted. Fixes #77703. (#78168) Thanks @brokemac79 and @transxtech.
 - Gateway/sessions: remove the automatic cron session reaper and retired `cron.sessionRetention`; use `openclaw sessions cleanup` for session-row maintenance while cron run-log pruning remains under `cron.runLog`.
+- Cron/state: store runtime schedule state and run history in the shared SQLite state database; `openclaw doctor --fix` imports legacy `jobs-state.json` and `cron/runs/*.jsonl` files.
 - PR triage: mark external pull requests with `proof: supplied` when Barnacle finds structured real behavior proof, keep stale negative proof labels in sync across CRLF-edited PR bodies, and let ClawSweeper own the stronger `proof: sufficient` judgement.
 - ACPX/Codex: preserve trusted Codex project declarations when launching isolated Codex ACP sessions, avoiding interactive trust prompts in headless runs. Thanks @Stedyclaw.
 - ACPX/Codex: reap stale OpenClaw-owned ACPX/Codex ACP process trees on startup and after ACP session close, preventing orphaned harness processes from slowing the Gateway. Thanks @91wan.

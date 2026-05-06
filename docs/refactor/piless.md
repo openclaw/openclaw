@@ -73,8 +73,8 @@ This plan has started landing in slices:
   replay, chat/TUI history, restart/subagent recovery, managed media indexing,
   token estimation, title/preview/usage helpers, runtime transcript repair,
   bootstrap completion checks, and bounded inspection all use the scoped SQLite
-  transcript. Legacy JSONL import is doctor/import/debug only: `openclaw doctor
---fix` builds the transcript database from old files and removes the JSONL
+  transcript. Legacy JSONL import is doctor/import/debug only:
+  `openclaw doctor --fix` builds the transcript database from old files and removes the JSONL
   sources after successful import. Runtime paths do not import, prune, or repair
   JSONL files. Pre-compaction checkpoints are SQLite transcript snapshots, not
   `.checkpoint.*.jsonl` copies; branch/restore and checkpoint pruning now work
@@ -101,6 +101,12 @@ This plan has started landing in slices:
 - Managed outgoing image attachment metadata now uses the shared SQLite `kv`
   store as the primary record path. Older per-attachment JSON files import into
   SQLite when encountered and are removed after import.
+- Cron runtime schedule state and run history now use the shared SQLite state
+  database. `openclaw doctor --fix` imports legacy `jobs-state.json` and
+  `cron/runs/*.jsonl` files into SQLite and removes those file sources after a
+  successful import. Runtime cron paths no longer write new schedule-state or
+  run-history JSON files; `jobs.json` remains the hand-editable job definition
+  file.
 - The subagent run registry now uses the shared SQLite `kv` store as the
   primary record path. Legacy `subagents/runs.json` files import into SQLite
   when SQLite is empty and are removed after import.
