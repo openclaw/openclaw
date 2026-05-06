@@ -938,6 +938,7 @@ describe("runCodexAppServerAttempt", () => {
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
     expect(llmInput).toHaveBeenCalled();
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
     expect(llmInput.mock.calls).toEqual(
       expect.arrayContaining([
