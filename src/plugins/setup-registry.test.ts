@@ -8,10 +8,10 @@ import {
   resetRegistryJitiMocks,
 } from "./test-helpers/registry-jiti-mocks.js";
 
-// plugin-module-loader-cache prefers native require() for compiled .js before falling
-// back to jiti. These tests scripts plugin-loading behaviour through the
-// source-transform mock — disable the native-require fast path so the mocked source transformer
-// stays authoritative for the test fixture files on disk.
+// plugin-module-loader-cache prefers native require() for compiled .js before
+// falling back to jiti. These tests script plugin-loading behavior through the
+// source-transform mock, so force the fallback path and keep the fixture
+// transformer authoritative.
 vi.mock("./native-module-require.js", () => ({
   isJavaScriptModulePath: (_modulePath: string) => false,
   tryNativeRequireJavaScriptModule: (_modulePath: string) => ({ ok: false }),
@@ -210,7 +210,7 @@ describe("setup-registry module loader", () => {
     );
     expect(mocks.createJiti.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({
-        tryNative: false,
+        tryNative: true,
       }),
     );
   });

@@ -161,7 +161,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/allow-from` | `formatAllowFromLowercase` |
     | `plugin-sdk/channel-secret-runtime` | Narrow secret-contract collection helpers for channel/plugin secret surfaces |
     | `plugin-sdk/secret-ref-runtime` | Narrow `coerceSecretRef` and SecretRef typing helpers for secret-contract/config parsing |
-    | `plugin-sdk/security-runtime` | Shared trust, DM gating, external-content, sensitive text redaction, constant-time secret comparison, and secret-collection helpers |
+    | `plugin-sdk/security-runtime` | Shared trust, DM gating, root-bounded file/path helpers including create-only writes, sync/async atomic file replacement, sibling temp writes, cross-device move fallback, private file-store helpers, symlink-parent guards, external-content, sensitive text redaction, constant-time secret comparison, and secret-collection helpers |
     | `plugin-sdk/ssrf-policy` | Host allowlist and private-network SSRF policy helpers |
     | `plugin-sdk/ssrf-dispatcher` | Narrow pinned-dispatcher helpers without the broad infra runtime surface |
     | `plugin-sdk/ssrf-runtime` | Pinned-dispatcher, SSRF-guarded fetch, SSRF error, and SSRF policy helpers |
@@ -210,7 +210,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/param-readers` | Common tool/CLI param readers |
     | `plugin-sdk/tool-payload` | Extract normalized payloads from tool result objects |
     | `plugin-sdk/tool-send` | Extract canonical send target fields from tool args |
-    | `plugin-sdk/temp-path` | Shared temp-download path helpers |
+    | `plugin-sdk/temp-path` | Shared temp-download path helpers and private secure temp workspaces |
     | `plugin-sdk/logging-core` | Subsystem logger and redaction helpers |
     | `plugin-sdk/markdown-table-runtime` | Markdown table mode and conversion helpers |
     | `plugin-sdk/model-session-runtime` | Model/session override helpers such as `applyModelOverrideToSessionEntry` and `resolveAgentMaxConcurrent` |

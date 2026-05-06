@@ -166,7 +166,7 @@ That stages grounded durable candidates into the short-term dreaming store while
   <Accordion title="1. Config normalization">
     If the config contains legacy value shapes (for example `messages.ackReaction` without a channel-specific override), doctor normalizes them into the current schema.
 
-    That includes legacy Talk flat fields. Current public Talk config is `talk.provider` + `talk.providers.<provider>`. Doctor rewrites old `talk.voiceId` / `talk.voiceAliases` / `talk.modelId` / `talk.outputFormat` / `talk.apiKey` shapes into the provider map.
+    That includes legacy Talk flat fields. Current public Talk speech config is `talk.provider` + `talk.providers.<provider>`, and realtime voice config is `talk.realtime.*`. Doctor rewrites old `talk.voiceId` / `talk.voiceAliases` / `talk.modelId` / `talk.outputFormat` / `talk.apiKey` shapes into the provider map, and rewrites legacy top-level realtime selectors (`talk.mode`, `talk.transport`, `talk.brain`, `talk.model`, `talk.voice`) into `talk.realtime`.
 
     Doctor also warns when `plugins.allow` is non-empty and tool policy uses
     wildcard or plugin-owned tool entries. `tools.allow: ["*"]` only matches tools
@@ -199,6 +199,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - `routing.bindings` → top-level `bindings`
     - `routing.agents`/`routing.defaultAgentId` → `agents.list` + `agents.list[].default`
     - legacy `talk.voiceId`/`talk.voiceAliases`/`talk.modelId`/`talk.outputFormat`/`talk.apiKey` → `talk.provider` + `talk.providers.<provider>`
+    - legacy top-level realtime Talk selectors (`talk.mode`/`talk.transport`/`talk.brain`/`talk.model`/`talk.voice`) + `talk.provider`/`talk.providers` → `talk.realtime`
     - `routing.agentToAgent` → `tools.agentToAgent`
     - `routing.transcribeAudio` → `tools.media.audio.models`
     - `messages.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `messages.tts.providers.<provider>`

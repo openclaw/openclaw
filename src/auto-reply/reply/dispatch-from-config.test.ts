@@ -3099,7 +3099,7 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
-  it("keeps diagnostic progress when source progress callbacks are suppressed", async () => {
+  it("forwards non-answer progress callbacks when source replies are suppressed", async () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
     const dispatcher = createDispatcher();
@@ -3131,6 +3131,7 @@ describe("dispatchReplyFromConfig", () => {
       dispatcher,
       replyOptions: {
         sourceReplyDeliveryMode: "message_tool_only",
+        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
         onToolStart: callbacks.toolStart,
         onItemEvent: callbacks.itemEvent,
         onCommandOutput: callbacks.commandOutput,
@@ -3138,9 +3139,9 @@ describe("dispatchReplyFromConfig", () => {
       replyResolver,
     });
 
-    expect(callbacks.toolStart).not.toHaveBeenCalled();
-    expect(callbacks.itemEvent).not.toHaveBeenCalled();
-    expect(callbacks.commandOutput).not.toHaveBeenCalled();
+    expect(callbacks.toolStart).toHaveBeenCalledTimes(1);
+    expect(callbacks.itemEvent).toHaveBeenCalledTimes(1);
+    expect(callbacks.commandOutput).toHaveBeenCalledTimes(1);
     expect(diagnosticMocks.markDiagnosticSessionProgress).toHaveBeenCalledTimes(3);
     expect(diagnosticMocks.markDiagnosticSessionProgress).toHaveBeenCalledWith({
       sessionKey: "agent:main:discord:channel:C1",
@@ -4578,6 +4579,38 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       }),
       expect.any(Object),
     );
+  });
+
+  it("preserves hook-blocked metadata when source delivery is message-tool-only", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const blockedReply = setReplyPayloadMetadata(
+      { text: "Your message could not be sent: blocked by policy-plugin", isError: true },
+      { beforeAgentRunBlocked: true },
+    );
+    const replyResolver = vi.fn(async () => blockedReply satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:session" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(result.beforeAgentRunBlocked).toBe(true);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
   });
 
   it("delivers marked runtime failure notices in message-tool-only mode", async () => {

@@ -7,7 +7,7 @@ import type { ChannelConfigSchema } from "../channels/plugins/types.config.js";
 import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { openRootFileSync } from "../infra/boundary-file-read.js";
 import {
   createProfiler,
   formatPluginLoadProfileLine,
@@ -262,7 +262,7 @@ function formatBundledEntryModuleOpenFailure(params: {
   specifier: string;
   resolvedPath: string;
   boundaryRoot: string;
-  failure: Extract<ReturnType<typeof openBoundaryFileSync>, { ok: false }>;
+  failure: Extract<ReturnType<typeof openRootFileSync>, { ok: false }>;
 }): string {
   const importerPath = fileURLToPath(params.importMetaUrl);
   const errorDetail =
@@ -286,11 +286,11 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
 
   let firstFailure: {
     candidate: BundledEntryModuleCandidate;
-    failure: Extract<ReturnType<typeof openBoundaryFileSync>, { ok: false }>;
+    failure: Extract<ReturnType<typeof openRootFileSync>, { ok: false }>;
   } | null = null;
 
   for (const candidate of candidates) {
-    const opened = openBoundaryFileSync({
+    const opened = openRootFileSync({
       absolutePath: candidate.path,
       rootPath: candidate.boundaryRoot,
       boundaryLabel: "plugin root",
