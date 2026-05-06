@@ -347,6 +347,43 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
   });
 
+  it("includes HOME in passEnv for exec SecretRef without a doctor warning", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const warnings: string[] = [];
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv(),
+      port: 3000,
+      runtime: "node",
+      config: {
+        secrets: {
+          providers: {
+            onepassword: {
+              source: "exec",
+              command: "/usr/bin/op",
+              args: ["read", "op://Private/Discord/password"],
+              passEnv: ["HOME", "OP_SERVICE_ACCOUNT_TOKEN"],
+              allowInsecurePath: true,
+            },
+          },
+        },
+        channels: {
+          discord: {
+            token: { source: "exec", provider: "onepassword", id: "value" },
+          },
+        },
+      },
+      warn: (msg) => warnings.push(msg),
+    });
+
+    expect(warnings.filter((w) => w.includes("HOME"))).toHaveLength(0);
+    expect(plan.environment.HOME).toBe(isolatedHome);
+  });
+
   it("does not include passEnv values for unused exec SecretRef providers", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {

@@ -29,6 +29,7 @@ import type { GatewayServiceEnvironmentValueSource } from "../daemon/service-typ
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
+  isDangerousHostInheritedEnvVarName,
   normalizeEnvVarKey,
 } from "../infra/host-env-security.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
@@ -212,7 +213,7 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
         );
         continue;
       }
-      if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
+      if (isDangerousHostInheritedEnvVarName(key)) {
         params.warn?.(
           `Exec SecretRef passEnv ref "${key}" blocked by host-env security policy`,
           "Config SecretRef",
