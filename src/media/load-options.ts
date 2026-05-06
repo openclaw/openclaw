@@ -95,7 +95,6 @@ export function buildOutboundMediaLoadOptions(
       ...(params.trustExplicitProxyDns !== undefined
         ? { trustExplicitProxyDns: params.trustExplicitProxyDns }
         : {}),
-      hostReadCapability: true,
       ...(params.optimizeImages !== undefined ? { optimizeImages: params.optimizeImages } : {}),
       ...(workspaceDir ? { workspaceDir } : {}),
     };

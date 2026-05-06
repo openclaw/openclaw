@@ -69,7 +69,6 @@ describe("loadOutboundMediaFromUrl", () => {
       maxBytes: 2048,
       localRoots: ["/tmp/workspace-agent"],
       readFile: mediaReadFile,
-      hostReadCapability: true,
     });
   });
 
@@ -100,7 +99,6 @@ describe("loadOutboundMediaFromUrl", () => {
       maxBytes: 2048,
       localRoots: "any",
       readFile: mediaReadFile,
-      hostReadCapability: true,
     });
   });
 });
