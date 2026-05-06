@@ -1,1 +1,1 @@
-export type PluginOrigin = "bundled" | "global" | "workspace" | "config";
+export type PluginOrigin = "system" | "bundled" | "global" | "workspace" | "config";

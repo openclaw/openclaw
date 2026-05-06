@@ -138,6 +138,18 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
     pluginId: string,
   ) => boolean;
 }): PluginActivationDecision {
+  // System-tier plugins are always enabled and cannot be suppressed by user
+  // config (deny lists, allowlists, per-entry disabled, or global toggle).
+  if (params.origin === "system") {
+    return {
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: true,
+      source: "explicit",
+      reason: "system plugin (always enabled)",
+    };
+  }
+
   const activationSource = params.activationSource ?? {
     plugins: params.config,
     rootConfig: params.rootConfig,

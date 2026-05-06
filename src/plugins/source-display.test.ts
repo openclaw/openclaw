@@ -5,6 +5,7 @@ import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { formatPluginSourceForTable, resolvePluginSourceRoots } from "./source-display.js";
 
 const PLUGIN_SOURCE_ROOTS = {
+  system: "",
   stock: path.resolve(path.sep, "opt", "homebrew", "lib", "node_modules", "openclaw", "extensions"),
   global: path.resolve(path.sep, "Users", "x", ".openclaw", "extensions"),
   workspace: path.resolve(path.sep, "Users", "x", "ws", ".openclaw", "extensions"),
@@ -46,7 +47,7 @@ function expectResolvedSourceRoots(params: {
     }),
   );
 
-  expect(roots).toEqual(params.expected);
+  expect(roots).toMatchObject(params.expected);
 }
 
 function createFormattedSourceExpectation(

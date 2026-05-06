@@ -2091,8 +2091,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    // System-tier plugins get implicit full permissions — treat them like
+    // bundled plugins and override any restrictive policy from user config.
+    const isSystemPlugin = record.origin === "system";
+    const effectivePolicy: PluginTypedHookPolicy | undefined = isSystemPlugin
+      ? { allowPromptInjection: true, allowConversationAccess: true }
+      : policy;
+
     let effectiveHandler = handler;
-    if (policy?.allowPromptInjection === false && isPromptInjectionHookName(hookName)) {
+    if (effectivePolicy?.allowPromptInjection === false && isPromptInjectionHookName(hookName)) {
       if (hookName !== "before_agent_start") {
         pushDiagnostic({
           level: "warn",
@@ -2113,8 +2120,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       ) as PluginHookHandlerMap[K];
     }
     if (isConversationHookName(hookName)) {
-      const explicitConversationAccess = policy?.allowConversationAccess;
-      if (record.origin !== "bundled" && explicitConversationAccess !== true) {
+      const explicitConversationAccess = effectivePolicy?.allowConversationAccess;
+      if (record.origin !== "bundled" && record.origin !== "system" && explicitConversationAccess !== true) {
         pushDiagnostic({
           level: "warn",
           pluginId: record.id,
@@ -2135,13 +2142,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         return;
       }
     }
+    // System-tier hooks get a reserved priority band (>= 10000) so they
+    // always run before user/bundled hooks (which default to 0-999).
+    const SYSTEM_PRIORITY_FLOOR = 10000;
+    const effectivePriority = isSystemPlugin
+      ? Math.max(opts?.priority ?? SYSTEM_PRIORITY_FLOOR, SYSTEM_PRIORITY_FLOOR)
+      : opts?.priority;
+
     const timeoutMs = resolveTypedHookTimeoutMs({ hookName, opts, policy });
     record.hookCount += 1;
     registry.typedHooks.push({
       pluginId: record.id,
       hookName,
       handler: effectiveHandler,
-      priority: opts?.priority,
+      priority: effectivePriority,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       source: record.source,
     } as TypedPluginHookRegistration);
@@ -2422,7 +2436,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               },
               registerSessionExtension: (extension) => registerSessionExtension(record, extension),
               enqueueNextTurnInjection: (injection) => {
-                if (params.hookPolicy?.allowPromptInjection === false) {
+                if (record.origin !== "system" && params.hookPolicy?.allowPromptInjection === false) {
                   pushDiagnostic({
                     level: "warn",
                     pluginId: record.id,

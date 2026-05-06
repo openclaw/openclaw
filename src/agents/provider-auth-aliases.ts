@@ -23,6 +23,7 @@ type ProviderAuthAliasCandidate = {
 };
 
 const PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
+  system: -1,
   config: 0,
   bundled: 1,
   global: 2,
