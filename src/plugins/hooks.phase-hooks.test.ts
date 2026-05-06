@@ -51,12 +51,20 @@ describe("phase hooks merger", () => {
       name: "before_model_resolve keeps higher-priority override values",
       hookName: "before_model_resolve" as const,
       hooks: [
-        { pluginId: "low", result: { modelOverride: "demo-low-priority-model" }, priority: 1 },
+        {
+          pluginId: "low",
+          result: {
+            modelOverride: "demo-low-priority-model",
+            authProfileOverride: "demo-low-priority-profile",
+          },
+          priority: 1,
+        },
         {
           pluginId: "high",
           result: {
             modelOverride: "demo-high-priority-model",
             providerOverride: "demo-provider",
+            authProfileOverride: "demo-high-priority-profile",
           },
           priority: 10,
         },
@@ -64,6 +72,7 @@ describe("phase hooks merger", () => {
       expected: {
         modelOverride: "demo-high-priority-model",
         providerOverride: "demo-provider",
+        authProfileOverride: "demo-high-priority-profile",
       },
     },
     {

@@ -140,7 +140,12 @@ vi.mock("./agent-runner-utils.js", () => ({
   buildEmbeddedRunExecutionParams: (params: {
     provider: string;
     model: string;
-    run: { provider?: string; authProfileId?: string; authProfileIdSource?: "auto" | "user" };
+    run: {
+      provider?: string;
+      authProfileId?: string;
+      authProfileIdSource?: "auto" | "user";
+      authProfileIdCompactionCount?: number;
+    };
   }) => ({
     embeddedContext: {},
     senderContext: {},
@@ -150,6 +155,10 @@ vi.mock("./agent-runner-utils.js", () => ({
       authProfileId: params.provider === params.run.provider ? params.run.authProfileId : undefined,
       authProfileIdSource:
         params.provider === params.run.provider ? params.run.authProfileIdSource : undefined,
+      authProfileIdCompactionCount:
+        params.provider === params.run.provider
+          ? params.run.authProfileIdCompactionCount
+          : undefined,
     },
   }),
   resolveQueuedReplyRuntimeConfig: <T>(config: T) => config,
@@ -3307,6 +3316,41 @@ describe("runAgentTurnWithFallback", () => {
       modelOverrideSource: "auto",
       authProfileOverride: "anthropic:openclaw",
       authProfileOverrideSource: "user",
+    });
+  });
+
+  it("keeps legacy auto auth marker when queued fallback only changes model", async () => {
+    const applyFallbackCandidateSelectionToEntry =
+      await getApplyFallbackCandidateSelectionToEntry();
+    const entry = {
+      sessionId: "session",
+      updatedAt: 1,
+      authProfileOverride: "anthropic:auto",
+      authProfileOverrideCompactionCount: 4,
+    } as SessionEntry;
+
+    const { updated } = applyFallbackCandidateSelectionToEntry({
+      entry,
+      run: {
+        provider: "anthropic",
+        model: "claude-opus",
+        authProfileId: "anthropic:auto",
+        authProfileIdCompactionCount: 4,
+      } as FollowupRun["run"],
+      provider: "anthropic",
+      model: "claude-sonnet",
+      now: 123,
+    });
+
+    expect(updated).toBe(true);
+    expect(entry).toMatchObject({
+      updatedAt: 123,
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet",
+      modelOverrideSource: "auto",
+      authProfileOverride: "anthropic:auto",
+      authProfileOverrideSource: "auto",
+      authProfileOverrideCompactionCount: 4,
     });
   });
 });

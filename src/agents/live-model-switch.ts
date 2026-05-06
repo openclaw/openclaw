@@ -57,11 +57,16 @@ export function resolveLiveSessionModelSelection(params: {
     defaultModelRef.provider;
   const model = persisted?.model ?? defaultModelRef.model;
   const authProfileId = normalizeOptionalString(entry?.authProfileOverride);
+  const legacyAuthProfileIdSource =
+    typeof entry?.authProfileOverrideCompactionCount === "number" ? "auto" : "user";
+  const authProfileIdSource = authProfileId
+    ? (entry?.authProfileOverrideSource ?? legacyAuthProfileIdSource)
+    : undefined;
   return {
     provider,
     model,
     authProfileId,
-    authProfileIdSource: authProfileId ? entry?.authProfileOverrideSource : undefined,
+    authProfileIdSource,
   };
 }
 
@@ -99,13 +104,27 @@ export function hasDifferentLiveSessionModelSelection(
   if (!next) {
     return false;
   }
+  const nextAuthProfileId = normalizeOptionalString(next.authProfileId);
+  const currentAuthProfileId =
+    nextAuthProfileId || current.authProfileIdSource !== "auto"
+      ? normalizeOptionalString(current.authProfileId)
+      : undefined;
+  const currentAuthProfileIdSource = currentAuthProfileId
+    ? normalizeAuthProfileIdSource(current.authProfileIdSource)
+    : undefined;
+  const nextAuthProfileIdSource = nextAuthProfileId
+    ? normalizeAuthProfileIdSource(next.authProfileIdSource)
+    : undefined;
   return (
     current.provider !== next.provider ||
     current.model !== next.model ||
-    normalizeOptionalString(current.authProfileId) !== next.authProfileId ||
-    (normalizeOptionalString(current.authProfileId) ? current.authProfileIdSource : undefined) !==
-      next.authProfileIdSource
+    currentAuthProfileId !== nextAuthProfileId ||
+    currentAuthProfileIdSource !== nextAuthProfileIdSource
   );
+}
+
+function normalizeAuthProfileIdSource(source: string | undefined): "auto" | "user" {
+  return source === "auto" ? "auto" : "user";
 }
 
 export function shouldTrackPersistedLiveSessionModelSelection(

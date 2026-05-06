@@ -935,6 +935,8 @@ export async function runPreparedReply(
     ({ activeSessionId, isActive, isStreaming } = queueState.busyState);
   }
   const authProfileIdSource = preparedSessionState.sessionEntry?.authProfileOverrideSource;
+  const authProfileIdCompactionCount =
+    preparedSessionState.sessionEntry?.authProfileOverrideCompactionCount;
   const runHasSessionModelOverride = Boolean(
     normalizeOptionalString(preparedSessionState.sessionEntry?.modelOverride) ||
     normalizeOptionalString(preparedSessionState.sessionEntry?.providerOverride),
@@ -993,6 +995,7 @@ export async function runPreparedReply(
         : undefined,
       authProfileId,
       authProfileIdSource,
+      authProfileIdCompactionCount: authProfileId ? authProfileIdCompactionCount : undefined,
       thinkLevel: resolvedThinkLevel,
       fastMode: useFastReplyRuntime
         ? false

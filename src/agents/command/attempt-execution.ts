@@ -616,6 +616,9 @@ export function runAgentAttempt(params: {
     modelFallbacksOverride: params.modelFallbacksOverride,
     authProfileId,
     authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
+    authProfileIdCompactionCount: authProfileId
+      ? params.sessionEntry?.authProfileOverrideCompactionCount
+      : undefined,
     thinkLevel: params.resolvedThinkLevel,
     fastMode: params.fastMode,
     verboseLevel: params.resolvedVerboseLevel,
