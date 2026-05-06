@@ -148,7 +148,7 @@ manually.
     Dev only.
   </Step>
   <Step title="Preflight build (dev only)">
-    Runs lint and TypeScript build in a temp worktree. If the tip fails, walks back up to 10 commits to find the newest clean build.
+    Runs the TypeScript build in a temp worktree. If the tip fails, walks back up to 10 commits to find the newest buildable commit. Set `OPENCLAW_UPDATE_PREFLIGHT_LINT=1` to also run lint during this preflight; lint runs in constrained serial mode because user update hosts are often smaller than CI runners.
   </Step>
   <Step title="Rebase">
     Rebases onto the selected commit (dev only).

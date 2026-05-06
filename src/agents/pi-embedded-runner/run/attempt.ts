@@ -23,6 +23,7 @@ import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summar
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
+import { getCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import { buildAgentHookContextChannelFields } from "../../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import {
@@ -107,6 +108,7 @@ import {
   applyPiAutoCompactionGuard,
   applyPiCompactionSettingsFromConfig,
   isSilentOverflowProneModel,
+  resolveEffectiveCompactionMode,
 } from "../../pi-settings.js";
 import {
   createClientToolNameConflictError,
@@ -1448,11 +1450,17 @@ export async function runEmbeddedAttempt(
         cwd: effectiveWorkspace,
         agentDir,
         cfg: params.config,
+        pluginMetadataSnapshot: getCurrentPluginMetadataSnapshot({
+          config: params.config,
+          env: process.env,
+          workspaceDir: effectiveWorkspace,
+        }),
         contextTokenBudget: params.contextTokenBudget,
       });
       const piAutoCompactionGuardArgs = {
         settingsManager,
         contextEngineInfo: activeContextEngine?.info,
+        compactionMode: resolveEffectiveCompactionMode(params.config),
         silentOverflowProneProvider: isSilentOverflowProneModel({
           provider: params.provider,
           modelId: params.modelId,
