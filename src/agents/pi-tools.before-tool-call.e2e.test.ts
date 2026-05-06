@@ -259,6 +259,26 @@ describe("before_tool_call loop detection behavior", () => {
     expectToolLoopBlockedResult(result, "global circuit breaker");
   });
 
+  it("blocks repeated no-progress calls with null params", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "same output" }],
+      details: { ok: true },
+    });
+    const tool = createWrappedTool("read", execute);
+
+    for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+      await expect(tool.execute(`read-null-${i}`, null, undefined, undefined)).resolves.toBeDefined();
+    }
+
+    const result = await tool.execute(
+      `read-null-${GLOBAL_CIRCUIT_BREAKER_THRESHOLD}`,
+      null,
+      undefined,
+      undefined,
+    );
+    expectToolLoopBlockedResult(result, "global circuit breaker");
+  });
+
   it("does not carry loop history across run ids", async () => {
     const execute = vi.fn().mockResolvedValue({
       content: [{ type: "text", text: "same output" }],

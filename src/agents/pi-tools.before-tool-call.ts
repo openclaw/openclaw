@@ -425,6 +425,7 @@ export async function runBeforeToolCallHook(args: {
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
+  const normalizedParams = isPlainObject(params) ? params : {};
 
   if (args.ctx?.sessionKey) {
     const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =
@@ -438,7 +439,7 @@ export async function runBeforeToolCallHook(args: {
     const loopResult = detectToolCallLoop(
       sessionState,
       toolName,
-      params,
+      normalizedParams,
       args.ctx.loopDetection,
       loopScope,
     );
@@ -486,7 +487,7 @@ export async function runBeforeToolCallHook(args: {
     recordToolCall(
       sessionState,
       toolName,
-      params,
+      normalizedParams,
       args.toolCallId,
       args.ctx.loopDetection,
       loopScope,
@@ -495,7 +496,6 @@ export async function runBeforeToolCallHook(args: {
 
   const hookRunner = getGlobalHookRunner();
   try {
-    const normalizedParams = isPlainObject(params) ? params : {};
     const toolContext = {
       toolName,
       ...(args.ctx?.agentId && { agentId: args.ctx.agentId }),
@@ -534,7 +534,7 @@ export async function runBeforeToolCallHook(args: {
             trustedPolicyResult.requireApproval.description ||
             trustedPolicyResult.requireApproval.title ||
             "Plugin approval required",
-          params,
+          params: normalizedParams,
         };
       }
       return await requestPluginToolApproval({
@@ -543,11 +543,11 @@ export async function runBeforeToolCallHook(args: {
         toolCallId: args.toolCallId,
         ctx: args.ctx,
         signal: args.signal,
-        baseParams: params,
+        baseParams: normalizedParams,
         overrideParams: trustedPolicyResult.params,
       });
     }
-    const policyAdjustedParams = trustedPolicyResult?.params ?? params;
+    const policyAdjustedParams = trustedPolicyResult?.params ?? normalizedParams;
     if (!hookRunner?.hasHooks("before_tool_call")) {
       return { blocked: false, params: policyAdjustedParams };
     }
