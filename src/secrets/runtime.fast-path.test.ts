@@ -169,4 +169,43 @@ describe("secrets runtime fast path", () => {
 
     expect(resolveRuntimeWebToolsMock).toHaveBeenCalledTimes(1);
   });
+
+  it("marks webToolsFromFastPath as true when the fast path is used", async () => {
+    const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        gateway: { auth: { mode: "token", token: "plain-token" } },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: emptyAuthStore,
+    });
+
+    expect(snapshot.webToolsFromFastPath).toBe(true);
+    expect(runtimePrepareImportMock).not.toHaveBeenCalled();
+  });
+
+  it("marks webToolsFromFastPath as false when the full resolver is used", async () => {
+    const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({}),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          },
+        },
+      }),
+    });
+
+    expect(snapshot.webToolsFromFastPath).toBe(false);
+    expect(resolveRuntimeWebToolsMock).toHaveBeenCalledTimes(1);
+  });
 });
