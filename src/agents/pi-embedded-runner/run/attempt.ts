@@ -16,6 +16,7 @@ import {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContextFromActiveScope,
   freezeDiagnosticTraceContext,
+  type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
@@ -712,44 +713,12 @@ export async function runEmbeddedAttempt(
   let emitDiagnosticRunCompleted:
     | ((outcome: "completed" | "aborted" | "error", err?: unknown) => void)
     | undefined;
+  let emitDiagnosticMessageProcessingCompleted:
+    | ((outcome: "completed" | "error", err?: unknown) => void)
+    | undefined;
   try {
     const skillsSnapshotForRun =
       sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? undefined : params.skillsSnapshot;
-    const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-      workspaceDir: effectiveWorkspace,
-      config: params.config,
-      agentId: sessionAgentId,
-      skillsSnapshot: skillsSnapshotForRun,
-    });
-    restoreSkillEnv = skillsSnapshotForRun
-      ? applySkillEnvOverridesFromSnapshot({
-          snapshot: skillsSnapshotForRun,
-          config: params.config,
-        })
-      : applySkillEnvOverrides({
-          skills: skillEntries ?? [],
-          config: params.config,
-        });
-
-    const skillsPrompt = resolveSkillsPromptForRun({
-      skillsSnapshot: skillsSnapshotForRun,
-      entries: shouldLoadSkillEntries ? skillEntries : undefined,
-      config: params.config,
-      workspaceDir: effectiveWorkspace,
-      agentId: sessionAgentId,
-    });
-    prepStages.mark("skills");
-
-    const sessionLabel = params.sessionKey ?? params.sessionId;
-    const contextInjectionMode = resolveContextInjectionMode(params.config);
-    const isRawModelRun = params.modelRun === true || params.promptMode === "none";
-    if (isRawModelRun && log.isEnabled("debug")) {
-      log.debug(
-        `raw model run enabled: modelRun=${params.modelRun === true} promptMode=${params.promptMode ?? "unset"}`,
-      );
-    }
-    const activeContextEngine = isRawModelRun ? undefined : params.contextEngine;
-    const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
     const diagnosticTrace = freezeDiagnosticTraceContext(
       createDiagnosticTraceContextFromActiveScope(),
     );
@@ -773,12 +742,52 @@ export async function runEmbeddedAttempt(
       ...diagnosticRunBase,
     });
     const diagnosticRunStartedAt = Date.now();
+    const diagnosticMessageProcessingBase = {
+      runId: params.runId,
+      channel: params.messageChannel ?? params.messageProvider ?? "unknown",
+      phase: "run" as const,
+      ...(params.currentMessageId !== undefined ? { messageId: params.currentMessageId } : {}),
+      ...(params.messageTo ? { chatId: params.messageTo } : {}),
+      ...(params.sessionKey && { sessionKey: params.sessionKey }),
+      ...(params.sessionId && { sessionId: params.sessionId }),
+      trace: freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(runTrace)),
+    };
+    emitTrustedDiagnosticEvent({
+      type: "message.processing.started",
+      ...diagnosticMessageProcessingBase,
+      phase: "start",
+    });
+    const diagnosticMessageProcessingStartedAt = Date.now();
+    let diagnosticMessageProcessingCompleted = false;
+    emitDiagnosticMessageProcessingCompleted = (outcome, err) => {
+      if (diagnosticMessageProcessingCompleted) {
+        return;
+      }
+      diagnosticMessageProcessingCompleted = true;
+      if (outcome === "error") {
+        emitTrustedDiagnosticEvent({
+          type: "message.processing.error",
+          ...diagnosticMessageProcessingBase,
+          phase: "error",
+          durationMs: Date.now() - diagnosticMessageProcessingStartedAt,
+          errorCategory: diagnosticErrorCategory(err),
+        });
+        return;
+      }
+      emitTrustedDiagnosticEvent({
+        type: "message.processing.completed",
+        ...diagnosticMessageProcessingBase,
+        phase: "end",
+        durationMs: Date.now() - diagnosticMessageProcessingStartedAt,
+      });
+    };
     let diagnosticRunCompleted = false;
     emitDiagnosticRunCompleted = (outcome, err) => {
       if (diagnosticRunCompleted) {
         return;
       }
       diagnosticRunCompleted = true;
+      emitDiagnosticMessageProcessingCompleted?.(outcome === "error" ? "error" : "completed", err);
       emitTrustedDiagnosticEvent({
         type: "run.completed",
         ...diagnosticRunBase,
@@ -787,6 +796,147 @@ export async function runEmbeddedAttempt(
         ...(err ? { errorCategory: diagnosticErrorCategory(err) } : {}),
       });
     };
+
+    const skillScope: "snapshot" | "workspace" | "disabled" = params.skillsSnapshot
+      ? "snapshot"
+      : "workspace";
+    const skillDiagnosticBase = (
+      skillName: string,
+      trace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(runTrace)),
+    ): {
+      runId: string;
+      sessionKey?: string;
+      sessionId?: string;
+      skillName: string;
+      skillScope: "snapshot" | "workspace" | "disabled";
+      trace: DiagnosticTraceContext;
+    } => ({
+      runId: params.runId,
+      ...(params.sessionKey && { sessionKey: params.sessionKey }),
+      ...(params.sessionId && { sessionId: params.sessionId }),
+      skillName,
+      skillScope,
+      trace,
+    });
+
+    const skillEntriesTrace = freezeDiagnosticTraceContext(
+      createChildDiagnosticTraceContext(runTrace),
+    );
+    const skillEntriesBase = skillDiagnosticBase("skills.entries.resolve", skillEntriesTrace);
+    const skillEntriesStartedAt = Date.now();
+    emitTrustedDiagnosticEvent({
+      type: "skill.execution.started",
+      ...skillEntriesBase,
+    });
+    let skillEntriesLoaded = 0;
+    let shouldLoadSkillEntries = false;
+    let skillEntries: ReturnType<typeof resolveEmbeddedRunSkillEntries>["skillEntries"];
+    try {
+      const resolved = resolveEmbeddedRunSkillEntries({
+        workspaceDir: effectiveWorkspace,
+        config: params.config,
+        agentId: sessionAgentId,
+        skillsSnapshot: skillsSnapshotForRun,
+      });
+      shouldLoadSkillEntries = resolved.shouldLoadSkillEntries;
+      skillEntries = resolved.skillEntries;
+      skillEntriesLoaded = shouldLoadSkillEntries ? (skillEntries?.length ?? 0) : 0;
+      emitTrustedDiagnosticEvent({
+        type: "skill.execution.completed",
+        ...skillEntriesBase,
+        durationMs: Date.now() - skillEntriesStartedAt,
+        loadedCount: skillEntriesLoaded,
+      });
+    } catch (err) {
+      emitTrustedDiagnosticEvent({
+        type: "skill.execution.error",
+        ...skillEntriesBase,
+        durationMs: Date.now() - skillEntriesStartedAt,
+        errorCategory: diagnosticErrorCategory(err),
+      });
+      throw err;
+    }
+
+    const skillEnvTrace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(runTrace));
+    const skillEnvBase = skillDiagnosticBase("skills.env.apply", skillEnvTrace);
+    const skillEnvStartedAt = Date.now();
+    emitTrustedDiagnosticEvent({
+      type: "skill.execution.started",
+      ...skillEnvBase,
+    });
+    try {
+      restoreSkillEnv = skillsSnapshotForRun
+        ? applySkillEnvOverridesFromSnapshot({
+            snapshot: skillsSnapshotForRun,
+            config: params.config,
+          })
+        : applySkillEnvOverrides({
+            skills: skillEntries ?? [],
+            config: params.config,
+          });
+      emitTrustedDiagnosticEvent({
+        type: "skill.execution.completed",
+        ...skillEnvBase,
+        durationMs: Date.now() - skillEnvStartedAt,
+        loadedCount: skillEntriesLoaded,
+      });
+    } catch (err) {
+      emitTrustedDiagnosticEvent({
+        type: "skill.execution.error",
+        ...skillEnvBase,
+        durationMs: Date.now() - skillEnvStartedAt,
+        errorCategory: diagnosticErrorCategory(err),
+      });
+      throw err;
+    }
+
+    const skillPromptTrace = freezeDiagnosticTraceContext(
+      createChildDiagnosticTraceContext(runTrace),
+    );
+    const skillPromptBase = skillDiagnosticBase("skills.prompt.build", skillPromptTrace);
+    const skillPromptStartedAt = Date.now();
+    emitTrustedDiagnosticEvent({
+      type: "skill.execution.started",
+      ...skillPromptBase,
+    });
+    let skillsPrompt = "";
+    try {
+      skillsPrompt = resolveSkillsPromptForRun({
+        skillsSnapshot: skillsSnapshotForRun,
+        entries: shouldLoadSkillEntries ? skillEntries : undefined,
+        config: params.config,
+        workspaceDir: effectiveWorkspace,
+        agentId: sessionAgentId,
+      });
+      emitTrustedDiagnosticEvent({
+        type: "skill.execution.completed",
+        ...skillPromptBase,
+        durationMs: Date.now() - skillPromptStartedAt,
+        loadedCount: skillEntriesLoaded,
+        promptChars: skillsPrompt.length,
+      });
+    } catch (err) {
+      emitTrustedDiagnosticEvent({
+        type: "skill.execution.error",
+        ...skillPromptBase,
+        durationMs: Date.now() - skillPromptStartedAt,
+        errorCategory: diagnosticErrorCategory(err),
+      });
+      throw err;
+    }
+
+    const isRawModelRun = params.modelRun === true || params.promptMode === "none";
+    if (isRawModelRun && log.isEnabled("debug")) {
+      log.debug(
+        `raw model run enabled: modelRun=${params.modelRun === true} promptMode=${params.promptMode ?? "unset"}`,
+      );
+    }
+    const activeContextEngine = isRawModelRun ? undefined : params.contextEngine;
+    prepStages.mark("skills");
+
+    const sessionLabel = params.sessionKey ?? params.sessionId;
+    const contextInjectionMode = resolveContextInjectionMode(params.config);
+    const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
     const corePluginToolStages = createEmbeddedRunStageTracker();
     const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
       disableTools: params.disableTools,

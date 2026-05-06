@@ -80,6 +80,8 @@ describe("package Telegram live Docker E2E", () => {
     expect(script).toContain('ln -sfnT /app/extensions "$openclaw_package_dir/extensions"');
     expect(script).toContain("node scripts/e2e/lib/npm-telegram-live/prepare-package.mjs");
     expect(script).toContain("/app/node_modules/openclaw/package.json");
+    expect(script).toContain("mkdir -p /app/node_modules/@openclaw");
+    expect(script).toContain("ln -sfnT /app/extensions/qa-channel /app/node_modules/@openclaw/qa-channel");
     expect(preparePackage).toContain('pkg.exports["./plugin-sdk/gateway-runtime"]');
     expect(preparePackage).toContain('"./dist/plugin-sdk/gateway-runtime.js"');
     expect(gatewayRpcClient).toContain('from "openclaw/plugin-sdk/gateway-runtime"');

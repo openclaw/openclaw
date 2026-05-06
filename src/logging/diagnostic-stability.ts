@@ -210,6 +210,23 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.outcome = event.outcome;
       assignReasonCode(record, event.reason);
       break;
+    case "message.processing.started":
+      record.channel = event.channel;
+      record.action = event.phase;
+      break;
+    case "message.processing.completed":
+      record.channel = event.channel;
+      record.action = event.phase;
+      record.durationMs = event.durationMs;
+      record.outcome = "completed";
+      break;
+    case "message.processing.error":
+      record.channel = event.channel;
+      record.action = event.phase;
+      record.durationMs = event.durationMs;
+      record.outcome = "error";
+      assignReasonCode(record, event.errorCategory);
+      break;
     case "message.delivery.started":
       record.channel = event.channel;
       record.deliveryKind = event.deliveryKind;
@@ -350,6 +367,22 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.toolName = event.toolName;
       record.outcome = "blocked";
       assignReasonCode(record, event.deniedReason);
+      break;
+    case "skill.execution.started":
+      record.toolName = event.skillName;
+      record.outcome = "started";
+      break;
+    case "skill.execution.completed":
+      record.toolName = event.skillName;
+      record.durationMs = event.durationMs;
+      record.count = event.loadedCount;
+      record.outcome = "completed";
+      break;
+    case "skill.execution.error":
+      record.toolName = event.skillName;
+      record.durationMs = event.durationMs;
+      record.outcome = "error";
+      assignReasonCode(record, event.errorCategory);
       break;
     case "exec.process.completed":
       record.target = event.target;

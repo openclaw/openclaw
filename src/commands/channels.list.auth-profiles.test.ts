@@ -47,24 +47,6 @@ vi.mock("../infra/provider-usage.js", () => ({
 
 import { channelsListCommand } from "./channels/list.js";
 
-function createMockChannelPlugin(accountIds: string[]): ChannelPlugin {
-  return {
-    id: "telegram",
-    meta: {
-      id: "telegram",
-      label: "Telegram",
-      selectionLabel: "Telegram",
-      docsPath: "/channels/telegram",
-      blurb: "Telegram",
-    },
-    capabilities: { chatTypes: ["direct"] },
-    config: {
-      listAccountIds: () => accountIds,
-      resolveAccount: () => ({}),
-    },
-  };
-}
-
 describe("channels list auth profiles", () => {
   beforeEach(() => {
     mocks.readConfigFileSnapshot.mockReset();
@@ -118,8 +100,14 @@ describe("channels list auth profiles", () => {
   it("includes configured chat channel accounts in JSON output", async () => {
     const runtime = createTestRuntime();
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
-      createMockChannelPlugin(["alerts", "default"]),
-    ]);
+      {
+        id: "telegram",
+        meta: { id: "telegram", label: "Telegram" },
+        config: {
+          listAccountIds: () => ["alerts", "default"],
+        },
+      },
+    ] as never);
     mocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseConfigSnapshot,
       config: {
@@ -174,8 +162,14 @@ describe("channels list auth profiles", () => {
   it("prints configured chat channel accounts before auth providers", async () => {
     const runtime = createTestRuntime();
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
-      createMockChannelPlugin(["default"]),
-    ]);
+      {
+        id: "telegram",
+        meta: { id: "telegram", label: "Telegram" },
+        config: {
+          listAccountIds: () => ["default"],
+        },
+      },
+    ] as never);
     mocks.buildChannelAccountSnapshot.mockResolvedValue({
       accountId: "default",
       configured: true,

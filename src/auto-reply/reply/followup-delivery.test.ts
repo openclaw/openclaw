@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
-import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: () => undefined,
 }));
+
+import type { OpenClawConfig } from "../../config/config.js";
+import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 
 const baseConfig = {} as OpenClawConfig;
 

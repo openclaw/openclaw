@@ -26,6 +26,11 @@ const INDIRECT_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
     new Set(["jimp"]),
   ],
   [
+    "extensions/qa-lab",
+    // qa-lab imports qa-channel at runtime via plugin boundaries.
+    new Set(["@openclaw/qa-channel"]),
+  ],
+  [
     "extensions/memory-lancedb",
     // LanceDB imports apache-arrow at runtime through its peer dependency.
     new Set(["apache-arrow"]),
