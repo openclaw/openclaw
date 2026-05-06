@@ -1,7 +1,7 @@
 ---
 summary: "CLI reference for `openclaw setup` (initialize config + workspace)"
 read_when:
-  - You’re doing first-run setup without full CLI onboarding
+  - You're doing first-run setup without full CLI onboarding
   - You want to set the default workspace path
 title: "Setup"
 ---

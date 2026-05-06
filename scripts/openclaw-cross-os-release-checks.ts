@@ -10,6 +10,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -20,7 +21,6 @@ import { createConnection as createNetConnection, createServer as createNetServe
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { assertNoLegacyPluginDependencyStagingDebris } from "../src/infra/package-dist-inventory.ts";
 import { isLocalBuildMetadataDistPath } from "./lib/local-build-metadata-paths.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -107,6 +107,7 @@ function buildReleaseProviderConfigOverride(providerMeta) {
 }
 
 const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
+const INSTALL_STAGE_DEBRIS_DIR_PATTERN = /^\.openclaw-install-stage(?:-[^/]+)?$/iu;
 const OMITTED_QA_EXTENSION_PREFIXES = [
   "dist/extensions/qa-channel/",
   "dist/extensions/qa-lab/",
@@ -626,6 +627,62 @@ function normalizeRelativePath(value) {
   return value.replace(/\\/gu, "/");
 }
 
+function isNotFoundError(error) {
+  return error && typeof error === "object" && error.code === "ENOENT";
+}
+
+function isInstallStageDirName(value) {
+  return INSTALL_STAGE_DEBRIS_DIR_PATTERN.test(value);
+}
+
+function collectLegacyPluginDependencyStagingDebrisPaths(packageRoot) {
+  const extensionsDir = join(packageRoot, "dist", "extensions");
+  let extensionEntries = [];
+  try {
+    extensionEntries = readdirSync(extensionsDir, { withFileTypes: true });
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      return [];
+    }
+    throw error;
+  }
+
+  const debris = [];
+  for (const extensionEntry of extensionEntries) {
+    if (!extensionEntry.isDirectory()) {
+      continue;
+    }
+    const extensionPath = join(extensionsDir, extensionEntry.name);
+    let stagingEntries = [];
+    try {
+      stagingEntries = readdirSync(extensionPath, { withFileTypes: true });
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        continue;
+      }
+      throw error;
+    }
+    for (const stagingEntry of stagingEntries) {
+      if (isInstallStageDirName(stagingEntry.name)) {
+        debris.push(
+          normalizeRelativePath(join("dist", "extensions", extensionEntry.name, stagingEntry.name)),
+        );
+      }
+    }
+  }
+  return debris.toSorted((left, right) => left.localeCompare(right));
+}
+
+function assertNoLegacyPluginDependencyStagingDebris(packageRoot) {
+  const debris = collectLegacyPluginDependencyStagingDebrisPaths(packageRoot);
+  if (debris.length === 0) {
+    return;
+  }
+  throw new Error(
+    `unexpected legacy plugin dependency staging debris in package dist: ${debris.join(", ")}`,
+  );
+}
+
 function isPackagedDistPath(relativePath) {
   if (!relativePath.startsWith("dist/")) {
     return false;
@@ -649,7 +706,7 @@ function isPackagedDistPath(relativePath) {
 }
 
 export async function writePackageDistInventoryForCandidate(params) {
-  await assertNoLegacyPluginDependencyStagingDebris(params.sourceDir);
+  assertNoLegacyPluginDependencyStagingDebris(params.sourceDir);
   const dryRun = await runCommand(
     npmCommand(),
     ["pack", "--dry-run", "--ignore-scripts", "--json"],
