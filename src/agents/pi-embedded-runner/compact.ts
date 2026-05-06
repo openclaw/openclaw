@@ -493,6 +493,9 @@ async function compactEmbeddedPiSessionDirectOnce(
     params.agentDir ?? resolveAgentDir(params.config ?? {}, earlyAgentIds.sessionAgentId);
   await ensureOpenClawModelsJson(params.config, agentDir, {
     workspaceDir: resolvedWorkspace,
+    // Thread the resolved provider so the targetProvider short-circuit can skip
+    // a full plan when this provider's disk config already matches.
+    targetProvider: provider,
   });
   const { model, error, authStorage, modelRegistry } = await resolveModelAsync(
     provider,

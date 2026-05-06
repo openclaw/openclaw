@@ -98,6 +98,9 @@ export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: 
 export const resolveAgentTransportOverrideMock: Mock<(params?: unknown) => string | undefined> =
   vi.fn(() => undefined);
 export const resolveSandboxContextMock = vi.fn(async () => null);
+export const ensureOpenClawModelsJsonMock: Mock<
+  (config?: unknown, agentDir?: string, options?: unknown) => Promise<void>
+> = vi.fn(async () => {});
 export const maybeCompactAgentHarnessSessionMock: Mock<(params?: unknown) => Promise<unknown>> =
   vi.fn(async () => undefined);
 export const rotateTranscriptAfterCompactionMock: Mock<
@@ -232,6 +235,8 @@ export function resetCompactHooksHarnessMocks(): void {
   resetCompactSessionStateMocks();
   createOpenClawCodingToolsMock.mockReset();
   createOpenClawCodingToolsMock.mockReturnValue([]);
+  ensureOpenClawModelsJsonMock.mockReset();
+  ensureOpenClawModelsJsonMock.mockResolvedValue(undefined);
 }
 
 export async function loadCompactHooksHarness(): Promise<{
@@ -353,7 +358,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../models-config.js", () => ({
-    ensureOpenClawModelsJson: vi.fn(async () => {}),
+    ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
   }));
 
   vi.doMock("../model-auth.js", () => ({

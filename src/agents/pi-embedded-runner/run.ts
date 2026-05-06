@@ -522,6 +522,9 @@ export async function runEmbeddedPiAgent(
           : await (async () => {
               await ensureOpenClawModelsJson(params.config, agentDir, {
                 workspaceDir: resolvedWorkspace,
+                // Thread the resolved provider so the targetProvider short-circuit can skip
+                // a full plan when this provider's disk config already matches.
+                targetProvider: provider,
               });
               return await resolveModelAsync(provider, modelId, agentDir, params.config);
             })();

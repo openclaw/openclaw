@@ -4,6 +4,7 @@ import {
   applyExtraParamsToAgentMock,
   contextEngineCompactMock,
   createOpenClawCodingToolsMock,
+  ensureOpenClawModelsJsonMock,
   ensureRuntimePluginsLoaded,
   estimateTokensMock,
   getMemorySearchManagerMock,
@@ -1400,5 +1401,39 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     expect(result.ok).toBe(true);
     expect(result.compacted).toBe(true);
     expect(contextEngineCompactMock).toHaveBeenCalled();
+  });
+});
+
+describe("compactEmbeddedPiSessionDirect targetProvider wiring (Clawsweeper P2 round-6 on #73261)", () => {
+  beforeAll(async () => {
+    ({ compactEmbeddedPiSessionDirect, compactEmbeddedPiSession } =
+      await loadCompactHooksHarness());
+  });
+
+  beforeEach(() => {
+    resetCompactHooksHarnessMocks();
+  });
+
+  it("threads targetProvider: provider into ensureOpenClawModelsJson so the short-circuit can fire", async () => {
+    // Without the fix (Clawsweeper P2 on #73261), the compact embedded caller passed only
+    // { workspaceDir } — the targetProvider short-circuit never fired because options.targetProvider
+    // was undefined.  After the fix, the resolved provider is forwarded so the scoped-cache
+    // short-circuit can skip a full models.json plan when the disk config already matches.
+    await compactEmbeddedPiSessionDirect(wrappedCompactionArgs());
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      expect.objectContaining({ targetProvider: "openai" }),
+    );
+  });
+
+  it("threads the caller-supplied provider, not only the default, when a provider param is passed", async () => {
+    // Confirm that the wiring follows the resolved provider rather than always "openai".
+    await compactEmbeddedPiSessionDirect(wrappedCompactionArgs({ provider: "anthropic" }));
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      expect.objectContaining({ targetProvider: "anthropic" }),
+    );
   });
 });
