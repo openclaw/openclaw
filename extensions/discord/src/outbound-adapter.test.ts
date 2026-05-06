@@ -30,6 +30,13 @@ describe("normalizeDiscordOutboundTarget", () => {
     expect(normalizeDiscordOutboundTarget("channel:123")).toEqual({ ok: true, to: "channel:123" });
   });
 
+  it("normalizes provider-prefixed channel targets", () => {
+    expect(normalizeDiscordOutboundTarget("discord:channel:123")).toEqual({
+      ok: true,
+      to: "channel:123",
+    });
+  });
+
   it("passes through user: prefixed targets", () => {
     expect(normalizeDiscordOutboundTarget("user:123")).toEqual({ ok: true, to: "user:123" });
   });

@@ -172,6 +172,33 @@ describe("discordPlugin outbound", () => {
     });
   });
 
+  it("resolves bare allowlisted Discord user IDs as message-tool DM targets", async () => {
+    const resolveTarget = discordPlugin.messaging?.targetResolver?.resolveTarget;
+    if (!resolveTarget) {
+      throw new Error(
+        "Expected discordPlugin.messaging.targetResolver.resolveTarget to be defined",
+      );
+    }
+
+    await expect(
+      resolveTarget({
+        cfg: {
+          channels: {
+            discord: {
+              allowFrom: ["1439091261670948987"],
+            },
+          },
+        } as OpenClawConfig,
+        input: "1439091261670948987",
+        normalized: "channel:1439091261670948987",
+        preferredKind: "channel",
+      }),
+    ).resolves.toMatchObject({
+      to: "user:1439091261670948987",
+      kind: "user",
+    });
+  });
+
   it("honors per-account replyToMode overrides", () => {
     const resolveReplyToMode = discordPlugin.threading?.resolveReplyToMode;
     if (!resolveReplyToMode) {
