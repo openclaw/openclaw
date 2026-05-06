@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSlackSendTestClient, installSlackBlockTestMocks } from "./blocks.test-helpers.js";
 import {
   clearSlackThreadParticipationCache,
@@ -7,6 +7,10 @@ import {
 
 installSlackBlockTestMocks();
 const { sendMessageSlack } = await import("./send.js");
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 const SLACK_TEXT_LIMIT = 8000;
 
@@ -150,6 +154,71 @@ describe("sendMessageSlack chunking", () => {
     expect(postedTexts).toHaveLength(2);
     expect(postedTexts.every((text) => typeof text === "string" && text.length <= 8000)).toBe(true);
     expect(postedTexts.join("")).toBe(message);
+  });
+});
+
+describe("sendMessageSlack transient delivery retry", () => {
+  it("retries socket not-ready send failures before surfacing delivery failure", async () => {
+    vi.useFakeTimers();
+    const client = createSlackSendTestClient();
+    client.chat.postMessage
+      .mockRejectedValueOnce(
+        new Error("Failed to send a WebSocket message as the client is not ready"),
+      )
+      .mockResolvedValueOnce({ ts: "171234.568" });
+
+    const sendPromise = sendMessageSlack("channel:C123", "hello", {
+      cfg: {},
+      token: "xoxb-test",
+      client,
+    });
+    await vi.advanceTimersByTimeAsync(500);
+
+    await expect(sendPromise).resolves.toEqual({
+      messageId: "171234.568",
+      channelId: "C123",
+    });
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry ambiguous wrapped Web API write errors", async () => {
+    const client = createSlackSendTestClient();
+    const epipeWrapped = Object.assign(new Error("A request error occurred: write EPIPE"), {
+      code: "slack_webapi_request_error",
+      original: Object.assign(new Error("write EPIPE"), { code: "EPIPE" }),
+    });
+    client.chat.postMessage.mockRejectedValueOnce(epipeWrapped);
+
+    await expect(
+      sendMessageSlack("channel:C123", "hello", {
+        cfg: {},
+        token: "xoxb-test",
+        client,
+      }),
+    ).rejects.toThrow(/write EPIPE/i);
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces socket not-ready send failures after retry exhaustion", async () => {
+    vi.useFakeTimers();
+    const client = createSlackSendTestClient();
+    client.chat.postMessage.mockRejectedValue(
+      new Error("Failed to send a WebSocket message as the client is not ready"),
+    );
+
+    const sendPromise = sendMessageSlack("channel:C123", "hello", {
+      cfg: {},
+      token: "xoxb-test",
+      client,
+    });
+    const assertion = expect(sendPromise).rejects.toThrow(/client is not ready/i);
+
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(1500);
+    await vi.advanceTimersByTimeAsync(3000);
+
+    await assertion;
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(4);
   });
 });
 
