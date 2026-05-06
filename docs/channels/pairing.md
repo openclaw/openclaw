@@ -7,7 +7,7 @@ read_when:
 title: "Pairing"
 ---
 
-“Pairing” is OpenClaw’s explicit access approval step.
+"Pairing" is OpenClaw's explicit access approval step.
 It is used in two places:
 
 1. **DM pairing** (who is allowed to talk to the bot)
