@@ -3,7 +3,7 @@ import type { SkillWorkshopConfig } from "./config.js";
 export function buildWorkshopGuidance(config: SkillWorkshopConfig): string {
   const writeMode =
     config.approvalPolicy === "auto"
-      ? "Auto mode: apply safe workspace-skill updates when clearly reusable."
+      ? "Auto mode: apply safe workspace-skill updates; apply=false queues instead."
       : "Pending mode: queue suggestions; apply only after explicit approval.";
   return [
     "<skill_workshop>",
