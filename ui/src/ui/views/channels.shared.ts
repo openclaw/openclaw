@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import type { ChannelAccountSnapshot } from "../types.ts";
+import { viDashboardText as uiText } from "../vi-dashboard-text.ts";
 import type { ChannelKey, ChannelsProps } from "./channels.types.ts";
 
 type ChannelDisplayState = {
@@ -145,5 +146,7 @@ export function renderChannelAccountCount(
   if (count < 2) {
     return nothing;
   }
-  return html`<div class="account-count">Accounts (${count})</div>`;
+  return html`<div class="account-count">
+    ${uiText(`Accounts (${count})`, `Tài khoản (${count})`)}
+  </div>`;
 }

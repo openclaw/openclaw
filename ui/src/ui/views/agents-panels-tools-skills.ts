@@ -223,10 +223,10 @@ export function renderAgentTools(params: {
   const profileOptions = resolveToolProfileOptions(params.toolsCatalogResult);
   const toolSections = resolveToolSections(params.toolsCatalogResult);
   const profileSource = agentTools.profile
-    ? "agent override"
+    ? uiText("agent override", "ghi đè agent")
     : globalTools.profile
-      ? "global default"
-      : "default";
+      ? uiText("global default", "mặc định toàn cục")
+      : uiText("default", "mặc định");
   const hasAgentAllow = Array.isArray(agentTools.allow) && agentTools.allow.length > 0;
   const hasGlobalAllow = Array.isArray(globalTools.allow) && globalTools.allow.length > 0;
   const editable =
@@ -432,7 +432,9 @@ export function renderAgentTools(params: {
                 "What this agent can use in the current chat session.",
                 "Những gì agent này có thể dùng trong phiên chat hiện tại.",
               )}
-              <span class="mono">${params.runtimeSessionKey || "no session"}</span>
+              <span class="mono"
+                >${params.runtimeSessionKey || uiText("no session", "chưa có phiên")}</span
+              >
             </div>
             ${!params.runtimeSessionMatchesSelectedAgent
               ? html`
@@ -490,7 +492,10 @@ export function renderAgentTools(params: {
                             ? html`
                                 <span
                                   class="agent-tools-runtime-chip agent-tools-runtime-chip--more"
-                                  title=${`${hiddenEffectiveToolCount} more live tools are available in the groups below.`}
+                                  title=${uiText(
+                                    `${hiddenEffectiveToolCount} more live tools are available in the groups below.`,
+                                    `${hiddenEffectiveToolCount} công cụ live khác có trong các nhóm bên dưới.`,
+                                  )}
                                 >
                                   ${uiText(
                                     `+${hiddenEffectiveToolCount} more live tools`,
@@ -960,10 +965,14 @@ function renderAgentSkillRow(
         <div class="list-sub">${skill.description}</div>
         ${renderSkillStatusChips({ skill })}
         ${missing.length > 0
-          ? html`<div class="muted" style="margin-top: 6px;">Missing: ${missing.join(", ")}</div>`
+          ? html`<div class="muted" style="margin-top: 6px;">
+              ${uiText("Missing:", "Thiếu:")} ${missing.join(", ")}
+            </div>`
           : nothing}
         ${reasons.length > 0
-          ? html`<div class="muted" style="margin-top: 6px;">Reason: ${reasons.join(", ")}</div>`
+          ? html`<div class="muted" style="margin-top: 6px;">
+              ${uiText("Reason:", "Lý do:")} ${reasons.join(", ")}
+            </div>`
           : nothing}
       </div>
       <div class="list-meta">

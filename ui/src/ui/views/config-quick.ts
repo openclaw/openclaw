@@ -969,12 +969,12 @@ function renderPresetsCard(props: QuickSettingsProps) {
                   </div>
                   <div class="qs-preset__meta">
                     <span
-                      >${formatCharBudget(Number(presetDefaults.bootstrapMaxChars ?? 0))} per
-                      file</span
+                      >${formatCharBudget(Number(presetDefaults.bootstrapMaxChars ?? 0))}
+                      ${uiText("per file", "mỗi tệp")}</span
                     >
                     <span
                       >${formatCharBudget(Number(presetDefaults.bootstrapTotalMaxChars ?? 0))}
-                      total</span
+                      ${uiText("total", "tổng")}</span
                     >
                     <span>${formatContextInjectionLabel(presetContext)}</span>
                   </div>

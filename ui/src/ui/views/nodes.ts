@@ -118,7 +118,10 @@ function formatAccessSummary(access: DevicePairingAccessSummary | null): string 
   if (!access) {
     return uiText("none", "không có");
   }
-  return `roles: ${formatList(access.roles)} · scopes: ${formatList(access.scopes)}`;
+  return uiText(
+    `roles: ${formatList(access.roles)} · scopes: ${formatList(access.scopes)}`,
+    `vai trò: ${formatList(access.roles)} · phạm vi: ${formatList(access.scopes)}`,
+  );
 }
 
 function renderPendingApprovalNote(kind: PendingDeviceApprovalKind) {
@@ -144,7 +147,7 @@ function renderPendingDevice(req: PendingDevice, props: NodesProps, paired?: Pai
   const name = normalizeOptionalString(req.displayName) || req.deviceId;
   const age = typeof req.ts === "number" ? formatRelativeTimestamp(req.ts) : t("common.na");
   const approval = resolvePendingDeviceApprovalState(req, paired);
-  const repair = req.isRepair ? " · repair" : "";
+  const repair = req.isRepair ? uiText(" · repair", " · sửa kết nối") : "";
   const ip = req.remoteIp ? ` · ${req.remoteIp}` : "";
   return html`
     <div class="list-item">
@@ -184,8 +187,14 @@ function renderPendingDevice(req: PendingDevice, props: NodesProps, paired?: Pai
 function renderPairedDevice(device: PairedDevice, props: NodesProps) {
   const name = normalizeOptionalString(device.displayName) || device.deviceId;
   const ip = device.remoteIp ? ` · ${device.remoteIp}` : "";
-  const roles = `roles: ${formatList(device.roles)}`;
-  const scopes = `scopes: ${formatList(device.scopes)}`;
+  const roles = uiText(
+    `roles: ${formatList(device.roles)}`,
+    `vai trò: ${formatList(device.roles)}`,
+  );
+  const scopes = uiText(
+    `scopes: ${formatList(device.scopes)}`,
+    `phạm vi: ${formatList(device.scopes)}`,
+  );
   const tokens = Array.isArray(device.tokens) ? device.tokens : [];
   return html`
     <div class="list-item">
@@ -211,8 +220,13 @@ function renderPairedDevice(device: PairedDevice, props: NodesProps) {
 }
 
 function renderTokenRow(deviceId: string, token: DeviceTokenSummary, props: NodesProps) {
-  const status = token.revokedAtMs ? "revoked" : "active";
-  const scopes = `scopes: ${formatList(token.scopes)}`;
+  const status = token.revokedAtMs
+    ? uiText("revoked", "đã thu hồi")
+    : uiText("active", "đang hoạt động");
+  const scopes = uiText(
+    `scopes: ${formatList(token.scopes)}`,
+    `phạm vi: ${formatList(token.scopes)}`,
+  );
   const when = formatRelativeTimestamp(
     token.rotatedAtMs ?? token.createdAtMs ?? token.lastUsedAtMs ?? null,
   );
