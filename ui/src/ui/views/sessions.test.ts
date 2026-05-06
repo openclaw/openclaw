@@ -229,7 +229,7 @@ describe("sessions view", () => {
       Array.from(thinking?.options ?? [])
         .find((option) => option.value === "max")
         ?.textContent?.trim(),
-    ).toBe("maximum");
+    ).toBe("Override: maximum");
 
     thinking!.value = "max";
     thinking!.dispatchEvent(new Event("change", { bubbles: true }));
@@ -260,7 +260,12 @@ describe("sessions view", () => {
 
     const thinking = container.querySelector("tbody select") as HTMLSelectElement | null;
     expect(thinking?.value).toBe("");
-    expect(thinking?.options[0]?.textContent?.trim()).toBe("Default (adaptive)");
+    expect(thinking?.options[0]?.textContent?.trim()).toBe("Inherited: adaptive");
+    expect(
+      Array.from(thinking?.options ?? [])
+        .find((option) => option.value === "adaptive")
+        ?.textContent?.trim(),
+    ).toBe("Override: adaptive");
   });
 
   it("keeps legacy binary thinking labels patching canonical ids", async () => {
@@ -289,7 +294,7 @@ describe("sessions view", () => {
       Array.from(thinking?.options ?? [])
         .find((option) => option.value === "low")
         ?.textContent?.trim(),
-    ).toBe("on");
+    ).toBe("Override: on");
 
     thinking!.value = "low";
     thinking!.dispatchEvent(new Event("change", { bubbles: true }));
