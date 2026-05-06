@@ -150,6 +150,42 @@ describe("deliverDiscordReply", () => {
     );
   });
 
+  it("preserves marked Discord tool-progress labels at the front-channel boundary", async () => {
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: "📖 Read: `lines 1-10 from file.txt`",
+          channelData: { openclawDiscordToolProgress: true },
+        },
+        {
+          text: "🛠️ Exec: `print text`",
+          channelData: { openclawDiscordToolProgress: true },
+        },
+      ],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [
+          {
+            text: "📖 Read: `lines 1-10 from file.txt`",
+            channelData: { openclawDiscordToolProgress: true },
+          },
+          {
+            text: "🛠️ Exec: `print text`",
+            channelData: { openclawDiscordToolProgress: true },
+          },
+        ],
+      }),
+    );
+  });
+
   it("drops pure internal trace text while preserving media-only delivery", async () => {
     await deliverDiscordReply({
       replies: [

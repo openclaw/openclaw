@@ -542,9 +542,23 @@ export async function processDiscordMessage(
         if (isFinal) {
           notifyFinalReplyStart();
         }
+        const deliveryPayload: ReplyPayload =
+          info.kind === "tool"
+            ? {
+                ...payload,
+                channelData: {
+                  ...(payload.channelData &&
+                  typeof payload.channelData === "object" &&
+                  !Array.isArray(payload.channelData)
+                    ? payload.channelData
+                    : {}),
+                  openclawDiscordToolProgress: true,
+                },
+              }
+            : payload;
         await deliverDiscordReply({
           cfg,
-          replies: [payload],
+          replies: [deliveryPayload],
           target: deliverTarget,
           token,
           accountId,

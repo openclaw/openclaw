@@ -24,13 +24,34 @@ function hasInteractiveOrPresentationBlocks(value: unknown): boolean {
   return Array.isArray(record.blocks) && record.blocks.length > 0;
 }
 
+function getDiscordToolProgressChannelData(
+  payload: ReplyPayload,
+): Record<string, unknown> | undefined {
+  const channelData = payload.channelData;
+  if (!channelData || typeof channelData !== "object" || Array.isArray(channelData)) {
+    return undefined;
+  }
+  return channelData as Record<string, unknown>;
+}
+
+function hasNonMarkerChannelData(value: unknown): boolean {
+  if (!hasNonEmptyRecord(value)) {
+    return false;
+  }
+  return Object.keys(value).some((key) => key !== "openclawDiscordToolProgress");
+}
+
 function hasNonTextReplyPayloadContent(payload: ReplyPayload): boolean {
   return (
     payload.audioAsVoice === true ||
-    hasNonEmptyRecord(payload.channelData) ||
+    hasNonMarkerChannelData(payload.channelData) ||
     hasInteractiveOrPresentationBlocks(payload.interactive) ||
     hasInteractiveOrPresentationBlocks(payload.presentation)
   );
+}
+
+function shouldPreserveDiscordToolProgressText(payload: ReplyPayload): boolean {
+  return getDiscordToolProgressChannelData(payload)?.openclawDiscordToolProgress === true;
 }
 
 function stripDiscordInternalTraceLines(text: string): string {
@@ -73,7 +94,9 @@ export function sanitizeDiscordFrontChannelReplyPayloads(
   for (const payload of payloads) {
     const safeText =
       typeof payload.text === "string"
-        ? sanitizeDiscordFrontChannelText(payload.text)
+        ? shouldPreserveDiscordToolProgressText(payload)
+          ? sanitizeAssistantVisibleText(payload.text).trim()
+          : sanitizeDiscordFrontChannelText(payload.text)
         : payload.text;
     const nextPayload =
       safeText === payload.text
