@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { recordTalkDiagnosticEvent } from "../talk/diagnostics.js";
 import {
   createTalkSessionController,
   type TalkBrain,
@@ -319,13 +320,16 @@ function createTalkHandoffRoom(params: {
   provider?: string;
 }): TalkHandoffRoomState {
   return {
-    talk: createTalkSessionController({
-      sessionId: params.roomId,
-      mode: params.mode,
-      transport: params.transport,
-      brain: params.brain,
-      provider: params.provider,
-    }),
+    talk: createTalkSessionController(
+      {
+        sessionId: params.roomId,
+        mode: params.mode,
+        transport: params.transport,
+        brain: params.brain,
+        provider: params.provider,
+      },
+      { onEvent: recordTalkDiagnosticEvent },
+    ),
   };
 }
 

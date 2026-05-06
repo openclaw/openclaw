@@ -271,6 +271,7 @@ describe("managed npm root", () => {
         "npm",
         "uninstall",
         "--loglevel=error",
+        "--legacy-peer-deps",
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
@@ -280,6 +281,9 @@ describe("managed npm root", () => {
       ],
       expect.objectContaining({
         cwd: npmRoot,
+        env: expect.objectContaining({
+          npm_config_legacy_peer_deps: "true",
+        }),
       }),
     );
 
