@@ -42,6 +42,15 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
       agentFallbacks: ["openai/gpt-4o"],
       expectedFallbacks: [],
     },
+    {
+      name: "passes fallbacks with internal whitespace as-is to the runner for resolution-time repair",
+      payload: {
+        kind: "agentTurn",
+        message: "test",
+        fallbacks: ["anthropic/ claude-haiku-4-5", "openai/ gpt-5"],
+      },
+      expectedFallbacks: ["anthropic/ claude-haiku-4-5", "openai/ gpt-5"],
+    },
   ])("$name", async ({ payload, agentFallbacks, expectedFallbacks }) => {
     if (agentFallbacks) {
       resolveAgentModelFallbacksOverrideMock.mockReturnValue(agentFallbacks);

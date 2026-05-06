@@ -800,6 +800,30 @@ export function resolveAllowedModelRefFromAliasIndex(params: {
       params.defaultProvider)
     : params.defaultProvider;
 
+  // Helper: try compacted (whitespace-collapsed) form when internal whitespace
+  // may be accidental. Only applies to slash-form refs to avoid corrupting
+  // spaced aliases such as "DeepSeek R1".
+  const tryCompacted = (): ResolveAllowedModelRefResult | null => {
+    const compacted = trimmed.replace(/\s+/g, "");
+    if (compacted === trimmed || !compacted.includes("/")) {
+      return null;
+    }
+    const resolvedCompacted = resolveModelRefFromString({
+      cfg: params.cfg,
+      raw: compacted,
+      defaultProvider: params.defaultProvider,
+      aliasIndex: params.aliasIndex,
+    });
+    if (!resolvedCompacted) {
+      return null;
+    }
+    const compactedStatus = params.getStatus(resolvedCompacted.ref);
+    if (!compactedStatus.allowed) {
+      return { error: `model not allowed: ${compactedStatus.key}` };
+    }
+    return { ref: resolvedCompacted.ref, key: compactedStatus.key };
+  };
+
   const resolved = resolveModelRefFromString({
     cfg: params.cfg,
     raw: trimmed,
@@ -807,11 +831,15 @@ export function resolveAllowedModelRefFromAliasIndex(params: {
     aliasIndex: params.aliasIndex,
   });
   if (!resolved) {
-    return { error: `invalid model: ${trimmed}` };
+    return tryCompacted() ?? { error: `invalid model: ${trimmed}` };
   }
 
   const status = params.getStatus(resolved.ref);
   if (!status.allowed) {
+    const compactedResult = tryCompacted();
+    if (compactedResult && !("error" in compactedResult)) {
+      return compactedResult;
+    }
     return { error: `model not allowed: ${status.key}` };
   }
 

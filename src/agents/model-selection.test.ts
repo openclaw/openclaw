@@ -990,6 +990,66 @@ describe("model-selection", () => {
         ref: { provider: "openai", model: "xiaomi/mimo-v2-pro-mit" },
       });
     });
+
+    it("repairs accidental internal whitespace in provider/model refs", () => {
+      const result = resolveAllowedModelRef({
+        cfg: EXPLICIT_ALLOWLIST_CONFIG,
+        catalog: BUNDLED_ALLOWLIST_CATALOG,
+        raw: "anthropic/ claude-sonnet-4-6",
+        defaultProvider: "openai",
+      });
+
+      expect(result).toEqual({
+        key: "anthropic/claude-sonnet-4-6",
+        ref: { provider: "anthropic", model: "claude-sonnet-4-6" },
+      });
+    });
+
+    it("repairs accidental internal whitespace in multi-segment openrouter paths", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: { "openrouter/deepseek/deepseek-r1": {} },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [],
+        raw: "openrouter/ deepseek/ deepseek-r1",
+        defaultProvider: "anthropic",
+      });
+
+      expect(result).toEqual({
+        key: "openrouter/deepseek/deepseek-r1",
+        ref: { provider: "openrouter", model: "deepseek/deepseek-r1" },
+      });
+    });
+
+    it("preserves spaced aliases and does not collapse their internal whitespace", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "huggingface/deepseek-ai/deepseek-r1": { alias: "DeepSeek R1" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [],
+        raw: "DeepSeek R1",
+        defaultProvider: "anthropic",
+      });
+
+      expect(result).toEqual({
+        key: "huggingface/deepseek-ai/deepseek-r1",
+        ref: { provider: "huggingface", model: "deepseek-ai/deepseek-r1" },
+      });
+    });
   });
 
   describe("resolveModelRefFromString", () => {
