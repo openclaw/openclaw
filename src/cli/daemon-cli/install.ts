@@ -159,6 +159,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         runtime: runtimeRaw,
         wrapperPath,
         existingEnvironment: existingServiceEnv,
+        existingEnvironmentValueSources: existingServiceCommand?.environmentValueSources,
         config: cfg,
       });
       if (autoRefreshMessage) {
@@ -206,21 +207,23 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     }
   }
 
-  const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-    env: installEnv,
-    port,
-    runtime: runtimeRaw,
-    wrapperPath,
-    existingEnvironment: existingServiceEnv,
-    warn: (message) => {
-      if (json) {
-        warnings.push(message);
-      } else {
-        defaultRuntime.log(message);
-      }
-    },
-    config: cfg,
-  });
+  const { programArguments, workingDirectory, environment, environmentValueSources } =
+    await buildGatewayInstallPlan({
+      env: installEnv,
+      port,
+      runtime: runtimeRaw,
+      wrapperPath,
+      existingEnvironment: existingServiceEnv,
+      existingEnvironmentValueSources: existingServiceCommand?.environmentValueSources,
+      warn: (message) => {
+        if (json) {
+          warnings.push(message);
+        } else {
+          defaultRuntime.log(message);
+        }
+      },
+      config: cfg,
+    });
 
   await installDaemonServiceAndEmit({
     serviceNoun: "Gateway",
@@ -235,6 +238,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         programArguments,
         workingDirectory,
         environment,
+        environmentValueSources,
       });
     },
   });
@@ -248,6 +252,7 @@ async function getGatewayServiceAutoRefreshMessage(params: {
   runtime: GatewayDaemonRuntime;
   wrapperPath?: string;
   existingEnvironment?: Record<string, string | undefined>;
+  existingEnvironmentValueSources?: GatewayServiceCommandConfig["environmentValueSources"];
   config: OpenClawConfig;
 }): Promise<string | undefined> {
   try {
@@ -263,6 +268,7 @@ async function getGatewayServiceAutoRefreshMessage(params: {
         runtime: params.runtime,
         wrapperPath: params.wrapperPath,
         existingEnvironment: params.existingEnvironment,
+        existingEnvironmentValueSources: params.existingEnvironmentValueSources,
         warn: () => undefined,
         config: params.config,
       });
@@ -283,6 +289,7 @@ async function getGatewayServiceAutoRefreshMessage(params: {
         runtime: params.runtime,
         wrapperPath: params.wrapperPath,
         existingEnvironment: params.existingEnvironment,
+        existingEnvironmentValueSources: params.existingEnvironmentValueSources,
         warn: () => undefined,
         config: params.config,
       });
