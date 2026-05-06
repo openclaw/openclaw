@@ -10,7 +10,7 @@
   "dependencies": {
     "@agentclientprotocol/claude-agent-acp": "0.32.0",
     "@zed-industries/codex-acp": "0.13.0",
-    "acpx": "0.6.1"
+    "acpx": "0.7.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
