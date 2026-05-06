@@ -1,0 +1,76 @@
+name: Verify macOS Release Assets
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to verify (e.g. v2026.4.12)"
+        required: true
+        type: string
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  EXPECTED_ASSET_COUNT: 3
+
+jobs:
+  verify_assets:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (!github.event.release.prerelease && !github.event.release.draft)
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      contents: read
+    steps:
+      - name: Determine release tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          RELEASE_TAG_NAME: ${{ github.event.release.tag_name }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="$RELEASE_TAG_NAME"
+          fi
+          if [[ ! "$TAG" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+ ]]; then
+            echo "::error::Invalid tag format: $TAG"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Poll for release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 45); do
+            ASSET_COUNT=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+              --jq '.assets | length' 2>/dev/null || echo "0")
+            echo "[$i/45] $RELEASE_TAG: $ASSET_COUNT/$EXPECTED_ASSET_COUNT assets"
+            if [ "$ASSET_COUNT" -ge "$EXPECTED_ASSET_COUNT" ]; then
+              echo "Assets present."
+              exit 0
+            fi
+            sleep 60
+          done
+          echo "::error::$RELEASE_TAG has $ASSET_COUNT assets after 45 minutes (expected >= $EXPECTED_ASSET_COUNT)."
+          exit 1
+
+      - name: Verify appcast.xml
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          if curl -sf "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/appcast.xml" \
+            | grep -q "$VERSION"; then
+            echo "appcast.xml contains $VERSION"
+          else
+            echo "::warning::appcast.xml does not contain $VERSION yet. Manual commit may still be pending."
+          fi
