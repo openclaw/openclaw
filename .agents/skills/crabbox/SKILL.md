@@ -293,8 +293,21 @@ environment, or owned capacity is explicitly the goal.
 
 When AWS capacity is under pressure, do not start with `class=beast`.
 `beast` begins at 48xlarge instances and can burn 192 vCPU quota per request.
-Use `standard` first, then `fast`, and use `large`/`beast` only when the task
-truly needs that many cores or the AWS quota increase has landed.
+OpenClaw's owned-cloud default is `standard`; escalate to `fast`, then `large`,
+and only use `beast` when the work is explicitly CPU-bound and the smaller class
+already failed the goal.
+
+Use `beast` only for exceptional lanes:
+
+- full-suite or all-plugin Docker matrices where wall time is dominated by CPU,
+  not dependency install or network;
+- release/blocker validation where a maintainer explicitly asks for the largest
+  owned AWS class;
+- performance profiling where the point is to compare high-core behavior.
+
+Do not use `beast` for `pnpm check:changed`, focused tests, docs-only work,
+ordinary lint/typecheck, small E2E repros, or Blacksmith outage triage. Those
+should use `standard` first and `fast` only when the extra cores materially help.
 
 Preferred AWS pressure-relief flow:
 
