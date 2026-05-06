@@ -240,7 +240,7 @@ export function buildGroupChatContext(params: {
     );
   }
   lines.push(
-    "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.",
+    "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. If a message addresses another agent/person and not you, stay silent unless explicitly invited or correcting important facts. Emoji reactions are welcome when available.",
   );
   lines.push(
     "Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.",
