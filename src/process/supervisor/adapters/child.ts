@@ -3,6 +3,7 @@ import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
 import { killProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
+import type { SpawnFallback } from "../../spawn-utils.js";
 import { resolveWindowsCommandShim } from "../../windows-command.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
@@ -38,7 +39,7 @@ export async function createChildAdapter(params: {
     env: baseEnv,
   });
 
-  const stdinMode = params.stdinMode ?? (params.input !== undefined ? "pipe-closed" : "inherit");
+  const stdinMode = params.stdinMode ?? (params.input !== undefined ? "pipe-closed" : process.stdin.isTTY ? "inherit" : "pipe");
 
   // In service-managed mode keep children attached so systemd/launchd can
   // stop the full process tree reliably. Outside service mode preserve the
@@ -62,14 +63,20 @@ export async function createChildAdapter(params: {
   const spawned = await spawnWithFallback({
     argv: [preparedSpawn.command, ...preparedSpawn.args],
     options,
-    fallbacks: useDetached
-      ? [
-          {
-            label: "no-detach",
-            options: { detached: false },
-          },
-        ]
-      : [],
+    fallbacks: (() => {
+      const fbs: SpawnFallback[] = [];
+      if (useDetached) {
+        fbs.push({
+          label: "no-detach",
+          options: { detached: false },
+        });
+      }
+      fbs.push({
+        label: "pipe-stdin",
+        options: { detached: false, stdio: ["pipe", "pipe", "pipe"] },
+      });
+      return fbs;
+    })(),
   });
 
   const child = spawned.child as ChildProcessWithoutNullStreams;
