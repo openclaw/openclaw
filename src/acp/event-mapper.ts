@@ -373,6 +373,21 @@ export function extractToolCallContent(value: unknown): ToolCallContent[] | unde
           text: entry.text,
         },
       });
+    } else if (
+      entry?.type === "image" &&
+      typeof entry.data === "string" &&
+      entry.data.trim() &&
+      typeof entry.mimeType === "string" &&
+      entry.mimeType.trim()
+    ) {
+      contents.push({
+        type: "content",
+        content: {
+          type: "image",
+          data: entry.data,
+          mimeType: entry.mimeType,
+        } as ImageContent & { type: "image" },
+      });
     }
   }
 
