@@ -32,7 +32,10 @@ import {
   type SessionScope,
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readRecentSessionUsageFromTranscript } from "../gateway/session-utils.fs.js";
+import {
+  readRecentSessionUsageFromTranscript,
+  readSessionCompactionCountFromTranscript,
+} from "../gateway/session-utils.fs.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import {
@@ -320,6 +323,28 @@ const readUsageFromSessionLog = (
   }
 };
 
+const readCompactionCountFromSessionLog = (
+  sessionId?: string,
+  sessionEntry?: SessionEntry,
+  agentId?: string,
+  sessionKey?: string,
+  storePath?: string,
+): number | undefined => {
+  if (!sessionId) {
+    return undefined;
+  }
+  try {
+    return readSessionCompactionCountFromTranscript(
+      sessionId,
+      storePath,
+      sessionEntry?.sessionFile,
+      agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined),
+    );
+  } catch {
+    return undefined;
+  }
+};
+
 const formatUsagePair = (input?: number | null, output?: number | null) => {
   if (input == null && output == null) {
     return null;
@@ -581,6 +606,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   let cacheWrite = entry?.cacheWrite;
   const freshTotalTokens = resolveFreshSessionTotalTokens(entry);
   const allowTranscriptContextUsage = entry?.totalTokensFresh !== false;
+  let compactionCount = Math.max(0, entry?.compactionCount ?? 0);
   let totalTokens =
     freshTotalTokens ??
     (entry?.totalTokensFresh === false
@@ -590,6 +616,16 @@ export function buildStatusMessage(args: StatusArgs): string {
   // Prefer prompt-size tokens from the session transcript when it looks larger
   // (cached prompt tokens are often missing from agent meta/store).
   if (args.includeTranscriptUsage) {
+    const logCompactionCount = readCompactionCountFromSessionLog(
+      entry?.sessionId,
+      entry,
+      args.agentId,
+      args.sessionKey,
+      args.sessionStorePath,
+    );
+    if (typeof logCompactionCount === "number") {
+      compactionCount = Math.max(compactionCount, logCompactionCount);
+    }
     const logUsage = readUsageFromSessionLog(
       entry?.sessionId,
       entry,
@@ -800,7 +836,7 @@ export function buildStatusMessage(args: StatusArgs): string {
 
   const contextLine = [
     `Context: ${formatTokens(totalTokens, contextTokens ?? null)}`,
-    `🧹 Compactions: ${entry?.compactionCount ?? 0}`,
+    `🧹 Compactions: ${compactionCount}`,
   ]
     .filter(Boolean)
     .join(" · ");

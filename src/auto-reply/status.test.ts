@@ -1420,6 +1420,29 @@ describe("buildStatusMessage", () => {
       totalTokens: number;
     };
   }) {
+    writeTranscriptEntriesLog({
+      dir: params.dir,
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      entries: [
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            model: params.model ?? "claude-opus-4-6",
+            usage: params.usage,
+          },
+        },
+      ],
+    });
+  }
+
+  function writeTranscriptEntriesLog(params: {
+    dir: string;
+    agentId: string;
+    sessionId: string;
+    entries: Array<Record<string, unknown>>;
+  }) {
     const logPath = path.join(
       params.dir,
       ".openclaw",
@@ -1431,16 +1454,7 @@ describe("buildStatusMessage", () => {
     fs.mkdirSync(path.dirname(logPath), { recursive: true });
     fs.writeFileSync(
       logPath,
-      [
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "assistant",
-            model: params.model ?? "claude-opus-4-6",
-            usage: params.usage,
-          },
-        }),
-      ].join("\n"),
+      params.entries.map((entry) => JSON.stringify(entry)).join("\n"),
       "utf-8",
     );
   }
@@ -1500,6 +1514,34 @@ describe("buildStatusMessage", () => {
         });
 
         expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");
+      },
+      { prefix: "openclaw-status-" },
+    );
+  });
+
+  it("uses transcript-observed compactions when the session store count is stale", async () => {
+    await withTempHome(
+      async (dir) => {
+        const sessionId = "sess-live-compactions";
+        writeTranscriptEntriesLog({
+          dir,
+          agentId: "main",
+          sessionId,
+          entries: [
+            { type: "message", message: { role: "user", content: "start" } },
+            { type: "compaction", id: "compact-1" },
+            { type: "compaction", id: "compact-2" },
+            { type: "compaction", id: "compact-3" },
+            { type: "compaction", id: "compact-4" },
+          ],
+        });
+
+        const text = buildTranscriptStatusText({
+          sessionId,
+          sessionKey: "agent:main:main",
+        });
+
+        expect(normalizeTestText(text)).toContain("Compactions: 4");
       },
       { prefix: "openclaw-status-" },
     );

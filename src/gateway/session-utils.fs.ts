@@ -1469,6 +1469,27 @@ export function readRecentSessionUsageFromTranscript(
   });
 }
 
+export function readSessionCompactionCountFromTranscript(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  agentId: string | undefined,
+): number | undefined {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+  if (!filePath) {
+    return undefined;
+  }
+  try {
+    const records = selectActiveTranscriptRecords(readTranscriptRecords(filePath));
+    return records.reduce(
+      (count, entry) => count + (entry.record.type === "compaction" ? 1 : 0),
+      0,
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 const PREVIEW_READ_SIZES = [64 * 1024, 256 * 1024, 1024 * 1024];
 const PREVIEW_MAX_LINES = 200;
 
