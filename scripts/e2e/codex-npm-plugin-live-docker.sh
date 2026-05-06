@@ -11,7 +11,7 @@ IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-codex-npm-plugin-live-e2e" OPEN
 DOCKER_TARGET="${OPENCLAW_CODEX_NPM_PLUGIN_DOCKER_TARGET:-bare}"
 HOST_BUILD="${OPENCLAW_CODEX_NPM_PLUGIN_HOST_BUILD:-1}"
 PACKAGE_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
-PROFILE_FILE="${OPENCLAW_CODEX_NPM_PLUGIN_PROFILE_FILE:-$HOME/.profile}"
+PROFILE_FILE="${OPENCLAW_CODEX_NPM_PLUGIN_PROFILE_FILE:-${OPENCLAW_TESTBOX_PROFILE_FILE:-$HOME/.openclaw-testbox-live.profile}}"
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" codex-npm-plugin-live "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "$DOCKER_TARGET"
 
@@ -32,6 +32,10 @@ prepare_package_tgz
 PROFILE_MOUNT=()
 PROFILE_STATUS="none"
 if [ -f "$PROFILE_FILE" ] && [ -r "$PROFILE_FILE" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$PROFILE_FILE"
+  set +a
   PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/appuser/.profile:ro)
   PROFILE_STATUS="$PROFILE_FILE"
 fi
