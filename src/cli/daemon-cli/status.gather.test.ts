@@ -9,11 +9,17 @@ import type { GatewayRestartSnapshot } from "./restart-health.js";
 import { gatherDaemonStatus } from "./status.gather.js";
 
 const callGatewayStatusProbe = vi.fn<
-  (opts?: unknown) => Promise<{ ok: boolean; url?: string; error?: string | null }>
+  (opts?: unknown) => Promise<{
+    ok: boolean;
+    url?: string;
+    error?: string | null;
+    version?: string | null;
+  }>
 >(async (_opts?: unknown) => ({
   ok: true,
   url: "ws://127.0.0.1:19001",
   error: null,
+  version: "2026.4.24",
 }));
 const loadGatewayTlsRuntime = vi.fn(async (_cfg?: unknown) => ({
   enabled: true,
@@ -219,6 +225,7 @@ describe("gatherDaemonStatus", () => {
     );
     expect(status.gateway?.probeUrl).toBe("wss://127.0.0.1:19001");
     expect(status.gateway?.tlsEnabled).toBe(true);
+    expect(status.gateway?.version).toBe("2026.4.24");
     expect(status.rpc?.url).toBe("wss://127.0.0.1:19001");
     expect(status.rpc?.ok).toBe(true);
     expect(inspectGatewayRestart).not.toHaveBeenCalled();
