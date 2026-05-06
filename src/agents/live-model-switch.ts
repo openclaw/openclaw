@@ -37,7 +37,7 @@ export function resolveLiveSessionModelSelection(params: {
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId,
   });
-  const entry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+  const entry = loadSessionStore(storePath)[sessionKey];
   const normalizedSelection = normalizeStoredOverrideModel({
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
@@ -159,7 +159,7 @@ export function shouldSwitchToLiveModel(params: {
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: params.agentId?.trim(),
   });
-  const entry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+  const entry = loadSessionStore(storePath)[sessionKey];
   if (!entry?.liveModelSwitchPending) {
     return undefined;
   }

@@ -206,7 +206,7 @@ function getSessionStoreLookup(
 ): SessionStoreLookup {
   if (!context) {
     return {
-      store: taskRegistryMaintenanceRuntime.loadSessionStore(storePath, { clone: false }),
+      store: taskRegistryMaintenanceRuntime.loadSessionStore(storePath),
     };
   }
   const cached = context.sessionStoresByPath.get(storePath);
@@ -214,7 +214,7 @@ function getSessionStoreLookup(
     return cached;
   }
   const lookup = {
-    store: taskRegistryMaintenanceRuntime.loadSessionStore(storePath, { clone: false }),
+    store: taskRegistryMaintenanceRuntime.loadSessionStore(storePath),
   };
   context.sessionStoresByPath.set(storePath, lookup);
   return lookup;

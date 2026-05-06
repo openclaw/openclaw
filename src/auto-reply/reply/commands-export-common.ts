@@ -46,7 +46,7 @@ export function resolveExportCommandSessionTarget(
 ): ExportCommandSessionTarget | ReplyPayload {
   const targetAgentId = resolveAgentIdFromSessionKey(params.sessionKey) || params.agentId || "main";
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(targetAgentId);
-  const store = loadSessionStore(storePath, { skipCache: true });
+  const store = loadSessionStore(storePath);
   const entry = store[params.sessionKey] as SessionEntry | undefined;
   if (!entry?.sessionId) {
     return { text: `❌ Session not found: ${params.sessionKey}` };

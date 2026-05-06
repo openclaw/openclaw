@@ -79,7 +79,7 @@ type SaveSessionStoreOptions = {
 };
 
 function loadMutableSessionStoreForWriter(storePath: string): Record<string, SessionEntry> {
-  return loadSessionStore(storePath, { skipCache: true, clone: false });
+  return loadSessionStore(storePath);
 }
 
 function resolveMutableSessionStoreKey(

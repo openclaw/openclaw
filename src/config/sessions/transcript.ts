@@ -306,7 +306,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   }
 
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(params.agentId);
-  const store = loadSessionStore(storePath, { skipCache: true });
+  const store = loadSessionStore(storePath);
   const normalizedKey = normalizeStoreSessionKey(sessionKey);
   const entry = (store[normalizedKey] ?? store[sessionKey]) as SessionEntry | undefined;
   if (!entry?.sessionId) {

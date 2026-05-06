@@ -213,9 +213,7 @@ export function initFastReplySessionState(params: {
     mainKey: cfg.session?.mainKey,
   });
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  const sessionStore: Record<string, SessionEntry> = loadSessionStore(storePath, {
-    skipCache: true,
-  });
+  const sessionStore: Record<string, SessionEntry> = loadSessionStore(storePath);
   const existingEntry = sessionStore[sessionKey];
   const commandSource = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
   const triggerBodyNormalized = stripStructuralPrefixes(commandSource).trim();
