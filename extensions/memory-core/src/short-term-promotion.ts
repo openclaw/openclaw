@@ -1465,7 +1465,6 @@ function relocateCandidateRange(
     quality: number;
     distance: number;
   }> = [];
-  let smallestContainingSpan: number | undefined;
   for (let startIndex = 0; startIndex < lines.length; startIndex += 1) {
     for (let span = 1; span <= maxSpan && startIndex + span <= lines.length; span += 1) {
       const startLine = startIndex + 1;
@@ -1476,10 +1475,6 @@ function relocateCandidateRange(
         continue;
       }
       const distance = Math.abs(startLine - candidate.startLine);
-      if (comparison.quality === 2) {
-        smallestContainingSpan =
-          smallestContainingSpan === undefined ? span : Math.min(smallestContainingSpan, span);
-      }
       matches.push({
         startLine,
         endLine,
@@ -1491,16 +1486,31 @@ function relocateCandidateRange(
     }
   }
 
-  const containingSpanLimit =
-    smallestContainingSpan === undefined ? undefined : smallestContainingSpan + 1;
+  const containingAnchor = matches.reduce<(typeof matches)[number] | undefined>((best, match) => {
+    if (match.quality !== 2) {
+      return best;
+    }
+    if (!best || match.distance < best.distance) {
+      return match;
+    }
+    if (match.distance === best.distance && match.span < best.span) {
+      return match;
+    }
+    return best;
+  }, undefined);
   let bestMatch:
     | { startLine: number; endLine: number; snippet: string; quality: number; distance: number }
     | undefined;
   for (const match of matches) {
     if (
       match.quality === 2 &&
-      containingSpanLimit !== undefined &&
-      match.span > containingSpanLimit
+      containingAnchor &&
+      !rangesOverlap(
+        match.startLine,
+        match.endLine,
+        containingAnchor.startLine,
+        containingAnchor.endLine,
+      )
     ) {
       continue;
     }

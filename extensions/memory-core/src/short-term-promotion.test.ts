@@ -1580,6 +1580,59 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("keeps nearby wider containment matches ahead of distant tight repeats", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+        "intro",
+        "summary",
+        "daily note churn",
+        "another inserted line",
+        "Move backups",
+        "to S3",
+        "Glacier. Nearby suffix.",
+        "gap",
+        "gap",
+        "Far prefix Move backups to S3 Glacier. Far suffix.",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "glacier nearby wrapped repeated",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 5,
+            endLine: 7,
+            score: 0.94,
+            snippet: "Move backups to S3 Glacier.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appliedCandidates[0]?.startLine).toBe(5);
+      expect(applied.appliedCandidates[0]?.endLine).toBe(7);
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).toContain("memory/2026-04-01.md:5-7");
+      expect(memoryText).toContain("Glacier. Nearby suffix.");
+      expect(memoryText).not.toContain("Far prefix Move backups");
+    });
+  });
+
   it("uses nested tight containment instead of broad stale ranges", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
