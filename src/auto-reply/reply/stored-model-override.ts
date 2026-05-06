@@ -1,4 +1,8 @@
-import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
+import {
+  modelKey,
+  normalizeModelRef,
+  resolvePersistedOverrideModelRef,
+} from "../../agents/model-selection.js";
 import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -56,4 +60,40 @@ export function resolveStoredModelOverride(params: {
     return null;
   }
   return { ...parentOverride, source: "parent" };
+}
+
+export function isStaleHeartbeatAutoFallbackOverride(params: {
+  isHeartbeat?: boolean;
+  hasResolvedHeartbeatModelOverride?: boolean;
+  sessionEntry?: SessionEntry;
+  storedOverride?: StoredModelOverride | null;
+  defaultProvider: string;
+  defaultModel: string;
+}): boolean {
+  if (params.isHeartbeat !== true || params.hasResolvedHeartbeatModelOverride === true) {
+    return false;
+  }
+  if (params.storedOverride?.source !== "session") {
+    return false;
+  }
+  if (params.sessionEntry?.modelOverrideSource !== "auto") {
+    return false;
+  }
+  const selectedModel = normalizeOptionalString(params.sessionEntry.fallbackNoticeSelectedModel);
+  if (!selectedModel) {
+    return false;
+  }
+  const selectedRef = resolvePersistedOverrideModelRef({
+    defaultProvider: params.defaultProvider,
+    overrideModel: selectedModel,
+  });
+  if (!selectedRef) {
+    return false;
+  }
+  const normalizedSelectedRef = normalizeModelRef(selectedRef.provider, selectedRef.model);
+  const normalizedDefaultRef = normalizeModelRef(params.defaultProvider, params.defaultModel);
+  return (
+    modelKey(normalizedSelectedRef.provider, normalizedSelectedRef.model) !==
+    modelKey(normalizedDefaultRef.provider, normalizedDefaultRef.model)
+  );
 }
