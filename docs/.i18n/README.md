@@ -19,9 +19,9 @@ Generated locale trees and live translation memory now live in the publish repo:
 2. Push to `main`.
 3. `openclaw/openclaw/.github/workflows/docs-sync-publish.yml` mirrors the docs tree into `openclaw/docs`.
 4. The sync script rewrites the publish `docs/docs.json` so the generated locale picker blocks exist there even though they are no longer committed in the source repo.
-5. `openclaw/docs/.github/workflows/translate-zh-cn.yml` refreshes `docs/zh-CN/**` once a day, on demand, and after source-repo release dispatches.
-6. `openclaw/docs/.github/workflows/translate-zh-tw.yml` and `translate-ja-jp.yml` do the same for `docs/zh-TW/**` and `docs/ja-JP/**`.
-7. `openclaw/docs/.github/workflows/translate-es.yml`, `translate-pt-br.yml`, `translate-ko.yml`, `translate-de.yml`, `translate-fr.yml`, `translate-ar.yml`, `translate-it.yml`, `translate-vi.yml`, `translate-nl.yml`, `translate-fa.yml`, `translate-tr.yml`, `translate-uk.yml`, `translate-id.yml`, `translate-pl.yml`, and `translate-th.yml` do the same for `docs/es/**`, `docs/pt-BR/**`, `docs/ko/**`, `docs/de/**`, `docs/fr/**`, `docs/ar/**`, `docs/it/**`, `docs/vi/**`, `docs/nl/**`, `docs/fa/**`, `docs/tr/**`, `docs/uk/**`, `docs/id/**`, `docs/pl/**`, and `docs/th/**`.
+5. `openclaw/docs/.github/workflows/translate-all.yml` waits for `main` to settle, translates only stale or missing locale pages, and uploads per-locale artifacts.
+6. The publish repo finalizer applies successful locale artifacts and pushes one aggregate `chore(i18n): refresh translations` commit.
+7. A weekly `full` run reconciles every locale/page path so flaky model failures are retried without making hot docs commits wait.
 
 ## Why the split exists
 
