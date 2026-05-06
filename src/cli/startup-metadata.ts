@@ -1,6 +1,6 @@
-import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { tryReadJsonSync } from "../infra/json-files.js";
 
 const STARTUP_METADATA_FILE = "cli-startup-metadata.json";
 const startupMetadataByPath = new Map<string, Record<string, unknown> | null>();
@@ -22,14 +22,13 @@ export function readCliStartupMetadata(moduleUrl: string): Record<string, unknow
       }
       continue;
     }
-    try {
-      const parsed = JSON.parse(fs.readFileSync(metadataPath, "utf8")) as Record<string, unknown>;
+    const parsed = tryReadJsonSync<Record<string, unknown>>(metadataPath);
+    if (parsed) {
       startupMetadataByPath.set(metadataPath, parsed);
       return parsed;
-    } catch {
-      // Try the next bundled/source layout before falling back to dynamic startup work.
-      startupMetadataByPath.set(metadataPath, null);
     }
+    // Try the next bundled/source layout before falling back to dynamic startup work.
+    startupMetadataByPath.set(metadataPath, null);
   }
   return null;
 }

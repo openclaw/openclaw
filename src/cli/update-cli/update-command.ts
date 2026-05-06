@@ -28,6 +28,7 @@ import {
 } from "../../daemon/service.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { pathExists } from "../../infra/fs-safe.js";
+import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
 import { runGlobalPackageUpdateSteps } from "../../infra/package-update-steps.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
@@ -1702,15 +1703,14 @@ async function writePostCorePluginUpdateResultFile(
   if (!filePath) {
     return;
   }
-  await fs.writeFile(filePath, `${JSON.stringify(result)}\n`, "utf-8");
+  await writeJson(filePath, result, { trailingNewline: true });
 }
 
 async function readPostCorePluginUpdateResultFile(
   filePath: string,
 ): Promise<PostCorePluginUpdateResult | undefined> {
   try {
-    const raw = await fs.readFile(filePath, "utf-8");
-    const parsed = JSON.parse(raw) as PostCorePluginUpdateResult;
+    const parsed = await readJsonIfExists<PostCorePluginUpdateResult>(filePath);
     if (
       parsed &&
       typeof parsed === "object" &&
