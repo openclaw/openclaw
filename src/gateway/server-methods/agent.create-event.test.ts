@@ -60,9 +60,11 @@ describe("agent handler session create events", () => {
   afterEach(async () => {
     await fs.rm(tempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("emits sessions.changed with reason create for new agent sessions", async () => {
+    vi.useFakeTimers();
     const broadcastToConnIds = vi.fn();
     const respond = vi.fn();
 
@@ -88,6 +90,10 @@ describe("agent handler session create events", () => {
       isWebchatConnect: () => false,
       req: { id: "req-agent-create-event" } as never,
     });
+
+    // `agentHandlers.agent` emits `sessions.changed` after an async
+    // `setTimeout(10)`, so advance timers before asserting.
+    await vi.advanceTimersByTimeAsync(15);
 
     expect(respond).toHaveBeenCalledWith(
       true,

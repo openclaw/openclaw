@@ -240,6 +240,13 @@ function buildPatchSummaryText(summary: ApplyPatchSummary): string {
   return parts.length > 0 ? parts.join(", ") : "no file changes recorded";
 }
 
+function readDirectReply(result: unknown): boolean {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return false;
+  }
+  return (result as Record<string, unknown>).directReply === true;
+}
+
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
   const normalized = normalizeOptionalLowercaseString(toolName);
   if (normalized !== "exec" && normalized !== "bash") {
@@ -1194,5 +1201,32 @@ export async function handleToolExecutionEnd(
       .catch((err) => {
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
       });
+  }
+
+  // directReply: deliver tool output (text + optional media) directly and abort LLM inference.
+  if (!isToolError && readDirectReply(result)) {
+    const outputText = extractToolResultText(sanitizedResult)?.trim();
+    const mediaArtifact = extractToolResultMediaArtifact(result);
+    const mediaUrls = mediaArtifact
+      ? filterToolResultMediaUrls(
+          rawToolName,
+          mediaArtifact.mediaUrls,
+          result,
+          ctx.builtinToolNames,
+        )
+      : [];
+    const hasContent = Boolean(outputText) || mediaUrls.length > 0;
+    if (hasContent) {
+      ctx.emitBlockReply?.({
+        ...(outputText ? { text: outputText } : {}),
+        ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
+        ...(mediaArtifact?.audioAsVoice ? { audioAsVoice: true } : {}),
+      });
+      ctx.abortRun?.("direct_reply");
+    } else {
+      ctx.log.warn(
+        `directReply: tool=${toolName} ignored because no content was extracted (no text, no mediaUrls)`,
+      );
+    }
   }
 }

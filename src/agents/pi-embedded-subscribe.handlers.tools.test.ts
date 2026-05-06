@@ -1242,3 +1242,403 @@ describe("control UI credential redaction (issue #72283)", () => {
     expect(emittedResult).toContain("OPENROUTER_API_KEY=");
   });
 });
+
+// ---------------------------------------------------------------------------
+// readDirectReply helper — tested via handleToolExecutionEnd behaviour
+// (the helper is not exported, so we exercise it through the public API)
+// ---------------------------------------------------------------------------
+
+// We need a way to call readDirectReply in isolation. Since it is not exported
+// we test its contract through handleToolExecutionEnd, which is the only
+// production caller. The property tests below cover every branch.
+
+describe("readDirectReply contract (via handleToolExecutionEnd)", () => {
+  async function runEnd(ctx: ToolHandlerContext, result: unknown, isError = false): Promise<void> {
+    // Ensure start data exists so the end handler doesn't crash on missing meta.
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "custom",
+        toolCallId: "tc-dr",
+        args: {},
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "custom",
+        toolCallId: "tc-dr",
+        isError,
+        result,
+      } as never,
+    );
+  }
+
+  it("returns false for null — neither emitBlockReply nor abortRun called", async () => {
+    const { ctx } = createTestContext();
+    const emitBlockReply = vi.fn();
+    const abortRun = vi.fn();
+    ctx.emitBlockReply = emitBlockReply;
+    ctx.abortRun = abortRun;
+    await runEnd(ctx, null);
+    expect(emitBlockReply).not.toHaveBeenCalled();
+    expect(abortRun).not.toHaveBeenCalled();
+  });
+
+  it("returns false for undefined — neither called", async () => {
+    const { ctx } = createTestContext();
+    const emitBlockReply = vi.fn();
+    const abortRun = vi.fn();
+    ctx.emitBlockReply = emitBlockReply;
+    ctx.abortRun = abortRun;
+    await runEnd(ctx, undefined);
+    expect(emitBlockReply).not.toHaveBeenCalled();
+    expect(abortRun).not.toHaveBeenCalled();
+  });
+
+  it("returns false for a primitive string — neither called", async () => {
+    const { ctx } = createTestContext();
+    const emitBlockReply = vi.fn();
+    const abortRun = vi.fn();
+    ctx.emitBlockReply = emitBlockReply;
+    ctx.abortRun = abortRun;
+    await runEnd(ctx, "some string");
+    expect(emitBlockReply).not.toHaveBeenCalled();
+    expect(abortRun).not.toHaveBeenCalled();
+  });
+
+  it("returns false for an array — neither called", async () => {
+    const { ctx } = createTestContext();
+    const emitBlockReply = vi.fn();
+    const abortRun = vi.fn();
+    ctx.emitBlockReply = emitBlockReply;
+    ctx.abortRun = abortRun;
+    await runEnd(ctx, [{ directReply: true }]);
+    expect(emitBlockReply).not.toHaveBeenCalled();
+    expect(abortRun).not.toHaveBeenCalled();
+  });
+
+  it("returns false for { directReply: 1 } — neither called", async () => {
+    const { ctx } = createTestContext();
+    const emitBlockReply = vi.fn();
+    const abortRun = vi.fn();
+    ctx.emitBlockReply = emitBlockReply;
+    ctx.abortRun = abortRun;
+    await runEnd(ctx, { directReply: 1, content: [{ type: "text", text: "hi" }] });
+    expect(emitBlockReply).not.toHaveBeenCalled();
+    expect(abortRun).not.toHaveBeenCalled();
+  });
+
+  it('returns false for { directReply: "true" } — neither called', async () => {
+    const { ctx } = createTestContext();
+    const emitBlockReply = vi.fn();
+    const abortRun = vi.fn();
+    ctx.emitBlockReply = emitBlockReply;
+    ctx.abortRun = abortRun;
+    await runEnd(ctx, { directReply: "true", content: [{ type: "text", text: "hi" }] });
+    expect(emitBlockReply).not.toHaveBeenCalled();
+    expect(abortRun).not.toHaveBeenCalled();
+  });
+
+  it("returns false for { directReply: false } — neither called", async () => {
+    const { ctx } = createTestContext();
+    const emitBlockReply = vi.fn();
+    const abortRun = vi.fn();
+    ctx.emitBlockReply = emitBlockReply;
+    ctx.abortRun = abortRun;
+    await runEnd(ctx, { directReply: false, content: [{ type: "text", text: "hi" }] });
+    expect(emitBlockReply).not.toHaveBeenCalled();
+    expect(abortRun).not.toHaveBeenCalled();
+  });
+
+  it("returns true for { directReply: true } — abortRun called", async () => {
+    const { ctx } = createTestContext();
+    const abortRun = vi.fn();
+    ctx.abortRun = abortRun;
+    await runEnd(ctx, { directReply: true, content: [{ type: "text", text: "hello" }] });
+    expect(abortRun).toHaveBeenCalledWith("direct_reply");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handleToolExecutionEnd — directReply path
+// ---------------------------------------------------------------------------
+
+describe("handleToolExecutionEnd directReply path", () => {
+  async function runWithDirectReply(
+    ctx: ToolHandlerContext,
+    result: unknown,
+    isError = false,
+  ): Promise<void> {
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "custom",
+        toolCallId: "tc-1",
+        args: {},
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "custom",
+        toolCallId: "tc-1",
+        isError,
+        result,
+      } as never,
+    );
+  }
+
+  it("success + text: emitBlockReply called with trimmed text, abortRun called with direct_reply", async () => {
+    const { ctx } = createTestContext();
+    const emitBlockReply = vi.fn();
+    const abortRun = vi.fn();
+    ctx.emitBlockReply = emitBlockReply;
+    ctx.abortRun = abortRun;
+
+    await runWithDirectReply(ctx, {
+      directReply: true,
+      content: [{ type: "text", text: "  Hello world  " }],
+    });
+
+    expect(emitBlockReply).toHaveBeenCalledOnce();
+    expect(emitBlockReply).toHaveBeenCalledWith({ text: "Hello world" });
+    expect(abortRun).toHaveBeenCalledOnce();
+    expect(abortRun).toHaveBeenCalledWith("direct_reply");
+  });
+
+  it("success + empty text: does NOT abort, does NOT emitBlockReply", async () => {
+    const { ctx } = createTestContext();
+    const emitBlockReply = vi.fn();
+    const abortRun = vi.fn();
+    ctx.emitBlockReply = emitBlockReply;
+    ctx.abortRun = abortRun;
+
+    await runWithDirectReply(ctx, {
+      directReply: true,
+      content: [{ type: "text", text: "   " }],
+    });
+
+    expect(emitBlockReply).not.toHaveBeenCalled();
+    expect(abortRun).not.toHaveBeenCalled();
+  });
+
+  it("success + no content: does NOT abort, does NOT emitBlockReply", async () => {
+    const { ctx } = createTestContext();
+    const emitBlockReply = vi.fn();
+    const abortRun = vi.fn();
+    ctx.emitBlockReply = emitBlockReply;
+    ctx.abortRun = abortRun;
+
+    await runWithDirectReply(ctx, { directReply: true });
+
+    expect(emitBlockReply).not.toHaveBeenCalled();
+    expect(abortRun).not.toHaveBeenCalled();
+  });
+
+  it("isError + directReply: neither emitBlockReply nor abortRun called", async () => {
+    const { ctx } = createTestContext();
+    const emitBlockReply = vi.fn();
+    const abortRun = vi.fn();
+    ctx.emitBlockReply = emitBlockReply;
+    ctx.abortRun = abortRun;
+
+    await runWithDirectReply(
+      ctx,
+      { directReply: true, content: [{ type: "text", text: "error output" }] },
+      true,
+    );
+
+    expect(emitBlockReply).not.toHaveBeenCalled();
+    expect(abortRun).not.toHaveBeenCalled();
+  });
+
+  it("directReply absent: neither emitBlockReply nor abortRun called (backward compat)", async () => {
+    const { ctx } = createTestContext();
+    const emitBlockReply = vi.fn();
+    const abortRun = vi.fn();
+    ctx.emitBlockReply = emitBlockReply;
+    ctx.abortRun = abortRun;
+
+    await runWithDirectReply(ctx, { content: [{ type: "text", text: "normal output" }] });
+
+    expect(emitBlockReply).not.toHaveBeenCalled();
+    expect(abortRun).not.toHaveBeenCalled();
+  });
+
+  it("directReply: false: neither emitBlockReply nor abortRun called", async () => {
+    const { ctx } = createTestContext();
+    const emitBlockReply = vi.fn();
+    const abortRun = vi.fn();
+    ctx.emitBlockReply = emitBlockReply;
+    ctx.abortRun = abortRun;
+
+    await runWithDirectReply(ctx, {
+      directReply: false,
+      content: [{ type: "text", text: "normal output" }],
+    });
+
+    expect(emitBlockReply).not.toHaveBeenCalled();
+    expect(abortRun).not.toHaveBeenCalled();
+  });
+
+  it("ctx.emitBlockReply and ctx.abortRun both absent: no crash", async () => {
+    const { ctx } = createTestContext();
+    // Ensure neither field is set
+    delete (ctx as Partial<ToolHandlerContext>).emitBlockReply;
+    delete (ctx as Partial<ToolHandlerContext>).abortRun;
+
+    await expect(
+      runWithDirectReply(ctx, {
+        directReply: true,
+        content: [{ type: "text", text: "hello" }],
+      }),
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe("handleToolExecutionEnd directReply path — media support", () => {
+  async function runWithResult(
+    ctx: ToolHandlerContext,
+    result: unknown,
+    isError = false,
+  ): Promise<void> {
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "custom",
+        toolCallId: "tc-media",
+        args: {},
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "custom",
+        toolCallId: "tc-media",
+        isError,
+        result,
+      } as never,
+    );
+  }
+
+  it("mediaUrls only: emitBlockReply called with mediaUrls, abortRun called", async () => {
+    const { ctx } = createTestContext();
+    const emitBlockReply = vi.fn();
+    const abortRun = vi.fn();
+    ctx.emitBlockReply = emitBlockReply;
+    ctx.abortRun = abortRun;
+
+    await runWithResult(ctx, {
+      directReply: true,
+      content: [],
+      details: { directReply: true, media: { mediaUrls: ["https://example.com/report.pdf"] } },
+    });
+
+    expect(emitBlockReply).toHaveBeenCalledOnce();
+    expect(emitBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ mediaUrls: ["https://example.com/report.pdf"] }),
+    );
+    expect(abortRun).toHaveBeenCalledWith("direct_reply");
+  });
+
+  it("text + mediaUrls: emitBlockReply called with both", async () => {
+    const { ctx } = createTestContext();
+    const emitBlockReply = vi.fn();
+    const abortRun = vi.fn();
+    ctx.emitBlockReply = emitBlockReply;
+    ctx.abortRun = abortRun;
+
+    await runWithResult(ctx, {
+      directReply: true,
+      content: [{ type: "text", text: "Report ready" }],
+      details: { directReply: true, media: { mediaUrls: ["https://example.com/report.pdf"] } },
+    });
+
+    expect(emitBlockReply).toHaveBeenCalledOnce();
+    expect(emitBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Report ready",
+        mediaUrls: ["https://example.com/report.pdf"],
+      }),
+    );
+    expect(abortRun).toHaveBeenCalledWith("direct_reply");
+  });
+
+  it("audioAsVoice: emitBlockReply called with audioAsVoice: true", async () => {
+    const { ctx } = createTestContext();
+    const emitBlockReply = vi.fn();
+    const abortRun = vi.fn();
+    ctx.emitBlockReply = emitBlockReply;
+    ctx.abortRun = abortRun;
+
+    await runWithResult(ctx, {
+      directReply: true,
+      content: [],
+      details: {
+        directReply: true,
+        media: { mediaUrls: ["https://example.com/audio.mp3"], audioAsVoice: true },
+      },
+    });
+
+    expect(emitBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ audioAsVoice: true, mediaUrls: ["https://example.com/audio.mp3"] }),
+    );
+    expect(abortRun).toHaveBeenCalledWith("direct_reply");
+  });
+
+  it("directReplyResultWithMedia round-trip: readDirectReply true, mediaUrls extracted", async () => {
+    const { directReplyResultWithMedia } = await import("./tools/common.js");
+    const { extractToolResultMediaArtifact } = await import("./pi-embedded-subscribe.tools.js");
+
+    const result = directReplyResultWithMedia({
+      text: "Done",
+      mediaUrls: ["https://example.com/file.zip"],
+    });
+
+    // readDirectReply via handleToolExecutionEnd
+    const { ctx } = createTestContext();
+    const abortRun = vi.fn();
+    ctx.abortRun = abortRun;
+    const emitBlockReply = vi.fn();
+    ctx.emitBlockReply = emitBlockReply;
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "custom",
+        toolCallId: "tc-roundtrip",
+        args: {},
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "custom",
+        toolCallId: "tc-roundtrip",
+        isError: false,
+        result,
+      } as never,
+    );
+
+    expect(abortRun).toHaveBeenCalledWith("direct_reply");
+    expect(emitBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Done",
+        mediaUrls: ["https://example.com/file.zip"],
+      }),
+    );
+
+    // Also verify extractToolResultMediaArtifact sees the mediaUrls
+    const artifact = extractToolResultMediaArtifact(result);
+    expect(artifact?.mediaUrls).toEqual(["https://example.com/file.zip"]);
+  });
+});

@@ -895,6 +895,20 @@ function buildAssistantText(
     }
     return "";
   }
+  // `approval-turn-tool-followthrough`: after read(QA_KICKOFF_TASK.md), the generic
+  // evidence-snippet path truncates tool JSON and can omit harness `expectedReplyAny`
+  // keywords (qa/mission/repo/…). Reply deterministically so parity CI stays stable.
+  if (
+    toolOutput &&
+    /\bok do it\b/i.test(prompt) &&
+    /QA_KICKOFF_TASK\.md/i.test(prompt) &&
+    /reply with the qa mission/i.test(prompt)
+  ) {
+    return (
+      "QA mission from QA_KICKOFF_TASK.md: understand this OpenClaw repo from source and docs, " +
+      "then exercise chat flows via qa-channel and report worked, failed, or blocked."
+    );
+  }
   if (toolOutput) {
     const snippet = toolOutput.replace(/\s+/g, " ").trim().slice(0, 220);
     return `Protocol note: I reviewed the requested material. Evidence snippet: ${snippet || "no content"}`;

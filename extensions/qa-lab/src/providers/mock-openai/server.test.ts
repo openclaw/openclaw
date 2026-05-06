@@ -187,6 +187,37 @@ describe("qa mock openai server", () => {
     });
   });
 
+  it("returns approval followthrough assistant text after kickoff read even when tool JSON truncates keywords", async () => {
+    const server = await startMockServer();
+    const approval =
+      "ok do it. read `QA_KICKOFF_TASK.md` now and reply with the QA mission in one short sentence.";
+    const longPrefix = "x".repeat(400);
+    const toolJson = JSON.stringify({
+      padding: longPrefix,
+      body: "QA mission content is deep in payload",
+    });
+    const out = await expectResponsesJson<{
+      output: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      model: "gpt-5.5",
+      input: [
+        makeUserInput(
+          "Before acting, tell me the single file you would start with in six words or fewer. Do not use tools yet.",
+        ),
+        makeUserInput(approval),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_1",
+          output: toolJson,
+        },
+      ],
+    });
+    const text = out.output[0]?.content?.[0]?.text ?? "";
+    expect(text).toContain("QA mission");
+    expect(text.toLowerCase()).toContain("chat flows");
+  });
+
   it("emits deterministic text deltas for generic streaming QA prompts", async () => {
     const server = await startMockServer();
 

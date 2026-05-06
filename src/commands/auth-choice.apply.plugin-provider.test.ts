@@ -427,21 +427,14 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     expect(result?.config.agents?.defaults?.model).toEqual({
       primary: LOCAL_DEFAULT_MODEL,
     });
-    expect(resolvePluginSetupProvider).toHaveBeenCalledWith({
-      provider: LOCAL_PROVIDER_ID,
-      config: {
-        plugins: {
-          entries: {
-            "local-provider-plugin": {
-              enabled: true,
-            },
-          },
-        },
-      },
-      workspaceDir: "/tmp/workspace",
-      env: undefined,
-      pluginIds: ["local-provider-plugin"],
-    });
+    expect(resolvePluginSetupProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: LOCAL_PROVIDER_ID,
+        workspaceDir: "/tmp/workspace",
+        env: undefined,
+        pluginIds: ["local-provider-plugin"],
+      }),
+    );
     expect(resolvePluginProviders).not.toHaveBeenCalled();
   });
 

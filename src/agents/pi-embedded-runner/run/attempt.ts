@@ -2302,6 +2302,7 @@ export async function runEmbeddedAttempt(
       }
 
       let yieldAborted = false;
+      let directReplyAborted = false;
       const getAbortReason = (signal: AbortSignal): unknown =>
         "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
       const makeTimeoutAbortReason = (): Error => {
@@ -2381,6 +2382,7 @@ export async function runEmbeddedAttempt(
           agentId: sessionAgentId,
           builtinToolNames,
           internalEvents: params.internalEvents,
+          abortRun: (reason) => abortRun(false, reason),
         }),
       );
 
@@ -3185,6 +3187,8 @@ export async function runEmbeddedAttempt(
             }
           }
         } catch (err) {
+          directReplyAborted =
+            isRunnerAbortError(err) && err instanceof Error && err.cause === "direct_reply";
           yieldAborted =
             yieldDetected &&
             isRunnerAbortError(err) &&
@@ -3201,6 +3205,8 @@ export async function runEmbeddedAttempt(
             if (yieldMessage) {
               await persistSessionsYieldContextMessage(activeSession, yieldMessage);
             }
+          } else if (directReplyAborted) {
+            aborted = false;
           } else if (isMidTurnPrecheckSignal(err)) {
             handleMidTurnPrecheckRequest(err.request);
           } else {
@@ -3247,16 +3253,17 @@ export async function runEmbeddedAttempt(
             await params.onBlockReplyFlush();
           }
 
-          // Skip compaction wait when yield aborted the run — the signal is
+          // Skip compaction wait when yield or direct-reply aborted the run — the signal is
           // already tripped and abortable() would immediately reject.
-          const compactionRetryWait = yieldAborted
-            ? { timedOut: false }
-            : await waitForCompactionRetryWithAggregateTimeout({
-                waitForCompactionRetry,
-                abortable,
-                aggregateTimeoutMs: COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS,
-                isCompactionStillInFlight: isCompactionInFlight,
-              });
+          const compactionRetryWait =
+            yieldAborted || directReplyAborted
+              ? { timedOut: false }
+              : await waitForCompactionRetryWithAggregateTimeout({
+                  waitForCompactionRetry,
+                  abortable,
+                  aggregateTimeoutMs: COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS,
+                  isCompactionStillInFlight: isCompactionInFlight,
+                });
           if (compactionRetryWait.timedOut) {
             timedOutDuringCompaction = true;
             if (!isProbeSession) {
