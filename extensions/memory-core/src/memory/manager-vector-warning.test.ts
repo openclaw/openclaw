@@ -30,6 +30,22 @@ describe("memory vector degradation warnings", () => {
     );
   });
 
+  it("blames embedding provider when sqlite-vec loaded but no dimensions resolved", () => {
+    const warn = vi.fn();
+
+    logMemoryVectorDegradedWrite({
+      vectorEnabled: true,
+      vectorReady: false,
+      chunkCount: 3,
+      warningShown: false,
+      warn,
+    });
+
+    expect(warn).toHaveBeenCalledWith(
+      "chunks_vec not updated \u2014 embedding provider unavailable \u2014 no vector dimensions resolved. Vector recall degraded. Further duplicate warnings suppressed.",
+    );
+  });
+
   it("skips the warning when vector writes are available", () => {
     const warn = vi.fn();
 

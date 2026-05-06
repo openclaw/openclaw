@@ -14,9 +14,14 @@ export function logMemoryVectorDegradedWrite(params: {
   ) {
     return params.warningShown;
   }
-  const errDetail = params.loadError ? `: ${params.loadError}` : "";
+  let reason: string;
+  if (params.loadError) {
+    reason = `sqlite-vec unavailable: ${params.loadError}`;
+  } else {
+    reason = "embedding provider unavailable — no vector dimensions resolved";
+  }
   params.warn(
-    `chunks_vec not updated — sqlite-vec unavailable${errDetail}. Vector recall degraded. Further duplicate warnings suppressed.`,
+    `chunks_vec not updated — ${reason}. Vector recall degraded. Further duplicate warnings suppressed.`,
   );
   return true;
 }
