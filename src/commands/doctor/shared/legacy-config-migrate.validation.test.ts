@@ -58,7 +58,7 @@ describe("legacy config migrate validation", () => {
 
     expect(res.partiallyValid).toBe(true);
     expect(res.changes).toContain(
-      "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds.",
+      "Removed agents.defaults.llm.idleTimeoutSeconds: 120; to preserve this behavior, set models.providers.<id>.timeoutSeconds: 120 for slow providers.",
     );
     expect(res.changes).toContain(
       "Migration applied; other validation issues remain — run doctor to review.",
