@@ -119,6 +119,7 @@ export function collectInstalledPackageErrors(params: {
   }
 
   errors.push(...collectInstalledContextEngineRuntimeErrors(params.packageRoot));
+  errors.push(...collectInstalledPluginSdkZodArtifactErrors(params.packageRoot));
   errors.push(...collectInstalledRootDependencyManifestErrors(params.packageRoot));
 
   return errors;
@@ -202,6 +203,39 @@ export function collectInstalledContextEngineRuntimeErrors(packageRoot: string):
     }
   }
   return errors;
+}
+
+export function collectInstalledPluginSdkZodArtifactErrors(packageRoot: string): string[] {
+  const relativePath = "dist/plugin-sdk/zod.js";
+  const artifactPath = join(packageRoot, relativePath);
+  if (!existsSync(artifactPath)) {
+    return [`installed package is missing required plugin SDK artifact: ${relativePath}`];
+  }
+  const artifactStat = lstatSync(artifactPath);
+  if (!artifactStat.isFile() || artifactStat.size > MAX_INSTALLED_ROOT_DIST_JS_BYTES) {
+    return [
+      `installed package plugin SDK artifact '${relativePath}' is invalid or exceeds ${MAX_INSTALLED_ROOT_DIST_JS_BYTES} bytes.`,
+    ];
+  }
+
+  const source = readFileSync(artifactPath, "utf8");
+  const parsedSpecifiers = extractJavaScriptImportSpecifiers(source);
+  if (!parsedSpecifiers.ok) {
+    return [
+      `installed package plugin SDK artifact '${relativePath}' could not be parsed for runtime dependency verification: ${parsedSpecifiers.error}.`,
+    ];
+  }
+
+  const bareZodSpecifiers = [...parsedSpecifiers.specifiers]
+    .filter((specifier) => specifier === "zod" || specifier.startsWith("zod/"))
+    .toSorted((left, right) => left.localeCompare(right));
+  if (bareZodSpecifiers.length === 0) {
+    return [];
+  }
+
+  return [
+    `installed package plugin SDK artifact '${relativePath}' must be self-contained but imports ${bareZodSpecifiers.join(", ")}.`,
+  ];
 }
 
 function listInstalledRootDistJavaScriptFiles(packageRoot: string): string[] {
