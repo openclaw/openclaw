@@ -39,6 +39,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Gateway protocol changes: additive first; incompatible needs versioning/docs/client follow-through.
 - Config contract: exported types, schema/help, metadata, baselines, docs aligned. Retired public keys stay retired; compat in raw migration/doctor.
 - Direction: manifest-first control plane; targeted runtime loaders; no hidden contract bypasses; broad mutable registries transitional.
+- Prepared runtime: optional per-agent prepared facts (providers, models, channels, media, speech) computed at startup and injected into runtime plan without triggering full plugin bootstraps. Callers remain unchanged; no consumer code requires prepared facts. Seams are backwards-compatible and additive.
 - Prompt cache: deterministic ordering for maps/sets/registries/plugin lists/files/network results before model/tool payloads. Preserve old transcript bytes when possible.
 
 ## Commands
