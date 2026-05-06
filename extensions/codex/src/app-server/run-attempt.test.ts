@@ -756,6 +756,111 @@ describe("runCodexAppServerAttempt", () => {
     expect(queueAgentHarnessMessage("session-1", "after silent turn")).toBe(false);
   });
 
+  it("does not extend the silent-turn timeout for another thread's notification", async () => {
+    vi.useFakeTimers();
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 60_000;
+
+    const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 5 });
+    await vi.waitFor(() =>
+      expect(harness.requests.some((entry) => entry.method === "turn/start")).toBe(true),
+    );
+
+    await vi.advanceTimersByTimeAsync(4);
+    await harness.notify({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-other",
+        turnId: "turn-other",
+        itemId: "msg-other",
+        delta: "noise",
+      },
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(harness.request).toHaveBeenCalledWith("turn/interrupt", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    await expect(run).resolves.toMatchObject({
+      aborted: true,
+      timedOut: true,
+      promptError: "codex app-server turn idle timed out waiting for turn/completed",
+    });
+  });
+
+  it("does not extend the silent-turn timeout for another thread's server request", async () => {
+    vi.useFakeTimers();
+    let handleRequest:
+      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
+      | undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-1", "inProgress");
+      }
+      return {};
+    });
+    __testing.setCodexAppServerClientFactoryForTests(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: () => () => undefined,
+          addRequestHandler: (
+            handler: (request: {
+              id: string;
+              method: string;
+              params?: unknown;
+            }) => Promise<unknown>,
+          ) => {
+            handleRequest = handler;
+            return () => undefined;
+          },
+        }) as never,
+    );
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 60_000;
+
+    const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 5 });
+    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"));
+
+    await vi.advanceTimersByTimeAsync(4);
+    await expect(
+      handleRequest?.({
+        id: "request-other-tool",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-other",
+          turnId: "turn-other",
+          callId: "call-other",
+          namespace: null,
+          tool: "message",
+          arguments: { action: "send", text: "other run" },
+        },
+      }),
+    ).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(request).toHaveBeenCalledWith("turn/interrupt", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    await expect(run).resolves.toMatchObject({
+      aborted: true,
+      timedOut: true,
+      promptError: "codex app-server turn idle timed out waiting for turn/completed",
+    });
+  });
+
   it("applies before_prompt_build to Codex developer instructions and turn input", async () => {
     const beforePromptBuild = vi.fn(async () => ({
       systemPrompt: "custom codex system",

@@ -875,11 +875,15 @@ export async function runCodexAppServerAttempt(
   };
 
   const handleNotification = async (notification: CodexServerNotification) => {
-    touchTurnCompletionActivity(`notification:${notification.method}`);
     userInputBridge?.handleNotification(notification);
     if (!projector || !turnId) {
       pendingNotifications.push(notification);
       return;
+    }
+    if (
+      isCurrentTurnNotification(notification.method, notification.params, thread.threadId, turnId)
+    ) {
+      touchTurnCompletionActivity(`notification:${notification.method}`);
     }
     // Determine terminal-turn status before invoking the projector so a throw
     // inside projector.handleNotification still releases the session lane.
@@ -916,93 +920,130 @@ export async function runCodexAppServerAttempt(
 
   const notificationCleanup = client.addNotificationHandler(enqueueNotification);
   const requestCleanup = client.addRequestHandler(async (request) => {
-    activeAppServerTurnRequests += 1;
-    clearTurnCompletionIdleTimer();
-    touchTurnCompletionActivity(`request:${request.method}`);
-    let armCompletionWatchOnResponse = false;
-    try {
-      if (request.method === "account/chatgptAuthTokens/refresh") {
-        return refreshCodexAppServerAuthTokens({
-          agentDir,
-          authProfileId: startupAuthProfileId,
+    const runCurrentTurnRequest = async <T>(
+      action: () => Promise<T> | T,
+      options?: { armCompletionWatchOnResponse?: boolean },
+    ): Promise<T> => {
+      activeAppServerTurnRequests += 1;
+      clearTurnCompletionIdleTimer();
+      touchTurnCompletionActivity(`request:${request.method}`);
+      try {
+        return await action();
+      } finally {
+        activeAppServerTurnRequests = Math.max(0, activeAppServerTurnRequests - 1);
+        touchTurnCompletionActivity(`request:${request.method}:response`, {
+          arm: options?.armCompletionWatchOnResponse,
         });
       }
-      if (!turnId) {
-        return undefined;
-      }
-      if (request.method === "mcpServer/elicitation/request") {
-        armCompletionWatchOnResponse = true;
-        return handleCodexAppServerElicitationRequest({
-          requestParams: request.params,
-          paramsForRun: params,
-          threadId: thread.threadId,
-          turnId,
-          signal: runAbortController.signal,
-        });
-      }
-      if (request.method === "item/tool/requestUserInput") {
-        armCompletionWatchOnResponse = true;
-        return userInputBridge?.handleRequest({
-          id: request.id,
-          params: request.params,
-        });
-      }
-      if (request.method !== "item/tool/call") {
-        if (isCodexAppServerApprovalRequest(request.method)) {
-          armCompletionWatchOnResponse = true;
-          return handleApprovalRequest({
-            method: request.method,
-            params: request.params,
-            paramsForRun: params,
-            threadId: thread.threadId,
-            turnId,
-            signal: runAbortController.signal,
-          });
-        }
-        return undefined;
-      }
-      const call = readDynamicToolCallParams(request.params);
-      if (!call || call.threadId !== thread.threadId || call.turnId !== turnId) {
-        return undefined;
-      }
-      armCompletionWatchOnResponse = true;
-      trajectoryRecorder?.recordEvent("tool.call", {
-        threadId: call.threadId,
-        turnId: call.turnId,
-        toolCallId: call.callId,
-        name: call.tool,
-        arguments: call.arguments,
-      });
-      const response = await handleDynamicToolCallWithTimeout({
-        call,
-        toolBridge,
-        signal: runAbortController.signal,
-        timeoutMs: CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
-        onTimeout: () => {
-          trajectoryRecorder?.recordEvent("tool.timeout", {
-            threadId: call.threadId,
-            turnId: call.turnId,
-            toolCallId: call.callId,
-            name: call.tool,
-            timeoutMs: CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
-          });
-        },
-      });
-      trajectoryRecorder?.recordEvent("tool.result", {
-        threadId: call.threadId,
-        turnId: call.turnId,
-        toolCallId: call.callId,
-        name: call.tool,
-        success: response.success,
-        contentItems: response.contentItems,
-      });
-      return response as JsonValue;
-    } finally {
-      activeAppServerTurnRequests = Math.max(0, activeAppServerTurnRequests - 1);
-      touchTurnCompletionActivity(`request:${request.method}:response`, {
-        arm: armCompletionWatchOnResponse,
+    };
+
+    if (request.method === "account/chatgptAuthTokens/refresh") {
+      return refreshCodexAppServerAuthTokens({
+        agentDir,
+        authProfileId: startupAuthProfileId,
       });
     }
+    if (!turnId) {
+      return undefined;
+    }
+    const currentTurnId = turnId;
+    if (request.method === "mcpServer/elicitation/request") {
+      if (
+        !isCurrentTurnRequest(request.params, thread.threadId, currentTurnId, {
+          allowNullTurnId: true,
+        })
+      ) {
+        return undefined;
+      }
+      return runCurrentTurnRequest(
+        () =>
+          handleCodexAppServerElicitationRequest({
+            requestParams: request.params,
+            paramsForRun: params,
+            threadId: thread.threadId,
+            turnId: currentTurnId,
+            signal: runAbortController.signal,
+          }),
+        { armCompletionWatchOnResponse: true },
+      );
+    }
+    if (request.method === "item/tool/requestUserInput") {
+      if (!isCurrentTurnRequest(request.params, thread.threadId, currentTurnId)) {
+        return undefined;
+      }
+      return runCurrentTurnRequest(
+        () =>
+          userInputBridge?.handleRequest({
+            id: request.id,
+            params: request.params,
+          }),
+        { armCompletionWatchOnResponse: true },
+      );
+    }
+    if (request.method !== "item/tool/call") {
+      if (isCodexAppServerApprovalRequest(request.method)) {
+        if (
+          !isCurrentTurnRequest(request.params, thread.threadId, currentTurnId, {
+            allowConversationId: true,
+          })
+        ) {
+          return undefined;
+        }
+        return runCurrentTurnRequest(
+          () =>
+            handleApprovalRequest({
+              method: request.method,
+              params: request.params,
+              paramsForRun: params,
+              threadId: thread.threadId,
+              turnId: currentTurnId,
+              signal: runAbortController.signal,
+            }),
+          { armCompletionWatchOnResponse: true },
+        );
+      }
+      return undefined;
+    }
+    const call = readDynamicToolCallParams(request.params);
+    if (!call || call.threadId !== thread.threadId || call.turnId !== currentTurnId) {
+      return undefined;
+    }
+    return runCurrentTurnRequest(
+      async () => {
+        trajectoryRecorder?.recordEvent("tool.call", {
+          threadId: call.threadId,
+          turnId: call.turnId,
+          toolCallId: call.callId,
+          name: call.tool,
+          arguments: call.arguments,
+        });
+        const response = await handleDynamicToolCallWithTimeout({
+          call,
+          toolBridge,
+          signal: runAbortController.signal,
+          timeoutMs: CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+          onTimeout: () => {
+            trajectoryRecorder?.recordEvent("tool.timeout", {
+              threadId: call.threadId,
+              turnId: call.turnId,
+              toolCallId: call.callId,
+              name: call.tool,
+              timeoutMs: CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+            });
+          },
+        });
+        trajectoryRecorder?.recordEvent("tool.result", {
+          threadId: call.threadId,
+          turnId: call.turnId,
+          toolCallId: call.callId,
+          name: call.tool,
+          success: response.success,
+          contentItems: response.contentItems,
+        });
+        return response as JsonValue;
+      },
+      { armCompletionWatchOnResponse: true },
+    );
   });
 
   const llmInputEvent = {
@@ -1744,6 +1785,49 @@ function isTurnNotification(
     return false;
   }
   return readString(value, "threadId") === threadId && readNotificationTurnId(value) === turnId;
+}
+
+function isCurrentTurnNotification(
+  method: string,
+  value: JsonValue | undefined,
+  threadId: string,
+  turnId: string,
+): boolean {
+  if (!isJsonObject(value)) {
+    return false;
+  }
+  if (method === "hook/started" || method === "hook/completed") {
+    return (
+      readString(value, "threadId") === threadId &&
+      (value.turnId === turnId || value.turnId === null)
+    );
+  }
+  return isTurnNotification(value, threadId, turnId);
+}
+
+function isCurrentTurnRequest(
+  value: JsonValue | undefined,
+  threadId: string,
+  turnId: string,
+  options: {
+    allowConversationId?: boolean;
+    allowNullTurnId?: boolean;
+  } = {},
+): boolean {
+  if (!isJsonObject(value)) {
+    return false;
+  }
+  const requestThreadId =
+    readString(value, "threadId") ??
+    (options.allowConversationId ? readString(value, "conversationId") : undefined);
+  if (requestThreadId !== threadId) {
+    return false;
+  }
+  const requestTurnId = value.turnId;
+  if (options.allowNullTurnId && requestTurnId === null) {
+    return true;
+  }
+  return requestTurnId === turnId;
 }
 
 function isTerminalTurnStatus(status: string | undefined): boolean {
