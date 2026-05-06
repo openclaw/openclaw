@@ -596,6 +596,65 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.currentTokenCount).toBeGreaterThan(100_000);
   });
 
+  it("combines latest usage with post-usage tail pressure for preflight compaction", async () => {
+    const sessionFile = path.join(rootDir, "combined-tail-pressure-session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: "small answer",
+            usage: { input: 86_000, output: 2_000 },
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "tool",
+            content: `moderate interrupted tool output ${"x".repeat(36_000)}`,
+          },
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    const compactCall = compactEmbeddedPiSessionMock.mock.calls[0]?.[0] as {
+      currentTokenCount?: number;
+    };
+    expect(compactCall.currentTokenCount).toBeGreaterThanOrEqual(96_000);
+  });
+
   it("does not treat raw transcript metadata bytes as token pressure", async () => {
     const sessionFile = path.join(rootDir, "metadata-heavy-session.jsonl");
     await fs.writeFile(

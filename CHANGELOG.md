@@ -474,6 +474,7 @@ Docs: https://docs.openclaw.ai
 - Doctor/plugins: discover doctor contracts from load-path channel plugins during `openclaw doctor --fix`, so plugin-owned legacy config repair runs before validation. (#77477) Thanks @jalehman.
 - Dependencies: bump transitive `basic-ftp` to 5.3.1 so the runtime lockfile no longer includes the vulnerable 5.3.0 build flagged by the production dependency audit. (#78637) Thanks @sallyom.
 - Agents/compaction: clamp compaction summary reserve tokens to each model's output limit so high-context compaction no longer requests invalid `max_tokens` values. (#54392) Thanks @adzendo.
+- Agents/compaction: ignore pre-usage transcript metadata bytes when stale token snapshots estimate preflight compaction pressure, while still counting post-usage transcript tail pressure. Fixes #78604. (#78619) Thanks @hera8939.
 
 ## 2026.5.3-1
 

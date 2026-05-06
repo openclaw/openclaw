@@ -428,12 +428,9 @@ async function estimatePromptTokensFromSessionTranscript(params: {
     })();
     if (typeof promptTokens === "number" && Number.isFinite(promptTokens) && promptTokens > 0) {
       const outputTokens = snapshot.usage?.outputTokens;
+      const usagePromptTokens = Math.ceil(promptTokens) + (trailingBytesTokens ?? 0);
       return {
-        promptTokens: Math.max(
-          Math.ceil(promptTokens),
-          estimatedMessageTokens ?? 0,
-          trailingBytesTokens ?? 0,
-        ),
+        promptTokens: Math.max(usagePromptTokens, estimatedMessageTokens ?? 0),
         outputTokens:
           typeof outputTokens === "number" && Number.isFinite(outputTokens) && outputTokens > 0
             ? Math.ceil(outputTokens)
