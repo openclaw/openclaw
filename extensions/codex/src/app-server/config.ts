@@ -1,6 +1,6 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { z } from "zod";
-import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
+import type { CodexPersonality, CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
 
 const START_OPTIONS_KEY_SECRET = randomBytes(32);
 
@@ -53,6 +53,7 @@ export type CodexAppServerRuntimeOptions = {
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
   serviceTier?: CodexServiceTier;
+  personality?: CodexPersonality;
 };
 
 export type CodexPluginConfig = {
@@ -77,6 +78,7 @@ export type CodexPluginConfig = {
     sandbox?: CodexAppServerSandboxMode;
     approvalsReviewer?: CodexAppServerApprovalsReviewer;
     serviceTier?: CodexServiceTier | null;
+    personality?: CodexPersonality;
     defaultWorkspaceDir?: string;
   };
 };
@@ -95,6 +97,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "sandbox",
   "approvalsReviewer",
   "serviceTier",
+  "personality",
   "defaultWorkspaceDir",
 ] as const;
 
@@ -123,6 +126,7 @@ const codexAppServerApprovalPolicySchema = z.enum([
 ]);
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 const codexAppServerApprovalsReviewerSchema = z.enum(["user", "auto_review", "guardian_subagent"]);
+const codexAppServerPersonalitySchema = z.enum(["none", "friendly", "pragmatic"]);
 const codexDynamicToolsProfileSchema = z.enum(["native-first", "openclaw-compat"]);
 const codexAppServerServiceTierSchema = z
   .preprocess(
@@ -170,6 +174,7 @@ const codexPluginConfigSchema = z
         sandbox: codexAppServerSandboxSchema.optional(),
         approvalsReviewer: codexAppServerApprovalsReviewerSchema.optional(),
         serviceTier: codexAppServerServiceTierSchema,
+        personality: codexAppServerPersonalitySchema.optional(),
         defaultWorkspaceDir: z.string().optional(),
       })
       .strict()
@@ -209,6 +214,9 @@ export function resolveCodexAppServerRuntimeOptions(
     resolvePolicyMode(env.OPENCLAW_CODEX_APP_SERVER_MODE) ??
     "yolo";
   const serviceTier = resolveServiceTier(config.serviceTier);
+  const personality =
+    resolvePersonality(config.personality) ??
+    resolvePersonality(env.OPENCLAW_CODEX_APP_SERVER_PERSONALITY);
   if (transport === "websocket" && !url) {
     throw new Error(
       "plugins.entries.codex.config.appServer.url is required when appServer.transport is websocket",
@@ -239,6 +247,7 @@ export function resolveCodexAppServerRuntimeOptions(
       resolveApprovalsReviewer(config.approvalsReviewer) ??
       (policyMode === "guardian" ? "auto_review" : "user"),
     ...(serviceTier ? { serviceTier } : {}),
+    ...(personality ? { personality } : {}),
   };
 }
 
@@ -373,6 +382,10 @@ function resolveApprovalsReviewer(value: unknown): CodexAppServerApprovalsReview
 
 function resolveServiceTier(value: unknown): CodexServiceTier | undefined {
   return value === "fast" || value === "flex" ? value : undefined;
+}
+
+function resolvePersonality(value: unknown): CodexPersonality | undefined {
+  return value === "none" || value === "friendly" || value === "pragmatic" ? value : undefined;
 }
 
 function normalizePositiveNumber(value: unknown, fallback: number): number {

@@ -271,12 +271,19 @@ does not write synthetic Codex project-doc files or depend on Codex fallback
 filenames for persona files, because Codex fallbacks only apply when
 `AGENTS.md` is missing.
 
-For OpenClaw workspace parity, the Codex harness resolves the other bootstrap
-files (`SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`,
-`BOOTSTRAP.md`, and `MEMORY.md` when present) and forwards them through Codex
-developer instructions on `thread/start` and `thread/resume`. This keeps
-`SOUL.md` and related workspace persona/profile context visible on the native
-Codex behavior-shaping lane without duplicating `AGENTS.md`.
+For OpenClaw workspace parity, the Codex harness resolves the available
+bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`,
+`HEARTBEAT.md`, `BOOTSTRAP.md`, and `MEMORY.md` when present) and injects the
+non-missing files into Codex developer instructions on `thread/start` and
+`thread/resume`. Developer instructions are the highest-signal app-server lane
+OpenClaw controls below the native Codex/system contract, so bootstrap context
+is injected there once instead of being duplicated through Codex config
+instructions.
+
+The injected bootstrap remains user-editable workspace context. It does not
+override higher-priority OpenClaw or Codex instructions, tool/security policy,
+repository owner rules, or explicit user instructions in the current
+conversation.
 
 ## Add Codex alongside other models
 
@@ -505,6 +512,7 @@ To opt in to Codex guardian-reviewed approvals, set `appServer.mode:
           appServer: {
             mode: "guardian",
             serviceTier: "fast",
+            personality: "friendly",
           },
         },
       },
@@ -526,6 +534,13 @@ Individual policy fields still override `mode`, so advanced deployments can mix
 the preset with explicit choices. The older `guardian_subagent` reviewer value is
 still accepted as a compatibility alias, but new configs should use
 `auto_review`.
+
+`appServer.personality` is an optional native Codex app-server personality
+override. Use `"friendly"` when you want Codex runtime turns to preserve the
+warmer OpenClaw GPT-5 interaction style, `"pragmatic"` for a more utilitarian
+Codex tone, or `"none"` to disable Codex's native personality layer. The value is
+sent on thread start, thread resume, and each turn. Existing sessions may need
+`/new` or `/reset` before the updated native thread settings are observable.
 
 For an already-running app-server, use WebSocket transport:
 
@@ -643,6 +658,7 @@ Supported `appServer` fields:
 | `sandbox`           | `"danger-full-access"`                   | Native Codex sandbox mode sent to thread start/resume.                                                                                                                                                                               |
 | `approvalsReviewer` | `"user"`                                 | Use `"auto_review"` to let Codex review native approval prompts. `guardian_subagent` remains a legacy alias.                                                                                                                         |
 | `serviceTier`       | unset                                    | Optional Codex app-server service tier: `"fast"`, `"flex"`, or `null`. Invalid legacy values are ignored.                                                                                                                            |
+| `personality`       | unset                                    | Optional native Codex personality override: `"friendly"`, `"pragmatic"`, or `"none"`.                                                                                                                                                |
 
 OpenClaw-owned dynamic tool calls are bounded independently from
 `appServer.requestTimeoutMs`: each Codex `item/tool/call` request must receive
