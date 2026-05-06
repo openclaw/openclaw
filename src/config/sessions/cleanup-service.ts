@@ -23,11 +23,7 @@ import {
   pruneStaleEntries,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
-import {
-  loadSessionStore,
-  updateSessionStore,
-  type SessionMaintenanceApplyReport,
-} from "./store.js";
+import { loadSessionStore, updateSessionStore } from "./store.js";
 import {
   resolveSessionStoreTargets,
   type SessionStoreTarget,
@@ -87,6 +83,15 @@ export type SessionsCleanupRunResult = {
     budgetEvictedKeys: Set<string>;
   }>;
   appliedSummaries: SessionCleanupSummary[];
+};
+
+type AppliedSessionCleanupReport = {
+  mode: ResolvedSessionMaintenanceConfig["mode"];
+  beforeCount: number;
+  afterCount: number;
+  pruned: number;
+  capped: number;
+  diskBudget: Awaited<ReturnType<typeof enforceSessionDiskBudget>>;
 };
 
 export function resolveSessionCleanupAction(params: {
@@ -312,29 +317,57 @@ export async function runSessionsCleanup(params: {
   const appliedSummaries: SessionCleanupSummary[] = [];
   if (!opts.dryRun) {
     for (const target of targets) {
-      const appliedReportRef: { current: SessionMaintenanceApplyReport | null } = {
+      const appliedReportRef: { current: AppliedSessionCleanupReport | null } = {
         current: null,
       };
       const missingApplied = await updateSessionStore(
         target.storePath,
         async (store) => {
-          if (!opts.fixMissing) {
-            return 0;
+          const beforeCount = Object.keys(store).length;
+          const missing = opts.fixMissing
+            ? pruneMissingTranscriptEntries({
+                store,
+                storePath: target.storePath,
+              })
+            : 0;
+          let pruned = 0;
+          let capped = 0;
+          let diskBudget: AppliedSessionCleanupReport["diskBudget"] = null;
+          if (mode === "warn") {
+            diskBudget = await enforceSessionDiskBudget({
+              store,
+              storePath: target.storePath,
+              activeSessionKey: opts.activeKey,
+              maintenance,
+              warnOnly: true,
+            });
+          } else {
+            const preserveKeys = opts.activeKey ? new Set([opts.activeKey]) : undefined;
+            pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
+              preserveKeys,
+            });
+            capped = capEntryCount(store, maintenance.maxEntries, {
+              preserveKeys,
+            });
+            diskBudget = await enforceSessionDiskBudget({
+              store,
+              storePath: target.storePath,
+              activeSessionKey: opts.activeKey,
+              maintenance,
+              warnOnly: false,
+            });
           }
-          return pruneMissingTranscriptEntries({
-            store,
-            storePath: target.storePath,
-          });
-        },
-        {
-          activeSessionKey: opts.activeKey,
-          maintenanceOverride: {
+          appliedReportRef.current = {
             mode,
-          },
-          onMaintenanceApplied: (report) => {
-            appliedReportRef.current = report;
-          },
+            beforeCount,
+            afterCount: Object.keys(store).length,
+            pruned,
+            capped,
+            diskBudget,
+          };
+          return missing;
         },
+        opts.activeKey ? { activeSessionKey: opts.activeKey } : undefined,
       );
       const afterStore = loadSessionStore(target.storePath, { skipCache: true });
       const unreferencedArtifacts =

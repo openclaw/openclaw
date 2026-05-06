@@ -220,14 +220,15 @@ describe("enforceSessionDiskBudget", () => {
         },
       };
       await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await fs.writeFile(path.join(dir, "removable-worker.jsonl"), "w".repeat(800), "utf-8");
 
       const result = await enforceSessionDiskBudget({
         store,
         storePath,
         activeSessionKey: activeKey,
         maintenance: {
-          maxDiskBytes: 1000,
-          highWaterBytes: 500,
+          maxDiskBytes: 600,
+          highWaterBytes: 200,
         },
         warnOnly: false,
       });
@@ -238,6 +239,7 @@ describe("enforceSessionDiskBudget", () => {
       expect(result).toEqual(
         expect.objectContaining({
           removedEntries: 1,
+          removedFiles: 1,
         }),
       );
     });
