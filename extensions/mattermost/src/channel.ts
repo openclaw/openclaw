@@ -59,6 +59,10 @@ import type { MattermostConfig } from "./types.js";
 
 const loadMattermostChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
 
+type MattermostDirectoryListParams = Parameters<
+  NonNullable<NonNullable<ChannelPlugin["directory"]>["listGroups"]>
+>[0];
+
 const mattermostSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedMattermostAccount>({
   channelKey: "mattermost",
   resolveDmPolicy: (account) => account.config.dmPolicy,
@@ -108,6 +112,34 @@ function describeMattermostMessageTool({
     actions,
     capabilities: enabledAccounts.length > 0 ? ["presentation"] : [],
   };
+}
+
+function hasConfiguredMattermostDirectoryAccount({
+  cfg,
+  accountId,
+}: Pick<MattermostDirectoryListParams, "cfg" | "accountId">): boolean {
+  const accounts = accountId
+    ? [resolveMattermostAccount({ cfg, accountId })]
+    : listMattermostAccountIds(cfg).map((listedAccountId) =>
+        resolveMattermostAccount({ cfg, accountId: listedAccountId }),
+      );
+  return accounts.some((account) =>
+    Boolean(account.enabled && account.botToken?.trim() && account.baseUrl?.trim()),
+  );
+}
+
+async function listMattermostDirectoryGroups(params: MattermostDirectoryListParams) {
+  if (!hasConfiguredMattermostDirectoryAccount(params)) {
+    return [];
+  }
+  return (await loadMattermostChannelRuntime()).listMattermostDirectoryGroups(params);
+}
+
+async function listMattermostDirectoryPeers(params: MattermostDirectoryListParams) {
+  if (!hasConfiguredMattermostDirectoryAccount(params)) {
+    return [];
+  }
+  return (await loadMattermostChannelRuntime()).listMattermostDirectoryPeers(params);
 }
 
 const mattermostMessageActions: ChannelMessageActionAdapter = {
@@ -379,14 +411,10 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       collectRuntimeConfigAssignments,
     },
     directory: createChannelDirectoryAdapter({
-      listGroups: async (params) =>
-        (await loadMattermostChannelRuntime()).listMattermostDirectoryGroups(params),
-      listGroupsLive: async (params) =>
-        (await loadMattermostChannelRuntime()).listMattermostDirectoryGroups(params),
-      listPeers: async (params) =>
-        (await loadMattermostChannelRuntime()).listMattermostDirectoryPeers(params),
-      listPeersLive: async (params) =>
-        (await loadMattermostChannelRuntime()).listMattermostDirectoryPeers(params),
+      listGroups: listMattermostDirectoryGroups,
+      listGroupsLive: listMattermostDirectoryGroups,
+      listPeers: listMattermostDirectoryPeers,
+      listPeersLive: listMattermostDirectoryPeers,
     }),
     messaging: {
       targetPrefixes: ["mattermost"],

@@ -27,6 +27,10 @@ vi.mock("./auth-profiles/order.js", () => ({
   resolveAuthProfileOrder: vi.fn(),
 }));
 
+vi.mock("./provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
+}));
+
 vi.mock("./auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSource: vi.fn(() => true),
 }));
