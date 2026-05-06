@@ -142,15 +142,19 @@ struct ExecAllowlistTests {
     }
 
     @Test func `resolve for allowlist treats c after posix shell operand as direct exec`() {
-        let command = ["/bin/bash", "./script.sh", "-c", "/usr/bin/printf safe_marker"]
-        let resolutions = ExecCommandResolution.resolveForAllowlist(
-            command: command,
-            rawCommand: nil,
-            cwd: "/tmp",
-            env: ["PATH": "/usr/bin:/bin"])
-        #expect(resolutions.count == 1)
-        #expect(resolutions[0].resolvedPath == "/bin/bash")
-        #expect(resolutions[0].executableName == "bash")
+        for command in [
+            ["/bin/bash", "./script.sh", "-c", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "-x", "-C", "echo ok", "-c", "/usr/bin/printf safe_marker"],
+        ] {
+            let resolutions = ExecCommandResolution.resolveForAllowlist(
+                command: command,
+                rawCommand: nil,
+                cwd: "/tmp",
+                env: ["PATH": "/usr/bin:/bin"])
+            #expect(resolutions.count == 1)
+            #expect(resolutions[0].resolvedPath == "/bin/bash")
+            #expect(resolutions[0].executableName == "bash")
+        }
     }
 
     @Test func `resolve for allowlist uses wrapper argv payload even with canonical raw command`() {

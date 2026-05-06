@@ -9,7 +9,9 @@ enum ExecInlineCommandParser {
     private static let posixShellOptionsWithSeparateValues = Set([
         "--init-file",
         "--rcfile",
+        "-O",
         "-o",
+        "+O",
         "+o",
     ])
 
@@ -25,11 +27,11 @@ enum ExecInlineCommandParser {
                 idx += 1
                 continue
             }
-            let lower = token.lowercased()
-            if lower == "--" {
+            if token == "--" {
                 break
             }
-            if flags.contains(lower) {
+            let comparableToken = allowCombinedC ? token : token.lowercased()
+            if flags.contains(comparableToken) {
                 return Match(tokenIndex: idx, inlineCommand: nil)
             }
             if allowCombinedC, self.isCombinedCommandFlag(token) {
@@ -66,7 +68,7 @@ enum ExecInlineCommandParser {
     }
 
     private static func isCombinedCommandFlag(_ token: String) -> Bool {
-        let chars = Array(token.lowercased())
+        let chars = Array(token)
         guard chars.count >= 2, chars[0] == "-", chars[1] != "-" else {
             return false
         }
@@ -77,7 +79,6 @@ enum ExecInlineCommandParser {
     }
 
     private static func consumesSeparateValue(_ token: String) -> Bool {
-        let lower = token.lowercased()
-        return self.posixShellOptionsWithSeparateValues.contains(lower)
+        return self.posixShellOptionsWithSeparateValues.contains(token)
     }
 }
