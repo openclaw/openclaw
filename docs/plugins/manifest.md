@@ -295,7 +295,7 @@ avoid importing a plugin runtime just to have its tool factory return `null`.
     "example": ["EXAMPLE_API_KEY"]
   },
   "contracts": {
-    "tools": ["example_search"]
+    "tools": ["example_search", "example-*"]
   },
   "toolMetadata": {
     "example_search": {
@@ -315,6 +315,8 @@ avoid importing a plugin runtime just to have its tool factory return `null`.
   }
 }
 ```
+
+**Note:** `contracts.tools` supports glob/wildcard patterns (e.g., `"example-*"`) for plugins with dynamic tool registration.
 
 If a tool has no `toolMetadata`, OpenClaw preserves the existing behavior and
 loads the owning plugin when the tool contract matches policy. For hot-path
