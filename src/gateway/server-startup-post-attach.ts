@@ -462,6 +462,9 @@ export async function startGatewaySidecars(params: {
   await measureStartup(params.startupTrace, "sidecars.channels", async () => {
     if (!skipChannels) {
       try {
+        await measureStartup(params.startupTrace, "sidecars.channel-start", () =>
+          params.startChannels(),
+        );
         schedulePrimaryModelPrewarm(
           {
             cfg: params.cfg,
@@ -470,9 +473,6 @@ export async function startGatewaySidecars(params: {
             startupTrace: params.startupTrace,
           },
           params.prewarmPrimaryModel,
-        );
-        await measureStartup(params.startupTrace, "sidecars.channel-start", () =>
-          params.startChannels(),
         );
       } catch (err) {
         params.logChannels.error(`channel startup failed: ${String(err)}`);
