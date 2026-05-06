@@ -7,7 +7,7 @@ import {
 } from "../infra/container-environment.js";
 import {
   pickMatchingExternalInterfaceAddress,
-  readNetworkInterfaces,
+  safeNetworkInterfaces,
 } from "../infra/network-interfaces.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import {
@@ -24,7 +24,7 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
  * Prefers common interface names (en0, eth0) then falls back to any external IPv4.
  */
 export function pickPrimaryLanIPv4(): string | undefined {
-  return pickMatchingExternalInterfaceAddress(readNetworkInterfaces(), {
+  return pickMatchingExternalInterfaceAddress(safeNetworkInterfaces(), {
     family: "IPv4",
     preferredNames: ["en0", "eth0"],
   });

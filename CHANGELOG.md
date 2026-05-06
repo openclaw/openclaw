@@ -2395,6 +2395,9 @@ Docs: https://docs.openclaw.ai
 - ACPX: stop probing ACP agents during normal Gateway startup; the embedded backend now registers without spawning Codex/ACP child processes unless `OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=1` is explicitly set.
 - CLI/image edit: accept `--size`, `--aspect-ratio`, and `--resolution` on `openclaw infer image edit` and report all supported edit flags from `capability inspect image.edit`. Thanks @Pinghuachiu.
 - ACP: wait for the configured runtime backend to become healthy before startup identity reconciliation, avoiding transient acpx warnings during Gateway boot. Fixes #40566.
+- Gateway: handle sandbox `uv_interface_addresses` failures during LAN and
+  tailnet interface discovery by degrading to loopback/empty network details
+  instead of crashing the Gateway. Fixes #71721. Thanks @luyao618.
 - Channels/ACP bindings: time out configured binding readiness checks instead of letting Discord preflight hang forever when an ACP target never settles. Fixes #68776.
 - Control UI: hide the chat loading skeleton during background history reloads when existing messages or active stream content are already visible, avoiding reload flashes on high-latency local gateways. Fixes #71844. Thanks @WolvenRA.
 - Control UI: keep locally optimistic chat messages visible when a history reload temporarily returns empty, avoiding lost first-turn messages on high-latency gateways. Fixes #71878. Thanks @WolvenRA.

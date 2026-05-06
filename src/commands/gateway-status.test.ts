@@ -182,6 +182,7 @@ vi.mock("../infra/bonjour-discovery.js", () => ({
 
 vi.mock("../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv4: mocks.pickPrimaryTailnetIPv4,
+  listTailnetAddressesFromSnapshot: () => ({ ipv4: [], ipv6: [] }),
 }));
 
 vi.mock("../infra/ssh-tunnel.js", () => ({
