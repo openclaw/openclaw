@@ -231,7 +231,7 @@ function mapFeishuButtonType(style: MessagePresentationButton["style"]) {
   return "default";
 }
 
-function buildFeishuPayloadButton(
+export function buildFeishuPayloadButton(
   button: MessagePresentationButton,
 ): Record<string, unknown> | undefined {
   const rendered: Record<string, unknown> = {
@@ -258,7 +258,7 @@ function buildFeishuPayloadButton(
   return rendered.url || rendered.value ? rendered : undefined;
 }
 
-function buildFeishuCardElementForBlock(
+export function buildFeishuCardElementForBlock(
   block: MessagePresentationBlock,
 ): Record<string, unknown> | undefined {
   if (block.type === "text") {
