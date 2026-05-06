@@ -68,6 +68,7 @@ let sessionHistoryHttpModulePromise:
   | Promise<typeof import("./sessions-history-http.js")>
   | undefined;
 let sessionKillHttpModulePromise: Promise<typeof import("./session-kill-http.js")> | undefined;
+let sessionAbortHttpModulePromise: Promise<typeof import("./sessions-abort-http.js")> | undefined;
 let toolsInvokeHttpModulePromise: Promise<typeof import("./tools-invoke-http.js")> | undefined;
 let canvasAuthModulePromise: Promise<typeof import("./server/http-auth.js")> | undefined;
 let httpAuthUtilsModulePromise: Promise<typeof import("./http-auth-utils.js")> | undefined;
@@ -118,6 +119,11 @@ function getSessionHistoryHttpModule() {
 function getSessionKillHttpModule() {
   sessionKillHttpModulePromise ??= import("./session-kill-http.js");
   return sessionKillHttpModulePromise;
+}
+
+function getSessionAbortHttpModule() {
+  sessionAbortHttpModulePromise ??= import("./sessions-abort-http.js");
+  return sessionAbortHttpModulePromise;
 }
 
 function getToolsInvokeHttpModule() {
@@ -211,6 +217,10 @@ function isManagedOutgoingImagePath(pathname: string): boolean {
 
 function isSessionKillPath(pathname: string): boolean {
   return /^\/sessions\/[^/]+\/kill$/.test(pathname);
+}
+
+function isSessionAbortPath(pathname: string): boolean {
+  return /^\/api\/sessions\/[^/]+\/abort$/.test(pathname);
 }
 
 function isSessionHistoryPath(pathname: string): boolean {
@@ -620,6 +630,18 @@ export function createGatewayHttpServer(opts: {
           name: "sessions-kill",
           run: async () =>
             (await getSessionKillHttpModule()).handleSessionKillHttpRequest(req, res, {
+              auth: resolvedAuth,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+            }),
+        });
+      }
+      if (isSessionAbortPath(scopedRequestPath)) {
+        requestStages.push({
+          name: "sessions-abort",
+          run: async () =>
+            (await getSessionAbortHttpModule()).handleSessionAbortHttpRequest(req, res, {
               auth: resolvedAuth,
               trustedProxies,
               allowRealIpFallback,

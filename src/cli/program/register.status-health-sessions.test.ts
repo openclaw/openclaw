@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   statusCommand: vi.fn(),
   healthCommand: vi.fn(),
   sessionsCommand: vi.fn(),
+  sessionsAbortCommand: vi.fn(),
   sessionsCleanupCommand: vi.fn(),
   exportTrajectoryCommand: vi.fn(),
   commitmentsListCommand: vi.fn(),
@@ -30,6 +31,7 @@ const mocks = vi.hoisted(() => ({
 const statusCommand = mocks.statusCommand;
 const healthCommand = mocks.healthCommand;
 const sessionsCommand = mocks.sessionsCommand;
+const sessionsAbortCommand = mocks.sessionsAbortCommand;
 const sessionsCleanupCommand = mocks.sessionsCleanupCommand;
 const exportTrajectoryCommand = mocks.exportTrajectoryCommand;
 const commitmentsListCommand = mocks.commitmentsListCommand;
@@ -56,6 +58,10 @@ vi.mock("../../commands/health.js", () => ({
 
 vi.mock("../../commands/sessions.js", () => ({
   sessionsCommand: mocks.sessionsCommand,
+}));
+
+vi.mock("../../commands/sessions-abort.js", () => ({
+  sessionsAbortCommand: mocks.sessionsAbortCommand,
 }));
 
 vi.mock("../../commands/sessions-cleanup.js", () => ({
@@ -107,6 +113,7 @@ describe("registerStatusHealthSessionsCommands", () => {
     statusCommand.mockResolvedValue(undefined);
     healthCommand.mockResolvedValue(undefined);
     sessionsCommand.mockResolvedValue(undefined);
+    sessionsAbortCommand.mockResolvedValue(undefined);
     sessionsCleanupCommand.mockResolvedValue(undefined);
     exportTrajectoryCommand.mockResolvedValue(undefined);
     commitmentsListCommand.mockResolvedValue(undefined);
@@ -253,6 +260,37 @@ describe("registerStatusHealthSessionsCommands", () => {
         enforce: true,
         fixMissing: true,
         activeKey: "agent:main:main",
+        json: true,
+      }),
+      runtime,
+    );
+  });
+
+  it("runs sessions abort subcommand with admin abort options", async () => {
+    await runCli([
+      "sessions",
+      "--json",
+      "abort",
+      "agent:main:subagent:worker",
+      "--force",
+      "--reason",
+      "incident cleanup",
+      "--url",
+      "ws://127.0.0.1:19001",
+      "--token",
+      "token-1",
+      "--timeout",
+      "5000",
+    ]);
+
+    expect(sessionsAbortCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:subagent:worker",
+        force: true,
+        reason: "incident cleanup",
+        url: "ws://127.0.0.1:19001",
+        token: "token-1",
+        timeout: "5000",
         json: true,
       }),
       runtime,

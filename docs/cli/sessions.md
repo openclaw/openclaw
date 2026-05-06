@@ -53,6 +53,21 @@ This is the command path used by the `/export-trajectory` slash command after
 the owner approves the exec request. The output directory is always resolved
 inside `.openclaw/trajectory-exports/` under the selected workspace.
 
+Abort a session by key through the admin Gateway endpoint:
+
+```bash
+openclaw sessions abort "agent:main:subagent:worker"
+openclaw sessions abort "agent:main:subagent:worker" --force
+```
+
+`openclaw sessions abort` is admin-scoped and cross-requester: it can abort a
+session created from another chat thread or client. The command removes the
+in-memory diagnostic tracker entry when present, marks the persisted session
+record failed with `abortedBy=admin_cli`, and emits `session.aborted_by_admin`.
+`--force` also tries the registered subagent cancel hook when the active runtime
+exposes one; if no matching cancellable run is registered, the tracker/store
+abort still succeeds.
+
 `openclaw sessions --all-agents` reads configured agent stores. Gateway and ACP
 session discovery are broader: they also include disk-only stores found under
 the default `agents/` root or a templated `session.store` root. Those

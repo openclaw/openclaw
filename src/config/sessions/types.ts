@@ -204,6 +204,10 @@ export type SessionEntry = {
   runtimeMs?: number;
   /** Final persisted subagent run status, used after in-memory run archival. */
   status?: "running" | "done" | "failed" | "killed" | "timeout";
+  /** Actor that forced this session into a terminal aborted state. */
+  abortedBy?: "admin_cli";
+  /** Human-readable reason captured for an admin abort. */
+  abortReason?: string;
   /**
    * Session-level stop cutoff captured when /stop is received.
    * Messages at/before this boundary are skipped to avoid replaying
