@@ -576,9 +576,11 @@ export async function sendMSTeamsMessages(params: {
     return messageIds;
   }
 
-  // For non-thread replyStyle, still preserve channel thread routing if the
-  // stored conversationRef has a threadId — otherwise replies to channel
-  // @mentions that fall through to the proactive path (e.g. via outbound.ts
-  // → send.ts) land top-level instead of in the original thread.
-  return await sendProactively(messages, 0, resolvedThreadId);
+  // replyStyle === "top-level" — explicit "post at the top of the channel"
+  // intent. Do NOT add the thread suffix even when the stored ref has a
+  // threadId; threading on a top-level send would defeat the operator's
+  // explicit choice. Threaded sends route through the `replyStyle === "thread"`
+  // branch above (which already passes resolvedThreadId on the proactive
+  // fallback when the live turn context is revoked, preserving #55198).
+  return await sendProactively(messages, 0);
 }
