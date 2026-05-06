@@ -563,6 +563,7 @@ export const TtsConfigSchema = z
     prefsPath: z.string().optional(),
     maxTextLength: z.number().int().min(1).optional(),
     timeoutMs: z.number().int().min(1000).max(120000).optional(),
+    skipEmojiSymbols: z.boolean().optional(),
   })
   .strict()
   .optional();

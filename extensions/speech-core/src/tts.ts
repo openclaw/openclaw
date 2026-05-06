@@ -1078,6 +1078,19 @@ function resolveTtsResultVoice(
   );
 }
 
+/**
+ * Strip emoji and symbol characters from text for TTS.
+ * Prevents TTS from speaking "checkmark" for "✓" or "copyright" for "©".
+ */
+function stripEmojiAndSymbols(text: string): string {
+  return text
+    .replace(
+      /[\u{1F300}-\u{1F9FF}\u{2600}-\u{27BF}\u{2B50}-\u{2B55}\u{2934}-\u{2935}\u{2B05}-\u{2B07}\u{2B1B}-\u{2B1C}\u{3297}\u{3299}\u{3030}\u{303D}\u{26A0}\u{26A1}\u{26AA}-\u{26AB}\u{26B0}-\u{26B1}\u{26BD}-\u{26BE}\u{26C4}-\u{26C5}\u{26CE}\u{26CF}\u{26D1}\u{26D3}-\u{26D4}\u{26E9}\u{26F0}-\u{26F5}\u{26F7}-\u{26FA}\u{26FD}]/gu,
+      "",
+    )
+    .replace(/[\u00A9\u00AE\u2122\u2120\u24C5\u24C6\u24DC\u24DD\u24DE\u24DF]/g, "");
+}
+
 export async function textToSpeech(params: {
   text: string;
   cfg: OpenClawConfig;
@@ -1089,7 +1102,15 @@ export async function textToSpeech(params: {
   agentId?: string;
   accountId?: string;
 }): Promise<TtsResult> {
-  const synthesis = await synthesizeSpeech(params);
+  // Apply skipEmojiSymbols filtering from effective TTS config before synthesis.
+  const effectiveTts = resolveEffectiveTtsConfig(params.cfg, {
+    agentId: params.agentId,
+    accountId: params.accountId,
+  });
+  const textToSynthesize = effectiveTts.skipEmojiSymbols
+    ? stripEmojiAndSymbols(params.text)
+    : params.text;
+  const synthesis = await synthesizeSpeech({ ...params, text: textToSynthesize });
   if (!synthesis.success || !synthesis.audioBuffer || !synthesis.fileExtension) {
     return {
       success: false,

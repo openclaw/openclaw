@@ -226,13 +226,16 @@ describe("createTtsTool", () => {
 
     const tool = createTtsTool({
       config: {
-        tts: {
-          skipEmojiSymbols: true,
-        } as any,
+        messages: {
+          tts: {
+            skipEmojiSymbols: true,
+          },
+        },
       } as any,
     });
     await tool.execute("call-1", { text: "Done ✓" });
 
+    // Filtering happens inside textToSpeech; spy sees the filtered text.
     expect(textToSpeechSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         text: "Done ",
@@ -250,9 +253,11 @@ describe("createTtsTool", () => {
 
     const tool = createTtsTool({
       config: {
-        tts: {
-          skipEmojiSymbols: false,
-        } as any,
+        messages: {
+          tts: {
+            skipEmojiSymbols: false,
+          },
+        },
       } as any,
     });
     await tool.execute("call-1", { text: "Done ✓" });
