@@ -452,6 +452,44 @@ describe("sessions_list gating", () => {
       params: { sessionKey: "current", limit: 1 },
     });
   });
+
+  it("uses requesterAgentIdOverride as spawned filter root for sandboxed list calls", async () => {
+    const cfg = {
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: true, allow: ["*"] },
+        sessions: { visibility: "all" },
+      },
+      agents: {
+        defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
+        list: [{ id: "tony", sandbox: { sessionToolsVisibility: "spawned" } }],
+      },
+    } as const;
+    loadConfigMock.mockReturnValue(cfg);
+    callGatewayMock.mockReset();
+    callGatewayMock.mockResolvedValue({
+      path: "/tmp/sessions.json",
+      sessions: [],
+    });
+
+    const tool = createSessionsListTool({
+      agentSessionKey: "global",
+      requesterAgentIdOverride: "tony",
+      sandboxed: true,
+      config: cfg as never,
+    });
+
+    await tool.execute("call-override-spawned-list", {});
+
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "sessions.list",
+      params: expect.objectContaining({
+        includeGlobal: false,
+        includeUnknown: false,
+        spawnedBy: "agent:tony:main",
+      }),
+    });
+  });
 });
 
 describe("sessions_list transcriptPath resolution", () => {

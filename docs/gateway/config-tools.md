@@ -303,7 +303,7 @@ Default: `tree` (current session + sessions spawned by it, such as subagents).
     - `tree`: current session + sessions spawned by the current session (subagents).
     - `agent`: any session belonging to the current agent id (can include other users if you run per-sender sessions under the same agent id).
     - `all`: any session. Cross-agent targeting still requires `tools.agentToAgent`.
-    - Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility="spawned"`, visibility is forced to `tree` even if `tools.sessions.visibility="all"`.
+    - Sandbox clamp: when the current session is sandboxed and the effective sandbox session-tools visibility is `"spawned"`, visibility is forced to `tree` even if `tools.sessions.visibility="all"`. Per-agent `agents.list[].sandbox.sessionToolsVisibility` overrides `agents.defaults.sandbox.sessionToolsVisibility` for that agent; if neither is set, the clamp defaults to `"spawned"`.
 
   </Accordion>
 </AccordionGroup>

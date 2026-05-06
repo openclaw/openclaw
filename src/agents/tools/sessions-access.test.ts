@@ -45,11 +45,45 @@ describe("resolveEffectiveSessionToolsVisibility", () => {
     } as unknown as OpenClawConfig;
     expect(resolveEffectiveSessionToolsVisibility({ cfg, sandboxed: true })).toBe("all");
   });
+
+  it("uses per-agent sandbox clamp overrides when provided", () => {
+    const cfg = {
+      tools: { sessions: { visibility: "all" } },
+      agents: {
+        defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
+        list: [{ id: "Tony", sandbox: { sessionToolsVisibility: "all" } }],
+      },
+    } as unknown as OpenClawConfig;
+    expect(
+      resolveEffectiveSessionToolsVisibility({
+        cfg,
+        sandboxed: true,
+        agentId: "tony",
+      }),
+    ).toBe("all");
+    expect(
+      resolveEffectiveSessionToolsVisibility({
+        cfg,
+        sandboxed: true,
+        agentId: "ghost",
+      }),
+    ).toBe("tree");
+  });
 });
 
 describe("sandbox session-tools context", () => {
   it("defaults sandbox visibility clamp to spawned", () => {
     expect(resolveSandboxSessionToolsVisibility({} as unknown as OpenClawConfig)).toBe("spawned");
+  });
+
+  it("prefers matching per-agent sandbox visibility over defaults", () => {
+    const cfg = {
+      agents: {
+        defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
+        list: [{ id: "Tony", sandbox: { sessionToolsVisibility: "all" } }],
+      },
+    } as unknown as OpenClawConfig;
+    expect(resolveSandboxSessionToolsVisibility(cfg, "tony")).toBe("all");
   });
 
   it("restricts non-subagent sandboxed sessions to spawned visibility", () => {
@@ -81,6 +115,26 @@ describe("sandbox session-tools context", () => {
 
     expect(context.restrictToSpawned).toBe(false);
     expect(context.requesterInternalKey).toBe("agent:main:subagent:abc");
+  });
+
+  it("roots sandboxed spawned visibility to requesterAgentId override", () => {
+    const cfg = {
+      session: { mainKey: "inbox" },
+      tools: { sessions: { visibility: "all" } },
+      agents: {
+        defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
+        list: [{ id: "tony", sandbox: { sessionToolsVisibility: "spawned" } }],
+      },
+    } as unknown as OpenClawConfig;
+    const context = resolveSandboxedSessionToolContext({
+      cfg,
+      agentSessionKey: "global",
+      agentId: "tony",
+      sandboxed: true,
+    });
+
+    expect(context.restrictToSpawned).toBe(true);
+    expect(context.effectiveRequesterKey).toBe("agent:tony:inbox");
   });
 });
 

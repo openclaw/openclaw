@@ -710,6 +710,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
         backend: "docker", // docker | ssh | openshell
         scope: "agent", // session | agent | shared
         workspaceAccess: "none", // none | ro | rw
+        sessionToolsVisibility: "spawned", // spawned | all
         workspaceRoot: "~/.openclaw/sandboxes",
         docker: {
           image: "openclaw-sandbox:bookworm-slim",
@@ -804,6 +805,11 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
 
 When `backend: "openshell"` is selected, runtime-specific settings move to
 `plugins.entries.openshell.config`.
+
+**Session tools visibility:**
+
+- `sessionToolsVisibility`: clamps sandboxed session tools to spawned sessions by default (`"spawned"`). Set `"all"` to allow that sandboxed agent to use the configured `tools.sessions.visibility` scope without the sandbox clamp.
+- Per-agent `agents.list[].sandbox.sessionToolsVisibility` overrides `agents.defaults.sandbox.sessionToolsVisibility` for that agent.
 
 **SSH backend config:**
 
