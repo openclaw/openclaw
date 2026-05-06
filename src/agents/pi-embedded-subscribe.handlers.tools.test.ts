@@ -755,6 +755,53 @@ describe("handleToolExecutionEnd derived tool events", () => {
     );
   });
 
+  it("throttles high-frequency exec output update events", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    try {
+      const { ctx, onAgentEvent } = createTestContext();
+
+      await handleToolExecutionStart(
+        ctx as never,
+        {
+          type: "tool_execution_start",
+          toolName: "exec",
+          toolCallId: "tool-exec-throttled-output",
+          args: { command: "yes" },
+        } as never,
+      );
+
+      const update = (aggregated: string) =>
+        handleToolExecutionUpdate(
+          ctx as never,
+          {
+            type: "tool_execution_update",
+            toolName: "exec",
+            toolCallId: "tool-exec-throttled-output",
+            partialResult: {
+              details: {
+                aggregated,
+              },
+            },
+          } as never,
+        );
+
+      update("first");
+      update("second");
+      update("x".repeat(1024 * 1024));
+      vi.setSystemTime(1_300);
+      update("third");
+
+      const commandOutputCalls = onAgentEvent.mock.calls
+        .map((call) => call[0] as { stream?: string; data?: { output?: string } })
+        .filter((event) => event.stream === "command_output");
+
+      expect(commandOutputCalls.map((event) => event.data?.output)).toEqual(["first", "third"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("emits command output events for exec results", async () => {
     const { ctx, onAgentEvent } = createTestContext();
 
@@ -1178,6 +1225,57 @@ describe("control UI credential redaction (issue #72283)", () => {
     expect(lastOutput?.data?.output).not.toContain("sk-or-v1-abcdef0123456789");
     expect(lastOutput?.data?.output).not.toContain("ghp_abcdefghij1234567890");
     expect(lastOutput?.data?.output).toContain("OPENROUTER_API_KEY=");
+  });
+
+  it("caps live exec command output events without changing the tool result shape", async () => {
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+    const { ctx, onAgentEvent } = createTestContext();
+    const aggregated = `head-${"x".repeat(90 * 1024)}-tail`;
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-long-output",
+        args: { command: "yes" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-long-output",
+        isError: false,
+        result: {
+          details: {
+            status: "completed",
+            aggregated,
+            exitCode: 0,
+          },
+        },
+      } as never,
+    );
+
+    const commandOutputCalls = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter((arg: unknown) => (arg as { stream?: string })?.stream === "command_output");
+    const lastOutput = commandOutputCalls.at(-1) as { data?: { output?: string } } | undefined;
+    expect(lastOutput?.data?.output).toContain("live command output truncated");
+    expect(lastOutput?.data?.output).toContain("-tail");
+    expect(lastOutput?.data?.output).not.toContain("head-");
+
+    const resultEvent = events.find(
+      (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "result",
+    );
+    const result = resultEvent?.data?.result as { details?: { aggregated?: string } } | undefined;
+    expect(result?.details?.aggregated).toContain("live command output truncated");
+    expect(result?.details?.aggregated).toContain("-tail");
   });
 
   it("redacts details-only results before emitting the tool result event", async () => {

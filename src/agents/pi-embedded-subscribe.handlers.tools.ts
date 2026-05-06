@@ -20,6 +20,7 @@ import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
+import { truncateUtf16Safe } from "../utils.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
@@ -87,9 +88,48 @@ type ToolStartRecord = {
 
 /** Track tool execution start data for after_tool_call hook. */
 const toolStartData = new Map<string, ToolStartRecord>();
+const EXEC_OUTPUT_DELTA_MIN_INTERVAL_MS = 250;
+const LIVE_COMMAND_OUTPUT_MAX_CHARS = 64 * 1024;
+type ExecOutputDeltaEmission = {
+  emittedAt: number;
+};
+const execOutputDeltaEmissions = new Map<string, ExecOutputDeltaEmission>();
 
 function buildToolStartKey(runId: string, toolCallId: string): string {
   return `${runId}:${toolCallId}`;
+}
+
+function buildExecOutputDeltaKey(runId: string, toolCallId: string): string {
+  return `${runId}:${toolCallId}`;
+}
+
+function shouldEmitExecOutputDelta(params: {
+  runId: string;
+  toolCallId: string;
+  output: string;
+  now?: number;
+}): boolean {
+  const key = buildExecOutputDeltaKey(params.runId, params.toolCallId);
+  const now = params.now ?? Date.now();
+  const previous = execOutputDeltaEmissions.get(key);
+  if (!previous) {
+    execOutputDeltaEmissions.set(key, {
+      emittedAt: now,
+    });
+    return true;
+  }
+  const elapsedMs = now - previous.emittedAt;
+  if (elapsedMs < EXEC_OUTPUT_DELTA_MIN_INTERVAL_MS) {
+    return false;
+  }
+  execOutputDeltaEmissions.set(key, {
+    emittedAt: now,
+  });
+  return true;
+}
+
+function clearExecOutputDeltaEmission(runId: string, toolCallId: string): void {
+  execOutputDeltaEmissions.delete(buildExecOutputDeltaKey(runId, toolCallId));
 }
 
 export function countActiveToolExecutions(runId: string): number {
@@ -187,6 +227,39 @@ function readExecToolDetails(result: unknown): ExecToolDetails | null {
     return null;
   }
   return details as ExecToolDetails;
+}
+
+function readExecOutputText(result: unknown): string | undefined {
+  const details = readToolResultDetailsRecord(result);
+  if (typeof details?.aggregated === "string") {
+    return details.aggregated;
+  }
+  return extractToolResultText(result);
+}
+
+function limitLiveCommandOutput(output: string): string {
+  if (output.length <= LIVE_COMMAND_OUTPUT_MAX_CHARS) {
+    return output;
+  }
+  const tail = truncateUtf16Safe(
+    output.slice(-LIVE_COMMAND_OUTPUT_MAX_CHARS),
+    LIVE_COMMAND_OUTPUT_MAX_CHARS,
+  );
+  return `[openclaw: live command output truncated to last ${tail.length} of ${output.length} chars]\n${tail}`;
+}
+
+function limitExecToolResultForLiveEvent(result: unknown): unknown {
+  const details = readToolResultDetailsRecord(result);
+  if (!details || typeof details.aggregated !== "string") {
+    return result;
+  }
+  return {
+    ...(result as Record<string, unknown>),
+    details: {
+      ...details,
+      aggregated: limitLiveCommandOutput(details.aggregated),
+    },
+  };
 }
 
 function readApplyPatchSummary(result: unknown): ApplyPatchSummary | null {
@@ -741,6 +814,19 @@ export function handleToolExecutionUpdate(
   const toolName = normalizeToolName(evt.toolName);
   const toolCallId = evt.toolCallId;
   const partial = evt.partialResult;
+  if (isExecToolName(toolName)) {
+    const output = readExecOutputText(partial);
+    if (
+      output &&
+      !shouldEmitExecOutputDelta({
+        runId: ctx.params.runId,
+        toolCallId,
+        output,
+      })
+    ) {
+      return;
+    }
+  }
   const sanitized = sanitizeToolResult(partial);
   emitAgentEvent({
     runId: ctx.params.runId,
@@ -772,11 +858,8 @@ export function handleToolExecutionUpdate(
     },
   });
   if (isExecToolName(toolName)) {
-    const execDetails = readExecToolDetails(sanitized);
-    const output =
-      execDetails && "aggregated" in execDetails
-        ? execDetails.aggregated
-        : extractToolResultText(sanitized);
+    const rawOutput = readExecOutputText(sanitized);
+    const output = rawOutput ? limitLiveCommandOutput(rawOutput) : undefined;
     const commandData: AgentItemEventData = {
       itemId: buildCommandItemId(toolCallId),
       phase: "update",
@@ -829,9 +912,13 @@ export async function handleToolExecutionEnd(
   const result = evt.result;
   const isToolError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
+  const liveEventResult = isExecToolName(toolName)
+    ? limitExecToolResultForLiveEvent(sanitizedResult)
+    : sanitizedResult;
   const toolStartKey = buildToolStartKey(runId, toolCallId);
   const startData = toolStartData.get(toolStartKey);
   toolStartData.delete(toolStartKey);
+  clearExecOutputDeltaEmission(runId, toolCallId);
   const callSummary = ctx.state.toolMetaById.get(toolCallId);
   const completedMutatingAction = !isToolError && Boolean(callSummary?.mutatingAction);
   const meta = callSummary?.meta;
@@ -934,7 +1021,7 @@ export async function handleToolExecutionEnd(
       toolCallId,
       meta,
       isError: isToolError,
-      result: sanitizedResult,
+      result: liveEventResult,
     },
   });
   const endedAt = Date.now();
@@ -1027,10 +1114,11 @@ export async function handleToolExecutionEnd(
             }),
       });
     } else {
-      const output =
+      const rawOutput =
         execDetails && "aggregated" in execDetails
           ? execDetails.aggregated
           : extractToolResultText(sanitizedResult);
+      const output = rawOutput ? limitLiveCommandOutput(rawOutput) : undefined;
       const commandStatus =
         execDetails?.status === "failed" || isToolError ? "failed" : "completed";
       emitTrackedItemEvent(ctx, {
@@ -1075,8 +1163,8 @@ export async function handleToolExecutionEnd(
         data: outputData,
       });
 
-      if (typeof output === "string") {
-        const parsedApprovalResult = parseExecApprovalResultText(output);
+      if (typeof rawOutput === "string") {
+        const parsedApprovalResult = parseExecApprovalResultText(rawOutput);
         if (parsedApprovalResult.kind === "denied") {
           const approvalData: AgentApprovalEventData = {
             phase: "resolved",
