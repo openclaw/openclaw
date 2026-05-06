@@ -66,7 +66,7 @@ function registerTarget(params: {
     path: params.path,
     webhookUrl: `https://example.com${params.path}`,
     webhookPath: params.path,
-    mediaMaxMb: 5,
+    mediaMaxMb: 20,
     canHostMedia: true,
     statusSink: params.statusSink,
   });
