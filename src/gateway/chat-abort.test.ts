@@ -1,7 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  __testing as sessionRunCancelTesting,
+  onSessionRunCancel,
+  requestSessionRunCancel,
+} from "../sessions/session-run-cancel.js";
 import {
   abortChatRunById,
   isChatStopCommandText,
+  registerChatAbortController,
+  wireSessionRunCancelRequester,
   type ChatAbortOps,
   type ChatAbortControllerEntry,
 } from "./chat-abort.js";
@@ -63,6 +70,10 @@ describe("isChatStopCommandText", () => {
 });
 
 describe("abortChatRunById", () => {
+  afterEach(() => {
+    sessionRunCancelTesting.reset();
+  });
+
   it("broadcasts aborted payload with partial message when buffered text exists", () => {
     const runId = "run-1";
     const sessionKey = "main";
@@ -116,6 +127,123 @@ describe("abortChatRunById", () => {
     expect(result).toEqual({ aborted: true });
     const payload = ops.broadcast.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(payload.message).toBeUndefined();
+  });
+
+  it("fans out cancel to delegated-task handlers registered for the session_run target", () => {
+    const runId = "run-1";
+    const sessionKey = "main";
+    const entry = createActiveEntry(sessionKey);
+    const ops = createOps({ runId, entry });
+    const handler = vi.fn();
+    onSessionRunCancel({ kind: "session_run", sessionKey, runId }, handler);
+
+    abortChatRunById(ops, { runId, sessionKey, stopReason: "user" });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(
+      { kind: "session_run", sessionKey, runId },
+      { source: "chat-abort", message: "user" },
+    );
+  });
+
+  it("clears sticky delegated-task cancel replay when the registered run is cleaned up", () => {
+    const runId = "run-1";
+    const sessionKey = "main";
+    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const activeRunAbort = registerChatAbortController({
+      chatAbortControllers,
+      runId,
+      sessionId: "sess-1",
+      sessionKey,
+      timeoutMs: 30_000,
+    });
+    expect(activeRunAbort.entry).toBeDefined();
+    const ops = createOps({ runId, entry: activeRunAbort.entry! });
+    ops.chatAbortControllers = chatAbortControllers;
+
+    abortChatRunById(ops, { runId, sessionKey, stopReason: "user" });
+    const lateBeforeCleanup = vi.fn();
+    onSessionRunCancel({ kind: "session_run", sessionKey, runId }, lateBeforeCleanup);
+    activeRunAbort.cleanup();
+    const lateAfterCleanup = vi.fn();
+    onSessionRunCancel({ kind: "session_run", sessionKey, runId }, lateAfterCleanup);
+
+    expect(lateBeforeCleanup).toHaveBeenCalledTimes(1);
+    expect(lateAfterCleanup).not.toHaveBeenCalled();
+    expect(
+      sessionRunCancelTesting.hasTerminalCancel({ kind: "session_run", sessionKey, runId }),
+    ).toBe(false);
+  });
+
+  it("does not fan out when the abort no-ops because no controller is tracked", () => {
+    const runId = "run-1";
+    const sessionKey = "main";
+    const entry = createActiveEntry(sessionKey);
+    const ops = createOps({ runId, entry });
+    ops.chatAbortControllers.clear();
+    const handler = vi.fn();
+    onSessionRunCancel({ kind: "session_run", sessionKey, runId }, handler);
+
+    const result = abortChatRunById(ops, { runId, sessionKey });
+
+    expect(result).toEqual({ aborted: false });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("wires requestSessionRunCancel to abortChatRunById for matching runs", async () => {
+    const runId = "run-1";
+    const sessionKey = "main";
+    const entry = createActiveEntry(sessionKey);
+    const ops = createOps({ runId, entry });
+    const dispose = wireSessionRunCancelRequester(ops);
+
+    const result = await requestSessionRunCancel(
+      { kind: "session_run", sessionKey, runId },
+      { source: "plugin:test", message: "cancelled" },
+    );
+
+    expect(result).toEqual({ requested: true, aborted: true });
+    expect(entry.controller.signal.aborted).toBe(true);
+    const payload = ops.broadcast.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(payload.stopReason).toBe("cancelled");
+
+    dispose();
+  });
+
+  it("reports aborted=false when no active run matches the requester", async () => {
+    const runId = "run-1";
+    const sessionKey = "main";
+    const entry = createActiveEntry(sessionKey);
+    const ops = createOps({ runId, entry });
+    ops.chatAbortControllers.clear();
+    const dispose = wireSessionRunCancelRequester(ops);
+
+    const result = await requestSessionRunCancel({
+      kind: "session_run",
+      sessionKey,
+      runId,
+    });
+
+    expect(result).toEqual({ requested: true, aborted: false });
+    dispose();
+  });
+
+  it("unwires the requester on disposer so later requests report requested=false", async () => {
+    const runId = "run-1";
+    const sessionKey = "main";
+    const entry = createActiveEntry(sessionKey);
+    const ops = createOps({ runId, entry });
+    const dispose = wireSessionRunCancelRequester(ops);
+    dispose();
+
+    const result = await requestSessionRunCancel({
+      kind: "session_run",
+      sessionKey,
+      runId,
+    });
+
+    expect(result).toEqual({ requested: false, aborted: false });
+    expect(entry.controller.signal.aborted).toBe(false);
   });
 
   it("preserves partial message even when abort listeners clear buffers synchronously", () => {
