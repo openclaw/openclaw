@@ -39,6 +39,11 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Gateway protocol changes: additive first; incompatible needs versioning/docs/client follow-through.
 - Config contract: exported types, schema/help, metadata, baselines, docs aligned. Retired public keys stay retired; compat in raw migration/doctor.
 - Direction: manifest-first control plane; targeted runtime loaders; no hidden contract bypasses; broad mutable registries transitional.
+- Request-time runtime resolution: when a path already knows the provider id, model ref, channel id, outbound target, capability family, or attachment class, carry that as a prepared runtime fact instead of rediscovering it later.
+- Prepared runtime facts should be small typed values produced once near startup, reply dispatch, model selection, tool planning, or channel resolution, then passed through context to consumers. Prefer `AgentRuntimePlan`, `ProviderRuntimePluginHandle`, scoped model/catalog helpers, active/runtime registries, manifest/public-artifact lookups, single-provider resolvers, and lazy registry construction.
+- Avoid broad request-time rediscovery: hot reply/tool/outbound/media paths should not call broad plugin/provider/channel/capability loaders such as `loadOpenClawPlugins`, `resolveProviderPluginsForHooks`, `resolvePluginCapabilityProviders`, `resolvePluginDiscoveryProvidersRuntime`, `getChannelPlugin`, or broad model/tool/media registry builders just to answer a question the caller already knows. Do not build multimodal/provider registries for document-only or otherwise non-participating paths.
+- Compatibility fallbacks are allowed only for startup/setup/admin/standalone/legacy callers that genuinely lack prepared facts. Keep them explicit, tested, and outside migrated hot reply/tool/outbound paths.
+- Do not fix repeated request-time discovery by adding scattered cache layers. Move the canonical fact earlier, reuse the existing prepared-runtime object, and delete duplicate lookup branches when the last migrated caller stops needing them.
 - Prompt cache: deterministic ordering for maps/sets/registries/plugin lists/files/network results before model/tool payloads. Preserve old transcript bytes when possible.
 
 ## Commands
