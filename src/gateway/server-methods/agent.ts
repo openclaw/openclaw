@@ -297,6 +297,54 @@ function requestGroupMatchesTrusted(params: {
   return Boolean(params.trustedGroupId && requestGroupId === params.trustedGroupId);
 }
 
+function resolveMatrixRoomTargetId(to?: string): string | undefined {
+  const raw = to?.trim();
+  if (!raw?.toLowerCase().startsWith("room:")) {
+    return undefined;
+  }
+  return normalizeOptionalString(raw.slice("room:".length));
+}
+
+function requestMatrixGroupMatchesTrustedCaseVariant(params: {
+  requestChannel?: string;
+  requestTo?: string;
+  requestGroupId?: string;
+  trustedGroupId?: string;
+}): boolean {
+  const requestGroupId = params.requestGroupId?.trim();
+  const trustedGroupId = params.trustedGroupId?.trim();
+  if (!requestGroupId || !trustedGroupId || requestGroupId === trustedGroupId) {
+    return false;
+  }
+  if (normalizeMessageChannel(params.requestChannel) !== "matrix") {
+    return false;
+  }
+  if (resolveMatrixRoomTargetId(params.requestTo) !== requestGroupId) {
+    return false;
+  }
+  return requestGroupId.toLowerCase() === trustedGroupId.toLowerCase();
+}
+
+function resolveCasePreservedTrustedGroupId(params: {
+  requestGroupId?: string;
+  trustedGroupId?: string;
+  allowCaseVariant?: boolean;
+}): string | undefined {
+  const trustedGroupId = params.trustedGroupId?.trim();
+  if (!trustedGroupId) {
+    return undefined;
+  }
+  const requestGroupId = params.requestGroupId?.trim();
+  if (
+    requestGroupId &&
+    (requestGroupId === trustedGroupId ||
+      (params.allowCaseVariant && requestGroupId.toLowerCase() === trustedGroupId.toLowerCase()))
+  ) {
+    return requestGroupId;
+  }
+  return trustedGroupId;
+}
+
 function emitSessionsChanged(
   context: Pick<
     GatewayRequestHandlerOptions["context"],
@@ -981,6 +1029,12 @@ export const agentHandlers: GatewayRequestHandlers = {
         stored: storedGroup,
         inherited: inheritedGroup,
       });
+      const allowCasePreservedMatrixGroup = requestMatrixGroupMatchesTrustedCaseVariant({
+        requestChannel: request.channel,
+        requestTo: request.to,
+        requestGroupId: normalizedSpawned.groupId,
+        trustedGroupId: trustedGroup.groupId,
+      });
       const validatedGroup = trustedGroup.groupId
         ? resolveTrustedGroupId({
             groupId: trustedGroup.groupId,
@@ -988,18 +1042,23 @@ export const agentHandlers: GatewayRequestHandlers = {
             spawnedBy: spawnedByValue,
           })
         : undefined;
-      if (validatedGroup?.dropped) {
+      if (validatedGroup?.dropped && !allowCasePreservedMatrixGroup) {
         resolvedGroupId = undefined;
         resolvedGroupChannel = undefined;
         resolvedGroupSpace = undefined;
       } else {
         const trustRequestSelectors =
           Boolean(trustedGroup.groupId) &&
-          requestGroupMatchesTrusted({
+          (requestGroupMatchesTrusted({
             requestGroupId: normalizedSpawned.groupId,
             trustedGroupId: trustedGroup.groupId,
-          });
-        resolvedGroupId = trustedGroup.groupId;
+          }) ||
+            allowCasePreservedMatrixGroup);
+        resolvedGroupId = resolveCasePreservedTrustedGroupId({
+          requestGroupId: normalizedSpawned.groupId,
+          trustedGroupId: trustedGroup.groupId,
+          allowCaseVariant: allowCasePreservedMatrixGroup,
+        });
         resolvedGroupChannel =
           trustedGroup.groupChannel ??
           (trustRequestSelectors ? normalizedSpawned.groupChannel : undefined);

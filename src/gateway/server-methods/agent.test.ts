@@ -2858,6 +2858,7 @@ describe("gateway agent handler", () => {
       sessionKey: string,
       entry: Record<string, unknown>,
       requestGroupId?: string,
+      requestDelivery?: { channel?: string; to?: string },
     ) {
       mocks.loadSessionEntry.mockReturnValue({
         cfg: {},
@@ -2880,6 +2881,8 @@ describe("gateway agent handler", () => {
         sessionKey,
         idempotencyKey: `group-persist-${sessionKey}-${requestGroupId ?? "none"}`,
         ...(requestGroupId !== undefined ? { groupId: requestGroupId } : {}),
+        ...(requestDelivery?.channel ? { channel: requestDelivery.channel } : {}),
+        ...(requestDelivery?.to ? { to: requestDelivery.to } : {}),
       });
       return capturedEntry;
     }
@@ -2896,6 +2899,26 @@ describe("gateway agent handler", () => {
         "trusted-group",
       );
       expect(entry?.groupId).toBe("trusted-group");
+    });
+
+    it("preserves Matrix provider-exact groupId case when session key only differs by case", async () => {
+      const entry = await captureGroupEntryFields(
+        "agent:main:matrix:channel:!mixedroom:example.org",
+        {},
+        "!MixedRoom:example.org",
+        { channel: "matrix", to: "room:!MixedRoom:example.org" },
+      );
+      expect(entry?.groupId).toBe("!MixedRoom:example.org");
+    });
+
+    it("drops case-only groupId mismatch without a matching Matrix delivery target", async () => {
+      const entry = await captureGroupEntryFields(
+        "agent:main:matrix:channel:!mixedroom:example.org",
+        {},
+        "!MixedRoom:example.org",
+        { channel: "matrix", to: "room:!otherroom:example.org" },
+      );
+      expect(entry?.groupId).toBeUndefined();
     });
 
     it("clears a previously forged groupId from the session entry on reconnection", async () => {
