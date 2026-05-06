@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginOrigin } from "../plugins/types.js";
@@ -70,6 +70,24 @@ let collectConfigAssignments: typeof import("./runtime-config-collectors.js").co
 let createResolverContext: typeof import("./runtime-shared.js").createResolverContext;
 let resolveSecretRefValues: typeof import("./resolve.js").resolveSecretRefValues;
 let resolveRuntimeWebTools: typeof import("./runtime-web-tools.js").resolveRuntimeWebTools;
+const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const previousTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+
+process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ??= "extensions";
+process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR ??= "1";
+
+afterAll(() => {
+  if (previousBundledPluginsDir === undefined) {
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  } else {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
+  }
+  if (previousTrustBundledPluginsDir === undefined) {
+    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+  } else {
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = previousTrustBundledPluginsDir;
+  }
+});
 
 async function ensureConfigCoverageRuntimeLoaded(): Promise<void> {
   if (!collectConfigAssignments) {
@@ -315,6 +333,16 @@ function applyConfigForOpenClawTarget(
       config,
       ["channels", "zalo", "accounts", wildcardToken, "webhookUrl"],
       "https://example.com/hook",
+    );
+  }
+  if (entry.id === "channels.qqbot.clientSecret") {
+    setPathCreateStrict(config, ["channels", "qqbot", "appId"], "sample-app-id");
+  }
+  if (entry.id === "channels.qqbot.accounts.*.clientSecret") {
+    setPathCreateStrict(
+      config,
+      ["channels", "qqbot", "accounts", wildcardToken, "appId"],
+      "sample-app-id",
     );
   }
   if (entry.id === "channels.feishu.verificationToken") {
