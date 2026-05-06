@@ -579,6 +579,11 @@ public struct SendParams: Codable, Sendable {
     public let replytoid: String?
     public let threadid: String?
     public let sessionkey: String?
+    public let latitude: Double?
+    public let longitude: Double?
+    public let locationname: String?
+    public let locationaddress: String?
+    public let accuracyinmeters: Double?
     public let idempotencykey: String
 
     public init(
@@ -594,6 +599,11 @@ public struct SendParams: Codable, Sendable {
         replytoid: String?,
         threadid: String?,
         sessionkey: String?,
+        latitude: Double?,
+        longitude: Double?,
+        locationname: String?,
+        locationaddress: String?,
+        accuracyinmeters: Double?,
         idempotencykey: String)
     {
         self.to = to
@@ -608,6 +618,11 @@ public struct SendParams: Codable, Sendable {
         self.replytoid = replytoid
         self.threadid = threadid
         self.sessionkey = sessionkey
+        self.latitude = latitude
+        self.longitude = longitude
+        self.locationname = locationname
+        self.locationaddress = locationaddress
+        self.accuracyinmeters = accuracyinmeters
         self.idempotencykey = idempotencykey
     }
 
@@ -624,6 +639,11 @@ public struct SendParams: Codable, Sendable {
         case replytoid = "replyToId"
         case threadid = "threadId"
         case sessionkey = "sessionKey"
+        case latitude
+        case longitude
+        case locationname = "locationName"
+        case locationaddress = "locationAddress"
+        case accuracyinmeters = "accuracyInMeters"
         case idempotencykey = "idempotencyKey"
     }
 }
