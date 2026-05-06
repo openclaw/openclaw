@@ -342,6 +342,36 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("- anthropic/claude-opus-4-5");
   });
 
+  it("does not list a configured CLI-runtime alias under the agent's default provider", async () => {
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.6" },
+    ]);
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.5",
+            fallbacks: ["opus-cli", "anthropic/claude-opus-4-6"],
+          },
+          models: {
+            "openai-codex/gpt-5.5": {},
+            "claude-cli/claude-opus-4-6": { alias: "opus-cli" },
+          },
+        },
+      },
+    } satisfies Partial<OpenClawConfig>;
+
+    const data = await buildModelsProviderData(cfg as OpenClawConfig);
+
+    expect(data.byProvider.get("openai-codex")?.has("opus-cli")).toBeFalsy();
+    expect(data.byProvider.get("openai-codex")?.has("gpt-5.5")).toBe(true);
+    expect(data.byProvider.has("claude-cli")).toBe(false);
+
+    const codexResult = await handleModelsCommand(buildParams("/models openai-codex", cfg), true);
+    expect(codexResult?.reply?.text).not.toContain("opus-cli");
+  });
+
   it("keeps the auth label on text-surface provider listings", async () => {
     modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue("target-auth");
     const params = buildParams("/models anthropic");

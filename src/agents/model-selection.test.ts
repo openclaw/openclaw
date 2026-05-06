@@ -867,6 +867,41 @@ describe("model-selection", () => {
       expect(result.allowedKeys.has("google/gemini-3-pro-preview")).toBe(false);
       expect(result.allowAny).toBe(false);
     });
+
+    it("resolves bare configured aliases in fallbacks to their true ref instead of synthesizing under default provider", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai-codex/gpt-5.5",
+              fallbacks: ["opus-cli", "anthropic/claude-opus-4-6"],
+            },
+            models: {
+              "openai-codex/gpt-5.5": {},
+              "claude-cli/claude-opus-4-6": { alias: "opus-cli" },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [
+          { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5" },
+          { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.6" },
+        ],
+        defaultProvider: "openai-codex",
+        defaultModel: "gpt-5.5",
+      });
+
+      expect(result.allowedKeys.has("openai-codex/opus-cli")).toBe(false);
+      expect(result.allowedKeys.has("claude-cli/claude-opus-4-6")).toBe(true);
+      expect(
+        result.allowedCatalog.some(
+          (entry) => entry.provider === "openai-codex" && entry.id === "opus-cli",
+        ),
+      ).toBe(false);
+    });
   });
 
   describe("resolveAllowedModelRef", () => {
