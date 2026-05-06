@@ -13,6 +13,7 @@ import { loadSessions } from "../controllers/sessions.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import {
   buildAgentMainSessionKey,
+  isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../session-key.ts";
@@ -564,6 +565,7 @@ type SessionOptionEntry = {
   label: string;
   scopeLabel: string;
   title: string;
+  parentKey?: string;
 };
 
 export type SessionOptionGroup = {
@@ -674,7 +676,7 @@ export function resolveSessionOptionGroups(
     return created;
   };
 
-  const addOption = (key: string) => {
+  const addOption = (key: string, parentKey?: string, isChild?: boolean) => {
     if (!key || seenKeys.has(key)) {
       return;
     }
@@ -688,12 +690,16 @@ export function resolveSessionOptionGroups(
         )
       : ensureGroup("other", "Other Sessions");
     const scopeLabel = normalizeOptionalString(parsed?.rest) ?? key;
-    const label = resolveSessionScopedOptionLabel(key, row, parsed?.rest);
+    let label = resolveSessionScopedOptionLabel(key, row, parsed?.rest);
+    if (isChild) {
+      label = `└─ ${label}`;
+    }
     group.options.push({
       key,
       label,
       scopeLabel,
       title: key,
+      ...(parentKey ? { parentKey } : {}),
     });
   };
 
@@ -710,7 +716,12 @@ export function resolveSessionOptionGroups(
     if (hideCron && row.key !== sessionKey && isCronSessionKey(row.key)) {
       continue;
     }
-    addOption(row.key);
+    const isSubagent = isSubagentSessionKey(row.key) || !!row.spawnedBy;
+    if (isSubagent && row.spawnedBy && byKey.has(row.spawnedBy)) {
+      addOption(row.key, row.spawnedBy, true);
+    } else {
+      addOption(row.key);
+    }
   }
   if (byKey.has(sessionKey)) {
     addOption(sessionKey);
