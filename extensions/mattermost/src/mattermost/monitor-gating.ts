@@ -1,5 +1,6 @@
 import type { ChatType, OpenClawConfig } from "./runtime-api.js";
 
+/** Returns the first non-empty trimmed Mattermost channel type, or null when none resolves. */
 export function resolveMattermostChannelType(
   ...channelTypes: Array<string | null | undefined>
 ): string | null {
@@ -13,6 +14,7 @@ export function resolveMattermostChannelType(
   return null;
 }
 
+/** Throws when the Mattermost channel type is missing or blank so auth callers fail closed. */
 export function mapMattermostChannelTypeToChatType(channelType?: string | null): ChatType {
   const channelTypeValue = resolveMattermostChannelType(channelType);
   if (!channelTypeValue) {
@@ -28,6 +30,7 @@ export function mapMattermostChannelTypeToChatType(channelType?: string | null):
   return "channel";
 }
 
+/** Security-sensitive callers should pass channelType; fallback is only for non-auth routing. */
 export function resolveMattermostTrustedChatKind(params: {
   channelType?: string | null;
   fallback?: ChatType;

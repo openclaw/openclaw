@@ -1,3 +1,4 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { monitorMattermostProvider } from "./monitor.js";
 import type { OpenClawConfig, RuntimeEnv } from "./runtime-api.js";
@@ -81,6 +82,9 @@ const mockState = vi.hoisted(() => ({
   dispatchReplyFromConfig: vi.fn(),
   enqueueSystemEvent: vi.fn(),
   fetchMattermostMe: vi.fn(),
+  interactionHandler: undefined as
+    | ((req: IncomingMessage, res: ServerResponse) => Promise<boolean | void> | boolean | void)
+    | undefined,
   registerMattermostMonitorSlashCommands: vi.fn(),
   registerPluginHttpRoute: vi.fn(),
   resolveChannelInfo: vi.fn(),
@@ -351,10 +355,79 @@ const testRuntime = (): RuntimeEnv =>
     }) as RuntimeEnv["exit"],
   }) satisfies RuntimeEnv;
 
+function createInteractionRequest(params: {
+  body: unknown;
+  remoteAddress?: string;
+  headers?: Record<string, string>;
+}): IncomingMessage {
+  const body = JSON.stringify(params.body);
+  const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+  const req = {
+    method: "POST",
+    headers: params.headers ?? {},
+    socket: { remoteAddress: params.remoteAddress ?? "127.0.0.1" },
+    destroy: vi.fn(),
+    on(event: string, handler: (...args: unknown[]) => void) {
+      const existing = listeners.get(event) ?? [];
+      existing.push(handler);
+      listeners.set(event, existing);
+      return this;
+    },
+  } as IncomingMessage & { emitTest: (event: string, ...args: unknown[]) => void };
+
+  req.emitTest = (event: string, ...args: unknown[]) => {
+    const handlers = listeners.get(event) ?? [];
+    for (const handler of handlers) {
+      handler(...args);
+    }
+  };
+
+  queueMicrotask(() => {
+    req.emitTest("data", Buffer.from(body));
+    req.emitTest("end");
+  });
+
+  return req;
+}
+
+function createInteractionResponse(): ServerResponse & {
+  headers: Record<string, string>;
+  body: string;
+} {
+  const res = {
+    statusCode: 200,
+    headers: {},
+    body: "",
+    setHeader(name: string, value: string | number | readonly string[]) {
+      res.headers[name] = Array.isArray(value) ? value.join(",") : String(value);
+      return res;
+    },
+    end(
+      chunk?: string | Buffer | Uint8Array,
+      _encoding?: BufferEncoding | (() => void),
+      cb?: () => void,
+    ) {
+      res.body = chunk ? String(chunk) : "";
+      cb?.();
+      return res;
+    },
+  } as ServerResponse & { headers: Record<string, string>; body: string };
+  return res;
+}
+
+async function runRegisteredInteractionHandler(body: unknown) {
+  const handler = mockState.interactionHandler;
+  expect(handler).toBeDefined();
+  const res = createInteractionResponse();
+  await handler?.(createInteractionRequest({ body }), res);
+  return res;
+}
+
 describe("mattermost inbound user posts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockState.abortController = undefined;
+    mockState.interactionHandler = undefined;
     mockState.runtimeCore = createRuntimeCore(testConfig);
     mockState.createMattermostClient.mockReturnValue({});
     mockState.createMattermostDraftStream.mockReturnValue({
@@ -367,7 +440,12 @@ describe("mattermost inbound user posts", () => {
       update_at: 1,
     });
     mockState.registerMattermostMonitorSlashCommands.mockResolvedValue(undefined);
-    mockState.registerPluginHttpRoute.mockReturnValue(vi.fn());
+    mockState.registerPluginHttpRoute.mockImplementation(
+      (params: { handler: NonNullable<typeof mockState.interactionHandler> }) => {
+        mockState.interactionHandler = params.handler;
+        return vi.fn();
+      },
+    );
     mockState.resolveChannelInfo.mockResolvedValue({
       id: "chan-1",
       name: "town-square",
@@ -430,6 +508,144 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.MessageSid).toBe("post-1");
     expect(ctx?.OriginatingChannel).toBe("mattermost");
     expect(ctx?.Provider).toBe("mattermost");
+  });
+
+  it("drops user posts when channel type is unavailable from payload and lookup", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    const restrictedDmConfig: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "pairing",
+          groupPolicy: "open",
+        },
+      },
+    };
+    mockState.runtimeCore = createRuntimeCore(restrictedDmConfig);
+    mockState.resolveChannelInfo.mockResolvedValue(null);
+    const { monitorMattermostProvider } = await import("./monitor.js");
+
+    const monitor = monitorMattermostProvider({
+      config: restrictedDmConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await socket.emitMessage({
+      event: "posted",
+      data: {
+        channel_id: "dm-lookup-failed",
+        sender_name: "mallory",
+        post: JSON.stringify({
+          id: "post-missing-type",
+          channel_id: "dm-lookup-failed",
+          user_id: "user-1",
+          message: "direct hello",
+          create_at: 1_714_000_000_000,
+        }),
+      },
+      broadcast: {
+        channel_id: "dm-lookup-failed",
+        user_id: "user-1",
+      },
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.resolveChannelInfo).toHaveBeenCalledWith("dm-lookup-failed");
+    expect(mockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(mockState.enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("skips button system events and synthetic dispatch when channel lookup later fails", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    const requestLog: string[] = [];
+    mockState.createMattermostClient.mockReturnValue({
+      request: vi.fn(async (path: string) => {
+        requestLog.push(path);
+        return {
+          id: "post-button",
+          channel_id: "button-channel",
+          message: "Choose",
+          props: {
+            attachments: [
+              {
+                actions: [{ id: "approve", name: "Approve" }],
+              },
+            ],
+          },
+        };
+      }),
+    });
+    mockState.resolveChannelInfo
+      .mockResolvedValueOnce({
+        id: "button-channel",
+        name: "town-square",
+        display_name: "Town Square",
+        team_id: "team-1",
+        type: "O",
+      })
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null);
+    const { monitorMattermostProvider } = await import("./monitor.js");
+
+    const monitor = monitorMattermostProvider({
+      config: testConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+    await vi.waitFor(() => {
+      expect(mockState.interactionHandler).toBeDefined();
+    });
+
+    const { generateInteractionToken } = await import("./interactions.js");
+    const context = {
+      action_id: "approve",
+      __openclaw_channel_id: "button-channel",
+    };
+    const res = await runRegisteredInteractionHandler({
+      user_id: "user-1",
+      user_name: "mallory",
+      channel_id: "button-channel",
+      post_id: "post-button",
+      context: {
+        ...context,
+        _token: generateInteractionToken(context, "default"),
+      },
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe("{}");
+    expect(requestLog).toEqual(["/posts/post-button"]);
+    expect(mockState.resolveChannelInfo).toHaveBeenCalledTimes(3);
+    expect(mockState.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(mockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(mockState.updateMattermostPost).toHaveBeenCalledWith(
+      expect.anything(),
+      "post-button",
+      expect.objectContaining({ message: "Choose" }),
+    );
   });
 
   it("pins direct-message main route updates to the configured owner", async () => {

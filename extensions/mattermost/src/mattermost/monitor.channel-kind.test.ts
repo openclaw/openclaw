@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mapMattermostChannelTypeToChatType } from "./monitor.js";
+import { mapMattermostChannelTypeToChatType, resolveMattermostTrustedChatKind } from "./monitor.js";
 
 describe("mapMattermostChannelTypeToChatType", () => {
   it("maps direct and group dm channel types", () => {
@@ -21,7 +21,22 @@ describe("mapMattermostChannelTypeToChatType", () => {
     expect(() => mapMattermostChannelTypeToChatType(undefined)).toThrow(
       "Mattermost channel type is required",
     );
+    expect(() => mapMattermostChannelTypeToChatType(null)).toThrow(
+      "Mattermost channel type is required",
+    );
+    expect(() => mapMattermostChannelTypeToChatType("")).toThrow(
+      "Mattermost channel type is required",
+    );
     expect(() => mapMattermostChannelTypeToChatType(" ")).toThrow(
+      "Mattermost channel type is required",
+    );
+  });
+
+  it("requires an explicit channel type for trusted chat kind", () => {
+    expect(() => resolveMattermostTrustedChatKind({})).toThrow(
+      "Mattermost channel type is required",
+    );
+    expect(() => resolveMattermostTrustedChatKind({ channelType: undefined })).toThrow(
       "Mattermost channel type is required",
     );
   });

@@ -1301,6 +1301,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         }
 
         const channelInfo = await resolveChannelInfo(channelId);
+        // Prefer the event channel_type because resolveChannelInfo can return cached null after
+        // the lookup-failure window from GHSA-gp79-m99v-gjmh; fail closed if neither resolves.
         const channelType = resolveMattermostChannelType(
           payload.data?.channel_type,
           channelInfo?.type,
