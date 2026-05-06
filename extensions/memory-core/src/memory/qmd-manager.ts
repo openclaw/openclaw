@@ -1388,6 +1388,9 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
+    if (!qmdUsesVectors(this.qmd.searchMode)) {
+      return { ok: false, error: undefined };
+    }
     const ok = await this.probeVectorAvailability();
     return {
       ok,
