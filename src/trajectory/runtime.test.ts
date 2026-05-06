@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
   createTrajectoryRuntimeRecorder,
@@ -203,5 +203,41 @@ describe("trajectory runtime", () => {
     });
 
     expect(recorder).toBeNull();
+  });
+
+  it("fires periodic flush after flushTimeoutMs", async () => {
+    vi.useFakeTimers();
+    try {
+      const flushCalls: number[] = [];
+      const recorder = createTrajectoryRuntimeRecorder({
+        cfg: { trajectory: { flushTimeoutMs: 5000 } },
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile: "/tmp/session.jsonl",
+        writer: {
+          filePath: "/tmp/session.trajectory.jsonl",
+          write: () => undefined,
+          flush: async () => {
+            flushCalls.push(Date.now());
+          },
+        },
+      });
+
+      expect(recorder).not.toBeNull();
+
+      // Record an event to trigger the periodic flush timer
+      recorder!.recordEvent("agent.start", {});
+
+      // Before timeout fires, flush should not have been called
+      expect(flushCalls).toHaveLength(0);
+
+      // Advance time past the flush timeout
+      await vi.advanceTimersByTimeAsync(5001);
+
+      // Flush should have been called once
+      expect(flushCalls).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
