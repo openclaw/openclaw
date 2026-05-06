@@ -43,6 +43,8 @@ Normal runs translate only:
 - locale pages with stale `x-i18n.source_hash`
 - pages affected by source deletion/pruning
 
+Internal files under `docs/.i18n/**` are not translation inputs.
+
 If a locale job fails, its artifact is marked failed and carries no payload. The finalizer still commits successful locales. The failed locale remains stale and is picked up by the next incremental run because its source hashes still do not match.
 
 ## Artifact contract
