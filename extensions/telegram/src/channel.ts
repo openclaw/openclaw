@@ -243,6 +243,7 @@ type TelegramMessageSendSourceResult = {
   messageId?: string;
   chatId?: string;
   receipt?: ChannelMessageSendResult["receipt"];
+  delivery?: ChannelMessageSendResult["delivery"];
 };
 
 function toTelegramMessageSendResult(
@@ -268,6 +269,7 @@ function toTelegramMessageSendResult(
   return {
     messageId: result.messageId || receipt.primaryPlatformMessageId,
     receipt,
+    ...(result.delivery ? { delivery: result.delivery } : {}),
   };
 }
 

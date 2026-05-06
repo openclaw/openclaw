@@ -37,6 +37,7 @@ describe("telegram channel message adapter", () => {
         expect.objectContaining({ verbose: false }),
       );
       expect(result.receipt.platformMessageIds).toEqual(["tg-text"]);
+      expect(result.delivery).toEqual({ providerAccepted: true });
     };
 
     const proveMedia = async () => {
@@ -58,6 +59,7 @@ describe("telegram channel message adapter", () => {
         }),
       );
       expect(result.receipt.parts[0]?.kind).toBe("media");
+      expect(result.delivery).toEqual({ providerAccepted: true });
     };
 
     const provePayload = async () => {
