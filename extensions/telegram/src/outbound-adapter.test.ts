@@ -118,7 +118,12 @@ describe("telegramOutbound", () => {
     expect(
       (sendMessageTelegramMock.mock.calls[1]?.[2] as Record<string, unknown>)?.buttons,
     ).toBeUndefined();
-    expect(result).toEqual({ channel: "telegram", messageId: "tg-2", chatId: "12345" });
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-2",
+      chatId: "12345",
+      delivery: { providerAccepted: true },
+    });
   });
 
   it("uses interactive button labels as fallback text for button-only payloads", async () => {
@@ -143,7 +148,12 @@ describe("telegramOutbound", () => {
         buttons: [[{ text: "Retry", callback_data: "cmd:retry" }]],
       }),
     );
-    expect(result).toEqual({ channel: "telegram", messageId: "tg-buttons", chatId: "12345" });
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-buttons",
+      chatId: "12345",
+      delivery: { providerAccepted: true },
+    });
   });
 
   it("forwards silent delivery options to Telegram sends", async () => {
@@ -165,7 +175,12 @@ describe("telegramOutbound", () => {
         silent: true,
       }),
     );
-    expect(result).toEqual({ channel: "telegram", messageId: "tg-silent", chatId: "12345" });
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-silent",
+      chatId: "12345",
+      delivery: { providerAccepted: true },
+    });
   });
 
   it("forwards audioAsVoice payload media to Telegram voice sends", async () => {
@@ -191,7 +206,12 @@ describe("telegramOutbound", () => {
         asVoice: true,
       }),
     );
-    expect(result).toEqual({ channel: "telegram", messageId: "tg-voice", chatId: "12345" });
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-voice",
+      chatId: "12345",
+      delivery: { providerAccepted: true },
+    });
   });
 
   it("backs declared durable final capabilities with delivery proofs", async () => {

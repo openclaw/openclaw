@@ -103,7 +103,7 @@ export async function sendTelegramPayloadMessages(params: {
   };
 
   // Telegram allows reply_markup on media; attach buttons only to the first send.
-  return await sendPayloadMediaSequenceOrFallback({
+  const result = await sendPayloadMediaSequenceOrFallback({
     text,
     mediaUrls,
     fallbackResult: { messageId: "unknown", chatId: params.to },
@@ -119,6 +119,13 @@ export async function sendTelegramPayloadMessages(params: {
         ...(isFirst ? { buttons } : {}),
       }),
   });
+  return {
+    ...result,
+    delivery: {
+      ...result.delivery,
+      providerAccepted: true,
+    },
+  };
 }
 
 export const telegramOutbound: ChannelOutboundAdapter = {

@@ -77,6 +77,7 @@ describe("telegram channel message adapter", () => {
         expect.objectContaining({ verbose: false }),
       );
       expect(result.receipt.platformMessageIds).toEqual(["tg-payload"]);
+      expect(result.delivery).toEqual({ providerAccepted: true });
     };
 
     const proveReplyThreadSilent = async () => {
