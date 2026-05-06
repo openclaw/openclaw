@@ -1,7 +1,7 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { OutboundDeliveryProjection } from "../../infra/outbound/deliver-types.js";
+import type { OutboundDeliveryProjection } from "../../infra/outbound/delivery-projection.js";
 import type { OutboundSendDeps } from "../../infra/outbound/send-deps.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 

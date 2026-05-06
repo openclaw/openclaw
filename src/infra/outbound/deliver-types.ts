@@ -1,10 +1,8 @@
 import type { MessageReceipt } from "../../channels/message/types.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
+import type { OutboundDeliveryProjection } from "./delivery-projection.js";
 
-export type OutboundDeliveryProjection = {
-  /** The channel provider accepted the outbound send request. This is not a read or visibility receipt. */
-  providerAccepted?: boolean;
-};
+export type { OutboundDeliveryProjection } from "./delivery-projection.js";
 
 export type OutboundDeliveryResult = {
   channel: Exclude<ChannelId, "none">;
