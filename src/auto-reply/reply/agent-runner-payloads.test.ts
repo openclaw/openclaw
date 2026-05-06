@@ -566,6 +566,26 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("keeps error payloads during silent turns", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      silentExpected: true,
+      payloads: [
+        { text: "normal maintenance reply" },
+        {
+          text: "⚠️ write failed: Memory flush writes are restricted to memory/2026-05-05.md; use that path only.",
+          isError: true,
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject({
+      text: "⚠️ write failed: Memory flush writes are restricted to memory/2026-05-05.md; use that path only.",
+      isError: true,
+    });
+  });
+
   it("keeps voice media payloads during silent turns", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
