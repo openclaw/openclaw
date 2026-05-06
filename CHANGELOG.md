@@ -150,6 +150,7 @@ Docs: https://docs.openclaw.ai
 - Network/runtime: avoid importing Undici's package dispatcher during no-proxy timeout bootstrap so external channel plugin fetch requests with explicit Content-Length keep working. Fixes #78007. Thanks @shakkernerd.
 - Gateway/shutdown: cancel delayed post-ready maintenance during close and suppress maintenance/cron startup after quick restarts, preventing orphaned background timers. Thanks @vincentkoc.
 - Agents/TTS: send media-bearing block replies directly when block streaming is off, so agent `tts` tool audio attached to a final text reply is delivered instead of being consumed before final Telegram/media delivery. Thanks @Conan-Scott.
+- Doctor: avoid crashing on partial Linux environments when the legacy crontab probe or terminal note wrapper receives missing or non-string output. Fixes #77773. Thanks @blackflame7983.
 - Agents/generated media: treat attachment-style message tool actions as completed chat sends, preventing duplicate fallback media posts when generated files were already uploaded.
 - Control UI/sessions: show each session's agent runtime in the Sessions table and allow filtering by runtime labels, matching the Agents panel runtime wording. Thanks @vincentkoc.
 - Discord/streaming: show live reasoning text in progress drafts instead of a bare `Reasoning` status line.

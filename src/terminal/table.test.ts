@@ -278,4 +278,12 @@ describe("wrapNoteMessage", () => {
     expect(resolveNoteColumns(79)).toBe(80);
     expect(resolveNoteColumns(120)).toBe(120);
   });
+
+  it("coerces nullish and non-string note messages before wrapping", () => {
+    expect(wrapNoteMessage(undefined, { maxWidth: 20, columns: 80 })).toBe("");
+    expect(wrapNoteMessage(null, { maxWidth: 20, columns: 80 })).toBe("");
+    expect(wrapNoteMessage(12345, { maxWidth: 20, columns: 80 })).toBe("12345");
+    expect(wrapNoteMessage(new Error("boom"), { maxWidth: 20, columns: 80 })).toBe("Error: boom");
+    expect(wrapNoteMessage({ message: "boom" }, { maxWidth: 20, columns: 80 })).toBe("");
+  });
 });
