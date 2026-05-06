@@ -565,7 +565,7 @@ releases.
   | `plugin-sdk/reply-chunking` | Reply chunk helpers | Text/markdown chunking helpers |
   | `plugin-sdk/session-store-runtime` | Session store helpers | Store path + updated-at helpers |
   | `plugin-sdk/state-paths` | State path helpers | State and OAuth dir helpers |
-  | `plugin-sdk/routing` | Routing/session-key helpers | `resolveAgentRoute`, `buildAgentSessionKey`, `resolveDefaultAgentBoundAccountId`, session-key normalization helpers |
+  | `plugin-sdk/routing` | Routing/session-key helpers | `resolveAgentRoute`, `buildAgentSessionKey`, `resolveDefaultAgentBoundAccountId`, `resolveCanonicalIdentityFromLinks`, session-key normalization helpers |
   | `plugin-sdk/status-helpers` | Channel status helpers | Channel/account status summary builders, runtime-state defaults, issue metadata helpers |
   | `plugin-sdk/target-resolver-runtime` | Target resolver helpers | Shared target resolver helpers |
   | `plugin-sdk/string-normalization-runtime` | String normalization helpers | Slug/string normalization helpers |
