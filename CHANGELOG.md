@@ -166,7 +166,6 @@ Docs: https://docs.openclaw.ai
 - Discord/gateway: measure heartbeat ACK timeouts from the actual heartbeat send, preventing late initial heartbeats from triggering false reconnect loops while the channel is still awaiting readiness. Fixes #77668. (#78087) Thanks @bryce-d-greybeard and @NikolaFC.
 - Channels/cron: ignore stale runtime conversation bindings that point at completed isolated cron run sessions, so follow-up DMs fall back to their normal route instead of reusing a closed cron task prompt. Fixes #78074. Thanks @amknight.
 - Discord/guilds: route plain text control commands such as `/steer` through the normal authorization and mention gate instead of silently dropping them before an agent session can see them. Fixes #78080. Thanks @ramitrkar-hash.
-- Agents/subagents: have completed session-mode subagent registry rows honor `agents.defaults.subagents.archiveAfterMinutes` (default 60 minutes; same knob run-mode already uses for `archiveAtMs`) instead of a hardcoded 5-minute TTL, so `subagents list` and other registry-backed surfaces still show recently-completed runs and operators have one consistent retention knob across spawn modes. (#78263) Thanks @arniesaha.
 - Control UI/Sessions: make the compaction count a compact `N Checkpoint(s)` disclosure and show expanded session-level details with modern checkpoint history cards across responsive table layouts. Thanks @BunsDev.
 - Control UI/performance: keep chat and channel tabs responsive while history payloads and channel probes are slow, label partial channel status, and record slow chat/config render timings in the event log. Thanks @BunsDev.
 - ACP: preserve streamed chunk boundaries in background-task progress summaries so CJK text, paths, URLs, and identifiers are no longer split with synthetic spaces. Fixes #78312. Thanks @amknight.
@@ -481,6 +480,7 @@ Docs: https://docs.openclaw.ai
 - Doctor/plugins: discover doctor contracts from load-path channel plugins during `openclaw doctor --fix`, so plugin-owned legacy config repair runs before validation. (#77477) Thanks @jalehman.
 - Dependencies: bump transitive `basic-ftp` to 5.3.1 so the runtime lockfile no longer includes the vulnerable 5.3.0 build flagged by the production dependency audit. (#78637) Thanks @sallyom.
 - Agents/compaction: clamp compaction summary reserve tokens to each model's output limit so high-context compaction no longer requests invalid `max_tokens` values. (#54392) Thanks @adzendo.
+- Agents/subagents: have completed session-mode subagent registry rows honor `agents.defaults.subagents.archiveAfterMinutes` (default 60 minutes; same knob run-mode already uses for `archiveAtMs`) instead of a hardcoded 5-minute TTL, so `subagents list` and other registry-backed surfaces still show recently-completed runs and operators have one consistent retention knob across spawn modes. (#78263) Thanks @arniesaha.
 
 ## 2026.5.3-1
 
