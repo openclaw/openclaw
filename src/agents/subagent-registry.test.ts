@@ -913,7 +913,7 @@ describe("subagent registry seam flow", () => {
       endedAt: now - 8_000,
       outcome: { status: "ok", startedAt: now - 10_000, endedAt: now - 8_000, elapsedMs: 2_000 },
       cleanupHandled: true,
-      cleanupCompletedAt: now - 6 * 60_000,
+      cleanupCompletedAt: now - 61 * 60_000,
     });
     mod.addSubagentRunForTests({
       runId: "run-archive-swept-context-engine",

@@ -196,8 +196,16 @@ const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
  * `timed out` completion right before the eventual success.
  */
 const LIFECYCLE_TIMEOUT_RETRY_GRACE_MS = 15_000;
-/** Absolute TTL for session-mode runs after cleanup completes (no archiveAtMs). */
-const SESSION_RUN_TTL_MS = 5 * 60_000; // 5 minutes
+/**
+ * Absolute TTL for session-mode runs after cleanup completes (no archiveAtMs).
+ *
+ * Five minutes was too short in real usage: spawned child sessions still exist,
+ * but the registry entry disappears before a human can reasonably ask
+ * "what happened to the subagents?" on a slower messaging surface. Keep the
+ * registry row around longer so `subagents list` remains useful after the run
+ * finishes, especially when agent-to-agent transcript access is disabled.
+ */
+const SESSION_RUN_TTL_MS = 60 * 60_000; // 60 minutes
 /** Absolute TTL for orphaned pendingLifecycleError / pendingLifecycleTimeout entries. */
 const PENDING_LIFECYCLE_TERMINAL_TTL_MS = 5 * 60_000; // 5 minutes
 /** Grace period before treating a "running" subagent without a live run context as stale. */
