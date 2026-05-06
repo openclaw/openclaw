@@ -1977,18 +1977,30 @@
   display: grid;
   gap: 8px;
   container-type: inline-size;
+  min-width: 0;
 }
 
 .list-item {
+  box-sizing: border-box;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(200px, 260px);
   gap: 16px;
   align-items: start;
+  /* Grid items default to min-width: auto (= min-content), so long strings can
+     forbid shrinking and never wrap — force participation in layout width. */
+  min-width: 0;
+  max-width: 100%;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 12px;
   background: var(--card);
   transition: border-color var(--duration-fast) ease;
+}
+
+/* Paired device rows only use .list-main; keep a single fluid column instead of
+   reserving an empty 200–260px track that squeezes readable width. */
+.list-item.nodes-device-paired {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .list-item-clickable {
@@ -2036,6 +2048,83 @@
 .list-meta .field textarea,
 .list-meta .field select {
   width: 100%;
+}
+
+/* Nodes → Devices → Paired: long ids / scope lines must wrap; keep actions visible */
+.nodes-device-paired .list-main {
+  min-width: 0;
+}
+
+/* Grid/flex children default to min-width:auto; allow the card to shrink with the viewport */
+.nodes-device-paired .list-main > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.nodes-device-paired .list-title {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Heading is the raw device id when no separate display name is set */
+.nodes-device-paired .list-title.nodes-device-paired__device-id {
+  word-break: break-all;
+}
+
+.nodes-device-paired .list-sub {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Unbroken hex device ids */
+.nodes-device-paired__device-id {
+  word-break: break-all;
+}
+
+.nodes-device-paired__meta {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.nodes-device-token-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+}
+
+/* Always stack meta above actions — flex side-by-side still allowed long “detail” lines
+   to measure as one min-content-wide row and spill past the card on some widths. */
+.nodes-device-token-row {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.nodes-device-token-row__detail {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.nodes-device-token-row__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
 }
 
 /* Debug event log payloads should use full width like other debug sections. */
@@ -2230,7 +2319,7 @@
 
 @container (max-width: 560px) {
   .list-item {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .list-meta {

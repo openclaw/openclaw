@@ -536,6 +536,11 @@ openclaw-app {
   position: relative;
   z-index: 1;
   min-height: 100vh;
+  /* Prevent long unbroken strings anywhere in the subtree from stretching past the viewport. */
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
 }
 
 @media (display-mode: standalone) {

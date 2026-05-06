@@ -1,4 +1,5 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
+import { styleMap } from "lit/directives/style-map.js";
 import {
   resolvePendingDeviceApprovalState,
   type DevicePairingAccessSummary,
@@ -12,6 +13,39 @@ import { renderExecApprovals, resolveExecApprovalsState } from "./nodes-exec-app
 import { resolveConfigAgents, resolveNodeTargets, type NodeTargetOption } from "./nodes-shared.ts";
 export type { NodesProps } from "./nodes.types.ts";
 import type { NodesProps } from "./nodes.types.ts";
+
+/** Inline so wrapping survives any stylesheet order / stale bundles; grid+flex min-sizing can't suppress these. */
+const NODES_WRAP_BREAK_ALL: Readonly<Record<string, string>> = {
+  overflowWrap: "anywhere",
+  wordBreak: "break-all",
+  maxWidth: "100%",
+  minWidth: "0",
+  whiteSpace: "normal",
+};
+
+const NODES_WRAP_SOFT: Readonly<Record<string, string>> = {
+  overflowWrap: "anywhere",
+  wordBreak: "break-word",
+  maxWidth: "100%",
+  minWidth: "0",
+  whiteSpace: "normal",
+};
+
+/** Inserts `<wbr>` so lines can break even when CSS min-content / caching fights `word-break`. */
+function htmlChunkWithBreaks(text: string, chunkSize: number): TemplateResult {
+  const n = Math.max(8, Math.floor(chunkSize));
+  if (text.length <= n) {
+    return html`${text}`;
+  }
+  const parts: Array<string | TemplateResult> = [];
+  for (let i = 0; i < text.length; i += n) {
+    if (i > 0) {
+      parts.push(html`<wbr />`);
+    }
+    parts.push(text.slice(i, i + n));
+  }
+  return html`${parts}`;
+}
 
 export function renderNodes(props: NodesProps) {
   const bindingState = resolveBindingsState(props);
@@ -166,22 +200,51 @@ function renderPendingDevice(req: PendingDevice, props: NodesProps, paired?: Pai
 }
 
 function renderPairedDevice(device: PairedDevice, props: NodesProps) {
-  const name = normalizeOptionalString(device.displayName) || device.deviceId;
+  const displayName = normalizeOptionalString(device.displayName);
+  const technicalId = device.deviceId.trim();
   const ip = device.remoteIp ? ` · ${device.remoteIp}` : "";
+  const titleLabel = displayName || technicalId;
+  const showTechnicalIdRow = Boolean(displayName && displayName.trim() !== technicalId);
   const roles = `roles: ${formatList(device.roles)}`;
   const scopes = `scopes: ${formatList(device.scopes)}`;
   const tokens = Array.isArray(device.tokens) ? device.tokens : [];
+  const titleHexClass = showTechnicalIdRow || !technicalId ? "" : "nodes-device-paired__device-id";
+  const titleUsesBreakAll = Boolean(technicalId) && !showTechnicalIdRow;
+  const titleInline = titleUsesBreakAll ? NODES_WRAP_BREAK_ALL : NODES_WRAP_SOFT;
+  const titleText = `${titleLabel}${showTechnicalIdRow ? "" : ip}`;
+  const idRowText = `${technicalId}${ip}`;
+  const rolesScopesText = `${roles} · ${scopes}`;
   return html`
-    <div class="list-item">
+    <div class="list-item nodes-device-paired">
       <div class="list-main">
-        <div class="list-title">${name}</div>
-        <div class="list-sub">${device.deviceId}${ip}</div>
-        <div class="muted" style="margin-top: 6px;">${roles} · ${scopes}</div>
+        <div class="list-title ${titleHexClass}" style=${styleMap(titleInline)}>
+          ${titleUsesBreakAll || titleText.length > 48
+            ? htmlChunkWithBreaks(titleText, 14)
+            : html`${titleText}`}
+        </div>
+        ${showTechnicalIdRow
+          ? html`<div
+              class="list-sub nodes-device-paired__device-id"
+              style=${styleMap(NODES_WRAP_BREAK_ALL)}
+            >
+              ${htmlChunkWithBreaks(idRowText, 14)}
+            </div>`
+          : nothing}
+        <div
+          class="muted nodes-device-paired__meta"
+          style=${styleMap({ ...NODES_WRAP_BREAK_ALL, marginTop: "6px" })}
+        >
+          ${htmlChunkWithBreaks(rolesScopesText, 28)}
+        </div>
         ${tokens.length === 0
-          ? html` <div class="muted" style="margin-top: 6px">Tokens: none</div> `
+          ? html`
+              <div class="muted nodes-device-paired__meta" style="margin-top: 6px">
+                Tokens: none
+              </div>
+            `
           : html`
               <div class="muted" style="margin-top: 10px;">Tokens</div>
-              <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 6px;">
+              <div class="nodes-device-token-list">
                 ${tokens.map((token) => renderTokenRow(device.deviceId, token, props))}
               </div>
             `}
@@ -196,10 +259,13 @@ function renderTokenRow(deviceId: string, token: DeviceTokenSummary, props: Node
   const when = formatRelativeTimestamp(
     token.rotatedAtMs ?? token.createdAtMs ?? token.lastUsedAtMs ?? null,
   );
+  const detailText = `${token.role} · ${status} · ${scopes} · ${when}`;
   return html`
-    <div class="row" style="justify-content: space-between; gap: 8px;">
-      <div class="list-sub">${token.role} · ${status} · ${scopes} · ${when}</div>
-      <div class="row" style="justify-content: flex-end; gap: 6px; flex-wrap: wrap;">
+    <div class="nodes-device-token-row">
+      <div class="list-sub nodes-device-token-row__detail" style=${styleMap(NODES_WRAP_BREAK_ALL)}>
+        ${htmlChunkWithBreaks(detailText, 28)}
+      </div>
+      <div class="nodes-device-token-row__actions">
         <button
           class="btn btn--sm"
           @click=${() => props.onDeviceRotate(deviceId, token.role, token.scopes)}
