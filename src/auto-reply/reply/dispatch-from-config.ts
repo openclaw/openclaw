@@ -421,19 +421,9 @@ export async function dispatchReplyFromConfig(
     });
   };
 
-  const inboundDedupeClaim = claimInboundDedupe(ctx);
-  if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
-    recordProcessed("skipped", { reason: "duplicate" });
-    return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
-  }
   let inboundDedupeReplayUnsafe = false;
   const markInboundDedupeReplayUnsafe = () => {
     inboundDedupeReplayUnsafe = true;
-  };
-  const commitInboundDedupeIfClaimed = () => {
-    if (inboundDedupeClaim.status === "claimed") {
-      commitInboundDedupe(inboundDedupeClaim.key);
-    }
   };
 
   const initialSessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
@@ -793,6 +783,20 @@ export async function dispatchReplyFromConfig(
     sourceReplyDeliveryMode === "message_tool_only"
       ? { ...result, sourceReplyDeliveryMode }
       : result;
+
+  const inboundDedupeClaim = claimInboundDedupe(ctx);
+  if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
+    recordProcessed("skipped", { reason: "duplicate" });
+    return attachSourceReplyDeliveryMode({
+      queuedFinal: false,
+      counts: dispatcher.getQueuedCounts(),
+    });
+  }
+  const commitInboundDedupeIfClaimed = () => {
+    if (inboundDedupeClaim.status === "claimed") {
+      commitInboundDedupe(inboundDedupeClaim.key);
+    }
+  };
 
   let pluginFallbackReason:
     | "plugin-bound-fallback-missing-plugin"

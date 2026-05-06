@@ -1162,6 +1162,41 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });
 
+  it("does not add silent fallback when source delivery is message-tool-only", async () => {
+    setupDraftStreams({ answerMessageId: 2001, reasoningMessageId: 3001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:direct:123",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      cfg: {
+        agents: {
+          defaults: {
+            silentReply: {
+              direct: "disallow",
+              group: "allow",
+              internal: "allow",
+            },
+            silentReplyRewrite: {
+              direct: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(sendMessageTelegram).not.toHaveBeenCalled();
+  });
+
   it("shows compacting reaction during auto-compaction and resumes thinking", async () => {
     const statusReactionController = {
       setThinking: vi.fn(async () => {}),
