@@ -2788,7 +2788,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-    expect(sendMessageSpy.mock.calls[0][0]).toBe("5");
+    expect(String(sendMessageSpy.mock.calls[0][0])).toBe("5");
     expect(sendMessageSpy.mock.calls[0][1]).toBe(codexRateLimitText);
     expect(String(sendMessageSpy.mock.calls[0][1])).not.toContain(
       "All models are temporarily rate-limited",
@@ -2806,6 +2806,11 @@ describe("createTelegramBot", () => {
       replySpy.mockResolvedValue({
         text: "a".repeat(4500),
         replyToId: String(messageId),
+      });
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: { dmPolicy: "open", allowFrom: ["*"], streamMode: "off" },
+        },
       });
 
       createTelegramBot({ token: "tok", replyToMode: mode });

@@ -42,10 +42,8 @@ async function withLock<T>(key: string, task: () => Promise<T>): Promise<T> {
   }
 }
 
-async function readJson(rootDir: string, filePath: string): Promise<StoreFile> {
-  const parsed = await privateFileStore(rootDir).readJsonIfExists<StoreFile>(
-    path.relative(rootDir, filePath),
-  );
+async function readJson(rootDir: string, relativePath: string): Promise<StoreFile> {
+  const parsed = await privateFileStore(rootDir).readJsonIfExists<StoreFile>(relativePath);
   if (!parsed) {
     return { version: 1, proposals: [] };
   }
@@ -77,8 +75,12 @@ function normalizeReviewState(
   };
 }
 
-async function atomicWriteJson(rootDir: string, filePath: string, data: StoreFile): Promise<void> {
-  await privateFileStore(rootDir).writeJson(path.relative(rootDir, filePath), data, {
+async function atomicWriteJson(
+  rootDir: string,
+  relativePath: string,
+  data: StoreFile,
+): Promise<void> {
+  await privateFileStore(rootDir).writeJson(relativePath, data, {
     trailingNewline: true,
   });
 }
@@ -86,18 +88,16 @@ async function atomicWriteJson(rootDir: string, filePath: string, data: StoreFil
 export class SkillWorkshopStore {
   readonly stateDir: string;
   readonly filePath: string;
+  private readonly relativePath: string;
 
   constructor(params: { stateDir: string; workspaceDir: string }) {
     this.stateDir = path.resolve(params.stateDir);
-    this.filePath = path.join(
-      this.stateDir,
-      "skill-workshop",
-      `${workspaceKey(params.workspaceDir)}.json`,
-    );
+    this.relativePath = path.join("skill-workshop", `${workspaceKey(params.workspaceDir)}.json`);
+    this.filePath = path.join(this.stateDir, this.relativePath);
   }
 
   async list(status?: SkillWorkshopStatus): Promise<SkillProposal[]> {
-    const file = await readJson(this.stateDir, this.filePath);
+    const file = await readJson(this.stateDir, this.relativePath);
     const proposals = status
       ? file.proposals.filter((proposal) => proposal.status === status)
       : file.proposals;
@@ -110,7 +110,7 @@ export class SkillWorkshopStore {
 
   async add(proposal: SkillProposal, maxPending: number): Promise<SkillProposal> {
     return await withLock(this.filePath, async () => {
-      const file = await readJson(this.stateDir, this.filePath);
+      const file = await readJson(this.stateDir, this.relativePath);
       const duplicate = file.proposals.find(
         (item) =>
           (item.status === "pending" || item.status === "quarantined") &&
@@ -132,7 +132,7 @@ export class SkillWorkshopStore {
             ).length <= maxPending
         );
       });
-      await atomicWriteJson(this.stateDir, this.filePath, {
+      await atomicWriteJson(this.stateDir, this.relativePath, {
         ...file,
         version: 1,
         proposals: nextProposals,
@@ -143,41 +143,41 @@ export class SkillWorkshopStore {
 
   async updateStatus(id: string, status: SkillWorkshopStatus): Promise<SkillProposal> {
     return await withLock(this.filePath, async () => {
-      const file = await readJson(this.stateDir, this.filePath);
+      const file = await readJson(this.stateDir, this.relativePath);
       const index = file.proposals.findIndex((proposal) => proposal.id === id);
       if (index < 0) {
         throw new Error(`proposal not found: ${id}`);
       }
       const updated = { ...file.proposals[index], status, updatedAt: Date.now() };
       file.proposals[index] = updated;
-      await atomicWriteJson(this.stateDir, this.filePath, file);
+      await atomicWriteJson(this.stateDir, this.relativePath, file);
       return updated;
     });
   }
 
   async recordReviewTurn(toolCalls: number): Promise<SkillWorkshopReviewState> {
     return await withLock(this.filePath, async () => {
-      const file = await readJson(this.stateDir, this.filePath);
+      const file = await readJson(this.stateDir, this.relativePath);
       const current = normalizeReviewState(file.review);
       const next = {
         ...current,
         turnsSinceReview: current.turnsSinceReview + 1,
         toolCallsSinceReview: current.toolCallsSinceReview + Math.max(0, Math.trunc(toolCalls)),
       };
-      await atomicWriteJson(this.stateDir, this.filePath, { ...file, review: next });
+      await atomicWriteJson(this.stateDir, this.relativePath, { ...file, review: next });
       return next;
     });
   }
 
   async markReviewed(): Promise<SkillWorkshopReviewState> {
     return await withLock(this.filePath, async () => {
-      const file = await readJson(this.stateDir, this.filePath);
+      const file = await readJson(this.stateDir, this.relativePath);
       const next = {
         turnsSinceReview: 0,
         toolCallsSinceReview: 0,
         lastReviewAt: Date.now(),
       };
-      await atomicWriteJson(this.stateDir, this.filePath, { ...file, review: next });
+      await atomicWriteJson(this.stateDir, this.relativePath, { ...file, review: next });
       return next;
     });
   }

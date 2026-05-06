@@ -396,10 +396,6 @@ type DailyIngestionState = {
   files: Record<string, DailyIngestionFileState>;
 };
 
-function resolveDailyIngestionStatePath(workspaceDir: string): string {
-  return path.join(workspaceDir, DAILY_INGESTION_STATE_RELATIVE_PATH);
-}
-
 function normalizeDailyIngestionState(raw: unknown): DailyIngestionState {
   const record = asRecord(raw);
   const filesRaw = asRecord(record?.files);
@@ -442,10 +438,9 @@ function normalizeMemoryDay(value: unknown): string | undefined {
 }
 
 async function readDailyIngestionState(workspaceDir: string): Promise<DailyIngestionState> {
-  const statePath = resolveDailyIngestionStatePath(workspaceDir);
   try {
     return normalizeDailyIngestionState(
-      await privateFileStore(workspaceDir).readJsonIfExists(path.relative(workspaceDir, statePath)),
+      await privateFileStore(workspaceDir).readJsonIfExists(DAILY_INGESTION_STATE_RELATIVE_PATH),
     );
   } catch (err) {
     if (err instanceof SyntaxError) {
@@ -459,8 +454,7 @@ async function writeDailyIngestionState(
   workspaceDir: string,
   state: DailyIngestionState,
 ): Promise<void> {
-  const statePath = resolveDailyIngestionStatePath(workspaceDir);
-  await privateFileStore(workspaceDir).writeJson(path.relative(workspaceDir, statePath), state, {
+  await privateFileStore(workspaceDir).writeJson(DAILY_INGESTION_STATE_RELATIVE_PATH, state, {
     trailingNewline: true,
   });
 }
@@ -494,10 +488,6 @@ type SessionIngestionCollectionResult = {
 function normalizeWorkspaceKey(workspaceDir: string): string {
   const resolved = path.resolve(workspaceDir).replace(/\\/g, "/");
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-
-function resolveSessionIngestionStatePath(workspaceDir: string): string {
-  return path.join(workspaceDir, SESSION_INGESTION_STATE_RELATIVE_PATH);
 }
 
 function normalizeSessionIngestionState(raw: unknown): SessionIngestionState {
@@ -554,10 +544,9 @@ function normalizeSessionIngestionState(raw: unknown): SessionIngestionState {
 }
 
 async function readSessionIngestionState(workspaceDir: string): Promise<SessionIngestionState> {
-  const statePath = resolveSessionIngestionStatePath(workspaceDir);
   try {
     return normalizeSessionIngestionState(
-      await privateFileStore(workspaceDir).readJsonIfExists(path.relative(workspaceDir, statePath)),
+      await privateFileStore(workspaceDir).readJsonIfExists(SESSION_INGESTION_STATE_RELATIVE_PATH),
     );
   } catch (err) {
     if (err instanceof SyntaxError) {
@@ -571,8 +560,7 @@ async function writeSessionIngestionState(
   workspaceDir: string,
   state: SessionIngestionState,
 ): Promise<void> {
-  const statePath = resolveSessionIngestionStatePath(workspaceDir);
-  await privateFileStore(workspaceDir).writeJson(path.relative(workspaceDir, statePath), state, {
+  await privateFileStore(workspaceDir).writeJson(SESSION_INGESTION_STATE_RELATIVE_PATH, state, {
     trailingNewline: true,
   });
 }
