@@ -619,6 +619,11 @@ export function runAgentAttempt(params: {
       ? "openclaw"
       : undefined);
   if (!isRawModelRun && isCliExecutionProvider) {
+    if (params.opts.toolsAllow !== undefined) {
+      throw new Error(
+        "toolsAllow is only supported for embedded native runs; CLI-backed native runs cannot enforce runtime tool allowlists.",
+      );
+    }
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
     const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;
     const cliPrompt =
