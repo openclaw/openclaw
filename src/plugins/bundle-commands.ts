@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import {

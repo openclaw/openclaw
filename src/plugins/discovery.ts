@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import {
   normalizeLowercaseStringOrEmpty,

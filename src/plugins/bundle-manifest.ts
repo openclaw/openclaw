@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { readRootStructuredFileSync } from "@openclaw/fs-safe/json";
 import JSON5 from "json5";
 import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
+import { readRootStructuredFileSync } from "../infra/json-files.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
