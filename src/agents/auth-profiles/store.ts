@@ -6,6 +6,10 @@ import { withFileLock } from "../../infra/file-lock.js";
 import { loadJsonFile, repairJsonFilePermissions, saveJsonFile } from "../../infra/json-file.js";
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { isRecord } from "../../utils.js";
+import {
+  shouldPersistCredentialInAgentStore,
+  stripNonOwnerCanonicalOAuthProfiles,
+} from "./canonical-owner.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION, log } from "./constants.js";
 import {
@@ -437,6 +441,14 @@ function shouldKeepProfileInLocalStore(params: {
     return true;
   }
   if (
+    !shouldPersistCredentialInAgentStore({
+      credential: params.credential,
+      agentDir: params.agentDir,
+    })
+  ) {
+    return false;
+  }
+  if (
     isInheritedMainOAuthCredential({
       agentDir: params.agentDir,
       profileId: params.profileId,
@@ -471,6 +483,13 @@ function shouldKeepProfileInLocalStore(params: {
     credential: params.credential,
     profiles: params.externalProfiles(),
   });
+}
+
+function sanitizeLocalAuthProfileStore(params: {
+  store: AuthProfileStore;
+  agentDir?: string;
+}): AuthProfileStore {
+  return stripNonOwnerCanonicalOAuthProfiles(params);
 }
 
 function pruneAuthProfileStoreReferences(
@@ -841,15 +860,22 @@ function loadAuthProfileStoreForAgent(
       agentDir,
       options,
     });
-    if (!readOnly && synced.cacheable) {
+    const sanitized = sanitizeLocalAuthProfileStore({ store: synced.store, agentDir });
+    if (!readOnly && sanitized !== synced.store) {
+      saveAuthProfileStore(sanitized, agentDir, { filterExternalAuthProfiles: false });
+      log.info("reconciled canonical OAuth ownership in local auth store", {
+        agentDir,
+      });
+    }
+    if (!readOnly && (synced.cacheable || sanitized !== synced.store)) {
       writeCachedAuthProfileStore({
         authPath,
         authMtimeMs: readAuthStoreMtimeMs(authPath),
         stateMtimeMs: readAuthStoreMtimeMs(statePath),
-        store: synced.store,
+        store: sanitized,
       });
     }
-    return synced.store;
+    return sanitized;
   }
 
   const legacy = loadLegacyAuthProfileStore(agentDir);
@@ -890,16 +916,17 @@ function loadAuthProfileStoreForAgent(
     agentDir,
     options,
   });
+  const sanitized = sanitizeLocalAuthProfileStore({ store: synced.store, agentDir });
 
-  if (!readOnly && synced.cacheable) {
+  if (!readOnly && (synced.cacheable || sanitized !== synced.store)) {
     writeCachedAuthProfileStore({
       authPath,
       authMtimeMs: readAuthStoreMtimeMs(authPath),
       stateMtimeMs: readAuthStoreMtimeMs(statePath),
-      store: synced.store,
+      store: sanitized,
     });
   }
-  return synced.store;
+  return sanitized;
 }
 
 export function loadAuthProfileStoreForRuntime(
