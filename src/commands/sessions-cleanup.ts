@@ -103,6 +103,23 @@ function renderStoreDryRunPlan(params: {
       `Would enforce disk budget: ${params.summary.diskBudget.totalBytesBefore} -> ${params.summary.diskBudget.totalBytesAfter} bytes (files ${params.summary.diskBudget.removedFiles}, entries ${params.summary.diskBudget.removedEntries})`,
     );
   }
+  const archived = params.summary.archivedFiles;
+  if (archived) {
+    const totalRemoved =
+      archived.removedDeleted + archived.removedReset + archived.removedOrphanCheckpoint;
+    if (totalRemoved > 0) {
+      params.runtime.log(
+        `Would remove archived transcripts: ${totalRemoved} (deleted=${archived.removedDeleted}, reset=${archived.removedReset}, orphan-checkpoint=${archived.removedOrphanCheckpoint}, ${archived.bytesFreed} bytes)`,
+      );
+    } else if (
+      archived.scannedDeleted + archived.scannedReset + archived.scannedOrphanCheckpoint >
+      0
+    ) {
+      params.runtime.log(
+        `Archived transcripts scanned: ${archived.scannedDeleted + archived.scannedReset + archived.scannedOrphanCheckpoint} (none past retention)`,
+      );
+    }
+  }
   if (params.actionRows.length === 0) {
     return;
   }

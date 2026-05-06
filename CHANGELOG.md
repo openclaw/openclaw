@@ -6,6 +6,9 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions/cleanup: `openclaw sessions cleanup` now prunes leftover archived transcript files (`<sessionId>.jsonl.deleted.<ts>`, `<sessionId>.jsonl.reset.<ts>`) past their retention windows and removes orphaned compaction checkpoint files (`<sessionId>.checkpoint.<uuid>.jsonl`) for sessions no longer in the index. The JSON summary gains an `archivedFiles` field reporting scanned/removed counts and bytes freed; `--dry-run` reports the same orphan-checkpoint set as `--enforce`. Fixes #75658.
+- Gateway/Windows: bind the default loopback gateway listener only to `127.0.0.1` on Windows so libuv's dual-stack `::1` behavior cannot wedge localhost HTTP requests. (#69701, fixes #69674) Thanks @SARAMALI15792.
+- Plugins/migration: emit catalog-backed install hints when `plugins.entries` or `plugins.allow` references an official external plugin that is not installed, so upgraded configs point operators to `openclaw plugins install <spec>` instead of telling them to remove valid plugin config. (#77483) Thanks @hclsys.
 - Plugins/install: add `npm-pack:<path.tgz>` installs so local npm pack artifacts run through the same managed npm-root install, lockfile verification, dependency scan, and install-record path as registry npm plugins.
 - Plugin skills/Windows: publish plugin-provided skill directories as junctions on Windows so standard users without Developer Mode can register plugin skills without symlink EPERM failures. Fixes #77958. (#77971) Thanks @hclsys and @jarro.
 - MS Teams: surface blocked Bot Framework egress by logging JWKS fetch network failures and adding a Bot Connector send hint for transport-level reply failures. Fixes #77674. (#78081) Thanks @Beandon13.

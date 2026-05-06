@@ -111,6 +111,31 @@ openclaw sessions cleanup --json
 - `--store <path>`: run against a specific `sessions.json` file.
 - `--json`: print a JSON summary. With `--all-agents`, output includes one summary per store.
 
+### Archived transcript files
+
+In addition to pruning entries from `sessions.json`, cleanup removes leftover archived transcript files in the same directory:
+
+- `<sessionId>.jsonl.deleted.<ts>` — older than `session.maintenance.pruneAfterMs`.
+- `<sessionId>.jsonl.reset.<ts>` — older than `session.maintenance.resetArchiveRetention` (when configured; otherwise left in place).
+- `<sessionId>.checkpoint.<uuid>.jsonl` — orphaned compaction checkpoints whose owning session is no longer in the index.
+
+`--dry-run` reports the same orphan-checkpoint set as `--enforce` would remove (it simulates index pruning before scanning).
+
+The JSON summary includes an `archivedFiles` field with scanned/removed counts and bytes freed:
+
+```json
+"archivedFiles": {
+  "scannedDeleted": 12,
+  "scannedReset": 3,
+  "scannedOrphanCheckpoint": 5,
+  "removedDeleted": 8,
+  "removedReset": 1,
+  "removedOrphanCheckpoint": 5,
+  "bytesFreed": 18432000,
+  "candidatePaths": ["/home/user/.openclaw/agents/main/sessions/abc.jsonl.deleted.2026-04-01T00-00-00.000Z"]
+}
+```
+
 When a Gateway is reachable, non-dry-run cleanup for configured agent stores is
 sent through the Gateway so it shares the same session-store writer as runtime
 traffic. Use `--store <path>` for explicit offline repair of a store file.
