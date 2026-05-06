@@ -323,6 +323,7 @@ export async function buildDiscordMessageProcessContext(params: {
     SenderId: sender.id,
     SenderUsername: senderUsername,
     SenderTag: sender.tag,
+    TrustedSenderPrincipal: sender.trustedPrincipal,
     GroupSubject: groupSubject,
     GroupChannel: groupChannel,
     MemberRoleIds: memberRoleIds,

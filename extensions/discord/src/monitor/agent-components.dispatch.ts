@@ -34,6 +34,7 @@ import {
 } from "./inbound-context.js";
 import { buildDirectLabel, buildGuildLabel } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
+import { resolveDiscordTrustedPrincipalFromUserId } from "./sender-identity.js";
 
 let conversationRuntimePromise: Promise<typeof import("./agent-components.runtime.js")> | undefined;
 let replyPipelineRuntimePromise:
@@ -128,6 +129,10 @@ export async function dispatchDiscordComponentEvent(params: {
   const senderName = interactionCtx.user.globalName ?? interactionCtx.user.username;
   const senderUsername = interactionCtx.user.username;
   const senderTag = formatDiscordUserTag(interactionCtx.user);
+  const trustedSenderPrincipal = resolveDiscordTrustedPrincipalFromUserId({
+    userId: interactionCtx.userId,
+    identityLinks: ctx.cfg.session?.identityLinks,
+  });
   const groupChannel =
     !interactionCtx.isDirectMessage && channelCtx.displayChannelSlug
       ? `#${channelCtx.displayChannelSlug}`
@@ -221,6 +226,7 @@ export async function dispatchDiscordComponentEvent(params: {
     SenderId: interactionCtx.userId,
     SenderUsername: senderUsername,
     SenderTag: senderTag,
+    TrustedSenderPrincipal: trustedSenderPrincipal,
     GroupSubject: groupSubject,
     GroupChannel: groupChannel,
     MemberRoleIds: interactionCtx.memberRoleIds,
