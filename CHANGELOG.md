@@ -1159,6 +1159,7 @@ Docs: https://docs.openclaw.ai
 - Discord/voice: apply per-channel Discord `systemPrompt` overrides to voice transcript turns by forwarding the trusted channel prompt through the voice agent run. Fixes #47095. Thanks @qearlyao.
 - Discord/native commands: send component-only interaction replies from slash command and status handlers instead of treating renderable Discord components as an empty response. Thanks @vincentkoc.
 - Slack/slash commands: send block-only slash command replies instead of dropping Slack block payloads with no plain-text fallback. Thanks @vincentkoc.
+- Slack: mark unresolved thread replies as ambiguous and skip them instead of treating them as root channel messages, while keeping thread-continuation gating on the SDK-backed participation store. Thanks @soichiyo.
 - Telegram/messages: derive fallback text from interactive button/select labels before sending button-only payloads, so Telegram replies are not rejected as empty messages. Thanks @vincentkoc.
 - LINE/messages: send quick-reply-only payloads with fallback option text instead of accepting the payload and returning an empty delivery. Thanks @vincentkoc.
 - Auto-reply/docking: require `/dock-*` route switches to start from direct chats, so group or channel participants cannot reroute a shared session's future replies into a linked DM. Thanks @vincentkoc.

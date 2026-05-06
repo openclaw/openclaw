@@ -4,6 +4,14 @@ export type MentionGateParams = {
   canDetectMention: boolean;
   wasMentioned: boolean;
   implicitMention?: boolean;
+  /**
+   * True when the bot has previously participated in this thread (via
+   * persistent or cached state).  Separated from implicitMention so that
+   * root-message mention gating and thread-continuation gating can be
+   * distinguished in logs and logic.  When set, it contributes to
+   * effectiveWasMentioned independently of implicitMention.
+   */
+  threadContinuation?: boolean;
   shouldBypassMention?: boolean;
 };
 
@@ -20,6 +28,7 @@ export type MentionGateWithBypassParams = {
   canDetectMention: boolean;
   wasMentioned: boolean;
   implicitMention?: boolean;
+  threadContinuation?: boolean;
   hasAnyMention?: boolean;
   allowTextCommands: boolean;
   hasControlCommand: boolean;
@@ -196,7 +205,10 @@ export function resolveMentionGating(params: MentionGateParams): MentionGateResu
     requireMention: params.requireMention,
     canDetectMention: params.canDetectMention,
     wasMentioned: params.wasMentioned,
-    implicitMentionKinds: implicitMentionKindWhen("native", params.implicitMention === true),
+    implicitMentionKinds: [
+      ...implicitMentionKindWhen("native", params.implicitMention === true),
+      ...implicitMentionKindWhen("bot_thread_participant", params.threadContinuation === true),
+    ],
     shouldBypassMention: params.shouldBypassMention === true,
   });
   return {
@@ -214,7 +226,10 @@ export function resolveMentionGatingWithBypass(
       canDetectMention: params.canDetectMention,
       wasMentioned: params.wasMentioned,
       hasAnyMention: params.hasAnyMention,
-      implicitMentionKinds: implicitMentionKindWhen("native", params.implicitMention === true),
+      implicitMentionKinds: [
+        ...implicitMentionKindWhen("native", params.implicitMention === true),
+        ...implicitMentionKindWhen("bot_thread_participant", params.threadContinuation === true),
+      ],
     },
     policy: {
       isGroup: params.isGroup,

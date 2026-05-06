@@ -17,6 +17,12 @@ const normalizeThreadTs = (threadTs?: string | null) => {
   return trimmed ? trimmed : undefined;
 };
 
+const markAmbiguousThreadReply = (message: SlackMessageEvent): SlackMessageEvent =>
+  ({
+    ...message,
+    _ambiguousThreadReply: true,
+  }) as SlackMessageEvent;
+
 async function resolveThreadTsFromHistory(params: {
   client: SlackWebClient;
   channelId: string;
@@ -34,11 +40,9 @@ async function resolveThreadTsFromHistory(params: {
       response.messages?.find((entry) => entry.ts === params.messageTs) ?? response.messages?.[0];
     return normalizeThreadTs(message?.thread_ts);
   } catch (err) {
-    if (shouldLogVerbose()) {
-      logVerbose(
-        `slack inbound: failed to resolve thread_ts via conversations.history for channel=${params.channelId} ts=${params.messageTs}: ${formatErrorMessage(err)}`,
-      );
-    }
+    logVerbose(
+      `slack inbound: failed to resolve thread_ts via conversations.history for channel=${params.channelId} ts=${params.messageTs}: ${formatErrorMessage(err)}`,
+    );
     return undefined;
   }
 }
@@ -87,7 +91,7 @@ export function createSlackThreadTsResolver(params: {
       const now = Date.now();
       const cached = getCached(cacheKey, now);
       if (cached !== undefined) {
-        return cached ? { ...message, thread_ts: cached } : message;
+        return cached ? { ...message, thread_ts: cached } : markAmbiguousThreadReply(message);
       }
 
       if (shouldLogVerbose()) {
@@ -116,20 +120,18 @@ export function createSlackThreadTsResolver(params: {
       setCached(cacheKey, resolved ?? null, Date.now());
 
       if (resolved) {
-        if (shouldLogVerbose()) {
-          logVerbose(
-            `slack inbound: resolved missing thread_ts channel=${message.channel} ts=${message.ts} -> thread_ts=${resolved}`,
-          );
-        }
+        logVerbose(
+          `slack inbound: resolved missing thread_ts channel=${message.channel} ts=${message.ts} -> thread_ts=${resolved}`,
+        );
         return { ...message, thread_ts: resolved };
       }
 
-      if (shouldLogVerbose()) {
-        logVerbose(
-          `slack inbound: could not resolve missing thread_ts channel=${message.channel} ts=${message.ts}`,
-        );
-      }
-      return message;
+      // History failed. Mark as ambiguous thread reply so downstream code can
+      // distinguish this from a genuine root message.
+      logVerbose(
+        `slack inbound: WARN thread_ts resolution failed channel=${message.channel} ts=${message.ts} parent_user_id=${message.parent_user_id} — marking as ambiguous`,
+      );
+      return markAmbiguousThreadReply(message);
     },
   };
 }

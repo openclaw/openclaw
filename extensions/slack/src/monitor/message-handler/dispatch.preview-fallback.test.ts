@@ -147,6 +147,7 @@ function createPreparedSlackMessage(params?: {
       channelHistories: new Map(),
       allowFrom: [],
       setSlackThreadStatus: params?.setSlackThreadStatus ?? (async () => undefined),
+      logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
     },
     account: {
       accountId: "default",
@@ -180,6 +181,7 @@ function createPreparedSlackMessage(params?: {
     isRoomish: false,
     historyKey: "history-key",
     preview: "",
+    storePath: "/tmp/test-store",
     ackReactionValue: "eyes",
     ackReactionMessageTs: params?.ackReactionMessageTs,
     ackReactionPromise: params?.ackReactionPromise ?? null,
