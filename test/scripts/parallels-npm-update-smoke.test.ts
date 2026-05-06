@@ -61,6 +61,15 @@ describe("parallels npm update smoke", () => {
     expect(script).toContain('"/usr/sbin/chown", sudoUser, scriptPath');
   });
 
+  it("writes macOS update scripts through the desktop user transport", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("const macosExecArgs = this.resolveMacosUpdateExecArgs(ctx)");
+    expect(script).toContain("macosExecArgs,\n    );");
+    expect(script).toContain('["exec", vm, ...execArgs, "/usr/bin/tee", scriptPath]');
+    expect(script).toContain('["exec", vm, ...execArgs, "/bin/chmod", "700", scriptPath]');
+  });
+
   it("scrubs future plugin entries before invoking old same-guest updaters", () => {
     const script = readFileSync(UPDATE_SCRIPTS_PATH, "utf8");
 

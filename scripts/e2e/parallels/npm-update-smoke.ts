@@ -662,6 +662,7 @@ class NpmUpdateSmoke {
       macosVm,
       script,
       "openclaw-parallels-npm-update-macos",
+      macosExecArgs,
     );
     const macosExecArgs = this.resolveMacosUpdateExecArgs(ctx);
     const sudoUserArgIndex = macosExecArgs.indexOf("-u");
@@ -820,9 +821,14 @@ class NpmUpdateSmoke {
     }
   }
 
-  private writeGuestScript(vm: string, script: string, prefix: string): string {
+  private writeGuestScript(
+    vm: string,
+    script: string,
+    prefix: string,
+    execArgs: string[] = [],
+  ): string {
     const scriptPath = `/tmp/${prefix}-${process.pid}-${Date.now()}.sh`;
-    const write = run("prlctl", ["exec", vm, "/usr/bin/tee", scriptPath], {
+    const write = run("prlctl", ["exec", vm, ...execArgs, "/usr/bin/tee", scriptPath], {
       check: false,
       input: script,
       quiet: true,
@@ -831,7 +837,7 @@ class NpmUpdateSmoke {
     if (write.status !== 0) {
       throw new Error(`failed to write guest script ${scriptPath}: ${write.stderr.trim()}`);
     }
-    const chmod = run("prlctl", ["exec", vm, "/bin/chmod", "755", scriptPath], {
+    const chmod = run("prlctl", ["exec", vm, ...execArgs, "/bin/chmod", "700", scriptPath], {
       check: false,
       quiet: true,
       timeoutMs: 30_000,
