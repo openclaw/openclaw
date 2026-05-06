@@ -144,6 +144,9 @@ export type MemoryDreamingConfig = {
 export type MemoryDreamingWorkspace = {
   workspaceDir: string;
   agentIds: string[];
+  /** True when multiple agents share this workspace directory.
+   *  Indicates a cross-agent dreaming contamination risk (Bug #65374). */
+  shared: boolean;
 };
 
 export type MemoryDreamingWorkspaceOptions = {
@@ -642,10 +645,11 @@ export function resolveMemoryDreamingWorkspaces(
     if (existing) {
       if (!existing.agentIds.includes(agentId)) {
         existing.agentIds.push(agentId);
+        existing.shared = true; // Multiple agents share this workspace
       }
       return;
     }
-    byWorkspace.set(key, { workspaceDir, agentIds: [agentId] });
+    byWorkspace.set(key, { workspaceDir, agentIds: [agentId], shared: false });
   };
 
   for (const agentId of agentIds) {

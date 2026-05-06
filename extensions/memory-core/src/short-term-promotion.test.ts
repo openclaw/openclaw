@@ -1816,4 +1816,186 @@ describe("short-term promotion", () => {
       }),
     ).toEqual(expect.arrayContaining(["障害対応", "ルーター", "バックアップ", "路由器", "备份"]));
   });
+
+  // Bug #65374: Agent-isolation filtering in rankShortTermPromotionCandidates
+  describe("rankShortTermPromotionCandidates agent isolation (Bug #65374)", () => {
+    it("returns no candidates in shared workspace without currentAgentId (fail-closed)", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        // Write a daily note and record a recall
+        await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
+          "- Shared workspace entry that should be isolated",
+        ]);
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "shared entry",
+          results: [
+            {
+              path: "memory/2026-04-03.md",
+              startLine: 1,
+              endLine: 1,
+              score: 0.9,
+              snippet: "Shared workspace entry that should be isolated",
+              source: "memory",
+            },
+          ],
+        });
+
+        // Without currentAgentId in shared workspace: fail closed, no candidates
+        const candidates = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          isShared: true,
+          // currentAgentId intentionally omitted
+        });
+        expect(candidates).toEqual([]);
+      });
+    });
+
+    it("filters to agent-scoped entries in shared workspace", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        // Create agent-scoped corpus directory and daily note
+        const emmiDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus", "emmi");
+        const anyaDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus", "anya");
+        await fs.mkdir(emmiDir, { recursive: true });
+        await fs.mkdir(anyaDir, { recursive: true });
+
+        // Record recall in emmi's agent-scoped path
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "emmi task",
+          results: [
+            {
+              path: "memory/.dreams/session-corpus/emmi/2026-04-03.md",
+              startLine: 1,
+              endLine: 1,
+              score: 0.9,
+              snippet: "Emmi's task data",
+              source: "memory",
+            },
+          ],
+        });
+
+        // Record recall in anya's agent-scoped path
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "anya task",
+          results: [
+            {
+              path: "memory/.dreams/session-corpus/anya/2026-04-03.md",
+              startLine: 1,
+              endLine: 1,
+              score: 0.85,
+              snippet: "Anya's task data",
+              source: "memory",
+            },
+          ],
+        });
+
+        // emmi should only see emmi's entries
+        const emmiCandidates = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          currentAgentId: "emmi",
+          isShared: true,
+        });
+        expect(emmiCandidates.length).toBe(1);
+        expect(emmiCandidates[0].snippet).toBe("Emmi's task data");
+
+        // anya should only see anya's entries
+        const anyaCandidates = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          currentAgentId: "anya",
+          isShared: true,
+        });
+        expect(anyaCandidates.length).toBe(1);
+        expect(anyaCandidates[0].snippet).toBe("Anya's task data");
+      });
+    });
+
+    it("returns all candidates in non-shared workspace (no isolation needed)", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        await writeDailyMemoryNote(workspaceDir, "2026-04-03", ["- Regular workspace entry"]);
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "regular entry",
+          results: [
+            {
+              path: "memory/2026-04-03.md",
+              startLine: 1,
+              endLine: 1,
+              score: 0.88,
+              snippet: "Regular workspace entry",
+              source: "memory",
+            },
+          ],
+        });
+
+        // Non-shared workspace: no filtering regardless of currentAgentId
+        const candidates = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          isShared: false,
+        });
+        expect(candidates.length).toBe(1);
+        expect(candidates[0].snippet).toBe("Regular workspace entry");
+      });
+    });
+
+    it("excludes legacy shared-path entries in shared workspace mode", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        // Record a recall in the OLD shared path (no agentId in path)
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "legacy entry",
+          results: [
+            {
+              path: "memory/.dreams/session-corpus/2026-04-03.md",
+              startLine: 1,
+              endLine: 1,
+              score: 0.9,
+              snippet: "Legacy shared path entry",
+              source: "memory",
+            },
+          ],
+        });
+
+        // Record a recall in the new agent-scoped path
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "agent entry",
+          results: [
+            {
+              path: "memory/.dreams/session-corpus/emmi/2026-04-03.md",
+              startLine: 1,
+              endLine: 1,
+              score: 0.8,
+              snippet: "Agent-scoped entry",
+              source: "memory",
+            },
+          ],
+        });
+
+        // In shared mode, only agent-scoped entries should appear
+        const candidates = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          currentAgentId: "emmi",
+          isShared: true,
+        });
+        expect(candidates.length).toBe(1);
+        expect(candidates[0].snippet).toBe("Agent-scoped entry");
+      });
+    });
+  });
 });

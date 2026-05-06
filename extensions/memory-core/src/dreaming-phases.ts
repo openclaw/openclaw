@@ -61,6 +61,7 @@ type RunPhaseIfTriggeredParams = {
   logger: Logger;
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
   eventText: string;
+  currentAgentId?: string;
 } & (
   | {
       phase: "light";
@@ -113,17 +114,28 @@ const MANAGED_DAILY_DREAMING_BLOCKS = [
 function resolveWorkspaces(params: {
   cfg?: DreamingHostConfig;
   fallbackWorkspaceDir?: string;
+  logger?: Logger;
 }): string[] {
   const fallbackWorkspaceDir = normalizeTrimmedString(params.fallbackWorkspaceDir);
-  const workspaceCandidates = params.cfg
+  const workspaceEntries = params.cfg
     ? resolveMemoryDreamingWorkspaces(
         params.cfg as Parameters<typeof resolveMemoryDreamingWorkspaces>[0],
         {
           primaryWorkspaceDir: fallbackWorkspaceDir,
           primaryAgentId: "main",
         },
-      ).map((entry) => entry.workspaceDir)
+      )
     : [];
+  // Warn on shared workspaces (Bug #65374 — cross-agent dreaming contamination risk)
+  for (const entry of workspaceEntries) {
+    if (entry.shared && entry.agentIds.length > 1 && params.logger) {
+      params.logger.warn(
+        `memory-core: workspace ${entry.workspaceDir} is shared by agents ` +
+          `${entry.agentIds.join(", ")}. Cross-agent dreaming contamination risk.`,
+      );
+    }
+  }
+  const workspaceCandidates = workspaceEntries.map((entry) => entry.workspaceDir);
   const seen = new Set<string>();
   const workspaces = workspaceCandidates.filter((workspaceDir) => {
     if (seen.has(workspaceDir)) {
@@ -644,14 +656,48 @@ function buildSessionRenderedLine(params: {
   return `[${source}] ${params.snippet}`.slice(0, SESSION_INGESTION_MAX_SNIPPET_CHARS + 64);
 }
 
+/**
+ * Filter recall entries for agent-scoped read-path isolation (Bug #65374).
+ * In shared workspaces, only include entries from the current agent's corpus path.
+ * In non-shared workspaces, include all entries (no filtering needed).
+ * Supports backward compatibility: entries from the old shared path (no agentId in path)
+ * are excluded in shared mode because they could belong to any agent.
+ */
+function filterRecallEntriesForAgentIsolation(params: {
+  entries: ShortTermRecallEntry[];
+  currentAgentId?: string;
+  isShared?: boolean;
+}): ShortTermRecallEntry[] {
+  if (!params.isShared) {
+    // Non-shared workspace: no filtering needed
+    return params.entries;
+  }
+  if (!params.currentAgentId?.trim()) {
+    // Shared workspace without identity: fail closed, return nothing
+    return [];
+  }
+  const agentCorpusPrefix = `memory/.dreams/session-corpus/${params.currentAgentId}/`;
+  return params.entries.filter((entry) => {
+    // In shared workspace with known identity, only include agent-scoped corpus entries
+    return entry.path.startsWith(agentCorpusPrefix);
+  });
+}
+
+type ResolvedSessionAgents = {
+  agentIds: string[];
+  isShared: boolean;
+};
+
 function resolveSessionAgentsForWorkspace(params: {
   cfg: DreamingHostConfig;
   workspaceDir: string;
   primaryWorkspaceDir?: string;
-}): string[] {
-  const { cfg, workspaceDir, primaryWorkspaceDir } = params;
+  logger?: Logger;
+  currentAgentId?: string;
+}): ResolvedSessionAgents {
+  const { cfg, workspaceDir, primaryWorkspaceDir, logger, currentAgentId } = params;
   if (!cfg) {
-    return [];
+    return { agentIds: [], isShared: false };
   }
   const target = normalizeWorkspaceKey(workspaceDir);
   const workspaces = resolveMemoryDreamingWorkspaces(
@@ -663,27 +709,79 @@ function resolveSessionAgentsForWorkspace(params: {
   );
   const match = workspaces.find((entry) => normalizeWorkspaceKey(entry.workspaceDir) === target);
   if (!match) {
-    return [];
+    return { agentIds: [], isShared: false };
   }
-  return match.agentIds
-    .filter((agentId, index, all) => agentId.trim().length > 0 && all.indexOf(agentId) === index)
-    .toSorted();
+  // Warn on shared workspaces (Bug #65374)
+  if (match.shared && match.agentIds.length > 1 && logger) {
+    logger.warn(
+      `memory-core: workspace ${match.workspaceDir} is shared by agents ` +
+        `${match.agentIds.join(", ")}. Cross-agent dreaming contamination risk.`,
+    );
+  }
+  // Layer 2: Fail closed when shared workspace has no agent identity (Bug #65374)
+  // If multiple agents share a workspace but we don't know WHICH agent is dreaming,
+  // we must NOT fall through to ingesting all agents' sessions. Skip dreaming entirely.
+  if (match.shared && !currentAgentId?.trim()) {
+    logger?.warn(
+      `memory-core: shared workspace ${match.workspaceDir} has no agent identity — ` +
+        `skipping dreaming to prevent cross-agent contamination.`,
+    );
+    return { agentIds: [], isShared: match.shared };
+  }
+  // Filter to current agent when workspace is shared and identity is known
+  if (currentAgentId && match.agentIds.length > 1) {
+    // Validate that currentAgentId is actually configured for this workspace
+    const isValidAgent = match.agentIds.some(
+      (id) => id.toLowerCase() === currentAgentId.toLowerCase(),
+    );
+    if (!isValidAgent) {
+      logger?.warn(
+        `memory-core: currentAgentId "${currentAgentId}" is not configured for shared workspace ${match.workspaceDir} — skipping dreaming.`,
+      );
+      return { agentIds: [], isShared: match.shared };
+    }
+    return { agentIds: [currentAgentId], isShared: true };
+  }
+  return {
+    agentIds: match.agentIds
+      .filter((agentId, index, all) => agentId.trim().length > 0 && all.indexOf(agentId) === index)
+      .toSorted(),
+    isShared: match.shared,
+  };
 }
 
 async function appendSessionCorpusLines(params: {
   workspaceDir: string;
   day: string;
   lines: SessionIngestionMessage[];
+  currentAgentId?: string;
+  isShared?: boolean;
 }): Promise<MemorySearchResult[]> {
   if (params.lines.length === 0) {
     return [];
   }
-  const relativePath = path.posix.join("memory", ".dreams", "session-corpus", `${params.day}.txt`);
-  const absolutePath = path.join(
-    params.workspaceDir,
-    SESSION_CORPUS_RELATIVE_DIR,
-    `${params.day}.txt`,
-  );
+  // Layer 2c: Per-agent corpus files for shared workspaces (Bug #65374)
+  // When workspace is shared, write to agent-scoped path to prevent write-side contamination.
+  // Falls back to shared path for backward compatibility on read.
+  const isSharedWorkspace = params.isShared && Boolean(params.currentAgentId);
+  const corpusSubPath = isSharedWorkspace
+    ? path.posix.join(
+        "memory",
+        ".dreams",
+        "session-corpus",
+        params.currentAgentId!,
+        `${params.day}.txt`,
+      )
+    : path.posix.join("memory", ".dreams", "session-corpus", `${params.day}.txt`);
+  const absolutePath = isSharedWorkspace
+    ? path.join(
+        params.workspaceDir,
+        SESSION_CORPUS_RELATIVE_DIR,
+        params.currentAgentId!,
+        `${params.day}.txt`,
+      )
+    : path.join(params.workspaceDir, SESSION_CORPUS_RELATIVE_DIR, `${params.day}.txt`);
+  const relativePath = corpusSubPath;
   await fs.mkdir(path.dirname(absolutePath), { recursive: true });
   let existing = "";
   try {
@@ -727,6 +825,8 @@ async function collectSessionIngestionBatches(params: {
   nowMs: number;
   timezone?: string;
   state: SessionIngestionState;
+  logger?: Logger;
+  currentAgentId?: string;
 }): Promise<SessionIngestionCollectionResult> {
   if (!params.cfg) {
     return {
@@ -737,10 +837,12 @@ async function collectSessionIngestionBatches(params: {
         Object.keys(params.state.seenMessages).length > 0,
     };
   }
-  const agentIds = resolveSessionAgentsForWorkspace({
+  const { agentIds, isShared } = resolveSessionAgentsForWorkspace({
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
     primaryWorkspaceDir: params.primaryWorkspaceDir,
+    logger: params.logger,
+    currentAgentId: params.currentAgentId,
   });
   const cutoffMs = calculateLookbackCutoffMs(params.nowMs, params.lookbackDays);
   const batchByDay = new Map<string, SessionIngestionMessage[]>();
@@ -1008,6 +1110,8 @@ async function collectSessionIngestionBatches(params: {
       workspaceDir: params.workspaceDir,
       day,
       lines,
+      currentAgentId: params.currentAgentId,
+      isShared,
     });
     if (results.length > 0) {
       batches.push({ day, results });
@@ -1028,6 +1132,8 @@ async function ingestSessionTranscriptSignals(params: {
   lookbackDays: number;
   nowMs: number;
   timezone?: string;
+  logger?: Logger;
+  currentAgentId?: string;
 }): Promise<void> {
   const state = await readSessionIngestionState(params.workspaceDir);
   const collected = await collectSessionIngestionBatches({
@@ -1038,6 +1144,8 @@ async function ingestSessionTranscriptSignals(params: {
     nowMs: params.nowMs,
     timezone: params.timezone,
     state,
+    logger: params.logger,
+    currentAgentId: params.currentAgentId,
   });
   const ingestionDayBucket = formatMemoryDreamingDay(params.nowMs, params.timezone);
   for (const batch of collected.batches) {
@@ -1559,8 +1667,19 @@ async function runLightDreaming(params: {
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
   detachNarratives?: boolean;
   nowMs?: number;
+  currentAgentId?: string;
 }): Promise<void> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  // Determine if THIS workspace is shared for read-path isolation (Bug #65374)
+  const workspaceIsShared = params.cfg
+    ? resolveMemoryDreamingWorkspaces(
+        params.cfg as Parameters<typeof resolveMemoryDreamingWorkspaces>[0],
+        { primaryWorkspaceDir: params.primaryWorkspaceDir, primaryAgentId: "main" },
+      ).some(
+        (entry) =>
+          entry.shared && entry.agentIds.length > 1 && entry.workspaceDir === params.workspaceDir,
+      )
+    : false;
   await ingestDailyMemorySignals({
     workspaceDir: params.workspaceDir,
     lookbackDays: params.config.lookbackDays,
@@ -1575,13 +1694,19 @@ async function runLightDreaming(params: {
     lookbackDays: params.config.lookbackDays,
     nowMs,
     timezone: params.config.timezone,
+    logger: params.logger,
+    currentAgentId: params.currentAgentId,
   });
   const recentEntries = await filterLiveShortTermRecallEntries({
     workspaceDir: params.workspaceDir,
-    entries: filterRecallEntriesWithinLookback({
-      entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
-      nowMs,
-      lookbackDays: params.config.lookbackDays,
+    entries: filterRecallEntriesForAgentIsolation({
+      entries: filterRecallEntriesWithinLookback({
+        entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
+        nowMs,
+        lookbackDays: params.config.lookbackDays,
+      }),
+      currentAgentId: params.currentAgentId,
+      isShared: workspaceIsShared,
     }),
   });
   const entries = dedupeEntries(
@@ -1658,8 +1783,19 @@ async function runRemDreaming(params: {
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
   detachNarratives?: boolean;
   nowMs?: number;
+  currentAgentId?: string;
 }): Promise<void> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  // Determine if THIS workspace is shared for read-path isolation (Bug #65374)
+  const workspaceIsShared = params.cfg
+    ? resolveMemoryDreamingWorkspaces(
+        params.cfg as Parameters<typeof resolveMemoryDreamingWorkspaces>[0],
+        { primaryWorkspaceDir: params.primaryWorkspaceDir, primaryAgentId: "main" },
+      ).some(
+        (entry) =>
+          entry.shared && entry.agentIds.length > 1 && entry.workspaceDir === params.workspaceDir,
+      )
+    : false;
   await ingestDailyMemorySignals({
     workspaceDir: params.workspaceDir,
     lookbackDays: params.config.lookbackDays,
@@ -1674,13 +1810,19 @@ async function runRemDreaming(params: {
     lookbackDays: params.config.lookbackDays,
     nowMs,
     timezone: params.config.timezone,
+    logger: params.logger,
+    currentAgentId: params.currentAgentId,
   });
   const entries = await filterLiveShortTermRecallEntries({
     workspaceDir: params.workspaceDir,
-    entries: filterRecallEntriesWithinLookback({
-      entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
-      nowMs,
-      lookbackDays: params.config.lookbackDays,
+    entries: filterRecallEntriesForAgentIsolation({
+      entries: filterRecallEntriesWithinLookback({
+        entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
+        nowMs,
+        lookbackDays: params.config.lookbackDays,
+      }),
+      currentAgentId: params.currentAgentId,
+      isShared: workspaceIsShared,
     }),
   });
   const preview = previewRemDreaming({
@@ -1756,6 +1898,7 @@ export async function runDreamingSweepPhases(params: {
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
   detachNarratives?: boolean;
   nowMs?: number;
+  currentAgentId?: string;
 }): Promise<void> {
   // Normalize nowMs once so all phase timestamps and narrative session keys are consistent.
   const sweepNowMs: number = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
@@ -1773,6 +1916,7 @@ export async function runDreamingSweepPhases(params: {
       subagent: params.subagent,
       nowMs: sweepNowMs,
       detachNarratives: params.detachNarratives,
+      currentAgentId: params.currentAgentId,
     });
   }
 
@@ -1789,6 +1933,7 @@ export async function runDreamingSweepPhases(params: {
       subagent: params.subagent,
       nowMs: sweepNowMs,
       detachNarratives: params.detachNarratives,
+      currentAgentId: params.currentAgentId,
     });
   }
 }
@@ -1807,6 +1952,7 @@ async function runPhaseIfTriggered(
   const workspaces = resolveWorkspaces({
     cfg: params.cfg,
     fallbackWorkspaceDir: primaryWorkspaceDir,
+    logger: params.logger,
   });
   if (workspaces.length === 0) {
     params.logger.warn(
@@ -1828,6 +1974,7 @@ async function runPhaseIfTriggered(
           config: params.config,
           logger: params.logger,
           subagent: params.subagent,
+          currentAgentId: params.currentAgentId,
         });
       } else {
         await runRemDreaming({
@@ -1837,6 +1984,7 @@ async function runPhaseIfTriggered(
           config: params.config,
           logger: params.logger,
           subagent: params.subagent,
+          currentAgentId: params.currentAgentId,
         });
       }
     } catch (err) {
@@ -1851,6 +1999,9 @@ async function runPhaseIfTriggered(
 export const __testing = {
   runPhaseIfTriggered,
   previewRemDreaming,
+  appendSessionCorpusLines,
+  filterRecallEntriesForAgentIsolation,
+  resolveSessionAgentsForWorkspace,
   constants: {
     LIGHT_SLEEP_EVENT_TEXT,
     REM_SLEEP_EVENT_TEXT,
