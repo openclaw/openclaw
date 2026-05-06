@@ -836,6 +836,73 @@
   text-align: right;
 }
 
+.settings-info-row__value--wide {
+  min-width: min(260px, 52vw);
+}
+
+.settings-range {
+  width: 180px;
+  accent-color: var(--accent);
+}
+
+.settings-range:disabled {
+  opacity: 0.5;
+}
+
+.settings-range-value {
+  min-width: 40px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-action-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.settings-action-row__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease,
+    opacity var(--duration-fast) ease;
+}
+
+.settings-action-row__button:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.settings-action-row__button--primary {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.settings-action-row__button--primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg));
+}
+
+.settings-action-row__button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .settings-status-dot {
   width: 8px;
   height: 8px;

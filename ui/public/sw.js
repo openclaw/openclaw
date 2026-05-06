@@ -88,7 +88,12 @@ self.addEventListener("push", (event) => {
     body: data.body || "",
     icon: "./apple-touch-icon.png",
     badge: "./favicon-32.png",
-    tag: data.tag || "openclaw-notification",
+    // Use a fresh tag by default so repeated web-push tests produce a visible
+    // notification instead of being silently coalesced by the browser/OS.
+    // If the server provides a stable tag, preserve intentional coalescing
+    // unless it explicitly asks to re-alert on replacement.
+    tag: data.tag || `openclaw-notification-${Date.now()}`,
+    renotify: data.renotify ?? !data.tag,
     data: { url: data.url || "./" },
   };
 
