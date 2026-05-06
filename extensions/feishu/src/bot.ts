@@ -867,7 +867,7 @@ export async function handleFeishuMessage(params: {
     // user turn to the session causes downstream LLM providers (e.g. MiniMax)
     // to reject the request with "messages must not be empty" errors. Logging
     // the skip avoids silent loss without polluting the agent session.
-    if (!ctx.content.trim() && mediaList.length === 0) {
+    if (!ctx.content?.trim() && mediaList.length === 0) {
       log(
         `feishu[${account.accountId}]: skipping empty message (no text, no media) from ${ctx.senderOpenId}`,
       );
