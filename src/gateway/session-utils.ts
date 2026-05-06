@@ -578,6 +578,27 @@ function resolveSessionRowModelIdentityRef(params: {
       params.fallbackModelRef,
     );
   }
+  const runtimeModel = normalizeOptionalString(params.entry?.model);
+  const runtimeProvider = normalizeOptionalString(params.entry?.modelProvider);
+  const fallbackModelRef = normalizeOptionalString(params.fallbackModelRef);
+  if (runtimeModel && runtimeProvider && !fallbackModelRef) {
+    return { provider: runtimeProvider, model: runtimeModel };
+  }
+  const normalizedOverride = normalizeStoredOverrideModel({
+    providerOverride: params.entry?.providerOverride,
+    modelOverride: params.entry?.modelOverride,
+  });
+  if (
+    !runtimeModel &&
+    !fallbackModelRef &&
+    normalizedOverride.providerOverride &&
+    normalizedOverride.modelOverride
+  ) {
+    return {
+      provider: normalizedOverride.providerOverride,
+      model: normalizedOverride.modelOverride,
+    };
+  }
   const key = createSessionEntryModelCacheKey({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -589,14 +610,12 @@ function resolveSessionRowModelIdentityRef(params: {
     return cached;
   }
 
-  const runtimeModel = normalizeOptionalString(params.entry?.model);
-  const runtimeProvider = normalizeOptionalString(params.entry?.modelProvider);
   if (
     !runtimeModel &&
     !runtimeProvider &&
-    !normalizeOptionalString(params.fallbackModelRef) &&
-    !normalizeOptionalString(params.entry?.providerOverride) &&
-    !normalizeOptionalString(params.entry?.modelOverride)
+    !fallbackModelRef &&
+    !normalizedOverride.providerOverride &&
+    !normalizedOverride.modelOverride
   ) {
     const resolved = resolveSessionDefaultModelRefForRow(params.cfg, params.agentId);
     params.rowContext.modelIdentityByEntryKey.set(key, resolved);
@@ -623,6 +642,12 @@ function resolveSessionSelectedModelRef(params: {
     providerOverride: params.entry?.providerOverride,
     modelOverride: params.entry?.modelOverride,
   });
+  if (override.providerOverride && override.modelOverride) {
+    return {
+      provider: override.providerOverride,
+      model: override.modelOverride,
+    };
+  }
   if (!override.modelOverride) {
     return null;
   }
@@ -1811,12 +1836,23 @@ export function buildGatewaySessionRow(params: {
 
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
-  const thinkingLevels = resolveSessionRowThinkingLevels({
-    provider: thinkingProvider,
-    model: thinkingModel,
-    modelCatalog: params.modelCatalog,
-    rowContext,
-  });
+  const thinkingLevels = lightweight
+    ? undefined
+    : resolveSessionRowThinkingLevels({
+        provider: thinkingProvider,
+        model: thinkingModel,
+        modelCatalog: params.modelCatalog,
+        rowContext,
+      });
+  const thinkingDefault = lightweight
+    ? undefined
+    : resolveGatewaySessionThinkingDefault({
+        cfg,
+        provider: thinkingProvider,
+        model: thinkingModel,
+        agentId: sessionAgentId,
+        modelCatalog: params.modelCatalog,
+      });
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
 
@@ -1845,16 +1881,8 @@ export function buildGatewaySessionRow(params: {
     abortedLastRun: entry?.abortedLastRun,
     thinkingLevel: entry?.thinkingLevel,
     thinkingLevels,
-    thinkingOptions: thinkingLevels.map((level) => level.label),
-    thinkingDefault: lightweight
-      ? entry?.thinkingLevel
-      : resolveGatewaySessionThinkingDefault({
-          cfg,
-          provider: thinkingProvider,
-          model: thinkingModel,
-          agentId: sessionAgentId,
-          modelCatalog: params.modelCatalog,
-        }),
+    thinkingOptions: thinkingLevels?.map((level) => level.label),
+    thinkingDefault,
     fastMode: entry?.fastMode,
     verboseLevel: entry?.verboseLevel,
     traceLevel: entry?.traceLevel,
