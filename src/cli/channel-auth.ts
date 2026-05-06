@@ -162,8 +162,12 @@ async function reconcileGatewayRuntimeAfterLocalLogin(params: {
       deviceIdentity: null,
     });
   } catch (error) {
+    const errMsg = formatErrorMessage(error);
+    const hint = errMsg.includes("not a recognized chat channel") || errMsg.includes("not configured")
+      ? `; run \`openclaw config set channels.${params.channelId}.enabled true\` and restart the gateway`
+      : "";
     params.runtime.log(
-      `Local login saved auth for ${params.channelId}/${params.accountId}, but the running gateway did not restart it: ${formatErrorMessage(error)}`,
+      `Local login saved auth for ${params.channelId}/${params.accountId}, but the running gateway did not restart it: ${errMsg}${hint}`,
     );
   }
 }
