@@ -138,6 +138,15 @@ export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = [
     cost: { input: 0.45, output: 2.15, cacheRead: 0, cacheWrite: 0 },
   },
   {
+    id: "zai-org/GLM-5.1-TEE",
+    name: "zai-org/GLM-5.1-TEE",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 202752,
+    maxTokens: 65535,
+    cost: { input: 1.05, output: 3.5, cacheRead: 0, cacheWrite: 0 },
+  },
+  {
     id: "zai-org/GLM-5-TEE",
     name: "zai-org/GLM-5-TEE",
     reasoning: true,
