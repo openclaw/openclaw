@@ -3,7 +3,7 @@ import { logVerbose } from "../../globals.js";
 import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, ReplyPayload, ReplyThreadingPolicy } from "../types.js";
-import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
+import type { BlockReplyPipeline, BlockReplyResult } from "./block-reply-pipeline.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
 import { parseReplyDirectives } from "./reply-directives.js";
 import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.js";
@@ -63,7 +63,10 @@ export function normalizeReplyPayloadDirectives(params: {
 }
 
 async function sendDirectBlockReply(params: {
-  onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
+  onBlockReply: (
+    payload: ReplyPayload,
+    context?: BlockReplyContext,
+  ) => Promise<BlockReplyResult | void> | BlockReplyResult | void;
   directlySentBlockKeys: Set<string>;
   trackingPayload: ReplyPayload;
   payload: ReplyPayload;
@@ -73,7 +76,10 @@ async function sendDirectBlockReply(params: {
 }
 
 export function createBlockReplyDeliveryHandler(params: {
-  onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
+  onBlockReply: (
+    payload: ReplyPayload,
+    context?: BlockReplyContext,
+  ) => Promise<BlockReplyResult | void> | BlockReplyResult | void;
   currentMessageId?: string;
   replyThreading?: ReplyThreadingPolicy;
   normalizeStreamingText: (payload: ReplyPayload) => { text?: string; skip: boolean };

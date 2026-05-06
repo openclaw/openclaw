@@ -3,6 +3,11 @@ import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { ReplyPayload } from "./reply-payload.js";
 import type { TypingController } from "./reply/typing.js";
 
+/** Result returned by onBlockReply to confirm which media URLs were delivered. */
+export type BlockReplyResult = {
+  sentMediaUrls?: readonly string[];
+};
+
 export type BlockReplyContext = {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
@@ -78,7 +83,10 @@ export type GetReplyOptions = {
    * delivery drains. Useful for channels that need to rotate preview state at
    * block boundaries without waiting for transport acks. */
   onBlockReplyQueued?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
-  onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
+  onBlockReply?: (
+    payload: ReplyPayload,
+    context?: BlockReplyContext,
+  ) => Promise<BlockReplyResult | void> | BlockReplyResult | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
   onToolStart?: (payload: {
