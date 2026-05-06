@@ -15,6 +15,14 @@ export type MemorySearchResult = {
 export type MemoryEmbeddingProbeResult = {
   ok: boolean;
   error?: string;
+  /**
+   * True when embeddings were intentionally skipped (e.g. QMD configured for
+   * BM25-only `searchMode=search`). Callers should render this as a neutral
+   * "skipped" / "disabled by config" status rather than as an error.
+   */
+  skipped?: boolean;
+  /** Short reason describing why embeddings were skipped (e.g. `searchMode=search`). */
+  skippedReason?: string;
   checked?: boolean;
   cached?: boolean;
   checkedAtMs?: number;

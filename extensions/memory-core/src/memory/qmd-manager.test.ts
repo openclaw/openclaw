@@ -4884,9 +4884,12 @@ describe("QmdMemoryManager", () => {
     const baselineCalls = spawnMock.mock.calls.length;
 
     await expect(manager.probeVectorAvailability()).resolves.toBe(false);
+    // searchMode=search disables vectors by design — status must report this
+    // as `skipped` rather than as an embeddings error. See issue #77645.
     await expect(manager.probeEmbeddingAvailability()).resolves.toEqual({
       ok: false,
-      error: "QMD semantic vectors are unavailable",
+      skipped: true,
+      skippedReason: "searchMode=search",
     });
     expect(spawnMock.mock.calls.length).toBe(baselineCalls);
     expect(manager.status().vector).toEqual({

@@ -1388,6 +1388,18 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
+    // When QMD is intentionally configured for BM25-only mode, vectors are
+    // disabled by design — surface that as `skipped` rather than an error so
+    // `memory status --deep` doesn't misreport the configuration as a failure.
+    if (!qmdUsesVectors(this.qmd.searchMode)) {
+      this.vectorAvailable = false;
+      this.vectorStatusDetail = null;
+      return {
+        ok: false,
+        skipped: true,
+        skippedReason: `searchMode=${this.qmd.searchMode}`,
+      };
+    }
     const ok = await this.probeVectorAvailability();
     return {
       ok,

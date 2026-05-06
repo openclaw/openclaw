@@ -471,6 +471,44 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("renders embeddings as skipped when QMD probe reports skipped (issue #77645)", async () => {
+    const close = vi.fn(async () => {});
+    const probeVectorAvailability = vi.fn(async () => false);
+    const probeEmbeddingAvailability = vi.fn(async () => ({
+      ok: false,
+      skipped: true,
+      skippedReason: "searchMode=search",
+    }));
+    mockManager({
+      probeVectorAvailability,
+      probeEmbeddingAvailability,
+      status: () =>
+        makeMemoryStatus({
+          backend: "qmd",
+          provider: "qmd",
+          model: "qmd",
+          requestedProvider: "qmd",
+          vector: {
+            enabled: false,
+            semanticAvailable: false,
+            available: false,
+          },
+        }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status", "--deep"]);
+
+    expect(probeEmbeddingAvailability).toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("Embeddings: skipped (searchMode=search)"),
+    );
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Embeddings: unavailable"));
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Embeddings error"));
+    expect(close).toHaveBeenCalled();
+  });
+
   it("prints recall-store audit details during status", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({
