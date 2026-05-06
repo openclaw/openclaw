@@ -510,6 +510,7 @@ imsg send <handle> "test"
 ## Related
 
 - [Channels Overview](/channels) — all supported channels
+- [Coming from BlueBubbles](/channels/imessage-from-bluebubbles) — config translation table and step-by-step cutover
 - [Pairing](/channels/pairing) — DM authentication and pairing flow
 - [Groups](/channels/groups) — group chat behavior and mention gating
 - [Channel Routing](/channels/channel-routing) — session routing for messages

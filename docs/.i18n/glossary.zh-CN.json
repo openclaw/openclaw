@@ -4,6 +4,14 @@
     "target": "OpenClaw"
   },
   {
+    "source": "iMessage",
+    "target": "iMessage"
+  },
+  {
+    "source": "Coming from BlueBubbles",
+    "target": "Coming from BlueBubbles"
+  },
+  {
     "source": "ClawHub",
     "target": "ClawHub"
   },

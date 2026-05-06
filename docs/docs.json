@@ -1063,6 +1063,7 @@
                   "channels/msteams",
                   "channels/googlechat",
                   "channels/imessage",
+                  "channels/imessage-from-bluebubbles",
                   "channels/matrix",
                   "channels/matrix-migration",
                   "channels/matrix-push-rules"
