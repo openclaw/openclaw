@@ -787,4 +787,45 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("user: Only message 1");
     expect(memoryContent).toContain("assistant: Only message 2");
   });
+
+  it("elides assistant turns that are only chat-template garbage (transcript read path)", async () => {
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "Hello" },
+      {
+        role: "assistant",
+        content:
+          "<tool_call>\n<function=foo>\n<parameter=bar>\nbaz\n</parameter>\n</function>\n</tool_call><|im_end|>",
+      },
+      { role: "assistant", content: "NO_REPLY" },
+      { role: "assistant", content: "Legit reply after the noise." },
+    ]);
+    const { memoryContent } = await runNewWithPreviousSession({ sessionContent });
+
+    expect(memoryContent).toContain("user: Hello");
+    expect(memoryContent).toContain("assistant: [malformed turn elided]");
+    expect(memoryContent).toContain("assistant: Legit reply after the noise.");
+    expect(memoryContent).not.toContain("<|im_end|>");
+    expect(memoryContent).not.toContain("<tool_call>");
+    expect(memoryContent).not.toContain("<function=foo>");
+  });
+
+  it("strips residual chat-template tokens in handler defense-in-depth pass", async () => {
+    // Model emitted `<|im_end|>` mid-sentence — not enough to elide the whole
+    // turn, but the token itself must not be persisted. The handler-level pass
+    // cleans any residue before writing to the memory file.
+    const sessionContent = createMockSessionContent([
+      {
+        role: "assistant",
+        content:
+          "Here is a long and substantive response that does not trip the elision heuristic at all. " +
+          "It explains the task in detail and then <|im_end|> continues with more content afterward " +
+          "so the surviving text stays well above the short-turn threshold.",
+      },
+    ]);
+    const { memoryContent } = await runNewWithPreviousSession({ sessionContent });
+
+    expect(memoryContent).not.toContain("<|im_end|>");
+    expect(memoryContent).toContain("long and substantive response");
+    expect(memoryContent).toContain("continues with more content afterward");
+  });
 });

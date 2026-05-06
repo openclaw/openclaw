@@ -24,6 +24,7 @@ import {
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
+import { sanitizeAssistantContent } from "./sanitize.js";
 import { findPreviousSessionFile, getRecentSessionContentWithResetFallback } from "./transcript.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
@@ -271,7 +272,33 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
 
     // Include conversation content if available
     if (sessionContent) {
-      entryParts.push("## Conversation Summary", "", sessionContent, "");
+      // Defense in depth: strip chat-template tokens and raw tool_call XML in
+      // case a future caller bypasses the transcript-layer sanitization. The
+      // per-turn elision has already happened in transcript.ts; this pass just
+      // catches any residual leaked tokens on otherwise-legit turns.
+      const defensive = sanitizeAssistantContent(sessionContent);
+      if (defensive.strippedRatio > 0) {
+        log.debug("session-memory: defensive sanitization stripped residue", {
+          originalLength: defensive.originalLength,
+          strippedRatio: defensive.strippedRatio,
+        });
+      }
+      if (defensive.skipped) {
+        // Without this branch, a transcript that the defensive pass elides
+        // entirely (e.g. all-NO_REPLY, or pure chat-template scaffolding that
+        // the per-turn pass missed) is silently dropped — the memory file
+        // gets a header-only entry with no Conversation Summary and no log
+        // line explaining why. Surface it so operators can correlate empty
+        // memory files with the elision rate.
+        log.debug("session-memory: defensive pass skipped entire session content", {
+          originalLength: defensive.originalLength,
+          strippedRatio: defensive.strippedRatio,
+        });
+      }
+      const safeSessionContent = defensive.skipped ? "" : defensive.text;
+      if (safeSessionContent.length > 0) {
+        entryParts.push("## Conversation Summary", "", safeSessionContent, "");
+      }
     }
 
     const entry = entryParts.join("\n");

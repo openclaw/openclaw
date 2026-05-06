@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
+import { ELIDED_TURN_MARKER, sanitizeAssistantContent } from "./sanitize.js";
+
+const log = createSubsystemLogger("hooks/session-memory");
 
 function extractTextMessageContent(content: unknown): string | undefined {
   if (typeof content === "string") {
@@ -46,7 +50,17 @@ export async function getRecentSessionContent(
             }
             const text = extractTextMessageContent(msg.content);
             if (text && !text.startsWith("/")) {
-              allMessages.push(`${role}: ${text}`);
+              const sanitized = sanitizeAssistantContent(text);
+              if (sanitized.skipped) {
+                log.debug("session-memory: elided malformed turn", {
+                  role,
+                  originalLength: sanitized.originalLength,
+                  strippedRatio: sanitized.strippedRatio,
+                });
+                allMessages.push(`${role}: ${ELIDED_TURN_MARKER}`);
+              } else {
+                allMessages.push(`${role}: ${sanitized.text}`);
+              }
             }
           }
         }
