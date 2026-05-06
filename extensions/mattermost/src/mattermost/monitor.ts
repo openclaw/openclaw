@@ -773,18 +773,86 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             onReplyStart: typingCallbacks?.onReplyStart,
           });
 
-        await core.channel.reply.dispatchReplyFromConfig({
-          ctx: ctxPayload,
-          cfg,
-          dispatcher,
-          replyOptions: {
-            ...replyOptions,
-            disableBlockStreaming:
-              typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
-            onModelSelected,
-          },
+        const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
+          agentId: route.agentId,
         });
-        markDispatchIdle();
+
+        let dispatchSettledBeforeStart = false;
+        try {
+          await core.channel.turn.run({
+            channel: "mattermost",
+            accountId: route.accountId,
+            raw: opts.post,
+            adapter: {
+              ingest: () => ({
+                id: opts.post.id ?? `${to}:${Date.now()}`,
+                timestamp: opts.post.create_at ?? undefined,
+                rawText: bodyText,
+                textForAgent: ctxPayload.BodyForAgent,
+                textForCommands: ctxPayload.CommandBody,
+                raw: opts.post,
+              }),
+              resolveTurn: () => ({
+                channel: "mattermost",
+                accountId: route.accountId,
+                routeSessionKey: route.sessionKey,
+                storePath,
+                ctxPayload,
+                recordInboundSession: core.channel.session.recordInboundSession,
+                record: {
+                  updateLastRoute:
+                    kind === "direct"
+                      ? {
+                          sessionKey: route.mainSessionKey,
+                          channel: "mattermost",
+                          to,
+                          accountId: route.accountId,
+                        }
+                      : undefined,
+                  onRecordError: (err) => {
+                    logVerboseMessage(
+                      `mattermost: failed updating session meta button-click id=${opts.post.id ?? "unknown"}: ${String(err)}`,
+                    );
+                  },
+                },
+                onPreDispatchFailure: async () => {
+                  dispatchSettledBeforeStart = true;
+                  await core.channel.reply.settleReplyDispatcher({
+                    dispatcher,
+                    onSettled: () => {
+                      markDispatchIdle();
+                    },
+                  });
+                },
+                runDispatch: () =>
+                  core.channel.reply.withReplyDispatcher({
+                    dispatcher,
+                    onSettled: () => {
+                      markDispatchIdle();
+                    },
+                    run: () =>
+                      core.channel.reply.dispatchReplyFromConfig({
+                        ctx: ctxPayload,
+                        cfg,
+                        dispatcher,
+                        replyOptions: {
+                          ...replyOptions,
+                          disableBlockStreaming:
+                            typeof account.blockStreaming === "boolean"
+                              ? !account.blockStreaming
+                              : undefined,
+                          onModelSelected,
+                        },
+                      }),
+                  }),
+              }),
+            },
+          });
+        } finally {
+          if (!dispatchSettledBeforeStart) {
+            markDispatchIdle();
+          }
+        }
       },
       log: (msg) => runtime.log?.(msg),
     }),
@@ -983,24 +1051,96 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         onReplyStart: typingCallbacks?.onReplyStart,
       });
 
-    await core.channel.reply.withReplyDispatcher({
-      dispatcher,
-      onSettled: () => {
-        markDispatchIdle();
-      },
-      run: () =>
-        core.channel.reply.dispatchReplyFromConfig({
-          ctx: ctxPayload,
-          cfg,
-          dispatcher,
-          replyOptions: {
-            ...replyOptions,
-            disableBlockStreaming:
-              typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
-            onModelSelected,
-          },
-        }),
+    const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
+      agentId: params.route.agentId,
     });
+
+    let dispatchSettledBeforeStart = false;
+    try {
+      await core.channel.turn.run({
+        channel: "mattermost",
+        accountId: params.route.accountId,
+        raw: {
+          commandText: params.commandText,
+          channelId: params.channelId,
+          senderId: params.senderId,
+          senderName: params.senderName,
+          postId: params.postId,
+        },
+        adapter: {
+          ingest: () => ({
+            id: params.messageSid ?? `interaction:${params.postId}:${Date.now()}`,
+            timestamp: params.timestamp ?? Date.now(),
+            rawText: params.commandText,
+            textForAgent: ctxPayload.BodyForAgent,
+            textForCommands: ctxPayload.CommandBody,
+            raw: {
+              commandText: params.commandText,
+              channelId: params.channelId,
+              senderId: params.senderId,
+            },
+          }),
+          resolveTurn: () => ({
+            channel: "mattermost",
+            accountId: params.route.accountId,
+            routeSessionKey: params.sessionKey,
+            storePath,
+            ctxPayload,
+            recordInboundSession: core.channel.session.recordInboundSession,
+            record: {
+              updateLastRoute:
+                params.kind === "direct"
+                  ? {
+                      sessionKey: params.route.mainSessionKey,
+                      channel: "mattermost",
+                      to,
+                      accountId: params.route.accountId,
+                    }
+                  : undefined,
+              onRecordError: (err) => {
+                logVerboseMessage(
+                  `mattermost: failed updating session meta model-picker id=${params.postId}: ${String(err)}`,
+                );
+              },
+            },
+            onPreDispatchFailure: async () => {
+              dispatchSettledBeforeStart = true;
+              await core.channel.reply.settleReplyDispatcher({
+                dispatcher,
+                onSettled: () => {
+                  markDispatchIdle();
+                },
+              });
+            },
+            runDispatch: () =>
+              core.channel.reply.withReplyDispatcher({
+                dispatcher,
+                onSettled: () => {
+                  markDispatchIdle();
+                },
+                run: () =>
+                  core.channel.reply.dispatchReplyFromConfig({
+                    ctx: ctxPayload,
+                    cfg,
+                    dispatcher,
+                    replyOptions: {
+                      ...replyOptions,
+                      disableBlockStreaming:
+                        typeof account.blockStreaming === "boolean"
+                          ? !account.blockStreaming
+                          : undefined,
+                      onModelSelected,
+                    },
+                  }),
+              }),
+          }),
+        },
+      });
+    } finally {
+      if (!dispatchSettledBeforeStart) {
+        markDispatchIdle();
+      }
+    }
 
     return capturedTexts.join("\n\n").trim();
   };
