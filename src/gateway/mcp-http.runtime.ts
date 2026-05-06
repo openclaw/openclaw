@@ -24,6 +24,8 @@ export class McpLoopbackToolCache {
   resolve(params: {
     cfg: OpenClawConfig;
     sessionKey: string;
+    sessionId?: string;
+    onYield?: (message: string) => Promise<void> | void;
     messageProvider: string | undefined;
     accountId: string | undefined;
     senderIsOwner: boolean | undefined;
@@ -43,6 +45,8 @@ export class McpLoopbackToolCache {
     const next = resolveGatewayScopedTools({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      onYield: params.onYield,
       messageProvider: params.messageProvider,
       accountId: params.accountId,
       senderIsOwner: params.senderIsOwner,
