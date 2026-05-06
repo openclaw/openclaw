@@ -9,18 +9,17 @@ coverage:
   primary:
     - personal.memory-recall
   secondary:
-    - memory.tools
+    - memory.recall
     - channels.qa-channel
 risk: medium
 capabilities:
-  - memory.search
-  - memory.get
+  - memory.recall
   - channel.reply
-objective: Verify a fake personal preference seeded only in the QA workspace can be recalled through local memory tools.
+objective: Verify a fake personal preference can be remembered and recalled later in the same QA personal conversation.
 successCriteria:
-  - Scenario writes only fake memory into the temporary QA workspace.
-  - Agent uses memory tooling in mock mode before replying.
-  - Final reply returns the fake preference code in the qa-channel conversation.
+  - Agent acknowledges the fake preference without using real user memory.
+  - Agent later recalls the same fake preference code.
+  - Recall stays scoped to the temporary QA conversation.
 docsRefs:
   - docs/concepts/memory.md
   - docs/concepts/memory-search.md
@@ -30,68 +29,71 @@ codeRefs:
   - extensions/qa-lab/src/suite-runtime-agent.ts
 execution:
   kind: flow
-  summary: Verify fake personal preference recall through local QA memory only.
+  summary: Verify fake personal preference recall through the local QA memory path.
   config:
-    channelId: qa-personal-memory
-    channelTitle: QA Personal Memory
-    memoryFact: "Fake personal QA preference: the preferred reminder label code is ORBIT-9."
-    memoryQuery: "preferred reminder label code ORBIT-9"
-    expectedNeedle: ORBIT-9
-    prompt: "@openclaw Memory tools check: what is my fake personal preferred reminder label code stored only in memory? Use memory tools first and reply in this channel."
-    promptSnippet: "Memory tools check"
+    sessionKey: agent:qa:personal-memory
+    rememberPrompt: "Please remember this fact for later: my fake personal QA preference is that my preferred reminder label code is ORBIT-9. Use your normal memory mechanism and reply exactly `Remembered ORBIT-9.` once stored."
+    rememberAckAny:
+      - remembered orbit-9
+    recallPrompt: "What fake personal reminder label code did I ask you to remember earlier? Reply with the code only, plus at most one short sentence."
+    recallExpectedAny:
+      - orbit-9
 ```
 
 ```yaml qa-flow
 steps:
-  - name: recalls the fake preference from temporary QA memory
+  - name: stores the fake personal preference
     actions:
-      - call: reset
-      - call: fs.writeFile
+      - call: fs.rm
         args:
           - expr: "path.join(env.gateway.workspaceDir, 'MEMORY.md')"
-          - expr: "`${config.memoryFact}\\n`"
-          - utf8
-      - call: forceMemoryIndex
+          - force: true
+      - call: fs.rm
         args:
-          - env:
-              ref: env
-            query:
-              expr: config.memoryQuery
-            expectedNeedle:
-              expr: config.expectedNeedle
-      - call: waitForGatewayHealthy
+          - expr: "path.join(env.gateway.workspaceDir, 'memory', `${formatMemoryDreamingDay(Date.now())}.md`)"
+          - force: true
+      - call: reset
+      - call: runAgentPrompt
         args:
           - ref: env
-          - 60000
-      - call: waitForQaChannelReady
-        args:
-          - ref: env
-          - 60000
-      - call: state.addInboundMessage
-        args:
-          - conversation:
-              id:
-                expr: config.channelId
-              kind: channel
-              title:
-                expr: config.channelTitle
-            senderId: qa-alice
-            senderName: QA Alice
-            text:
-              expr: config.prompt
+          - sessionKey:
+              expr: config.sessionKey
+            message:
+              expr: config.rememberPrompt
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+      - set: rememberAckAny
+        value:
+          expr: config.rememberAckAny.map(normalizeLowercaseStringOrEmpty)
       - call: waitForOutboundMessage
         saveAs: outbound
         args:
           - ref: state
           - lambda:
               params: [candidate]
-              expr: "candidate.conversation.id === config.channelId && candidate.text.includes(config.expectedNeedle)"
-          - expr: liveTurnTimeoutMs(env, 45000)
-      - assert:
-          expr: "!env.mock || (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet)).some((request) => request.plannedToolName === 'memory_search')"
-          message: expected memory_search for personal preference recall in mock mode
-      - assert:
-          expr: "!env.mock || (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet)).some((request) => request.plannedToolName === 'memory_get')"
-          message: expected memory_get for personal preference recall in mock mode
+              expr: "candidate.conversation.id === 'qa-operator' && rememberAckAny.some((needle) => normalizeLowercaseStringOrEmpty(candidate.text).includes(needle))"
+          - expr: liveTurnTimeoutMs(env, 30000)
+    detailsExpr: outbound.text
+
+  - name: recalls the fake personal preference
+    actions:
+      - call: runAgentPrompt
+        args:
+          - ref: env
+          - sessionKey:
+              expr: config.sessionKey
+            message:
+              expr: config.recallPrompt
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+      - set: recallExpectedAny
+        value:
+          expr: config.recallExpectedAny.map(normalizeLowercaseStringOrEmpty)
+      - call: waitForCondition
+        saveAs: outbound
+        args:
+          - lambda:
+              expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && recallExpectedAny.some((needle) => normalizeLowercaseStringOrEmpty(candidate.text).includes(needle))).at(-1)"
+          - expr: liveTurnTimeoutMs(env, 30000)
     detailsExpr: outbound.text
 ```

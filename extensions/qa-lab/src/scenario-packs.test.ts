@@ -60,8 +60,8 @@ describe("qa scenario packs", () => {
     expect(toolSafetyFlow).toContain("request.plannedToolName");
     expect(toolSafetyFlow).toContain("plannedToolName === 'read'");
 
-    expect(memoryFlow).toContain("config.promptSnippet");
-    expect(memoryFlow).toContain("plannedToolName === 'memory_search'");
-    expect(memoryFlow).toContain("plannedToolName === 'memory_get'");
+    expect(memoryFlow).toContain("config.rememberPrompt");
+    expect(memoryFlow).toContain("config.recallPrompt");
+    expect(memoryFlow).toContain("recallExpectedAny");
   });
 });
