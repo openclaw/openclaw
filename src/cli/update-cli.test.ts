@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_BUNDLED_RUNTIME_SIDECAR_PATHS } from "../../test/helpers/bundled-runtime-sidecars.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import { writePackageDistInventory } from "../infra/package-dist-inventory.js";
@@ -269,10 +269,17 @@ type UpdateCliScenario = {
 describe("update-cli", () => {
   const fixtureRoot = "/tmp/openclaw-update-tests";
   let fixtureCount = 0;
+  const tempDirsToCleanup = new Set<string>();
 
   const createCaseDir = (prefix: string) => {
     const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
     // Tests only need a stable path; the directory does not have to exist because all I/O is mocked.
+    return dir;
+  };
+
+  const createTrackedTempDir = async (prefix: string) => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    tempDirsToCleanup.add(dir);
     return dir;
   };
 
@@ -558,6 +565,18 @@ describe("update-cli", () => {
     vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
     setTty(false);
     setStdoutTty(false);
+  });
+
+  afterEach(async () => {
+    if (tempDirsToCleanup.size === 0) {
+      return;
+    }
+    await Promise.allSettled(
+      [...tempDirsToCleanup].map(async (dir) => {
+        await fs.rm(dir, { recursive: true, force: true });
+      }),
+    );
+    tempDirsToCleanup.clear();
   });
 
   it("bounds completion cache refresh during update follow-up", async () => {
@@ -1746,7 +1765,7 @@ describe("update-cli", () => {
   });
 
   it("stops package post-update work when staged npm install verification fails", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-staged-fail-"));
+    const tempDir = await createTrackedTempDir("openclaw-update-staged-fail-");
     const prefix = path.join(tempDir, "prefix");
     const nodeModules = path.join(prefix, "lib", "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
@@ -1828,7 +1847,7 @@ describe("update-cli", () => {
   });
 
   it("marks package post-update doctor as update-in-progress", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-package-"));
+    const tempDir = await createTrackedTempDir("openclaw-update-package-");
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
     const entryPath = path.join(pkgRoot, "dist", "index.js");
@@ -1883,7 +1902,7 @@ describe("update-cli", () => {
   });
 
   it("stops a running managed gateway before package replacement", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-stop-service-"));
+    const tempDir = await createTrackedTempDir("openclaw-update-stop-service-");
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
     const entryPath = path.join(pkgRoot, "dist", "index.js");
@@ -1970,7 +1989,7 @@ describe("update-cli", () => {
   });
 
   it("refreshes package installs even when the current version already matches the target", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-current-"));
+    const tempDir = await createTrackedTempDir("openclaw-update-current-");
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
     const entryPath = path.join(pkgRoot, "dist", "index.js");
@@ -2053,7 +2072,7 @@ describe("update-cli", () => {
   });
 
   it("retries package updates without optional deps when npm global update fails", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-optional-"));
+    const tempDir = await createTrackedTempDir("openclaw-update-optional-");
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
     mockPackageInstallStatus(pkgRoot);
