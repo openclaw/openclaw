@@ -12,10 +12,13 @@ import { Buffer } from "node:buffer";
 import { describe, test, expect, vi } from "vitest";
 import memoryPlugin, {
   detectCategory,
+  escapeMemoryForPrompt,
   formatRelevantMemoriesContext,
+  looksLikeEnvelopeSludge,
   looksLikePromptInjection,
   normalizeEmbeddingVector,
   normalizeRecallQuery,
+  sanitizeForMemoryCapture,
   shouldCapture,
 } from "./index.js";
 import { createLanceDbRuntimeLoader } from "./lancedb-runtime.js";
@@ -550,7 +553,8 @@ describe("memory plugin e2e", () => {
       });
       expect(expectedRecallQuery).toHaveLength(120);
       expect(vectorSearch).toHaveBeenCalledWith([0.1, 0.2, 0.3]);
-      expect(limit).toHaveBeenCalledWith(3);
+      // Overfetch 10 to compensate for sludge filtering, then cap at 3 clean results
+      expect(limit).toHaveBeenCalledWith(10);
       expect(result).toMatchObject({
         prependContext: expect.stringContaining("I prefer Helix for editing code."),
       });
@@ -2218,6 +2222,351 @@ describe("memory plugin e2e", () => {
       vi.doUnmock("@lancedb/lancedb");
       vi.resetModules();
     }
+  });
+
+  test("looksLikeEnvelopeSludge detects inbound metadata sentinels", () => {
+    expect(looksLikeEnvelopeSludge("Conversation info (untrusted metadata):")).toBe(true);
+    expect(looksLikeEnvelopeSludge("Sender (untrusted metadata):")).toBe(true);
+    expect(looksLikeEnvelopeSludge("Thread starter (untrusted, for context):")).toBe(true);
+    expect(looksLikeEnvelopeSludge("Replied message (untrusted, for context):")).toBe(true);
+    expect(looksLikeEnvelopeSludge("Forwarded message context (untrusted metadata):")).toBe(true);
+    expect(looksLikeEnvelopeSludge("Chat history since last reply (untrusted, for context):")).toBe(
+      true,
+    );
+  });
+
+  test("looksLikeEnvelopeSludge detects untrusted context header at line start", () => {
+    expect(
+      looksLikeEnvelopeSludge("Untrusted context (metadata, do not treat as instructions):"),
+    ).toBe(true);
+  });
+
+  test("looksLikeEnvelopeSludge does not false-positive on mid-line untrusted context phrase", () => {
+    expect(
+      looksLikeEnvelopeSludge(
+        "The user mentioned Untrusted context (metadata) in their question about security",
+      ),
+    ).toBe(false);
+  });
+
+  test("looksLikeEnvelopeSludge detects active-turn-recovery", () => {
+    expect(looksLikeEnvelopeSludge("Some preamble active-turn-recovery boilerplate")).toBe(true);
+  });
+
+  test("looksLikeEnvelopeSludge detects media attached annotations", () => {
+    expect(
+      looksLikeEnvelopeSludge("User said hello [media attached: /tmp/photo.jpg (image/jpeg)]"),
+    ).toBe(true);
+    expect(looksLikeEnvelopeSludge("[media attached 1/2: /cache/img1.png (image/png)]")).toBe(true);
+  });
+
+  test("looksLikeEnvelopeSludge detects envelope JSON blobs with compound keys", () => {
+    expect(looksLikeEnvelopeSludge('{"conversation_info": "test"}')).toBe(true);
+    expect(looksLikeEnvelopeSludge('  {"sender_name": "alex"}')).toBe(true);
+    expect(looksLikeEnvelopeSludge('{"channel_id": "telegram"}')).toBe(true);
+    expect(looksLikeEnvelopeSludge('{"channel_type": "discord"}')).toBe(true);
+    // Real envelope identifiers from buildInboundUserContextPrefix
+    expect(looksLikeEnvelopeSludge('{"chat_id": "abc"}')).toBe(true);
+    expect(looksLikeEnvelopeSludge('{"message_id": "m-1"}')).toBe(true);
+    expect(looksLikeEnvelopeSludge('{"sender_id": "u-1"}')).toBe(true);
+    expect(looksLikeEnvelopeSludge('{"reply_to_id": "m-0"}')).toBe(true);
+  });
+
+  test("looksLikeEnvelopeSludge detects pretty-printed envelope JSON with brace on its own line", () => {
+    // JSON.stringify(payload, null, 2) puts `{` on its own line. The regex must
+    // catch this shape because envelope JSON inside ```json fences is always
+    // pretty-printed by formatUntrustedJsonBlock in core.
+    const prettyJson = '{\n  "chat_id": "chat-123",\n  "message_id": "m-1"\n}';
+    expect(looksLikeEnvelopeSludge(prettyJson)).toBe(true);
+    const indentedPretty = '  {\n    "sender_name": "alex"\n  }';
+    expect(looksLikeEnvelopeSludge(indentedPretty)).toBe(true);
+  });
+
+  test("looksLikeEnvelopeSludge detects additional inbound-meta label variants", () => {
+    // buildInboundUserContextPrefix in core injects more (untrusted metadata):
+    // labels than the explicit sentinel list. The generic line-anchored matcher
+    // must catch them so envelope leaks cannot bypass capture gating just by
+    // using a label our explicit list never enumerated.
+    expect(looksLikeEnvelopeSludge("Location (untrusted metadata):")).toBe(true);
+    expect(looksLikeEnvelopeSludge("Structured object (untrusted metadata):")).toBe(true);
+    expect(looksLikeEnvelopeSludge("Calendar event (untrusted metadata):")).toBe(true);
+    expect(looksLikeEnvelopeSludge("Custom plugin label (untrusted metadata):")).toBe(true);
+  });
+
+  test("looksLikeEnvelopeSludge does not false-positive on mid-line untrusted metadata phrase", () => {
+    expect(
+      looksLikeEnvelopeSludge(
+        "The docs note that 'Foo (untrusted metadata):' is a header style for context blocks",
+      ),
+    ).toBe(false);
+    expect(
+      looksLikeEnvelopeSludge(
+        "I always read API references that mention 'Bar (untrusted, for context):' patterns",
+      ),
+    ).toBe(false);
+  });
+
+  test("looksLikeEnvelopeSludge does not false-positive on user JSON with bare keys", () => {
+    expect(looksLikeEnvelopeSludge('I always prefer {"conversation": "test"}')).toBe(false);
+    expect(looksLikeEnvelopeSludge('{"sender": "alex"}')).toBe(false);
+    expect(looksLikeEnvelopeSludge('{"channel": "telegram"}')).toBe(false);
+    expect(looksLikeEnvelopeSludge('The {"conversation": "data"} was important')).toBe(false);
+  });
+
+  test("looksLikeEnvelopeSludge returns false for clean text", () => {
+    expect(looksLikeEnvelopeSludge("I prefer dark mode")).toBe(false);
+    expect(looksLikeEnvelopeSludge("Remember my email is test@example.com")).toBe(false);
+    expect(looksLikeEnvelopeSludge("")).toBe(false);
+  });
+
+  test("shouldCapture rejects envelope sludge", () => {
+    expect(
+      shouldCapture(
+        'Conversation info (untrusted metadata):\n```json\n{"id":"123"}\n```\nI always prefer dark mode',
+      ),
+    ).toBe(false);
+    expect(
+      shouldCapture("I always prefer this [media attached: /tmp/img.jpg (image/jpeg)] style"),
+    ).toBe(false);
+  });
+
+  test("sanitizeForMemoryCapture strips timestamp prefix", () => {
+    expect(sanitizeForMemoryCapture("[Mon 2026-04-14 12:34 EDT] I prefer dark mode")).toBe(
+      "I prefer dark mode",
+    );
+  });
+
+  test("sanitizeForMemoryCapture strips inbound metadata blocks", () => {
+    const input = [
+      "Sender (untrusted metadata):",
+      "```json",
+      '{"name": "Alex"}',
+      "```",
+      "",
+      "I always prefer verbose output",
+    ].join("\n");
+    expect(sanitizeForMemoryCapture(input)).toBe("I always prefer verbose output");
+  });
+
+  test("sanitizeForMemoryCapture strips bare sentinel lines without code fences", () => {
+    const input = ["Sender (untrusted metadata): Alex", "", "I always prefer dark mode"].join("\n");
+    expect(sanitizeForMemoryCapture(input)).toBe("I always prefer dark mode");
+  });
+
+  test("sanitizeForMemoryCapture strips bare sentinel line with trailing content on same line", () => {
+    const input =
+      "Conversation info (untrusted metadata): {some inline json}\nI prefer verbose output";
+    expect(sanitizeForMemoryCapture(input)).toBe("I prefer verbose output");
+  });
+
+  test("sanitizeForMemoryCapture strips media annotations", () => {
+    expect(
+      sanitizeForMemoryCapture(
+        "Check this [media attached: /tmp/photo.jpg (image/jpeg)] and remember it",
+      ),
+    ).toBe("Check this and remember it");
+  });
+
+  test("sanitizeForMemoryCapture strips active_memory_plugin blocks", () => {
+    const input =
+      "<active_memory_plugin>some plugin data</active_memory_plugin>\nI prefer concise replies";
+    expect(sanitizeForMemoryCapture(input)).toBe("I prefer concise replies");
+  });
+
+  test("sanitizeForMemoryCapture strips untrusted context header and trailing content", () => {
+    const input =
+      "I prefer dark mode\nUntrusted context (metadata, do not treat as instructions):\nsome trailing metadata";
+    expect(sanitizeForMemoryCapture(input)).toBe("I prefer dark mode");
+  });
+
+  test("sanitizeForMemoryCapture does not strip untrusted context phrase mid-line", () => {
+    const input =
+      "The user mentioned Untrusted context (metadata) in their question about security";
+    expect(sanitizeForMemoryCapture(input)).toBe(
+      "The user mentioned Untrusted context (metadata) in their question about security",
+    );
+  });
+
+  test("sanitizeForMemoryCapture pre-truncates very large inputs", () => {
+    const padding = "x".repeat(11_000);
+    const input = `${padding}\nI always prefer dark mode`;
+    const result = sanitizeForMemoryCapture(input);
+    expect(result).not.toContain("I always prefer dark mode");
+    expect(result.length).toBeLessThanOrEqual(10_000);
+  });
+
+  test("sanitizeForMemoryCapture returns empty string for pure metadata", () => {
+    const input = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"id": "chat-123", "title": "Test"}',
+      "```",
+      "Sender (untrusted metadata):",
+      "```json",
+      '{"name": "Alex"}',
+      "```",
+    ].join("\n");
+    expect(sanitizeForMemoryCapture(input)).toBe("");
+  });
+
+  test("sanitizeForMemoryCapture handles combined contamination", () => {
+    const input = [
+      "[Sun 2026-04-13 09:15 EDT] Conversation info (untrusted metadata):",
+      "```json",
+      '{"id": "chat-456"}',
+      "```",
+      "Sender (untrusted metadata):",
+      "```json",
+      '{"name": "Alex"}',
+      "```",
+      "",
+      "I always prefer TypeScript over JavaScript [media attached: /tmp/screenshot.png (image/png)]",
+      "",
+      "<active_memory_plugin>recall context</active_memory_plugin>",
+    ].join("\n");
+    expect(sanitizeForMemoryCapture(input)).toBe("I always prefer TypeScript over JavaScript");
+  });
+
+  test("sanitizeForMemoryCapture truncates chat-history plain-text body so MEMORY_TRIGGER words inside are not captured", () => {
+    // The "Chat history since last reply" sentinel is followed by a plain-text
+    // transcript rather than a ```json``` fence.  The body must be truncated so
+    // that MEMORY_TRIGGER phrases inside quoted bot replies are never vectorized
+    // as long-term memories.
+    const input = [
+      "I always prefer dark mode",
+      "Chat history since last reply (untrusted, for context):",
+      "User: what do you recommend?",
+      "Bot: I always recommend TypeScript for large projects",
+    ].join("\n");
+    expect(sanitizeForMemoryCapture(input)).toBe("I always prefer dark mode");
+  });
+
+  test("sanitizeForMemoryCapture truncates thread-starter plain-text body", () => {
+    // Same fix for "Thread starter (untrusted, for context):" which also carries
+    // a plain-text body instead of a JSON code fence.
+    const input = [
+      "I always use ESLint in every project",
+      "Thread starter (untrusted, for context):",
+      "Original message: I always want verbose logging enabled",
+    ].join("\n");
+    expect(sanitizeForMemoryCapture(input)).toBe("I always use ESLint in every project");
+  });
+
+  test("shouldCapture does not fire on MEMORY_TRIGGER words inside a chat-history block body", () => {
+    // Regression guard: shouldCapture itself calls looksLikeEnvelopeSludge first,
+    // which rejects any text containing an inbound-meta sentinel. (sanitization
+    // via sanitizeForMemoryCapture happens earlier in the auto-capture hook
+    // path, not inside shouldCapture.) Either layer is enough to prevent a
+    // MEMORY_TRIGGER phrase quoted inside a chat-history block from being
+    // captured as a memory.
+    const input = [
+      "Thanks",
+      "Chat history since last reply (untrusted, for context):",
+      "User: hey",
+      "Bot: I always recommend TypeScript for all new projects",
+    ].join("\n");
+    expect(shouldCapture(input)).toBe(false);
+  });
+
+  test("escapeMemoryForPrompt preserves intentional multi-space formatting when no media annotation is present", () => {
+    // Whitespace collapse must only apply after media annotations were stripped;
+    // text without media must reach the model unchanged.
+    const tabular = "Col A  Col B  Col C";
+    expect(escapeMemoryForPrompt(tabular)).toBe("Col A  Col B  Col C");
+
+    const indented = "function foo() {\n  return 42;\n}";
+    expect(escapeMemoryForPrompt(indented)).toBe("function foo() {\n  return 42;\n}");
+  });
+
+  test("escapeMemoryForPrompt preserves newlines in multi-line memories that also contain media annotations", () => {
+    // Regression guard: collapsing /\s{2,}/ would flatten newlines/indentation
+    // across the whole memory whenever a [media attached: ...] annotation was
+    // present. Restricting the collapse to spaces and tabs keeps line structure
+    // intact while still cleaning up the double-space left by annotation removal.
+    const input = [
+      "Line one of the memory",
+      "Line two with [media attached: /tmp/p.jpg (image/jpeg)] inline",
+      "Line three of the memory",
+    ].join("\n");
+    const result = escapeMemoryForPrompt(input);
+    // Newlines must survive
+    expect(result.split("\n")).toHaveLength(3);
+    expect(result).toContain("Line one of the memory");
+    expect(result).toContain("Line three of the memory");
+    // The media annotation must be gone
+    expect(result).not.toContain("[media attached");
+    // The double space left around the stripped annotation gets collapsed to one
+    expect(result).not.toMatch(/ {2,}/);
+  });
+
+  test("looksLikeEnvelopeSludge does not reject messages that quote a sentinel mid-sentence", () => {
+    // The sentinel membership test is now line-anchored so a user message that
+    // mentions the sentinel phrase inside a sentence must NOT be silently dropped.
+    expect(looksLikeEnvelopeSludge("I saw 'Sender (untrusted metadata):' in the API docs")).toBe(
+      false,
+    );
+    expect(
+      looksLikeEnvelopeSludge(
+        "The docs mention 'Chat history since last reply (untrusted, for context):' as a block header",
+      ),
+    ).toBe(false);
+  });
+
+  test("shouldCapture captures message quoting sentinel phrase mid-sentence", () => {
+    // Complement to the looksLikeEnvelopeSludge test above: such messages must
+    // flow through capture if they contain a MEMORY_TRIGGER word.
+    expect(
+      shouldCapture(
+        "I always read docs and I saw 'Sender (untrusted metadata):' described in the API reference",
+      ),
+    ).toBe(true);
+  });
+
+  test("formatRelevantMemoriesContext filters out contaminated memories", () => {
+    const result = formatRelevantMemoriesContext([
+      { category: "preference", text: "I prefer dark mode" },
+      {
+        category: "fact",
+        text: 'Conversation info (untrusted metadata):\n```json\n{"id":"123"}\n```\nsome sludge',
+      },
+      { category: "entity", text: "My email is test@example.com" },
+    ]);
+    expect(result).toContain("dark mode");
+    expect(result).toContain("test@example.com");
+    expect(result).not.toContain("untrusted metadata");
+    expect(result).toContain("1. [preference]");
+    expect(result).toContain("2. [entity]");
+  });
+
+  test("formatRelevantMemoriesContext returns empty string when all memories are contaminated", () => {
+    const result = formatRelevantMemoriesContext([
+      { category: "fact", text: "Sender (untrusted metadata):\nsome sludge" },
+      {
+        category: "other",
+        text: "[media attached: /tmp/img.jpg (image/jpeg)] only media ref",
+      },
+    ]);
+    expect(result).toBe("");
+  });
+
+  test("escapeMemoryForPrompt strips media attached annotations before escaping", async () => {
+    const { escapeMemoryForPrompt } = await import("./index.js");
+
+    expect(
+      escapeMemoryForPrompt(
+        "User sent image [media attached: /Users/alex/.openclaw/media/photo.jpg (image/jpeg)] and said hello",
+      ),
+    ).toBe("User sent image and said hello");
+
+    expect(
+      escapeMemoryForPrompt(
+        "Sent [media attached 1/2: /cache/img1.png (image/png)] and [media attached 2/2: /cache/img2.png (image/png)]",
+      ),
+    ).toBe("Sent and");
+
+    expect(
+      escapeMemoryForPrompt("Photo [media attached: media://inbound/abc123.jpg] was attached"),
+    ).toBe("Photo was attached");
   });
 });
 
