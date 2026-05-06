@@ -39,7 +39,7 @@ type DreamingHostConfig = unknown;
 type DreamingPhaseStorageConfig = {
   timezone?: string;
   storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
-  execution?: { model?: string };
+  execution?: { model?: string; timeoutMs?: number };
 };
 type LightDreamingConfig = DreamingPhaseStorageConfig & {
   enabled: boolean;
@@ -1633,6 +1633,7 @@ async function runLightDreaming(params: {
         nowMs,
         timezone: params.config.timezone,
         model: params.config.execution?.model,
+        timeoutMs: params.config.execution?.timeoutMs,
         logger: params.logger,
       });
     } else {
@@ -1643,6 +1644,7 @@ async function runLightDreaming(params: {
         nowMs,
         timezone: params.config.timezone,
         model: params.config.execution?.model,
+        timeoutMs: params.config.execution?.timeoutMs,
         logger: params.logger,
       });
     }
@@ -1732,6 +1734,7 @@ async function runRemDreaming(params: {
         nowMs,
         timezone: params.config.timezone,
         model: params.config.execution?.model,
+        timeoutMs: params.config.execution?.timeoutMs,
         logger: params.logger,
       });
     } else {
@@ -1742,6 +1745,7 @@ async function runRemDreaming(params: {
         nowMs,
         timezone: params.config.timezone,
         model: params.config.execution?.model,
+        timeoutMs: params.config.execution?.timeoutMs,
         logger: params.logger,
       });
     }
