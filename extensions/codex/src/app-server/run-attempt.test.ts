@@ -4,16 +4,14 @@ import path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   abortAgentHarnessRun,
-  queueAgentHarnessMessage,
-  type EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness";
-import {
   buildAgentRuntimePlan,
   embeddedAgentLog,
   nativeHookRelayTesting,
   onAgentEvent,
+  queueAgentHarnessMessage,
   resetAgentEventsForTest,
   type AgentEventPayload,
+  type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   initializeGlobalHookRunner,
@@ -81,6 +79,25 @@ function buildCodexRuntimePlan(params: EmbeddedRunAttemptParams, workspaceDir: s
     agentDir: tempDir,
     thinkingLevel: params.thinkLevel,
   });
+}
+
+function createCodexRuntimePlanFixture(): NonNullable<EmbeddedRunAttemptParams["runtimePlan"]> {
+  return {
+    auth: {},
+    observability: {
+      resolvedRef: "codex/gpt-5.4-codex",
+      provider: "codex",
+      modelId: "gpt-5.4-codex",
+      harnessId: "codex",
+    },
+    prompt: {
+      resolveSystemPromptContribution: () => undefined,
+    },
+    tools: {
+      normalize: (tools: unknown[]) => tools,
+      logDiagnostics: () => undefined,
+    },
+  } as unknown as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
 }
 
 function threadStartResult(threadId = "thread-1") {
@@ -935,11 +952,13 @@ describe("runCodexAppServerAttempt", () => {
     sessionManager.appendMessage(assistantMessage("existing context", Date.now()));
     const harness = createStartedThreadHarness();
 
-    const params = createParamsWithRuntimePlan(sessionFile, workspaceDir);
+    const params = createParams(sessionFile, workspaceDir);
+    params.runtimePlan = createCodexRuntimePlanFixture();
     params.onAgentEvent = onRunAgentEvent;
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
     expect(llmInput).toHaveBeenCalled();
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
     expect(llmInput.mock.calls).toEqual(
       expect.arrayContaining([
@@ -1442,9 +1461,10 @@ describe("runCodexAppServerAttempt", () => {
       return undefined;
     });
 
-    await expect(
-      runCodexAppServerAttempt(createParamsWithRuntimePlan(sessionFile, workspaceDir)),
-    ).rejects.toThrow("turn start exploded");
+    const params = createParams(sessionFile, workspaceDir);
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow("turn start exploded");
 
     expect(llmInput).toHaveBeenCalledTimes(1);
     expect(llmOutput).toHaveBeenCalledTimes(1);

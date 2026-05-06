@@ -10,6 +10,10 @@ title: "Setup"
 
 Initialize `~/.openclaw/openclaw.json` and the agent workspace.
 
+<Note>
+`openclaw setup` is for mutable config installs. In Nix mode (`OPENCLAW_NIX_MODE=1`), OpenClaw refuses setup writes because the config file is managed by Nix. Agents should use the first-party [nix-openclaw Quick Start](https://github.com/openclaw/nix-openclaw#quick-start) or the equivalent source config for another Nix package.
+</Note>
+
 Related:
 
 - Getting started: [Getting started](/start/getting-started)
