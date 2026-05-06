@@ -5,8 +5,10 @@ export async function runTasksWithConcurrency<T>(params: {
   limit: number;
   errorMode?: ConcurrencyErrorMode;
   onTaskError?: (error: unknown, index: number) => void;
+  /** When provided, workers stop picking up new tasks once the signal is aborted. */
+  signal?: AbortSignal;
 }): Promise<{ results: T[]; firstError: unknown; hasError: boolean }> {
-  const { tasks, limit, onTaskError } = params;
+  const { tasks, limit, onTaskError, signal } = params;
   const errorMode = params.errorMode ?? "continue";
   if (tasks.length === 0) {
     return { results: [], firstError: undefined, hasError: false };
@@ -20,6 +22,9 @@ export async function runTasksWithConcurrency<T>(params: {
 
   const workers = Array.from({ length: resolvedLimit }, async () => {
     while (true) {
+      if (signal?.aborted) {
+        return;
+      }
       if (errorMode === "stop" && hasError) {
         return;
       }

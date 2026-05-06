@@ -101,4 +101,47 @@ describe("runTasksWithConcurrency", () => {
     expect(onTaskError).toHaveBeenNthCalledWith(1, firstErr, 0);
     expect(onTaskError).toHaveBeenNthCalledWith(2, expect.any(Error), 2);
   });
+
+  it("stops picking up new tasks when signal is aborted", async () => {
+    const controller = new AbortController();
+    const seen: number[] = [];
+    const tasks = [0, 1, 2, 3].map((index) => async (): Promise<number> => {
+      seen.push(index);
+      if (index === 1) {
+        controller.abort();
+      }
+      return index;
+    });
+
+    const result = await runTasksWithConcurrency({
+      tasks,
+      limit: 1,
+      signal: controller.signal,
+    });
+    expect(seen).toEqual([0, 1]);
+    expect(result.results[0]).toBe(0);
+    expect(result.results[1]).toBe(1);
+    expect(result.results[2]).toBeUndefined();
+    expect(result.results[3]).toBeUndefined();
+  });
+
+  it("returns immediately when signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const seen: number[] = [];
+    const tasks = [
+      async () => {
+        seen.push(0);
+        return 10;
+      },
+    ];
+
+    const result = await runTasksWithConcurrency({
+      tasks,
+      limit: 1,
+      signal: controller.signal,
+    });
+    expect(seen).toEqual([]);
+    expect(result.hasError).toBe(false);
+  });
 });
