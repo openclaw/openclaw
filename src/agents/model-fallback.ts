@@ -509,6 +509,11 @@ function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefined): s
   return DEFAULT_PROVIDER;
 }
 
+export const __testing = {
+  resolveFallbackCandidates,
+  resolveImageFallbackCandidates,
+} as const;
+
 function resolveFallbackCandidates(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;

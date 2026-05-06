@@ -369,6 +369,7 @@ describe("runCodexAppServerAttempt", () => {
 
   afterEach(async () => {
     __testing.resetCodexAppServerClientFactoryForTests();
+    __testing.resetOpenClawCodingToolsFactoryForTests();
     resetCodexRateLimitCacheForTests();
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
     resetAgentEventsForTest();
@@ -475,6 +476,18 @@ describe("runCodexAppServerAttempt", () => {
     params.config = { tools: { profile: "coding" } };
     params.sourceReplyDeliveryMode = "message_tool_only";
     params.messageProvider = "whatsapp";
+    let seenForceMessageTool: boolean | undefined;
+    __testing.setOpenClawCodingToolsFactoryForTests((options) => {
+      seenForceMessageTool = options?.forceMessageTool;
+      return [
+        {
+          name: "message",
+          description: "message test tool",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(),
+        },
+      ] as never;
+    });
 
     const dynamicTools = await __testing.buildDynamicTools({
       params,
@@ -489,6 +502,7 @@ describe("runCodexAppServerAttempt", () => {
     });
     const dynamicToolNames = dynamicTools.map((tool) => tool.name);
 
+    expect(seenForceMessageTool).toBe(true);
     expect(dynamicToolNames).toContain("message");
   });
 
@@ -517,6 +531,18 @@ describe("runCodexAppServerAttempt", () => {
         },
       }),
     );
+    let seenRunSessionKey: string | undefined;
+    __testing.setOpenClawCodingToolsFactoryForTests((options) => {
+      seenRunSessionKey = options?.runSessionKey;
+      return [
+        {
+          name: "session_status",
+          description: "session status test tool",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(async () => ({ details: { sessionKey: options?.runSessionKey } })),
+        },
+      ] as never;
+    });
 
     const dynamicTools = await __testing.buildDynamicTools({
       params,
@@ -533,6 +559,7 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(sessionStatus).toBeDefined();
     const result = await sessionStatus?.execute("call-current", { sessionKey: "current" });
+    expect(seenRunSessionKey).toBe("agent:main:main");
     expect((result?.details as { sessionKey?: string } | undefined)?.sessionKey).toBe(
       "agent:main:main",
     );

@@ -214,6 +214,10 @@ function isToolsInvokePath(pathname: string): boolean {
   return pathname === "/tools/invoke";
 }
 
+function isManagedOutgoingImagePath(pathname: string): boolean {
+  return pathname.startsWith("/api/chat/media/outgoing/");
+}
+
 function isSessionKillPath(pathname: string): boolean {
   return /^\/sessions\/[^/]+\/kill$/.test(pathname);
 }
@@ -724,20 +728,22 @@ export function createGatewayHttpServer(opts: {
         }),
       );
 
-      requestStages.push({
-        name: "chat-managed-image-media",
-        run: async () =>
-          (await getManagedImageAttachmentsModule()).handleManagedOutgoingImageHttpRequest(
-            req,
-            res,
-            {
-              auth: resolvedAuth,
-              trustedProxies,
-              allowRealIpFallback,
-              rateLimiter,
-            },
-          ),
-      });
+      if (isManagedOutgoingImagePath(scopedRequestPath)) {
+        requestStages.push({
+          name: "chat-managed-image-media",
+          run: async () =>
+            (await getManagedImageAttachmentsModule()).handleManagedOutgoingImageHttpRequest(
+              req,
+              res,
+              {
+                auth: resolvedAuth,
+                trustedProxies,
+                allowRealIpFallback,
+                rateLimiter,
+              },
+            ),
+        });
+      }
 
       if (controlUiEnabled) {
         requestStages.push({

@@ -248,6 +248,7 @@ const toggleStoreLocks = new Map<string, AsyncLock>();
 let lastActiveRecallCacheSweepAt = 0;
 let minimumTimeoutMs = DEFAULT_MIN_TIMEOUT_MS;
 let setupGraceTimeoutMs = DEFAULT_SETUP_GRACE_TIMEOUT_MS;
+let timeoutPartialDataGraceMs = TIMEOUT_PARTIAL_DATA_GRACE_MS;
 
 function createAsyncLock(): AsyncLock {
   let lock: Promise<void> = Promise.resolve();
@@ -1906,7 +1907,7 @@ async function waitForSubagentPartialTimeoutData(
   }
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<undefined>((resolve) => {
-    timeoutId = setTimeout(() => resolve(undefined), TIMEOUT_PARTIAL_DATA_GRACE_MS);
+    timeoutId = setTimeout(() => resolve(undefined), timeoutPartialDataGraceMs);
     timeoutId.unref?.();
   });
   try {
@@ -3009,12 +3010,16 @@ const testing = {
     lastActiveRecallCacheSweepAt = 0;
     minimumTimeoutMs = DEFAULT_MIN_TIMEOUT_MS;
     setupGraceTimeoutMs = DEFAULT_SETUP_GRACE_TIMEOUT_MS;
+    timeoutPartialDataGraceMs = TIMEOUT_PARTIAL_DATA_GRACE_MS;
   },
   setMinimumTimeoutMsForTests(value: number) {
     minimumTimeoutMs = value;
   },
   setSetupGraceTimeoutMsForTests(value: number) {
     setupGraceTimeoutMs = Math.max(0, Math.floor(value));
+  },
+  setTimeoutPartialDataGraceMsForTests(value: number) {
+    timeoutPartialDataGraceMs = Math.max(0, Math.floor(value));
   },
   setCachedResult,
   getCircuitBreakerEntry(key: string) {

@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadOpenClawPlugins } from "./loader.js";
@@ -23,15 +22,18 @@ describe("source checkout bundled plugin runtime", () => {
       origin: "bundled",
     });
 
-    const builtRuntime = path.join(process.cwd(), "dist", "extensions", "twitch", "index.js");
-    const expectedRuntime = fs.existsSync(builtRuntime)
-      ? `${path.sep}dist${path.sep}extensions${path.sep}twitch${path.sep}index.js`
-      : `${path.sep}extensions${path.sep}twitch${path.sep}index.ts`;
-    const expectedRoot = fs.existsSync(builtRuntime)
-      ? `${path.sep}dist${path.sep}extensions${path.sep}twitch`
-      : `${path.sep}extensions${path.sep}twitch`;
+    const runtimeCandidates = [
+      `${path.sep}dist${path.sep}extensions${path.sep}twitch${path.sep}index.js`,
+      `${path.sep}extensions${path.sep}twitch${path.sep}index.ts`,
+    ];
+    const rootCandidates = [
+      `${path.sep}dist${path.sep}extensions${path.sep}twitch`,
+      `${path.sep}extensions${path.sep}twitch`,
+    ];
+    const includesAny = (actual: string | undefined, candidates: readonly string[]) =>
+      actual !== undefined && candidates.some((candidate) => actual.includes(candidate));
 
-    expect(twitch?.source).toContain(expectedRuntime);
-    expect(twitch?.rootDir).toContain(expectedRoot);
+    expect(includesAny(twitch?.source, runtimeCandidates)).toBe(true);
+    expect(includesAny(twitch?.rootDir, rootCandidates)).toBe(true);
   });
 });

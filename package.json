@@ -1674,6 +1674,7 @@
     "@aws-sdk/client-bedrock-runtime": "3.1042.0",
     "@aws-sdk/credential-provider-node": "3.972.39",
     "@aws/bedrock-token-generator": "^1.1.0",
+    "@clack/core": "^1.3.0",
     "@clack/prompts": "^1.3.0",
     "@google/genai": "^1.51.0",
     "@grammyjs/runner": "^2.0.3",
