@@ -993,6 +993,54 @@ describe("uninstallPlugin", () => {
     await expect(fs.access(pluginDir)).rejects.toThrow();
   });
 
+  it("repairs remaining npm plugin openclaw peer links after npm uninstall prunes them", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const npmRoot = path.join(stateDir, "npm");
+    const removedPluginDir = path.join(npmRoot, "node_modules", "removed-plugin");
+    const peerPluginDir = path.join(npmRoot, "node_modules", "peer-plugin");
+    const peerLink = path.join(peerPluginDir, "node_modules", "openclaw");
+    await fs.mkdir(removedPluginDir, { recursive: true });
+    await fs.mkdir(path.dirname(peerLink), { recursive: true });
+    await fs.writeFile(path.join(removedPluginDir, "package.json"), "{}\n");
+    await fs.writeFile(
+      path.join(peerPluginDir, "package.json"),
+      `${JSON.stringify(
+        {
+          name: "peer-plugin",
+          version: "1.0.0",
+          peerDependencies: { openclaw: ">=2026.0.0" },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await fs.symlink(tempDir, peerLink, "junction");
+    runCommandWithTimeoutMock.mockImplementationOnce(async () => {
+      await fs.rm(peerLink, { recursive: true, force: true });
+      return {
+        code: 0,
+        stdout: "",
+        stderr: "",
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+
+    const applied = await applyPluginUninstallDirectoryRemoval({
+      target: removedPluginDir,
+      cleanup: {
+        kind: "npm",
+        npmRoot,
+        packageName: "removed-plugin",
+      },
+    });
+
+    expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
+    await expect(fs.access(removedPluginDir)).rejects.toThrow();
+    await expect(fs.lstat(peerLink).then((stat) => stat.isSymbolicLink())).resolves.toBe(true);
+  });
+
   it("skips npm cleanup when the managed package directory is already absent", async () => {
     const stateDir = path.join(tempDir, "state");
     const npmRoot = path.join(stateDir, "npm");

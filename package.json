@@ -1695,7 +1695,7 @@
     "@mariozechner/pi-tui": "0.73.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "^0.6.0",
-    "@openclaw/fs-safe": "^0.1.1",
+    "@openclaw/fs-safe": "github:openclaw/fs-safe#3c508734af0b",
     "@slack/bolt": "^4.7.2",
     "@slack/types": "^2.21.0",
     "@slack/web-api": "^7.15.2",
@@ -1767,6 +1767,7 @@
     "@aws-sdk/client-bedrock-runtime": "$@aws-sdk/client-bedrock-runtime",
     "axios": "1.16.0",
     "follow-redirects": "1.16.0",
+    "ip-address": "10.2.0",
     "node-domexception": "npm:@nolyfill/domexception@1.0.28",
     "uuid": "14.0.0"
   },
@@ -1789,6 +1790,7 @@
       "basic-ftp": "5.3.0",
       "file-type": "22.0.1",
       "form-data": "2.5.4",
+      "ip-address": "10.2.0",
       "minimatch": "10.2.5",
       "path-to-regexp": "8.4.0",
       "qs": "6.14.2",
@@ -1801,6 +1803,7 @@
       "uuid": "14.0.0"
     },
     "onlyBuiltDependencies": [
+      "@openclaw/fs-safe",
       "@discordjs/opus",
       "@google/genai",
       "@lydell/node-pty",

@@ -2392,16 +2392,17 @@ describe("active-memory plugin", () => {
   });
 
   it("ignores late subagent payloads once the active-memory timeout signal has fired", async () => {
+    const CONFIGURED_TIMEOUT_MS = 25;
     __testing.setMinimumTimeoutMsForTests(1);
     __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 1,
+      timeoutMs: CONFIGURED_TIMEOUT_MS,
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
     runEmbeddedPiAgent.mockImplementationOnce(async (params: { timeoutMs?: number }) => {
-      await new Promise((resolve) => setTimeout(resolve, (params.timeoutMs ?? 0) + 1));
+      await new Promise((resolve) => setTimeout(resolve, (params.timeoutMs ?? 0) + 25));
       return {
         payloads: [{ text: "late timeout payload that should never become memory context" }],
         meta: { aborted: true },
@@ -2433,12 +2434,13 @@ describe("active-memory plugin", () => {
   });
 
   it("does not spend the model timeout budget on active-memory subagent setup", async () => {
-    const CONFIGURED_TIMEOUT_MS = 10;
+    const CONFIGURED_TIMEOUT_MS = 50;
+    const SETUP_GRACE_TIMEOUT_MS = 500;
     __testing.setMinimumTimeoutMsForTests(1);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: CONFIGURED_TIMEOUT_MS,
-      setupGraceTimeoutMs: 100,
+      setupGraceTimeoutMs: SETUP_GRACE_TIMEOUT_MS,
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -2458,7 +2460,9 @@ describe("active-memory plugin", () => {
     );
 
     expect(result?.prependContext).toContain("remember the ramen place");
-    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.timeoutMs).toBe(CONFIGURED_TIMEOUT_MS + 100);
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.timeoutMs).toBe(
+      CONFIGURED_TIMEOUT_MS + SETUP_GRACE_TIMEOUT_MS,
+    );
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
@@ -3607,11 +3611,12 @@ describe("active-memory plugin", () => {
   });
 
   it("skips recall after consecutive timeouts when circuit breaker trips (#74054)", async () => {
+    const CONFIGURED_TIMEOUT_MS = 25;
     __testing.setMinimumTimeoutMsForTests(1);
     __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 1,
+      timeoutMs: CONFIGURED_TIMEOUT_MS,
       logging: true,
       circuitBreakerMaxTimeouts: 2,
       circuitBreakerCooldownMs: 60_000,
@@ -3662,11 +3667,12 @@ describe("active-memory plugin", () => {
   });
 
   it("resets circuit breaker after a successful recall", async () => {
+    const CONFIGURED_TIMEOUT_MS = 25;
     __testing.setMinimumTimeoutMsForTests(1);
     __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 50,
+      timeoutMs: CONFIGURED_TIMEOUT_MS,
       logging: true,
       circuitBreakerMaxTimeouts: 1,
       circuitBreakerCooldownMs: 60_000,
