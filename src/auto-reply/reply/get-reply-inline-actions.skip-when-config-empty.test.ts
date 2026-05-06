@@ -8,13 +8,19 @@ import { stripInlineStatus } from "./reply-inline.js";
 import { buildTestCtx } from "./test-ctx.js";
 import type { TypingController } from "./typing.js";
 
-const { buildStatusReplyMock, createOpenClawToolsMock, getChannelPluginMock, handleCommandsMock } =
-  vi.hoisted(() => ({
-    buildStatusReplyMock: vi.fn(),
-    createOpenClawToolsMock: vi.fn(),
-    getChannelPluginMock: vi.fn(),
-    handleCommandsMock: vi.fn(),
-  }));
+const {
+  buildStatusReplyMock,
+  createOpenClawCodingToolsMock,
+  getChannelPluginMock,
+  handleCommandsMock,
+  resolveSandboxContextMock,
+} = vi.hoisted(() => ({
+  buildStatusReplyMock: vi.fn(),
+  createOpenClawCodingToolsMock: vi.fn(),
+  getChannelPluginMock: vi.fn(),
+  handleCommandsMock: vi.fn(),
+  resolveSandboxContextMock: vi.fn(),
+}));
 
 type HandleInlineActionsInput = Parameters<
   typeof import("./get-reply-inline-actions.js").handleInlineActions
@@ -25,8 +31,12 @@ vi.mock("./commands.runtime.js", () => ({
   buildStatusReply: (...args: unknown[]) => buildStatusReplyMock(...args),
 }));
 
-vi.mock("../../agents/openclaw-tools.runtime.js", () => ({
-  createOpenClawTools: (...args: unknown[]) => createOpenClawToolsMock(...args),
+vi.mock("../../agents/pi-tools.js", () => ({
+  createOpenClawCodingTools: (...args: unknown[]) => createOpenClawCodingToolsMock(...args),
+}));
+
+vi.mock("../../agents/sandbox.js", () => ({
+  resolveSandboxContext: (...args: unknown[]) => resolveSandboxContextMock(...args),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -148,10 +158,12 @@ describe("handleInlineActions", () => {
     handleCommandsMock.mockReset();
     handleCommandsMock.mockResolvedValue({ shouldContinue: true, reply: undefined });
     getChannelPluginMock.mockReset();
-    createOpenClawToolsMock.mockReset();
+    createOpenClawCodingToolsMock.mockReset();
+    resolveSandboxContextMock.mockReset();
     buildStatusReplyMock.mockReset();
     buildStatusReplyMock.mockResolvedValue({ text: "status" });
-    createOpenClawToolsMock.mockReturnValue([]);
+    createOpenClawCodingToolsMock.mockReturnValue([]);
+    resolveSandboxContextMock.mockResolvedValue(null);
     getChannelPluginMock.mockImplementation((channelId?: string) =>
       channelId === "whatsapp"
         ? { commands: { skipWhenConfigEmpty: true } }
@@ -575,8 +587,8 @@ describe("handleInlineActions", () => {
 
   it("passes requesterAgentIdOverride into inline tool runtimes", async () => {
     const typing = createTypingController();
-    const toolExecute = vi.fn(async () => ({ text: "spawned" }));
-    createOpenClawToolsMock.mockReturnValue([
+    const toolExecute = vi.fn(async () => ({ content: "spawned" }));
+    createOpenClawCodingToolsMock.mockReturnValue([
       {
         name: "sessions_spawn",
         execute: toolExecute,
@@ -623,19 +635,19 @@ describe("handleInlineActions", () => {
       }),
     );
 
-    expect(result).toEqual({ kind: "reply", reply: { text: "✅ Done." } });
-    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
+    expect(result).toEqual({ kind: "reply", reply: { text: "spawned" } });
+    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        requesterAgentIdOverride: "named-worker",
+        agentId: "named-worker",
       }),
     );
     expect(toolExecute).toHaveBeenCalled();
   });
 
-  it("passes senderIsOwner into inline tool runtimes before owner-only filtering", async () => {
+  it("passes senderIsOwner into the shared inline tool policy pipeline", async () => {
     const typing = createTypingController();
-    const toolExecute = vi.fn(async () => ({ text: "updated" }));
-    createOpenClawToolsMock.mockReturnValue([
+    const toolExecute = vi.fn(async () => ({ content: "updated" }));
+    createOpenClawCodingToolsMock.mockReturnValue([
       {
         name: "message",
         execute: toolExecute,
@@ -681,10 +693,124 @@ describe("handleInlineActions", () => {
       }),
     );
 
-    expect(result).toEqual({ kind: "reply", reply: { text: "✅ Done." } });
-    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
+    expect(result).toEqual({ kind: "reply", reply: { text: "updated" } });
+    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         senderIsOwner: true,
+      }),
+    );
+    expect(toolExecute).toHaveBeenCalled();
+  });
+
+  it("uses the canonical target session policy context for inline tool dispatch", async () => {
+    const typing = createTypingController();
+    const toolExecute = vi.fn(async () => ({ content: "spawned" }));
+    const sandbox = {
+      enabled: true,
+      workspaceDir: "/tmp/sandbox",
+      workspaceAccess: "ro",
+      tools: { allow: ["read"] },
+    };
+    resolveSandboxContextMock.mockResolvedValue(sandbox);
+    createOpenClawCodingToolsMock.mockReturnValue([
+      {
+        name: "sessions_spawn",
+        execute: toolExecute,
+      },
+    ]);
+
+    const ctx = buildTestCtx({
+      Body: "/spawn_subagent investigate",
+      CommandBody: "/spawn_subagent investigate",
+      SessionKey: "agent:main:telegram:slash-session",
+      RuntimePolicySessionKey: "agent:target:telegram:direct:target-session",
+      AccountId: "acct-1",
+      SenderName: "Alice",
+      SenderUsername: "alice_u",
+      SenderE164: "+15551234567",
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const skillCommands: SkillCommandSpec[] = [
+      {
+        name: "spawn_subagent",
+        skillName: "spawn-subagent",
+        description: "Spawn a subagent",
+        dispatch: {
+          kind: "tool",
+          toolName: "sessions_spawn",
+          argMode: "raw",
+        },
+        sourceFilePath: "/tmp/plugin/commands/spawn-subagent.md",
+      },
+    ];
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "/spawn_subagent investigate",
+        command: {
+          surface: "telegram",
+          channel: "telegram",
+          channelId: "telegram",
+          isAuthorizedSender: true,
+          senderId: "sender-1",
+          senderIsOwner: true,
+          rawBodyNormalized: "/spawn_subagent investigate",
+          commandBodyNormalized: "/spawn_subagent investigate",
+        },
+        overrides: {
+          cfg: { commands: { text: true } },
+          allowTextCommands: true,
+          provider: "openai",
+          model: "gpt-5.4",
+          sessionKey: "agent:wrapper:telegram:direct:wrapper-session",
+          sessionEntry: {
+            sessionId: "wrapper-session",
+            updatedAt: Date.now(),
+            groupId: "wrapper-group",
+            groupChannel: "#wrapper",
+            space: "wrapper-space",
+            spawnedBy: "agent:wrapper-parent",
+          } as SessionEntry,
+          sessionStore: {
+            "agent:wrapper:telegram:direct:wrapper-session": {
+              sessionId: "target-session",
+              updatedAt: Date.now(),
+              groupId: "target-group",
+              groupChannel: "#target",
+              space: "target-space",
+              spawnedBy: "agent:target-parent",
+            } as SessionEntry,
+          },
+          skillCommands,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ kind: "reply", reply: { text: "spawned" } });
+    expect(resolveSandboxContextMock).toHaveBeenCalledWith({
+      config: { commands: { text: true } },
+      sessionKey: "agent:target:telegram:direct:target-session",
+      workspaceDir: "/tmp",
+    });
+    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:target:telegram:direct:target-session",
+        sandbox,
+        groupId: "target-group",
+        groupChannel: "#target",
+        groupSpace: "target-space",
+        spawnedBy: "agent:target-parent",
+        messageProvider: "telegram",
+        agentAccountId: "acct-1",
+        senderId: "sender-1",
+        senderName: "Alice",
+        senderUsername: "alice_u",
+        senderE164: "+15551234567",
+        modelProvider: "openai",
+        modelId: "gpt-5.4",
       }),
     );
     expect(toolExecute).toHaveBeenCalled();
