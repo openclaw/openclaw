@@ -1461,9 +1461,10 @@ describe("runCodexAppServerAttempt", () => {
       return undefined;
     });
 
-    await expect(
-      runCodexAppServerAttempt(createParamsWithRuntimePlan(sessionFile, workspaceDir)),
-    ).rejects.toThrow("turn start exploded");
+    const params = createParams(sessionFile, workspaceDir);
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow("turn start exploded");
 
     expect(llmInput).toHaveBeenCalledTimes(1);
     expect(llmOutput).toHaveBeenCalledTimes(1);
