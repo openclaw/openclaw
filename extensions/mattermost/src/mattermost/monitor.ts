@@ -828,6 +828,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
   const {
     resolveMattermostMedia,
+    resolveMattermostThreadFileIds,
     sendTypingIndicator,
     resolveChannelInfo,
     resolveUserInfo,
@@ -1242,6 +1243,22 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       logVerboseMessage("mattermost: drop post (missing message id)");
       return;
     }
+
+    if (
+      post.id &&
+      (!normalizeOptionalString(post.root_id) ||
+        !(Array.isArray(post.file_ids) && post.file_ids.length > 0))
+    ) {
+      try {
+        const hydratedPost = await client.request<MattermostPost>(`/posts/${post.id}`);
+        if (hydratedPost && typeof hydratedPost === "object") {
+          post = { ...post, ...hydratedPost };
+        }
+      } catch (err) {
+        logVerboseMessage(`mattermost: post hydration failed post=${post.id}: ${String(err)}`);
+      }
+    }
+
     const replayResult = await processMattermostReplayGuardedPost({
       accountId: account.accountId,
       messageIds: allMessageIds,
@@ -1502,7 +1519,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           recordPendingHistory();
           return;
         }
-        const mediaList = await resolveMattermostMedia(post.file_ids);
+        const threadFileIds = await resolveMattermostThreadFileIds(
+          threadRootId,
+          post.id,
+          post.file_ids,
+        );
+        const mediaList = await resolveMattermostMedia([
+          ...(post.file_ids ?? []),
+          ...threadFileIds,
+        ]);
         const mediaPlaceholder = buildMattermostAttachmentPlaceholder(mediaList);
         const bodySource = oncharTriggered ? oncharResult.stripped : rawText;
         const baseText = [bodySource, mediaPlaceholder].filter(Boolean).join("\n").trim();
