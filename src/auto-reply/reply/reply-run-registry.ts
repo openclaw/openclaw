@@ -469,7 +469,11 @@ export function isReplyRunStreamingForSessionId(sessionId: string): boolean {
 export function queueReplyRunMessage(sessionId: string, text: string): boolean {
   const operation = resolveReplyRunForCurrentSessionId(sessionId);
   const backend = operation ? getAttachedBackend(operation) : undefined;
-  if (!operation || operation.phase !== "running" || !backend?.queueMessage) {
+  // Accept messages during preflight_compacting and memory_flushing so queued
+  // follow-up messages (e.g. from webchat) are not silently dropped while the
+  // embedded run is compacting.
+  const acceptingPhases = new Set(["running", "preflight_compacting", "memory_flushing"]);
+  if (!operation || !acceptingPhases.has(operation.phase) || !backend?.queueMessage) {
     return false;
   }
   if (!backend.isStreaming()) {

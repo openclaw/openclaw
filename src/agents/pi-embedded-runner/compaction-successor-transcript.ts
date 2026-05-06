@@ -151,6 +151,11 @@ function buildSuccessorEntries(params: {
       removedIds.add(entry.id);
     }
   }
+  // Preserve assistant messages that precede surviving user messages.
+  // Otherwise the rotated transcript may show consecutive user messages
+  // with no intermediate reply, causing the agent to treat multiple turns
+  // as one combined input.
+  preserveLastAssistantBeforeSurvivingUser(allEntries, removedIds);
 
   const entryById = new Map(allEntries.map((entry) => [entry.id, entry]));
   const activeBranchIds = new Set(branch.map((entry) => entry.id));
@@ -176,6 +181,52 @@ function buildSuccessorEntries(params: {
     activeBranchIds,
     originalIndexById,
   });
+}
+
+/**
+ * Preserve assistant messages that directly precede surviving user messages.
+ * Without this, the rotated transcript may contain consecutive user messages
+ * with no intermediate replies, causing the agent to treat multiple turns
+ * as a single combined input (since it sees unanswered user messages).
+ */
+function preserveLastAssistantBeforeSurvivingUser(
+  allEntries: SessionEntry[],
+  removedIds: Set<string>,
+): void {
+  // Collect surviving user message ids
+  const survivingUserIds = new Set<string>();
+  for (const entry of allEntries) {
+    if (
+      entry.type === "message" &&
+      typeof entry.message === "object" &&
+      entry.message !== null &&
+      (entry.message as { role?: string }).role === "user" &&
+      !removedIds.has(entry.id)
+    ) {
+      survivingUserIds.add(entry.id);
+    }
+  }
+
+  if (survivingUserIds.size === 0) return;
+
+  // Scan for removed assistant messages; if the next surviving user
+  // message directly follows (no intervening surviving user), keep it.
+  let pendingAssistantId: string | undefined;
+  for (const entry of allEntries) {
+    if (entry.type === "message" && typeof entry.message === "object" && entry.message !== null) {
+      const role = (entry.message as { role?: string }).role;
+      if (role === "assistant" && removedIds.has(entry.id)) {
+        pendingAssistantId = entry.id;
+      } else if (role === "user") {
+        if (survivingUserIds.has(entry.id) && pendingAssistantId) {
+          removedIds.delete(pendingAssistantId);
+        }
+        pendingAssistantId = undefined;
+      } else if (role !== "toolResult") {
+        pendingAssistantId = undefined;
+      }
+    }
+  }
 }
 
 function collectLatestStateEntryIds(entries: SessionEntry[]): Set<string> {
