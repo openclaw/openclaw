@@ -1536,10 +1536,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
           const sessionsRes = await client.listSessions(
             createStartupConversationSummaryListParams(currentAgentId),
           );
-          const activeNonCurrent = sessionsRes.sessions?.find((s) => s.key !== currentSessionKey);
-          if (activeNonCurrent) {
+          const sessions = sessionsRes.sessions ?? [];
+          const summarySession =
+            sessions.find((s) => s.key === currentSessionKey) ?? sessions[0];
+          if (summarySession) {
             const summaryStr =
-              activeNonCurrent.derivedTitle || activeNonCurrent.lastMessagePreview || "";
+              summarySession.derivedTitle || summarySession.lastMessagePreview || "";
             const dynamicLines = formatStartupConversationSummary(summaryStr);
             if (dynamicLines.length > 0) {
               chatLog.addSystem("");
