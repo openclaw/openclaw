@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 
 type MockManifestRegistry = {
@@ -156,7 +157,8 @@ function collectActiveRegistryLookups() {
       Boolean(
         options &&
         typeof options === "object" &&
-        Object.hasOwn(options as Record<string, unknown>, "onlyPluginIds"),
+        Object.hasOwn(options as Record<string, unknown>, "onlyPluginIds") &&
+        !Object.hasOwn(options as Record<string, unknown>, "activate"),
       ),
     );
 }
@@ -301,7 +303,7 @@ describe("resolvePluginCapabilityProviders", () => {
 
   it("resolves bundled capability ids from the current metadata snapshot", () => {
     setCurrentPluginMetadataSnapshot({
-      policyHash: "policy",
+      policyHash: resolveInstalledPluginIndexPolicyHash({}),
       workspaceDir: "/workspace",
       index: { plugins: [] },
       registryDiagnostics: [],
@@ -347,7 +349,7 @@ describe("resolvePluginCapabilityProviders", () => {
 
   it("resolves enabled external capability ids from the current metadata snapshot", () => {
     setCurrentPluginMetadataSnapshot({
-      policyHash: "policy",
+      policyHash: resolveInstalledPluginIndexPolicyHash({}),
       workspaceDir: "/workspace",
       index: {
         plugins: [
@@ -468,6 +470,62 @@ describe("resolvePluginCapabilityProviders", () => {
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenLastCalledWith({
       onlyPluginIds: ["external-image"],
     });
+    expect(mocks.loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
+  });
+
+  it("cold-loads enabled external manifest-contract providers missing from startup registry", () => {
+    const loaded = createEmptyPluginRegistry();
+    loaded.speechProviders.push({
+      pluginId: "fish-audio",
+      pluginName: "Fish Audio",
+      source: "test",
+      provider: {
+        id: "fish-audio",
+        label: "Fish Audio",
+        isConfigured: () => true,
+        synthesize: async () => ({ kind: "audio", data: Buffer.from([]), mimeType: "audio/mpeg" }),
+      },
+    } as never);
+    mocks.loadPluginRegistrySnapshot.mockReturnValue({
+      plugins: [{ pluginId: "fish-audio", origin: "global", enabled: true }],
+    });
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "fish-audio",
+          origin: "global",
+          enabledByDefault: false,
+          contracts: { speechProviders: ["fish-audio"] },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.resolveRuntimePluginRegistry.mockImplementation((options?: unknown) => {
+      if (
+        options &&
+        typeof options === "object" &&
+        (options as { activate?: unknown }).activate === false
+      ) {
+        return loaded;
+      }
+      return undefined;
+    });
+
+    const provider = resolvePluginCapabilityProvider({
+      key: "speechProviders",
+      providerId: "fish-audio",
+    });
+
+    expect(provider?.id).toBe("fish-audio");
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
+      onlyPluginIds: ["fish-audio"],
+    });
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activate: false,
+        onlyPluginIds: ["fish-audio"],
+      }),
+    );
     expect(mocks.loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
   });
 
@@ -864,6 +922,45 @@ describe("resolvePluginCapabilityProviders", () => {
       env: process.env,
       pluginSdkResolution: undefined,
     });
+  });
+
+  it("loads requested realtime voice providers missing from active registry", () => {
+    const active = createEmptyPluginRegistry();
+    active.realtimeVoiceProviders.push({
+      pluginId: "openai",
+      pluginName: "openai",
+      source: "test",
+      provider: { id: "openai" },
+    } as never);
+    const loaded = createEmptyPluginRegistry();
+    loaded.realtimeVoiceProviders.push({
+      pluginId: "google",
+      pluginName: "Google",
+      source: "test",
+      provider: { id: "google" },
+    } as never);
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "google",
+          origin: "bundled",
+          contracts: { realtimeVoiceProviders: ["google"] },
+        },
+      ] as never,
+      diagnostics: [],
+    });
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? active : loaded,
+    );
+
+    const provider = resolvePluginCapabilityProvider({
+      key: "realtimeVoiceProviders",
+      providerId: "google",
+      cfg: { plugins: { allow: ["openai", "google"] } } as OpenClawConfig,
+    });
+
+    expect(provider?.id).toBe("google");
+    expectActiveRegistryLookup(["google"]);
   });
 
   it("does not merge unrelated bundled capability providers when cfg requests one provider", () => {

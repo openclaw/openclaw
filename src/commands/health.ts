@@ -14,6 +14,11 @@ import { getRuntimeConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
+import {
+  DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+  DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+  evaluateChannelHealth,
+} from "../gateway/channel-health-policy.js";
 import type { ChannelRuntimeSnapshot } from "../gateway/server-channel-runtime.types.js";
 import { info } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -91,6 +96,20 @@ const formatDurationParts = (ms: number): string => {
   }
   return parts.join(" ");
 };
+
+function formatEventLoopHealthLine(summary: HealthSummary): string | null {
+  const eventLoop = summary.eventLoop;
+  if (!eventLoop) {
+    return null;
+  }
+  const state = eventLoop.degraded ? "degraded" : "ok";
+  const reasons = eventLoop.reasons.length > 0 ? ` reasons=${eventLoop.reasons.join(",")}` : "";
+  return `Gateway event loop: ${state}${reasons} max=${Math.round(
+    eventLoop.delayMaxMs,
+  )}ms p99=${Math.round(eventLoop.delayP99Ms)}ms util=${eventLoop.utilization} cpu=${
+    eventLoop.cpuCoreRatio
+  }`;
+}
 
 const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
   resolveHeartbeatSummaryForAgent(cfg, agentId);
@@ -307,6 +326,7 @@ export async function getHealthSnapshot(params?: {
   probe?: boolean;
   includeSensitive?: boolean;
   runtimeSnapshot?: ChannelRuntimeSnapshot;
+  eventLoop?: HealthSummary["eventLoop"];
 }): Promise<HealthSummary> {
   const timeoutMs = params?.timeoutMs;
   const cfg = getRuntimeConfig();
@@ -432,6 +452,15 @@ export async function getHealthSnapshot(params?: {
       if (lastProbeAt) {
         snapshot.lastProbeAt = lastProbeAt;
       }
+      const health = evaluateChannelHealth(snapshot, {
+        channelId: plugin.id,
+        now: Date.now(),
+        staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+        channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+      });
+      if (!health.healthy) {
+        snapshot.healthState = health.reason;
+      }
 
       const summary = plugin.status?.buildChannelSummary
         ? await plugin.status.buildChannelSummary({
@@ -483,6 +512,7 @@ export async function getHealthSnapshot(params?: {
     ok: true,
     ts: Date.now(),
     durationMs: Date.now() - start,
+    ...(params?.eventLoop ? { eventLoop: params.eventLoop } : {}),
     ...(pluginHealth ? { plugins: pluginHealth } : {}),
     channels,
     channelOrder,
@@ -666,6 +696,10 @@ export async function healthCommand(
           });
     for (const line of channelLines) {
       runtime.log(styleHealthChannelLine(line, rich));
+    }
+    const eventLoopLine = formatEventLoopHealthLine(summary);
+    if (eventLoopLine) {
+      runtime.log(styleHealthChannelLine(eventLoopLine, rich));
     }
     for (const plugin of displayPlugins) {
       const channelSummary = summary.channels?.[plugin.id];

@@ -10,6 +10,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -18,9 +19,8 @@ import { mkdtempSync } from "node:fs";
 import { createServer } from "node:http";
 import { createConnection as createNetConnection, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve, win32 as pathWin32 } from "node:path";
+import { dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { assertNoLegacyPluginDependencyStagingDebris } from "../src/infra/package-dist-inventory.ts";
 import { isLocalBuildMetadataDistPath } from "./lib/local-build-metadata-paths.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -33,6 +33,7 @@ const SUPPORTED_SUITES = new Set([
   "packaged-upgrade",
   "dev-update",
 ]);
+const SUPPORTED_OS_IDS = new Set(["ubuntu", "windows", "macos"]);
 
 export const CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS",
@@ -106,6 +107,7 @@ function buildReleaseProviderConfigOverride(providerMeta) {
 }
 
 const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
+const INSTALL_STAGE_DEBRIS_DIR_PATTERN = /^\.openclaw-install-stage(?:-[^/]+)?$/iu;
 const OMITTED_QA_EXTENSION_PREFIXES = [
   "dist/extensions/qa-channel/",
   "dist/extensions/qa-lab/",
@@ -119,6 +121,13 @@ export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
 export const CROSS_OS_GATEWAY_READY_TIMEOUT_MS = 3 * 60_000;
 export const CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS = 5 * 60_000;
 export const CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE = "minimal";
+export const CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS = 25 * 60;
+export const CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS =
+  (CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS + 5 * 60) * 1000;
+export const CROSS_OS_COMMAND_HEARTBEAT_SECONDS = parsePositiveIntegerEnv(
+  "OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS",
+  60,
+);
 
 if (isMainModule()) {
   try {
@@ -229,6 +238,7 @@ export function resolveRunnerMatrix(params) {
   const pick = (...values) =>
     values.find((value) => typeof value === "string" && value.trim().length > 0)?.trim();
   const suites = resolveRequestedSuites(params.mode, params.ref);
+  const suiteFilter = parseCrossOsSuiteFilter(params.suiteFilter ?? "");
   const runners = [
     {
       os_id: "ubuntu",
@@ -249,17 +259,82 @@ export function resolveRunnerMatrix(params) {
       artifact_name: "macos",
     },
   ];
-  return {
-    include: runners.flatMap((runner) =>
-      suites.map((suite) =>
+  const include = runners.flatMap((runner) =>
+    suites
+      .filter((suite) => suiteFilter.matches(runner.os_id, suite))
+      .map((suite) =>
         Object.assign({}, runner, {
           suite,
           suite_label: formatSuiteLabel(suite),
           lane: suite.includes(`upgrade`) || suite === `dev-update` ? `upgrade` : `fresh`,
         }),
       ),
-    ),
+  );
+  if (include.length === 0) {
+    throw new Error(
+      `cross_os_suite_filter ${JSON.stringify(params.suiteFilter ?? "")} did not match any ${params.mode} suite.`,
+    );
+  }
+  return {
+    include,
   };
+}
+
+export function parseCrossOsSuiteFilter(rawFilter) {
+  const tokens = String(rawFilter ?? "")
+    .split(/[, ]+/u)
+    .map((token) => normalizeCrossOsSuiteFilterToken(token))
+    .filter(Boolean);
+  if (tokens.length === 0) {
+    return {
+      matches: () => true,
+      tokens,
+    };
+  }
+
+  const matchers = tokens.map((token) => {
+    if (SUPPORTED_SUITES.has(token)) {
+      return { osId: "", suite: token };
+    }
+    if (SUPPORTED_OS_IDS.has(token)) {
+      return { osId: token, suite: "" };
+    }
+    for (const separator of ["/", ":", "-"]) {
+      const matchedOs = [...SUPPORTED_OS_IDS].find((osId) =>
+        token.startsWith(`${osId}${separator}`),
+      );
+      if (!matchedOs) {
+        continue;
+      }
+      const suite = token.slice(matchedOs.length + separator.length);
+      if (!SUPPORTED_SUITES.has(suite)) {
+        break;
+      }
+      return { osId: matchedOs, suite };
+    }
+    throw new Error(
+      `Unsupported cross_os_suite_filter token ${JSON.stringify(token)}. Use an OS id, suite id, or os/suite pair such as windows/packaged-upgrade.`,
+    );
+  });
+
+  return {
+    matches: (osId, suite) =>
+      matchers.some((matcher) => {
+        const osMatches = !matcher.osId || matcher.osId === osId;
+        const suiteMatches = !matcher.suite || matcher.suite === suite;
+        return osMatches && suiteMatches;
+      }),
+    tokens,
+  };
+}
+
+function normalizeCrossOsSuiteFilterToken(token) {
+  return token
+    .trim()
+    .toLowerCase()
+    .replace(/_/gu, "-")
+    .replace(/\s*[/:-]\s*/gu, (separator) => separator.trim())
+    .replace(/\s+/gu, "-");
 }
 
 export function readRunnerOverrideEnv(env = process.env) {
@@ -316,6 +391,7 @@ async function main(argv) {
           ubuntuRunner: args["ubuntu-runner"],
           windowsRunner: args["windows-runner"],
           macosRunner: args["macos-runner"],
+          suiteFilter: args["suite-filter"],
           ...runnerOverrideEnv,
         }),
       )}\n`,
@@ -551,6 +627,83 @@ function normalizeRelativePath(value) {
   return value.replace(/\\/gu, "/");
 }
 
+function isNotFoundError(error) {
+  return error && typeof error === "object" && error.code === "ENOENT";
+}
+
+function isInstallStageDirName(value) {
+  return INSTALL_STAGE_DEBRIS_DIR_PATTERN.test(value);
+}
+
+function collectLegacyPluginDependencyStagingDebrisPaths(packageRoot) {
+  const rootEntries = readdirSync(packageRoot, { withFileTypes: true });
+  const debris = [];
+  for (const rootEntry of rootEntries) {
+    if (!rootEntry.isDirectory() || rootEntry.name.toLowerCase() !== "dist") {
+      continue;
+    }
+    const distDir = join(packageRoot, rootEntry.name);
+    let distEntries = [];
+    try {
+      distEntries = readdirSync(distDir, { withFileTypes: true });
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        continue;
+      }
+      throw error;
+    }
+    for (const distEntry of distEntries) {
+      if (!distEntry.isDirectory() || distEntry.name.toLowerCase() !== "extensions") {
+        continue;
+      }
+      const extensionsDir = join(distDir, distEntry.name);
+      let extensionEntries = [];
+      try {
+        extensionEntries = readdirSync(extensionsDir, { withFileTypes: true });
+      } catch (error) {
+        if (isNotFoundError(error)) {
+          continue;
+        }
+        throw error;
+      }
+
+      for (const extensionEntry of extensionEntries) {
+        if (!extensionEntry.isDirectory()) {
+          continue;
+        }
+        const extensionPath = join(extensionsDir, extensionEntry.name);
+        let stagingEntries = [];
+        try {
+          stagingEntries = readdirSync(extensionPath, { withFileTypes: true });
+        } catch (error) {
+          if (isNotFoundError(error)) {
+            continue;
+          }
+          throw error;
+        }
+        for (const stagingEntry of stagingEntries) {
+          if (isInstallStageDirName(stagingEntry.name)) {
+            debris.push(
+              normalizeRelativePath(relative(packageRoot, join(extensionPath, stagingEntry.name))),
+            );
+          }
+        }
+      }
+    }
+  }
+  return debris.toSorted((left, right) => left.localeCompare(right));
+}
+
+function assertNoLegacyPluginDependencyStagingDebris(packageRoot) {
+  const debris = collectLegacyPluginDependencyStagingDebrisPaths(packageRoot);
+  if (debris.length === 0) {
+    return;
+  }
+  throw new Error(
+    `unexpected legacy plugin dependency staging debris in package dist: ${debris.join(", ")}`,
+  );
+}
+
 function isPackagedDistPath(relativePath) {
   if (!relativePath.startsWith("dist/")) {
     return false;
@@ -574,7 +727,7 @@ function isPackagedDistPath(relativePath) {
 }
 
 export async function writePackageDistInventoryForCandidate(params) {
-  await assertNoLegacyPluginDependencyStagingDebris(params.sourceDir);
+  assertNoLegacyPluginDependencyStagingDebris(params.sourceDir);
   const dryRun = await runCommand(
     npmCommand(),
     ["pack", "--dry-run", "--ignore-scripts", "--json"],
@@ -730,60 +883,80 @@ async function runUpgradeLane(params) {
   const cleanup = [];
   try {
     const env = buildLaneEnv(lane, params.providerConfig, params.providerSecretValue);
-    logLanePhase(lane, "install-baseline");
-    if (!params.baselineTgz && params.baselineSpec) {
-      await installPackageSpec({
+    await runTimedLanePhase(lane, "install-baseline", async () => {
+      if (!params.baselineTgz && params.baselineSpec) {
+        await installPackageSpec({
+          lane,
+          env,
+          packageSpec: params.baselineSpec,
+          logPath: join(params.logsDir, "upgrade-install-baseline.log"),
+          ignoreScripts: true,
+        });
+      } else {
+        await installTarballPackage({
+          lane,
+          env,
+          tgzPath: params.baselineTgz,
+          logPath: join(params.logsDir, "upgrade-install-baseline.log"),
+          ignoreScripts: true,
+          restoreBundledPluginPostinstall: false,
+        });
+      }
+    });
+    await runTimedLanePhase(lane, "run-baseline-bundled-plugin-postinstall", async () => {
+      await runBundledPluginPostinstall({
         lane,
         env,
-        packageSpec: params.baselineSpec,
         logPath: join(params.logsDir, "upgrade-install-baseline.log"),
       });
-    } else {
-      await installTarballPackage({
-        lane,
-        env,
-        tgzPath: params.baselineTgz,
-        logPath: join(params.logsDir, "upgrade-install-baseline.log"),
-        restoreBundledPluginPostinstall: false,
-      });
-    }
-    logLanePhase(lane, "run-baseline-bundled-plugin-postinstall");
-    await runBundledPluginPostinstall({
-      lane,
-      env,
-      logPath: join(params.logsDir, "upgrade-install-baseline.log"),
     });
 
     const baseline = {
       version: readInstalledVersion(lane.prefixDir),
     };
 
-    logLanePhase(lane, "update");
     const updateEnv = buildRealUpdateEnv(env);
-    const updateArgs = [
-      "update",
-      "--tag",
-      params.candidateUrl,
-      "--yes",
-      "--json",
-      "--timeout",
-      String(updateStepTimeoutSeconds()),
-    ];
-    const updateResult = await runOpenClaw({
-      lane,
-      env: updateEnv,
-      args: updateArgs,
-      logPath: join(params.logsDir, "upgrade-update.log"),
-      timeoutMs: updateTimeoutMs(),
-      check: false,
+    const updateArgs = buildPackagedUpgradeUpdateArgs(params.candidateUrl);
+    const updateLogPath = join(params.logsDir, "upgrade-update.log");
+    let updateResult;
+    let usedWindowsPackagedUpgradeTimeoutFallback = false;
+    await runTimedLanePhase(lane, "update", async () => {
+      try {
+        updateResult = await runOpenClaw({
+          lane,
+          env: updateEnv,
+          args: updateArgs,
+          logPath: updateLogPath,
+          timeoutMs: updateTimeoutMs(),
+          check: false,
+        });
+      } catch (error) {
+        if (!isRecoverableWindowsPackagedUpgradeTimeoutError(error, process.platform)) {
+          throw error;
+        }
+        usedWindowsPackagedUpgradeTimeoutFallback = true;
+        appendFileSync(
+          updateLogPath,
+          `\n[release-checks] Windows baseline updater timed out after fetching candidate; falling back to direct candidate install: ${formatError(error)}\n`,
+        );
+        updateResult = {
+          exitCode: 124,
+          stdout: "",
+          stderr: formatError(error),
+        };
+      }
     });
-    if (isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(updateResult, process.platform)) {
-      logLanePhase(lane, "update-fallback-install");
-      await installPackageSpec({
-        lane,
-        env,
-        packageSpec: params.candidateUrl,
-        logPath: join(params.logsDir, "upgrade-update-fallback-install.log"),
+    const usedWindowsPackagedUpgradeFallback =
+      usedWindowsPackagedUpgradeTimeoutFallback ||
+      isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(updateResult, process.platform);
+    if (usedWindowsPackagedUpgradeFallback) {
+      await runTimedLanePhase(lane, "update-fallback-install", async () => {
+        await installPackageSpec({
+          lane,
+          env,
+          packageSpec: params.candidateUrl,
+          logPath: join(params.logsDir, "upgrade-update-fallback-install.log"),
+        });
       });
     } else {
       verifyPackagedUpgradeUpdateResult(updateResult, {
@@ -791,68 +964,83 @@ async function runUpgradeLane(params) {
       });
     }
 
-    logLanePhase(lane, "update-status");
-    await runOpenClaw({
-      lane,
-      env: updateEnv,
-      args: ["update", "status", "--json"],
-      logPath: join(params.logsDir, "upgrade-update-status.log"),
-      timeoutMs: 2 * 60 * 1000,
-    });
-    logLanePhase(lane, "run-bundled-plugin-postinstall");
-    await runBundledPluginPostinstall({
-      lane,
-      env,
-      logPath: join(params.logsDir, "upgrade-bundled-plugin-postinstall.log"),
+    if (
+      shouldRunPackagedUpgradeStatusProbe({
+        platform: process.platform,
+        usedWindowsPackagedUpgradeFallback,
+      })
+    ) {
+      await runTimedLanePhase(lane, "update-status", async () => {
+        await runOpenClaw({
+          lane,
+          env: updateEnv,
+          args: ["update", "status", "--json"],
+          logPath: join(params.logsDir, "upgrade-update-status.log"),
+          timeoutMs: 2 * 60 * 1000,
+        });
+      });
+    }
+    await runTimedLanePhase(lane, "run-bundled-plugin-postinstall", async () => {
+      await runBundledPluginPostinstall({
+        lane,
+        env,
+        logPath: join(params.logsDir, "upgrade-bundled-plugin-postinstall.log"),
+      });
     });
 
     const installed = readInstalledMetadata(lane.prefixDir);
     verifyInstalledCandidate(installed, params.build);
 
-    logLanePhase(lane, "onboard");
-    await runOnboard({
-      lane,
-      env,
-      providerConfig: params.providerConfig,
-      logPath: join(params.logsDir, "upgrade-onboard.log"),
+    await runTimedLanePhase(lane, "onboard", async () => {
+      await runOnboard({
+        lane,
+        env,
+        providerConfig: params.providerConfig,
+        logPath: join(params.logsDir, "upgrade-onboard.log"),
+      });
     });
 
-    logLanePhase(lane, "models-set");
-    await runModelsSet({
-      lane,
-      env,
-      providerConfig: params.providerConfig,
-      logPath: join(params.logsDir, "upgrade-models-set.log"),
+    await runTimedLanePhase(lane, "models-set", async () => {
+      await runModelsSet({
+        lane,
+        env,
+        providerConfig: params.providerConfig,
+        logPath: join(params.logsDir, "upgrade-models-set.log"),
+      });
     });
 
-    logLanePhase(lane, "start-gateway");
-    const gateway = await startGateway({
-      lane,
-      env,
-      logPath: join(params.logsDir, "upgrade-gateway.log"),
-    });
+    const gateway = await runTimedLanePhase(lane, "start-gateway", async () =>
+      startGateway({
+        lane,
+        env,
+        logPath: join(params.logsDir, "upgrade-gateway.log"),
+      }),
+    );
     cleanup.push(() => stopGateway(gateway));
 
-    logLanePhase(lane, "wait-gateway");
-    await waitForGateway({
-      lane,
-      env,
-      logPath: join(params.logsDir, "upgrade-gateway-status.log"),
+    await runTimedLanePhase(lane, "wait-gateway", async () => {
+      await waitForGateway({
+        lane,
+        env,
+        logPath: join(params.logsDir, "upgrade-gateway-status.log"),
+      });
     });
 
-    logLanePhase(lane, "dashboard");
-    await runDashboardSmoke({
-      lane,
-      logPath: join(params.logsDir, "upgrade-dashboard.log"),
+    await runTimedLanePhase(lane, "dashboard", async () => {
+      await runDashboardSmoke({
+        lane,
+        logPath: join(params.logsDir, "upgrade-dashboard.log"),
+      });
     });
 
-    logLanePhase(lane, "agent-turn");
-    const agent = await runAgentTurn({
-      lane,
-      env,
-      label: "upgrade",
-      logPath: join(params.logsDir, "upgrade-agent.log"),
-    });
+    const agent = await runTimedLanePhase(lane, "agent-turn", async () =>
+      runAgentTurn({
+        lane,
+        env,
+        label: "upgrade",
+        logPath: join(params.logsDir, "upgrade-agent.log"),
+      }),
+    );
 
     return {
       status: "pass",
@@ -862,6 +1050,7 @@ async function runUpgradeLane(params) {
       dashboardStatus: "pass",
       gatewayPort: lane.gatewayPort,
       agentOutput: trimForSummary(agent.stdout),
+      phaseTimings: lane.phaseTimings,
     };
   } finally {
     await runCleanup(cleanup);
@@ -1219,6 +1408,7 @@ function createLaneState(name) {
     stateDir,
     appDataDir,
     gatewayPort: 0,
+    phaseTimings: [],
   };
 }
 
@@ -1331,6 +1521,19 @@ export function verifyPackagedUpgradeUpdateResult(result, _options) {
   );
 }
 
+export function buildPackagedUpgradeUpdateArgs(candidateUrl) {
+  return [
+    "update",
+    "--tag",
+    candidateUrl,
+    "--yes",
+    "--json",
+    "--no-restart",
+    "--timeout",
+    String(updateStepTimeoutSeconds()),
+  ];
+}
+
 export function isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
   result,
   platform = process.platform,
@@ -1346,6 +1549,29 @@ export function isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
     /[/\\]\.openclaw-\d+-\d+[/\\]/u.test(output) &&
     /\.node['"]?/iu.test(output)
   );
+}
+
+export function isRecoverableWindowsPackagedUpgradeTimeoutError(
+  error,
+  platform = process.platform,
+) {
+  if (platform !== "win32") {
+    return false;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /\bCommand timed out:/u.test(message) &&
+    /[/\\]openclaw\.mjs update --tag http:\/\/127\.0\.0\.1:\d+\/openclaw[^/\s]*\.tgz --yes --json(?: --no-restart)? --timeout \d+/u.test(
+      message,
+    )
+  );
+}
+
+export function shouldRunPackagedUpgradeStatusProbe({
+  platform = process.platform,
+  usedWindowsPackagedUpgradeFallback,
+} = {}) {
+  return !(platform === "win32" && usedWindowsPackagedUpgradeFallback);
 }
 
 export function resolveExplicitBaselineVersion(baselineSpec) {
@@ -2343,6 +2569,7 @@ async function installTarballPackage(params) {
     packageSpec: params.tgzPath,
     logPath: params.logPath,
     timeoutMs: params.timeoutMs,
+    ignoreScripts: params.ignoreScripts,
   });
   if (
     params.restoreBundledPluginPostinstall !== false &&
@@ -2366,15 +2593,7 @@ async function installPackageSpec(params) {
   rmSync(installedPackageRoot(params.lane.prefixDir), { force: true, recursive: true });
   await runCommand(
     npmCommand(),
-    [
-      "install",
-      "-g",
-      params.packageSpec,
-      "--omit=dev",
-      "--no-fund",
-      "--no-audit",
-      "--loglevel=notice",
-    ],
+    buildNpmGlobalInstallArgs(params.packageSpec, { ignoreScripts: params.ignoreScripts }),
     {
       cwd: params.lane.homeDir,
       env: installEnv,
@@ -2384,16 +2603,33 @@ async function installPackageSpec(params) {
   );
 }
 
+export function buildNpmGlobalInstallArgs(packageSpec, options = {}) {
+  return [
+    "install",
+    "-g",
+    packageSpec,
+    "--omit=dev",
+    "--no-fund",
+    "--no-audit",
+    ...(options.ignoreScripts ? ["--ignore-scripts"] : []),
+    "--loglevel=notice",
+  ];
+}
+
 function installTimeoutMs() {
   return process.platform === "win32" ? 45 * 60 * 1000 : 20 * 60 * 1000;
 }
 
 function updateTimeoutMs() {
-  return process.platform === "win32" ? 30 * 60 * 1000 : 20 * 60 * 1000;
+  return process.platform === "win32"
+    ? CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS
+    : 20 * 60 * 1000;
 }
 
 function updateStepTimeoutSeconds() {
-  return process.platform === "win32" ? 1800 : 1200;
+  return process.platform === "win32"
+    ? CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS
+    : 1200;
 }
 
 async function runBundledPluginPostinstall(params) {
@@ -3196,6 +3432,10 @@ async function runCommand(command, args, options) {
     let stderr = "";
     let timedOut = false;
     let settled = false;
+    const startedAt = Date.now();
+    let killWaitTimer = null;
+    let timer = null;
+    let heartbeatTimer = null;
 
     const clearTimers = () => {
       if (timer) {
@@ -3203,6 +3443,9 @@ async function runCommand(command, args, options) {
       }
       if (killWaitTimer) {
         clearTimeout(killWaitTimer);
+      }
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
       }
     };
 
@@ -3235,8 +3478,7 @@ async function runCommand(command, args, options) {
       child.kill(process.platform === "win32" ? undefined : "SIGKILL");
     };
 
-    let killWaitTimer = null;
-    const timer =
+    timer =
       options.timeoutMs && Number.isFinite(options.timeoutMs)
         ? setTimeout(() => {
             timedOut = true;
@@ -3255,6 +3497,20 @@ async function runCommand(command, args, options) {
             }, 15_000);
           }, options.timeoutMs)
         : null;
+    heartbeatTimer =
+      CROSS_OS_COMMAND_HEARTBEAT_SECONDS > 0
+        ? setInterval(() => {
+            const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
+            const message = `${new Date().toISOString()} still running after ${elapsedSeconds}s: ${command} ${args.join(" ")}\n`;
+            logStream.write(message);
+            process.stdout.write(`[release-checks] ${message}`);
+          }, CROSS_OS_COMMAND_HEARTBEAT_SECONDS * 1000)
+        : null;
+    heartbeatTimer?.unref?.();
+
+    logStream.write(
+      `${new Date().toISOString()} start command=${command} args=${args.join(" ")}\n`,
+    );
 
     child.stdout?.on("data", (chunk) => {
       const text = chunk.toString();
@@ -3382,6 +3638,13 @@ function writeSummary(baseDir, summaryPayload) {
     result.agentOutput ? `- Agent output: \`${trimForSummary(result.agentOutput)}\`` : "",
     result.error ? `- Error: \`${trimForSummary(result.error)}\`` : "",
   ].filter(Boolean);
+  if (Array.isArray(result.phaseTimings) && result.phaseTimings.length > 0) {
+    lines.push("", "### Phase timings");
+    for (const phase of result.phaseTimings) {
+      const suffix = phase.status === "pass" ? "" : ` (${phase.status})`;
+      lines.push(`- \`${phase.name}\`: ${Math.round(phase.durationMs / 1000)}s${suffix}`);
+    }
+  }
   writeFileSync(summaryMarkdownPath, `${lines.join("\n")}\n`, "utf8");
 }
 
@@ -3448,6 +3711,23 @@ function logPhase(scope, phase) {
 
 function logLanePhase(lane, phase) {
   logPhase(`lane.${lane.name}`, phase);
+}
+
+async function runTimedLanePhase(lane, phase, callback) {
+  const startedAt = Date.now();
+  logLanePhase(lane, phase);
+  try {
+    const result = await callback();
+    const durationMs = Date.now() - startedAt;
+    lane.phaseTimings.push({ name: phase, status: "pass", durationMs });
+    logPhase(`lane.${lane.name}`, `${phase}: done in ${Math.round(durationMs / 1000)}s`);
+    return result;
+  } catch (error) {
+    const durationMs = Date.now() - startedAt;
+    lane.phaseTimings.push({ name: phase, status: "fail", durationMs });
+    logPhase(`lane.${lane.name}`, `${phase}: failed in ${Math.round(durationMs / 1000)}s`);
+    throw error;
+  }
 }
 
 function trimForSummary(value) {

@@ -112,6 +112,7 @@ describe("setupOfficialPluginInstalls", () => {
       expect.objectContaining({
         entry: expect.objectContaining({
           pluginId: "diagnostics-otel",
+          trustedSourceLinkedOfficialInstall: true,
           install: expect.objectContaining({
             clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
             npmSpec: "@openclaw/diagnostics-otel",

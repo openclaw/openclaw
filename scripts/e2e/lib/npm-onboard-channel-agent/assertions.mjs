@@ -83,15 +83,43 @@ function configureMockModel() {
 
 function assertChannelConfig() {
   const channel = process.argv[3];
-  const token = process.argv[4];
+  const expectedTokens = process.argv.slice(4);
+  if (expectedTokens.length === 0) {
+    throw new Error("assert-channel-config requires at least one expected token");
+  }
   const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
   const cfg = readJson(configPath);
   const entry = cfg.channels?.[channel];
   if (!entry || entry.enabled === false) {
     throw new Error(`${channel} was not enabled`);
   }
-  if (!JSON.stringify(entry).includes(token)) {
-    throw new Error(`${channel} token was not persisted`);
+  const serializedEntry = JSON.stringify(entry);
+  for (const token of expectedTokens) {
+    if (!serializedEntry.includes(token)) {
+      throw new Error(`${channel} token was not persisted`);
+    }
+  }
+}
+
+function assertStatusSurfaces() {
+  const channel = process.argv[3];
+  const channelsStatusPath = process.argv[4];
+  const statusTextPath = process.argv[5];
+  const channelsStatus = readJson(channelsStatusPath);
+  const configuredChannels = Array.isArray(channelsStatus.configuredChannels)
+    ? channelsStatus.configuredChannels
+    : [];
+  if (!configuredChannels.includes(channel)) {
+    throw new Error(
+      `channels status did not list configured channel ${channel}. Payload: ${JSON.stringify(channelsStatus)}`,
+    );
+  }
+  const statusText = fs.readFileSync(statusTextPath, "utf8");
+  if (!/channels/i.test(statusText)) {
+    throw new Error(`plain status output did not render a Channels section. Output: ${statusText}`);
+  }
+  if (!statusText.toLowerCase().includes(channel.toLowerCase())) {
+    throw new Error(`plain status output did not mention ${channel}. Output: ${statusText}`);
   }
 }
 
@@ -112,6 +140,7 @@ const commands = {
   "assert-onboard-state": assertOnboardState,
   "configure-mock-model": configureMockModel,
   "assert-channel-config": assertChannelConfig,
+  "assert-status-surfaces": assertStatusSurfaces,
   "assert-agent-turn": assertAgentTurn,
 };
 

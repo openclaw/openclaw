@@ -6,7 +6,11 @@ import {
   withBundledPluginEnablementCompat,
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
-import { resolvePluginRegistryLoadCacheKey, type PluginLoadOptions } from "./loader.js";
+import {
+  resolvePluginRegistryLoadCacheKey,
+  resolveRuntimePluginRegistry,
+  type PluginLoadOptions,
+} from "./loader.js";
 import {
   hasManifestContractValue,
   isManifestPluginAvailableForControlPlane,
@@ -357,7 +361,12 @@ function filterLoadedProvidersForRequestedConfig<K extends CapabilityProviderReg
   requested: Set<string>;
   entries: PluginRegistry[K];
 }): PluginRegistry[K] {
-  if (params.key !== "speechProviders" && params.key !== "mediaUnderstandingProviders") {
+  if (
+    params.key !== "speechProviders" &&
+    params.key !== "realtimeTranscriptionProviders" &&
+    params.key !== "realtimeVoiceProviders" &&
+    params.key !== "mediaUnderstandingProviders"
+  ) {
     return [] as unknown as PluginRegistry[K];
   }
   if (params.requested.size === 0) {
@@ -382,7 +391,7 @@ function resolveRequestedCapabilityPluginIds(params: {
   cfg?: OpenClawConfig;
   requested?: Set<string>;
 }): CapabilityPluginResolution | undefined {
-  if (params.key !== "speechProviders" || !params.requested || params.requested.size === 0) {
+  if (!params.requested || params.requested.size === 0) {
     return undefined;
   }
   const runtimePluginIds = new Set<string>();
@@ -414,17 +423,25 @@ function loadCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(
   loadOptions: PluginLoadOptions;
   requested?: Set<string>;
 }): PluginRegistry[K] {
-  const registry = getLoadedRuntimePluginRegistry({
+  const loadedRegistry = getLoadedRuntimePluginRegistry({
     env: params.loadOptions.env,
     loadOptions: params.loadOptions,
     workspaceDir: params.loadOptions.workspaceDir,
     requiredPluginIds: params.loadOptions.onlyPluginIds,
   });
-  const entries = registry?.[params.key] ?? [];
+  const loadedEntries = loadedRegistry?.[params.key] ?? [];
+  const coldRegistry = loadedRegistry
+    ? undefined
+    : resolveRuntimePluginRegistry(params.loadOptions);
+  const coldEntries = coldRegistry?.[params.key] ?? [];
+  const entries =
+    loadedEntries.length > 0 && coldEntries.length > 0
+      ? mergeCapabilityProviderEntries(loadedEntries, coldEntries)
+      : loadedEntries.length > 0
+        ? loadedEntries
+        : coldEntries;
   const missingRequested =
-    params.key === "speechProviders" && params.requested && params.requested.size > 0
-      ? new Set(params.requested)
-      : undefined;
+    params.requested && params.requested.size > 0 ? new Set(params.requested) : undefined;
   if (missingRequested) {
     removeActiveProviderIds(missingRequested, entries);
   }
@@ -537,17 +554,19 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
       return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
     }
   }
-  let requestedSpeechProviders: Set<string> | undefined;
+  let requestedProviders: Set<string> | undefined;
   if (params.key === "speechProviders") {
-    requestedSpeechProviders =
+    requestedProviders =
       missingRequestedProviders ??
-      (activeProviders.length === 0 ? collectRequestedSpeechProviderIds(params.cfg) : undefined);
+      (activeProviders.length === 0
+        ? collectRequestedCapabilityProviderIds({ key: params.key, cfg: params.cfg })
+        : undefined);
   }
   const pluginIds =
     resolveRequestedCapabilityPluginIds({
       key: params.key,
       cfg: params.cfg,
-      requested: requestedSpeechProviders,
+      requested: requestedProviders,
     }) ??
     resolveCapabilityPluginIds({
       key: params.key,
@@ -567,7 +586,7 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
     cfg: params.cfg,
     bundledCompatPluginIds: pluginIds.bundledCompatPluginIds,
     loadOptions,
-    requested: requestedSpeechProviders,
+    requested: requestedProviders,
   });
   if (params.key !== "memoryEmbeddingProviders") {
     const mergeLoadedProviders =

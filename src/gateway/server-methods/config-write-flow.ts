@@ -13,8 +13,9 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { getActiveSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
-import { resolveEffectiveSharedGatewayAuth } from "../auth.js";
-import { buildGatewayReloadPlan, resolveGatewayReloadSettings } from "../config-reload.js";
+import { resolveEffectiveSharedGatewayAuth, resolveGatewayAuth } from "../auth.js";
+import { buildGatewayReloadPlan } from "../config-reload-plan.js";
+import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
 import { formatControlPlaneActor, type ControlPlaneActor } from "../control-plane-audit.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -30,7 +31,51 @@ export function resolveGatewayConfigPath(snapshot?: Pick<ConfigWriteSnapshot, "p
   return snapshot?.path ?? createConfigIO().configPath;
 }
 
+function normalizeStringListForAuthCompare(items: readonly string[] | undefined): string[] {
+  return [...(items ?? [])].toSorted();
+}
+
+function normalizeTrustedProxyAuthForCompare(auth: ReturnType<typeof resolveGatewayAuth>): {
+  userHeader: string | undefined;
+  requiredHeaders: string[];
+  allowUsers: string[];
+  allowLoopback: boolean | undefined;
+} {
+  return {
+    userHeader: auth.trustedProxy?.userHeader,
+    requiredHeaders: normalizeStringListForAuthCompare(auth.trustedProxy?.requiredHeaders),
+    allowUsers: normalizeStringListForAuthCompare(auth.trustedProxy?.allowUsers),
+    allowLoopback: auth.trustedProxy?.allowLoopback,
+  };
+}
+
 export function didSharedGatewayAuthChange(prev: OpenClawConfig, next: OpenClawConfig): boolean {
+  const prevResolvedAuth = resolveGatewayAuth({
+    authConfig: prev.gateway?.auth,
+    env: process.env,
+    tailscaleMode: prev.gateway?.tailscale?.mode,
+  });
+  const nextResolvedAuth = resolveGatewayAuth({
+    authConfig: next.gateway?.auth,
+    env: process.env,
+    tailscaleMode: next.gateway?.tailscale?.mode,
+  });
+  if (prevResolvedAuth.mode === "trusted-proxy" || nextResolvedAuth.mode === "trusted-proxy") {
+    if (prevResolvedAuth.mode !== nextResolvedAuth.mode) {
+      return true;
+    }
+    return (
+      !isDeepStrictEqual(
+        normalizeTrustedProxyAuthForCompare(prevResolvedAuth),
+        normalizeTrustedProxyAuthForCompare(nextResolvedAuth),
+      ) ||
+      !isDeepStrictEqual(
+        normalizeStringListForAuthCompare(prev.gateway?.trustedProxies),
+        normalizeStringListForAuthCompare(next.gateway?.trustedProxies),
+      )
+    );
+  }
+
   const prevAuth = resolveEffectiveSharedGatewayAuth({
     authConfig: prev.gateway?.auth,
     env: process.env,

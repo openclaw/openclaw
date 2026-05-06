@@ -3,7 +3,9 @@ import type {
   MiscMessageGenerationOptions,
   WAMessage,
 } from "@whiskeysockets/baileys";
+import { listMessageReceiptPlatformIds } from "openclaw/plugin-sdk/channel-message";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveWhatsAppOutboundMentions } from "./outbound-mentions.js";
 import { createWebSendApi } from "./send-api.js";
 
 const recordChannelActivity = vi.hoisted(() => vi.fn());
@@ -76,13 +78,38 @@ describe("createWebSendApi", () => {
     expect(res).toMatchObject({
       kind: "text",
       messageId: "msg-1",
-      messageIds: ["msg-1"],
       providerAccepted: true,
     });
+    expect(res.receipt ? listMessageReceiptPlatformIds(res.receipt) : []).toEqual(["msg-1"]);
     expect(recordChannelActivity).toHaveBeenCalledWith({
       channel: "whatsapp",
       accountId: "main",
       direction: "outbound",
+    });
+  });
+
+  it("adds native mention metadata to group text sends", async () => {
+    api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      resolveOutboundMentions: ({ jid, text }) =>
+        resolveWhatsAppOutboundMentions({
+          chatJid: jid,
+          text,
+          participants: [
+            {
+              id: "277038292303944:4@lid",
+              phoneNumber: "5511976136970@s.whatsapp.net",
+            },
+          ],
+        }),
+    });
+
+    await api.sendMessage("120363000000000000@g.us", "ping @+5511976136970");
+
+    expect(sendMessage).toHaveBeenCalledWith("120363000000000000@g.us", {
+      text: "ping @277038292303944",
+      mentions: ["277038292303944@lid"],
     });
   });
 
@@ -95,6 +122,32 @@ describe("createWebSendApi", () => {
         image: payload,
         caption: "cap",
         mimetype: "image/jpeg",
+      }),
+    );
+  });
+
+  it("adds native mention metadata to group media captions", async () => {
+    api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      resolveOutboundMentions: ({ jid, text }) =>
+        resolveWhatsAppOutboundMentions({
+          chatJid: jid,
+          text,
+          participants: [{ id: "15551234567@s.whatsapp.net" }],
+        }),
+    });
+    const payload = Buffer.from("img");
+
+    await api.sendMessage("120363000000000000@g.us", "cap @15551234567", payload, "image/jpeg");
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "120363000000000000@g.us",
+      expect.objectContaining({
+        image: payload,
+        caption: "cap @15551234567",
+        mimetype: "image/jpeg",
+        mentions: ["15551234567@s.whatsapp.net"],
       }),
     );
   });
@@ -138,9 +191,12 @@ describe("createWebSendApi", () => {
     expect(res).toMatchObject({
       kind: "media",
       messageId: "voice-1",
-      messageIds: ["voice-1", "voice-text-1"],
       providerAccepted: true,
     });
+    expect(res.receipt ? listMessageReceiptPlatformIds(res.receipt) : []).toEqual([
+      "voice-1",
+      "voice-text-1",
+    ]);
   });
 
   it("supports video media and gifPlayback option", async () => {
@@ -214,9 +270,9 @@ describe("createWebSendApi", () => {
     expect(res).toMatchObject({
       kind: "text",
       messageId: "unknown",
-      messageIds: [],
       providerAccepted: false,
     });
+    expect(res.receipt ? listMessageReceiptPlatformIds(res.receipt) : []).toEqual([]);
   });
 
   it("keeps direct-chat reactions without a participant key", async () => {

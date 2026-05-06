@@ -4,7 +4,11 @@ import officialExternalProviderCatalog from "../../scripts/lib/official-external
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
-import type { PluginPackageInstall } from "./manifest.js";
+import type {
+  PluginManifestChannelConfig,
+  PluginManifestContracts,
+  PluginPackageInstall,
+} from "./manifest.js";
 
 type ManifestKey = typeof MANIFEST_KEY;
 
@@ -60,6 +64,8 @@ export type OfficialExternalPluginCatalogManifest = {
   providers?: readonly OfficialExternalProviderCatalogProvider[];
   webSearchProviders?: readonly OfficialExternalWebSearchProvider[];
   install?: PluginPackageInstall;
+  contracts?: PluginManifestContracts;
+  channelConfigs?: Record<string, PluginManifestChannelConfig>;
 };
 
 export type OfficialExternalPluginCatalogEntry = {
@@ -110,6 +116,17 @@ export function resolveOfficialExternalPluginId(
     normalizeOptionalString(manifest?.channel?.id) ??
     normalizeOptionalString(manifest?.providers?.[0]?.id)
   );
+}
+
+function resolveOfficialExternalPluginLookupIds(
+  entry: OfficialExternalPluginCatalogEntry,
+): string[] {
+  const manifest = getOfficialExternalPluginCatalogManifest(entry);
+  return [
+    normalizeOptionalString(manifest?.plugin?.id),
+    normalizeOptionalString(manifest?.channel?.id),
+    normalizeOptionalString(manifest?.providers?.[0]?.id),
+  ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
 }
 
 export function resolveOfficialExternalPluginLabel(
@@ -183,7 +200,19 @@ export function getOfficialExternalPluginCatalogEntry(
   if (!normalized) {
     return undefined;
   }
+  return listOfficialExternalPluginCatalogEntries().find((entry) =>
+    resolveOfficialExternalPluginLookupIds(entry).includes(normalized),
+  );
+}
+
+export function getOfficialExternalPluginCatalogEntryForPackage(
+  packageName: string | undefined,
+): OfficialExternalPluginCatalogEntry | undefined {
+  const normalized = packageName?.trim();
+  if (!normalized) {
+    return undefined;
+  }
   return listOfficialExternalPluginCatalogEntries().find(
-    (entry) => resolveOfficialExternalPluginId(entry) === normalized,
+    (entry) => normalizeOptionalString(entry.name) === normalized,
   );
 }

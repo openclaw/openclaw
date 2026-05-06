@@ -29,6 +29,32 @@ import {
   resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";
 
+function buildSessionAssistantMessage(text: string, timestamp: number) {
+  return {
+    role: "assistant" as const,
+    content: [{ type: "text" as const, text }],
+    api: "openai",
+    provider: "openai",
+    model: "mock-1",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+    },
+    stopReason: "stop" as const,
+    timestamp,
+  };
+}
+
 function registerTempSessionStore(
   prefix: string,
   assignPaths: (tmpDir: string, storePath: string) => void,
@@ -49,6 +75,30 @@ function writeTranscript(tmpDir: string, sessionId: string, lines: unknown[]): s
   const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
   fs.writeFileSync(transcriptPath, lines.map((line) => JSON.stringify(line)).join("\n"), "utf-8");
   return transcriptPath;
+}
+
+function appendBlockedUserMessageWithSessionManager(params: {
+  sessionFile: string;
+  originalText?: string;
+  redactedText: string;
+  pluginId: string;
+  idempotencyKey?: string;
+}): string {
+  const sessionManager = SessionManager.open(params.sessionFile, path.dirname(params.sessionFile));
+  const messageId = sessionManager.appendMessage({
+    role: "user",
+    content: [{ type: "text", text: params.redactedText }],
+    timestamp: Date.now(),
+    ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+    __openclaw: {
+      beforeAgentRunBlocked: {
+        blockedBy: params.pluginId,
+        blockedAt: Date.now(),
+      },
+    },
+  } as Parameters<typeof sessionManager.appendMessage>[0]);
+  (sessionManager as unknown as { _rewriteFile?: () => void })._rewriteFile?.();
+  return messageId;
 }
 
 function buildBasicSessionTranscript(
@@ -1047,6 +1097,29 @@ describe("readSessionMessages", () => {
     }
   });
 
+  test("keeps legacy messages when a mixed transcript lacks a complete branch tree", () => {
+    const sessionId = "mixed-legacy-tree-session";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      { type: "session", version: 1, id: sessionId },
+      { type: "message", id: "legacy-user", message: { role: "user", content: "legacy hello" } },
+      {
+        type: "message",
+        id: "tree-assistant",
+        parentId: "legacy-user",
+        message: { role: "assistant", content: "tree hello" },
+      },
+    ];
+    fs.writeFileSync(transcriptPath, lines.map((line) => JSON.stringify(line)).join("\n"), "utf-8");
+
+    const out = readSessionMessages(sessionId, storePath);
+
+    expect(out.map((message) => (message as { content?: unknown }).content)).toEqual([
+      "legacy hello",
+      "tree hello",
+    ]);
+  });
+
   test.each([
     {
       sessionId: "cross-agent-default-root",
@@ -1081,6 +1154,215 @@ describe("readSessionMessages", () => {
       expect((out[0] as { __openclaw?: { seq?: number } }).__openclaw?.seq).toBe(1);
     },
   );
+
+  test("reads only the active SessionManager branch after a transcript rewrite", () => {
+    const sessionId = "branched-session";
+    const sessionManager = SessionManager.create(tmpDir, tmpDir);
+    const decoratedPrompt = 'Sender (untrusted metadata):\n```json\n{"label":"ui"}\n```\n\nhello';
+    const visiblePrompt = "hello";
+    sessionManager.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: decoratedPrompt }],
+      timestamp: 1,
+    });
+    sessionManager.appendMessage(buildSessionAssistantMessage("old answer", 2));
+
+    const decoratedUser = sessionManager
+      .getBranch()
+      .find((entry) => entry.type === "message" && entry.message.role === "user");
+    expect(decoratedUser?.type).toBe("message");
+    if (decoratedUser?.parentId) {
+      sessionManager.branch(decoratedUser.parentId);
+    } else {
+      sessionManager.resetLeaf();
+    }
+    sessionManager.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: visiblePrompt }],
+      timestamp: 1,
+    });
+    sessionManager.appendMessage(buildSessionAssistantMessage("old answer", 2));
+
+    const sessionFile = sessionManager.getSessionFile();
+    expect(sessionFile).toBeTruthy();
+
+    const out = readSessionMessages(sessionId, storePath, sessionFile ?? undefined);
+
+    expect(
+      out.map((message) => ({
+        role: (message as { role?: string }).role,
+        content: (message as { content?: unknown }).content,
+      })),
+    ).toEqual([
+      { role: "user", content: [{ type: "text", text: visiblePrompt }] },
+      { role: "assistant", content: [{ type: "text", text: "old answer" }] },
+    ]);
+  });
+
+  test("keeps compaction markers when reading only the active SessionManager branch", () => {
+    const sessionId = "branched-session-with-compaction";
+    const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      {
+        type: "session",
+        version: 1,
+        id: sessionId,
+      },
+      {
+        type: "message",
+        id: "user-old",
+        parentId: null,
+        message: { role: "user", content: "old prompt", timestamp: 1 },
+      },
+      {
+        type: "message",
+        id: "assistant-old",
+        parentId: "user-old",
+        message: { role: "assistant", content: "old answer", timestamp: 2 },
+      },
+      {
+        type: "compaction",
+        id: "comp-1",
+        timestamp: "2026-02-07T00:00:00.000Z",
+        summary: "Compacted history",
+      },
+      {
+        type: "message",
+        id: "user-active",
+        parentId: null,
+        message: { role: "user", content: "active prompt", timestamp: 3 },
+      },
+      {
+        type: "message",
+        id: "assistant-active",
+        parentId: "user-active",
+        message: { role: "assistant", content: "active answer", timestamp: 4 },
+      },
+    ];
+    fs.writeFileSync(sessionFile, lines.map((line) => JSON.stringify(line)).join("\n"), "utf-8");
+
+    const out = readSessionMessages(sessionId, storePath, sessionFile);
+
+    expect(
+      out.map((message) => ({
+        role: (message as { role?: string }).role,
+        content: (message as { content?: unknown }).content,
+        kind: (message as { __openclaw?: { kind?: string } }).__openclaw?.kind,
+      })),
+    ).toEqual([
+      { role: "system", content: [{ type: "text", text: "Compaction" }], kind: "compaction" },
+      { role: "user", content: "active prompt", kind: undefined },
+      { role: "assistant", content: "active answer", kind: undefined },
+    ]);
+  });
+
+  test("keeps blocked hook messages on the current active branch", async () => {
+    const sessionId = "blocked-hook-branch-session";
+    const sessionKey = "agent:main:explicit:blocked-hook-branch";
+    const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          sessionFile,
+        },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      sessionFile,
+      [
+        { type: "session", version: 1, id: sessionId },
+        {
+          type: "message",
+          id: "user-1",
+          parentId: null,
+          message: { role: "user", content: "hello", timestamp: 1 },
+        },
+        {
+          type: "message",
+          id: "assistant-1",
+          parentId: "user-1",
+          message: { role: "assistant", content: "hi", timestamp: 2 },
+        },
+      ]
+        .map((line) => JSON.stringify(line))
+        .join("\n") + "\n",
+      "utf-8",
+    );
+
+    const messageId = appendBlockedUserMessageWithSessionManager({
+      sessionFile,
+      originalText: "[hitl:block] hello",
+      redactedText: "Blocked by HITL test hook.",
+      pluginId: "hitl-test-hooks",
+    });
+
+    expect(messageId).toBeTruthy();
+    const out = readSessionMessages(sessionId, storePath, sessionFile);
+    expect(
+      out.map((message) => ({
+        role: (message as { role?: string }).role,
+        text: (message as { content?: string | Array<{ text?: string }> }).content,
+      })),
+    ).toEqual([
+      { role: "user", text: "hello" },
+      { role: "assistant", text: "hi" },
+      { role: "user", text: [{ type: "text", text: "Blocked by HITL test hook." }] },
+    ]);
+    expect(JSON.stringify(out)).not.toContain("[hitl:block] hello");
+    expect(JSON.stringify(out)).not.toContain("matched original");
+  });
+
+  test("keeps repeated blocked hook messages together in a new session", async () => {
+    const sessionKey = "agent:main:explicit:repeated-blocked-hook";
+    const sessionManager = SessionManager.create(tmpDir, tmpDir);
+    const sessionId = sessionManager.getSessionId();
+    const sessionFile = sessionManager.getSessionFile();
+    if (!sessionFile) {
+      throw new Error("expected SessionManager.create to return a session file");
+    }
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          sessionFile,
+        },
+      }),
+      "utf-8",
+    );
+
+    appendBlockedUserMessageWithSessionManager({
+      sessionFile,
+      originalText: "[hitl:block] first",
+      redactedText: "Blocked by HITL test hook.",
+      pluginId: "hitl-test-hooks",
+    });
+    appendBlockedUserMessageWithSessionManager({
+      sessionFile,
+      originalText: "[hitl:block] second",
+      redactedText: "Blocked again by HITL test hook.",
+      pluginId: "hitl-test-hooks",
+    });
+
+    const out = readSessionMessages(sessionId, storePath, sessionFile);
+    expect(
+      out.map((message) => ({
+        role: (message as { role?: string }).role,
+        text: (message as { content?: Array<{ text?: string }> }).content?.[0]?.text,
+      })),
+    ).toEqual([
+      { role: "user", text: "Blocked by HITL test hook." },
+      { role: "user", text: "Blocked again by HITL test hook." },
+    ]);
+    expect(JSON.stringify(out)).not.toContain("[hitl:block] first");
+    expect(JSON.stringify(out)).not.toContain("[hitl:block] second");
+    expect(JSON.stringify(out)).not.toContain("matched original");
+  });
 });
 
 describe("readSessionPreviewItemsFromTranscript", () => {
@@ -1670,5 +1952,125 @@ describe("archiveSessionTranscripts", () => {
     expect(archived).toHaveLength(1);
     expect(archived[0]).toContain(".deleted.");
     expect(fs.existsSync(transcriptPath)).toBe(false);
+  });
+});
+
+describe("oversized transcript line guards", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  registerTempSessionStore("openclaw-session-fs-oversized-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
+  });
+
+  test("readRecentSessionMessagesAsync replaces oversized JSONL lines with placeholders", async () => {
+    const sessionId = "test-oversized-recent";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const oversizedContent = "x".repeat(300 * 1024);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({ message: { role: "user", content: "start" } }),
+      JSON.stringify({ message: { role: "assistant", content: oversizedContent } }),
+      JSON.stringify({ message: { role: "user", content: "after oversized" } }),
+    ];
+    fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
+
+    const out = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 10,
+    });
+
+    const serialized = JSON.stringify(out);
+    expect(serialized).not.toContain(oversizedContent);
+    expect(serialized).toContain("[chat.history omitted: message too large]");
+    expect(serialized).toContain("after oversized");
+  });
+
+  test("readRecentSessionMessagesAsync keeps oversized active-tree leaves", async () => {
+    const sessionId = "test-oversized-tree-tail";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const oversizedContent = "z".repeat(300 * 1024);
+    const lines = [
+      JSON.stringify({ type: "session", version: 3, id: sessionId }),
+      JSON.stringify({
+        type: "message",
+        id: "root",
+        parentId: null,
+        message: { role: "user", content: "root" },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "oversized-leaf",
+        parentId: "root",
+        message: { role: "assistant", content: oversizedContent },
+      }),
+    ];
+    fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
+
+    const out = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 10,
+    });
+
+    const serialized = JSON.stringify(out);
+    expect(serialized).toContain("root");
+    expect(serialized).toContain("oversized-leaf");
+    expect(serialized).not.toContain(oversizedContent);
+    expect(serialized).toContain("[chat.history omitted: message too large]");
+  });
+
+  test("readRecentSessionUsageFromTranscriptAsync skips oversized lines", async () => {
+    const sessionId = "test-oversized-usage";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const oversizedContent = "y".repeat(300 * 1024);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({
+        message: {
+          role: "assistant",
+          content: oversizedContent,
+          usage: { input: 9999, output: 9999 },
+          provider: "oversized-provider",
+          model: "oversized-model",
+        },
+      }),
+      JSON.stringify({
+        message: {
+          role: "assistant",
+          content: "normal",
+          usage: { input: 100, output: 50 },
+          provider: "test-provider",
+          model: "test-model",
+        },
+      }),
+    ];
+    fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
+
+    const usage = await readRecentSessionUsageFromTranscriptAsync(
+      sessionId,
+      storePath,
+      undefined,
+      undefined,
+      512 * 1024,
+    );
+
+    expect(usage).not.toBeNull();
+    expect(usage?.modelProvider).not.toBe("oversized-provider");
+    expect(usage?.modelProvider).toBe("test-provider");
+  });
+
+  test("readSessionTitleFieldsFromTranscriptAsync delegates to bounded sync reader", async () => {
+    const sessionId = "test-async-title-bounded";
+    writeTranscript(
+      tmpDir,
+      sessionId,
+      buildBasicSessionTranscript(sessionId, "User says hi", "Bot says hello"),
+    );
+
+    const syncResult = readSessionTitleFieldsFromTranscript(sessionId, storePath);
+    const asyncResult = await readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath);
+
+    expect(asyncResult).toEqual(syncResult);
+    expect(asyncResult.firstUserMessage).toBe("User says hi");
+    expect(asyncResult.lastMessagePreview).toBe("Bot says hello");
   });
 });

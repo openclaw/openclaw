@@ -223,7 +223,7 @@ function formatInboundEnvelopeMock(params: TestInboundEnvelopeParams) {
   return `[${parts.join(" ")}] ${body}`;
 }
 
-function createChannelReplyPipelineMock() {
+function createChannelMessageReplyPipelineMock() {
   return {
     onModelSelected: undefined,
     responsePrefix: undefined,
@@ -250,6 +250,31 @@ function resolveSendableOutboundReplyPartsMock(payload: Record<string, unknown>)
       typeof payload.mediaPath === "string" ||
       typeof payload.fileUrl === "string",
   };
+}
+
+function resolveChannelMessageSourceReplyDeliveryModeMock(params: {
+  cfg: {
+    messages?: {
+      visibleReplies?: "automatic" | "message_tool";
+      groupChat?: { visibleReplies?: "automatic" | "message_tool" };
+    };
+  };
+  ctx: { ChatType?: string; CommandSource?: "text" | "native" };
+  requested?: "automatic" | "message_tool_only";
+}) {
+  if (params.requested) {
+    return params.requested;
+  }
+  if (params.ctx.CommandSource === "native") {
+    return "automatic";
+  }
+  const chatType = normalizeLowercaseStringOrEmpty(params.ctx.ChatType);
+  if (chatType === "group" || chatType === "channel") {
+    return params.cfg.messages?.groupChat?.visibleReplies === "automatic"
+      ? "automatic"
+      : "message_tool_only";
+  }
+  return params.cfg.messages?.visibleReplies === "message_tool" ? "message_tool_only" : "automatic";
 }
 
 function toLocationContextMock(location: unknown) {
@@ -439,12 +464,13 @@ vi.mock("./inbound/runtime-api.js", () => ({
 }));
 
 vi.mock("./auto-reply/monitor/inbound-dispatch.runtime.js", () => ({
-  createChannelReplyPipeline: createChannelReplyPipelineMock,
+  createChannelMessageReplyPipeline: createChannelMessageReplyPipelineMock,
   dispatchReplyWithBufferedBlockDispatcher: createBufferedDispatchReplyMock(),
   finalizeInboundContext: <T>(ctx: T) => ctx,
   getAgentScopedMediaLocalRoots: () => [] as string[],
   jidToE164: normalizePhoneLikeToE164,
   logVerbose: (_msg: string) => undefined,
+  resolveChannelMessageSourceReplyDeliveryMode: resolveChannelMessageSourceReplyDeliveryModeMock,
   resolveChunkMode: () => undefined,
   resolveIdentityNamePrefix: resolveIdentityNamePrefixMock,
   resolveInboundLastRouteSessionKey: (params: { sessionKey: string }) => params.sessionKey,
@@ -468,7 +494,7 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
       ? `Chat messages since your last reply:\n${rendered}\n\n${params.currentMessage}`
       : params.currentMessage;
   },
-  createChannelReplyPipeline: createChannelReplyPipelineMock,
+  createChannelMessageReplyPipeline: createChannelMessageReplyPipelineMock,
   dispatchReplyWithBufferedBlockDispatcher: createBufferedDispatchReplyMock(),
   finalizeInboundContext: <T>(ctx: T) => ctx,
   formatInboundEnvelope: formatInboundEnvelopeMock,
@@ -478,6 +504,7 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
   normalizeE164: normalizePhoneLikeToE164,
   readStoreAllowFromForDmPolicy: async () => [] as string[],
   recordSessionMetaFromInbound: async () => undefined,
+  resolveChannelMessageSourceReplyDeliveryMode: resolveChannelMessageSourceReplyDeliveryModeMock,
   resolveChannelContextVisibilityMode: resolveChannelContextVisibilityModeMock,
   resolveChunkMode: () => undefined,
   resolveIdentityNamePrefix: resolveIdentityNamePrefixMock,
