@@ -1049,7 +1049,14 @@ describe("runWithModelFallback", () => {
   });
 
   it("falls back on model-not-found error shapes", async () => {
-    const cases = [
+    const cases: Array<{
+      name: string;
+      provider: string;
+      model: string;
+      error: Error;
+      expectedFallback: [string, string];
+      expectedReason?: string;
+    }> = [
       {
         name: "unknown anthropic override",
         provider: "anthropic",
@@ -1064,14 +1071,7 @@ describe("runWithModelFallback", () => {
         error: new Error("Model not found: openai/gpt-6"),
         expectedFallback: ["anthropic", "claude-haiku-3-5"],
       },
-    ] satisfies Array<{
-      name: string;
-      provider: string;
-      model: string;
-      error: Error;
-      expectedFallback: [string, string];
-      expectedReason?: string;
-    }>;
+    ];
 
     for (const testCase of cases) {
       await runModelFallbackCase(testCase.name, async () => {
