@@ -66,20 +66,34 @@ const VALID_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
 // eslint-disable-next-line no-control-regex -- detects any character outside printable ASCII
 const NON_ASCII_PATTERN = /[^\x00-\x7F]/;
 
-function normalizeTrackedSlug(raw: string): string {
-  const slug = raw.trim();
-  if (!slug || slug.includes("/") || slug.includes("\\") || slug.includes("..")) {
+// Some ClawHub references use `<owner>/<slug>` even though the registry and local
+// install metadata are keyed by the bare slug. Strip the owner prefix before any
+// registry, install-dir, or lockfile work.
+function parseClawHubSkillSlug(raw: string, mode: "tracked" | "requested"): string {
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.includes("\\") || trimmed.includes("..")) {
     throw new Error(`Invalid skill slug: ${raw}`);
   }
-  return slug;
+  const parts = trimmed.split("/");
+  if (parts.length > 2 || parts.some((part) => part.length === 0)) {
+    throw new Error(`Invalid skill slug: ${raw}`);
+  }
+  if (mode === "requested") {
+    for (const part of parts) {
+      if (NON_ASCII_PATTERN.test(part) || !VALID_SLUG_PATTERN.test(part)) {
+        throw new Error(`Invalid skill slug: ${raw}`);
+      }
+    }
+  }
+  return parts[parts.length - 1];
+}
+
+function normalizeTrackedSlug(raw: string): string {
+  return parseClawHubSkillSlug(raw, "tracked");
 }
 
 function validateRequestedSlug(raw: string): string {
-  const slug = normalizeTrackedSlug(raw);
-  if (NON_ASCII_PATTERN.test(slug) || !VALID_SLUG_PATTERN.test(slug)) {
-    throw new Error(`Invalid skill slug: ${raw}`);
-  }
-  return slug;
+  return parseClawHubSkillSlug(raw, "requested");
 }
 
 async function resolveRequestedUpdateSlug(params: {
@@ -87,7 +101,10 @@ async function resolveRequestedUpdateSlug(params: {
   requestedSlug: string;
   lock: ClawHubSkillsLockfile;
 }): Promise<string> {
-  const trackedSlug = normalizeTrackedSlug(params.requestedSlug);
+  const raw = params.requestedSlug.trim();
+  const trackedSlug = raw.includes("/")
+    ? parseClawHubSkillSlug(params.requestedSlug, "requested")
+    : normalizeTrackedSlug(params.requestedSlug);
   const trackedTargetDir = resolveSkillInstallDir(params.workspaceDir, trackedSlug);
   const trackedOrigin = await readClawHubSkillOrigin(trackedTargetDir);
   if (trackedOrigin || params.lock.skills[trackedSlug]) {

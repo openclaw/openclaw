@@ -328,6 +328,270 @@ describe("skills-clawhub", () => {
     });
   });
 
+  describe("owner-prefixed slugs match ClawHub references", () => {
+    it("strips the owner prefix and installs the bare slug", async () => {
+      installPackageDirMock.mockResolvedValueOnce({
+        ok: true,
+        targetDir: "/tmp/workspace/skills/skill-vetter",
+      });
+
+      const result = await installSkillFromClawHub({
+        workspaceDir: "/tmp/workspace",
+        slug: "spclaudehome/skill-vetter",
+      });
+
+      expect(fetchClawHubSkillDetailMock).toHaveBeenCalledWith({
+        slug: "skill-vetter",
+        baseUrl: undefined,
+      });
+      expect(downloadClawHubSkillArchiveMock).toHaveBeenCalledWith({
+        slug: "skill-vetter",
+        version: "1.0.0",
+        baseUrl: undefined,
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        slug: "skill-vetter",
+        version: "1.0.0",
+        targetDir: "/tmp/workspace/skills/skill-vetter",
+      });
+    });
+
+    it("accepts mixed-case owner-prefixed slugs", async () => {
+      installPackageDirMock.mockResolvedValueOnce({
+        ok: true,
+        targetDir: "/tmp/workspace/skills/Skill-Vetter",
+      });
+
+      const result = await installSkillFromClawHub({
+        workspaceDir: "/tmp/workspace",
+        slug: "SpclaudeHome/Skill-Vetter",
+      });
+
+      expect(downloadClawHubSkillArchiveMock).toHaveBeenCalledWith({
+        slug: "Skill-Vetter",
+        version: "1.0.0",
+        baseUrl: undefined,
+      });
+      expect(result).toMatchObject({ ok: true, slug: "Skill-Vetter" });
+    });
+
+    it("rejects more than one slash separator", async () => {
+      const result = await installSkillFromClawHub({
+        workspaceDir: "/tmp/workspace",
+        slug: "owner/team/skill",
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("Invalid skill slug"),
+      });
+      expect(fetchClawHubSkillDetailMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects an empty owner segment", async () => {
+      const result = await installSkillFromClawHub({
+        workspaceDir: "/tmp/workspace",
+        slug: "/skill-vetter",
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("Invalid skill slug"),
+      });
+    });
+
+    it("rejects an empty name segment", async () => {
+      const result = await installSkillFromClawHub({
+        workspaceDir: "/tmp/workspace",
+        slug: "spclaudehome/",
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("Invalid skill slug"),
+      });
+    });
+
+    it("rejects a backslash in either segment", async () => {
+      const result = await installSkillFromClawHub({
+        workspaceDir: "/tmp/workspace",
+        slug: "spclaudehome\\skill-vetter",
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("Invalid skill slug"),
+      });
+    });
+
+    it("rejects a path-traversal segment", async () => {
+      const result = await installSkillFromClawHub({
+        workspaceDir: "/tmp/workspace",
+        slug: "spclaudehome/../skill-vetter",
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("Invalid skill slug"),
+      });
+    });
+
+    it("rejects a non-ASCII owner segment", async () => {
+      const result = await installSkillFromClawHub({
+        workspaceDir: "/tmp/workspace",
+        slug: "reаct/skill-vetter",
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("Invalid skill slug"),
+      });
+    });
+
+    it("rejects a non-ASCII name segment", async () => {
+      const result = await installSkillFromClawHub({
+        workspaceDir: "/tmp/workspace",
+        slug: "spclaudehome/reаct",
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("Invalid skill slug"),
+      });
+    });
+
+    it("rejects an owner segment starting with a hyphen", async () => {
+      const result = await installSkillFromClawHub({
+        workspaceDir: "/tmp/workspace",
+        slug: "-spclaudehome/skill-vetter",
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("Invalid skill slug"),
+      });
+    });
+
+    it("rejects a name segment ending with a hyphen", async () => {
+      const result = await installSkillFromClawHub({
+        workspaceDir: "/tmp/workspace",
+        slug: "spclaudehome/skill-",
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("Invalid skill slug"),
+      });
+    });
+
+    it("rejects invalid owner prefixes on update even when the bare slug is already tracked", async () => {
+      const slug = "skill-vetter";
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-clawhub-"));
+      const skillDir = path.join(workspaceDir, "skills", slug);
+      await fs.mkdir(path.join(skillDir, ".clawhub"), { recursive: true });
+      await fs.mkdir(path.join(workspaceDir, ".clawhub"), { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, ".clawhub", "origin.json"),
+        `${JSON.stringify(
+          {
+            version: 1,
+            registry: "https://legacy.clawhub.ai",
+            slug,
+            installedVersion: "0.9.0",
+            installedAt: 123,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(workspaceDir, ".clawhub", "lock.json"),
+        `${JSON.stringify(
+          {
+            version: 1,
+            skills: { [slug]: { version: "0.9.0", installedAt: 123 } },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      try {
+        await expect(
+          updateSkillsFromClawHub({
+            workspaceDir,
+            slug: `owner_1/${slug}`,
+          }),
+        ).rejects.toThrow("Invalid skill slug");
+        expect(fetchClawHubSkillDetailMock).not.toHaveBeenCalled();
+        expect(downloadClawHubSkillArchiveMock).not.toHaveBeenCalled();
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    });
+
+    it("updates a bare-slug install when invoked with the owner-prefixed form", async () => {
+      const slug = "skill-vetter";
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-clawhub-"));
+      const skillDir = path.join(workspaceDir, "skills", slug);
+      await fs.mkdir(path.join(skillDir, ".clawhub"), { recursive: true });
+      await fs.mkdir(path.join(workspaceDir, ".clawhub"), { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, ".clawhub", "origin.json"),
+        `${JSON.stringify(
+          {
+            version: 1,
+            registry: "https://legacy.clawhub.ai",
+            slug,
+            installedVersion: "0.9.0",
+            installedAt: 123,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(workspaceDir, ".clawhub", "lock.json"),
+        `${JSON.stringify(
+          {
+            version: 1,
+            skills: { [slug]: { version: "0.9.0", installedAt: 123 } },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      installPackageDirMock.mockResolvedValueOnce({
+        ok: true,
+        targetDir: skillDir,
+      });
+
+      try {
+        const results = await updateSkillsFromClawHub({
+          workspaceDir,
+          slug: `spclaudehome/${slug}`,
+        });
+
+        expect(fetchClawHubSkillDetailMock).toHaveBeenCalledWith({
+          slug,
+          baseUrl: "https://legacy.clawhub.ai",
+        });
+        expect(downloadClawHubSkillArchiveMock).toHaveBeenCalledWith({
+          slug,
+          version: "1.0.0",
+          baseUrl: "https://legacy.clawhub.ai",
+        });
+        expect(results).toMatchObject([
+          {
+            ok: true,
+            slug,
+            previousVersion: "0.9.0",
+            version: "1.0.0",
+            targetDir: skillDir,
+          },
+        ]);
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("uses search for browse-all skill discovery", async () => {
     searchClawHubSkillsMock.mockResolvedValueOnce([
       {
