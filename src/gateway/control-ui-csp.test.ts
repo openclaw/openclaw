@@ -3,10 +3,10 @@ import { describe, expect, it } from "vitest";
 import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
 
 describe("buildControlUiCspHeader", () => {
-  it("blocks inline scripts while allowing inline styles", () => {
+  it("blocks inline scripts while allowing inline styles and eval for bundled code", () => {
     const csp = buildControlUiCspHeader();
     expect(csp).toContain("frame-ancestors 'none'");
-    expect(csp).toContain("script-src 'self'");
+    expect(csp).toContain("script-src 'self' 'unsafe-eval'");
     expect(csp).not.toContain("script-src 'self' 'unsafe-inline'");
     expect(csp).toContain("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com");
   });
@@ -39,7 +39,7 @@ describe("buildControlUiCspHeader", () => {
     const csp = buildControlUiCspHeader({
       inlineScriptHashes: ["sha256-abc123"],
     });
-    expect(csp).toContain("script-src 'self' 'sha256-abc123'");
+    expect(csp).toContain("script-src 'self' 'unsafe-eval' 'sha256-abc123'");
     expect(csp).not.toMatch(/script-src[^;]*'unsafe-inline'/);
   });
 
@@ -47,12 +47,12 @@ describe("buildControlUiCspHeader", () => {
     const csp = buildControlUiCspHeader({
       inlineScriptHashes: ["sha256-aaa", "sha256-bbb"],
     });
-    expect(csp).toContain("script-src 'self' 'sha256-aaa' 'sha256-bbb'");
+    expect(csp).toContain("script-src 'self' 'unsafe-eval' 'sha256-aaa' 'sha256-bbb'");
   });
 
-  it("falls back to plain script-src self when hashes array is empty", () => {
+  it("falls back to plain script-src self with unsafe-eval when hashes array is empty", () => {
     const csp = buildControlUiCspHeader({ inlineScriptHashes: [] });
-    expect(csp).toMatch(/script-src 'self'(?:;|$)/);
+    expect(csp).toMatch(/script-src 'self' 'unsafe-eval'(?:;|$)/);
   });
 });
 

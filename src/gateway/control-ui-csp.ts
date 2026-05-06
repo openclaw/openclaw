@@ -35,8 +35,8 @@ function hasScriptSrcAttribute(openTag: string): boolean {
 export function buildControlUiCspHeader(opts?: { inlineScriptHashes?: string[] }): string {
   const hashes = opts?.inlineScriptHashes;
   const scriptSrc = hashes?.length
-    ? `script-src 'self' ${hashes.map((h) => `'${h}'`).join(" ")}`
-    : "script-src 'self'";
+    ? `script-src 'self' 'unsafe-eval' ${hashes.map((h) => `'${h}'`).join(" ")}`
+    : "script-src 'self' 'unsafe-eval'";
   return [
     "default-src 'self'",
     "base-uri 'none'",
