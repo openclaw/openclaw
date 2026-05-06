@@ -424,7 +424,7 @@ describe("chrome MCP page parsing", () => {
     expect(tabs).toHaveLength(1);
   });
 
-  it("destroys session on transport errors so next call reconnects", async () => {
+  it("blocks passive reconnect after transport errors so the next call does not respawn", async () => {
     let factoryCalls = 0;
     const factory: ChromeMcpSessionFactory = async () => {
       factoryCalls += 1;
@@ -443,10 +443,9 @@ describe("chrome MCP page parsing", () => {
     // First call: transport error — should destroy session
     await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(/connection reset/);
 
-    // Second call: should create a new session (factory called twice)
-    const tabs = await listChromeMcpTabs("chrome-live");
-    expect(factoryCalls).toBe(2);
-    expect(tabs).toHaveLength(2);
+    // Second passive call: should not create a new session during cooldown.
+    await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(/refusing to respawn/);
+    expect(factoryCalls).toBe(1);
   });
 
   it("times out a stuck click and recovers on the next call", async () => {
@@ -479,9 +478,8 @@ describe("chrome MCP page parsing", () => {
       }),
     ).rejects.toThrow(/timed out/i);
 
-    const tabs = await listChromeMcpTabs("chrome-live");
-    expect(factoryCalls).toBe(2);
-    expect(tabs).toHaveLength(1);
+    await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(/refusing to respawn/);
+    expect(factoryCalls).toBe(1);
   });
 
   it("does not dispatch a click when the signal is already aborted", async () => {
@@ -550,7 +548,7 @@ describe("chrome MCP page parsing", () => {
     expect(factoryCalls).toBe(2);
     expect(tabs).toHaveLength(2);
   });
-  it("reconnects and retries list_pages once when Chrome MCP reports a stale selected page", async () => {
+  it("blocks passive reconnect when Chrome MCP reports a stale selected page", async () => {
     let factoryCalls = 0;
     const factory: ChromeMcpSessionFactory = async () => {
       factoryCalls += 1;
@@ -578,17 +576,9 @@ describe("chrome MCP page parsing", () => {
     };
     setChromeMcpSessionFactoryForTest(factory);
 
-    const tabs = await listChromeMcpTabs("chrome-live");
+    await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(/refusing to respawn/);
 
-    expect(factoryCalls).toBe(2);
-    expect(tabs).toEqual([
-      {
-        targetId: "1",
-        title: "",
-        url: "https://example.com",
-        type: "page",
-      },
-    ]);
+    expect(factoryCalls).toBe(1);
   });
 
   it("clears cached sessions after repeated stale selected-page failures", async () => {
@@ -619,14 +609,9 @@ describe("chrome MCP page parsing", () => {
     };
     setChromeMcpSessionFactoryForTest(factory);
 
-    await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(
-      /The selected page has been closed/,
-    );
+    await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(/refusing to respawn/);
 
-    const tabs = await listChromeMcpTabs("chrome-live");
-
-    expect(factoryCalls).toBe(3);
-    expect(tabs).toHaveLength(1);
+    expect(factoryCalls).toBe(1);
   });
 
   it("always passes a default timeout to navigate_page when none is specified", async () => {
@@ -683,10 +668,9 @@ describe("chrome MCP page parsing", () => {
     // Switch back to real timers before testing reconnect behaviour.
     vi.useRealTimers();
 
-    // Next call must use a fresh session — factory is called a second time.
-    const tabs = await listChromeMcpTabs("chrome-live");
-    expect(factoryCalls).toBe(2);
-    expect(tabs).toHaveLength(2);
+    // Next passive call must not silently respawn a fresh session.
+    await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(/refusing to respawn/);
+    expect(factoryCalls).toBe(1);
   });
 
   it("probeChromeMcpHealth returns attached:false without invoking the session factory when cache is empty", async () => {
@@ -1378,6 +1362,99 @@ describe("ensureChromeMcpAvailable spawn gate", () => {
 
     await ensureChromeMcpAvailable("chrome-live", { userDataDir: "/tmp/chrome-fake" });
     expect(spawned).toBe(1);
+  });
+
+  it("returns HIGH/attached on Chrome 144 WS-only flavors that 404 /json/version when toggle/port/owner agree", async () => {
+    // Chrome 144 builds with the WS-only remote-debugging flavor return 404
+    // on /json/version even when the listener is healthy and Chrome owns the
+    // port. With toggle=on, port listening, Chrome owner, and an HTTP 404
+    // from that same Chrome, confidence must still be HIGH so the start gate
+    // refuses to spawn a fresh chrome-devtools-mcp child (which would
+    // re-fire the macOS automation consent dialog).
+    let spawned = 0;
+    const factory: ChromeMcpSessionFactory = async () => {
+      spawned += 1;
+      return createFakeSession();
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+    setBrowserAuthSignalProbesForTest({
+      fileProbe: async () => ({
+        enabled: true,
+        toggleEnabled: true,
+        port: 50211,
+        browserUuid: "abc",
+        portListening: true,
+        reason: "devtools-active-port-detected",
+      }),
+      portOwnerProbe: async () => ({
+        kind: "chrome",
+        process: "Google Chrome",
+        pid: 37121,
+        reason: "lsof-chrome-listener",
+      }),
+      jsonVersionProbe: async () => ({ ok: false, reason: "http-404" }),
+    });
+
+    const health = await probeChromeMcpHealth("chrome-live", { userDataDir: "/tmp/chrome-fake" });
+    expect(health.level).toBe("high");
+    expect(health.attached).toBe(true);
+    expect(health.cacheAttached).toBe(false);
+    expect(health.reasons).toContain("http:http-404");
+
+    await expect(
+      ensureChromeMcpAvailable("chrome-live", { userDataDir: "/tmp/chrome-fake" }),
+    ).rejects.toThrow(/already attached/);
+    expect(spawned).toBe(0);
+  });
+
+  it("blocks non-explicit reconnect after a transport-close cooldown but lets explicit ensureChromeMcpAvailable spawn", async () => {
+    // After the chrome-devtools-mcp transport closes (transport.pid === null),
+    // the next non-explicit listChromeMcpTabs call must reject without
+    // calling the factory. Only an explicit ensureChromeMcpAvailable
+    // (allowReconnect=true) is allowed to spawn a fresh child during the
+    // cooldown window.
+    let factoryCalls = 0;
+    let firstSession: ChromeMcpSession | null = null;
+    const factory: ChromeMcpSessionFactory = async () => {
+      factoryCalls += 1;
+      const session = createFakeSession();
+      if (factoryCalls === 1) {
+        firstSession = session;
+      }
+      return session;
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await listChromeMcpTabs("chrome-live", { userDataDir: "/tmp/chrome-fake" });
+    expect(factoryCalls).toBe(1);
+    expect(firstSession).not.toBeNull();
+
+    // Simulate the chrome-devtools-mcp transport closing: production code
+    // observes transport.pid === null and, if no allowReconnect was passed,
+    // records a fault-reset cooldown so passive callers (status polls,
+    // routine tool calls) cannot silently respawn the child.
+    (firstSession as unknown as { transport: { pid: number | null } }).transport.pid = null;
+
+    await expect(
+      listChromeMcpTabs("chrome-live", { userDataDir: "/tmp/chrome-fake" }),
+    ).rejects.toThrow(/cooldown|reset/i);
+    expect(factoryCalls).toBe(1);
+
+    // Explicit ensureChromeMcpAvailable carries allowReconnect=true and may
+    // spawn during the cooldown, but only after the start gate clears.
+    setBrowserAuthSignalProbesForTest({
+      fileProbe: async () => ({
+        enabled: false,
+        toggleEnabled: false,
+        port: null,
+        browserUuid: null,
+        portListening: false,
+        reason: "user-enabled-false",
+      }),
+      portOwnerProbe: async () => ({ kind: "none", reason: "lsof-no-listener" }),
+    });
+    await ensureChromeMcpAvailable("chrome-live", { userDataDir: "/tmp/chrome-fake" });
+    expect(factoryCalls).toBe(2);
   });
 });
 

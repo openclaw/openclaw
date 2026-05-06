@@ -12,6 +12,7 @@ import {
   browserDoctor,
   browserOpenTab,
   browserSnapshot,
+  browserStart,
   browserStatus,
   browserTabs,
 } from "./client.js";
@@ -340,6 +341,28 @@ describe("browser client", () => {
       targetId: "t-default",
       timeoutMs: 20_000,
     });
+  });
+
+  it("uses a 45s default client timeout for browserStart so users can approve the macOS attach prompt", async () => {
+    const calls: Array<{ url: string; init?: RequestInit & { timeoutMs?: number } }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit & { timeoutMs?: number }) => {
+        calls.push({ url, init });
+        return {
+          ok: true,
+          json: async () => ({ ok: true }),
+        } as unknown as Response;
+      }),
+    );
+
+    await browserStart("http://127.0.0.1:18791");
+    await browserStart("http://127.0.0.1:18791", { timeoutMs: 5_000 });
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.init?.timeoutMs).toBe(45_000);
+    expect(calls[0]?.init?.method).toBe("POST");
+    expect(calls[1]?.init?.timeoutMs).toBe(5_000);
   });
 
   it("gives browser act requests enough client timeout for long waits", async () => {

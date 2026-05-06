@@ -379,13 +379,13 @@ describe("browser server-context existing-session profile", () => {
 
     await live.ensureBrowserAvailable();
     const tabs = await live.listTabs();
-    expect(tabs.map((tab) => tab.targetId)).toEqual(["7"]);
+    expect(tabs.map((tab) => tab.targetId)).toEqual(["7", "8"]);
 
     const opened = await live.openTab("about:blank");
     expect(opened.targetId).toBe("8");
 
     const selected = await live.ensureTabAvailable();
-    expect(selected.targetId).toBe("8");
+    expect(selected.targetId).toBe("7");
 
     await live.focusTab("7");
     await live.stopRunningBrowser();
@@ -440,7 +440,6 @@ describe("browser server-context existing-session profile", () => {
   });
 
   it("surfaces DevToolsActivePort attach failures instead of a generic tab timeout", async () => {
-    vi.useFakeTimers();
     fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     vi.mocked(chromeMcp.probeChromeMcpHealth).mockResolvedValue(makeUnattached("low", true));
     vi.mocked(chromeMcp.listChromeMcpTabs).mockRejectedValue(
@@ -453,11 +452,52 @@ describe("browser server-context existing-session profile", () => {
     const ctx = createBrowserRouteContext({ getState: () => state });
     const live = ctx.forProfile("chrome-live");
 
-    const pending = live.ensureBrowserAvailable();
-    const assertion = expect(pending).rejects.toThrow(
+    await expect(live.ensureBrowserAvailable()).rejects.toThrow(
       /could not connect to Chrome.*managed "openclaw" profile.*DevToolsActivePort/s,
     );
-    await vi.advanceTimersByTimeAsync(8_000);
-    await assertion;
+  });
+
+  it("waits for two consecutive listChromeMcpTabs successes before resolving the start readiness", async () => {
+    // chrome-devtools-mcp's first list_pages can land while it is still
+    // finishing target sync, followed by a transient failure. The start
+    // readiness must require two consecutive successes (separated by a
+    // settle delay) before treating attach as live; otherwise the next
+    // browser action races the still-syncing MCP child.
+    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
+    vi.mocked(chromeMcp.probeChromeMcpHealth).mockResolvedValue(makeUnattached("low", true));
+    vi.mocked(chromeMcp.listChromeMcpTabs)
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error("transient sync race"))
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+
+    const state = makeState();
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const live = ctx.forProfile("chrome-live");
+
+    await live.ensureBrowserAvailable();
+
+    expect(chromeMcp.ensureChromeMcpAvailable).toHaveBeenCalledTimes(1);
+    expect(chromeMcp.listChromeMcpTabs).toHaveBeenCalledTimes(4);
+  });
+
+  it("rejects start readiness when only a single listChromeMcpTabs success ever lands", async () => {
+    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
+    vi.mocked(chromeMcp.probeChromeMcpHealth).mockResolvedValue(makeUnattached("low", true));
+    let calls = 0;
+    vi.mocked(chromeMcp.listChromeMcpTabs).mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return [];
+      }
+      throw new Error("still syncing");
+    });
+
+    const state = makeState();
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const live = ctx.forProfile("chrome-live");
+
+    await expect(live.ensureBrowserAvailable()).rejects.toThrow(/still syncing/);
+    expect(calls).toBeGreaterThan(1);
   });
 });

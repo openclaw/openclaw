@@ -163,23 +163,31 @@ function createRouteContext(profileCtx: ProfileContext, options?: { ssrfPolicy?:
 }
 
 async function callTabsRoute(params: {
-  method: "get" | "post";
-  path: "/tabs" | "/tabs/action" | "/tabs/focus";
+  method: "get" | "post" | "delete";
+  path: "/tabs" | "/tabs/action" | "/tabs/focus" | "/tabs/:targetId";
   body?: Record<string, unknown>;
+  routeParams?: Record<string, string>;
   profileCtx: ProfileContext;
   ssrfPolicy?: unknown;
 }) {
-  const { app, getHandlers, postHandlers } = createBrowserRouteApp();
+  const { app, getHandlers, postHandlers, deleteHandlers } = createBrowserRouteApp();
   registerBrowserTabRoutes(
     app,
     createRouteContext(params.profileCtx, { ssrfPolicy: params.ssrfPolicy }) as never,
   );
   const handler =
-    params.method === "get" ? getHandlers.get(params.path) : postHandlers.get(params.path);
+    params.method === "get"
+      ? getHandlers.get(params.path)
+      : params.method === "post"
+        ? postHandlers.get(params.path)
+        : deleteHandlers.get(params.path);
   expect(handler).toBeTypeOf("function");
 
   const response = createBrowserRouteResponse();
-  await handler?.({ params: {}, query: {}, body: params.body ?? {} }, response.res);
+  await handler?.(
+    { params: params.routeParams ?? {}, query: {}, body: params.body ?? {} },
+    response.res,
+  );
   return response;
 }
 
@@ -582,5 +590,132 @@ describe("browser tab routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.body).toEqual({ ok: true, tabs: [publicTab()] });
     expect(profileCtx.listTabs).toHaveBeenCalledTimes(1);
+  });
+
+  describe("non-spawning ensureBrowserRunning for chrome-mcp profiles", () => {
+    const liveNoCacheHealth = (): MockChromeMcpHealth => ({
+      level: "high",
+      attached: true,
+      mcpPid: null,
+      port: 50211,
+      browserUuid: "abc",
+      reasons: ["file:devtools-active-port-detected", "owner:lsof-chrome-listener", "http:ok"],
+      emptyState: false,
+      cacheAttached: false,
+    });
+    const notRunningHealth = (): MockChromeMcpHealth => ({
+      level: "low",
+      attached: false,
+      mcpPid: null,
+      port: null,
+      browserUuid: null,
+      reasons: ["file:user-enabled-false"],
+      emptyState: true,
+      cacheAttached: false,
+    });
+
+    it("does not call listTabs/focusTab on /tabs/focus when chrome-mcp cache is cold and Chrome is live", async () => {
+      chromeMcpMocks.probeChromeMcpHealth.mockResolvedValueOnce(liveNoCacheHealth());
+      const profileCtx = createExistingSessionProfileContext({
+        listTabs: vi.fn(async () => [publicTab()]),
+      });
+
+      const response = await callTabsRoute({
+        method: "post",
+        path: "/tabs/focus",
+        body: { targetId: "T1" },
+        profileCtx,
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(profileCtx.isReachable).not.toHaveBeenCalled();
+      expect(profileCtx.listTabs).not.toHaveBeenCalled();
+      expect(profileCtx.focusTab).not.toHaveBeenCalled();
+    });
+
+    it("does not call closeTab on DELETE /tabs/:targetId when chrome-mcp is not running", async () => {
+      chromeMcpMocks.probeChromeMcpHealth.mockResolvedValueOnce(notRunningHealth());
+      const profileCtx = createExistingSessionProfileContext();
+
+      const response = await callTabsRoute({
+        method: "delete",
+        path: "/tabs/:targetId",
+        routeParams: { targetId: "T1" },
+        profileCtx,
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(profileCtx.isReachable).not.toHaveBeenCalled();
+      expect(profileCtx.closeTab).not.toHaveBeenCalled();
+    });
+
+    it("does not call listTabs/closeTab on /tabs/action close when chrome-mcp cache is cold", async () => {
+      chromeMcpMocks.probeChromeMcpHealth.mockResolvedValueOnce(liveNoCacheHealth());
+      const profileCtx = createExistingSessionProfileContext();
+
+      const response = await callTabsAction({
+        body: { action: "close", index: 0 },
+        profileCtx,
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(profileCtx.isReachable).not.toHaveBeenCalled();
+      expect(profileCtx.listTabs).not.toHaveBeenCalled();
+      expect(profileCtx.closeTab).not.toHaveBeenCalled();
+    });
+
+    it("does not call listTabs/focusTab on /tabs/action select when chrome-mcp cache is cold", async () => {
+      chromeMcpMocks.probeChromeMcpHealth.mockResolvedValueOnce(liveNoCacheHealth());
+      const profileCtx = createExistingSessionProfileContext();
+
+      const response = await callTabsAction({
+        body: { action: "select", index: 0 },
+        profileCtx,
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(profileCtx.isReachable).not.toHaveBeenCalled();
+      expect(profileCtx.listTabs).not.toHaveBeenCalled();
+      expect(profileCtx.focusTab).not.toHaveBeenCalled();
+    });
+
+    it("does not call labelTab on /tabs/action label when chrome-mcp cache is cold", async () => {
+      chromeMcpMocks.probeChromeMcpHealth.mockResolvedValueOnce(liveNoCacheHealth());
+      const profileCtx = createExistingSessionProfileContext();
+
+      const response = await callTabsAction({
+        body: { action: "label", targetId: "t1", label: "meet" },
+        profileCtx,
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(profileCtx.isReachable).not.toHaveBeenCalled();
+      expect(profileCtx.labelTab).not.toHaveBeenCalled();
+    });
+
+    it("proceeds with focus/close/select/label when chrome-mcp cache is attached", async () => {
+      chromeMcpMocks.probeChromeMcpHealth.mockResolvedValue({
+        level: "high",
+        attached: true,
+        mcpPid: 4321,
+        port: null,
+        browserUuid: null,
+        reasons: ["cache:mcp-session-ready"],
+        emptyState: false,
+        cacheAttached: true,
+      });
+      const profileCtx = createExistingSessionProfileContext({
+        listTabs: vi.fn(async () => [publicTab()]),
+      });
+
+      const focused = await callTabsRoute({
+        method: "post",
+        path: "/tabs/focus",
+        body: { targetId: "T1" },
+        profileCtx,
+      });
+      expect(focused.statusCode).toBe(200);
+      expect(profileCtx.focusTab).toHaveBeenCalledWith("T1");
+    });
   });
 });

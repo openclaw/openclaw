@@ -38,6 +38,14 @@ type ChromeMcpCallOptions = {
   ephemeral?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
+  /**
+   * Permit a fresh chrome-devtools-mcp spawn even when the cooldown set by a
+   * recent session fault is still active. Only the explicit start path
+   * (`ensureChromeMcpAvailable`) sets this; passive callers must not so a
+   * crashed/closed session does not silently respawn during status polling
+   * or routine tool calls (which would re-fire the macOS consent dialog).
+   */
+  allowReconnect?: boolean;
 };
 
 export type ChromeMcpProfileOptions = {
@@ -85,7 +93,8 @@ const CHROME_MCP_CONNECTION_FLAGS = new Set([
 const CHROME_MCP_USER_DATA_DIR_FLAGS = new Set(["--userDataDir", "--user-data-dir"]);
 const CHROME_MCP_NEW_PAGE_TIMEOUT_MS = 5_000;
 const CHROME_MCP_NAVIGATE_TIMEOUT_MS = 20_000;
-const CHROME_MCP_HANDSHAKE_TIMEOUT_MS = 30_000;
+const CHROME_MCP_HANDSHAKE_TIMEOUT_MS = 45_000;
+const CHROME_MCP_RESPAWN_COOLDOWN_MS = 5_000;
 const CHROME_MCP_STDERR_MAX_BYTES = 8 * 1024;
 const STALE_SELECTED_PAGE_ERROR =
   "The selected page has been closed. Call list_pages to see open pages.";
@@ -93,7 +102,40 @@ const STALE_SELECTED_PAGE_ERROR =
 const sessions = new Map<string, ChromeMcpSession>();
 const pendingSessions = new Map<string, Promise<ChromeMcpSession>>();
 const sessionReadyState = new WeakMap<ChromeMcpSession, "pending" | "ready" | "failed">();
+const respawnCooldownAt = new Map<string, number>();
 let sessionFactory: ChromeMcpSessionFactory | null = null;
+
+function recordSessionFaultReset(cacheKey: string): void {
+  respawnCooldownAt.set(cacheKey, Date.now() + CHROME_MCP_RESPAWN_COOLDOWN_MS);
+}
+
+function consumeSessionFaultCooldown(cacheKey: string): number {
+  const deadline = respawnCooldownAt.get(cacheKey);
+  if (deadline === undefined) {
+    return 0;
+  }
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) {
+    respawnCooldownAt.delete(cacheKey);
+    return 0;
+  }
+  return remaining;
+}
+
+function assertSpawnAllowed(
+  cacheKey: string,
+  profileName: string,
+  allowReconnect: boolean | undefined,
+): void {
+  const remaining = consumeSessionFaultCooldown(cacheKey);
+  if (remaining > 0 && !allowReconnect) {
+    throw new BrowserProfileUnavailableError(
+      `Chrome MCP session for profile "${profileName}" was reset; refusing to respawn ` +
+        `chrome-devtools-mcp during a non-explicit attach (cooldown ${remaining}ms remaining). ` +
+        `Run "openclaw browser repair" or trigger an explicit attach to reconnect.`,
+    );
+  }
+}
 
 function trackSessionReadyState(session: ChromeMcpSession): void {
   if (sessionReadyState.has(session)) {
@@ -511,6 +553,7 @@ async function getSession(
   profileName: string,
   profileOptions?: ChromeMcpOptionsInput,
   timeoutMs?: number,
+  allowReconnect?: boolean,
 ): Promise<ChromeMcpSession> {
   const options = normalizeChromeMcpOptions(profileOptions);
   const cacheKey = buildChromeMcpSessionCacheKey(profileName, options);
@@ -519,9 +562,11 @@ async function getSession(
   let session = sessions.get(cacheKey);
   if (session && session.transport.pid === null) {
     sessions.delete(cacheKey);
+    recordSessionFaultReset(cacheKey);
     session = undefined;
   }
   if (!session) {
+    assertSpawnAllowed(cacheKey, profileName, allowReconnect);
     let pending = pendingSessions.get(cacheKey);
     if (!pending) {
       pending = (async () => {
@@ -551,6 +596,7 @@ async function getSession(
     const current = sessions.get(cacheKey);
     if (current?.transport === session.transport) {
       sessions.delete(cacheKey);
+      recordSessionFaultReset(cacheKey);
     }
     throw err;
   }
@@ -564,6 +610,7 @@ async function getExistingSession(
   let session = sessions.get(cacheKey);
   if (session && session.transport.pid === null) {
     sessions.delete(cacheKey);
+    recordSessionFaultReset(cacheKey);
     session = undefined;
   }
   if (session) {
@@ -574,6 +621,7 @@ async function getExistingSession(
       const current = sessions.get(cacheKey);
       if (current?.transport === session.transport) {
         sessions.delete(cacheKey);
+        recordSessionFaultReset(cacheKey);
       }
       throw err;
     }
@@ -592,6 +640,7 @@ async function getExistingSession(
     const current = sessions.get(cacheKey);
     if (current?.transport === session.transport) {
       sessions.delete(cacheKey);
+      recordSessionFaultReset(cacheKey);
     }
     throw err;
   }
@@ -601,8 +650,11 @@ async function createEphemeralSession(
   profileName: string,
   profileOptions?: ChromeMcpOptionsInput,
   timeoutMs?: number,
+  allowReconnect?: boolean,
 ): Promise<ChromeMcpSession> {
   const options = normalizeChromeMcpOptions(profileOptions);
+  const cacheKey = buildChromeMcpSessionCacheKey(profileName, options);
+  assertSpawnAllowed(cacheKey, profileName, allowReconnect);
   const session = await (sessionFactory ?? createRealSession)(profileName, options);
   try {
     await waitForChromeMcpReady(session, profileName, timeoutMs);
@@ -622,7 +674,12 @@ async function leaseSession(
   const cacheKey = buildChromeMcpSessionCacheKey(profileName, normalizedProfileOptions);
   if (!options.ephemeral) {
     return {
-      session: await getSession(profileName, normalizedProfileOptions, options.timeoutMs),
+      session: await getSession(
+        profileName,
+        normalizedProfileOptions,
+        options.timeoutMs,
+        options.allowReconnect,
+      ),
       cacheKey,
       temporary: false,
     };
@@ -640,7 +697,12 @@ async function leaseSession(
   }
 
   return {
-    session: await createEphemeralSession(profileName, normalizedProfileOptions, options.timeoutMs),
+    session: await createEphemeralSession(
+      profileName,
+      normalizedProfileOptions,
+      options.timeoutMs,
+      options.allowReconnect,
+    ),
     cacheKey,
     temporary: true,
   };
@@ -704,6 +766,7 @@ async function callTool(
         const cur = sessions.get(lease.cacheKey);
         if (cur?.transport === lease.session.transport) {
           sessions.delete(lease.cacheKey);
+          recordSessionFaultReset(lease.cacheKey);
           await lease.session.client.close().catch(() => {});
         }
       }
@@ -729,6 +792,7 @@ async function callTool(
           const cur = sessions.get(lease.cacheKey);
           if (cur?.transport === lease.session.transport) {
             sessions.delete(lease.cacheKey);
+            recordSessionFaultReset(lease.cacheKey);
             await lease.session.client.close().catch(() => {});
           }
         }
@@ -795,7 +859,10 @@ export async function ensureChromeMcpAvailable(
       }
     }
   }
-  const lease = await leaseSession(profileName, profileOptions, options);
+  const lease = await leaseSession(profileName, profileOptions, {
+    ...options,
+    allowReconnect: true,
+  });
   if (lease.temporary) {
     await lease.session.client.close().catch(() => {});
   }
@@ -1330,6 +1397,21 @@ async function computeBrowserAuthConfidence(
       emptyState: false,
     };
   }
+  // Chrome 144+ build flavors restrict /json/version (or only enable WS-only
+  // remote debugging UI), returning 404 even when the listener is healthy.
+  // Toggle on, port listening, Chrome owner, plus a 404 from the same Chrome
+  // is enough to confirm HIGH and avoid spawning a fresh chrome-devtools-mcp
+  // child that would re-fire the macOS automation consent dialog.
+  if (json.reason === "http-404") {
+    return {
+      level: "high",
+      attached: true,
+      port: file.port,
+      browserUuid: file.browserUuid,
+      reasons,
+      emptyState: false,
+    };
+  }
   return {
     level: "medium",
     attached: false,
@@ -1838,6 +1920,21 @@ export function setChromeMcpSessionFactoryForTest(factory: ChromeMcpSessionFacto
   sessionFactory = factory;
 }
 
+export function getChromeMcpRespawnCooldownRemainingMsForTest(
+  profileName: string,
+  profileOptions?: string | ChromeMcpProfileOptions,
+): number {
+  const cacheKey = buildChromeMcpSessionCacheKey(
+    profileName,
+    normalizeChromeMcpOptions(profileOptions),
+  );
+  return consumeSessionFaultCooldown(cacheKey);
+}
+
+export function clearChromeMcpRespawnCooldownForTest(): void {
+  respawnCooldownAt.clear();
+}
+
 export async function resetChromeMcpSessionsForTest(): Promise<void> {
   sessionFactory = null;
   // Disable the file-based remote-debugging prober by default in tests so that
@@ -1851,5 +1948,6 @@ export async function resetChromeMcpSessionsForTest(): Promise<void> {
   };
   browserAuthVisualVerifier = null;
   pendingSessions.clear();
+  respawnCooldownAt.clear();
   await stopAllChromeMcpSessions();
 }

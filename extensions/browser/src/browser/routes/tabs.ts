@@ -77,18 +77,6 @@ async function withTabsProfileRoute(params: {
   }
 }
 
-async function ensureBrowserRunning(profileCtx: ProfileContext, res: BrowserResponse) {
-  if (!(await profileCtx.isReachable(300))) {
-    jsonError(
-      res,
-      new BrowserProfileUnavailableError("browser not running").status,
-      "browser not running",
-    );
-    return false;
-  }
-  return true;
-}
-
 type ChromeMcpTabListReadiness = "spawn-safe" | "live-no-cache" | "not-running";
 
 async function probeChromeMcpTabListReadiness(
@@ -102,6 +90,36 @@ async function probeChromeMcpTabListReadiness(
     return "live-no-cache";
   }
   return "not-running";
+}
+
+async function ensureBrowserRunning(profileCtx: ProfileContext, res: BrowserResponse) {
+  const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+  if (capabilities.usesChromeMcp) {
+    // profileCtx.isReachable() goes through listChromeMcpTabs which would
+    // cold-spawn chrome-devtools-mcp on a passive call (re-firing the
+    // macOS automation consent dialog). Use the non-spawning health probe
+    // and only proceed when the cache is warm; otherwise return 503 with
+    // an actionable message so callers run an explicit start instead.
+    const readiness = await probeChromeMcpTabListReadiness(profileCtx);
+    if (readiness === "spawn-safe") {
+      return true;
+    }
+    const message =
+      readiness === "live-no-cache"
+        ? `Browser session for profile "${profileCtx.profile.name}" is live but not yet attached. Run start to attach.`
+        : "browser not running";
+    jsonError(res, new BrowserProfileUnavailableError(message).status, message);
+    return false;
+  }
+  if (!(await profileCtx.isReachable(300))) {
+    jsonError(
+      res,
+      new BrowserProfileUnavailableError("browser not running").status,
+      "browser not running",
+    );
+    return false;
+  }
+  return true;
 }
 
 async function redactBlockedTabUrls(params: {

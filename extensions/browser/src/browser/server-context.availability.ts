@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { resolveCdpReachabilityPolicy } from "./cdp-reachability-policy.js";
 import {
   CHROME_MCP_ATTACH_READY_POLL_MS,
+  CHROME_MCP_ATTACH_READY_SETTLE_MS,
   CHROME_MCP_ATTACH_READY_WINDOW_MS,
   PROFILE_ATTACH_RETRY_TIMEOUT_MS,
   PROFILE_POST_RESTART_WS_TIMEOUT_MS,
@@ -280,15 +281,28 @@ export function createProfileAvailability({
   };
 
   const waitForChromeMcpReadyAfterAttach = async (): Promise<void> => {
+    // Require two consecutive listChromeMcpTabs() successes separated by a
+    // short settle delay. The first response can land while
+    // chrome-devtools-mcp is still finishing its initial target sync; a
+    // single success has been observed to be followed by a transient
+    // "selected page closed" error. Two stable successes confirm the MCP
+    // session can serve real navigation/tab calls.
     const deadlineMs = Date.now() + CHROME_MCP_ATTACH_READY_WINDOW_MS;
     let lastError: unknown;
+    let consecutiveSuccesses = 0;
     while (Date.now() < deadlineMs) {
       try {
         const { listChromeMcpTabs } = await getChromeMcpModule();
         await listChromeMcpTabs(profile.name, profile);
-        return;
+        consecutiveSuccesses += 1;
+        if (consecutiveSuccesses >= 2) {
+          return;
+        }
+        await new Promise((r) => setTimeout(r, CHROME_MCP_ATTACH_READY_SETTLE_MS));
+        continue;
       } catch (err) {
         lastError = err;
+        consecutiveSuccesses = 0;
       }
       await new Promise((r) => setTimeout(r, CHROME_MCP_ATTACH_READY_POLL_MS));
     }

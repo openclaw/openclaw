@@ -115,10 +115,15 @@ export async function browserStart(
   const q = buildProfileQuery(opts?.profile);
   await fetchBrowserJson(withBaseUrl(baseUrl, `/start${q}`), {
     method: "POST",
+    // chrome-devtools-mcp existing-session attach requires the user to approve
+    // the macOS automation consent dialog (or its Linux/Windows equivalent)
+    // and then waits for two consecutive list_pages successes. The 15 s
+    // default reliably timed out before the dialog was approved; 45 s gives
+    // realistic headroom for first-time consent.
     timeoutMs:
       typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
         ? Math.max(1, Math.floor(opts.timeoutMs))
-        : 15000,
+        : 45_000,
   });
 }
 
