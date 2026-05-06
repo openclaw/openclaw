@@ -35,20 +35,18 @@ Make OpenClaw's filesystem access boring and predictable:
 - Do not chase cosmetic import churn without reducing helper count or clarifying
   trust boundaries.
 
-## Temporary fs-safe Source Pin
+## fs-safe Package Pin
 
-`@openclaw/fs-safe` is pinned to a GitHub source commit until the first npm
-release is published. This keeps fresh checkouts, CI runners, and other
-maintainers off the local-only `link:../fs-safe` dependency.
+`@openclaw/fs-safe` is published on npm and consumed through a semver range.
+Fresh checkouts and CI runners should install the package from the public
+registry, not from a local `link:../fs-safe` checkout or a GitHub tarball.
 
-Current pin:
+Current range:
 
-- `github:openclaw/fs-safe#2e83f7d9b96eeb0a07c9ac1431d66e81b049e69f`
+- `^0.1.0`
 
-fs-safe keeps a source prepack helper so pnpm can build the package from the
-GitHub tarball. After npm publish, replace the source pin with a semver range
-and remove `@openclaw/fs-safe` from the build-script allowlist if the published
-package no longer runs package build scripts during install.
+The published package ships built `dist` files, so OpenClaw should not list it
+in `pnpm.onlyBuiltDependencies`.
 
 ## Current Shape
 

@@ -1695,7 +1695,7 @@
     "@mariozechner/pi-tui": "0.73.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "^0.6.0",
-    "@openclaw/fs-safe": "github:openclaw/fs-safe#2e83f7d9b96eeb0a07c9ac1431d66e81b049e69f",
+    "@openclaw/fs-safe": "^0.1.0",
     "@slack/bolt": "^4.7.2",
     "@slack/types": "^2.21.0",
     "@slack/web-api": "^7.15.2",
@@ -1801,7 +1801,6 @@
       "uuid": "14.0.0"
     },
     "onlyBuiltDependencies": [
-      "@openclaw/fs-safe",
       "@discordjs/opus",
       "@google/genai",
       "@lydell/node-pty",
