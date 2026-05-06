@@ -168,6 +168,8 @@ vi.mock("../utils.js", async (importOriginal) => {
 });
 
 vi.mock("../plugins/update.js", () => ({
+  resolveTrustedSourceLinkedOfficialClawHubSpec: vi.fn(() => undefined),
+  resolveTrustedSourceLinkedOfficialNpmSpec: vi.fn(() => undefined),
   syncPluginsForUpdateChannel: (...args: unknown[]) => syncPluginsForUpdateChannel(...args),
   updateNpmInstalledPlugins: (...args: unknown[]) => updateNpmInstalledPlugins(...args),
 }));
