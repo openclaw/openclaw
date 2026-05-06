@@ -246,9 +246,7 @@ export function buildGroupChatContext(params: {
     "Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.",
   );
   if (normalizeOptionalLowercaseString(params.sessionCtx.Provider) === "discord") {
-    lines.push(
-      "On Discord, wrap URLs in angle brackets (`<https://example.com>`) to suppress link embeds when posting bare links.",
-    );
+    lines.push("Discord: wrap bare URLs like <https://example.com> to suppress embeds.");
   }
   lines.push(
     "When subagent or session-spawn tools are available and a directly requested group-chat task will require several tool calls, prefer delegating bounded side investigations early so the channel gets a responsive path forward. Keep the critical path local, avoid subagents for simple one-step work, and only surface concise group-visible updates when they add value.",
