@@ -74,7 +74,7 @@ describe("createMinimaxThinkingDisabledWrapper", () => {
     ).toBeUndefined();
   });
 
-  it("preserves an already-set thinking value", () => {
+  it("overrides an already-set thinking value for minimax (#77625)", () => {
     let capturedThinking: unknown = undefined;
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -91,6 +91,31 @@ describe("createMinimaxThinkingDisabledWrapper", () => {
         api: "anthropic-messages",
         provider: "minimax",
         id: "MiniMax-M2.7",
+      } as Model<"anthropic-messages">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(capturedThinking).toEqual({ type: "disabled" });
+  });
+
+  it("does not override thinking for non-minimax providers", () => {
+    let capturedThinking: unknown = undefined;
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        thinking: { type: "enabled", budget_tokens: 1024 },
+      };
+      options?.onPayload?.(payload, _model);
+      capturedThinking = payload.thinking;
+      return {} as ReturnType<StreamFn>;
+    };
+
+    const wrapped = createMinimaxThinkingDisabledWrapper(baseStreamFn);
+    void wrapped(
+      {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-6",
       } as Model<"anthropic-messages">,
       { messages: [] } as Context,
       {},
