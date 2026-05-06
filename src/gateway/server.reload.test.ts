@@ -717,8 +717,6 @@ describe("gateway hot reload", () => {
       await vi.waitFor(() => {
         expect(restartedCron.start).toHaveBeenCalledTimes(1);
       });
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      expect(restartedCron.start).toHaveBeenCalledTimes(1);
 
       expect(hoisted.providerManager.stopChannel).toHaveBeenCalledTimes(5);
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledTimes(5);

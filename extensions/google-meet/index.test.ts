@@ -2885,11 +2885,14 @@ describe("google-meet plugin", () => {
           }) => Promise<void>)
         | undefined;
       const respond = vi.fn();
+      vi.useFakeTimers();
 
-      await handler?.({
+      const run = handler?.({
         params: { url: "https://meet.google.com/abc-defg-hij" },
         respond,
       });
+      await vi.advanceTimersByTimeAsync(2_000);
+      await run;
 
       expect(respond.mock.calls[0]?.[1]).toMatchObject({
         spoken: false,
@@ -2905,6 +2908,7 @@ describe("google-meet plugin", () => {
       });
       expect(inspectCount).toBeGreaterThanOrEqual(2);
     } finally {
+      vi.useRealTimers();
       Object.defineProperty(process, "platform", { value: originalPlatform });
     }
   });
@@ -4831,6 +4835,7 @@ describe("google-meet plugin", () => {
   });
 
   it("stops paired-node realtime audio after repeated input pull failures", async () => {
+    vi.useFakeTimers();
     const bridge = {
       connect: vi.fn(async () => {}),
       sendAudio: vi.fn(),
@@ -4860,38 +4865,42 @@ describe("google-meet plugin", () => {
       },
     };
 
-    const handle = await startNodeRealtimeAudioBridge({
-      config: resolveGoogleMeetConfig({
-        realtime: { provider: "openai", model: "gpt-realtime" },
-      }),
-      fullConfig: {} as never,
-      runtime: runtime as never,
-      meetingSessionId: "meet-1",
-      nodeId: "node-1",
-      bridgeId: "bridge-1",
-      logger: noopLogger,
-      providers: [provider],
-    });
-
-    await vi.waitFor(
-      () => {
-        expect(bridge.close).toHaveBeenCalled();
-      },
-      { timeout: 3_000 },
-    );
-    expect(handle.getHealth()).toMatchObject({
-      bridgeClosed: true,
-      consecutiveInputErrors: 5,
-      lastInputError: "node invoke timeout",
-    });
-    expect(runtime.nodes.invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
+    try {
+      const handle = await startNodeRealtimeAudioBridge({
+        config: resolveGoogleMeetConfig({
+          realtime: { provider: "openai", model: "gpt-realtime" },
+        }),
+        fullConfig: {} as never,
+        runtime: runtime as never,
+        meetingSessionId: "meet-1",
         nodeId: "node-1",
-        command: "googlemeet.chrome",
-        params: { action: "stop", bridgeId: "bridge-1" },
-        timeoutMs: 5_000,
-      }),
-    );
+        bridgeId: "bridge-1",
+        logger: noopLogger,
+        providers: [provider],
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(bridge.close).toHaveBeenCalled();
+        },
+        { timeout: 3_000 },
+      );
+      expect(handle.getHealth()).toMatchObject({
+        bridgeClosed: true,
+        consecutiveInputErrors: 5,
+        lastInputError: "node invoke timeout",
+      });
+      expect(runtime.nodes.invoke).toHaveBeenCalledWith(
+        expect.objectContaining({
+          nodeId: "node-1",
+          command: "googlemeet.chrome",
+          params: { action: "stop", bridgeId: "bridge-1" },
+          timeoutMs: 5_000,
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("exposes node-host list and stop-by-url bridge actions", async () => {
