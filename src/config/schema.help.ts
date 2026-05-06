@@ -1297,6 +1297,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Ordered fallback music-generation models (provider/model).",
   "agents.defaults.mediaGenerationAutoProviderFallback":
     "When true (default), shared image, music, and video generation automatically appends other auth-backed provider defaults after explicit primary/fallback refs. Set false to disable implicit cross-provider fallback while keeping explicit fallbacks.",
+  "agents.defaults.revertAfterImageModel":
+    "When true, auto-revert the session model override back to the primary model after image or PDF analysis completes. Default: false.",
   "agents.defaults.pdfModel.primary":
     "Optional PDF model (provider/model) for the PDF analysis tool. Defaults to imageModel, then session model.",
   "agents.defaults.pdfModel.fallbacks": "Ordered fallback PDF models (provider/model).",
