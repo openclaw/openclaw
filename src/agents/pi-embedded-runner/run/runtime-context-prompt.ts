@@ -115,7 +115,7 @@ export function resolveRuntimeContextPromptParts(params: {
   }
 
   if (isHeartbeatTurn && !runtimeContext) {
-    return { prompt };
+    return { prompt: HEARTBEAT_TRANSCRIPT_PROMPT, runtimeContext: params.effectivePrompt };
   }
 
   return runtimeContext ? { prompt, runtimeContext } : { prompt };
