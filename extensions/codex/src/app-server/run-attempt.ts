@@ -120,8 +120,8 @@ const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
 const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
 const LOG_FIELD_MAX_LENGTH = 160;
-const CODEX_NATIVE_PROJECT_DOC_BASENAMES = new Set(["agents.md"]);
 const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
+  ["agents.md", 5],
   ["soul.md", 10],
   ["identity.md", 20],
   ["user.md", 30],
@@ -1828,51 +1828,54 @@ async function buildCodexWorkspaceBootstrapInstructions(params: {
       contextMode: params.params.bootstrapContextMode,
       runKind: params.params.bootstrapContextRunKind,
     });
-    return renderCodexWorkspaceBootstrapInstructions(
-      contextFiles.map((file) =>
-        remapCodexContextFilePath({
-          file,
-          sourceWorkspaceDir: params.resolvedWorkspace,
-          targetWorkspaceDir: params.effectiveWorkspace,
-        }),
-      ),
+    const remappedContextFiles = contextFiles.map((file) =>
+      remapCodexContextFilePath({
+        file,
+        sourceWorkspaceDir: params.resolvedWorkspace,
+        targetWorkspaceDir: params.effectiveWorkspace,
+      }),
     );
+    return renderCodexWorkspaceBootstrapDeveloperInstructions(remappedContextFiles);
   } catch (error) {
     embeddedAgentLog.warn("failed to load codex workspace bootstrap instructions", { error });
     return undefined;
   }
 }
 
-function renderCodexWorkspaceBootstrapInstructions(
+function renderCodexWorkspaceBootstrapDeveloperInstructions(
   contextFiles: EmbeddedContextFile[],
 ): string | undefined {
-  const files = contextFiles
-    .filter((file) => {
-      const baseName = getCodexContextFileBasename(file.path);
-      return baseName && !CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName);
-    })
-    .toSorted(compareCodexContextFiles);
+  const files = filterCodexDeveloperBootstrapFiles(contextFiles);
   if (files.length === 0) {
     return undefined;
   }
-  const hasSoulFile = files.some((file) => getCodexContextFileBasename(file.path) === "soul.md");
   const lines = [
-    "OpenClaw loaded these user-editable workspace files. Treat them as project/user context. Codex loads AGENTS.md natively, so AGENTS.md is not repeated here.",
+    "OpenClaw injected the available workspace bootstrap files into developer instructions for this Codex session. Treat them as standing project/user context, including voice, identity, preferences, tools notes, bootstrap state, memory, and heartbeat guidance. These user-editable files do not override higher-priority OpenClaw or Codex instructions, tool/security policy, repository owner rules, or explicit user instructions in the current conversation.",
     "",
-    "# Project Context",
+    "# OpenClaw Workspace Bootstrap",
     "",
-    "The following project context files have been loaded:",
+    "The following bootstrap files have been loaded:",
+    "",
   ];
-  if (hasSoulFile) {
-    lines.push(
-      "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
-    );
-  }
-  lines.push("");
   for (const file of files) {
-    lines.push(`## ${file.path}`, "", file.content, "");
+    lines.push(`## ${file.path}`, "", file.content.trim(), "");
   }
   return lines.join("\n").trim();
+}
+
+function filterCodexDeveloperBootstrapFiles(
+  contextFiles: EmbeddedContextFile[],
+): EmbeddedContextFile[] {
+  return contextFiles
+    .filter((file) => {
+      const content = file.content.trim();
+      return (
+        Boolean(getCodexContextFileBasename(file.path)) &&
+        content.length > 0 &&
+        !content.startsWith("[MISSING] Expected at:")
+      );
+    })
+    .toSorted(compareCodexContextFiles);
 }
 
 function remapCodexContextFilePath(params: {

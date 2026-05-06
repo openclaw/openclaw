@@ -2,6 +2,7 @@ import type {
   ClientRequest as GeneratedClientRequest,
   InitializeParams as GeneratedInitializeParams,
   InitializeResponse as GeneratedInitializeResponse,
+  Personality as GeneratedPersonality,
   ServiceTier as GeneratedServiceTier,
   v2,
 } from "./protocol-generated/typescript/index.js";
@@ -10,6 +11,7 @@ import type { JsonValue as GeneratedJsonValue } from "./protocol-generated/types
 export type JsonValue = GeneratedJsonValue;
 export type JsonObject = { [key: string]: JsonValue };
 export type CodexServiceTier = GeneratedServiceTier;
+export type CodexPersonality = GeneratedPersonality;
 
 export type CodexAppServerRequestMethod = GeneratedClientRequest["method"];
 export type CodexAppServerRequestParams<M extends CodexAppServerRequestMethod> =
