@@ -404,6 +404,7 @@ export async function getMessageFeishu(params: {
   try {
     const response = (await client.im.message.get({
       path: { message_id: messageId },
+      params: { card_msg_content_type: "user_card_content" },
     })) as FeishuGetMessageResponse;
 
     if (response.code !== 0) {
@@ -466,6 +467,7 @@ export async function listFeishuThreadMessages(params: {
       // Results are reversed below to restore chronological order.
       sort_type: "ByCreateTimeDesc",
       page_size: Math.min(limit + 1, 50),
+      card_msg_content_type: "user_card_content",
     },
   })) as {
     code?: number;

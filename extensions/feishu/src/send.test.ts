@@ -167,6 +167,11 @@ describe("getMessageFeishu", () => {
         content: "hello markdown\nhello div",
       }),
     );
+    expect(mockClientGet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: { card_msg_content_type: "user_card_content" },
+      }),
+    );
   });
 
   it("falls through empty interactive card element arrays and locale variants", async () => {
@@ -417,6 +422,11 @@ describe("getMessageFeishu", () => {
         content: "hello from card 2.0",
       }),
     ]);
+    expect(mockClientList).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({ card_msg_content_type: "user_card_content" }),
+      }),
+    );
   });
 });
 
