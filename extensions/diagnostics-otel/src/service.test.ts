@@ -646,6 +646,34 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("records hook-blocked run metrics with safe blocker originator", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "run.completed",
+      runId: "run-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      outcome: "blocked",
+      blockedBy: "policy-plugin",
+      durationMs: 100,
+    });
+    await flushDiagnosticEvents();
+
+    expect(telemetryState.histograms.get("openclaw.run.duration_ms")?.record).toHaveBeenCalledWith(
+      100,
+      expect.objectContaining({
+        "openclaw.outcome": "blocked",
+        "openclaw.blocked_by": "policy-plugin",
+      }),
+    );
+    expect(JSON.stringify(telemetryState)).not.toContain("matched secret prompt");
+
+    await service.stop?.(ctx);
+  });
+
   test("honors disabled traces when an OpenTelemetry SDK is preloaded", async () => {
     process.env.OPENCLAW_OTEL_PRELOADED = "1";
     const service = createDiagnosticsOtelService();

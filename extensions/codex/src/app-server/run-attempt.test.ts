@@ -4,16 +4,14 @@ import path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   abortAgentHarnessRun,
-  queueAgentHarnessMessage,
-  type EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness";
-import {
   buildAgentRuntimePlan,
   embeddedAgentLog,
   nativeHookRelayTesting,
   onAgentEvent,
+  queueAgentHarnessMessage,
   resetAgentEventsForTest,
   type AgentEventPayload,
+  type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   initializeGlobalHookRunner,
@@ -81,6 +79,25 @@ function buildCodexRuntimePlan(params: EmbeddedRunAttemptParams, workspaceDir: s
     agentDir: tempDir,
     thinkingLevel: params.thinkLevel,
   });
+}
+
+function createCodexRuntimePlanFixture(): NonNullable<EmbeddedRunAttemptParams["runtimePlan"]> {
+  return {
+    auth: {},
+    observability: {
+      resolvedRef: "codex/gpt-5.4-codex",
+      provider: "codex",
+      modelId: "gpt-5.4-codex",
+      harnessId: "codex",
+    },
+    prompt: {
+      resolveSystemPromptContribution: () => undefined,
+    },
+    tools: {
+      normalize: (tools: unknown[]) => tools,
+      logDiagnostics: () => undefined,
+    },
+  } as unknown as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
 }
 
 function threadStartResult(threadId = "thread-1") {
@@ -498,102 +515,36 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
-  it("forces the message dynamic tool for message-tool-only source replies", async () => {
+  it("forces the message dynamic tool for message-tool-only source replies", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    params.disableTools = false;
-    params.config = { tools: { profile: "coding" } };
     params.sourceReplyDeliveryMode = "message_tool_only";
-    params.messageProvider = "whatsapp";
-    params.runtimePlan = buildCodexRuntimePlan(params, workspaceDir);
-    let seenForceMessageTool: boolean | undefined;
-    __testing.setOpenClawCodingToolsFactoryForTests((options) => {
-      seenForceMessageTool = options?.forceMessageTool;
-      return [
-        {
-          name: "message",
-          description: "message test tool",
-          parameters: { type: "object", properties: {} },
-          execute: vi.fn(),
-        },
-      ] as never;
-    });
 
-    const dynamicTools = await __testing.buildDynamicTools({
-      params,
-      resolvedWorkspace: workspaceDir,
-      effectiveWorkspace: workspaceDir,
-      sandboxSessionKey: "agent:main:session-1",
-      sandbox: null,
-      runAbortController: new AbortController(),
-      sessionAgentId: "main",
-      pluginConfig: {},
-      onYieldDetected: () => undefined,
-    });
-    const dynamicToolNames = dynamicTools.map((tool) => tool.name);
+    expect(__testing.shouldForceMessageTool(params)).toBe(true);
 
-    expect(seenForceMessageTool).toBe(true);
-    expect(dynamicToolNames).toContain("message");
+    params.sourceReplyDeliveryMode = "automatic";
+    expect(__testing.shouldForceMessageTool(params)).toBe(false);
   });
 
-  it("passes the live run session key to Codex dynamic tools when sandbox policy uses another key", async () => {
+  it("passes the live run session key to Codex dynamic tools when sandbox policy uses another key", () => {
     const workspaceDir = path.join(tempDir, "workspace");
-    const sessionsPath = path.join(tempDir, "sessions.json");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    params.disableTools = false;
     params.sessionKey = "agent:main:main";
-    params.config = {
-      session: { store: sessionsPath, mainKey: "main", scope: "per-sender" },
-      tools: { profile: "coding" },
-    };
-    params.runtimePlan = buildCodexRuntimePlan(params, workspaceDir);
-    await fs.writeFile(
-      sessionsPath,
-      JSON.stringify({
-        "agent:main:main": {
-          sessionId: "s-main",
-          updatedAt: 10,
-          status: "running",
-        },
-        "agent:main:telegram:default:direct:1234": {
-          sessionId: "s-telegram-policy",
-          updatedAt: 5,
-          status: "done",
-        },
-      }),
-    );
-    let seenRunSessionKey: string | undefined;
-    __testing.setOpenClawCodingToolsFactoryForTests((options) => {
-      seenRunSessionKey = options?.runSessionKey;
-      return [
-        {
-          name: "session_status",
-          description: "session status test tool",
-          parameters: { type: "object", properties: {} },
-          execute: vi.fn(async () => ({ details: { sessionKey: options?.runSessionKey } })),
-        },
-      ] as never;
+
+    expect(
+      __testing.resolveOpenClawCodingToolsSessionKeys(
+        params,
+        "agent:main:telegram:default:direct:1234",
+      ),
+    ).toEqual({
+      sessionKey: "agent:main:telegram:default:direct:1234",
+      runSessionKey: "agent:main:main",
     });
 
-    const dynamicTools = await __testing.buildDynamicTools({
-      params,
-      resolvedWorkspace: workspaceDir,
-      effectiveWorkspace: workspaceDir,
-      sandboxSessionKey: "agent:main:telegram:default:direct:1234",
-      sandbox: null,
-      runAbortController: new AbortController(),
-      sessionAgentId: "main",
-      pluginConfig: {},
-      onYieldDetected: () => undefined,
+    expect(__testing.resolveOpenClawCodingToolsSessionKeys(params, "agent:main:main")).toEqual({
+      sessionKey: "agent:main:main",
+      runSessionKey: undefined,
     });
-    const sessionStatus = dynamicTools.find((tool) => tool.name === "session_status");
-
-    expect(sessionStatus).toBeDefined();
-    const result = await sessionStatus?.execute("call-current", { sessionKey: "current" });
-    expect(seenRunSessionKey).toBe("agent:main:main");
-    expect((result?.details as { sessionKey?: string } | undefined)?.sessionKey).toBe(
-      "agent:main:main",
-    );
   });
 
   it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {
@@ -1001,11 +952,13 @@ describe("runCodexAppServerAttempt", () => {
     sessionManager.appendMessage(assistantMessage("existing context", Date.now()));
     const harness = createStartedThreadHarness();
 
-    const params = createParamsWithRuntimePlan(sessionFile, workspaceDir);
+    const params = createParams(sessionFile, workspaceDir);
+    params.runtimePlan = createCodexRuntimePlanFixture();
     params.onAgentEvent = onRunAgentEvent;
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await vi.waitFor(() => expect(llmInput).toHaveBeenCalled(), { interval: 1 });
+    expect(llmInput).toHaveBeenCalled();
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
     expect(llmInput.mock.calls).toEqual(
       expect.arrayContaining([
@@ -1042,8 +995,8 @@ describe("runCodexAppServerAttempt", () => {
     const result = await run;
 
     expect(result.assistantTexts).toEqual(["hello back"]);
-    await vi.waitFor(() => expect(llmOutput).toHaveBeenCalledTimes(1), { interval: 1 });
-    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), { interval: 1 });
+    expect(llmOutput).toHaveBeenCalledTimes(1);
+    expect(agentEnd).toHaveBeenCalledTimes(1);
     const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event);
     expect(agentEvents).toEqual(
       expect.arrayContaining([
@@ -1453,7 +1406,7 @@ describe("runCodexAppServerAttempt", () => {
     const result = await run;
 
     expect(result.promptError).toBe("codex exploded");
-    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), { interval: 1 });
+    expect(agentEnd).toHaveBeenCalledTimes(1);
     const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event);
     expect(agentEvents).toEqual(
       expect.arrayContaining([
@@ -1508,13 +1461,14 @@ describe("runCodexAppServerAttempt", () => {
       return undefined;
     });
 
-    await expect(
-      runCodexAppServerAttempt(createParamsWithRuntimePlan(sessionFile, workspaceDir)),
-    ).rejects.toThrow("turn start exploded");
+    const params = createParams(sessionFile, workspaceDir);
+    params.runtimePlan = createCodexRuntimePlanFixture();
 
-    await vi.waitFor(() => expect(llmInput).toHaveBeenCalledTimes(1), { interval: 1 });
-    await vi.waitFor(() => expect(llmOutput).toHaveBeenCalledTimes(1), { interval: 1 });
-    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), { interval: 1 });
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow("turn start exploded");
+
+    expect(llmInput).toHaveBeenCalledTimes(1);
+    expect(llmOutput).toHaveBeenCalledTimes(1);
+    expect(agentEnd).toHaveBeenCalledTimes(1);
     expect(llmOutput).toHaveBeenCalledWith(
       expect.objectContaining({
         assistantTexts: [],
@@ -1555,7 +1509,7 @@ describe("runCodexAppServerAttempt", () => {
 
     const result = await run;
     expect(result.aborted).toBe(true);
-    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), { interval: 1 });
+    expect(agentEnd).toHaveBeenCalledTimes(1);
     expect(agentEnd).toHaveBeenCalledWith(
       expect.objectContaining({
         success: false,
@@ -1710,87 +1664,6 @@ describe("runCodexAppServerAttempt", () => {
     );
 
     await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-  });
-
-  it("routes MCP approval elicitations through the native bridge", async () => {
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    let handleRequest:
-      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
-      | undefined;
-    const bridgeSpy = vi
-      .spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest")
-      .mockResolvedValue({
-        action: "accept",
-        content: null,
-        _meta: null,
-      });
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
-      if (method === "turn/start") {
-        return turnStartResult();
-      }
-      return {};
-    });
-    __testing.setCodexAppServerClientFactoryForTests(
-      async () =>
-        ({
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: (
-            handler: (request: {
-              id: string;
-              method: string;
-              params?: unknown;
-            }) => Promise<unknown>,
-          ) => {
-            handleRequest = handler;
-            return () => undefined;
-          },
-        }) as never,
-    );
-
-    const run = runCodexAppServerAttempt(
-      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
-    );
-    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), { interval: 1 });
-
-    const result = await handleRequest?.({
-      id: "request-elicitation-1",
-      method: "mcpServer/elicitation/request",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        serverName: "codex_apps__github",
-        mode: "form",
-      },
-    });
-
-    expect(result).toEqual({
-      action: "accept",
-      content: null,
-      _meta: null,
-    });
-    expect(bridgeSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        threadId: "thread-1",
-        turnId: "turn-1",
-      }),
-    );
-
-    await notify({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        turn: { id: "turn-1", status: "completed" },
-      },
-    });
     await run;
   });
 

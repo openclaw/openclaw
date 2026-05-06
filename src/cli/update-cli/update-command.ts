@@ -10,6 +10,7 @@ import {
 import { doctorCommand } from "../../commands/doctor.js";
 import {
   ConfigMutationConflictError,
+  assertConfigWriteAllowedInCurrentMode,
   readConfigFileSnapshot,
   replaceConfigFile,
   resolveGatewayPort,
@@ -51,6 +52,7 @@ import {
   globalInstallArgs,
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
+  resolvePnpmGlobalDirFromGlobalRoot,
 } from "../../infra/update-global.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
@@ -1069,9 +1071,13 @@ async function runGitUpdate(params: {
       timeoutMs: effectiveTimeout,
       pkgRoot: params.root,
     });
+    const installLocation =
+      installTarget.manager === "pnpm"
+        ? resolvePnpmGlobalDirFromGlobalRoot(installTarget.globalRoot)
+        : null;
     const installStep = await runUpdateStep({
       name: "global install",
-      argv: globalInstallArgs(installTarget, updateRoot),
+      argv: globalInstallArgs(installTarget, updateRoot, undefined, installLocation),
       cwd: updateRoot,
       env: installEnv,
       timeoutMs: effectiveTimeout,
@@ -1944,6 +1950,9 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const shouldRestart = opts.restart !== false;
   if (timeoutMs === null) {
     return;
+  }
+  if (opts.dryRun !== true) {
+    assertConfigWriteAllowedInCurrentMode();
   }
   const updateStepTimeoutMs = timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
