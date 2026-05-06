@@ -14,7 +14,7 @@ import {
 import { parseAudioTag } from "./audio-tags.js";
 
 // Allow optional wrapping backticks and punctuation after the token; capture the core token.
-export const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
+export const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/g;
 
 export type ParsedMediaOutputSegment =
   | {
@@ -475,6 +475,22 @@ function isInsideFence(fenceSpans: Array<{ start: number; end: number }>, offset
   return fenceSpans.some((span) => offset >= span.start && offset < span.end);
 }
 
+/**
+ * Heuristic: detect whether a line is likely part of a top-level indented
+ * code block.  Requires 4+ leading spaces or a tab AND the preceding line
+ * was blank or itself an indented-code line (prevents interrupting a
+ * paragraph).
+ *
+ * This is a practical approximation, NOT a full CommonMark parser.
+ * Known gaps: container context (list / blockquote indentation) is not
+ * tracked, so deeply indented list continuations may be mis-classified.
+ * The trade-off favours false positives (skip extraction from a non-code
+ * line) over false negatives (extract MEDIA from a code line).
+ */
+function isIndentedCodeLine(line: string, prevLineBlankOrCode: boolean): boolean {
+  return prevLineBlankOrCode && /^(?: {4}|\t)/.test(line);
+}
+
 export function splitMediaFromOutput(
   raw: string,
   options: SplitMediaFromOutputOptions = {},
@@ -523,29 +539,50 @@ export function splitMediaFromOutput(
   // Collect tokens line by line so we can strip them cleanly.
   const lines = trimmedRaw.split("\n");
   const keptLines: string[] = [];
+  const keptLineIsCode: boolean[] = [];
 
   let lineOffset = 0; // Track character offset for fence checking
+  let prevLineBlankOrIndentedCode = true; // document start counts as "preceded by blank"
   for (const line of lines) {
+    const isBlank = line.trim() === "";
+    const isIndented = isIndentedCodeLine(line, prevLineBlankOrIndentedCode);
+
     // Skip MEDIA extraction if this line is inside a fenced code block
     if (hasFenceMarkers && isInsideFence(fenceSpans, lineOffset)) {
       keptLines.push(line);
+      keptLineIsCode.push(true);
       pushTextSegment(line);
       lineOffset += line.length + 1; // +1 for newline
+      // Exiting a fenced block is a block boundary: next line can start
+      // an indented code block without a preceding blank line.
+      prevLineBlankOrIndentedCode = true;
+      continue;
+    }
+
+    // Skip MEDIA extraction if this line is inside an indented code block
+    if (isIndented) {
+      keptLines.push(line);
+      keptLineIsCode.push(true);
+      pushTextSegment(line);
+      lineOffset += line.length + 1;
+      prevLineBlankOrIndentedCode = true;
       continue;
     }
 
     const trimmedStart = line.trimStart();
-    if (!trimmedStart.toUpperCase().startsWith("MEDIA:")) {
+    if (!trimmedStart.startsWith("MEDIA:")) {
       const markdownImageResult = extractMarkdownImages
         ? collectMarkdownImageSegments({ line, media })
         : { lineSegments: [], foundMedia: false };
       if (!markdownImageResult.foundMedia) {
         keptLines.push(line);
+        keptLineIsCode.push(false);
         pushTextSegment(line);
       } else {
         foundMediaToken = true;
         if (markdownImageResult.cleanedLine) {
           keptLines.push(markdownImageResult.cleanedLine);
+          keptLineIsCode.push(false);
         }
         for (const segment of markdownImageResult.lineSegments) {
           if (segment.type === "text") {
@@ -556,14 +593,17 @@ export function splitMediaFromOutput(
         }
       }
       lineOffset += line.length + 1; // +1 for newline
+      prevLineBlankOrIndentedCode = isBlank;
       continue;
     }
 
     const matches = Array.from(line.matchAll(MEDIA_TOKEN_RE));
     if (matches.length === 0) {
       keptLines.push(line);
+      keptLineIsCode.push(false);
       pushTextSegment(line);
       lineOffset += line.length + 1; // +1 for newline
+      prevLineBlankOrIndentedCode = isBlank;
       continue;
     }
 
@@ -667,6 +707,7 @@ export function splitMediaFromOutput(
     // If the line becomes empty, drop it.
     if (cleanedLine) {
       keptLines.push(cleanedLine);
+      keptLineIsCode.push(false);
       lineSegments.push({ type: "text", text: cleanedLine });
     }
     for (const segment of lineSegments) {
@@ -677,20 +718,34 @@ export function splitMediaFromOutput(
       segments.push(segment);
     }
     lineOffset += line.length + 1; // +1 for newline
+    prevLineBlankOrIndentedCode = false;
   }
 
+  // Determine whether the first surviving content line is code — if so,
+  // preserve its leading whitespace (it is structurally significant).
+  const firstContentIdx = keptLines.findIndex((l) => l.trim().length > 0);
+  const firstLineIsCode = firstContentIdx >= 0 && keptLineIsCode[firstContentIdx];
+  const leadingNormRegex = firstLineIsCode
+    ? /^(?:[ \t]*\n)*/
+    : /^(?:[ \t]*\n)*(?:[ \t]{0,3}(?=\S))?/;
+
   let cleanedText = keptLines
+    .map((line, i) =>
+      keptLineIsCode[i] ? line : line.replace(/[ \t]+$/, "").replace(/[ \t]{2,}/g, " "),
+    )
     .join("\n")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/[ \t]{2,}/g, " ")
     .replace(/\n{2,}/g, "\n")
-    .trim();
+    .replace(leadingNormRegex, "")
+    .trimEnd();
 
   // Detect and strip [[audio_as_voice]] tag
   const audioTagResult = parseAudioTag(cleanedText);
   const hasAudioAsVoice = audioTagResult.audioAsVoice;
   if (audioTagResult.hadTag) {
-    cleanedText = audioTagResult.text.replace(/\n{2,}/g, "\n").trim();
+    cleanedText = audioTagResult.text
+      .replace(/\n{2,}/g, "\n")
+      .replace(/^(?:[ \t]*\n)*(?:[ \t]{0,3}(?=\S))?/, "")
+      .trimEnd();
   }
 
   if (media.length === 0) {
