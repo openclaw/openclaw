@@ -51,6 +51,7 @@ import {
   resolveAgentDir,
   resolveDefaultModelForAgent,
 } from "./bot-message-dispatch.agent.runtime.js";
+import { deduplicateBlockSentMedia } from "./bot-message-dispatch.media-dedup.js";
 import { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
 import {
   generateTopicLabel,
@@ -994,8 +995,14 @@ export const dispatchTelegramMessage = async ({
             ctxPayload,
             recordInboundSession: context.turn.recordInboundSession,
             record: context.turn.record,
-            runDispatch: () =>
-              telegramDeps.dispatchReplyWithBufferedBlockDispatcher({
+            runDispatch: () => {
+              // Track media URLs delivered via block replies so final replies
+              // can skip duplicates. Without this, non-streaming Telegram
+              // delivers each MEDIA: attachment twice — once from the
+              // media-only block reply and once from the final reply.
+              const sentBlockMediaUrls = new Set<string>();
+
+              return telegramDeps.dispatchReplyWithBufferedBlockDispatcher({
                 ctx: ctxPayload,
                 cfg,
                 dispatcherOptions: {
@@ -1008,6 +1015,25 @@ export const dispatchTelegramMessage = async ({
                     if (payload.isError === true) {
                       hadErrorReplyFailureOrSkip = true;
                     }
+
+                    // Track media URLs from block replies so final replies
+                    // can skip duplicates (non-streaming MEDIA: dedup).
+                    if (info.kind === "block" && payload.mediaUrls?.length) {
+                      for (const url of payload.mediaUrls) {
+                        sentBlockMediaUrls.add(url);
+                      }
+                    }
+
+                    // Filter out media already sent via block reply.
+                    const deduped =
+                      info.kind === "final"
+                        ? deduplicateBlockSentMedia(payload, sentBlockMediaUrls)
+                        : payload;
+                    if (deduped === undefined) {
+                      return;
+                    }
+                    const effectivePayload = deduped;
+
                     if (info.kind === "final") {
                       await enqueueDraftLaneEvent(async () => {});
                     }
@@ -1022,13 +1048,13 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
                     const telegramButtons = (
-                      payload.channelData?.telegram as
+                      effectivePayload.channelData?.telegram as
                         | { buttons?: TelegramInlineButtons }
                         | undefined
                     )?.buttons;
-                    const split = splitTextIntoLaneSegments(payload.text);
+                    const split = splitTextIntoLaneSegments(effectivePayload.text);
                     const segments = split.segments;
-                    const reply = resolveSendableOutboundReplyParts(payload);
+                    const reply = resolveSendableOutboundReplyParts(effectivePayload);
                     const _hasMedia = reply.hasMedia;
 
                     const flushBufferedFinalAnswer = async () => {
@@ -1059,7 +1085,7 @@ export const dispatchTelegramMessage = async ({
                         reasoningStepState.shouldBufferFinalAnswer()
                       ) {
                         reasoningStepState.bufferFinalAnswer({
-                          payload,
+                          payload: effectivePayload,
                           text: segment.text,
                           bufferedGeneration: replyFenceGeneration,
                         });
@@ -1072,11 +1098,11 @@ export const dispatchTelegramMessage = async ({
                         streamMode === "progress" &&
                         segment.lane === "answer" &&
                         info.kind === "final"
-                          ? await deliverProgressModeFinalAnswer(payload, segment.text)
+                          ? await deliverProgressModeFinalAnswer(effectivePayload, segment.text)
                           : await deliverLaneText({
                               laneName: segment.lane,
                               text: segment.text,
-                              payload,
+                              payload: effectivePayload,
                               infoKind: info.kind,
                               buttons: telegramButtons,
                             });
@@ -1100,7 +1126,9 @@ export const dispatchTelegramMessage = async ({
                     if (split.suppressedReasoningOnly) {
                       if (reply.hasMedia) {
                         const payloadWithoutSuppressedReasoning =
-                          typeof payload.text === "string" ? { ...payload, text: "" } : payload;
+                          typeof effectivePayload.text === "string"
+                            ? { ...effectivePayload, text: "" }
+                            : effectivePayload;
                         await sendPayload(payloadWithoutSuppressedReasoning, {
                           durable: info.kind === "final",
                         });
@@ -1123,7 +1151,7 @@ export const dispatchTelegramMessage = async ({
                       }
                       return;
                     }
-                    await sendPayload(payload, { durable: info.kind === "final" });
+                    await sendPayload(effectivePayload, { durable: info.kind === "final" });
                     if (info.kind === "final") {
                       await flushBufferedFinalAnswer();
                     }
@@ -1315,7 +1343,8 @@ export const dispatchTelegramMessage = async ({
                     : undefined,
                   onModelSelected,
                 },
-              }),
+              });
+            },
           }),
         },
       });
