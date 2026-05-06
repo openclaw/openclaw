@@ -364,8 +364,14 @@ function listManifestToolNamesForAllowlist(params: {
   if (params.allowlist.has(pluginKey)) {
     return [...params.toolNames];
   }
+  // Support glob/wildcard patterns in allowlist
+  const compiledGlobPatterns = compileGlobPatterns({
+    raw: [...params.allowlist],
+    normalize: normalizeToolName,
+  });
   const matchedToolNames = params.toolNames.filter((name) =>
-    params.allowlist.has(normalizeToolName(name)),
+    params.allowlist.has(normalizeToolName(name)) ||
+    matchesAnyGlobPattern(normalizeToolName(name), compiledGlobPatterns),
   );
   if (!allowlistIncludesDefaultPluginTools(params.allowlist)) {
     return matchedToolNames;
@@ -460,6 +466,11 @@ function resolvePluginToolRuntimePluginIds(params: {
       continue;
     }
     const toolNames = plugin.contracts?.tools ?? [];
+    // Support glob/wildcard patterns in contracts.tools
+    const compiledToolPatterns = compileGlobPatterns({
+      raw: toolNames,
+      normalize: normalizeToolName,
+    });
     const selectedToolNames = listManifestToolNamesForAvailability({
       toolNames,
       plugin,
@@ -471,7 +482,10 @@ function resolvePluginToolRuntimePluginIds(params: {
           pluginId: plugin.id,
           toolName,
           denylist,
-        }),
+        }) &&
+        (toolNames.length === 0 ||
+          toolNames.includes(toolName) ||
+          matchesAnyGlobPattern(normalizeToolName(toolName), compiledToolPatterns)),
     );
     if (
       selectedToolNames.length > 0 &&
