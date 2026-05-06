@@ -149,10 +149,22 @@ const resolveAgentOrder = (cfg: OpenClawConfig) => {
 const buildSessionSummary = async (storePath: string) => {
   const { loadSessionStore } = await import("../config/sessions/store.js");
   const store = loadSessionStore(storePath);
+  const seenSessionIds = new Set<string>();
   const sessions = Object.entries(store)
     .filter(([key]) => key !== "global" && key !== "unknown")
-    .map(([key, entry]) => ({ key, updatedAt: entry?.updatedAt ?? 0 }))
-    .toSorted((a, b) => b.updatedAt - a.updatedAt);
+    .toSorted(([, a], [, b]) => (b?.updatedAt ?? 0) - (a?.updatedAt ?? 0))
+    .filter(([, entry]) => {
+      const sessionId = entry?.sessionId;
+      if (!sessionId) {
+        return true;
+      }
+      if (seenSessionIds.has(sessionId)) {
+        return false;
+      }
+      seenSessionIds.add(sessionId);
+      return true;
+    })
+    .map(([key, entry]) => ({ key, updatedAt: entry?.updatedAt ?? 0 }));
   const recent = sessions.slice(0, 5).map((s) => ({
     key: s.key,
     updatedAt: s.updatedAt || null,
