@@ -1173,6 +1173,28 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
+  it("chat.send marks user slash commands as text command sources", async () => {
+    createTranscriptFixture("openclaw-chat-send-text-command-source-");
+    mockState.finalText = "ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-text-command-source",
+      message: "/codex status",
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        BodyForCommands: "/codex status",
+        CommandSource: "text",
+      }),
+    );
+  });
+
   it("chat.send keeps explicit delivery routes for Feishu channel-scoped sessions", async () => {
     createTranscriptFixture("openclaw-chat-send-feishu-origin-routing-");
     mockState.finalText = "ok";
