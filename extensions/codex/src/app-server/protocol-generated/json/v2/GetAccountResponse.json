@@ -1,53 +1,49 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GetAccountResponse",
+  "type": "object",
+  "required": ["requiresOpenaiAuth"],
+  "properties": {
+    "account": { "anyOf": [{ "$ref": "#/definitions/Account" }, { "type": "null" }] },
+    "requiresOpenaiAuth": { "type": "boolean" }
+  },
   "definitions": {
     "Account": {
       "oneOf": [
         {
-          "properties": {
-            "type": {
-              "enum": ["apiKey"],
-              "title": "ApiKeyAccountType",
-              "type": "string"
-            }
-          },
+          "type": "object",
           "required": ["type"],
-          "title": "ApiKeyAccount",
-          "type": "object"
+          "properties": {
+            "type": { "type": "string", "enum": ["apiKey"], "title": "ApiKeyAccountType" }
+          },
+          "title": "ApiKeyAccount"
         },
         {
-          "properties": {
-            "email": {
-              "type": "string"
-            },
-            "planType": {
-              "$ref": "#/definitions/PlanType"
-            },
-            "type": {
-              "enum": ["chatgpt"],
-              "title": "ChatgptAccountType",
-              "type": "string"
-            }
-          },
+          "type": "object",
           "required": ["email", "planType", "type"],
-          "title": "ChatgptAccount",
-          "type": "object"
+          "properties": {
+            "email": { "type": "string" },
+            "planType": { "$ref": "#/definitions/PlanType" },
+            "type": { "type": "string", "enum": ["chatgpt"], "title": "ChatgptAccountType" }
+          },
+          "title": "ChatgptAccount"
         },
         {
+          "type": "object",
+          "required": ["type"],
           "properties": {
             "type": {
+              "type": "string",
               "enum": ["amazonBedrock"],
-              "title": "AmazonBedrockAccountType",
-              "type": "string"
+              "title": "AmazonBedrockAccountType"
             }
           },
-          "required": ["type"],
-          "title": "AmazonBedrockAccount",
-          "type": "object"
+          "title": "AmazonBedrockAccount"
         }
       ]
     },
     "PlanType": {
+      "type": "string",
       "enum": [
         "free",
         "go",
@@ -61,26 +57,7 @@
         "enterprise",
         "edu",
         "unknown"
-      ],
-      "type": "string"
-    }
-  },
-  "properties": {
-    "account": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/Account"
-        },
-        {
-          "type": "null"
-        }
       ]
-    },
-    "requiresOpenaiAuth": {
-      "type": "boolean"
     }
-  },
-  "required": ["requiresOpenaiAuth"],
-  "title": "GetAccountResponse",
-  "type": "object"
+  }
 }

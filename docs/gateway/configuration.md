@@ -89,17 +89,13 @@ When validation fails:
 - Run `openclaw doctor` to see exact issues
 - Run `openclaw doctor --fix` (or `--yes`) to apply repairs
 
-The Gateway keeps a trusted last-known-good copy after each successful startup.
-If `openclaw.json` later fails validation (or drops `gateway.mode`, shrinks
-sharply, or has a stray log line prepended), OpenClaw preserves the broken file
-as `.clobbered.*`, restores the last-known-good copy, and logs the recovery
-reason. The next agent turn also receives a system-event warning so the main
-agent does not blindly rewrite the restored config. Promotion to last-known-good
-is skipped when a candidate contains redacted secret placeholders such as `***`.
-When every validation issue is scoped to `plugins.entries.<id>...`, OpenClaw
-does not perform whole-file recovery. It keeps the current config active and
-surfaces the plugin-local failure so a plugin schema or host-version mismatch
-cannot roll back unrelated user settings.
+The Gateway keeps a trusted last-known-good copy after each successful startup,
+but startup and hot reload do not restore it automatically. If `openclaw.json`
+fails validation (including plugin-local validation), Gateway startup fails or
+the reload is skipped and the current runtime keeps the last accepted config.
+Run `openclaw doctor --fix` (or `--yes`) to repair prefixed/clobbered config or
+restore the last-known-good copy. Promotion to last-known-good is skipped when a
+candidate contains redacted secret placeholders such as `***`.
 
 ## Common tasks
 
@@ -107,16 +103,16 @@ cannot roll back unrelated user settings.
   <Accordion title="Set up a channel (WhatsApp, Telegram, Discord, etc.)">
     Each channel has its own config section under `channels.<provider>`. See the dedicated channel page for setup steps:
 
-    - [WhatsApp](/channels/whatsapp) — `channels.whatsapp`
-    - [Telegram](/channels/telegram) — `channels.telegram`
-    - [Discord](/channels/discord) — `channels.discord`
-    - [Feishu](/channels/feishu) — `channels.feishu`
-    - [Google Chat](/channels/googlechat) — `channels.googlechat`
-    - [Microsoft Teams](/channels/msteams) — `channels.msteams`
-    - [Slack](/channels/slack) — `channels.slack`
-    - [Signal](/channels/signal) — `channels.signal`
-    - [iMessage](/channels/imessage) — `channels.imessage`
-    - [Mattermost](/channels/mattermost) — `channels.mattermost`
+    - [WhatsApp](/channels/whatsapp) - `channels.whatsapp`
+    - [Telegram](/channels/telegram) - `channels.telegram`
+    - [Discord](/channels/discord) - `channels.discord`
+    - [Feishu](/channels/feishu) - `channels.feishu`
+    - [Google Chat](/channels/googlechat) - `channels.googlechat`
+    - [Microsoft Teams](/channels/msteams) - `channels.msteams`
+    - [Slack](/channels/slack) - `channels.slack`
+    - [Signal](/channels/signal) - `channels.signal`
+    - [iMessage](/channels/imessage) - `channels.imessage`
+    - [Mattermost](/channels/mattermost) - `channels.mattermost`
 
     All channels share the same DM policy pattern:
 
@@ -333,7 +329,7 @@ cannot roll back unrelated user settings.
     }
     ```
 
-    Build the image first — from a source checkout run `scripts/sandbox-setup.sh`, or from an npm install see the inline `docker build` command in [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup).
+    Build the image first - from a source checkout run `scripts/sandbox-setup.sh`, or from an npm install see the inline `docker build` command in [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup).
 
     See [Sandboxing](/gateway/sandboxing) for the full guide and [full reference](/gateway/config-agents#agentsdefaultssandbox) for all options.
 
@@ -535,31 +531,26 @@ cannot roll back unrelated user settings.
 
 ## Config hot reload
 
-The Gateway watches `~/.openclaw/openclaw.json` and applies changes automatically — no manual restart needed for most settings.
+The Gateway watches `~/.openclaw/openclaw.json` and applies changes automatically - no manual restart needed for most settings.
 
 Direct file edits are treated as untrusted until they validate. The watcher waits
 for editor temp-write/rename churn to settle, reads the final file, and rejects
-invalid external edits by restoring the last-known-good config. OpenClaw-owned
-config writes use the same schema gate before writing; destructive clobbers such
-as dropping `gateway.mode` or shrinking the file by more than half are rejected
-and saved as `.rejected.*` for inspection.
+invalid external edits without rewriting `openclaw.json`. OpenClaw-owned config
+writes use the same schema gate before writing; destructive clobbers such as
+dropping `gateway.mode` or shrinking the file by more than half are rejected and
+saved as `.rejected.*` for inspection.
 
-Plugin-local validation failures are the exception: if all issues are under
-`plugins.entries.<id>...`, reload keeps the current config and reports the plugin
-issue instead of restoring `.last-good`.
-
-If you see `Config auto-restored from last-known-good` or
-`config reload restored last-known-good config` in logs, inspect the matching
-`.clobbered.*` file next to `openclaw.json`, fix the rejected payload, then run
-`openclaw config validate`. See [Gateway troubleshooting](/gateway/troubleshooting#gateway-restored-last-known-good-config)
-for the recovery checklist.
+If you see `config reload skipped (invalid config)` or startup reports `Invalid
+config`, inspect the config, run `openclaw config validate`, then run `openclaw
+doctor --fix` for repair. See [Gateway troubleshooting](/gateway/troubleshooting#gateway-rejected-invalid-config)
+for the checklist.
 
 ### Reload modes
 
 | Mode                   | Behavior                                                                                |
 | ---------------------- | --------------------------------------------------------------------------------------- |
 | **`hybrid`** (default) | Hot-applies safe changes instantly. Automatically restarts for critical ones.           |
-| **`hot`**              | Hot-applies safe changes only. Logs a warning when a restart is needed — you handle it. |
+| **`hot`**              | Hot-applies safe changes only. Logs a warning when a restart is needed - you handle it. |
 | **`restart`**          | Restarts the Gateway on any config change, safe or not.                                 |
 | **`off`**              | Disables file watching. Changes take effect on the next manual restart.                 |
 
@@ -577,7 +568,7 @@ Most fields hot-apply without downtime. In `hybrid` mode, restart-required chang
 
 | Category            | Fields                                                            | Restart needed? |
 | ------------------- | ----------------------------------------------------------------- | --------------- |
-| Channels            | `channels.*`, `web` (WhatsApp) — all built-in and plugin channels | No              |
+| Channels            | `channels.*`, `web` (WhatsApp) - all built-in and plugin channels | No              |
 | Agent & models      | `agent`, `agents`, `models`, `routing`                            | No              |
 | Automation          | `hooks`, `cron`, `agent.heartbeat`                                | No              |
 | Sessions & messages | `session`, `messages`                                             | No              |
@@ -587,7 +578,7 @@ Most fields hot-apply without downtime. In `hybrid` mode, restart-required chang
 | Infrastructure      | `discovery`, `canvasHost`, `plugins`                              | **Yes**         |
 
 <Note>
-`gateway.reload` and `gateway.remote` are exceptions — changing them does **not** trigger a restart.
+`gateway.reload` and `gateway.remote` are exceptions - changing them does **not** trigger a restart.
 </Note>
 
 ### Reload planning
@@ -609,7 +600,7 @@ For tooling that writes config over the gateway API, prefer this flow:
 - `config.patch` for partial updates (JSON merge patch: objects merge, `null`
   deletes, arrays replace)
 - `config.apply` only when you intend to replace the entire config
-- `update.run` for explicit self-update plus restart
+- `update.run` for explicit self-update plus restart; include `continuationMessage` when the post-restart session should run one follow-up turn
 - `update.status` to inspect the latest update restart sentinel and verify the running version after a restart
 
 Agents should treat `config.schema.lookup` as the first stop for exact

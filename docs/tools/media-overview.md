@@ -14,6 +14,12 @@ media capabilities are tool-driven: the agent decides when to use them based
 on the conversation, and each tool only appears when at least one backing
 provider is configured.
 
+Live speech uses the Talk session contract instead of the one-shot media tool
+path. Talk has three modes: provider-native `realtime`, local or streaming
+`stt-tts`, and `transcription` for observe-only speech capture. Those modes
+share provider catalogs, event envelopes, and cancellation semantics with
+telephony, meetings, browser realtime, and native push-to-talk clients.
+
 ## Capabilities
 
 <CardGroup cols={2}>
@@ -80,19 +86,22 @@ reply model.
 
 ## Async vs synchronous
 
-| Capability      | Mode         | Why                                                                |
-| --------------- | ------------ | ------------------------------------------------------------------ |
-| Image           | Synchronous  | Provider responses return in seconds; completes inline with reply. |
-| Text-to-speech  | Synchronous  | Provider responses return in seconds; attached to the reply audio. |
-| Video           | Asynchronous | Provider processing takes 30 s to several minutes.                 |
-| Music (shared)  | Asynchronous | Same provider-processing characteristic as video.                  |
-| Music (ComfyUI) | Synchronous  | Local workflow runs inline against the configured ComfyUI server.  |
+| Capability      | Mode         | Why                                                                                                  |
+| --------------- | ------------ | ---------------------------------------------------------------------------------------------------- |
+| Image           | Synchronous  | Provider responses return in seconds; completes inline with reply.                                   |
+| Text-to-speech  | Synchronous  | Provider responses return in seconds; attached to the reply audio.                                   |
+| Video           | Asynchronous | Provider processing takes 30 s to several minutes; slow queues can run up to the configured timeout. |
+| Music (shared)  | Asynchronous | Same provider-processing characteristic as video.                                                    |
+| Music (ComfyUI) | Synchronous  | Local workflow runs inline against the configured ComfyUI server.                                    |
 
 For async tools, OpenClaw submits the request to the provider, returns a task
 id immediately, and tracks the job in the task ledger. The agent continues
 responding to other messages while the job runs. When the provider finishes,
-OpenClaw wakes the agent so it can post the finished media back into the
-original channel.
+OpenClaw wakes the agent with the generated media paths so it can tell the
+user and, when required by source-delivery policy, relay the result through
+the message tool. For message-tool-only group/channel routes, OpenClaw treats
+missing message-tool delivery evidence as a failed completion attempt and sends
+the generated media fallback directly to the original channel.
 
 ## Speech-to-text and Voice Call
 
@@ -106,6 +115,11 @@ STT call for the same audio.
 Deepgram, ElevenLabs, Mistral, OpenAI, and xAI also register Voice Call
 streaming STT providers, so live phone audio can be forwarded to the selected
 vendor without waiting for a completed recording.
+
+For live user conversations, prefer [Talk mode](/nodes/talk). Batch audio
+attachments stay on the media path; browser realtime, native push-to-talk,
+telephony, and meeting audio should use Talk events and the session-scoped
+catalogs returned by the Gateway.
 
 ## Provider mappings (how vendors split across surfaces)
 
@@ -141,3 +155,4 @@ vendor without waiting for a completed recording.
 - [Text-to-speech](/tools/tts)
 - [Media understanding](/nodes/media-understanding)
 - [Audio nodes](/nodes/audio)
+- [Talk mode](/nodes/talk)

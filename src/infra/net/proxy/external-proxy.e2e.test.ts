@@ -226,7 +226,9 @@ function createTunnelProxy(
     });
 
     upstream.on("error", () => {
-      clientSocket.end("HTTP/1.1 502 Bad Gateway\r\n\r\n");
+      if (!clientSocket.destroyed && !clientSocket.writableEnded) {
+        clientSocket.end("HTTP/1.1 502 Bad Gateway\r\n\r\n");
+      }
     });
   });
 
@@ -338,7 +340,7 @@ describe("SSRF external proxy routing", () => {
         import { fetch as undiciFetch } from "undici";
         import { WebSocket } from "ws";
         import { startProxy, stopProxy } from "./src/infra/net/proxy/proxy-lifecycle.ts";
-        import { dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane } from "./src/infra/net/proxy/proxy-lifecycle.ts";
+        import { registerManagedProxyGatewayLoopbackNoProxy } from "./src/infra/net/proxy/proxy-lifecycle.ts";
 
         async function nodeHttpGet(url, options = {}) {
           return new Promise((resolve, reject) => {
@@ -394,14 +396,18 @@ describe("SSRF external proxy routing", () => {
 
         async function gatewayLoopbackBypassProbe(url) {
           return new Promise((resolve, reject) => {
-            const ws = dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane(url, () =>
-              new WebSocket(url, { handshakeTimeout: ${PROBE_TIMEOUT_MS} }),
-            );
+            const unregister = registerManagedProxyGatewayLoopbackNoProxy(url);
+            const ws = new WebSocket(url, { handshakeTimeout: ${PROBE_TIMEOUT_MS} });
+            const cleanup = () => unregister?.();
             ws.once("open", () => {
               ws.close();
+              cleanup();
               resolve();
             });
-            ws.once("error", reject);
+            ws.once("error", (err) => {
+              cleanup();
+              reject(err);
+            });
           });
         }
 

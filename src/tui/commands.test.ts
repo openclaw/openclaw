@@ -56,7 +56,7 @@ describe("getSlashCommands", () => {
     ]);
   });
 
-  it("falls back to provider-resolved levels when thinkingLevels is empty (#76482)", () => {
+  it("falls back to provider-resolved levels when thinkingLevels is empty (#76482)", async () => {
     const commands = getSlashCommands({
       provider: "anthropic",
       model: "claude-sonnet-4-6",
@@ -64,7 +64,7 @@ describe("getSlashCommands", () => {
     });
     const think = commands.find((command) => command.name === "think");
     // Should fall back to listThinkingLevelLabels, not return empty completions
-    const completions = think?.getArgumentCompletions?.("");
+    const completions = await think?.getArgumentCompletions?.("");
     expect(completions?.length).toBeGreaterThan(0);
   });
 });

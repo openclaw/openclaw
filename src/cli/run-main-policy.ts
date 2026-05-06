@@ -89,6 +89,9 @@ export function shouldStartProxyForCli(argv: string[]): boolean {
   if (invocation.hasHelpOrVersion || !primary) {
     return false;
   }
+  if (invocation.commandPath.length === 1 && primary === "channels") {
+    return false;
+  }
   return resolveCliNetworkProxyPolicy(policyArgv) === "default";
 }
 
@@ -139,6 +142,17 @@ export function resolveMissingPluginCommandMessage(
         `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
         `\`plugins.entries.${parentPluginId}.enabled=false\`. Re-enable that entry if you want ` +
         "the bundled plugin command surface."
+      );
+    }
+    if (
+      commandAlias.kind !== "runtime-slash" &&
+      commandAlias.enabledByDefault !== true &&
+      config?.plugins?.entries?.[parentPluginId]?.enabled !== true
+    ) {
+      return (
+        `The \`openclaw ${normalizedPluginId}\` command is provided by the ` +
+        `"${parentPluginId}" plugin, but that bundled plugin is disabled by default. Run ` +
+        `\`openclaw plugins enable ${parentPluginId}\` to enable that CLI surface.`
       );
     }
     if (commandAlias.kind === "runtime-slash") {

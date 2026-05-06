@@ -1037,7 +1037,11 @@ describe("loadOpenClawPlugins", () => {
       },
     });
 
-    expect(registry.plugins.find((entry) => entry.id === "discord")?.status).toBe("loaded");
+    const record = registry.plugins.find((entry) => entry.id === "discord");
+    expect(
+      record?.status,
+      JSON.stringify({ error: record?.error, diagnostics: registry.diagnostics }, null, 2),
+    ).toBe("loaded");
   });
   it("registers standalone text transforms", () => {
     useNoBundledPlugins();
@@ -5387,6 +5391,44 @@ module.exports = {
     ]);
   });
 
+  it("applies configured typed hook timeout overrides", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "hook-timeouts",
+      filename: "hook-timeouts.cjs",
+      body: `module.exports = { id: "hook-timeouts", register(api) {
+  api.on("before_prompt_build", () => ({ prependContext: "prepend" }), { timeoutMs: 5000 });
+  api.on("before_model_resolve", () => ({ providerOverride: "demo-provider" }));
+  api.on("before_agent_start", () => ({ modelOverride: "demo-model" }));
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["hook-timeouts"],
+        entries: {
+          "hook-timeouts": {
+            hooks: {
+              timeoutMs: 250,
+              timeouts: {
+                before_model_resolve: 750,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      Object.fromEntries(registry.typedHooks.map((entry) => [entry.hookName, entry.timeoutMs])),
+    ).toEqual({
+      before_prompt_build: 250,
+      before_model_resolve: 750,
+      before_agent_start: 250,
+    });
+  });
+
   it("blocks conversation typed hooks for non-bundled plugins unless explicitly allowed", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -6553,7 +6595,10 @@ module.exports = {
       }),
     );
     const record = registry.plugins.find((entry) => entry.id === "legacy-root-import");
-    expect(record?.status).toBe("loaded");
+    expect(
+      record?.status,
+      JSON.stringify({ error: record?.error, diagnostics: registry.diagnostics }, null, 2),
+    ).toBe("loaded");
   });
 
   it("supports legacy plugins subscribing to diagnostic events from the root sdk", async () => {
@@ -6601,7 +6646,10 @@ module.exports = {
       const record = registry.plugins.find(
         (entry) => entry.id === "legacy-root-diagnostic-listener",
       );
-      expect(record?.status).toBe("loaded");
+      expect(
+        record?.status,
+        JSON.stringify({ error: record?.error, diagnostics: registry.diagnostics }, null, 2),
+      ).toBe("loaded");
 
       emitDiagnosticEvent({
         type: "model.usage",

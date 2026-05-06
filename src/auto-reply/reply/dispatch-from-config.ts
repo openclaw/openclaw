@@ -84,6 +84,7 @@ import {
   resolveSessionStoreEntry,
   resolveStorePath,
   triggerInternalHook,
+  updateSessionStoreEntry,
 } from "./dispatch-from-config.runtime.js";
 import type {
   DispatchFromConfigParams,
@@ -325,6 +326,34 @@ const resolveHarnessSourceVisibleRepliesDefault = (params: {
     return undefined;
   }
 };
+
+async function clearPendingFinalDeliveryAfterSuccess(params: {
+  storePath?: string;
+  sessionKey?: string;
+}): Promise<void> {
+  if (!params.storePath || !params.sessionKey) {
+    return;
+  }
+  await updateSessionStoreEntry({
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    update: async (entry) => {
+      if (!entry.pendingFinalDelivery && !entry.pendingFinalDeliveryText) {
+        return null;
+      }
+      return {
+        pendingFinalDelivery: undefined,
+        pendingFinalDeliveryText: undefined,
+        pendingFinalDeliveryCreatedAt: undefined,
+        pendingFinalDeliveryLastAttemptAt: undefined,
+        pendingFinalDeliveryAttemptCount: undefined,
+        pendingFinalDeliveryLastError: undefined,
+        pendingFinalDeliveryContext: undefined,
+        updatedAt: Date.now(),
+      };
+    },
+  });
+}
 
 export type {
   DispatchFromConfigParams,
@@ -750,10 +779,17 @@ export async function dispatchReplyFromConfig(
     sourceReplyDeliveryMode,
     suppressAutomaticSourceDelivery,
     suppressDelivery,
+    sendPolicyDenied,
     deliverySuppressionReason,
     suppressHookUserDelivery,
     suppressHookReplyLifecycle,
   } = sourceReplyPolicy;
+  const attachSourceReplyDeliveryMode = (
+    result: DispatchFromConfigResult,
+  ): DispatchFromConfigResult =>
+    sourceReplyDeliveryMode === "message_tool_only"
+      ? { ...result, sourceReplyDeliveryMode }
+      : result;
 
   let pluginFallbackReason:
     | "plugin-bound-fallback-missing-plugin"
@@ -797,7 +833,10 @@ export async function dispatchReplyFromConfig(
           markIdle("plugin_binding_dispatch");
           recordProcessed("completed", { reason: "plugin-bound-handled" });
           commitInboundDedupeIfClaimed();
-          return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+          return attachSourceReplyDeliveryMode({
+            queuedFinal: false,
+            counts: dispatcher.getQueuedCounts(),
+          });
         }
         case "missing_plugin":
         case "no_handler": {
@@ -824,7 +863,10 @@ export async function dispatchReplyFromConfig(
           markIdle("plugin_binding_declined");
           recordProcessed("completed", { reason: "plugin-bound-declined" });
           commitInboundDedupeIfClaimed();
-          return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+          return attachSourceReplyDeliveryMode({
+            queuedFinal: false,
+            counts: dispatcher.getQueuedCounts(),
+          });
         }
         case "error": {
           logVerbose(
@@ -837,7 +879,10 @@ export async function dispatchReplyFromConfig(
           markIdle("plugin_binding_error");
           recordProcessed("completed", { reason: "plugin-bound-error" });
           commitInboundDedupeIfClaimed();
-          return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+          return attachSourceReplyDeliveryMode({
+            queuedFinal: false,
+            counts: dispatcher.getQueuedCounts(),
+          });
         }
       }
     }
@@ -910,7 +955,7 @@ export async function dispatchReplyFromConfig(
       recordProcessed("completed", { reason: "fast_abort" });
       markIdle("message_completed");
       commitInboundDedupeIfClaimed();
-      return { queuedFinal, counts };
+      return attachSourceReplyDeliveryMode({ queuedFinal, counts });
     }
 
     const isSlackNonDirectSurface =
@@ -989,7 +1034,7 @@ export async function dispatchReplyFromConfig(
         recordProcessed("completed", { reason: "before_dispatch_handled" });
         markIdle("message_completed");
         commitInboundDedupeIfClaimed();
-        return { queuedFinal, counts };
+        return attachSourceReplyDeliveryMode({ queuedFinal, counts });
       }
     }
 
@@ -1023,10 +1068,10 @@ export async function dispatchReplyFromConfig(
       );
       if (replyDispatchResult?.handled) {
         commitInboundDedupeIfClaimed();
-        return {
+        return attachSourceReplyDeliveryMode({
           queuedFinal: replyDispatchResult.queuedFinal,
           counts: replyDispatchResult.counts,
-        };
+        });
       }
     }
 
@@ -1192,6 +1237,8 @@ export async function dispatchReplyFromConfig(
     });
     const suppressDefaultToolProgressMessages =
       params.replyOptions?.suppressDefaultToolProgressMessages === true;
+    const shouldSuppressDefaultToolProgressMessages = () =>
+      suppressDefaultToolProgressMessages && !shouldEmitVerboseProgress();
     const onToolResultFromReplyOptions = params.replyOptions?.onToolResult;
     const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
     const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
@@ -1257,7 +1304,7 @@ export async function dispatchReplyFromConfig(
             if (!deliveryPayload) {
               return;
             }
-            if (suppressDefaultToolProgressMessages) {
+            if (shouldSuppressDefaultToolProgressMessages()) {
               const hasMedia = resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
               const execApproval =
                 deliveryPayload.channelData &&
@@ -1286,7 +1333,7 @@ export async function dispatchReplyFromConfig(
           if (!suppressAutomaticSourceDelivery) {
             await onPlanUpdateFromReplyOptions?.(payload);
           }
-          if (payload.phase !== "update" || suppressDefaultToolProgressMessages) {
+          if (payload.phase !== "update" || shouldSuppressDefaultToolProgressMessages()) {
             return;
           }
           await sendPlanUpdate({ explanation: payload.explanation, steps: payload.steps });
@@ -1297,7 +1344,7 @@ export async function dispatchReplyFromConfig(
           if (!suppressAutomaticSourceDelivery) {
             await onApprovalEventFromReplyOptions?.(payload);
           }
-          if (payload.phase !== "requested" || suppressDefaultToolProgressMessages) {
+          if (payload.phase !== "requested" || shouldSuppressDefaultToolProgressMessages()) {
             return;
           }
           const label = summarizeApprovalLabel({
@@ -1316,7 +1363,7 @@ export async function dispatchReplyFromConfig(
           if (!suppressAutomaticSourceDelivery) {
             await onPatchSummaryFromReplyOptions?.(payload);
           }
-          if (payload.phase !== "end" || suppressDefaultToolProgressMessages) {
+          if (payload.phase !== "end" || shouldSuppressDefaultToolProgressMessages()) {
             return;
           }
           const label = summarizePatchLabel({ summary: payload.summary, title: payload.title });
@@ -1441,10 +1488,10 @@ export async function dispatchReplyFromConfig(
           },
         );
         if (tailDispatchResult?.handled) {
-          return {
+          return attachSourceReplyDeliveryMode({
             queuedFinal: tailDispatchResult.queuedFinal,
             counts: tailDispatchResult.counts,
-          };
+          });
         }
       }
     }
@@ -1453,18 +1500,38 @@ export async function dispatchReplyFromConfig(
 
     let queuedFinal = false;
     let routedFinalCount = 0;
-    if (!suppressDelivery) {
-      for (const reply of replies) {
-        // Suppress reasoning payloads from channel delivery — channels using this
-        // generic dispatch path do not have a dedicated reasoning lane.
-        if (reply.isReasoning === true) {
-          continue;
-        }
-        const finalReply = await sendFinalPayload(reply);
-        queuedFinal = finalReply.queuedFinal || queuedFinal;
-        routedFinalCount += finalReply.routedFinalCount;
+    let attemptedFinalDelivery = false;
+    let finalDeliveryFailed = false;
+    const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
+      suppressAutomaticSourceDelivery &&
+      !sendPolicyDenied &&
+      getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true;
+    for (const reply of replies) {
+      // Suppress reasoning payloads from channel delivery — channels using this
+      // generic dispatch path do not have a dedicated reasoning lane.
+      if (reply.isReasoning === true) {
+        continue;
       }
+      if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {
+        continue;
+      }
+      attemptedFinalDelivery = true;
+      const finalReply = await sendFinalPayload(reply);
+      queuedFinal = finalReply.queuedFinal || queuedFinal;
+      routedFinalCount += finalReply.routedFinalCount;
+      if (!finalReply.queuedFinal && finalReply.routedFinalCount === 0) {
+        finalDeliveryFailed = true;
+      }
+    }
 
+    if (attemptedFinalDelivery && !finalDeliveryFailed) {
+      await clearPendingFinalDeliveryAfterSuccess({
+        storePath: sessionStoreEntry.storePath,
+        sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+      });
+    }
+
+    if (!suppressDelivery) {
       const ttsMode = resolveConfiguredTtsMode(cfg, {
         agentId: sessionAgentId,
         channelId: deliveryChannel,
@@ -1533,7 +1600,7 @@ export async function dispatchReplyFromConfig(
       pluginFallbackReason ? { reason: pluginFallbackReason } : undefined,
     );
     markIdle("message_completed");
-    return { queuedFinal, counts };
+    return attachSourceReplyDeliveryMode({ queuedFinal, counts });
   } catch (err) {
     if (inboundDedupeClaim.status === "claimed") {
       if (inboundDedupeReplayUnsafe) {

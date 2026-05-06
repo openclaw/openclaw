@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathExists } from "./fs-safe.js";
 import { readPackageVersion } from "./package-json.js";
 import {
   collectInstalledGlobalPackageErrors,
@@ -36,6 +37,7 @@ type StagedNpmInstall = {
   prefix: string;
   layout: NpmGlobalPrefixLayout;
   packageRoot: string;
+  installTarget: ResolvedGlobalInstallTarget;
 };
 
 type NpmBinShimBackup = {
@@ -49,15 +51,6 @@ type NpmBinShimBackup = {
 
 function formatError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
-}
-
-async function pathExists(targetPath: string): Promise<boolean> {
-  try {
-    await fs.access(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function removePathBestEffort(targetPath: string): Promise<void> {
@@ -82,24 +75,60 @@ async function readPackageVersionIfPresent(packageRoot: string | null): Promise<
   }
 }
 
+function isUnambiguousNpmPrefixGlobalRoot(globalRoot: string | null): boolean {
+  const trimmed = globalRoot?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const normalized = path.resolve(trimmed);
+  if (path.basename(normalized) !== "node_modules") {
+    return false;
+  }
+  const parentDir = path.dirname(normalized);
+  if (path.basename(parentDir) === "lib") {
+    return true;
+  }
+  return process.platform === "win32" && path.basename(parentDir).toLowerCase() === "npm";
+}
+
+function resolveStagedNpmTargetLayout(
+  installTarget: ResolvedGlobalInstallTarget,
+): NpmGlobalPrefixLayout | null {
+  const targetLayout = resolveNpmGlobalPrefixLayoutFromGlobalRoot(installTarget.globalRoot);
+  if (!targetLayout) {
+    return null;
+  }
+  if (
+    installTarget.manager === "npm" ||
+    isUnambiguousNpmPrefixGlobalRoot(installTarget.globalRoot)
+  ) {
+    return targetLayout;
+  }
+  return null;
+}
+
 async function createStagedNpmInstall(
   installTarget: ResolvedGlobalInstallTarget,
   packageName: string,
 ): Promise<StagedNpmInstall | null> {
-  if (installTarget.manager !== "npm") {
-    return null;
-  }
-  const targetLayout = resolveNpmGlobalPrefixLayoutFromGlobalRoot(installTarget.globalRoot);
+  const targetLayout = resolveStagedNpmTargetLayout(installTarget);
   if (!targetLayout) {
     return null;
   }
   await fs.mkdir(targetLayout.globalRoot, { recursive: true });
   const prefix = await fs.mkdtemp(path.join(targetLayout.globalRoot, ".openclaw-update-stage-"));
   const layout = resolveNpmGlobalPrefixLayoutFromPrefix(prefix);
+  const command = installTarget.manager === "npm" ? installTarget.command : "npm";
   return {
     prefix,
     layout,
     packageRoot: path.join(layout.globalRoot, packageName),
+    installTarget: {
+      manager: "npm",
+      command,
+      globalRoot: layout.globalRoot,
+      packageRoot: path.join(layout.globalRoot, packageName),
+    },
   };
 }
 
@@ -329,10 +358,11 @@ export async function runGlobalPackageUpdateSteps(params: {
       };
     }
 
+    const installCommandTarget = stagedInstall?.installTarget ?? params.installTarget;
     const updateStep = await params.runStep({
       name: "global update",
       argv: globalInstallArgs(
-        params.installTarget,
+        installCommandTarget,
         params.installSpec,
         undefined,
         stagedInstall?.prefix,
@@ -363,7 +393,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       }
 
       const fallbackArgv = globalInstallFallbackArgs(
-        params.installTarget,
+        stagedInstall?.installTarget ?? params.installTarget,
         params.installSpec,
         undefined,
         stagedInstall?.prefix,

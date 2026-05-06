@@ -332,7 +332,7 @@ See [ClawDock](/install/clawdock) for the full helper guide.
     `openclaw-cli` uses `network_mode: "service:openclaw-gateway"` so CLI
     commands can reach the gateway over `127.0.0.1`. Treat this as a shared
     trust boundary. The compose config drops `NET_RAW`/`NET_ADMIN` and enables
-    `no-new-privileges` on `openclaw-cli`.
+    `no-new-privileges` on both `openclaw-gateway` and `openclaw-cli`.
   </Accordion>
 
   <Accordion title="Permissions and EACCES">
@@ -342,6 +342,14 @@ See [ClawDock](/install/clawdock) for the full helper guide.
     ```bash
     sudo chown -R 1000:1000 /path/to/openclaw-config /path/to/openclaw-workspace
     ```
+
+    The same mismatch can show up as a plugin warning such as
+    `blocked plugin candidate: suspicious ownership (... uid=1000, expected uid=0 or root)`
+    followed by `plugin present but blocked`. That means the process uid and the
+    mounted plugin directory owner disagree. Prefer running the container as the
+    default uid 1000 and fixing the bind mount ownership. Only chown
+    `/path/to/openclaw-config/npm` to `root:root` if you intentionally run
+    OpenClaw as root long term.
 
   </Accordion>
 

@@ -96,25 +96,13 @@ export function resolveAugmentedPluginNpmPackageJson(params) {
   };
 }
 
-function readGeneratedBundledChannelConfigs(repoRoot) {
+export function readGeneratedBundledChannelConfigs(repoRoot) {
   const metadataPath = path.join(repoRoot, GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA_PATH);
   if (!fs.existsSync(metadataPath)) {
     return new Map();
   }
   const source = fs.readFileSync(metadataPath, "utf8");
-  const match = source.match(
-    /export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = ([\s\S]*?) as const;/u,
-  );
-  if (!match?.[1]) {
-    return new Map();
-  }
-
-  let entries;
-  try {
-    entries = JSON5.parse(match[1]);
-  } catch {
-    return new Map();
-  }
+  const entries = readGeneratedBundledChannelConfigEntries(source);
   if (!Array.isArray(entries)) {
     return new Map();
   }
@@ -145,7 +133,36 @@ function readGeneratedBundledChannelConfigs(repoRoot) {
   return byPlugin;
 }
 
-function mergeGeneratedChannelConfigs(manifest, generatedChannelConfigs) {
+function readGeneratedBundledChannelConfigEntries(source) {
+  const legacyMatch = source.match(
+    /export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = ([\s\S]*?) as const;/u,
+  );
+  if (legacyMatch?.[1]) {
+    try {
+      return JSON5.parse(legacyMatch[1]);
+    } catch {
+      return undefined;
+    }
+  }
+
+  const compactMatch = source.match(
+    /const RAW_BUNDLED_CHANNEL_CONFIG_METADATA = \[([\s\S]*?)\]\.join\(""\);/u,
+  );
+  if (!compactMatch?.[1]) {
+    return undefined;
+  }
+  try {
+    const chunks = JSON5.parse(`[${compactMatch[1]}]`);
+    if (!Array.isArray(chunks) || chunks.some((chunk) => typeof chunk !== "string")) {
+      return undefined;
+    }
+    return JSON.parse(chunks.join(""));
+  } catch {
+    return undefined;
+  }
+}
+
+export function mergeGeneratedChannelConfigs(manifest, generatedChannelConfigs) {
   if (!generatedChannelConfigs || Object.keys(generatedChannelConfigs).length === 0) {
     return manifest;
   }
