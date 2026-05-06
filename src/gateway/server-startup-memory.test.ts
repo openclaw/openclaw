@@ -10,7 +10,10 @@ vi.mock("../plugins/memory-runtime.js", () => ({
   getActiveMemorySearchManager: getMemorySearchManagerMock,
 }));
 
-import { startGatewayMemoryBackend } from "./server-startup-memory.js";
+import {
+  startGatewayMemoryBackend,
+  startGatewayMemorySessionListeners,
+} from "./server-startup-memory.js";
 
 function createQmdConfig(
   agents: OpenClawConfig["agents"],
@@ -191,5 +194,116 @@ describe("startGatewayMemoryBackend", () => {
     expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
     expect(log.info).not.toHaveBeenCalled();
     expect(log.warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("startGatewayMemorySessionListeners", () => {
+  beforeEach(() => {
+    getMemorySearchManagerMock.mockClear();
+  });
+
+  function createBuiltinSessionsConfig(): OpenClawConfig {
+    return {
+      agents: {
+        list: [{ id: "main", default: true }],
+        defaults: {
+          memorySearch: {
+            enabled: true,
+            sources: ["memory", "sessions"],
+            // Codex review (#76666 P3): `resolveMemorySearchConfig` strips the
+            // "sessions" source when `experimental.sessionMemory` is false,
+            // which would make the success-path test pass even if preload
+            // stopped arming listeners. Flag on so the resolver keeps the
+            // sessions source and `getActiveMemorySearchManager` is reached.
+            experimental: { sessionMemory: true },
+          },
+        },
+      },
+      memory: { backend: "builtin" },
+    } as OpenClawConfig;
+  }
+
+  function createBuiltinNoSessionsConfig(): OpenClawConfig {
+    return {
+      agents: {
+        list: [{ id: "main", default: true }],
+        defaults: {
+          memorySearch: {
+            enabled: true,
+            sources: ["memory"],
+            experimental: { sessionMemory: true },
+          },
+        },
+      },
+      memory: { backend: "builtin" },
+    } as OpenClawConfig;
+  }
+
+  it("skips agents that do not request the sessions source", async () => {
+    const cfg = createBuiltinNoSessionsConfig();
+    const log = createGatewayLogMock();
+
+    await startGatewayMemorySessionListeners({ cfg, log });
+
+    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
+    expect(log.info).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("does not close the manager when preload succeeds (listener must remain subscribed)", async () => {
+    // This regression-guards the whole point of the preload: if close() were
+    // called, ensureSessionListener's sessionUnsubscribe would immediately
+    // fire and drop us back to the same lazy-load state that causes the
+    // archive emit to land in an empty listener set.
+    const closeSpy = vi.fn(async () => undefined);
+    getMemorySearchManagerMock.mockResolvedValue({
+      manager: { search: vi.fn(), close: closeSpy },
+    });
+    const cfg = createBuiltinSessionsConfig();
+    const log = createGatewayLogMock();
+
+    await startGatewayMemorySessionListeners({ cfg, log });
+
+    // Codex review (#76666 P3): assert the resolver path actually reaches
+    // getActiveMemorySearchManager. Without this, a regression that breaks
+    // preload arming (e.g. resolver strips sessions source) would still pass
+    // the close-check.
+    expect(getMemorySearchManagerMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main" }),
+    );
+    expect(closeSpy).not.toHaveBeenCalled();
+  });
+
+  it("never throws even if manager acquisition rejects", async () => {
+    getMemorySearchManagerMock.mockRejectedValue(new Error("provider unreachable"));
+    const cfg = createBuiltinSessionsConfig();
+    const log = createGatewayLogMock();
+
+    // Startup must never blow up the gateway: failures are swallowed and
+    // logged (when the mock is actually reached; per-agent filtering may
+    // short-circuit before the call). Either way, this call must resolve.
+    await expect(startGatewayMemorySessionListeners({ cfg, log })).resolves.toBeUndefined();
+  });
+
+  it("skips preload entirely when memory.backend is qmd (Codex review scope guard)", async () => {
+    // Codex review on #76666 flagged that the qmd backend returns a
+    // FallbackMemoryManager wrapper whose inner MemoryIndexManager is only
+    // lazily constructed via `fallbackFactory`, so calling
+    // `getActiveMemorySearchManager` under qmd would NOT run
+    // `ensureSessionListener()`. Arming the qmd listener owner is deferred
+    // to a follow-up PR; this preload explicitly skips qmd to keep the
+    // advertised scope accurate (builtin-only).
+    const cfg = createQmdConfig({
+      defaults: { memorySearch: { enabled: true, sources: ["sessions"] } },
+    } as unknown as OpenClawConfig["agents"]);
+    const log = createGatewayLogMock();
+
+    await startGatewayMemorySessionListeners({ cfg, log });
+
+    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("qmd backend is intentionally out of scope"),
+    );
   });
 });

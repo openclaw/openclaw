@@ -545,6 +545,24 @@ export async function startGatewaySidecars(params: {
     scheduleGatewayMemoryBackend({ cfg: params.cfg, log: params.log, policy });
   });
 
+  await measureStartup(params.startupTrace, "sidecars.memory-session-listeners", async () => {
+    // Eagerly preload memory managers so session-transcript emit events
+    // (notably archiveFileOnDisk emits during `/reset` and `/new`) reach a
+    // subscribed listener even before the first `memory_search` tool call.
+    // Runs for every backend (qmd *and* builtin) as long as at least one
+    // agent has `memorySearch.sources` containing `"sessions"`. Any failure
+    // is swallowed via the function's internal try/catch — never blocks boot.
+    setImmediate(() => {
+      void import("./server-startup-memory.js")
+        .then(({ startGatewayMemorySessionListeners }) =>
+          startGatewayMemorySessionListeners({ cfg: params.cfg, log: params.log }),
+        )
+        .catch((err) => {
+          params.log.warn(`memory session-listener preload scheduling failed: ${String(err)}`);
+        });
+    });
+  });
+
   schedulePostReadySidecarTask({
     startupTrace: params.startupTrace,
     name: "sidecars.session-locks",
