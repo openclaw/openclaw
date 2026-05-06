@@ -181,6 +181,7 @@ async function sendChatAndWait(params: {
   originatingChannel: string;
   originatingTo: string;
   originatingAccountId: string;
+  deliver?: boolean;
   attachments?: Array<{
     mimeType: string;
     fileName: string;
@@ -194,6 +195,7 @@ async function sendChatAndWait(params: {
     originatingChannel: params.originatingChannel,
     originatingTo: params.originatingTo,
     originatingAccountId: params.originatingAccountId,
+    deliver: params.deliver,
     attachments: params.attachments,
   });
   if (started?.status !== "started" || typeof started.runId !== "string") {
@@ -444,6 +446,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
           originatingChannel: "slack",
           originatingTo: conversationId,
           originatingAccountId: accountId,
+          deliver: true,
         });
         const bindReply = await waitForOutboundText({
           replies: outboundReplies,
@@ -466,6 +469,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
             originatingChannel: "slack",
             originatingTo: conversationId,
             originatingAccountId: accountId,
+            deliver: true,
           });
           const result = await waitForOutboundText({
             replies: outboundReplies,
