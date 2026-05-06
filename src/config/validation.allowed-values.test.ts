@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { __testing, validateConfigObjectRaw } from "./validation.js";
+import {
+  __testing,
+  validateConfigObjectRaw,
+  validateConfigObjectWithPlugins,
+} from "./validation.js";
 
 function mapFirstIssue(
   schema: { safeParse: (value: unknown) => { success: true } | { success: false; error: unknown } },
@@ -17,6 +21,31 @@ function mapFirstIssue(
 }
 
 describe("config validation allowed-values metadata", () => {
+  it("normalizes bundled channel legacy config before channel schema validation", () => {
+    const result = validateConfigObjectWithPlugins(
+      {
+        channels: {
+          telegram: {
+            enabled: true,
+            botToken: "123456789:abcdefghijklmnopqrstuvwxyzABCDEFGHIJK",
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            groupPolicy: "allowlist",
+            streaming: "partial",
+          },
+        },
+      },
+      {
+        loadPluginMetadataSnapshot: () => ({ manifestRegistry: { plugins: [], diagnostics: [] } }),
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.channels?.telegram?.streaming).toEqual({ mode: "partial" });
+    }
+  });
+
   it("adds allowed values for invalid union paths", () => {
     const result = validateConfigObjectRaw({
       update: { channel: "nightly" },

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/ids.js";
+import { loadBundledChannelDoctorContractApi } from "../channels/plugins/doctor-contract-api.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
@@ -1279,6 +1280,19 @@ function validateConfigObjectWithPluginsBase(
 
   const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...CHANNEL_IDS]);
 
+  const applyBundledChannelCompatibilityMigration = (channelId: string): void => {
+    const normalizeCompatibilityConfig =
+      loadBundledChannelDoctorContractApi(channelId)?.normalizeCompatibilityConfig;
+    if (!normalizeCompatibilityConfig) {
+      return;
+    }
+    const mutation = normalizeCompatibilityConfig({ cfg: mutatedConfig });
+    if (!mutation || mutation.changes.length === 0) {
+      return;
+    }
+    mutatedConfig = mutation.config;
+  };
+
   if (config.channels && isRecord(config.channels)) {
     for (const key of Object.keys(config.channels)) {
       const trimmed = key.trim();
@@ -1319,10 +1333,13 @@ function validateConfigObjectWithPluginsBase(
       if (!channelSchema) {
         continue;
       }
+      applyBundledChannelCompatibilityMigration(trimmed);
       const result = validateJsonSchemaValue({
         schema: channelSchema,
         cacheKey: `channel:${trimmed}`,
-        value: config.channels[trimmed],
+        value: isRecord(mutatedConfig.channels)
+          ? mutatedConfig.channels[trimmed]
+          : config.channels[trimmed],
         applyDefaults: true, // Always apply defaults for AJV schema validation;
         // writeConfigFile persists persistCandidate, not validated.config (#61841)
       });
