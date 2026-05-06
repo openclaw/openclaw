@@ -118,7 +118,7 @@ Configure the proxy to:
 - Log destination, decision, status, and reason without logging request bodies, authorization headers, cookies, or other secrets.
 - Keep proxy policy under version control and review changes like security-sensitive configuration.
 
-## Recommended Blocked Destinations
+## Recommended blocked destinations
 
 Use this denylist as the starting point for any forward proxy, firewall, or egress policy.
 
