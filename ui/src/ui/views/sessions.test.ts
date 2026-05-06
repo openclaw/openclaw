@@ -5,12 +5,15 @@ import { describe, expect, it, vi } from "vitest";
 import type { SessionsListResult } from "../types.ts";
 import { renderSessions, type SessionsProps } from "./sessions.ts";
 
-function buildResult(session: SessionsListResult["sessions"][number]): SessionsListResult {
+function buildResult(
+  session: SessionsListResult["sessions"][number],
+  defaults?: Partial<SessionsListResult["defaults"]>,
+): SessionsListResult {
   return {
     ts: Date.now(),
     path: "(multiple)",
     count: 1,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
+    defaults: { modelProvider: null, model: null, contextTokens: null, ...defaults },
     sessions: [session],
   };
 }
@@ -266,6 +269,41 @@ describe("sessions view", () => {
         .find((option) => option.value === "adaptive")
         ?.textContent?.trim(),
     ).toBe("Override: adaptive");
+  });
+
+  it("labels inherited thinking from list defaults when lightweight rows omit row defaults", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult(
+            {
+              key: "agent:main:main",
+              kind: "direct",
+              updatedAt: Date.now(),
+            },
+            {
+              modelProvider: "openai-codex",
+              model: "gpt-5.5",
+              thinkingDefault: "high",
+              thinkingLevels: [
+                { id: "off", label: "off" },
+                { id: "high", label: "high" },
+              ],
+            },
+          ),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const thinking = container.querySelector("tbody select") as HTMLSelectElement | null;
+    expect(thinking?.value).toBe("");
+    expect(thinking?.options[0]?.textContent?.trim()).toBe("Inherited: high");
+    expect(Array.from(thinking?.options ?? []).map((option) => option.textContent?.trim())).toEqual(
+      ["Inherited: high", "Off", "Override: high"],
+    );
   });
 
   it("keeps legacy binary thinking labels patching canonical ids", async () => {
