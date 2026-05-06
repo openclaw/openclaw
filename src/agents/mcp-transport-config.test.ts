@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { logWarn } from "../logger.js";
-import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
+import {
+  DEFAULT_BUNDLE_MCP_REQUEST_TIMEOUT_MS,
+  resolveMcpTransportConfig,
+} from "./mcp-transport-config.js";
 
 vi.mock("../logger.js", () => ({ logWarn: vi.fn() }));
 
@@ -9,11 +12,12 @@ describe("resolveMcpTransportConfig", () => {
     vi.mocked(logWarn).mockClear();
   });
 
-  it("resolves stdio config with connection timeout", () => {
+  it("resolves stdio config with connection and request timeouts", () => {
     const resolved = resolveMcpTransportConfig("probe", {
       command: "node",
       args: ["./server.mjs"],
       connectionTimeoutMs: 12_345,
+      requestTimeoutMs: 456_789,
     });
 
     expect(resolved).toMatchObject({
@@ -22,7 +26,19 @@ describe("resolveMcpTransportConfig", () => {
       command: "node",
       args: ["./server.mjs"],
       connectionTimeoutMs: 12_345,
+      requestTimeoutMs: 456_789,
     });
+  });
+
+  it("defaults bundled MCP tool request timeout above the SDK 60s default", () => {
+    const resolved = resolveMcpTransportConfig("probe", {
+      command: "node",
+    });
+
+    expect(resolved).toMatchObject({
+      requestTimeoutMs: DEFAULT_BUNDLE_MCP_REQUEST_TIMEOUT_MS,
+    });
+    expect(DEFAULT_BUNDLE_MCP_REQUEST_TIMEOUT_MS).toBeGreaterThan(60_000);
   });
 
   it("drops dangerous env overrides from stdio config", () => {
@@ -55,6 +71,7 @@ describe("resolveMcpTransportConfig", () => {
       cwd: undefined,
       description: "node",
       connectionTimeoutMs: 30_000,
+      requestTimeoutMs: DEFAULT_BUNDLE_MCP_REQUEST_TIMEOUT_MS,
     });
     expect(logWarn).toHaveBeenCalledWith(
       'bundle-mcp: server "probe": env "NODE_OPTIONS" is blocked for stdio startup safety and was ignored.',
@@ -115,6 +132,7 @@ describe("resolveMcpTransportConfig", () => {
       },
       description: "https://mcp.example.com/sse",
       connectionTimeoutMs: 30_000,
+      requestTimeoutMs: DEFAULT_BUNDLE_MCP_REQUEST_TIMEOUT_MS,
     });
   });
 
@@ -135,6 +153,7 @@ describe("resolveMcpTransportConfig", () => {
       },
       description: "https://mcp.example.com/sse",
       connectionTimeoutMs: 30_000,
+      requestTimeoutMs: DEFAULT_BUNDLE_MCP_REQUEST_TIMEOUT_MS,
     });
   });
 
