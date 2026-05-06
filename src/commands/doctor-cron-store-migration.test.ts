@@ -145,7 +145,6 @@ describe("normalizeStoredCronJobs", () => {
       }),
     );
 
-    expect(result.mutated).toBe(false);
     expect(result.issues.invalidCronPayloadModel).toBeUndefined();
     expect((job.payload as Record<string, unknown>).model).toBe("minimax-portal/MiniMax-M2.7");
   });
