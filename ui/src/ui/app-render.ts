@@ -545,7 +545,7 @@ function extractMcpServerCount(state: AppViewState): number {
   return Object.keys(servers).length;
 }
 
-function extractQuickSettingsSecurity(state: AppViewState): {
+export function extractQuickSettingsSecurity(state: AppViewState): {
   gatewayAuth: string;
   execPolicy: string;
   deviceAuth: boolean;
@@ -578,17 +578,21 @@ function extractQuickSettingsSecurity(state: AppViewState): {
       gatewayAuth = "none";
     }
   }
-  const agents = cfg.agents;
+  // The canonical exec security key is `tools.exec.security` (see
+  // `src/node-host/invoke-system-run.ts` which reads
+  // `cfg.tools?.exec?.security` as the global default and per-agent
+  // `agents.list[i].tools.exec.security` as the override). The previously
+  // read `agents.defaults.exec.security` path does not exist in the schema,
+  // so this card always fell back to the literal "allowlist" default even
+  // when the user had set `tools.exec.security` to "full" or "deny".
   let execPolicy = "allowlist";
-  if (agents && typeof agents === "object") {
-    const defaults = (agents as Record<string, unknown>).defaults;
-    if (defaults && typeof defaults === "object") {
-      const exec = (defaults as Record<string, unknown>).exec;
-      if (exec && typeof exec === "object") {
-        const security = (exec as Record<string, unknown>).security;
-        if (typeof security === "string") {
-          execPolicy = security;
-        }
+  const tools = cfg.tools;
+  if (tools && typeof tools === "object") {
+    const exec = (tools as Record<string, unknown>).exec;
+    if (exec && typeof exec === "object") {
+      const security = (exec as Record<string, unknown>).security;
+      if (typeof security === "string" && security.trim()) {
+        execPolicy = security.trim();
       }
     }
   }
