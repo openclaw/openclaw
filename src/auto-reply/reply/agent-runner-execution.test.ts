@@ -2364,6 +2364,55 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
+  it.each([
+    {
+      rejection: new Error("CLI exceeded timeout (300s) and was terminated."),
+      modeLabel: "overall CLI turn budget" as const,
+      routingSubstring: undefined as string | undefined,
+    },
+    {
+      rejection: new Error("CLI produced no output for 120s and was terminated."),
+      modeLabel: "no-output stall" as const,
+      routingSubstring: undefined,
+    },
+    {
+      rejection: new Error(
+        "All models failed (2): anthropic/claude-opus-4-7: CLI exceeded timeout (300s) and was terminated. | anthropic/foo: bar",
+      ),
+      modeLabel: "overall CLI turn budget" as const,
+      routingSubstring: "(routing anthropic/claude-opus-4-7)",
+    },
+    {
+      rejection: new Error("codex-cli/gpt-5.5: CLI exceeded timeout (60s) and was terminated."),
+      modeLabel: "overall CLI turn budget" as const,
+      routingSubstring: "(routing codex-cli/gpt-5.5)",
+    },
+  ])(
+    "surfaces CLI subprocess timeout copy instead of generic failure when verbose is off ($modeLabel)",
+    async ({ rejection, modeLabel, routingSubstring }) => {
+      state.runWithModelFallbackMock.mockRejectedValueOnce(rejection);
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback({
+        ...createMinimalRunAgentTurnParams(),
+      });
+
+      expect(result.kind).toBe("final");
+      if (result.kind !== "final") {
+        throw new Error("expected final reply");
+      }
+      expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
+      expect(result.payload.text).toContain("CLI subprocess");
+      expect(result.payload.text).not.toContain("Claude CLI");
+      expect(result.payload.text).toContain(modeLabel);
+      expect(result.payload.text).toContain("gateway may still be healthy");
+      expect(result.payload.text).toContain("cliBackends.<your-runtime>");
+      if (routingSubstring) {
+        expect(result.payload.text).toContain(routingSubstring);
+      }
+    },
+  );
+
   it("forwards sanitized generic errors on external chat channels when verbose is on", async () => {
     state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
       new Error("INVALID_ARGUMENT: some other failure"),

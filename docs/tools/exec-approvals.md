@@ -299,14 +299,52 @@ Examples:
 - `~/.local/bin/*`
 - `/opt/homebrew/bin/rg`
 
-Each allowlist entry tracks:
+### Restricting arguments with argPattern
 
-| Field              | Meaning                          |
-| ------------------ | -------------------------------- |
-| `id`               | Stable UUID used for UI identity |
-| `lastUsedAt`       | Last-used timestamp              |
-| `lastUsedCommand`  | Last command that matched        |
-| `lastResolvedPath` | Last resolved binary path        |
+Add `argPattern` when an allowlist entry should match a binary and a
+specific argument shape. OpenClaw evaluates the regular expression
+against the parsed command arguments, excluding the executable token
+(`argv[0]`). For hand-authored entries, arguments are joined with a
+single space, so anchor the pattern when you need an exact match.
+
+```json
+{
+  "version": 1,
+  "agents": {
+    "main": {
+      "allowlist": [
+        {
+          "pattern": "python3",
+          "argPattern": "^safe\\.py$"
+        }
+      ]
+    }
+  }
+}
+```
+
+That entry allows `python3 safe.py`; `python3 other.py` is an allowlist
+miss. If a path-only entry for the same binary is also present, unmatched
+arguments can still fall back to that path-only entry. Omit the path-only
+entry when the goal is to restrict the binary to the declared arguments.
+
+Entries saved by approval flows can use an internal separator format for
+exact argv matching. Prefer the UI or approval flow to regenerate those
+entries instead of hand-editing the encoded value. If OpenClaw cannot
+parse argv for a command segment, entries with `argPattern` do not match.
+
+Each allowlist entry supports:
+
+| Field              | Meaning                                                       |
+| ------------------ | ------------------------------------------------------------- |
+| `pattern`          | Resolved binary path glob or bare command-name glob           |
+| `argPattern`       | Optional argv regex; omitted entries are path-only            |
+| `id`               | Stable UUID used for UI identity                              |
+| `source`           | Entry source, such as `allow-always`                          |
+| `commandText`      | Command text captured when an approval flow created the entry |
+| `lastUsedAt`       | Last-used timestamp                                           |
+| `lastUsedCommand`  | Last command that matched                                     |
+| `lastResolvedPath` | Last resolved binary path                                     |
 
 ## Auto-allow skill CLIs
 

@@ -162,7 +162,7 @@ If `openclaw doctor` detects state under:
 
 it will warn and recommend moving back to a local path.
 
-## Build & dev workflow (native)
+## Build and dev workflow (native)
 
 - `cd apps/macos && swift build`
 - `swift run OpenClaw` (or Xcode)
