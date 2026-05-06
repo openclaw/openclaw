@@ -214,6 +214,11 @@ export function parseMergeForwardContent(params: { content: string; log?: Feishu
     msg_type?: string;
     body?: { content?: string };
     sender?: { id?: string };
+    mentions?: Array<{
+      key?: string;
+      id?: string | { open_id?: string; user_id?: string; union_id?: string };
+      name?: string;
+    }>;
     upper_message_id?: string;
     create_time?: string;
   }>;
@@ -238,7 +243,27 @@ export function parseMergeForwardContent(params: { content: string; log?: Feishu
 
   const lines = ["[Merged and Forwarded Messages]"];
   for (const item of subMessages.slice(0, maxMessages)) {
-    lines.push(`- ${formatSubMessageContent(item.body?.content || "", item.msg_type || "text")}`);
+    const formatted = formatSubMessageContent(item.body?.content || "", item.msg_type || "text");
+    const senderId = item.sender?.id || "unknown";
+
+    // Resolve @_user_N placeholders using item.mentions from Feishu API
+    let resolved = formatted;
+    if (item.mentions && item.mentions.length > 0) {
+      // Sort by key length descending to avoid @_user_1 matching inside @_user_10
+      const sorted = [...item.mentions].sort((a, b) => (b.key?.length ?? 0) - (a.key?.length ?? 0));
+      for (const m of sorted) {
+        if (m.key) {
+          const mId =
+            typeof m.id === "string"
+              ? m.id
+              : m.id?.open_id || m.id?.user_id || m.id?.union_id || "";
+          const display = m.name && mId ? `${m.name}(${mId})` : m.name || mId || m.key;
+          resolved = resolved.replaceAll(m.key, () => `@${display}`);
+        }
+      }
+    }
+
+    lines.push(`- [${senderId}] ${resolved}`);
   }
   if (subMessages.length > maxMessages) {
     lines.push(`... and ${subMessages.length - maxMessages} more messages`);
