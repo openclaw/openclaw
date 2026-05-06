@@ -471,6 +471,67 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("warns when the memory index covers fewer files than the workspace scan", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-30", ["# Index coverage canary"]);
+      const close = vi.fn(async () => {});
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        status: () =>
+          makeMemoryStatus({
+            backend: "builtin",
+            workspaceDir,
+            files: 0,
+            chunks: 0,
+            sources: ["memory"],
+            sourceCounts: [{ source: "memory", files: 0, chunks: 0 }],
+          }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status", "--agent", "main"]);
+
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining("memory index coverage degraded for memory: indexed 0/1 files"),
+      );
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining("run openclaw memory index --force --agent main"),
+      );
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("warns with partial memory index coverage counts", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      for (const day of ["2026-04-26", "2026-04-27", "2026-04-28", "2026-04-29", "2026-04-30"]) {
+        await writeDailyMemoryNote(workspaceDir, day, [`# Index coverage canary ${day}`]);
+      }
+      const close = vi.fn(async () => {});
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        status: () =>
+          makeMemoryStatus({
+            backend: "builtin",
+            workspaceDir,
+            files: 2,
+            chunks: 2,
+            sources: ["memory"],
+            sourceCounts: [{ source: "memory", files: 2, chunks: 2 }],
+          }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status", "--agent", "main"]);
+
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining("memory index coverage degraded for memory: indexed 2/5 files"),
+      );
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
   it("prints recall-store audit details during status", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({

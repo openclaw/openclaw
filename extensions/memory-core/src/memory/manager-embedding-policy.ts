@@ -80,10 +80,56 @@ export function buildMemoryEmbeddingBatches<T extends MemoryEmbeddingChunk>(
   return batches;
 }
 
+const NON_RETRYABLE_MEMORY_EMBEDDING_ERROR_RE = new RegExp(
+  [
+    "(?:^|[^0-9])(?:400|401|403|404)(?:[^0-9]|$)",
+    "invalid url",
+    "failed to parse url",
+    "malformed request",
+  ].join("|"),
+  "i",
+);
+
+const RETRYABLE_MEMORY_EMBEDDING_ERROR_RE = new RegExp(
+  [
+    "rate[_ ]limit",
+    "too many requests",
+    "429",
+    "resource has been exhausted",
+    "5\\d\\d",
+    "cloudflare",
+    "tokens per day",
+    "\\bfetch failed\\b",
+    "network error",
+    "read ECONN",
+    "timed out",
+    "socket hang up",
+    "connection (?:reset|refused|closed|terminated)",
+    "other side closed",
+    "temporarily unavailable",
+    "upstream connect error",
+    "disconnect/reset before headers",
+    "ECONNRESET",
+    "ECONNREFUSED",
+    "ECONNABORTED",
+    "EPIPE",
+    "ETIMEDOUT",
+    "ESOCKETTIMEDOUT",
+    "EHOSTUNREACH",
+    "ENETUNREACH",
+    "EAI_AGAIN",
+    "ENOTFOUND",
+    "EPROTO",
+    "UND_ERR_[A-Z_]+",
+  ].join("|"),
+  "i",
+);
+
 export function isRetryableMemoryEmbeddingError(message: string): boolean {
-  return /(rate[_ ]limit|too many requests|429|resource has been exhausted|5\d\d|cloudflare|tokens per day|fetch failed|other side closed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|UND_ERR_|socket hang up|network error|read ECONN|timed out)/i.test(
-    message,
-  );
+  if (NON_RETRYABLE_MEMORY_EMBEDDING_ERROR_RE.test(message)) {
+    return false;
+  }
+  return RETRYABLE_MEMORY_EMBEDDING_ERROR_RE.test(message);
 }
 
 export function isStructuredInputTooLargeMemoryEmbeddingError(message: string): boolean {

@@ -647,6 +647,54 @@ async function scanMemorySources(params: {
   return { sources: scans, totalFiles, issues };
 }
 
+function resolveIndexedFilesForSource(
+  status: ReturnType<MemoryManager["status"]>,
+  source: MemorySourceName,
+  scanSourceCount: number,
+): number | null {
+  const sourceCount = status.sourceCounts?.find((entry) => entry.source === source);
+  if (sourceCount && typeof sourceCount.files === "number") {
+    return sourceCount.files;
+  }
+  if (scanSourceCount === 1 && typeof status.files === "number") {
+    return status.files;
+  }
+  return null;
+}
+
+function appendIndexCoverageIssues(params: {
+  scan: MemorySourceScan;
+  status: ReturnType<MemoryManager["status"]>;
+  agentId: string;
+}): MemorySourceScan {
+  if (params.status.backend && params.status.backend !== "builtin") {
+    return params.scan;
+  }
+  const issues = [...params.scan.issues];
+  for (const sourceScan of params.scan.sources) {
+    const total = sourceScan.totalFiles;
+    if (total === null || total <= 0) {
+      continue;
+    }
+    const indexed = resolveIndexedFilesForSource(
+      params.status,
+      sourceScan.source,
+      params.scan.sources.length,
+    );
+    if (indexed === null || indexed >= total) {
+      continue;
+    }
+    const fixCommand = `openclaw memory index --force --agent ${params.agentId}`;
+    issues.push(
+      `memory index coverage degraded for ${sourceScan.source}: indexed ${indexed}/${total} files; run ${fixCommand}`,
+    );
+  }
+  if (issues.length === params.scan.issues.length) {
+    return params.scan;
+  }
+  return { ...params.scan, issues };
+}
+
 export async function runMemoryStatus(opts: MemoryCommandOptions) {
   setVerbose(Boolean(opts.verbose));
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory status");
@@ -740,11 +788,15 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         ) as MemorySourceName[];
         const workspaceDir = status.workspaceDir;
         const scan = workspaceDir
-          ? await scanMemorySources({
-              workspaceDir,
+          ? appendIndexCoverageIssues({
+              scan: await scanMemorySources({
+                workspaceDir,
+                agentId,
+                sources,
+                extraPaths: status.extraPaths,
+              }),
+              status,
               agentId,
-              sources,
-              extraPaths: status.extraPaths,
             })
           : undefined;
         let audit: ShortTermAuditSummary | undefined;

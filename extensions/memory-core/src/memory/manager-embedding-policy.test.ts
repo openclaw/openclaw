@@ -110,6 +110,40 @@ describe("memory embedding policy", () => {
     expect(waits).toEqual([500]);
   });
 
+  it("retries transient network embedding failures", () => {
+    const retryableMessages = [
+      "TypeError: fetch failed",
+      "fetch failed: other side closed",
+      "embedding fetch failed: fetch failed | read ECONNRESET",
+      "embedding fetch failed: network error",
+      "embedding fetch failed: socket hang up",
+      "embedding fetch failed: other side closed UND_ERR_SOCKET",
+      "embedding fetch failed: getaddrinfo ENOTFOUND embeddings.example",
+      "embedding fetch failed: connect ETIMEDOUT 203.0.113.10:443",
+      "upstream connect error or disconnect/reset before headers",
+    ];
+
+    for (const message of retryableMessages) {
+      expect(isRetryableMemoryEmbeddingError(message), message).toBe(true);
+    }
+  });
+
+  it("does not retry client/auth or malformed-request embedding failures", () => {
+    const nonRetryableMessages = [
+      "embedding fetch failed: 400 invalid input",
+      "embedding fetch failed: 401 unauthorized",
+      "embedding fetch failed: 403 forbidden",
+      "embedding fetch failed: 404 not found",
+      "TypeError: fetch failed: Invalid URL",
+      "embedding fetch failed: malformed request body",
+      "Failed to parse URL from /v1/embeddings",
+    ];
+
+    for (const message of nonRetryableMessages) {
+      expect(isRetryableMemoryEmbeddingError(message), message).toBe(false);
+    }
+  });
+
   it("classifies oversized structured-input errors", () => {
     expect(isStructuredInputTooLargeMemoryEmbeddingError("payload too large")).toBe(true);
     expect(

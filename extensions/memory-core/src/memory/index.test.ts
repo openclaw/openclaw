@@ -28,6 +28,8 @@ afterAll(() => {
 
 let embedBatchCalls = 0;
 let embedBatchInputCalls = 0;
+let embedQueryCalls = 0;
+let embedQueryTransientFailuresRemaining = 0;
 let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
 let forceNoProvider = false;
 
@@ -65,7 +67,14 @@ vi.mock("./embeddings.js", () => {
         provider: {
           id: providerId,
           model,
-          embedQuery: async (text: string) => embedText(text),
+          embedQuery: async (text: string) => {
+            embedQueryCalls += 1;
+            if (embedQueryTransientFailuresRemaining > 0) {
+              embedQueryTransientFailuresRemaining -= 1;
+              throw new TypeError("fetch failed");
+            }
+            return embedText(text);
+          },
           embedBatch: async (texts: string[]) => {
             embedBatchCalls += 1;
             return texts.map(embedText);
@@ -187,6 +196,8 @@ describe("memory index", () => {
     registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
     embedBatchCalls = 0;
     embedBatchInputCalls = 0;
+    embedQueryCalls = 0;
+    embedQueryTransientFailuresRemaining = 0;
     providerCalls = [];
     forceNoProvider = false;
 
@@ -530,6 +541,22 @@ describe("memory index", () => {
     }
 
     expect(embedBatchCalls).toBe(beforeCalls);
+  });
+
+  it("retries transient query embedding failures during search", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-query-retry.sqlite"),
+      minScore: 0,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    embedQueryTransientFailuresRemaining = 1;
+    const results = await manager.search("Alpha", { minScore: 0, maxResults: 3 });
+
+    expect(embedQueryCalls).toBe(2);
+    expect(results.length).toBeGreaterThan(0);
   });
 
   it("builds FTS index and returns search results when no embedding provider is available", async () => {
