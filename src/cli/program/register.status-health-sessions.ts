@@ -133,7 +133,6 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--all-agents", "Aggregate sessions across all configured agents", false)
     .option("--active <minutes>", "Only show sessions updated within the past N minutes")
     .option("--limit <count>", 'Max sessions to show (default: 100; use "all" for full output)')
-    .option("--export-store <path>", "Export the raw resolved session store JSON to a file")
     .addHelpText(
       "after",
       () =>
@@ -144,7 +143,6 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           ["openclaw sessions --active 120", "Only last 2 hours."],
           ["openclaw sessions --limit 25", "Show the newest 25 sessions."],
           ["openclaw sessions --json", "Machine-readable output."],
-          ["openclaw sessions --export-store sessions-debug.json", "Export raw store JSON."],
           ["openclaw sessions --store ./tmp/sessions.json", "Use a specific session store."],
         ])}\n\n${theme.muted(
           "Shows token usage per session when the agent reports it; set agents.defaults.contextTokens to cap the window and show %.",
@@ -165,7 +163,6 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           allAgents: Boolean(opts.allAgents),
           active: opts.active as string | undefined,
           limit: opts.limit as string | undefined,
-          exportStore: opts.exportStore as string | undefined,
         },
         defaultRuntime,
       );

@@ -213,8 +213,6 @@ describe("registerStatusHealthSessionsCommands", () => {
       "120",
       "--limit",
       "25",
-      "--export-store",
-      "/tmp/exported-sessions.json",
     ]);
 
     expect(setVerbose).toHaveBeenCalledWith(true);

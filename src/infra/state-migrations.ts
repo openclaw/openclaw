@@ -16,6 +16,7 @@ import {
 import type { SessionEntry } from "../config/sessions.js";
 import { saveSessionStore } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
+import { importJsonSessionStoreToSqlite } from "../config/sessions/store-backend.sqlite.js";
 import type { SessionScope } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -46,6 +47,7 @@ export type LegacyStateDetection = {
   targetAgentId: string;
   targetMainKey: string;
   targetScope?: SessionScope;
+  env: NodeJS.ProcessEnv;
   stateDir: string;
   oauthDir: string;
   sessions: {
@@ -706,6 +708,7 @@ export async function detectLegacyStateMigrations(params: {
   const sessionsLegacyStorePath = path.join(sessionsLegacyDir, "sessions.json");
   const sessionsTargetDir = path.join(stateDir, "agents", targetAgentId, "sessions");
   const sessionsTargetStorePath = path.join(sessionsTargetDir, "sessions.json");
+  const hasTargetJsonSessionStore = fileExists(sessionsTargetStorePath);
   const legacySessionEntries = safeReadDir(sessionsLegacyDir);
   const hasLegacySessions =
     fileExists(sessionsLegacyStorePath) ||
@@ -740,6 +743,9 @@ export async function detectLegacyStateMigrations(params: {
   if (legacyKeys.length > 0) {
     preview.push(`- Sessions: canonicalize legacy keys in ${sessionsTargetStorePath}`);
   }
+  if (hasTargetJsonSessionStore) {
+    preview.push(`- Sessions: import ${sessionsTargetStorePath} into SQLite`);
+  }
   if (hasLegacyAgentDir) {
     preview.push(`- Agent dir: ${legacyAgentDir} → ${targetAgentDir}`);
   }
@@ -751,6 +757,7 @@ export async function detectLegacyStateMigrations(params: {
     targetAgentId,
     targetMainKey,
     targetScope,
+    env,
     stateDir,
     oauthDir,
     sessions: {
@@ -758,7 +765,7 @@ export async function detectLegacyStateMigrations(params: {
       legacyStorePath: sessionsLegacyStorePath,
       targetDir: sessionsTargetDir,
       targetStorePath: sessionsTargetStorePath,
-      hasLegacy: hasLegacySessions || legacyKeys.length > 0,
+      hasLegacy: hasLegacySessions || legacyKeys.length > 0 || hasTargetJsonSessionStore,
       legacyKeys,
     },
     agentDir: {
@@ -792,6 +799,7 @@ async function migrateLegacySessions(
   const targetParsed = fileExists(detected.sessions.targetStorePath)
     ? readSessionStoreJson5(detected.sessions.targetStorePath)
     : { store: {}, ok: true };
+  const hasTargetSessionStoreFile = fileExists(detected.sessions.targetStorePath);
   const legacyStore = legacyParsed.store;
   const targetStore = targetParsed.store;
 
@@ -837,7 +845,9 @@ async function migrateLegacySessions(
 
   if (
     (legacyParsed.ok || targetParsed.ok) &&
-    (Object.keys(legacyStore).length > 0 || Object.keys(targetStore).length > 0)
+    (Object.keys(legacyStore).length > 0 ||
+      Object.keys(targetStore).length > 0 ||
+      (hasTargetSessionStoreFile && targetParsed.ok))
   ) {
     const normalized: Record<string, SessionEntry> = {};
     for (const [key, entry] of Object.entries(merged)) {
@@ -851,6 +861,16 @@ async function migrateLegacySessions(
       skipMaintenance: true,
     });
     changes.push(`Merged sessions store → ${detected.sessions.targetStorePath}`);
+    if (fileExists(detected.sessions.targetStorePath)) {
+      const imported = importJsonSessionStoreToSqlite({
+        agentId: detected.targetAgentId,
+        env: detected.env,
+        sourcePath: detected.sessions.targetStorePath,
+      });
+      changes.push(
+        `Imported ${imported.imported} session index row(s) into SQLite for agent ${detected.targetAgentId}`,
+      );
+    }
     if (canonicalizedTarget.legacyKeys.length > 0) {
       changes.push(`Canonicalized ${canonicalizedTarget.legacyKeys.length} legacy session key(s)`);
     }
