@@ -244,6 +244,13 @@ export type GatewayReloadConfig = {
   deferralTimeoutMs?: number;
 };
 
+export type GatewayRestartConfig = {
+  /** Max seconds to wait for active work before bounded restart recovery. Default: 60; 0 skips drain. */
+  drainSeconds?: number;
+  /** Running task age without progress before restart promotes it to failed. Default: 300. */
+  zombieTtlSeconds?: number;
+};
+
 export type GatewayHttpChatCompletionsConfig = {
   /**
    * If false, the Gateway will not serve `POST /v1/chat/completions`.
@@ -455,6 +462,7 @@ export type GatewayConfig = {
   tailscale?: GatewayTailscaleConfig;
   remote?: GatewayRemoteConfig;
   reload?: GatewayReloadConfig;
+  restart?: GatewayRestartConfig;
   tls?: GatewayTlsConfig;
   http?: GatewayHttpConfig;
   push?: GatewayPushConfig;

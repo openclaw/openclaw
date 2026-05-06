@@ -31,3 +31,5 @@ export {
 } from "../../process/command-queue.js";
 export { getInspectableActiveTaskRestartBlockers } from "../../tasks/task-registry.maintenance.js";
 export { reloadTaskRegistryFromStore } from "../../tasks/runtime-internal.js";
+export { promoteRestartZombieTaskRuns } from "../../tasks/restart-drain.js";
+export { resolveGatewayRestartDrainPolicy } from "../../gateway/restart-drain-policy.js";
