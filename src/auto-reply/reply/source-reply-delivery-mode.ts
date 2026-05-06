@@ -20,7 +20,7 @@ export function resolveSourceReplyDeliveryMode(params: {
       ? "automatic"
       : params.requested;
   }
-  if (params.ctx.CommandSource === "native") {
+  if (params.ctx.CommandSource === "native" || params.ctx.CommandSource === "text") {
     return "automatic";
   }
   const chatType = normalizeChatType(params.ctx.ChatType);
