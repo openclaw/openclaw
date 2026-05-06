@@ -7,8 +7,8 @@
  * 2. onOpen sets TCP keepalive and socket timeout
  */
 
-import type { Socket } from "net";
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { Socket } from "node:net";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import WebSocket from "ws";
 
 describe("GatewayConnection keepalive", () => {
