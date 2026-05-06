@@ -75,6 +75,11 @@ import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import {
+  attachManagedOutgoingDocumentsToMessage,
+  cleanupManagedOutgoingDocumentRecords,
+  createManagedOutgoingDocumentBlocks,
+} from "../managed-document-attachments.js";
+import {
   attachManagedOutgoingImagesToMessage,
   cleanupManagedOutgoingImageRecords,
   createManagedOutgoingImageBlocks,
@@ -443,6 +448,23 @@ async function buildAssistantDisplayContentFromReplyPayloads(params: {
     if (imageBlocks.length > 0) {
       content.push(...imageBlocks);
     }
+
+    // Bug #9: documents (xlsx/docx/pdf/...) need their own signed download
+    // URL with `Content-Disposition: attachment` so the browser actually saves
+    // the file. The image module above filters out non-image content types
+    // and silently drops them; the document sibling picks those up here.
+    const documentBlocks = await createManagedOutgoingDocumentBlocks({
+      sessionKey: params.sessionKey,
+      mediaUrls,
+      localRoots: params.managedImageLocalRoots,
+      continueOnPrepareError: true,
+      onPrepareError: (error) => {
+        params.onManagedImagePrepareError?.(error.message);
+      },
+    });
+    if (documentBlocks.length > 0) {
+      content.push(...documentBlocks);
+    }
   }
 
   if (content.length > 0) {
@@ -541,12 +563,19 @@ function scheduleChatHistoryManagedImageCleanup(params: {
   if (chatHistoryManagedImageCleanupState.has(params.sessionKey)) {
     return;
   }
-  const pending = cleanupManagedOutgoingImageRecords({ sessionKey: params.sessionKey })
-    .then(() => undefined)
-    .catch((error) => {
-      params.context.logGateway.debug(
-        `chat.history managed image cleanup skipped sessionKey=${JSON.stringify(params.sessionKey)} error=${formatForLog(error)}`,
-      );
+  const pending = Promise.allSettled([
+    cleanupManagedOutgoingImageRecords({ sessionKey: params.sessionKey }),
+    cleanupManagedOutgoingDocumentRecords({ sessionKey: params.sessionKey }),
+  ])
+    .then((settled) => {
+      for (const r of settled) {
+        if (r.status === "rejected") {
+          params.context.logGateway.debug(
+            `chat.history managed attachment cleanup skipped sessionKey=${JSON.stringify(params.sessionKey)} error=${formatForLog(r.reason)}`,
+          );
+        }
+      }
+      return undefined;
     })
     .finally(() => {
       if (chatHistoryManagedImageCleanupState.get(params.sessionKey) === pending) {
@@ -2396,10 +2425,16 @@ export const chatHandlers: GatewayRequestHandlers = {
         });
         if (appended.ok) {
           if (appended.messageId && assistantContent?.length) {
-            await attachManagedOutgoingImagesToMessage({
-              messageId: appended.messageId,
-              blocks: assistantContent,
-            });
+            await Promise.all([
+              attachManagedOutgoingImagesToMessage({
+                messageId: appended.messageId,
+                blocks: assistantContent,
+              }),
+              attachManagedOutgoingDocumentsToMessage({
+                messageId: appended.messageId,
+                blocks: assistantContent,
+              }),
+            ]);
           }
           appendedWebchatAgentMedia = true;
           return;
@@ -2608,10 +2643,16 @@ export const chatHandlers: GatewayRequestHandlers = {
                 });
                 if (appended.ok) {
                   if (appended.messageId && assistantContent?.length) {
-                    await attachManagedOutgoingImagesToMessage({
-                      messageId: appended.messageId,
-                      blocks: assistantContent,
-                    });
+                    await Promise.all([
+                      attachManagedOutgoingImagesToMessage({
+                        messageId: appended.messageId,
+                        blocks: assistantContent,
+                      }),
+                      attachManagedOutgoingDocumentsToMessage({
+                        messageId: appended.messageId,
+                        blocks: assistantContent,
+                      }),
+                    ]);
                   }
                   message = broadcastAssistantContent?.length
                     ? { ...appended.message, content: broadcastAssistantContent }
