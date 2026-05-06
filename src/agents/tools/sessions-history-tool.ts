@@ -4,7 +4,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { capArrayByJsonBytes } from "../../gateway/session-utils.fs.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
-import { redactToolPayloadText } from "../../logging/redact.js";
+import {
+  OPENCLAW_REDACTED_MARKER,
+  OPENCLAW_REDACTED_NOTICE,
+  redactToolPayloadText,
+} from "../../logging/redact.js";
 import { readStringValue } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import {
@@ -256,7 +260,6 @@ export function createSessionsHistoryTool(opts?: {
       const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);
       const sanitizedMessages = selectedMessages.map((message) => sanitizeHistoryMessage(message));
       const contentTruncated = sanitizedMessages.some((entry) => entry.truncated);
-      const contentRedacted = sanitizedMessages.some((entry) => entry.redacted);
       const cappedMessages = capArrayByJsonBytes(
         sanitizedMessages.map((entry) => entry.message),
         SESSIONS_HISTORY_MAX_BYTES,
@@ -267,6 +270,14 @@ export function createSessionsHistoryTool(opts?: {
         bytes: cappedMessages.bytes,
         maxBytes: SESSIONS_HISTORY_MAX_BYTES,
       });
+      // Derive contentRedacted from the payload we are *returning* (post-cap + hard-cap),
+      // not from the full sanitized set. Otherwise the notice fires for redactions that
+      // happened in messages that were dropped by byte-cap or replaced by the hard-cap
+      // placeholder — a false positive for agents consuming the final payload.
+      const hardenedItemSet = new Set(hardened.items);
+      const contentRedacted = sanitizedMessages.some(
+        (entry) => hardenedItemSet.has(entry.message) && entry.redacted,
+      );
       return jsonResult({
         sessionKey: displayKey,
         messages: hardened.items,
@@ -274,6 +285,12 @@ export function createSessionsHistoryTool(opts?: {
         droppedMessages: droppedMessages || hardened.hardCapped,
         contentTruncated,
         contentRedacted,
+        // Surface the structured redaction flag as a machine-readable marker plus the
+        // shared guidance body so agents that scan text (not just structured fields)
+        // can still detect redaction and avoid writing placeholders back to config.
+        ...(contentRedacted
+          ? { notice: `${OPENCLAW_REDACTED_MARKER} ${OPENCLAW_REDACTED_NOTICE}` }
+          : {}),
         bytes: hardened.bytes,
       });
     },

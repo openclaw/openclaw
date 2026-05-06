@@ -683,14 +683,108 @@ describe("sessions tools", () => {
       truncated?: boolean;
       contentTruncated?: boolean;
       contentRedacted?: boolean;
+      notice?: string;
     };
     expect(details.contentRedacted).toBe(true);
     expect(details.contentTruncated).toBe(false);
     expect(details.truncated).toBe(false);
+    // When content is redacted, surface a machine-readable notice so agents can
+    // detect redaction from the response text itself, not only the structured flag.
+    expect(typeof details.notice).toBe("string");
+    expect(details.notice).toContain("[OPENCLAW-REDACTED]");
+    expect(details.notice).toContain("do NOT write this output back");
     const msg = details.messages?.[0] as { content?: Array<{ type?: string; text?: string }> };
     const textBlock = msg?.content?.find((b) => b.type === "text");
     expect(typeof textBlock?.text).toBe("string");
     expect(textBlock?.text).not.toContain("sk-1234567890abcdef1234");
+  });
+
+  it("sessions_history omits the redaction notice when nothing was redacted", async () => {
+    callGatewayMock.mockReset();
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "just regular content with no secrets" }],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call-no-redact-1", { sessionKey: "main" });
+    const details = result.details as {
+      contentRedacted?: boolean;
+      notice?: string;
+    };
+    expect(details.contentRedacted).toBe(false);
+    expect(details.notice).toBeUndefined();
+  });
+
+  it("sessions_history omits the redaction notice when redacted messages are dropped by the byte cap", async () => {
+    // Regression for Codex P2 on #68483: contentRedacted + notice must be derived from the
+    // payload that is actually returned, not from the full pre-cap history. Otherwise an
+    // older redacted message that the byte cap dropped still flips the flag and the notice
+    // fires with "in this output" even though nothing in the final output is redacted.
+    callGatewayMock.mockReset();
+    const padding = "y".repeat(8_000);
+    // First message contains a secret and will be redacted; later messages push it out past
+    // the sessions_history byte cap so the returned payload only contains non-redacted ones.
+    const oldMessages = Array.from({ length: 30 }, (_, idx) => ({
+      role: "assistant" as const,
+      content: [
+        {
+          type: "text",
+          text:
+            idx === 0
+              ? `leaking sk-1234567890abcdef1234 ${padding}`
+              : `safe message ${idx} ${padding}`,
+        },
+      ],
+    }));
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return { messages: oldMessages };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call-cap-drops-redacted", {
+      sessionKey: "main",
+      includeTools: true,
+    });
+    const details = result.details as {
+      messages?: Array<Record<string, unknown>>;
+      truncated?: boolean;
+      contentRedacted?: boolean;
+      notice?: string;
+    };
+
+    expect(details.truncated).toBe(true);
+    // The redacted message was dropped; the returned payload has no redaction marker.
+    expect(details.contentRedacted).toBe(false);
+    expect(details.notice).toBeUndefined();
+    // Sanity check: the kept messages don't contain the redacted placeholder from the dropped message.
+    const allKeptText = JSON.stringify(details.messages ?? []);
+    expect(allKeptText).not.toContain("sk-12");
+    expect(allKeptText).not.toContain("leaking");
   });
 
   it("sessions_history sets both contentRedacted and contentTruncated independently", async () => {
