@@ -349,6 +349,8 @@ Replying to a bot message counts as an implicit mention when the channel support
     - Per-agent override: `agents.list[].groupChat.mentionPatterns` (useful when multiple agents share a group).
     - Mention gating is only enforced when mention detection is possible (native mentions or `mentionPatterns` are configured).
     - Allowlisting a group or sender does not disable mention gating; set that group's `requireMention` to `false` when all messages should trigger.
+    - In group-chat prompt rules, agents should mostly lurk and should not answer every message. They should reply only when directly addressed, explicitly asked for help, or needed to prevent real confusion, security risk, or operational damage.
+    - An `@mention` of someone else means the message is addressed to that specific person, not to the agent, unless the message also clearly addresses the agent.
     - Group chat prompt context carries the resolved silent-reply instruction every turn; workspace files should not duplicate `NO_REPLY` mechanics.
     - Groups where silent replies are allowed treat clean empty or reasoning-only model turns as silent, equivalent to `NO_REPLY`. Direct chats do the same only when direct silent replies are explicitly allowed; otherwise empty replies remain failed agent turns.
     - Discord defaults live in `channels.discord.guilds."*"` (overridable per guild/channel).

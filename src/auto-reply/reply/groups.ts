@@ -240,7 +240,7 @@ export function buildGroupChatContext(params: {
     );
   }
   lines.push(
-    "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.",
+    "Be a good group participant: mostly lurk. Do not answer every message. Reply only when directly addressed, when explicitly asked for help, or when a concise correction prevents real confusion, security risk, or operational damage. If a message @mentions someone else, treat it as addressed to that specific person, not to you, unless it also clearly addresses you. Prefer reactions over text for lightweight acknowledgment when available.",
   );
   lines.push(
     "Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.",
@@ -262,7 +262,9 @@ export function buildGroupChatContext(params: {
       lines.push(
         `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so OpenClaw stays silent.`,
       );
-      lines.push("Be extremely selective: reply only when directly addressed or clearly helpful.");
+      lines.push(
+        "Be extremely selective: do not answer every message. Reply only when directly addressed, explicitly asked for help, or needed to prevent real confusion, security risk, or operational damage. An @mention of someone else is not a request for you to answer.",
+      );
     } else {
       lines.push(
         `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so OpenClaw can send a short fallback reply.`,

@@ -43,6 +43,12 @@ describe("group runtime loading", () => {
     expect(toolOnlyContext).toContain("Normal final replies are private");
     expect(toolOnlyContext).toContain("message tool with action=send");
     expect(toolOnlyContext).toContain("Be a good group participant");
+    expect(toolOnlyContext).toContain("Do not answer every message");
+    expect(toolOnlyContext).toContain(
+      "prevents real confusion, security risk, or operational damage",
+    );
+    expect(toolOnlyContext).toContain("If a message @mentions someone else");
+    expect(toolOnlyContext).toContain("not to you");
     expect(toolOnlyContext).toContain("do not call message(action=send)");
     expect(toolOnlyContext).not.toContain('reply with exactly "NO_REPLY"');
     expect(
@@ -114,7 +120,7 @@ describe("group runtime loading", () => {
     expect(allowed).toContain('your final answer must still be exactly "NO_REPLY"');
     expect(allowed).toContain("Never say that you are staying quiet");
     expect(allowed).toContain(
-      "Be extremely selective: reply only when directly addressed or clearly helpful.",
+      "Be extremely selective: do not answer every message. Reply only when directly addressed, explicitly asked for help, or needed to prevent real confusion, security risk, or operational damage. An @mention of someone else is not a request for you to answer.",
     );
     expect(allowed).not.toContain("Otherwise stay silent.");
 
