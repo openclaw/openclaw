@@ -105,7 +105,7 @@ importers:
         specifier: ^0.6.0
         version: 0.6.0
       '@openclaw/fs-safe':
-        specifier: github:openclaw/fs-safe#3c508734af0b
+        specifier: github:openclaw/fs-safe#3c508734af0baaad4f61cf70619bea98c783043b
         version: https://codeload.github.com/openclaw/fs-safe/tar.gz/3c508734af0baaad4f61cf70619bea98c783043b
       '@slack/bolt':
         specifier: ^4.7.2
