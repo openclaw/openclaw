@@ -13,8 +13,8 @@ import {
   type MemorySearchManager,
   type MemorySearchRuntimeDebug,
   type MemorySyncProgressUpdate,
-  type ResolvedQmdConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { buildQmdCacheKey } from "./qmd-cache-key.js";
 
 const MEMORY_SEARCH_MANAGER_CACHE_KEY = Symbol.for("openclaw.memorySearchManagerCache");
 type MemorySearchManagerCacheStore = {
@@ -60,7 +60,7 @@ export async function getMemorySearchManager(params: {
   const resolved = resolveMemoryBackendConfig(params);
   if (resolved.backend === "qmd" && resolved.qmd) {
     const statusOnly = params.purpose === "status";
-    const baseCacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
+    const baseCacheKey = buildQmdCacheKey(params.agentId, resolved.qmd, params.userId);
     const cacheKey = `${baseCacheKey}:${statusOnly ? "status" : "full"}`;
     const cached = QMD_MANAGER_CACHE.get(cacheKey);
     if (cached) {
@@ -358,10 +358,4 @@ class FallbackMemoryManager implements MemorySearchManager {
     this.cacheEvicted = true;
     this.onClose?.();
   }
-}
-
-function buildQmdCacheKey(agentId: string, config: ResolvedQmdConfig): string {
-  // ResolvedQmdConfig is assembled in a stable field order in resolveMemoryBackendConfig.
-  // Fast stringify avoids deep key-sorting overhead on this hot path.
-  return `${agentId}:${JSON.stringify(config)}`;
 }

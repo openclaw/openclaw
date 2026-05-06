@@ -53,7 +53,9 @@ import {
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/text-runtime";
 import { asRecord } from "../dreaming-shared.js";
+import { isMemoryIsolationEnabled } from "../isolation-identity.js";
 import { resolveQmdCollectionPatternFlags, type QmdCollectionPatternFlag } from "./qmd-compat.js";
+import { resolveQmdAgentDir } from "./qmd-paths.js";
 
 type SqliteDatabase = import("node:sqlite").DatabaseSync;
 
@@ -261,13 +263,27 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (!resolved) {
       return null;
     }
-    const manager = new QmdMemoryManager({ cfg: params.cfg, agentId: params.agentId, resolved });
+    // Fail closed: if isolation is enabled in config we must have a userId.
+    // Tools.shared.ts already gates this, but this is defense in depth so a
+    // direct create() call cannot accidentally produce a shared (non-isolated)
+    // manager when isolation is configured.
+    if (isMemoryIsolationEnabled(params.cfg) && !params.userId) {
+      log.warn("qmd memory manager refused to start: isolation enabled but no userId provided");
+      return null;
+    }
+    const manager = new QmdMemoryManager({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      userId: params.userId,
+      resolved,
+    });
     await manager.initialize(params.mode ?? "full");
     return manager;
   }
 
   private readonly cfg: OpenClawConfig;
   private readonly agentId: string;
+  private readonly userId: string | undefined;
   private readonly qmd: ResolvedQmdConfig;
   private readonly workspaceDir: string;
   private readonly stateDir: string;
@@ -319,14 +335,20 @@ export class QmdMemoryManager implements MemorySearchManager {
   private constructor(params: {
     cfg: OpenClawConfig;
     agentId: string;
+    userId?: string;
     resolved: ResolvedQmdConfig;
   }) {
     this.cfg = params.cfg;
     this.agentId = params.agentId;
+    this.userId = params.userId;
     this.qmd = params.resolved;
     this.workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
     this.stateDir = resolveStateDir(process.env, os.homedir);
-    this.agentStateDir = path.join(this.stateDir, "agents", this.agentId);
+    this.agentStateDir = resolveQmdAgentDir({
+      stateDir: this.stateDir,
+      agentId: this.agentId,
+      userId: this.userId,
+    });
     this.qmdDir = path.join(this.agentStateDir, "qmd");
     this.syncSettings = resolveMemorySearchSyncConfig(params.cfg, params.agentId);
     // QMD uses XDG base dirs for its internal state.
