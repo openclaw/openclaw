@@ -5,8 +5,6 @@ read_when:
 title: "Slack plugin"
 ---
 
-# Slack plugin
-
 Adds the Slack channel surface for sending and receiving OpenClaw messages.
 
 ## Distribution
