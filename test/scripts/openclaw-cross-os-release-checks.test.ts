@@ -36,6 +36,7 @@ import {
   CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS,
   CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS,
   CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
+  CROSS_OS_COMMAND_HEARTBEAT_SECONDS,
   isImmutableReleaseRef,
   isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
   isRecoverableWindowsPackagedUpgradeTimeoutError,
@@ -43,6 +44,7 @@ import {
   normalizeRequestedRef,
   normalizeWindowsCommandShimPath,
   normalizeWindowsInstalledCliPath,
+  parseCrossOsSuiteFilter,
   parseArgs,
   packageHasScript,
   readInstalledVersion,
@@ -95,6 +97,11 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS -
         CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS * 1000,
     ).toBeGreaterThanOrEqual(5 * 60 * 1000);
+  });
+
+  it("prints command heartbeats before long release commands hit job timeouts", () => {
+    expect(CROSS_OS_COMMAND_HEARTBEAT_SECONDS).toBeGreaterThan(0);
+    expect(CROSS_OS_COMMAND_HEARTBEAT_SECONDS).toBeLessThanOrEqual(60);
   });
 
   it("accepts OK agent output from the captured log when stdout is empty", () => {
@@ -369,6 +376,56 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         runner: "blacksmith-6vcpu-macos-latest",
         suite: "packaged-fresh",
       }),
+    );
+  });
+
+  it("filters the cross-OS runner matrix to a focused OS suite", () => {
+    const matrix = resolveRunnerMatrix({
+      mode: "both",
+      ref: "main",
+      suiteFilter: "windows/packaged-upgrade",
+      ubuntuRunner: "",
+      windowsRunner: "",
+      macosRunner: "",
+      varUbuntuRunner: "",
+      varWindowsRunner: "",
+      varMacosRunner: "",
+    });
+
+    expect(matrix.include).toEqual([
+      expect.objectContaining({
+        os_id: "windows",
+        suite: "packaged-upgrade",
+        lane: "upgrade",
+      }),
+    ]);
+  });
+
+  it("filters the cross-OS runner matrix by suite across platforms", () => {
+    const matrix = resolveRunnerMatrix({
+      mode: "both",
+      ref: "main",
+      suiteFilter: "packaged-fresh",
+      ubuntuRunner: "",
+      windowsRunner: "",
+      macosRunner: "",
+      varUbuntuRunner: "",
+      varWindowsRunner: "",
+      varMacosRunner: "",
+    });
+
+    expect(matrix.include).toHaveLength(3);
+    expect(matrix.include.map((entry) => entry.os_id).toSorted()).toEqual([
+      "macos",
+      "ubuntu",
+      "windows",
+    ]);
+    expect(matrix.include.every((entry) => entry.suite === "packaged-fresh")).toBe(true);
+  });
+
+  it("rejects unsupported cross-OS suite filter tokens", () => {
+    expect(() => parseCrossOsSuiteFilter("windows/nope")).toThrow(
+      /Unsupported cross_os_suite_filter/u,
     );
   });
 

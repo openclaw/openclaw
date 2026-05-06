@@ -7,6 +7,7 @@ import { detectPluginAutoEnableCandidates } from "../../../config/plugin-auto-en
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { compareOpenClawVersions } from "../../../config/version.js";
 import { isTruthyEnvValue } from "../../../infra/env.js";
+import { getOfficialExternalPluginCatalogEntry } from "../../../plugins/official-external-plugin-catalog.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { resolveWebSearchInstallCatalogEntry } from "../../../plugins/web-search-install-catalog.js";
 import { VERSION } from "../../../version.js";
@@ -214,6 +215,27 @@ function collectAcpRuntimePluginIds(cfg: OpenClawConfig): string[] {
   return ["acpx"];
 }
 
+function collectAllowOnlyOfficialPluginIds(cfg: OpenClawConfig): string[] {
+  const allow = cfg.plugins?.allow;
+  if (!Array.isArray(allow) || allow.length === 0) {
+    return [];
+  }
+  const materialEntryIds = new Set(
+    collectMaterialPluginEntryIds(cfg).map((id) => id.toLowerCase()),
+  );
+  const ids: string[] = [];
+  for (const rawPluginId of allow) {
+    const pluginId = normalizeId(rawPluginId);
+    if (!pluginId || materialEntryIds.has(pluginId.toLowerCase())) {
+      continue;
+    }
+    if (getOfficialExternalPluginCatalogEntry(pluginId)) {
+      ids.push(pluginId);
+    }
+  }
+  return ids;
+}
+
 function addEligiblePluginId(cfg: OpenClawConfig, pluginIds: Set<string>, pluginId: string): void {
   const normalized = pluginId.trim();
   if (!normalized || isDenied(cfg, normalized) || isDisabled(cfg, normalized)) {
@@ -272,6 +294,9 @@ export function collectReleaseConfiguredPluginIds(params: {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
   for (const pluginId of collectAcpRuntimePluginIds(params.cfg)) {
+    addEligiblePluginId(params.cfg, pluginIds, pluginId);
+  }
+  for (const pluginId of collectAllowOnlyOfficialPluginIds(params.cfg)) {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
   for (const channelId of collectConfiguredChannelIds(params.cfg, env)) {

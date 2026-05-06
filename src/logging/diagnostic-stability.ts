@@ -27,6 +27,9 @@ export type DiagnosticStabilityEventRecord = {
   phase?: string;
   detector?: string;
   deliveryKind?: string;
+  talkEventType?: string;
+  transport?: string;
+  brain?: string;
   toolName?: string;
   activeWorkKind?: string;
   pairedToolName?: string;
@@ -40,6 +43,7 @@ export type DiagnosticStabilityEventRecord = {
   commandLength?: number;
   exitCode?: number;
   timedOut?: boolean;
+  final?: boolean;
   costUsd?: number;
   count?: number;
   bytes?: number;
@@ -228,6 +232,16 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.outcome = "error";
       assignReasonCode(record, event.errorCategory);
       break;
+    case "talk.event":
+      record.talkEventType = event.talkEventType;
+      record.mode = event.mode;
+      record.transport = event.transport;
+      record.brain = event.brain;
+      record.provider = event.provider;
+      record.final = event.final;
+      record.durationMs = event.durationMs;
+      record.bytes = event.byteLength;
+      break;
     case "session.state":
       record.outcome = event.state;
       assignReasonCode(record, event.reason);
@@ -249,6 +263,27 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       if (event.activeToolName) {
         record.toolName = event.activeToolName;
       }
+      break;
+    case "session.recovery.requested":
+      record.outcome = event.state;
+      record.action = event.allowActiveAbort ? "abort" : "recover";
+      record.ageMs = event.ageMs;
+      record.queueDepth = event.queueDepth;
+      if (event.activeWorkKind) {
+        record.activeWorkKind = event.activeWorkKind;
+      }
+      assignReasonCode(record, event.reason);
+      break;
+    case "session.recovery.completed":
+      record.outcome = event.status;
+      record.action = event.action;
+      record.ageMs = event.ageMs;
+      record.queueDepth = event.queueDepth;
+      record.count = event.released;
+      if (event.activeWorkKind) {
+        record.activeWorkKind = event.activeWorkKind;
+      }
+      assignReasonCode(record, event.outcomeReason ?? event.reason);
       break;
     case "queue.lane.enqueue":
       record.source = event.lane;

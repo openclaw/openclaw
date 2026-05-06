@@ -27,7 +27,14 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { readRecentCodexRateLimits, rememberCodexRateLimits } from "./rate-limit-cache.js";
+import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
+import {
+  resolveCodexToolProgressDetailMode,
+  sanitizeCodexAgentEventRecord,
+  sanitizeCodexToolArguments,
+} from "./tool-progress-normalization.js";
 import { attachCodexMirrorIdentity } from "./transcript-mirror.js";
 
 export type CodexAppServerToolTelemetry = {
@@ -100,6 +107,7 @@ export class CodexAppServerEventProjector {
   private tokenUsage: ReturnType<typeof normalizeUsage>;
   private guardianReviewCount = 0;
   private completedCompactionCount = 0;
+  private latestRateLimits: JsonValue | undefined;
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
@@ -110,6 +118,11 @@ export class CodexAppServerEventProjector {
   async handleNotification(notification: CodexServerNotification): Promise<void> {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
     if (!params) {
+      return;
+    }
+    if (notification.method === "account/rateLimits/updated") {
+      this.latestRateLimits = params;
+      rememberCodexRateLimits(params);
       return;
     }
     if (isHookNotificationMethod(notification.method)) {
@@ -167,7 +180,7 @@ export class CodexAppServerEventProjector {
         if (readBooleanAlias(params, ["willRetry", "will_retry"]) === true) {
           break;
         }
-        this.promptError = readCodexErrorNotificationMessage(params) ?? "codex app-server error";
+        this.promptError = this.formatCodexErrorMessage(params) ?? "codex app-server error";
         this.promptErrorSource = "prompt";
         break;
       default:
@@ -388,6 +401,7 @@ export class CodexAppServerEventProjector {
       });
     }
     this.emitStandardItemEvent({ phase: "start", item });
+    this.emitNormalizedToolItemEvent({ phase: "start", item });
     this.emitToolResultSummary(item);
     this.emitAgentEvent({
       stream: "codex_app_server.item",
@@ -441,6 +455,7 @@ export class CodexAppServerEventProjector {
     }
     this.recordToolMeta(item);
     this.emitStandardItemEvent({ phase: "end", item });
+    this.emitNormalizedToolItemEvent({ phase: "result", item });
     this.emitToolResultSummary(item);
     this.emitToolResultOutput(item);
     this.emitAgentEvent({
@@ -523,7 +538,14 @@ export class CodexAppServerEventProjector {
       this.aborted = true;
     }
     if (turn.status === "failed") {
-      this.promptError = turn.error?.message ?? "codex app-server turn failed";
+      this.promptError =
+        formatCodexUsageLimitErrorMessage({
+          message: turn.error?.message,
+          codexErrorInfo: turn.error?.codexErrorInfo as JsonValue | null | undefined,
+          rateLimits: this.latestRateLimits ?? readRecentCodexRateLimits(),
+        }) ??
+        turn.error?.message ??
+        "codex app-server turn failed";
       this.promptErrorSource = "prompt";
     }
     for (const item of turn.items ?? []) {
@@ -641,6 +663,7 @@ export class CodexAppServerEventProjector {
       return;
     }
     const meta = itemMeta(item, this.toolProgressDetailMode());
+    const suppressChannelProgress = shouldSuppressChannelProgressForItem(item);
     this.emitAgentEvent({
       stream: "item",
       data: {
@@ -651,6 +674,42 @@ export class CodexAppServerEventProjector {
         status: params.phase === "start" ? "running" : itemStatus(item),
         ...(itemName(item) ? { name: itemName(item) } : {}),
         ...(meta ? { meta } : {}),
+        ...(suppressChannelProgress ? { suppressChannelProgress: true } : {}),
+      },
+    });
+  }
+
+  private emitNormalizedToolItemEvent(params: {
+    phase: "start" | "result";
+    item: CodexThreadItem | undefined;
+  }): void {
+    const { item } = params;
+    if (!item || !shouldSynthesizeToolProgressForItem(item)) {
+      return;
+    }
+    const name = itemName(item);
+    if (!name) {
+      return;
+    }
+    const meta = itemMeta(item, this.toolProgressDetailMode());
+    const args = params.phase === "start" ? itemToolArgs(item) : undefined;
+    const status = params.phase === "result" ? itemStatus(item) : "running";
+    this.emitAgentEvent({
+      stream: "tool",
+      data: {
+        phase: params.phase,
+        name,
+        itemId: item.id,
+        toolCallId: item.id,
+        ...(meta ? { meta } : {}),
+        ...(args ? { args } : {}),
+        ...(params.phase === "result"
+          ? {
+              status,
+              isError: isNonSuccessItemStatus(status),
+              ...itemToolResult(item),
+            }
+          : {}),
       },
     });
   }
@@ -728,7 +787,7 @@ export class CodexAppServerEventProjector {
   }
 
   private toolProgressDetailMode(): ToolProgressDetailMode {
-    return this.params.toolProgressDetail === "raw" ? "raw" : "explain";
+    return resolveCodexToolProgressDetailMode(this.params.toolProgressDetail);
   }
 
   private recordToolMeta(item: CodexThreadItem | undefined): void {
@@ -744,6 +803,17 @@ export class CodexAppServerEventProjector {
       toolName,
       ...(meta ? { meta } : {}),
     });
+  }
+
+  private formatCodexErrorMessage(params: JsonObject): string | undefined {
+    const error = isJsonObject(params.error) ? params.error : undefined;
+    return (
+      formatCodexUsageLimitErrorMessage({
+        message: error ? readString(error, "message") : undefined,
+        codexErrorInfo: error?.codexErrorInfo,
+        rateLimits: this.latestRateLimits ?? readRecentCodexRateLimits(),
+      }) ?? readCodexErrorNotificationMessage(params)
+    );
   }
 
   private emitAgentEvent(
@@ -1048,15 +1118,22 @@ function itemTitle(item: CodexThreadItem): string {
   }
 }
 
-function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" {
+function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" | "blocked" {
   const status = readItemString(item, "status");
   if (status === "failed") {
     return "failed";
+  }
+  if (status === "declined") {
+    return "blocked";
   }
   if (status === "inProgress" || status === "running") {
     return "running";
   }
   return "completed";
+}
+
+function isNonSuccessItemStatus(status: ReturnType<typeof itemStatus>): boolean {
+  return status === "failed" || status === "blocked";
 }
 
 function itemName(item: CodexThreadItem): string | undefined {
@@ -1077,6 +1154,78 @@ function itemName(item: CodexThreadItem): string | undefined {
     return "web_search";
   }
   return undefined;
+}
+
+function shouldSynthesizeToolProgressForItem(item: CodexThreadItem): boolean {
+  switch (item.type) {
+    case "commandExecution":
+    case "fileChange":
+    case "webSearch":
+    case "mcpToolCall":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function shouldSuppressChannelProgressForItem(item: CodexThreadItem): boolean {
+  if (shouldSynthesizeToolProgressForItem(item)) {
+    return true;
+  }
+  // Dynamic OpenClaw tool requests are emitted at the item/tool/call request
+  // boundary in run-attempt.ts. Re-emitting item notifications to channels can
+  // duplicate start/result progress when the app-server sends both signals.
+  return item.type === "dynamicToolCall";
+}
+
+function itemToolArgs(item: CodexThreadItem): Record<string, unknown> | undefined {
+  if (item.type === "commandExecution") {
+    return sanitizeCodexAgentEventRecord({
+      command: item.command,
+      ...(typeof item.cwd === "string" ? { cwd: item.cwd } : {}),
+    });
+  }
+  if (item.type === "webSearch" && typeof item.query === "string") {
+    return sanitizeCodexAgentEventRecord({ query: item.query });
+  }
+  if (item.type === "mcpToolCall") {
+    return sanitizeCodexToolArguments(item.arguments);
+  }
+  return undefined;
+}
+
+function itemToolResult(item: CodexThreadItem): { result?: Record<string, unknown> } {
+  if (item.type === "commandExecution") {
+    return {
+      result: sanitizeCodexAgentEventRecord({
+        status: item.status,
+        exitCode: item.exitCode,
+        durationMs: item.durationMs,
+      }),
+    };
+  }
+  if (item.type === "fileChange") {
+    return {
+      result: sanitizeCodexAgentEventRecord({
+        status: item.status,
+        changes: item.changes.map((change) => ({ path: change.path, kind: change.kind })),
+      }),
+    };
+  }
+  if (item.type === "mcpToolCall") {
+    return {
+      result: sanitizeCodexAgentEventRecord({
+        status: item.status,
+        durationMs: item.durationMs,
+        ...(item.error ? { error: item.error } : {}),
+        ...(item.result ? { result: item.result } : {}),
+      }),
+    };
+  }
+  if (item.type === "webSearch") {
+    return { result: sanitizeCodexAgentEventRecord({ status: "completed" }) };
+  }
+  return {};
 }
 
 function itemMeta(

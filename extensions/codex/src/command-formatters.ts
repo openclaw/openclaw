@@ -1,6 +1,7 @@
 import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerModelListResult } from "./app-server/models.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./app-server/protocol.js";
+import { summarizeCodexRateLimits } from "./app-server/rate-limits.js";
 import type { SafeValue } from "./command-rpc.js";
 
 type CodexStatusProbes = {
@@ -37,7 +38,7 @@ export function formatCodexStatus(probes: CodexStatusProbes): string {
   lines.push(
     `Rate limits: ${
       probes.limits.ok
-        ? summarizeRateLimits(probes.limits.value)
+        ? formatCodexRateLimitSummary(probes.limits.value)
         : formatCodexDisplayText(probes.limits.error)
     }`,
   );
@@ -104,7 +105,9 @@ export function formatAccount(
 ): string {
   return [
     `Account: ${account.ok ? formatCodexAccountSummary(account.value) : formatCodexDisplayText(account.error)}`,
-    `Rate limits: ${limits.ok ? summarizeRateLimits(limits.value) : formatCodexDisplayText(limits.error)}`,
+    `Rate limits: ${
+      limits.ok ? formatCodexRateLimitSummary(limits.value) : formatCodexDisplayText(limits.error)
+    }`,
   ].join("\n");
 }
 
@@ -274,6 +277,10 @@ function summarizeArrayLike(value: JsonValue | undefined): string {
     return "none returned";
   }
   return `${entries.length}`;
+}
+
+function formatCodexRateLimitSummary(value: JsonValue | undefined): string {
+  return formatCodexDisplayText(summarizeCodexRateLimits(value) ?? summarizeRateLimits(value));
 }
 
 function summarizeRateLimits(value: JsonValue | undefined): string {

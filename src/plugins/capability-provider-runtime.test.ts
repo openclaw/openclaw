@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 
 type MockManifestRegistry = {
@@ -302,7 +303,7 @@ describe("resolvePluginCapabilityProviders", () => {
 
   it("resolves bundled capability ids from the current metadata snapshot", () => {
     setCurrentPluginMetadataSnapshot({
-      policyHash: "policy",
+      policyHash: resolveInstalledPluginIndexPolicyHash({}),
       workspaceDir: "/workspace",
       index: { plugins: [] },
       registryDiagnostics: [],
@@ -348,7 +349,7 @@ describe("resolvePluginCapabilityProviders", () => {
 
   it("resolves enabled external capability ids from the current metadata snapshot", () => {
     setCurrentPluginMetadataSnapshot({
-      policyHash: "policy",
+      policyHash: resolveInstalledPluginIndexPolicyHash({}),
       workspaceDir: "/workspace",
       index: {
         plugins: [
@@ -921,6 +922,45 @@ describe("resolvePluginCapabilityProviders", () => {
       env: process.env,
       pluginSdkResolution: undefined,
     });
+  });
+
+  it("loads requested realtime voice providers missing from active registry", () => {
+    const active = createEmptyPluginRegistry();
+    active.realtimeVoiceProviders.push({
+      pluginId: "openai",
+      pluginName: "openai",
+      source: "test",
+      provider: { id: "openai" },
+    } as never);
+    const loaded = createEmptyPluginRegistry();
+    loaded.realtimeVoiceProviders.push({
+      pluginId: "google",
+      pluginName: "Google",
+      source: "test",
+      provider: { id: "google" },
+    } as never);
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "google",
+          origin: "bundled",
+          contracts: { realtimeVoiceProviders: ["google"] },
+        },
+      ] as never,
+      diagnostics: [],
+    });
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? active : loaded,
+    );
+
+    const provider = resolvePluginCapabilityProvider({
+      key: "realtimeVoiceProviders",
+      providerId: "google",
+      cfg: { plugins: { allow: ["openai", "google"] } } as OpenClawConfig,
+    });
+
+    expect(provider?.id).toBe("google");
+    expectActiveRegistryLookup(["google"]);
   });
 
   it("does not merge unrelated bundled capability providers when cfg requests one provider", () => {

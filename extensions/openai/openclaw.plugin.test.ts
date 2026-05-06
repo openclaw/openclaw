@@ -6,6 +6,14 @@ import { buildOpenAIProvider } from "./openai-provider.js";
 const manifest = JSON.parse(
   readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
 ) as {
+  mediaUnderstandingProviderMetadata?: Record<
+    string,
+    {
+      capabilities?: string[];
+      defaultModels?: Record<string, string>;
+      autoPriority?: Record<string, number>;
+    }
+  >;
   providerAuthChoices?: Array<{
     provider?: string;
     method?: string;
@@ -70,6 +78,20 @@ describe("OpenAI plugin manifest", () => {
     );
 
     expect(codexBrowserLogin?.deprecatedChoiceIds).toContain("openai-codex-import");
+  });
+
+  it("keeps Codex media-understanding manifest metadata aligned with runtime audio support", () => {
+    expect(manifest.mediaUnderstandingProviderMetadata?.["openai-codex"]).toMatchObject({
+      capabilities: ["image", "audio"],
+      defaultModels: {
+        image: "gpt-5.5",
+        audio: "gpt-4o-transcribe",
+      },
+      autoPriority: {
+        image: 20,
+        audio: 20,
+      },
+    });
   });
 
   it("labels OpenAI API key and Codex auth choices without stale mixed OAuth wording", () => {
