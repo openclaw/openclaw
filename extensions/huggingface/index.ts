@@ -1,4 +1,5 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { buildHuggingfaceImageGenerationProvider } from "./image-generation-provider.js";
 import { applyHuggingfaceConfig, HUGGINGFACE_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildHuggingfaceProvider } from "./provider-catalog.js";
 
@@ -10,7 +11,7 @@ type HuggingFacePluginConfig = {
   };
 };
 
-export default defineSingleProviderPluginEntry({
+const baseEntry = defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Hugging Face Provider",
   description: "Bundled Hugging Face provider plugin",
@@ -58,3 +59,12 @@ export default defineSingleProviderPluginEntry({
     },
   },
 });
+
+const baseRegister = baseEntry.register;
+export default {
+  ...baseEntry,
+  register(api: Parameters<typeof baseRegister>[0]) {
+    baseRegister(api);
+    api.registerImageGenerationProvider(buildHuggingfaceImageGenerationProvider());
+  },
+};

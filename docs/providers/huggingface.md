@@ -6,7 +6,7 @@ read_when:
 title: "Hugging Face (inference)"
 ---
 
-[Hugging Face Inference Providers](https://huggingface.co/docs/inference-providers) offer OpenAI-compatible chat completions through a single router API. You get access to many models (DeepSeek, Llama, and more) with one token. OpenClaw uses the **OpenAI-compatible endpoint** (chat completions only); for text-to-image, embeddings, or speech use the [HF inference clients](https://huggingface.co/docs/api-inference/quicktour) directly.
+[Hugging Face Inference Providers](https://huggingface.co/docs/inference-providers) offer OpenAI-compatible chat completions through a single router API. You get access to many models (DeepSeek, Llama, and more) with one token. OpenClaw uses the **OpenAI-compatible endpoint** for chat completions, plus the **`hf-inference` text-to-image route** for image generation. For embeddings or speech, use the [HF inference clients](https://huggingface.co/docs/api-inference/quicktour) directly.
 
 - Provider: `huggingface`
 - Auth: `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN` (fine-grained token with **Make calls to Inference Providers**)
@@ -216,6 +216,26 @@ You can append `:fastest` or `:cheapest` to any model id. Set your default order
     ```
   </Accordion>
 </AccordionGroup>
+
+## Image generation
+
+OpenClaw routes text-to-image requests through the Hugging Face Inference Providers `hf-inference` endpoint. The same `HUGGINGFACE_HUB_TOKEN` (or `HF_TOKEN`) used for chat is reused for image generation; no extra credential is required.
+
+- Endpoint: `POST https://router.huggingface.co/hf-inference/models/<repo_id>`
+- Default model: `black-forest-labs/FLUX.1-Krea-dev`
+- Other recommended models: `black-forest-labs/FLUX.1-dev`, `black-forest-labs/FLUX.1-schnell`, `Qwen/Qwen-Image`, `ByteDance/Hyper-SD`
+- Output: a single PNG (the inference router returns raw image bytes; JPEG is also surfaced when the upstream model emits it)
+- Optional `--size <width>x<height>` is forwarded as the `parameters.width` / `parameters.height` fields documented for the [text-to-image task](https://huggingface.co/docs/inference-providers/tasks/text-to-image)
+
+```bash
+openclaw infer image generate \
+  --model huggingface/black-forest-labs/FLUX.1-Krea-dev \
+  --prompt "a serene lake surrounded by mountains at sunset, photorealistic" \
+  --size 1024x1024 \
+  --output lake.png
+```
+
+Image-to-image edits, multi-image batches, and provider routes other than `hf-inference` (Fal AI, Replicate, Together, Nscale, WaveSpeedAI) are not yet wired through this plugin; use the official HF clients for those flows.
 
 ## Related
 
