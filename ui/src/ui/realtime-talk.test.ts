@@ -11,6 +11,9 @@ const {
   googleCtor,
   relayCtor,
   webRtcCtor,
+  fallbackStart,
+  fallbackStop,
+  fallbackCtor,
 } = vi.hoisted(() => ({
   googleStart: vi.fn(async () => undefined),
   googleStop: vi.fn(),
@@ -18,6 +21,8 @@ const {
   relayStop: vi.fn(),
   webRtcStart: vi.fn(async () => undefined),
   webRtcStop: vi.fn(),
+  fallbackStart: vi.fn(async () => undefined),
+  fallbackStop: vi.fn(),
   googleCtor: vi.fn(function () {
     return { start: googleStart, stop: googleStop };
   }),
@@ -26,6 +31,9 @@ const {
   }),
   webRtcCtor: vi.fn(function () {
     return { start: webRtcStart, stop: webRtcStop };
+  }),
+  fallbackCtor: vi.fn(function () {
+    return { start: fallbackStart, stop: fallbackStop };
   }),
 }));
 
@@ -41,6 +49,12 @@ vi.mock("./chat/realtime-talk-webrtc.ts", () => ({
   WebRtcSdpRealtimeTalkTransport: webRtcCtor,
 }));
 
+vi.mock("./chat/realtime-talk-browser-fallback.ts", () => ({
+  BrowserFallbackRealtimeTalkTransport: fallbackCtor,
+  shouldUseBrowserFallbackForRealtimeError: (error: unknown) =>
+    error instanceof Error && error.message.includes("not configured"),
+}));
+
 import { RealtimeTalkSession } from "./chat/realtime-talk.ts";
 
 describe("RealtimeTalkSession", () => {
@@ -51,9 +65,12 @@ describe("RealtimeTalkSession", () => {
     relayStop.mockClear();
     webRtcStart.mockClear();
     webRtcStop.mockClear();
+    fallbackStart.mockClear();
+    fallbackStop.mockClear();
     googleCtor.mockClear();
     relayCtor.mockClear();
     webRtcCtor.mockClear();
+    fallbackCtor.mockClear();
   });
 
   it("starts the Google Live WebSocket transport from a generic session result", async () => {
@@ -210,5 +227,33 @@ describe("RealtimeTalkSession", () => {
       prefixPaddingMs: 250,
       reasoningEffort: "low",
     });
+  });
+
+  it("falls back to browser dictation when realtime is not configured", async () => {
+    const request = vi.fn(async () => {
+      throw new Error('Realtime voice provider "openai" is not configured');
+    });
+    const session = new RealtimeTalkSession({ request } as never, "main");
+
+    await session.start();
+    session.stop();
+
+    expect(fallbackCtor).toHaveBeenCalledTimes(1);
+    expect(fallbackStart).toHaveBeenCalledTimes(1);
+    expect(fallbackStop).toHaveBeenCalledTimes(1);
+    expect(webRtcCtor).not.toHaveBeenCalled();
+    expect(googleCtor).not.toHaveBeenCalled();
+    expect(relayCtor).not.toHaveBeenCalled();
+  });
+
+  it("does not mask unrelated realtime startup failures", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("permission denied");
+    });
+    const session = new RealtimeTalkSession({ request } as never, "main");
+
+    await expect(session.start()).rejects.toThrow("permission denied");
+
+    expect(fallbackCtor).not.toHaveBeenCalled();
   });
 });

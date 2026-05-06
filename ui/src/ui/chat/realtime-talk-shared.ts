@@ -208,7 +208,7 @@ function extractTextFromMessage(message: unknown): string {
   return parts.join("\n\n").trim();
 }
 
-function waitForChatResult(params: {
+export function waitForChatResult(params: {
   client: GatewayBrowserClient;
   runId: string;
   timeoutMs: number;

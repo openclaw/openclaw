@@ -1,5 +1,9 @@
 import { normalizeTalkTransport } from "../../../../src/talk/talk-session-controller.js";
 import type { GatewayBrowserClient } from "../gateway.ts";
+import {
+  BrowserFallbackRealtimeTalkTransport,
+  shouldUseBrowserFallbackForRealtimeError,
+} from "./realtime-talk-browser-fallback.ts";
 import { GatewayRelayRealtimeTalkTransport } from "./realtime-talk-gateway-relay.ts";
 import { GoogleLiveRealtimeTalkTransport } from "./realtime-talk-google-live.ts";
 import {
@@ -84,18 +88,33 @@ export class RealtimeTalkSession {
   async start(): Promise<void> {
     this.closed = false;
     this.callbacks.onStatus?.("connecting");
-    const session = await this.createSession();
-    if (this.closed) {
-      return;
+    try {
+      const session = await this.createSession();
+      if (this.closed) {
+        return;
+      }
+      this.transport = createTransport(session, {
+        client: this.client,
+        sessionKey: this.sessionKey,
+        callbacks: this.callbacks,
+        consultThinkingLevel: session.consultThinkingLevel,
+        consultFastMode: session.consultFastMode,
+      });
+      await this.transport.start();
+    } catch (error) {
+      if (!shouldUseBrowserFallbackForRealtimeError(error)) {
+        throw error;
+      }
+      if (this.closed) {
+        return;
+      }
+      this.transport = new BrowserFallbackRealtimeTalkTransport({
+        client: this.client,
+        sessionKey: this.sessionKey,
+        callbacks: this.callbacks,
+      });
+      await this.transport.start();
     }
-    this.transport = createTransport(session, {
-      client: this.client,
-      sessionKey: this.sessionKey,
-      callbacks: this.callbacks,
-      consultThinkingLevel: session.consultThinkingLevel,
-      consultFastMode: session.consultFastMode,
-    });
-    await this.transport.start();
   }
 
   private async createSession(): Promise<RealtimeTalkSessionResult> {
