@@ -19,10 +19,7 @@ import {
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
 import { applySessionStoreMigrations } from "./store-migrations.js";
-import {
-  isSessionStoreRecord,
-  isValidSessionEntry,
-} from "./store-validation.js";
+import { isSessionStoreRecord, isValidSessionEntry } from "./store-validation.js";
 import { normalizeSessionRuntimeModelFields, type SessionEntry } from "./types.js";
 
 export type LoadSessionStoreOptions = {
@@ -106,8 +103,11 @@ function collectSessionStoreRecoveryCandidates(storePath: string): {
     // readdir failed — skip
   }
 
-  // Sort stale tmp by mtime desc, then apply cap
-  rawTmpCandidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  // Sort by sourceRank desc (stale=2 > fresh=1), then mtime desc, then apply cap
+  rawTmpCandidates.sort((a, b) => {
+    if (b.sourceRank !== a.sourceRank) return b.sourceRank - a.sourceRank;
+    return b.mtimeMs - a.mtimeMs;
+  });
   const cappedTmp = rawTmpCandidates.slice(0, SESSION_STORE_MAX_RECOVERY_CANDIDATES);
 
   // .bak always included (prepended); then capped stale tmp
@@ -120,9 +120,7 @@ function collectSessionStoreRecoveryCandidates(storePath: string): {
   };
 }
 
-function evaluateRecoveryCandidate(
-  candidate: RecoveryCandidate,
-): RecoveryCandidate | null {
+function evaluateRecoveryCandidate(candidate: RecoveryCandidate): RecoveryCandidate | null {
   try {
     const raw = fs.readFileSync(candidate.path, "utf-8");
     const parsed = JSON.parse(raw);
@@ -144,9 +142,7 @@ function evaluateRecoveryCandidate(
   }
 }
 
-function tryRecoverSessionStore(
-  storePath: string,
-): RecoveryCandidate | null {
+function tryRecoverSessionStore(storePath: string): RecoveryCandidate | null {
   const { candidates, totalCandidateCount, freshTmpCount } =
     collectSessionStoreRecoveryCandidates(storePath);
   if (candidates.length === 0) {
@@ -225,10 +221,7 @@ function selfHealWriteback(
       recoverySource,
       recoveryPath,
       entryCount,
-      error:
-        writeError instanceof Error
-          ? writeError.message
-          : String(writeError),
+      error: writeError instanceof Error ? writeError.message : String(writeError),
     });
     try {
       fs.unlinkSync(tmpPath);
@@ -244,18 +237,14 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
     lastChannel: entry.lastChannel,
     lastTo: entry.lastTo,
     lastAccountId: entry.lastAccountId,
-    lastThreadId:
-      entry.lastThreadId ??
-      entry.deliveryContext?.threadId ??
-      entry.origin?.threadId,
+    lastThreadId: entry.lastThreadId ?? entry.deliveryContext?.threadId ?? entry.origin?.threadId,
     deliveryContext: entry.deliveryContext,
   });
   const nextDelivery = normalized.deliveryContext;
   const sameDelivery =
     (entry.deliveryContext?.channel ?? undefined) === nextDelivery?.channel &&
     (entry.deliveryContext?.to ?? undefined) === nextDelivery?.to &&
-    (entry.deliveryContext?.accountId ?? undefined) ===
-      nextDelivery?.accountId &&
+    (entry.deliveryContext?.accountId ?? undefined) === nextDelivery?.accountId &&
     (entry.deliveryContext?.threadId ?? undefined) === nextDelivery?.threadId;
   const sameLast =
     entry.lastChannel === normalized.lastChannel &&
@@ -290,18 +279,14 @@ function stripPersistedSkillsCache(entry: SessionEntry): SessionEntry {
   return { ...entry, skillsSnapshot: rest };
 }
 
-export function normalizeSessionStore(
-  store: Record<string, SessionEntry>,
-): boolean {
+export function normalizeSessionStore(store: Record<string, SessionEntry>): boolean {
   let changed = false;
   for (const [key, entry] of Object.entries(store)) {
     if (!entry) {
       continue;
     }
     const normalized = stripPersistedSkillsCache(
-      normalizeSessionEntryDelivery(
-        normalizeSessionRuntimeModelFields(entry),
-      ),
+      normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(entry)),
     );
     if (normalized !== entry) {
       store[key] = normalized;
@@ -335,10 +320,7 @@ export function loadSessionStore(
   let mtimeMs = fileStat?.mtimeMs;
   let serializedFromDisk: string | undefined;
   const maxReadAttempts = process.platform === "win32" ? 3 : 1;
-  const retryBuf =
-    maxReadAttempts > 1
-      ? new Int32Array(new SharedArrayBuffer(4))
-      : undefined;
+  const retryBuf = maxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
   for (let attempt = 0; attempt < maxReadAttempts; attempt += 1) {
     try {
       const raw = fs.readFileSync(storePath, "utf-8");
@@ -372,9 +354,7 @@ export function loadSessionStore(
     }
   })();
   const mainFileCorruptedOrEmpty =
-    mainFileExists &&
-    serializedFromDisk === undefined &&
-    Object.keys(store).length === 0;
+    mainFileExists && serializedFromDisk === undefined && Object.keys(store).length === 0;
   if (mainFileCorruptedOrEmpty) {
     const recovered = tryRecoverSessionStore(storePath);
     if (recovered?.store) {
@@ -438,7 +418,5 @@ export function loadSessionStore(
     });
   }
 
-  return opts.clone === false
-    ? store
-    : cloneSessionStoreRecord(store, serializedFromDisk);
+  return opts.clone === false ? store : cloneSessionStoreRecord(store, serializedFromDisk);
 }
