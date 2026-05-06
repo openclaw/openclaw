@@ -110,6 +110,73 @@ function parseOpening(text: string, start: number): { end: number; name: string 
   return { end: afterLineBreak, name };
 }
 
+const HARMONY_CHANNELS = ["commentary", "analysis", "final"];
+const HARMONY_DELIMITER_RE = /^<\|[a-z]+\|>/;
+
+/**
+ * Parse a Harmony-format tool-call opening. Two shapes:
+ *   1. `commentary to=<name> code {json}`
+ *   2. `<|channel|>commentary to=<name> code<|message|>{json}`
+ *
+ * Returns the tool name and cursor position just before the JSON payload.
+ */
+function parseHarmonyOpening(text: string, start: number): { end: number; name: string } | null {
+  let cursor = start;
+
+  // Consume optional leading <|channel|> delimiter.
+  const delimMatch = HARMONY_DELIMITER_RE.exec(text.slice(cursor));
+  if (delimMatch) {
+    cursor += delimMatch[0].length;
+  }
+
+  // Expect one of the known harmony channel keywords.
+  let matched = false;
+  for (const channel of HARMONY_CHANNELS) {
+    if (text.startsWith(channel, cursor)) {
+      cursor += channel.length;
+      matched = true;
+      break;
+    }
+  }
+  if (!matched) {
+    return null;
+  }
+
+  // Expect ` to=<name>` (with mandatory space before "to").
+  cursor = skipHorizontalWhitespace(text, cursor);
+  if (!text.startsWith("to=", cursor)) {
+    return null;
+  }
+  cursor += 3;
+  const nameStart = cursor;
+  while (isToolNameChar(text[cursor])) {
+    cursor += 1;
+  }
+  if (cursor === nameStart) {
+    return null;
+  }
+  const name = text.slice(nameStart, cursor);
+
+  // Expect ` code` keyword after the tool name.
+  cursor = skipHorizontalWhitespace(text, cursor);
+  if (!text.startsWith("code", cursor)) {
+    return null;
+  }
+  cursor += 4;
+
+  // Consume optional <|message|> delimiter before JSON.
+  cursor = skipHorizontalWhitespace(text, cursor);
+  const msgDelim = HARMONY_DELIMITER_RE.exec(text.slice(cursor));
+  if (msgDelim) {
+    cursor += msgDelim[0].length;
+  }
+
+  // Skip any remaining whitespace before the JSON object.
+  cursor = skipWhitespace(text, cursor);
+
+  return { end: cursor, name };
+}
+
 function consumeJsonObject(
   text: string,
   start: number,
@@ -174,37 +241,57 @@ function parseClosing(text: string, start: number, name: string): number | null 
   return null;
 }
 
+const HARMONY_TRAILING_RE = /^<\|(?:end|return|message)\|>/;
+
+function consumeHarmonyTrailing(text: string, start: number): number {
+  let cursor = skipHorizontalWhitespace(text, start);
+  const trailing = HARMONY_TRAILING_RE.exec(text.slice(cursor));
+  if (trailing) {
+    cursor += trailing[0].length;
+  }
+  return cursor;
+}
+
 function parsePlainTextToolCallBlockAt(
   text: string,
   start: number,
   options?: PlainTextToolCallParseOptions,
 ): PlainTextToolCallBlock | null {
   const opening = parseOpening(text, start);
-  if (!opening) {
+  const harmonyOpening = opening ? null : parseHarmonyOpening(text, start);
+  const resolved = opening ?? harmonyOpening;
+  if (!resolved) {
     return null;
   }
+  const isHarmony = harmonyOpening !== null;
   const allowedToolNames = options?.allowedToolNames
     ? new Set(options.allowedToolNames)
     : undefined;
-  if (allowedToolNames && !allowedToolNames.has(opening.name)) {
+  if (allowedToolNames && !allowedToolNames.has(resolved.name)) {
     return null;
   }
   const payload = consumeJsonObject(
     text,
-    opening.end,
+    resolved.end,
     options?.maxPayloadBytes ?? DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES,
   );
   if (!payload) {
     return null;
   }
-  const end = parseClosing(text, payload.end, opening.name);
-  if (end === null) {
-    return null;
+  let end: number;
+  if (isHarmony) {
+    end = consumeHarmonyTrailing(text, payload.end);
+  } else {
+    const closingEnd = parseClosing(text, payload.end, resolved.name);
+    if (closingEnd === null) {
+      return null;
+    }
+    end = closingEnd;
   }
   return {
     arguments: payload.value,
     end,
-    name: opening.name,
+    name: resolved.name,
     raw: text.slice(start, end),
     start,
   };
