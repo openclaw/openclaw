@@ -6,6 +6,7 @@ import {
   copyStaticExtensionAssets,
   listStaticExtensionAssetOutputs,
   rewriteRootRuntimeImportsToStableAliases,
+  runRuntimePostBuild,
   writeLegacyCliExitCompatChunks,
   writeLegacyRootRuntimeCompatAliases,
   writeStableRootRuntimeAliases,
@@ -86,7 +87,56 @@ describe("runtime postbuild static assets", () => {
     expect(await fs.readFile(destPath, "utf8")).toBe("proxy-data\n");
   });
 
-  it("warns when a declared static asset is missing", () => {
+  it("stages copied static assets into the runtime overlay during the same postbuild run", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const source = "extensions/diffs/assets/viewer-runtime.js";
+    const output = "assets/viewer-runtime.js";
+    const distAsset = "dist/extensions/diffs/assets/viewer-runtime.js";
+    const runtimeAsset = "dist-runtime/extensions/diffs/assets/viewer-runtime.js";
+
+    await fs.mkdir(path.join(rootDir, "src", "plugin-sdk"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "src", "plugin-sdk", "root-alias.cjs"),
+      "module.exports = {};\n",
+      "utf8",
+    );
+    await fs.mkdir(path.join(rootDir, "extensions", "diffs", "assets"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "extensions", "diffs", "package.json"),
+      JSON.stringify({
+        name: "@openclaw/diffs",
+        openclaw: {
+          extensions: ["./index.ts"],
+          build: {
+            staticAssets: [{ source: `./${output}`, output }],
+          },
+        },
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "extensions", "diffs", "openclaw.plugin.json"),
+      '{"id":"diffs"}\n',
+      "utf8",
+    );
+    await fs.writeFile(path.join(rootDir, source), "export const viewer = true;\n", "utf8");
+
+    runRuntimePostBuild({
+      cwd: rootDir,
+      repoRoot: rootDir,
+      rootDir,
+      timings: false,
+    });
+
+    await expect(fs.readFile(path.join(rootDir, distAsset), "utf8")).resolves.toBe(
+      "export const viewer = true;\n",
+    );
+    await expect(fs.readFile(path.join(rootDir, runtimeAsset), "utf8")).resolves.toContain(
+      "dist/extensions/diffs/assets/viewer-runtime.js",
+    );
+  });
+
+  it("warns when a declared static asset is missing", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const warn = vi.fn();
 

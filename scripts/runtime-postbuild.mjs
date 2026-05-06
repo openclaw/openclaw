@@ -459,17 +459,17 @@ export function runRuntimePostBuild(params = {}) {
   runPhase("plugin SDK root alias", () => copyPluginSdkRootAlias(params));
   runPhase("bundled plugin metadata", () => copyBundledPluginMetadata(params));
   runPhase("official channel catalog", () => writeOfficialChannelCatalog(params));
-  runPhase("bundled plugin runtime overlay", () => stageBundledPluginRuntime(params));
-  runPhase("stable root runtime imports", () => rewriteRootRuntimeImportsToStableAliases(params));
-  runPhase("stable root runtime aliases", () => writeStableRootRuntimeAliases(params));
-  runPhase("legacy root runtime compat aliases", () => writeLegacyRootRuntimeCompatAliases(params));
-  runPhase("legacy CLI exit compat chunks", () => writeLegacyCliExitCompatChunks(params));
   runPhase("static extension assets", () =>
     copyStaticExtensionAssets({
       rootDir: ROOT,
       ...params,
     }),
   );
+  runPhase("bundled plugin runtime overlay", () => stageBundledPluginRuntime(params));
+  runPhase("stable root runtime imports", () => rewriteRootRuntimeImportsToStableAliases(params));
+  runPhase("stable root runtime aliases", () => writeStableRootRuntimeAliases(params));
+  runPhase("legacy root runtime compat aliases", () => writeLegacyRootRuntimeCompatAliases(params));
+  runPhase("legacy CLI exit compat chunks", () => writeLegacyCliExitCompatChunks(params));
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
