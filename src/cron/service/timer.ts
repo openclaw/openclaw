@@ -435,14 +435,22 @@ function emitFailureAlert(
     mode?: "announce" | "webhook";
     accountId?: string;
     status: "error" | "skipped";
+    eventTimestampMs?: number;
   },
 ) {
   const safeJobName = params.job.name || params.job.id;
   const truncatedError = (params.error?.trim() || "unknown reason").slice(0, 200);
   const statusVerb = params.status === "skipped" ? "skipped" : "failed";
   const detailLabel = params.status === "skipped" ? "Skip reason" : "Last error";
+  
+  // Format event timestamp if available
+  const timestampStr = params.eventTimestampMs 
+    ? new Date(params.eventTimestampMs).toISOString()
+    : "unknown time";
+  
   const text = [
     `Cron job "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times`,
+    `Event time: ${timestampStr}`,
     `${detailLabel}: ${truncatedError}`,
   ].join("\n");
 
@@ -508,6 +516,7 @@ function maybeEmitFailureAlert(
     mode: params.alertConfig.mode,
     accountId: params.alertConfig.accountId,
     status: params.status,
+    eventTimestampMs: params.job.state.lastRunAtMs,
   });
   params.job.state.lastFailureAlertAtMs = now;
 }
