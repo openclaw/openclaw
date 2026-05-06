@@ -909,25 +909,32 @@ export const SlackDmSchema = z
   })
   .strict();
 
-export const SlackChannelSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    requireMention: z.boolean().optional(),
-    tools: ToolPolicySchema,
-    toolsBySender: ToolPolicyBySenderSchema,
-    allowBots: z.boolean().optional(),
-    users: z.array(z.union([z.string(), z.number()])).optional(),
-    skills: z.array(z.string()).optional(),
-    systemPrompt: z.string().optional(),
-  })
-  .strict();
-
 export const SlackThreadSchema = z
   .object({
     historyScope: z.enum(["thread", "channel"]).optional(),
     inheritParent: z.boolean().optional(),
     initialHistoryLimit: z.number().int().min(0).optional(),
     requireExplicitMention: z.boolean().optional(),
+  })
+  .strict();
+
+export const SlackChannelThreadSchema = z
+  .object({
+    requireExplicitMention: z.boolean().optional(),
+  })
+  .strict();
+
+export const SlackChannelSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    requireMention: z.boolean().optional(),
+    thread: SlackChannelThreadSchema.optional(),
+    tools: ToolPolicySchema,
+    toolsBySender: ToolPolicyBySenderSchema,
+    allowBots: z.boolean().optional(),
+    users: z.array(z.union([z.string(), z.number()])).optional(),
+    skills: z.array(z.string()).optional(),
+    systemPrompt: z.string().optional(),
   })
   .strict();
 

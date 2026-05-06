@@ -146,6 +146,7 @@ async function resolveSlackConversationContext(params: {
         channels: ctx.channelsConfig,
         channelKeys: ctx.channelsConfigKeys,
         defaultRequireMention: ctx.defaultRequireMention,
+        defaultThreadRequireExplicitMention: ctx.threadRequireExplicitMention,
         allowNameMatching: ctx.allowNameMatching,
       })
     : null;
@@ -502,7 +503,7 @@ export async function prepareSlackMessage(params: {
     policy: {
       isGroup: isRoom,
       requireMention: shouldRequireMention,
-      allowedImplicitMentionKinds: ctx.threadRequireExplicitMention ? [] : undefined,
+      allowedImplicitMentionKinds: channelConfig?.threadRequireExplicitMention ? [] : undefined,
       allowTextCommands,
       hasControlCommand: hasControlCommandInMessage,
       commandAuthorized,

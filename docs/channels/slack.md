@@ -914,6 +914,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     - `allowBots`
     - `skills`
     - `systemPrompt`
+    - `thread.requireExplicitMention` (inherits `channels.slack.thread.requireExplicitMention`; `channels.slack.channels."*"` can provide a wildcard channel default)
     - `tools`, `toolsBySender`
     - `toolsBySender` key format: `id:`, `e164:`, `username:`, `name:`, or `"*"` wildcard
       (legacy unprefixed keys still map to `id:` only)
@@ -933,6 +934,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 - `channels.slack.thread.historyScope` default is `thread`; `thread.inheritParent` default is `false`.
 - `channels.slack.thread.initialHistoryLimit` controls how many existing thread messages are fetched when a new thread session starts (default `20`; set `0` to disable).
 - `channels.slack.thread.requireExplicitMention` (default `false`): when `true`, suppress implicit thread mentions so the bot only responds to explicit `@bot` mentions inside threads, even when the bot already participated in the thread. Without this, replies in a bot-participated thread bypass `requireMention` gating.
+- `channels.slack.channels.<id>.thread.requireExplicitMention` overrides that setting for one channel. Resolution order is exact channel entry, wildcard `"*"`, then the account-level `channels.slack.thread.requireExplicitMention`.
 
 Reply threading controls:
 

@@ -2126,4 +2126,97 @@ describe("slack thread.requireExplicitMention", () => {
     });
     expect(result).not.toBeNull();
   });
+
+  it("drops thread reply when channel override sets requireExplicitMention true (account default false)", async () => {
+    const ctx = createCtxWithExplicitMention(false);
+    ctx.channelsConfig = {
+      C123: { enabled: true, requireMention: true, thread: { requireExplicitMention: true } },
+    };
+    ctx.channelsConfigKeys = ["C123"];
+    const { storePath } = storeFixture.makeTmpStorePath();
+    vi.spyOn(
+      await import("openclaw/plugin-sdk/session-store-runtime"),
+      "resolveStorePath",
+    ).mockReturnValue(storePath);
+    const account = createSlackTestAccount();
+    const message: SlackMessageEvent = {
+      type: "message",
+      channel: "C123",
+      channel_type: "channel",
+      user: "U1",
+      text: "hello",
+      ts: "1700000001.000004",
+      thread_ts: "1700000000.000000",
+      parent_user_id: "B1",
+    };
+    const result = await prepareSlackMessage({
+      ctx,
+      account,
+      message,
+      opts: { source: "message" },
+    });
+    expect(result).toBeNull();
+  });
+
+  it("allows thread reply when channel override sets requireExplicitMention false (account default true)", async () => {
+    const ctx = createCtxWithExplicitMention(true);
+    ctx.channelsConfig = {
+      C123: { enabled: true, requireMention: true, thread: { requireExplicitMention: false } },
+    };
+    ctx.channelsConfigKeys = ["C123"];
+    const { storePath } = storeFixture.makeTmpStorePath();
+    vi.spyOn(
+      await import("openclaw/plugin-sdk/session-store-runtime"),
+      "resolveStorePath",
+    ).mockReturnValue(storePath);
+    const account = createSlackTestAccount();
+    const message: SlackMessageEvent = {
+      type: "message",
+      channel: "C123",
+      channel_type: "channel",
+      user: "U1",
+      text: "hello",
+      ts: "1700000001.000005",
+      thread_ts: "1700000000.000000",
+      parent_user_id: "B1",
+    };
+    const result = await prepareSlackMessage({
+      ctx,
+      account,
+      message,
+      opts: { source: "message" },
+    });
+    expect(result).not.toBeNull();
+  });
+
+  it("drops thread reply when wildcard channel override requires explicit mention", async () => {
+    const ctx = createCtxWithExplicitMention(false);
+    ctx.channelsConfig = {
+      "*": { enabled: true, requireMention: true, thread: { requireExplicitMention: true } },
+    };
+    ctx.channelsConfigKeys = ["*"];
+    const { storePath } = storeFixture.makeTmpStorePath();
+    vi.spyOn(
+      await import("openclaw/plugin-sdk/session-store-runtime"),
+      "resolveStorePath",
+    ).mockReturnValue(storePath);
+    const account = createSlackTestAccount();
+    const message: SlackMessageEvent = {
+      type: "message",
+      channel: "C123",
+      channel_type: "channel",
+      user: "U1",
+      text: "hello",
+      ts: "1700000001.000006",
+      thread_ts: "1700000000.000000",
+      parent_user_id: "B1",
+    };
+    const result = await prepareSlackMessage({
+      ctx,
+      account,
+      message,
+      opts: { source: "message" },
+    });
+    expect(result).toBeNull();
+  });
 });
