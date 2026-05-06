@@ -338,6 +338,25 @@ function resolveWebSearchCandidates(
           ...loadScope,
         }),
   ).filter(Boolean);
+  const explicitProviderId = options?.providerId?.trim();
+  if (
+    explicitProviderId &&
+    options?.preferRuntimeProviders &&
+    !providers.some((entry) => entry.id === explicitProviderId)
+  ) {
+    const merged = new Map(providers.map((provider) => [provider.id, provider] as const));
+    for (const provider of resolvePluginWebSearchProviders({
+      config,
+      bundledAllowlistCompat: true,
+    })) {
+      merged.set(provider.id, provider);
+    }
+    providers.splice(
+      0,
+      providers.length,
+      ...sortWebSearchProvidersForAutoDetect([...merged.values()]).filter(Boolean),
+    );
+  }
   if (providers.length === 0) {
     return [];
   }
@@ -351,7 +370,6 @@ function resolveWebSearchCandidates(
     (value, index, array): value is string => Boolean(value) && array.indexOf(value) === index,
   );
 
-  const explicitProviderId = options?.providerId?.trim();
   if (explicitProviderId && !providers.some((entry) => entry.id === explicitProviderId)) {
     throw new Error(`Unknown web_search provider "${explicitProviderId}".`);
   }
