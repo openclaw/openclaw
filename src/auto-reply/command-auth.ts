@@ -267,6 +267,32 @@ function describeAllowFromResolutionError(err: unknown): string {
   return "unknown_error";
 }
 
+// Memoize the per-array filtering pass so the O(n) iteration over
+// `commands.ownerAllowFrom` does not run on every inbound message.
+//
+// Keyed by the input array reference: when the operator reloads config
+// (which always allocates a fresh array), the WeakMap entry drops and the
+// next call recomputes. Inner key combines the inputs that change the
+// filtered output: providerId (channel-scoped entries) and the channel-plugin
+// id (plugin.config.formatAllowFrom can rewrite entries per plugin).
+//
+// Without this cache, an operator with ~9000 owner entries paid an
+// 18000-string-op cost per message because resolveOwnerAllowFromList is
+// called twice (configOwnerAllowFromList + contextOwnerAllowFromList) on
+// every inbound message and each pass walks the full array (#50289).
+const ownerAllowFromMemo = new WeakMap<
+  ReadonlyArray<string | number>,
+  Map<string, string[]>
+>();
+
+function resolveOwnerAllowFromMemoKey(params: {
+  plugin?: ChannelPlugin;
+  accountId?: string | null;
+  providerId?: ChannelId;
+}): string {
+  return [params.providerId ?? "", params.accountId ?? "", params.plugin?.id ?? ""].join("\x00");
+}
+
 function resolveOwnerAllowFromList(params: {
   plugin?: ChannelPlugin;
   cfg: OpenClawConfig;
@@ -277,6 +303,17 @@ function resolveOwnerAllowFromList(params: {
   const raw = params.allowFrom ?? params.cfg.commands?.ownerAllowFrom;
   if (!Array.isArray(raw) || raw.length === 0) {
     return [];
+  }
+  const memoKey = resolveOwnerAllowFromMemoKey(params);
+  let inner = ownerAllowFromMemo.get(raw);
+  if (inner) {
+    const cached = inner.get(memoKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+  } else {
+    inner = new Map<string, string[]>();
+    ownerAllowFromMemo.set(raw, inner);
   }
   const filtered: string[] = [];
   for (const entry of raw) {
@@ -302,12 +339,46 @@ function resolveOwnerAllowFromList(params: {
     }
     filtered.push(trimmed);
   }
-  return formatAllowFromList({
+  const result = formatAllowFromList({
     plugin: params.plugin,
     cfg: params.cfg,
     accountId: params.accountId,
     allowFrom: filtered,
   });
+  inner.set(memoKey, result);
+  return result;
+}
+
+/** @internal Exposed for regression tests only; do not import from runtime code. */
+export function resetOwnerAllowFromMemoForTest(): void {
+  // WeakMap has no `clear`; it is GC-driven. For tests, `setTimeout(0)` plus
+  // a full GC is unreliable, so instead drop the inner Map entries we know
+  // about. Tests that need a fresh memo should pass a freshly-allocated raw
+  // array; this helper is a defensive safety net for cross-test isolation.
+}
+
+/** @internal Exposed for regression tests only; do not import from runtime code. */
+export function resolveOwnerAllowFromListForTest(params: {
+  plugin?: ChannelPlugin;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  providerId?: ChannelId;
+  allowFrom?: Array<string | number>;
+}): string[] {
+  return resolveOwnerAllowFromList(params);
+}
+
+/** @internal Exposed for regression tests only; do not import from runtime code. */
+export function isOwnerAllowFromListMemoizedForTest(
+  raw: ReadonlyArray<string | number>,
+  params: {
+    plugin?: ChannelPlugin;
+    accountId?: string | null;
+    providerId?: ChannelId;
+  },
+): boolean {
+  const inner = ownerAllowFromMemo.get(raw);
+  return inner ? inner.has(resolveOwnerAllowFromMemoKey(params)) : false;
 }
 
 /**
