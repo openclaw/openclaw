@@ -111,6 +111,37 @@ describe("session delivery direct-session routing overrides", () => {
   );
 
   it.each([
+    {
+      sessionKey: "agent:main:telegram:group:-1003774691294",
+      persistedLastTo: "-1003774691294",
+    },
+    {
+      sessionKey: "agent:main:telegram:group:-1003774691294:topic:47",
+      persistedLastTo: "-1003774691294:topic:47",
+    },
+  ])(
+    "preserves established Telegram group/topic delivery when webchat opens $sessionKey",
+    ({ sessionKey, persistedLastTo }) => {
+      expect(
+        resolveLastChannelRaw({
+          originatingChannelRaw: "webchat",
+          persistedLastChannel: "telegram",
+          sessionKey,
+        }),
+      ).toBe("telegram");
+      expect(
+        resolveLastToRaw({
+          originatingChannelRaw: "webchat",
+          originatingToRaw: "session:dashboard",
+          persistedLastChannel: "telegram",
+          persistedLastTo,
+          sessionKey,
+        }),
+      ).toBe(persistedLastTo);
+    },
+  );
+
+  it.each([
     "agent:main:main:direct",
     "agent:main:cron:job-1:dm",
     "agent:main:subagent:worker:direct:user-1",

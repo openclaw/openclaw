@@ -3459,6 +3459,52 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.deliveryContext?.to).toBe("+1555");
   });
 
+  it.each([
+    {
+      sessionKey: "agent:main:telegram:group:-1003774691294",
+      lastTo: "-1003774691294",
+    },
+    {
+      sessionKey: "agent:main:telegram:group:-1003774691294:topic:47",
+      lastTo: "-1003774691294:topic:47",
+    },
+  ])(
+    "preserves Telegram group/topic delivery when webchat accesses $sessionKey",
+    async ({ sessionKey, lastTo }) => {
+      const storePath = await createStorePath("webchat-group-route-preserve-");
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: "sess-webchat-group",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo,
+          deliveryContext: {
+            channel: "telegram",
+            to: lastTo,
+          },
+        },
+      });
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+      const result = await initSessionState({
+        ctx: {
+          Body: "reply from control ui",
+          SessionKey: sessionKey,
+          OriginatingChannel: "webchat",
+          OriginatingTo: "session:dashboard",
+          Surface: "webchat",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.sessionEntry.lastChannel).toBe("telegram");
+      expect(result.sessionEntry.lastTo).toBe(lastTo);
+      expect(result.sessionEntry.deliveryContext?.channel).toBe("telegram");
+      expect(result.sessionEntry.deliveryContext?.to).toBe(lastTo);
+    },
+  );
+
   it("lets direct webchat turns own routing for sessions with no prior external route", async () => {
     // Webchat should still own routing for sessions that were created via webchat
     // (no external channel ever established).
