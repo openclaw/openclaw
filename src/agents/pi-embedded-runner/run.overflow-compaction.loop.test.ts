@@ -224,6 +224,41 @@ describe("overflow compaction in run loop", () => {
     expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining("auto-compaction failed"));
   });
 
+  it("makes at most one fallback truncation attempt after a failed overflow compaction", async () => {
+    queueOverflowAttemptWithOversizedToolOutput(mockedRunEmbeddedAttempt, makeOverflowError());
+
+    mockedCompactDirect
+      .mockResolvedValueOnce({
+        ok: false,
+        compacted: false,
+        reason: "nothing to compact",
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        compacted: false,
+        reason: "nothing to compact",
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        compacted: false,
+        reason: "nothing to compact",
+      });
+    mockedSessionLikelyHasOversizedToolResults.mockReturnValue(true);
+
+    const result = await runEmbeddedPiAgent({
+      ...baseParams,
+      model: "gpt-5.4",
+    });
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(mockedLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Tool result truncation did not help"),
+    );
+    expect(result.meta.error?.kind).toBe("context_overflow");
+  });
+
   it("falls back to tool-result truncation and retries when oversized results are detected", async () => {
     queueOverflowAttemptWithOversizedToolOutput(mockedRunEmbeddedAttempt, makeOverflowError());
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));

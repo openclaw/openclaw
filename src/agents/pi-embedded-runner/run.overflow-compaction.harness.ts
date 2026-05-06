@@ -491,6 +491,16 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("./tool-result-truncation.js", () => ({
     resolveLiveToolResultMaxChars: mockedResolveLiveToolResultMaxChars,
+    estimateToolResultReductionPotential: vi.fn((params?: { messages?: unknown[] }) => ({
+      maxChars: 40_000,
+      aggregateBudgetChars: 40_000,
+      toolResultCount: Array.isArray(params?.messages) ? params.messages.length : 0,
+      totalToolResultChars: 0,
+      oversizedCount: mockedSessionLikelyHasOversizedToolResults() ? 1 : 0,
+      oversizedReducibleChars: mockedSessionLikelyHasOversizedToolResults() ? 120_000 : 0,
+      aggregateReducibleChars: 0,
+      maxReducibleChars: mockedSessionLikelyHasOversizedToolResults() ? 120_000 : 0,
+    })),
     sessionLikelyHasOversizedToolResults: mockedSessionLikelyHasOversizedToolResults,
     truncateOversizedToolResultsInSession: mockedTruncateOversizedToolResultsInSession,
   }));

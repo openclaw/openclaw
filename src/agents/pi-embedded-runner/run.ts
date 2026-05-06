@@ -158,6 +158,7 @@ import {
 } from "./run/setup.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
 import {
+  estimateToolResultReductionPotential,
   resolveLiveToolResultMaxChars,
   sessionLikelyHasOversizedToolResults,
   truncateOversizedToolResultsInSession,
@@ -1744,19 +1745,41 @@ export async function runEmbeddedPiAgent(
                 cfg: params.config,
                 agentId: sessionAgentId,
               });
-              const hasOversized = attempt.messagesSnapshot
+              const toolResultReduction = attempt.messagesSnapshot
+                ? estimateToolResultReductionPotential({
+                    messages: attempt.messagesSnapshot,
+                    contextWindowTokens,
+                    maxCharsOverride: toolResultMaxChars,
+                  })
+                : null;
+              const hasOversized = toolResultReduction
                 ? sessionLikelyHasOversizedToolResults({
                     messages: attempt.messagesSnapshot,
                     contextWindowTokens,
                     maxCharsOverride: toolResultMaxChars,
                   })
                 : false;
+              const estimatedPromptTokens = derivePromptTokens(lastRunPromptUsage);
+              const promptBudgetBeforeReserve = Math.max(1, Math.floor(contextWindowTokens));
+              const overflowPromptTokens =
+                estimatedPromptTokens != null
+                  ? Math.max(0, estimatedPromptTokens - promptBudgetBeforeReserve)
+                  : undefined;
+              const estimatedOverflowChars =
+                overflowPromptTokens !== undefined ? overflowPromptTokens * 4 : undefined;
+              const truncationLikelyInsufficient =
+                estimatedOverflowChars !== undefined && toolResultReduction
+                  ? toolResultReduction.maxReducibleChars < estimatedOverflowChars
+                  : false;
 
-              if (hasOversized) {
+              if (hasOversized && !truncationLikelyInsufficient) {
                 toolResultTruncationAttempted = true;
                 log.warn(
                   `[context-overflow-recovery] Attempting tool result truncation for ${provider}/${modelId} ` +
-                    `(contextWindow=${contextWindowTokens} tokens)`,
+                    `(contextWindow=${contextWindowTokens} tokens)` +
+                    (toolResultReduction
+                      ? ` reducibleChars=${toolResultReduction.maxReducibleChars}`
+                      : ""),
                 );
                 const truncResult = await truncateOversizedToolResultsInSession({
                   sessionFile: activeSessionFile,
@@ -1777,6 +1800,13 @@ export async function runEmbeddedPiAgent(
                 }
                 log.warn(
                   `[context-overflow-recovery] Tool result truncation did not help: ${truncResult.reason ?? "unknown"}`,
+                );
+              } else if (hasOversized && truncationLikelyInsufficient) {
+                toolResultTruncationAttempted = true;
+                log.warn(
+                  `[context-overflow-recovery] Skipping tool result truncation for ${provider}/${modelId} because ` +
+                    `estimated reducible chars (${toolResultReduction?.maxReducibleChars ?? 0}) ` +
+                    `cannot cover current overflow (${estimatedOverflowChars ?? 0} chars)`,
                 );
               }
             }

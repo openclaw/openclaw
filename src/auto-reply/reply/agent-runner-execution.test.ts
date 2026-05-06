@@ -22,6 +22,9 @@ const state = vi.hoisted(() => ({
   isCliProviderMock: vi.fn((_: unknown) => false),
   isInternalMessageChannelMock: vi.fn((_: unknown) => false),
   createBlockReplyDeliveryHandlerMock: vi.fn(),
+  isCompactionFailureErrorMock: vi.fn(() => false),
+  isContextOverflowErrorMock: vi.fn(() => false),
+  isLikelyContextOverflowErrorMock: vi.fn(() => false),
 }));
 
 const GENERIC_RUN_FAILURE_TEXT =
@@ -84,10 +87,11 @@ vi.mock("../../agents/pi-embedded-helpers.js", () => ({
     }
     return undefined;
   },
-  isCompactionFailureError: () => false,
-  isContextOverflowError: () => false,
+  isCompactionFailureError: (message?: string) => state.isCompactionFailureErrorMock(message),
+  isContextOverflowError: (message?: string) => state.isContextOverflowErrorMock(message),
   isBillingErrorMessage: () => false,
-  isLikelyContextOverflowError: () => false,
+  isLikelyContextOverflowError: (message?: string) =>
+    state.isLikelyContextOverflowErrorMock(message),
   isOverloadedErrorMessage: (message: string) => /overloaded|capacity/i.test(message),
   isRateLimitErrorMessage: (message: string) =>
     /rate.limit|too many requests|429|usage limit/i.test(message),
@@ -399,9 +403,15 @@ describe("runAgentTurnWithFallback", () => {
     state.isCliProviderMock.mockReset();
     state.isCliProviderMock.mockReturnValue(false);
     state.isInternalMessageChannelMock.mockReset();
+    state.isCompactionFailureErrorMock.mockReset();
+    state.isContextOverflowErrorMock.mockReset();
+    state.isLikelyContextOverflowErrorMock.mockReset();
     state.isInternalMessageChannelMock.mockReturnValue(false);
     state.createBlockReplyDeliveryHandlerMock.mockReset();
     state.createBlockReplyDeliveryHandlerMock.mockReturnValue(undefined);
+    state.isCompactionFailureErrorMock.mockReturnValue(false);
+    state.isContextOverflowErrorMock.mockReturnValue(false);
+    state.isLikelyContextOverflowErrorMock.mockReturnValue(false);
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
       result: await params.run("anthropic", "claude"),
       provider: "anthropic",
@@ -3215,6 +3225,104 @@ describe("runAgentTurnWithFallback", () => {
     expect(sessionEntry.authProfileOverrideSource).toBe("user");
     expect(sessionStore.main.providerOverride).toBe("zai");
     expect(sessionStore.main.modelOverride).toBe("glm-5");
+  });
+
+  it("only resets on embedded compaction_failure errors, not plain embedded overflows", async () => {
+    state.isContextOverflowErrorMock.mockImplementation((message?: string) =>
+      (message ?? "").includes("Context overflow:"),
+    );
+
+    const resetSessionAfterCompactionFailure = vi.fn(async () => true);
+    state.runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [],
+      meta: {
+        error: {
+          kind: "context_overflow",
+          message: "Context overflow: prompt too large for the model.",
+        },
+      },
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(resetSessionAfterCompactionFailure).not.toHaveBeenCalled();
+    expect(result.kind).toBe("final");
+    expect(result.payload.text).toContain("Use /new to start a fresh session");
+  });
+
+  it("resets on embedded compaction_failure errors even when surfaced as embedded meta errors", async () => {
+    state.isContextOverflowErrorMock.mockImplementation((message?: string) =>
+      (message ?? "").includes("Context overflow:"),
+    );
+
+    const resetSessionAfterCompactionFailure = vi.fn(async () => true);
+    const { replyOperation, failMock } = createMockReplyOperation();
+    state.runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [],
+      meta: {
+        error: {
+          kind: "compaction_failure",
+          message: "Context overflow: summarization failed: prompt too large for the model.",
+        },
+      },
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+      replyOperation,
+    });
+
+    expect(resetSessionAfterCompactionFailure).toHaveBeenCalledTimes(1);
+    expect(failMock).toHaveBeenCalledWith(
+      "run_failed",
+      expect.objectContaining({ kind: "compaction_failure" }),
+    );
+    expect(result.kind).toBe("final");
+    expect(result.payload.text).toContain("I've reset our conversation to start fresh");
   });
 
   it("drops authProfileId when fallback switches providers", async () => {

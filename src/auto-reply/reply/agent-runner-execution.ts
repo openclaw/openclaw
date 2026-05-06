@@ -1904,12 +1904,13 @@ export async function runAgentTurnWithFallback(params: {
           }))
         : [];
 
-      // Some embedded runs surface context overflow as an error payload instead of throwing.
-      // Treat those as a session-level failure and auto-recover by starting a fresh session.
+      // Some embedded runs surface terminal errors as an embedded payload instead of throwing.
+      // Only auto-reset when the embedded error tells us compaction itself failed.
+      // Plain context_overflow means the conversation is simply too large, not that the
+      // session became unrecoverable, so surfacing a /new hint is safer than force-resetting.
       const embeddedError = runResult.meta?.error;
       if (
-        embeddedError &&
-        isContextOverflowError(embeddedError.message) &&
+        embeddedError?.kind === "compaction_failure" &&
         !didResetAfterCompactionFailure &&
         (await params.resetSessionAfterCompactionFailure(embeddedError.message))
       ) {
