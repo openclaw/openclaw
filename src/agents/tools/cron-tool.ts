@@ -735,7 +735,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           const includeDisabled = Boolean(params.includeDisabled);
           let offset = 0;
           let result: unknown;
-          do {
+          for (;;) {
             result = await callGateway("cron.list", gatewayOpts, {
               includeDisabled,
               agentId: listAgentId,
@@ -749,7 +749,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               break;
             }
             offset = nextOffset;
-          } while (true);
+          }
           return jsonResult(
             selfRemoveOnlyJobId ? filterCronListResultToJobId(result, selfRemoveOnlyJobId) : result,
           );
