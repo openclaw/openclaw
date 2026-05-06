@@ -1317,6 +1317,21 @@ describe("gateway agent handler", () => {
     expect(call.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
+  it("forwards toolsAllow from agent RPC into the runner", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent({
+      message: "tools allow probe",
+      sessionKey: "agent:main:subagent:tools-allow-probe",
+      idempotencyKey: "test-idem-agent-tools-allow",
+      toolsAllow: ["read", "exec"],
+    });
+
+    const call = await waitForAgentCommandCall();
+    expect(call.toolsAllow).toEqual(["read", "exec"]);
+  });
+
   it.each(
     (["channel", "replyChannel"] as const).flatMap((field) =>
       (["heartbeat", "cron", "webhook"] as const).map((channel) => [field, channel] as const),
