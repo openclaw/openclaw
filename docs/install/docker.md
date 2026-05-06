@@ -23,6 +23,47 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
   [Security hardening for network exposure](/gateway/security),
   especially Docker `DOCKER-USER` firewall policy.
 
+## Migrating an existing host install
+
+If OpenClaw already runs as a host-managed gateway on the same machine, move it
+into Docker in this order:
+
+1. Stop and uninstall the host service so launchd/systemd/schtasks does not
+   reclaim the gateway port:
+
+   ```bash
+   openclaw gateway stop
+   openclaw gateway uninstall
+   ```
+
+2. Reuse the existing config and workspace directories by exporting
+   `OPENCLAW_CONFIG_DIR` and `OPENCLAW_WORKSPACE_DIR` before running
+   `./scripts/docker/setup.sh`.
+
+3. If your existing config pins `agents.defaults.workspace` or another runtime
+   path to an absolute host path outside `/home/node/.openclaw/workspace`, mount
+   that path into the container at the same location so the config keeps
+   working unchanged:
+
+   ```bash
+   export OPENCLAW_EXTRA_MOUNTS="/srv/openclaw/workspace:/srv/openclaw/workspace"
+   ./scripts/docker/setup.sh
+   ```
+
+   This compatibility mount is especially useful when moving a long-lived local
+   install into Docker without rewriting existing absolute-path workspace
+   settings.
+
+4. If you set `OPENCLAW_EXTRA_MOUNTS` or `OPENCLAW_HOME_VOLUME`, the setup
+   script writes `docker-compose.extra.yml`. Keep using the same compose file
+   set for later `up`, `logs`, `exec`, and `run` commands.
+
+<Note>
+The generated `.env` and `docker-compose.extra.yml` files are local deployment
+artifacts. They may contain secrets or machine-specific mount paths, so do not
+commit them.
+</Note>
+
 ## Containerized gateway
 
 <Steps>
@@ -39,6 +80,9 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
     export OPENCLAW_IMAGE="ghcr.io/openclaw/openclaw:latest"
     ./scripts/docker/setup.sh
     ```
+
+    Using a published image is also the safer migration path when the checkout
+    on disk is older than the gateway version you are already running.
 
     Pre-built images are published at the
     [GitHub Container Registry](https://github.com/openclaw/openclaw/pkgs/container/openclaw).
@@ -124,6 +168,8 @@ The setup script accepts these optional environment variables:
 
 | Variable                                   | Purpose                                                         |
 | ------------------------------------------ | --------------------------------------------------------------- |
+| `OPENCLAW_CONFIG_DIR`                      | Reuse or override the host directory mounted at `/home/node/.openclaw` |
+| `OPENCLAW_WORKSPACE_DIR`                   | Reuse or override the host directory mounted at `/home/node/.openclaw/workspace` |
 | `OPENCLAW_IMAGE`                           | Use a remote image instead of building locally                  |
 | `OPENCLAW_DOCKER_APT_PACKAGES`             | Install extra apt packages during build (space-separated)       |
 | `OPENCLAW_EXTENSIONS`                      | Include selected bundled plugin helpers at build time           |
@@ -181,6 +227,19 @@ http://<gateway-host>:18789/api/diagnostics/prometheus
 The route is protected by Gateway authentication. Do not expose a separate
 public `/metrics` port or unauthenticated reverse-proxy path. See
 [Prometheus metrics](/gateway/prometheus).
+
+### Day-two Docker commands
+
+If the setup script generated `docker-compose.extra.yml`, include it in all
+later Compose commands:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.extra.yml up -d openclaw-gateway
+docker compose -f docker-compose.yml -f docker-compose.extra.yml logs -f openclaw-gateway
+docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm openclaw-cli gateway probe
+```
+
+Without the extra overlay, use plain `docker compose ...` from the repo root.
 
 ### Health checks
 

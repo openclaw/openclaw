@@ -1,0 +1,14 @@
+services:
+  openclaw-gateway:
+    volumes:
+      - /Users/abdullah/.openclaw:/Users/abdullah/.openclaw
+  openclaw-cli:
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: ""
+      OPENCLAW_STATE_DIR: /home/node/.openclaw-cli
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+    volumes:
+      - /Users/abdullah/.openclaw:/Users/abdullah/.openclaw
+      - openclaw_cli_state:/home/node/.openclaw-cli
+volumes:
+  openclaw_cli_state:
