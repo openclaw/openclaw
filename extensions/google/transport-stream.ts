@@ -19,6 +19,7 @@ import {
   sanitizeTransportPayloadText,
   stripSystemPromptCacheBoundary,
   transformTransportMessages,
+  type TransportStrictnessOpts,
   type WritableTransportStream,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
@@ -375,7 +376,11 @@ function normalizeGoogleThinkingConfig(
   return Object.keys(thinkingConfig).length > 0 ? thinkingConfig : undefined;
 }
 
-function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
+function convertGoogleMessages(
+  model: GoogleTransportModel,
+  context: Context,
+  strictness?: TransportStrictnessOpts,
+) {
   const contents: Array<Record<string, unknown>> = [];
   const transformedMessages = transformTransportMessages(context.messages, model, (id) =>
     requiresToolCallId(model.id) ? normalizeToolCallId(id) : id,
@@ -443,7 +448,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
           parts.push({
             functionCall: {
               name: block.name,
-              args: coerceTransportToolCallArguments(block.arguments),
+              args: coerceTransportToolCallArguments(block.arguments, strictness),
               ...(requiresToolCallId(model.id) ? { id: block.id } : {}),
             },
             ...(isSameProviderAndModel && block.thoughtSignature
@@ -533,6 +538,7 @@ export function buildGoogleGenerativeAiParams(
   model: GoogleTransportModel,
   context: Context,
   options?: GoogleTransportOptions,
+  strictness?: TransportStrictnessOpts,
 ): GoogleGenerateContentRequest {
   const generationConfig: Record<string, unknown> = {};
   if (typeof options?.temperature === "number") {
@@ -547,7 +553,7 @@ export function buildGoogleGenerativeAiParams(
   }
 
   const params: GoogleGenerateContentRequest = {
-    contents: convertGoogleMessages(model, context),
+    contents: convertGoogleMessages(model, context, strictness),
   };
   if (typeof options?.cachedContent === "string" && options.cachedContent.trim()) {
     params.cachedContent = options.cachedContent.trim();
@@ -745,7 +751,10 @@ function pushTextBlockEnd(
   }
 }
 
-function createGoogleTransportStreamFn(kind: GoogleTransportApi): StreamFn {
+function createGoogleTransportStreamFn(
+  kind: GoogleTransportApi,
+  strictness?: TransportStrictnessOpts,
+): StreamFn {
   return (rawModel, context, rawOptions) => {
     const model = rawModel as GoogleTransportModel;
     const options = rawOptions as GoogleTransportOptions | undefined;
@@ -764,7 +773,7 @@ function createGoogleTransportStreamFn(kind: GoogleTransportApi): StreamFn {
       try {
         const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? undefined;
         const guardedFetch = buildGuardedModelFetch(model);
-        let params = buildGoogleGenerativeAiParams(model, context, options);
+        let params = buildGoogleGenerativeAiParams(model, context, options, strictness);
         const nextParams = await options?.onPayload?.(params, model);
         if (nextParams !== undefined) {
           params = nextParams as GoogleGenerateContentRequest;
@@ -919,8 +928,10 @@ function createGoogleTransportStreamFn(kind: GoogleTransportApi): StreamFn {
   };
 }
 
-export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
-  return createGoogleTransportStreamFn("google-generative-ai");
+export function createGoogleGenerativeAiTransportStreamFn(
+  strictness?: TransportStrictnessOpts,
+): StreamFn {
+  return createGoogleTransportStreamFn("google-generative-ai", strictness);
 }
 
 export function createGoogleVertexTransportStreamFn(): StreamFn {

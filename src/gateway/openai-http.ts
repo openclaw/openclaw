@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ImageContent } from "../agents/command/types.js";
+import type { ToolStrictnessReport } from "../agents/pi-embedded-runner/tool-strictness-report.types.js";
+import type { ToolStrictnessMode } from "../agents/tool-strictness.js";
 import {
   hasNonzeroUsage,
   normalizeUsage,
@@ -63,6 +65,8 @@ type OpenAiChatMessage = {
 type OpenAiChatCompletionRequest = {
   model?: unknown;
   stream?: unknown;
+  tool_strictness_mode?: unknown;
+  toolStrictnessMode?: unknown;
   // Naming/style reference: src/agents/openai-transport-stream.ts:1262-1273
   stream_options?: unknown;
   messages?: unknown;
@@ -124,6 +128,7 @@ function buildAgentCommandInput(params: {
   runId: string;
   messageChannel: string;
   senderIsOwner: boolean;
+  toolStrictnessMode?: ToolStrictnessMode;
   abortSignal?: AbortSignal;
 }) {
   return {
@@ -138,7 +143,25 @@ function buildAgentCommandInput(params: {
     bestEffortDeliver: false as const,
     senderIsOwner: params.senderIsOwner,
     allowModelOverride: true as const,
+    toolStrictnessMode: params.toolStrictnessMode,
     abortSignal: params.abortSignal,
+  };
+}
+
+function resolveRequestToolStrictnessMode(
+  payload: OpenAiChatCompletionRequest,
+):
+  | { mode?: ToolStrictnessMode; errorMessage?: undefined }
+  | { mode?: undefined; errorMessage: string } {
+  const raw = payload.tool_strictness_mode ?? payload.toolStrictnessMode;
+  if (raw === undefined || raw === null) {
+    return {};
+  }
+  if (raw === "off" || raw === "warn" || raw === "strict") {
+    return { mode: raw };
+  }
+  return {
+    errorMessage: "`tool_strictness_mode` must be one of: off, warn, strict.",
   };
 }
 
@@ -202,6 +225,20 @@ function writeUsageChunk(
     model: params.model,
     choices: [],
     usage: params.usage,
+  });
+}
+
+function writeToolStrictnessReportChunk(
+  res: ServerResponse,
+  params: { runId: string; model: string; report: ToolStrictnessReport },
+) {
+  writeSse(res, {
+    id: params.runId,
+    object: "chat.completion.tool_strictness_report",
+    created: Math.floor(Date.now() / 1000),
+    model: params.model,
+    choices: [],
+    tool_strictness_report: params.report,
   });
 }
 
@@ -543,6 +580,14 @@ export async function handleOpenAiHttpRequest(
   const payload = coerceRequest(handled.body);
   const stream = Boolean(payload.stream);
   const streamIncludeUsage = stream && resolveIncludeUsageForStreaming(payload);
+  const { mode: toolStrictnessMode, errorMessage: toolStrictnessModeError } =
+    resolveRequestToolStrictnessMode(payload);
+  if (toolStrictnessModeError) {
+    sendJson(res, 400, {
+      error: { message: toolStrictnessModeError, type: "invalid_request_error" },
+    });
+    return true;
+  }
   const model = typeof payload.model === "string" ? payload.model : "openclaw";
   const user = typeof payload.user === "string" ? payload.user : undefined;
 
@@ -604,6 +649,7 @@ export async function handleOpenAiHttpRequest(
     sessionKey,
     runId,
     messageChannel,
+    toolStrictnessMode,
     abortSignal: abortController.signal,
     senderIsOwner,
   });
@@ -633,6 +679,7 @@ export async function handleOpenAiHttpRequest(
           },
         ],
         usage,
+        tool_strictness_report: result?.toolStrictnessReport,
       });
     } catch (err) {
       if (abortController.signal.aborted) {
@@ -660,6 +707,7 @@ export async function handleOpenAiHttpRequest(
         total_tokens: number;
       }
     | undefined;
+  let finalToolStrictnessReport: ToolStrictnessReport | undefined;
   let finalizeRequested = false;
   let closed = false;
   let stopWatchingDisconnect = () => {};
@@ -680,6 +728,13 @@ export async function handleOpenAiHttpRequest(
     }
     if (streamIncludeUsage && finalUsage) {
       writeUsageChunk(res, { runId, model, usage: finalUsage });
+    }
+    if (finalToolStrictnessReport) {
+      writeToolStrictnessReportChunk(res, {
+        runId,
+        model,
+        report: finalToolStrictnessReport,
+      });
     }
     writeDone(res);
     res.end();
@@ -744,6 +799,9 @@ export async function handleOpenAiHttpRequest(
       }
 
       finalUsage = resolveChatCompletionUsage(result);
+      finalToolStrictnessReport = (
+        result as { toolStrictnessReport?: ToolStrictnessReport } | undefined
+      )?.toolStrictnessReport;
 
       if (!sawAssistantDelta) {
         if (!wroteRole) {

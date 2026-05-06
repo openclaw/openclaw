@@ -5,6 +5,7 @@ import { createOpenAIWebSocketStreamFn } from "../openai-ws-stream.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { createBoundaryAwareStreamFnForModel } from "../provider-transport-stream.js";
 import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
+import type { TransportStrictnessOpts } from "../transport-stream-shared.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
 let embeddedAgentBaseStreamFnCache = new WeakMap<object, StreamFn | undefined>();
@@ -71,6 +72,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
   model: EmbeddedRunAttemptParams["model"];
   resolvedApiKey?: string;
   authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
+  toolStrictness?: TransportStrictnessOpts;
 }): StreamFn {
   if (params.providerStreamFn) {
     return wrapEmbeddedAgentStreamFn(params.providerStreamFn, {
@@ -105,7 +107,9 @@ export function resolveEmbeddedAgentStreamFn(params: {
   }
 
   if (params.currentStreamFn === undefined || params.currentStreamFn === streamSimple) {
-    const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
+    const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model, {
+      strictness: params.toolStrictness,
+    });
     if (boundaryAwareStreamFn) {
       // Boundary-aware transports read credentials from options.apiKey just
       // like provider-owned streams, but the embedded run layer never gets to

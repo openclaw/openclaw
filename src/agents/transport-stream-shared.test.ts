@@ -1,11 +1,51 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  coerceTransportToolCallArguments,
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
+
+describe("coerceTransportToolCallArguments", () => {
+  it("parses JSON-string arguments in default mode", () => {
+    expect(coerceTransportToolCallArguments('{"path":"README.md"}', { mode: "off" })).toEqual({
+      path: "README.md",
+    });
+  });
+
+  it("emits a warn-mode repair event when JSON-string arguments are parsed", () => {
+    const repairs: unknown[] = [];
+    expect(
+      coerceTransportToolCallArguments('{"path":"README.md"}', {
+        mode: "warn",
+        onRepairEvent: (event) => repairs.push(event),
+      }),
+    ).toEqual({ path: "README.md" });
+    expect(repairs).toEqual([
+      {
+        kind: "argumentShapeRepair",
+        fromType: "string",
+        toType: "object",
+        mode: "warn",
+        detail: "json-parse",
+      },
+    ]);
+  });
+
+  it("rejects JSON-string arguments in strict mode", () => {
+    expect(() =>
+      coerceTransportToolCallArguments('{"path":"README.md"}', { mode: "strict" }),
+    ).toThrow("strict tool mode rejected non-object tool arguments");
+  });
+
+  it("rejects malformed arguments in strict mode", () => {
+    expect(() => coerceTransportToolCallArguments("not-json", { mode: "strict" })).toThrow(
+      "strict tool mode rejected non-object tool arguments",
+    );
+  });
+});
 
 describe("transport stream shared helpers", () => {
   it("sanitizes unpaired surrogate code units", () => {

@@ -289,6 +289,96 @@ const runDefaultEmbeddedTurn = async (sessionFile: string, prompt: string, sessi
   });
 };
 
+describe("EmbeddedPiRunResult toolStrictnessReport contract", () => {
+  it("surfaces toolStrictnessReport on EmbeddedPiRunResult-shaped values", () => {
+    const toolStrictnessReport = {
+      compatibilityObservations: [
+        {
+          kind: "toolCallBlockTypeCompatibility" as const,
+          from: "functionCall" as const,
+          to: "toolCall" as const,
+          phase: "replay-sanitize" as const,
+          mode: "strict" as const,
+        },
+      ],
+      toolUseDiagnostics: [
+        {
+          kind: "toolUseReplayDiagnostic" as const,
+          reason: "pairingSensitiveReplay" as const,
+          provider: "generic" as const,
+          hasEmbeddedToolResult: true,
+          toolUseCount: 1,
+          phase: "replay-sanitize" as const,
+          mode: "strict" as const,
+        },
+      ],
+      repairs: [
+        {
+          kind: "toolNameNormalization" as const,
+          from: "functions.read" as const,
+          to: "read" as const,
+          mode: "warn" as const,
+          detail: "exact-canonical" as const,
+        },
+        {
+          kind: "argumentShapeRepair" as const,
+          fromType: "string" as const,
+          toType: "object" as const,
+          mode: "warn" as const,
+          detail: "json-parse" as const,
+        },
+        {
+          kind: "argumentKeyAlias" as const,
+          tool: "read" as const,
+          from: "file_path" as const,
+          to: "path" as const,
+          mode: "warn" as const,
+        },
+      ],
+      summary: {
+        compatibilityObservationCount: 1,
+        toolUseDiagnosticCount: 1,
+        repairCount: 3,
+        hadAnyRepair: true,
+        hadCompatibilityObservation: true,
+        hadReplayDiagnostic: true,
+        warnSurfaceUsed: true,
+        strictFailureCandidate: true,
+        compatibilityLevel: "strict-failure-candidate" as const,
+        warnSurfaceReasons: ["repair", "compatibilityObservation", "replayDiagnostic"] as (
+          | "repair"
+          | "compatibilityObservation"
+          | "replayDiagnostic"
+        )[],
+        strictFailureReasons: ["repair", "replayDiagnostic"] as ("repair" | "replayDiagnostic")[],
+        compatibilityObservationKindCounts: {
+          toolCallBlockTypeCompatibility: 1,
+        },
+        toolUseDiagnosticKindCounts: {
+          toolUseReplayDiagnostic: 1,
+        },
+        repairKindCounts: {
+          argumentKeyAlias: 1,
+          argumentShapeRepair: 1,
+          toolNameNormalization: 1,
+        },
+      },
+    };
+
+    const result = {
+      payloads: [{ text: "ok" }],
+      meta: {
+        durationMs: 1,
+        agentMeta: { sessionId: "session:test" },
+      },
+      toolStrictnessReport,
+    };
+
+    expect(result.toolStrictnessReport).toEqual(toolStrictnessReport);
+    expect(result.payloads?.[0]).toMatchObject({ text: "ok" });
+  });
+});
+
 describe("runEmbeddedPiAgent", () => {
   it("skips models.json generation when dynamic model resolution succeeds", async () => {
     const sessionFile = nextSessionFile();
@@ -561,6 +651,117 @@ describe("runEmbeddedPiAgent", () => {
     expect(result.payloads?.[0]).toMatchObject({ text: "ok" });
     expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledTimes(1);
     expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledWith("session:test");
+  });
+
+  // NOTE: This case currently times out under the heavy embedded-runner e2e harness
+  // before the test body meaningfully executes, so it is useful as a reminder that
+  // this file is not a reliable gate for lightweight result-contract propagation.
+  // Keep the lighter EmbeddedPiRunResult contract test above as the primary guard
+  // until a slimmer integration test surface exists.
+  it("preserves toolStrictnessReport on the embedded run result payload", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
+    const sessionKey = nextSessionKey();
+    const toolStrictnessReport = {
+      compatibilityObservations: [
+        {
+          kind: "toolCallBlockTypeCompatibility" as const,
+          from: "functionCall" as const,
+          to: "toolCall" as const,
+          phase: "replay-sanitize" as const,
+          mode: "strict" as const,
+        },
+      ],
+      toolUseDiagnostics: [
+        {
+          kind: "toolUseReplayDiagnostic" as const,
+          reason: "pairingSensitiveReplay" as const,
+          provider: "generic" as const,
+          hasEmbeddedToolResult: true,
+          toolUseCount: 1,
+          phase: "replay-sanitize" as const,
+          mode: "strict" as const,
+        },
+      ],
+      repairs: [
+        {
+          kind: "toolNameNormalization" as const,
+          from: "functions.read" as const,
+          to: "read" as const,
+          mode: "warn" as const,
+          detail: "exact-canonical" as const,
+        },
+        {
+          kind: "argumentShapeRepair" as const,
+          fromType: "string" as const,
+          toType: "object" as const,
+          mode: "warn" as const,
+          detail: "json-parse" as const,
+        },
+        {
+          kind: "argumentKeyAlias" as const,
+          tool: "read" as const,
+          from: "file_path" as const,
+          to: "path" as const,
+          mode: "warn" as const,
+        },
+      ],
+      summary: {
+        compatibilityObservationCount: 1,
+        toolUseDiagnosticCount: 1,
+        repairCount: 3,
+        hadAnyRepair: true,
+        hadCompatibilityObservation: true,
+        hadReplayDiagnostic: true,
+        warnSurfaceUsed: true,
+        strictFailureCandidate: true,
+        compatibilityLevel: "strict-failure-candidate" as const,
+        warnSurfaceReasons: ["repair", "compatibilityObservation", "replayDiagnostic"] as (
+          | "repair"
+          | "compatibilityObservation"
+          | "replayDiagnostic"
+        )[],
+        strictFailureReasons: ["repair", "replayDiagnostic"] as ("repair" | "replayDiagnostic")[],
+        compatibilityObservationKindCounts: {
+          toolCallBlockTypeCompatibility: 1,
+        },
+        toolUseDiagnosticKindCounts: {
+          toolUseReplayDiagnostic: 1,
+        },
+        repairKindCounts: {
+          argumentKeyAlias: 1,
+          argumentShapeRepair: 1,
+          toolNameNormalization: 1,
+        },
+      },
+    };
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        assistantTexts: ["ok"],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          content: [{ type: "text", text: "ok" }],
+        }),
+        toolStrictnessReport,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      sessionId: "session:test",
+      sessionKey,
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("tool-strictness-report-result"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(result.toolStrictnessReport).toEqual(toolStrictnessReport);
+    expect(result.payloads?.[0]).toMatchObject({ text: "ok" });
   });
 
   it("retries a planning-only GPT turn once with an act-now steer", async () => {

@@ -1,6 +1,22 @@
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import {
+  createToolArgumentShapeRepairEvent,
+  emitToolStrictnessRepairEvent,
+  isWarnToolMode,
+  resolveToolStrictnessMode,
+  shouldAllowToolArgumentRepair,
+  type ToolStrictnessMode,
+  type ToolStrictnessRepairEvent,
+} from "./tool-strictness.js";
 
-type TransportUsage = {
+export type TransportStrictnessOpts = {
+  mode?: ToolStrictnessMode;
+  onRepairEvent?: (event: ToolStrictnessRepairEvent) => void;
+};
+
+export type { ToolStrictnessRepairEvent };
+
+export type TransportUsage = {
   input: number;
   output: number;
   cacheRead: number;
@@ -35,20 +51,52 @@ export function sanitizeNonEmptyTransportPayloadText(
   return sanitized.trim().length > 0 ? sanitized : fallback;
 }
 
-export function coerceTransportToolCallArguments(argumentsValue: unknown): Record<string, unknown> {
+export function coerceTransportToolCallArguments(
+  argumentsValue: unknown,
+  options?: TransportStrictnessOpts,
+): Record<string, unknown> {
+  const mode = resolveToolStrictnessMode({ mode: options?.mode });
   if (argumentsValue && typeof argumentsValue === "object" && !Array.isArray(argumentsValue)) {
     return argumentsValue as Record<string, unknown>;
   }
   if (typeof argumentsValue === "string") {
+    if (!shouldAllowToolArgumentRepair(mode)) {
+      throw new Error("strict tool mode rejected non-object tool arguments");
+    }
     try {
       const parsed = JSON.parse(argumentsValue);
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        if (isWarnToolMode(mode)) {
+          emitToolStrictnessRepairEvent({
+            event: createToolArgumentShapeRepairEvent({
+              fromType: "string",
+              mode,
+              detail: "json-parse",
+            }),
+            onRepairEvent: options?.onRepairEvent,
+            logger: (message) => console.debug(message),
+          });
+        }
         return parsed as Record<string, unknown>;
       }
     } catch {
       // Preserve malformed strings in stored history, but send object-shaped payloads to
       // providers that require structured tool-call arguments.
     }
+  }
+  if (!shouldAllowToolArgumentRepair(mode)) {
+    throw new Error("strict tool mode rejected malformed tool arguments");
+  }
+  if (isWarnToolMode(mode)) {
+    emitToolStrictnessRepairEvent({
+      event: createToolArgumentShapeRepairEvent({
+        fromType: typeof argumentsValue,
+        mode,
+        detail: "fallback-empty-object",
+      }),
+      onRepairEvent: options?.onRepairEvent,
+      logger: (message) => console.debug(message),
+    });
   }
   return {};
 }

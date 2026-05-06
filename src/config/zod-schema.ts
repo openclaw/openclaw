@@ -423,6 +423,12 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    toolStrictness: z
+      .object({
+        mode: z.union([z.literal("off"), z.literal("warn"), z.literal("strict")]).optional(),
+      })
+      .strict()
+      .optional(),
     logging: z
       .object({
         level: LoggingLevelSchema.optional(),

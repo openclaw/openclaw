@@ -295,6 +295,8 @@ export type DiagnosticsOtelConfig = {
       };
 };
 
+export type ToolStrictnessMode = "off" | "warn" | "strict";
+
 export type DiagnosticsCacheTraceConfig = {
   enabled?: boolean;
   filePath?: string;
@@ -313,6 +315,10 @@ export type DiagnosticsConfig = {
   stuckSessionAbortMs?: number;
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
+};
+
+export type ToolStrictnessConfig = {
+  mode?: ToolStrictnessMode;
 };
 
 export type WebReconnectConfig = {

@@ -73,8 +73,12 @@ function createTestContext(): {
 }
 
 describe("handleToolExecutionStart read path checks", () => {
+  afterEach(() => {
+    delete process.env.OPENCLAW_TOOL_STRICTNESS_MODE;
+  });
   it("does not warn when read tool uses file_path alias", async () => {
     const { ctx, warn, onBlockReplyFlush } = createTestContext();
+    ctx.params.config = { toolStrictness: { mode: "off" } };
 
     const evt: ToolExecutionStartEvent = {
       type: "tool_execution_start",
@@ -87,6 +91,66 @@ describe("handleToolExecutionStart read path checks", () => {
 
     expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("reports a warn-mode repair event when read uses file_path alias", async () => {
+    const { ctx } = createTestContext();
+    const onToolStrictnessRepair = vi.fn();
+    ctx.params.config = { toolStrictness: { mode: "warn" } };
+    ctx.params.onToolStrictnessRepair = onToolStrictnessRepair;
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-warn-alias",
+      args: { file_path: "/tmp/example.txt" },
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    expect(onToolStrictnessRepair).toHaveBeenCalledWith({
+      kind: "argumentKeyAlias",
+      tool: "read",
+      from: "file_path",
+      to: "path",
+      mode: "warn",
+    });
+  });
+
+  it("prefers per-run strictness mode over env strictness", async () => {
+    process.env.OPENCLAW_TOOL_STRICTNESS_MODE = "strict";
+    const { ctx } = createTestContext();
+    const onToolStrictnessRepair = vi.fn();
+    ctx.params.toolStrictnessMode = "warn";
+    ctx.params.onToolStrictnessRepair = onToolStrictnessRepair;
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-warn-over-env",
+      args: { file_path: "/tmp/example.txt" },
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    expect(onToolStrictnessRepair).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "argumentKeyAlias", mode: "warn" }),
+    );
+  });
+
+  it("throws in strict mode when read uses file_path alias", async () => {
+    process.env.OPENCLAW_TOOL_STRICTNESS_MODE = "strict";
+    const { ctx } = createTestContext();
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-strict-alias",
+      args: { file_path: "/tmp/example.txt" },
+    };
+    expect(() => handleToolExecutionStart(ctx, evt)).toThrow(
+      "strict tool mode rejected read.file_path alias; expected path",
+    );
   });
 
   it("warns when read tool has neither path nor file_path", async () => {

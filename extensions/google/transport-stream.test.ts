@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Model } from "@mariozechner/pi-ai";
+import type { ToolStrictnessRepairEvent } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
@@ -502,6 +503,82 @@ describe("google transport stream", () => {
         },
       ],
     });
+  });
+
+  it("emits warn-mode repair events when replayed Google tool-call args are JSON strings", () => {
+    const repairs: ToolStrictnessRepairEvent[] = [];
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel(),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "openai",
+            api: "openai-responses",
+            model: "gpt-5.4",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "lookup",
+                arguments: '{"q":"hello"}',
+              },
+            ],
+          },
+        ],
+      } as never,
+      undefined,
+      {
+        mode: "warn",
+        onRepairEvent: (event) => repairs.push(event),
+      },
+    );
+
+    expect(params.contents[0]).toMatchObject({
+      role: "model",
+      parts: [{ functionCall: { name: "lookup", args: { q: "hello" } } }],
+    });
+    expect(repairs).toEqual([
+      expect.objectContaining({
+        kind: "argumentShapeRepair",
+        mode: "warn",
+        fromType: "string",
+        toType: "object",
+        detail: "json-parse",
+      }),
+    ]);
+  });
+
+  it("rejects replayed Google tool-call arg shape repairs in strict mode", () => {
+    expect(() =>
+      buildGoogleGenerativeAiParams(
+        buildGeminiModel(),
+        {
+          messages: [
+            {
+              role: "assistant",
+              provider: "openai",
+              api: "openai-responses",
+              model: "gpt-5.4",
+              stopReason: "toolUse",
+              timestamp: 0,
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_1",
+                  name: "lookup",
+                  arguments: '{"q":"hello"}',
+                },
+              ],
+            },
+          ],
+        } as never,
+        undefined,
+        { mode: "strict" },
+      ),
+    ).toThrow("strict tool mode rejected non-object tool arguments");
   });
 
   it("builds direct Gemini payloads without negative fallback thinking budgets", () => {

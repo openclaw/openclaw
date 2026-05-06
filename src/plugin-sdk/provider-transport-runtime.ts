@@ -10,5 +10,7 @@ export {
   finalizeTransportStream,
   mergeTransportHeaders,
   sanitizeTransportPayloadText,
+  type TransportStrictnessOpts,
+  type ToolStrictnessRepairEvent,
   type WritableTransportStream,
 } from "../agents/transport-stream-shared.js";

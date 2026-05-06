@@ -182,11 +182,14 @@ type ToolHandlerParams = Pick<
   | "onBlockReplyFlush"
   | "onAgentEvent"
   | "onToolResult"
+  | "onToolStrictnessRepair"
   | "sessionKey"
   | "sessionId"
   | "agentId"
   | "toolResultFormat"
   | "toolProgressDetail"
+  | "config"
+  | "toolStrictnessMode"
 >;
 
 type ToolHandlerState = Pick<

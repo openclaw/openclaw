@@ -1159,6 +1159,7 @@ export async function runEmbeddedPiAgent(
             workspaceDir: resolvedWorkspace,
             agentDir,
             config: params.config,
+            toolStrictnessMode: params.toolStrictnessMode,
             allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
             contextEngine,
             contextTokenBudget: ctxInfo.tokens,
@@ -2858,6 +2859,10 @@ export async function runEmbeddedPiAgent(
                 autoCompactionCount > 0 ? { lastTurnCompactions: autoCompactionCount } : undefined,
             },
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+            // Surface strict-tool diagnostics on the outer run result so callers
+            // can inspect compatibility/replay observations without depending on
+            // EmbeddedRunAttemptResult directly.
+            toolStrictnessReport: attempt.toolStrictnessReport,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
             messagingToolSentTexts: attempt.messagingToolSentTexts,
             messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,

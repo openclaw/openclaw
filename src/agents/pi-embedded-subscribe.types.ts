@@ -11,6 +11,7 @@ import type {
   ToolProgressDetailMode,
   ToolResultFormat,
 } from "./pi-embedded-subscribe.shared-types.js";
+import type { ToolStrictnessMode, ToolStrictnessRepairEvent } from "./tool-strictness.js";
 export type {
   BlockReplyChunking,
   ToolProgressDetailMode,
@@ -30,6 +31,7 @@ export type SubscribeEmbeddedPiSessionParams = {
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
+  onToolStrictnessRepair?: (event: ToolStrictnessRepairEvent) => void;
   onReasoningStream?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   /** Called when a thinking/reasoning block ends (</think> tag processed). */
   onReasoningEnd?: () => void | Promise<void>;
@@ -50,6 +52,7 @@ export type SubscribeEmbeddedPiSessionParams = {
   enforceFinalTag?: boolean;
   silentExpected?: boolean;
   config?: OpenClawConfig;
+  toolStrictnessMode?: ToolStrictnessMode;
   sessionKey?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;

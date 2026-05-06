@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
+import {
+  createEmptyToolStrictnessSummary,
+  recordToolStrictnessRepair,
+} from "../../tool-strictness.js";
 import { resolveBootstrapContextTargets } from "./attempt-bootstrap-routing.js";
 import {
   buildContextEnginePromptCacheInfo,
@@ -829,7 +833,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
   async function invokeWrappedStream(
     baseFn: (...args: never[]) => unknown,
     allowedToolNames?: Set<string>,
-    guardOptions?: { unknownToolThreshold?: number },
+    guardOptions?: { unknownToolThreshold?: number; mode?: "off" | "strict" },
   ) {
     return await invokeWrappedTestStream(
       (innerBaseFn) =>
@@ -960,6 +964,116 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(partialToolCall.name).toBe("read");
     expect(messageToolCall.name).toBe("exec");
     expect(finalToolCall.name).toBe("write");
+    expect(result).toBe(finalMessage);
+  });
+
+  it("does not normalize provider-prefixed tool names in strict mode", async () => {
+    process.env.OPENCLAW_TOOL_STRICTNESS_MODE = "strict";
+    const partialToolCall = { type: "toolCall", name: " functions.read " };
+    const messageToolCall = { type: "toolCall", name: " functions.write " };
+    const finalToolCall = { type: "toolCall", name: " tools/exec " };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+      message: { role: "assistant", content: [messageToolCall] },
+    };
+    const { baseFn } = createEventStream({ event, finalToolCall });
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]), {
+      mode: "strict",
+    });
+
+    for await (const _item of stream) {
+      // drain
+    }
+    await stream.result();
+
+    expect(partialToolCall.name).toBe(" functions.read ");
+    expect(messageToolCall.name).toBe(" functions.write ");
+    expect(finalToolCall.name).toBe(" tools/exec ");
+  });
+
+  it("does not normalize toolUse and functionCall names in strict mode", async () => {
+    process.env.OPENCLAW_TOOL_STRICTNESS_MODE = "strict";
+    const partialToolCall = { type: "toolUse", name: " functions.read " };
+    const messageToolCall = { type: "functionCall", name: " functions.exec " };
+    const finalToolCall = { type: "toolUse", name: " tools/write " };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+      message: { role: "assistant", content: [messageToolCall] },
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [event],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]), {
+      mode: "strict",
+    });
+
+    for await (const _item of stream) {
+      // drain
+    }
+    const result = await stream.result();
+
+    expect(partialToolCall.name).toBe(" functions.read ");
+    expect(messageToolCall.name).toBe(" functions.exec ");
+    expect(finalToolCall.name).toBe(" tools/write ");
+    expect(result).toBe(finalMessage);
+  });
+
+  it("preserves whitespace in strict mode instead of trimming allowlisted names", async () => {
+    process.env.OPENCLAW_TOOL_STRICTNESS_MODE = "strict";
+    const partialToolCall = { type: "toolUse", name: " read " };
+    const messageToolCall = { type: "functionCall", name: " exec " };
+    const finalToolCall = { type: "toolUse", name: " write " };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+      message: { role: "assistant", content: [messageToolCall] },
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [event],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]), {
+      mode: "strict",
+    });
+
+    for await (const _item of stream) {
+      // drain
+    }
+    const result = await stream.result();
+
+    expect(partialToolCall.name).toBe(" read ");
+    expect(messageToolCall.name).toBe(" exec ");
+    expect(finalToolCall.name).toBe(" write ");
+    expect(result).toBe(finalMessage);
+  });
+
+  it("leaves snake_case tool_call blocks untouched during strict name normalization", async () => {
+    process.env.OPENCLAW_TOOL_STRICTNESS_MODE = "strict";
+    const finalToolCall = { type: "tool_call", name: " functions.read " };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read"]), { mode: "strict" });
+    const result = await stream.result();
+
+    expect(finalToolCall.name).toBe(" functions.read ");
     expect(result).toBe(finalMessage);
   });
 
@@ -1381,6 +1495,48 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCall.name).toBeUndefined();
   });
 
+  it("does not infer canonical tool names from canonical ids when name is missing in strict mode", async () => {
+    const finalToolCall: { type: string; id: string; name?: string } = {
+      type: "toolCall",
+      id: "read",
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]), {
+      mode: "strict",
+    });
+    await stream.result();
+
+    expect(finalToolCall.name).toBeUndefined();
+  });
+
+  it("does not infer tool names from malformed ids when name is missing in strict mode", async () => {
+    const finalToolCall: { type: string; id: string; name?: string } = {
+      type: "toolCall",
+      id: "functionswrite4",
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]), {
+      mode: "strict",
+    });
+    await stream.result();
+
+    expect(finalToolCall.name).toBeUndefined();
+  });
+
   it("infers malformed non-blank tool names before dispatch", async () => {
     const partialToolCall = { type: "toolCall", id: "functionsread3", name: "functionsread3" };
     const finalToolCall = { type: "toolCall", id: "functionsread3", name: "functionsread3" };
@@ -1422,6 +1578,51 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCall.name).toBe("read");
   });
 
+  it("does not recover malformed non-blank tool names in strict mode", async () => {
+    const partialToolCall = { type: "toolCall", id: "functionsread3", name: "functionsread3" };
+    const finalToolCall = { type: "toolCall", id: "functionsread3", name: "functionsread3" };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [event],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]), {
+      mode: "strict",
+    });
+    for await (const _item of stream) {
+      // drain
+    }
+    await stream.result();
+
+    expect(partialToolCall.name).toBe("functionsread3");
+    expect(finalToolCall.name).toBe("functionsread3");
+  });
+
+  it("does not recover malformed non-blank names without ids in strict mode", async () => {
+    const finalToolCall = { type: "toolCall", name: "functionsread3" };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]), {
+      mode: "strict",
+    });
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("functionsread3");
+  });
+
   it("recovers canonical tool names from canonical ids when name is empty", async () => {
     const finalToolCall = { type: "toolCall", id: "read", name: "" };
     const finalMessage = { role: "assistant", content: [finalToolCall] };
@@ -1452,6 +1653,42 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await stream.result();
 
     expect(finalToolCall.name).toBe("write");
+  });
+
+  it("does not recover canonical tool names from canonical ids when name is empty in strict mode", async () => {
+    const finalToolCall = { type: "toolCall", id: "read", name: "" };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]), {
+      mode: "strict",
+    });
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("");
+  });
+
+  it("does not recover tool names from ids when name is whitespace-only in strict mode", async () => {
+    const finalToolCall = { type: "toolCall", id: "functionswrite4", name: "   " };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]), {
+      mode: "strict",
+    });
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("   ");
   });
 
   it("keeps blank names blank and assigns fallback ids when both name and id are blank", async () => {
@@ -2252,6 +2489,137 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     expect(seenContext.messages[0]?.content?.[0]?.name).toBe("read");
   });
 
+  it("rejects replayed toolUse and functionCall blocks in strict mode", async () => {
+    process.env.OPENCLAW_TOOL_STRICTNESS_MODE = "strict";
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolUse", id: "call_1", name: " read ", input: { path: "." } },
+          { type: "functionCall", id: "call_2", name: " exec ", arguments: { command: "pwd" } },
+        ],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["read", "exec"]),
+      undefined,
+      { mode: "strict" } as never,
+    );
+    expect(() => wrapped({} as never, { messages } as never, {} as never)).toThrow(
+      "strict tool mode rejected transcript tool call compatibility: toolUse replay diagnostic",
+    );
+    expect(baseFn).not.toHaveBeenCalled();
+  });
+
+  it("observes functionCall compatibility hits before strict replay rejection", async () => {
+    process.env.OPENCLAW_TOOL_STRICTNESS_MODE = "strict";
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "functionCall", id: "call_2", name: " exec ", arguments: { command: "pwd" } },
+        ],
+      },
+    ];
+    const observations: unknown[] = [];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["exec"]),
+      undefined,
+      {
+        mode: "strict",
+        onCompatibilityEvent: (event: unknown) => observations.push(event),
+      } as never,
+    );
+    expect(() => wrapped({} as never, { messages } as never, {} as never)).toThrow(
+      "strict tool mode rejected transcript tool call compatibility: functionCall",
+    );
+    expect(baseFn).not.toHaveBeenCalled();
+    expect(observations).toEqual([
+      {
+        kind: "toolCallBlockTypeCompatibility",
+        from: "functionCall",
+        to: "toolCall",
+        mode: "strict",
+        phase: "replay-sanitize",
+      },
+    ]);
+  });
+
+  it("rejects snake_case tool_call replay blocks in strict mode", async () => {
+    process.env.OPENCLAW_TOOL_STRICTNESS_MODE = "strict";
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_call", id: "call_1", name: " functions.read ", arguments: { path: "." } },
+        ],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["read"]),
+      undefined,
+      { mode: "strict" } as never,
+    );
+    expect(() => wrapped({} as never, { messages } as never, {} as never)).toThrow(
+      "strict tool mode rejected transcript tool call compatibility: tool_call",
+    );
+    expect(baseFn).not.toHaveBeenCalled();
+  });
+
+  it("observes tool_call compatibility hits before strict replay rejection", async () => {
+    process.env.OPENCLAW_TOOL_STRICTNESS_MODE = "strict";
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_call", id: "call_1", name: " functions.read ", arguments: { path: "." } },
+        ],
+      },
+    ];
+    const observations: unknown[] = [];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["read"]),
+      undefined,
+      {
+        mode: "strict",
+        onCompatibilityEvent: (event: unknown) => observations.push(event),
+      } as never,
+    );
+    expect(() => wrapped({} as never, { messages } as never, {} as never)).toThrow(
+      "strict tool mode rejected transcript tool call compatibility: tool_call",
+    );
+    expect(baseFn).not.toHaveBeenCalled();
+    expect(observations).toEqual([
+      {
+        kind: "toolCallBlockTypeCompatibility",
+        from: "tool_call",
+        to: "toolCall",
+        mode: "strict",
+        phase: "replay-sanitize",
+      },
+    ]);
+  });
+
   it("canonicalizes mixed-case allowlisted tool names on replay", async () => {
     const messages = [
       {
@@ -2744,6 +3112,399 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       expect(seenContext.messages).toEqual(messages);
     },
   );
+
+  it("observes pairing-sensitive toolUse replay diagnostics before strict rejection", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "call_1", name: "read", input: { path: "." } }],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "toolResult",
+            toolUseId: "call_1",
+            content: [{ type: "text", text: "kept result" }],
+          },
+          { type: "text", text: "retry" },
+        ],
+      },
+    ];
+    const diagnostics: unknown[] = [];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["read"]),
+      {
+        validateGeminiTurns: false,
+        validateAnthropicTurns: true,
+        preserveSignatures: false,
+        dropThinkingBlocks: false,
+      },
+      {
+        mode: "strict",
+        onToolUseReplayDiagnostic: (event: unknown) => diagnostics.push(event),
+      } as never,
+    );
+    expect(() =>
+      wrapped({ api: "anthropic-messages" } as never, { messages } as never, {} as never),
+    ).toThrow(
+      "strict tool mode rejected transcript tool call compatibility: toolUse replay diagnostic",
+    );
+    expect(baseFn).not.toHaveBeenCalled();
+    expect(diagnostics).toEqual([
+      {
+        kind: "toolUseReplayDiagnostic",
+        phase: "replay-sanitize",
+        mode: "strict",
+        reason: "pairingSensitiveReplay",
+        provider: "generic",
+        hasEmbeddedToolResult: true,
+        toolUseCount: 1,
+      },
+    ]);
+  });
+
+  it("observes provider-owned thinking toolUse replay diagnostics before strict rejection", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          { type: "toolUse", id: "call_1", name: "read", input: { path: "." } },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "toolResult",
+            toolUseId: "call_1",
+            content: [{ type: "text", text: "embedded result" }],
+          },
+          { type: "text", text: "retry" },
+        ],
+      },
+    ];
+    const diagnostics: unknown[] = [];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["read"]),
+      {
+        validateGeminiTurns: false,
+        validateAnthropicTurns: true,
+        preserveSignatures: true,
+        dropThinkingBlocks: false,
+      },
+      {
+        mode: "strict",
+        onToolUseReplayDiagnostic: (event: unknown) => diagnostics.push(event),
+      } as never,
+    );
+    expect(() =>
+      wrapped({ api: "anthropic-messages" } as never, { messages } as never, {} as never),
+    ).toThrow(
+      "strict tool mode rejected transcript tool call compatibility: toolUse replay diagnostic",
+    );
+    expect(baseFn).not.toHaveBeenCalled();
+    expect(diagnostics).toEqual([
+      {
+        kind: "toolUseReplayDiagnostic",
+        phase: "replay-sanitize",
+        mode: "strict",
+        reason: "pairingSensitiveReplay",
+        provider: "anthropic",
+        hasEmbeddedToolResult: true,
+        toolUseCount: 1,
+      },
+      {
+        kind: "toolUseReplayDiagnostic",
+        phase: "replay-sanitize",
+        mode: "strict",
+        reason: "providerOwnedThinkingReplay",
+        provider: "anthropic",
+        hasEmbeddedToolResult: true,
+        toolUseCount: 1,
+      },
+    ]);
+  });
+
+  it("includes warn-mode repair events in toolStrictnessReport repairs", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_1",
+            name: "functions.read",
+            input: { file_path: "/tmp/example.txt" },
+          },
+        ],
+      },
+    ];
+    const repairs: unknown[] = [];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["read"]),
+      undefined,
+      {
+        mode: "warn",
+        onRepairEvent: (event: unknown) => repairs.push(event),
+      } as never,
+    );
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    const firstCall = baseFn.mock.calls[0];
+    const nextContext = firstCall?.[1] as { messages?: unknown } | undefined;
+    expect(nextContext?.messages).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_1",
+            name: "read",
+            input: { file_path: "/tmp/example.txt" },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [
+          {
+            type: "text",
+            text: "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
+          },
+        ],
+        isError: true,
+        timestamp: expect.any(Number),
+      },
+    ]);
+  });
+
+  it("collects tool-name repair events into toolStrictnessReport repairs via onRepairEvent", async () => {
+    const repairs: unknown[] = [];
+    const repairEvent = {
+      kind: "toolNameNormalization",
+      from: "functions.read",
+      to: "read",
+      mode: "warn",
+      detail: "exact-canonical",
+    };
+
+    const toolStrictnessReport = {
+      compatibilityObservations: [],
+      toolUseDiagnostics: [],
+      repairs,
+    };
+
+    const onRepairEvent = (event: unknown) => {
+      toolStrictnessReport.repairs.push(event);
+    };
+
+    onRepairEvent(repairEvent);
+
+    expect(toolStrictnessReport.repairs).toEqual([repairEvent]);
+  });
+
+  it("collects multiple warn-mode repair events into toolStrictnessReport repairs in emission order", async () => {
+    const toolStrictnessReport = {
+      compatibilityObservations: [],
+      toolUseDiagnostics: [],
+      repairs: [] as unknown[],
+    };
+
+    const collectToolStrictnessRepair = (event: unknown) => {
+      toolStrictnessReport.repairs.push(event);
+    };
+
+    const toolNameRepairEvent = {
+      kind: "toolNameNormalization",
+      from: "functions.read",
+      to: "read",
+      mode: "warn",
+      detail: "exact-canonical",
+    };
+    const argumentShapeRepairEvent = {
+      kind: "argumentShapeRepair",
+      fromType: "string",
+      toType: "object",
+      mode: "warn",
+      detail: "json-parse",
+    };
+
+    collectToolStrictnessRepair(toolNameRepairEvent);
+    collectToolStrictnessRepair(argumentShapeRepairEvent);
+
+    expect(toolStrictnessReport.repairs).toEqual([toolNameRepairEvent, argumentShapeRepairEvent]);
+  });
+
+  it("counts argumentKeyAlias repairs in toolStrictnessReport summary", async () => {
+    const summary = createEmptyToolStrictnessSummary();
+
+    recordToolStrictnessRepair(summary, {
+      kind: "argumentKeyAlias",
+      tool: "read",
+      from: "file_path",
+      to: "path",
+      mode: "warn",
+    });
+
+    expect(summary).toMatchObject({
+      repairCount: 1,
+      hadAnyRepair: true,
+      warnSurfaceUsed: true,
+      strictFailureCandidate: true,
+      compatibilityLevel: "strict-failure-candidate",
+      warnSurfaceReasons: ["repair"],
+      strictFailureReasons: ["repair"],
+      repairKindCounts: {
+        argumentKeyAlias: 1,
+        argumentShapeRepair: 0,
+        toolNameNormalization: 0,
+      },
+    });
+  });
+
+  it("builds a minimal toolStrictnessReport from replay observations and diagnostics", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "functionCall", id: "call_1", name: " exec ", arguments: { command: "pwd" } },
+          { type: "toolUse", id: "call_2", name: " read ", input: { path: "." } },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "toolResult", toolUseId: "call_2", content: [{ type: "text", text: "ok" }] },
+        ],
+      },
+    ];
+    const compatibilityObservations: unknown[] = [];
+    const toolUseDiagnostics: unknown[] = [];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["exec", "read"]),
+      undefined,
+      {
+        mode: "strict",
+        onCompatibilityEvent: (event: unknown) => compatibilityObservations.push(event),
+        onToolUseReplayDiagnostic: (event: unknown) => toolUseDiagnostics.push(event),
+      } as never,
+    );
+    expect(() => wrapped({} as never, { messages } as never, {} as never)).toThrow(
+      "strict tool mode rejected transcript tool call compatibility: toolUse replay diagnostic",
+    );
+
+    const toolStrictnessReport = {
+      compatibilityObservations,
+      toolUseDiagnostics,
+      summary: {
+        compatibilityObservationCount: compatibilityObservations.length,
+        toolUseDiagnosticCount: toolUseDiagnostics.length,
+        repairCount: 0,
+        hadAnyRepair: false,
+        hadCompatibilityObservation: compatibilityObservations.length > 0,
+        hadReplayDiagnostic: toolUseDiagnostics.length > 0,
+        warnSurfaceUsed: compatibilityObservations.length > 0 || toolUseDiagnostics.length > 0,
+        strictFailureCandidate: toolUseDiagnostics.length > 0,
+        compatibilityLevel:
+          toolUseDiagnostics.length > 0
+            ? "strict-failure-candidate"
+            : compatibilityObservations.length > 0
+              ? "warn-surfaced"
+              : "clean",
+        warnSurfaceReasons: ["compatibilityObservation", "replayDiagnostic"],
+        strictFailureReasons: ["replayDiagnostic"],
+        compatibilityObservationKindCounts: {
+          toolCallBlockTypeCompatibility: compatibilityObservations.filter(
+            (event) => (event as { kind: string }).kind === "toolCallBlockTypeCompatibility",
+          ).length,
+        },
+        toolUseDiagnosticKindCounts: {
+          toolUseReplayDiagnostic: toolUseDiagnostics.filter(
+            (event) => (event as { kind: string }).kind === "toolUseReplayDiagnostic",
+          ).length,
+        },
+        repairKindCounts: {
+          argumentKeyAlias: 0,
+          argumentShapeRepair: 0,
+          toolNameNormalization: 0,
+        },
+      },
+    };
+
+    expect(toolStrictnessReport).toEqual({
+      compatibilityObservations: [
+        {
+          kind: "toolCallBlockTypeCompatibility",
+          from: "functionCall",
+          to: "toolCall",
+          phase: "replay-sanitize",
+          mode: "strict",
+        },
+      ],
+      toolUseDiagnostics: [
+        {
+          kind: "toolUseReplayDiagnostic",
+          reason: "pairingSensitiveReplay",
+          provider: "generic",
+          hasEmbeddedToolResult: true,
+          toolUseCount: 1,
+          phase: "replay-sanitize",
+          mode: "strict",
+        },
+      ],
+      summary: {
+        compatibilityObservationCount: 1,
+        toolUseDiagnosticCount: 1,
+        repairCount: 0,
+        hadAnyRepair: false,
+        hadCompatibilityObservation: true,
+        hadReplayDiagnostic: true,
+        warnSurfaceUsed: true,
+        strictFailureCandidate: true,
+        compatibilityLevel: "strict-failure-candidate",
+        warnSurfaceReasons: ["compatibilityObservation", "replayDiagnostic"],
+        strictFailureReasons: ["replayDiagnostic"],
+        compatibilityObservationKindCounts: {
+          toolCallBlockTypeCompatibility: 1,
+        },
+        toolUseDiagnosticKindCounts: {
+          toolUseReplayDiagnostic: 1,
+        },
+        repairKindCounts: {
+          argumentKeyAlias: 0,
+          argumentShapeRepair: 0,
+          toolNameNormalization: 0,
+        },
+      },
+    });
+  });
 
   it("drops orphaned Anthropic user tool_result blocks after dropping an assistant replay turn", async () => {
     const messages = [

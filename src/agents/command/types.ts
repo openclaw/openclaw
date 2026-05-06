@@ -4,6 +4,7 @@ import type { PromptMode } from "../../agents/system-prompt.types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
+import type { ToolStrictnessMode } from "../tool-strictness.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
 /** Image content block for Claude API multimodal messages. */
@@ -52,6 +53,8 @@ export type AgentCommandOpts = {
   provider?: string;
   /** Per-run model override. */
   model?: string;
+  /** Per-run strict tool mode override. */
+  toolStrictnessMode?: ToolStrictnessMode;
   to?: string;
   sessionId?: string;
   sessionKey?: string;

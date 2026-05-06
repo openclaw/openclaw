@@ -14,6 +14,7 @@ import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { EmbeddedRunReplayMetadata, EmbeddedRunReplayState } from "../replay-state.js";
+import type { ToolStrictnessReport } from "../tool-strictness-report.types.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
 import type { RunEmbeddedPiAgentParams } from "./params.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
@@ -95,6 +96,7 @@ export type EmbeddedRunAttemptResult = {
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   systemPromptReport?: SessionSystemPromptReport;
+  toolStrictnessReport?: ToolStrictnessReport;
   finalPromptText?: string;
   messagesSnapshot: AgentMessage[];
   assistantTexts: string[];
