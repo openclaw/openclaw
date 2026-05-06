@@ -250,12 +250,25 @@ export function installContextEngineLoopHook(params: {
   const originalTransformContext = mutableAgent.transformContext;
   let lastSeenLength: number | null = null;
   let lastAssembledView: AgentMessage[] | null = null;
+  let lastAssembledFromSourceLength: number | null = null;
+
+  const clearAssembledCache = () => {
+    lastAssembledView = null;
+    lastAssembledFromSourceLength = null;
+  };
 
   mutableAgent.transformContext = (async (messages: AgentMessage[], signal: AbortSignal) => {
     const transformed = originalTransformContext
       ? await originalTransformContext.call(mutableAgent, messages, signal)
       : messages;
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
+    if (
+      lastAssembledFromSourceLength !== null &&
+      sourceMessages.length < lastAssembledFromSourceLength
+    ) {
+      clearAssembledCache();
+      lastSeenLength = null;
+    }
 
     // Seed the loop fence from the attempt's pre-prompt message count when available.
     // This keeps the first real post-tool-call iteration eligible for compaction even
@@ -317,12 +330,14 @@ export function installContextEngineLoopHook(params: {
       });
       if (assembled && Array.isArray(assembled.messages) && assembled.messages !== sourceMessages) {
         lastAssembledView = assembled.messages;
+        lastAssembledFromSourceLength = sourceMessages.length;
         return assembled.messages;
       }
-      lastAssembledView = null;
+      clearAssembledCache();
     } catch {
       // Best-effort: any engine failure falls through to the raw source
       // messages so the tool loop still makes forward progress.
+      clearAssembledCache();
     }
 
     return sourceMessages;
