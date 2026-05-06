@@ -123,6 +123,7 @@ Docs: https://docs.openclaw.ai
 - Plugin skills/Windows: publish plugin-provided skill directories as junctions on Windows so standard users without Developer Mode can register plugin skills without symlink EPERM failures. Fixes #77958. (#77971) Thanks @hclsys and @jarro.
 - Shell env/Windows: hide the login-shell environment probe child window so gateway startup and shell-env refreshes do not flash a console on Windows. Fixes #78159. (#78266) Thanks @BradGroux.
 - MS Teams: surface blocked Bot Framework egress by logging JWKS fetch network failures and adding a Bot Connector send hint for transport-level reply failures. Fixes #77674. (#78081) Thanks @Beandon13.
+- Media/host-read: allow buffer-verified ZIP archives in the host-local media validator so agents can send ZIP attachments via the message tool. Fixes #78057. (#78292) Thanks @Linux2010.
 - Gateway/sessions: fast-path already-qualified model refs while building session-list rows so `openclaw sessions` and Control UI session lists avoid heavyweight model resolution on large stores. (#77902) Thanks @ragesaq.
 - Contributor PRs: remind external contributors to redact private information like IP addresses, API keys, phone numbers, and non-public endpoints from real behavior proof. Thanks @pashpashpash.
 - ACP bridge: relay Gateway exec approval prompts from active ACP turns to the ACP client's `session/request_permission` handler before resolving the Gateway approval. Thanks @amknight.
