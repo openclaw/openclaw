@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   evaluateMattermostMentionGate,
   mapMattermostChannelTypeToChatType,
+  resolveMattermostChannelType,
   resolveMattermostTrustedChatKind,
 } from "./monitor-gating.js";
 
@@ -11,7 +12,24 @@ describe("mattermost monitor gating", () => {
     expect(mapMattermostChannelTypeToChatType("G")).toBe("group");
     expect(mapMattermostChannelTypeToChatType("P")).toBe("group");
     expect(mapMattermostChannelTypeToChatType("O")).toBe("channel");
-    expect(mapMattermostChannelTypeToChatType(undefined)).toBe("channel");
+    expect(mapMattermostChannelTypeToChatType("x")).toBe("channel");
+  });
+
+  it("rejects missing channel types instead of defaulting to channel", () => {
+    expect(() => mapMattermostChannelTypeToChatType(undefined)).toThrow(
+      "Mattermost channel type is required",
+    );
+    expect(() => mapMattermostChannelTypeToChatType(null)).toThrow(
+      "Mattermost channel type is required",
+    );
+    expect(() => mapMattermostChannelTypeToChatType(" ")).toThrow(
+      "Mattermost channel type is required",
+    );
+  });
+
+  it("selects the first available resolved channel type", () => {
+    expect(resolveMattermostChannelType(undefined, "", " D ")).toBe("D");
+    expect(resolveMattermostChannelType(null, "  ")).toBeNull();
   });
 
   it("derives chat kind from trusted channel lookup before fallback state", () => {
@@ -28,7 +46,9 @@ describe("mattermost monitor gating", () => {
       }),
     ).toBe("direct");
     expect(resolveMattermostTrustedChatKind({ fallback: "group" })).toBe("group");
-    expect(resolveMattermostTrustedChatKind({})).toBe("channel");
+    expect(() => resolveMattermostTrustedChatKind({})).toThrow(
+      "Mattermost channel type is required",
+    );
   });
 
   it("drops non-mentioned traffic when onchar is enabled but not triggered", () => {

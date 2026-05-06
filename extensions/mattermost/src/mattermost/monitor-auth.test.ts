@@ -186,4 +186,31 @@ describe("mattermost monitor auth", () => {
       kind: "channel",
     });
   });
+
+  it("denies channel records with missing type before policy evaluation", async () => {
+    const { authorizeMattermostCommandInvocation } = await import("./monitor-auth.js");
+
+    expect(
+      authorizeMattermostCommandInvocation({
+        account: {
+          config: { groupPolicy: "open" },
+        } as never,
+        cfg: {} as never,
+        senderId: "alice",
+        senderName: "Alice",
+        channelId: "chan-1",
+        channelInfo: { id: "chan-1", type: "", name: "general" } as never,
+        allowTextCommands: true,
+        hasControlCommand: false,
+      }),
+    ).toMatchObject({
+      ok: false,
+      denyReason: "unknown-channel",
+      commandAuthorized: false,
+    });
+    expect(isDangerousNameMatchingEnabled).not.toHaveBeenCalled();
+    expect(resolveEffectiveAllowFromLists).not.toHaveBeenCalled();
+    expect(resolveControlCommandGate).not.toHaveBeenCalled();
+    expect(evaluateSenderGroupAccessForPolicy).not.toHaveBeenCalled();
+  });
 });

@@ -1,10 +1,24 @@
 import type { ChatType, OpenClawConfig } from "./runtime-api.js";
 
-export function mapMattermostChannelTypeToChatType(channelType?: string | null): ChatType {
-  if (!channelType) {
-    return "channel";
+export function resolveMattermostChannelType(
+  ...channelTypes: Array<string | null | undefined>
+): string | null {
+  // Preserve the original type code for logging/callers; mapping normalizes case.
+  for (const channelType of channelTypes) {
+    const normalized = channelType?.trim();
+    if (normalized) {
+      return normalized;
+    }
   }
-  const normalized = channelType.trim().toUpperCase();
+  return null;
+}
+
+export function mapMattermostChannelTypeToChatType(channelType?: string | null): ChatType {
+  const channelTypeValue = resolveMattermostChannelType(channelType);
+  if (!channelTypeValue) {
+    throw new Error("Mattermost channel type is required");
+  }
+  const normalized = channelTypeValue.toUpperCase();
   if (normalized === "D") {
     return "direct";
   }
@@ -18,11 +32,14 @@ export function resolveMattermostTrustedChatKind(params: {
   channelType?: string | null;
   fallback?: ChatType;
 }): ChatType {
-  const channelType = params.channelType?.trim();
+  const channelType = resolveMattermostChannelType(params.channelType);
   if (channelType) {
     return mapMattermostChannelTypeToChatType(channelType);
   }
-  return params.fallback ?? "channel";
+  if (params.fallback) {
+    return params.fallback;
+  }
+  throw new Error("Mattermost channel type is required");
 }
 
 export type MattermostRequireMentionResolverInput = {
