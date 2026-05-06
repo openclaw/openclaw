@@ -30,7 +30,7 @@
       },
       "modelId": {
         "type": "string",
-        "description": "TTS model id (default inworld-tts-1.5-max)."
+        "description": "TTS model id (default inworld-tts-2)."
       },
       "temperature": {
         "type": "number",
