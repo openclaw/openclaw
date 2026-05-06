@@ -2453,7 +2453,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         const useModern = !rawModels || rawModels === "modern" || rawModels === "all";
         const useExplicit = Boolean(rawModels) && !useModern;
         const filter = useExplicit ? parseFilter(rawModels) : null;
-        const useProviderScopedBuiltIns = providerList !== null && !useExplicit;
+        const useProviderScopedBuiltIns = Array.isArray(providerList) && !useExplicit;
         let authProfileStore: AuthProfileStore | undefined;
         let modelRegistry: LiveModelRegistry;
         let all: Array<Model<Api>>;
