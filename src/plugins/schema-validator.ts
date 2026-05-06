@@ -169,7 +169,13 @@ function formatAjvErrors(errors: ErrorObject[] | null | undefined): JsonSchemaVa
   }
   return errors.map((error) => {
     const path = resolveAjvErrorPath(error);
-    const baseMessage = error.message ?? "invalid";
+    let baseMessage = error.message ?? "invalid";
+    if (error.keyword === "additionalProperties") {
+      const additional = (error.params as { additionalProperty?: unknown }).additionalProperty;
+      if (typeof additional === "string" && additional) {
+        baseMessage = `${baseMessage} (unexpected property: '${additional}')`;
+      }
+    }
     const allowedValuesSummary = getAjvAllowedValuesSummary(error);
     const additionalProperty = resolveAdditionalProperty(error);
     const message = allowedValuesSummary
