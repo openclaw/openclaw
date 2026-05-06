@@ -1,6 +1,7 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { parseModelRef } from "../../agents/model-selection.js";
+import { exitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
@@ -217,8 +218,10 @@ export async function modelsListCommand(
 
   if (rows.length === 0) {
     runtime.log("No models found.");
+    exitAfterOneShotOutput(runtime);
     return;
   }
 
   printModelTable(rows, runtime, opts);
+  exitAfterOneShotOutput(runtime);
 }

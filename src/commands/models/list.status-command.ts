@@ -31,6 +31,7 @@ import {
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
+import { exitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import { createConfigIO } from "../../config/config.js";
 import {
   resolveAgentModelFallbackValues,
@@ -535,6 +536,7 @@ export async function modelsStatusCommand(
     if (opts.check) {
       runtime.exit(checkStatus);
     }
+    exitAfterOneShotOutput(runtime);
     return;
   }
 
@@ -543,6 +545,7 @@ export async function modelsStatusCommand(
     if (opts.check) {
       runtime.exit(checkStatus);
     }
+    exitAfterOneShotOutput(runtime);
     return;
   }
 
@@ -865,4 +868,5 @@ export async function modelsStatusCommand(
   if (opts.check) {
     runtime.exit(checkStatus);
   }
+  exitAfterOneShotOutput(runtime);
 }
