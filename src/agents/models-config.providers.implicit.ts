@@ -8,6 +8,7 @@ import {
   resolveRuntimePluginDiscoveryProviders,
   runProviderCatalog,
 } from "../plugins/provider-discovery.js";
+import { createProviderResolutionScope } from "../plugins/provider-resolution-scope.js";
 import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
@@ -55,6 +56,7 @@ type ImplicitProviderContext = ImplicitProviderParams & {
   env: NodeJS.ProcessEnv;
   resolveProviderApiKey: ProviderApiKeyResolver;
   resolveProviderAuth: ProviderAuthResolver;
+  resolutionScope: ReturnType<typeof createProviderResolutionScope>;
 };
 
 function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | null {
@@ -77,6 +79,7 @@ function resolveProviderDiscoveryFilter(params: {
   env: NodeJS.ProcessEnv;
   resolveOwners?: (provider: string) => readonly string[] | undefined;
   providerIds?: readonly string[];
+  resolutionScope?: ReturnType<typeof createProviderResolutionScope>;
 }): string[] | undefined {
   const { config, workspaceDir, env } = params;
   const testRaw = env.OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS?.trim();
@@ -97,6 +100,7 @@ function resolveProviderDiscoveryFilter(params: {
       workspaceDir,
       env,
       resolveOwners: params.resolveOwners,
+      resolutionScope: params.resolutionScope,
     });
   }
   const live =
@@ -124,6 +128,7 @@ function resolveProviderDiscoveryFilter(params: {
     workspaceDir,
     env,
     resolveOwners: params.resolveOwners,
+    resolutionScope: params.resolutionScope,
   });
 }
 
@@ -133,6 +138,7 @@ function resolveProviderPluginScopeFromProviderIds(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   resolveOwners?: (provider: string) => readonly string[] | undefined;
+  resolutionScope?: ReturnType<typeof createProviderResolutionScope>;
 }): string[] {
   const pluginIds = new Set<string>();
   for (const id of params.providerIds) {
@@ -143,6 +149,7 @@ function resolveProviderPluginScopeFromProviderIds(params: {
         config: params.config,
         workspaceDir: params.workspaceDir,
         env: params.env,
+        resolutionScope: params.resolutionScope,
       }) ??
       [];
     if (owners.length > 0) {
@@ -230,6 +237,7 @@ export function resolveProviderDiscoveryFilterForTest(params: {
   env: NodeJS.ProcessEnv;
   resolveOwners?: (provider: string) => readonly string[] | undefined;
   providerIds?: readonly string[];
+  resolutionScope?: ReturnType<typeof createProviderResolutionScope>;
 }): string[] | undefined {
   return resolveProviderDiscoveryFilter(params);
 }
@@ -459,19 +467,32 @@ export async function resolveImplicitProviders(
       allowKeychainPrompt: false,
       externalCliProviderIds: params.providerDiscoveryProviderIds,
     }));
+  const resolutionScope = createProviderResolutionScope();
   const context: ImplicitProviderContext = {
     ...params,
     get authStore() {
       return getAuthStore();
     },
     env,
-    resolveProviderApiKey: createProviderApiKeyResolver(env, getAuthStore, params.config),
-    resolveProviderAuth: createProviderAuthResolver(env, getAuthStore, params.config),
+    resolutionScope,
+    resolveProviderApiKey: createProviderApiKeyResolver(
+      env,
+      getAuthStore,
+      params.config,
+      resolutionScope,
+    ),
+    resolveProviderAuth: createProviderAuthResolver(
+      env,
+      getAuthStore,
+      params.config,
+      resolutionScope,
+    ),
   };
   const discoveryProviders = await resolveRuntimePluginDiscoveryProviders({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env,
+    resolutionScope,
     onlyPluginIds: resolveProviderDiscoveryFilter({
       config: params.config,
       workspaceDir: params.workspaceDir,
@@ -480,6 +501,7 @@ export async function resolveImplicitProviders(
         ? (provider) => resolvePluginMetadataProviderOwners(params.pluginMetadataSnapshot, provider)
         : undefined,
       providerIds: params.providerDiscoveryProviderIds,
+      resolutionScope,
     }),
     ...(params.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }

@@ -2,6 +2,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
+import {
+  createProviderResolutionCacheKey,
+  type ProviderResolutionScope,
+} from "./provider-resolution-scope.js";
 import { resolveDiscoveredProviderPluginIds } from "./providers.js";
 import { resolvePluginProviders } from "./providers.runtime.js";
 import { createPluginSourceLoader } from "./source-loader.js";
@@ -77,6 +81,7 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
+  resolutionScope?: ProviderResolutionScope;
 }): ProviderDiscoveryEntryResult {
   const metadataSnapshot =
     params.pluginMetadataSnapshot ??
@@ -147,15 +152,43 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
+  resolutionScope?: ProviderResolutionScope;
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
+  const cacheKey = params.resolutionScope
+    ? createProviderResolutionCacheKey({
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env,
+        onlyPluginIds: params.onlyPluginIds,
+        extra: {
+          kind: "runtime-plugin-discovery-providers",
+          includeUntrustedWorkspacePlugins: params.includeUntrustedWorkspacePlugins ?? null,
+          requireCompleteDiscoveryEntryCoverage:
+            params.requireCompleteDiscoveryEntryCoverage ?? null,
+          discoveryEntriesOnly: params.discoveryEntriesOnly ?? null,
+        },
+      })
+    : undefined;
+  const cached = cacheKey
+    ? params.resolutionScope?.pluginDiscoveryProviders.get(cacheKey)
+    : undefined;
+  if (cached) {
+    return cached;
+  }
+  const remember = (providers: ProviderPlugin[]) => {
+    if (cacheKey) {
+      params.resolutionScope?.pluginDiscoveryProviders.set(cacheKey, providers);
+    }
+    return providers;
+  };
   const entryResult = resolveProviderDiscoveryEntryPlugins({ ...params, env });
   if (params.discoveryEntriesOnly === true) {
-    return entryResult.providers;
+    return remember(entryResult.providers);
   }
   const liveEntryProviders = entryResult.providers.filter(hasLiveProviderDiscoveryHook);
   if (entryResult.complete && liveEntryProviders.length === entryResult.providers.length) {
-    return liveEntryProviders;
+    return remember(liveEntryProviders);
   }
   if (params.onlyPluginIds === undefined && entryResult.providers.length > 0) {
     const fullPluginIds = resolveSelectiveFullPluginIds({
@@ -172,11 +205,13 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
             bundledProviderAllowlistCompat: true,
           })
         : [];
-    return [...liveEntryProviders, ...fullProviders];
+    return remember([...liveEntryProviders, ...fullProviders]);
   }
-  return resolvePluginProviders({
-    ...params,
-    env,
-    bundledProviderAllowlistCompat: true,
-  });
+  return remember(
+    resolvePluginProviders({
+      ...params,
+      env,
+      bundledProviderAllowlistCompat: true,
+    }),
+  );
 }

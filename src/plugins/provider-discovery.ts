@@ -5,6 +5,7 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { listManifestProviderContributionIds } from "./manifest-contribution-ids.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import { type LoadPluginRegistryParams, type PluginRegistrySnapshot } from "./plugin-registry.js";
+import type { ProviderResolutionScope } from "./provider-resolution-scope.js";
 import type { ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
 
 const DISCOVERY_ORDER: readonly ProviderDiscoveryOrder[] = ["simple", "profile", "paired", "late"];
@@ -42,6 +43,7 @@ export type ResolveRuntimePluginDiscoveryProvidersParams = {
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
+  resolutionScope?: ProviderResolutionScope;
 };
 
 export type ResolveInstalledPluginProviderContributionIdsParams = LoadPluginRegistryParams & {
