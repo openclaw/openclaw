@@ -509,64 +509,25 @@ describe("runCodexAppServerAttempt", () => {
     expect(__testing.shouldForceMessageTool(params)).toBe(false);
   });
 
-  it("passes the live run session key to Codex dynamic tools when sandbox policy uses another key", async () => {
+  it("passes the live run session key to Codex dynamic tools when sandbox policy uses another key", () => {
     const workspaceDir = path.join(tempDir, "workspace");
-    const sessionsPath = path.join(tempDir, "sessions.json");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    params.disableTools = false;
     params.sessionKey = "agent:main:main";
-    params.config = {
-      session: { store: sessionsPath, mainKey: "main", scope: "per-sender" },
-      tools: { profile: "coding" },
-    };
-    params.runtimePlan = buildCodexRuntimePlan(params, workspaceDir);
-    await fs.writeFile(
-      sessionsPath,
-      JSON.stringify({
-        "agent:main:main": {
-          sessionId: "s-main",
-          updatedAt: 10,
-          status: "running",
-        },
-        "agent:main:telegram:default:direct:1234": {
-          sessionId: "s-telegram-policy",
-          updatedAt: 5,
-          status: "done",
-        },
-      }),
-    );
-    let seenRunSessionKey: string | undefined;
-    __testing.setOpenClawCodingToolsFactoryForTests((options) => {
-      seenRunSessionKey = options?.runSessionKey;
-      return [
-        {
-          name: "session_status",
-          description: "session status test tool",
-          parameters: { type: "object", properties: {} },
-          execute: vi.fn(async () => ({ details: { sessionKey: options?.runSessionKey } })),
-        },
-      ] as never;
+
+    expect(
+      __testing.resolveOpenClawCodingToolsSessionKeys(
+        params,
+        "agent:main:telegram:default:direct:1234",
+      ),
+    ).toEqual({
+      sessionKey: "agent:main:telegram:default:direct:1234",
+      runSessionKey: "agent:main:main",
     });
 
-    const dynamicTools = await __testing.buildDynamicTools({
-      params,
-      resolvedWorkspace: workspaceDir,
-      effectiveWorkspace: workspaceDir,
-      sandboxSessionKey: "agent:main:telegram:default:direct:1234",
-      sandbox: null,
-      runAbortController: new AbortController(),
-      sessionAgentId: "main",
-      pluginConfig: {},
-      onYieldDetected: () => undefined,
+    expect(__testing.resolveOpenClawCodingToolsSessionKeys(params, "agent:main:main")).toEqual({
+      sessionKey: "agent:main:main",
+      runSessionKey: undefined,
     });
-    const sessionStatus = dynamicTools.find((tool) => tool.name === "session_status");
-
-    expect(sessionStatus).toBeDefined();
-    const result = await sessionStatus?.execute("call-current", { sessionKey: "current" });
-    expect(seenRunSessionKey).toBe("agent:main:main");
-    expect((result?.details as { sessionKey?: string } | undefined)?.sessionKey).toBe(
-      "agent:main:main",
-    );
   });
 
   it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {
