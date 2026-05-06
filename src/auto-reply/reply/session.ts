@@ -54,6 +54,7 @@ import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
+import { stripInboundMetadata } from "./strip-inbound-meta.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { isResetAuthorizedForContext } from "./reset-authorization.js";
 import {
@@ -688,8 +689,9 @@ export async function initSessionState(params: {
     sessionEntry.chatType = "direct";
   }
   const threadLabel = normalizeOptionalString(ctx.ThreadLabel);
-  if (threadLabel) {
-    sessionEntry.displayName = threadLabel;
+  const sanitizedThreadLabel = threadLabel ? stripInboundMetadata(threadLabel).trim() : "";
+  if (sanitizedThreadLabel) {
+    sessionEntry.displayName = sanitizedThreadLabel;
   }
   const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
   const alreadyForked = sessionEntry.forkedFromParent === true;

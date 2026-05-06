@@ -78,6 +78,7 @@ import {
   normalizeOptionalString,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
+import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import {
@@ -221,8 +222,11 @@ export function deriveSessionTitle(
     return undefined;
   }
 
-  if (normalizeOptionalString(entry.displayName)) {
-    return normalizeOptionalString(entry.displayName);
+  const sanitizedDisplayName = normalizeOptionalString(
+    typeof entry.displayName === "string" ? stripInboundMetadata(entry.displayName).trim() : entry.displayName,
+  );
+  if (sanitizedDisplayName) {
+    return sanitizedDisplayName;
   }
 
   if (normalizeOptionalString(entry.subject)) {

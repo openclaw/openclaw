@@ -5,6 +5,14 @@ import ai.openclaw.app.ui.chat.ChatSheetContent
 import androidx.compose.runtime.Composable
 
 @Composable
-fun ChatSheet(viewModel: MainViewModel) {
-  ChatSheetContent(viewModel = viewModel)
+fun ChatSheet(
+  viewModel: MainViewModel,
+  hideCronSessions: Boolean = true,
+  onHideCronSessionsChange: (Boolean) -> Unit = {},
+) {
+  ChatSheetContent(
+    viewModel = viewModel,
+    hideCronSessions = hideCronSessions,
+    onHideCronSessionsChange = onHideCronSessionsChange,
+  )
 }
