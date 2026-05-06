@@ -259,7 +259,7 @@ describe("gateway session utils", () => {
     expect(row.thinkingDefault).toBe("medium");
   });
 
-  test("async session list skips per-row thinking enrichment for lightweight rows", async () => {
+  test("async session list reuses thinking metadata for lightweight rows", async () => {
     const resolveThinkingProfile = vi.fn(() => ({
       levels: [{ id: "off" as const }, { id: "medium" as const }],
       defaultLevel: "medium" as const,
@@ -298,10 +298,16 @@ describe("gateway session utils", () => {
     });
 
     expect(result.sessions).toHaveLength(5);
-    expect(result.sessions.every((session) => session.thinkingLevels === undefined)).toBe(true);
-    expect(result.sessions.every((session) => session.thinkingOptions === undefined)).toBe(true);
-    expect(result.sessions.every((session) => session.thinkingDefault === undefined)).toBe(true);
-    expect(resolveThinkingProfile).toHaveBeenCalledTimes(2);
+    expect(
+      result.sessions.every((session) =>
+        session.thinkingLevels?.some((level) => level.id === "medium"),
+      ),
+    ).toBe(true);
+    expect(result.sessions.every((session) => session.thinkingOptions?.includes("medium"))).toBe(
+      true,
+    );
+    expect(result.sessions.every((session) => session.thinkingDefault === "medium")).toBe(true);
+    expect(resolveThinkingProfile).toHaveBeenCalled();
   });
 
   test("session list thinking cache preserves case-distinct model catalog entries", async () => {
@@ -1293,9 +1299,9 @@ describe("listSessionsFromStore selected model display", () => {
       );
       expect(listed.sessions[0]?.agentRuntime).toEqual({ id: "pi", source: "implicit" });
       expect(listed.sessions[0]?.thinkingLevel).toBeUndefined();
-      expect(listed.sessions[0]?.thinkingLevels).toBeUndefined();
-      expect(listed.sessions[0]?.thinkingOptions).toBeUndefined();
-      expect(listed.sessions[0]?.thinkingDefault).toBeUndefined();
+      expect(listed.sessions[0]?.thinkingLevels?.length).toBeGreaterThan(0);
+      expect(listed.sessions[0]?.thinkingOptions?.length).toBeGreaterThan(0);
+      expect(listed.sessions[0]?.thinkingDefault).toBeDefined();
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -1537,15 +1543,15 @@ describe("listSessionsFromStore selected model display", () => {
         "agent:main:main": {
           sessionId: "sess-main",
           updatedAt: Date.now(),
-          providerOverride: "vercel-ai-gateway",
-          modelOverride: "anthropic/claude-haiku-4-5",
+          providerOverride: "anthropic",
+          modelOverride: "sonnet-4.6",
         } as SessionEntry,
       },
       opts: {},
     });
 
-    expect(result.sessions[0]?.modelProvider).toBe("vercel-ai-gateway");
-    expect(result.sessions[0]?.model).toBe("anthropic/claude-haiku-4-5");
+    expect(result.sessions[0]?.modelProvider).toBe("anthropic");
+    expect(result.sessions[0]?.model).toBe("claude-sonnet-4-6");
   });
 });
 
