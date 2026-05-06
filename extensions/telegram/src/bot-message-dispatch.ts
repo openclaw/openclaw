@@ -5,7 +5,10 @@ import {
   logTypingFailure,
   removeAckReactionAfterReply,
 } from "openclaw/plugin-sdk/channel-feedback";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import {
+  createChannelMessageReplyPipeline,
+  deriveDurableFinalDeliveryRequirements,
+} from "openclaw/plugin-sdk/channel-message";
 import {
   createChannelProgressDraftGate,
   formatChannelProgressDraftLine,
@@ -821,16 +824,69 @@ export const dispatchTelegramMessage = async ({
       }
       return { ...payload, replyToId: implicitQuoteReplyTargetId };
     };
+    const usesNativeTelegramQuote = (payload: ReplyPayload): boolean => {
+      if (replyQuoteText != null) {
+        return true;
+      }
+      return payload.replyToId != null && replyQuoteByMessageId[payload.replyToId] != null;
+    };
     let lastVisibleNonPreviewDeliveryAtMs: number | undefined;
-    const sendPayload = async (payload: ReplyPayload) => {
+    const sendPayload = async (
+      payload: ReplyPayload,
+      options?: { durable?: boolean; silent?: boolean },
+    ) => {
       if (isDispatchSuperseded()) {
         return false;
       }
+      const deliverablePayload = applyQuoteReplyTarget(payload);
+      const silent = options?.silent ?? (silentErrorReplies && payload.isError === true);
+      const durableDelivery = telegramDeps.deliverInboundReplyWithMessageSendContext;
+      if (options?.durable && durableDelivery) {
+        const durable = await durableDelivery({
+          cfg,
+          channel: "telegram",
+          to: String(chatId),
+          accountId: route.accountId,
+          agentId: route.agentId,
+          ctxPayload,
+          payload: deliverablePayload,
+          info: { kind: "final" },
+          replyToMode,
+          threadId: threadSpec.id,
+          formatting: {
+            textLimit,
+            tableMode,
+            chunkMode,
+          },
+          silent,
+          requiredCapabilities: deriveDurableFinalDeliveryRequirements({
+            payload: deliverablePayload,
+            replyToId: deliverablePayload.replyToId,
+            threadId: threadSpec.id,
+            silent,
+            payloadTransport: true,
+            extraCapabilities: {
+              nativeQuote: usesNativeTelegramQuote(deliverablePayload),
+            },
+          }),
+        });
+        if (durable.status === "failed") {
+          throw durable.error;
+        }
+        if (durable.status === "handled_visible") {
+          deliveryState.markDelivered();
+          lastVisibleNonPreviewDeliveryAtMs = Date.now();
+          return true;
+        }
+        if (durable.status === "handled_no_send") {
+          return false;
+        }
+      }
       const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
         ...deliveryBaseOptions,
-        replies: [applyQuoteReplyTarget(payload)],
+        replies: [deliverablePayload],
         onVoiceRecording: sendRecordVoice,
-        silent: silentErrorReplies && payload.isError === true,
+        silent,
         mediaLoader: telegramDeps.loadWebMedia,
       });
       if (result.delivered) {
@@ -918,7 +974,7 @@ export const dispatchTelegramMessage = async ({
     }
 
     const { onModelSelected, ...replyPipeline } = (
-      telegramDeps.createChannelReplyPipeline ?? createChannelReplyPipeline
+      telegramDeps.createChannelMessageReplyPipeline ?? createChannelMessageReplyPipeline
     )({
       cfg,
       agentId: route.agentId,
@@ -1076,7 +1132,9 @@ export const dispatchTelegramMessage = async ({
                         const payloadWithoutSuppressedReasoning =
                           typeof payload.text === "string" ? { ...payload, text: "" } : payload;
                         markVisibleNonPreviewBoundary(
-                          await sendPayload(payloadWithoutSuppressedReasoning),
+                          await sendPayload(payloadWithoutSuppressedReasoning, {
+                            durable: info.kind === "final",
+                          }),
                         );
                       }
                       if (info.kind === "final") {
@@ -1099,7 +1157,9 @@ export const dispatchTelegramMessage = async ({
                       }
                       return;
                     }
-                    markVisibleNonPreviewBoundary(await sendPayload(payload));
+                    markVisibleNonPreviewBoundary(
+                      await sendPayload(payload, { durable: info.kind === "final" }),
+                    );
                     if (info.kind === "final") {
                       await flushBufferedFinalAnswer();
                       pendingCompactionReplayBoundary = false;
