@@ -605,12 +605,26 @@ function sanitizeGoogleThinkingConfigContainer(params: {
   }
 }
 
+// Google models can resolve through several `model.api` shapes depending on
+// transport: `google-generative-ai` (native Google SDK), `google-vertex`
+// (Vertex AI SDK), and `google-gemini-cli` (Gemini CLI). All three reach the
+// same payload patch path and need the negative-thinkingBudget sanitization.
+// The original guard checked only the first shape, leaving Vertex/CLI streams
+// crashing with "Cannot convert undefined or null to object" when pi-ai emits
+// an invalid `thinkingBudget` (issue #38327, still reproducing on v2026.4.21+
+// per fxstein's forensic analysis).
+const GOOGLE_THINKING_PAYLOAD_APIS = new Set<string>([
+  "google-generative-ai",
+  "google-vertex",
+  "google-gemini-cli",
+]);
+
 export function createGoogleThinkingPayloadWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingLevel?: GoogleThinkingInputLevel,
 ): StreamFn {
   return createPayloadPatchStreamWrapper(baseStreamFn, ({ payload, model }) => {
-    if (model.api === "google-generative-ai") {
+    if (GOOGLE_THINKING_PAYLOAD_APIS.has(model.api)) {
       sanitizeGoogleThinkingPayload({
         payload,
         modelId: model.id,
