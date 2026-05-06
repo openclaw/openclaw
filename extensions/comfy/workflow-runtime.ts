@@ -460,10 +460,10 @@ async function waitForCloudCompletion(params: {
       errorPrefix: "Comfy status lookup failed",
     });
 
-    if (status.status === "completed") {
+    if (status.status === "completed" || status.status === "success") {
       return;
     }
-    if (status.status === "failed" || status.status === "cancelled") {
+    if (status.status === "failed" || status.status === "error" || status.status === "cancelled") {
       throw new Error(
         `Comfy workflow ${status.status}: ${status.error ?? status.message ?? params.promptId}`,
       );
