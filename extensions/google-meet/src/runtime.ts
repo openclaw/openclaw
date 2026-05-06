@@ -41,6 +41,12 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function buildTwilioVoiceCallSessionKey(meetingSessionId: string, agentId?: string): string {
+  return agentId
+    ? `agent:${agentId}:google-meet:${meetingSessionId}`
+    : `voice:google-meet:${meetingSessionId}`;
+}
+
 export function normalizeMeetUrl(input: unknown): string {
   const raw = normalizeOptionalString(input);
   if (!raw) {
@@ -478,6 +484,9 @@ export class GoogleMeetRuntime {
               dialInNumber,
               dtmfSequence,
               logger: this.params.logger,
+              ...(request.requesterSessionKey
+                ? { requesterSessionKey: request.requesterSessionKey }
+                : {}),
               message: isGoogleMeetTalkBackMode(mode)
                 ? (request.message ??
                   this.params.config.voiceCall.introMessage ??
@@ -485,12 +494,10 @@ export class GoogleMeetRuntime {
                 : undefined,
               agentId: request.agentId,
               // Per-meeting/per-agent session key isolates Voice Call sessions
-              // when multiple agents share a Twilio dial-in number. Pattern
-              // mirrors agent-consult.ts:55 (subagent namespace), distinct
-              // from the phone-leg namespace used here.
-              sessionKey: request.agentId
-                ? `agent:${request.agentId}:google-meet:${session.id}`
-                : undefined,
+              // when multiple agents share a Twilio dial-in number. When agentId
+              // is unset, falls back to the legacy voice:google-meet:<sid>
+              // namespace so single-agent setups stay back-compatible.
+              sessionKey: buildTwilioVoiceCallSessionKey(session.id, request.agentId),
             })
           : undefined;
         delegatedTwilioSpoken = Boolean(voiceCallResult?.introSent);
@@ -513,7 +520,7 @@ export class GoogleMeetRuntime {
         session.notes.push(
           this.params.config.voiceCall.enabled
             ? dtmfSequence
-              ? "Twilio transport delegated the phone leg to the voice-call plugin, then sent configured DTMF after connect before speaking."
+              ? "Twilio transport delegated the phone leg to the voice-call plugin, then queued configured DTMF before realtime connect."
               : "Twilio transport delegated the call to the voice-call plugin without configured DTMF."
             : "Twilio transport is an explicit dial plan; voice-call delegation is disabled.",
         );

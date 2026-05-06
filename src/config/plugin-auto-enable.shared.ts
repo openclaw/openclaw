@@ -1,9 +1,6 @@
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
-import {
-  hasPotentialConfiguredChannels,
-  listPotentialConfiguredChannelPresenceSignals,
-} from "../channels/config-presence.js";
+import { listPotentialConfiguredChannelPresenceSignals } from "../channels/config-presence.js";
 import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import {
   type PluginManifestRecord,
@@ -493,7 +490,7 @@ export function configMayNeedPluginAutoEnable(
   if (hasConfiguredPluginConfigEntry(cfg)) {
     return true;
   }
-  if (hasPotentialConfiguredChannels(cfg, env, { includePersistedAuthState: false })) {
+  if (collectConfiguredChannelIds(cfg, env).length > 0) {
     return true;
   }
   if (hasConfiguredProviderModelOrHarness(cfg, env)) {

@@ -68,6 +68,22 @@ Minimal config:
 }
 ```
 
+Public DM config:
+
+```json5
+{
+  channels: {
+    line: {
+      enabled: true,
+      channelAccessToken: "LINE_CHANNEL_ACCESS_TOKEN",
+      channelSecret: "LINE_CHANNEL_SECRET",
+      dmPolicy: "open",
+      allowFrom: ["*"],
+    },
+  },
+}
+```
+
 Env vars (default account only):
 
 - `LINE_CHANNEL_ACCESS_TOKEN`
@@ -119,7 +135,7 @@ openclaw pairing approve line <CODE>
 Allowlists and policies:
 
 - `channels.line.dmPolicy`: `pairing | allowlist | open | disabled`
-- `channels.line.allowFrom`: allowlisted LINE user IDs for DMs
+- `channels.line.allowFrom`: allowlisted LINE user IDs for DMs; `dmPolicy: "open"` requires `["*"]`
 - `channels.line.groupPolicy`: `allowlist | open | disabled`
 - `channels.line.groupAllowFrom`: allowlisted LINE user IDs for groups
 - Per-group overrides: `channels.line.groups.<groupId>.allowFrom`

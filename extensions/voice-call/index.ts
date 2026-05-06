@@ -104,6 +104,11 @@ const voiceCallConfigSchema = {
       help: "Controls the shared openclaw_agent_consult tool.",
       advanced: true,
     },
+    "realtime.consultPolicy": {
+      label: "Realtime Consult Policy",
+      help: "Guides when the realtime voice model should call openclaw_agent_consult.",
+      advanced: true,
+    },
     "realtime.fastContext.enabled": {
       label: "Enable Fast Realtime Context",
       help: "Searches memory/session context before the full consult agent.",
@@ -123,6 +128,31 @@ const voiceCallConfigSchema = {
     },
     "realtime.fastContext.fallbackToConsult": {
       label: "Fallback To Full Consult",
+      advanced: true,
+    },
+    "realtime.agentContext.enabled": {
+      label: "Enable Agent Voice Context",
+      help: "Injects a compact agent identity, system prompt, and workspace context capsule into realtime voice instructions.",
+      advanced: true,
+    },
+    "realtime.agentContext.maxChars": {
+      label: "Agent Voice Context Limit",
+      advanced: true,
+    },
+    "realtime.agentContext.includeIdentity": {
+      label: "Include Agent Identity",
+      advanced: true,
+    },
+    "realtime.agentContext.includeSystemPrompt": {
+      label: "Include Agent System Prompt",
+      advanced: true,
+    },
+    "realtime.agentContext.includeWorkspaceFiles": {
+      label: "Include Agent Workspace Files",
+      advanced: true,
+    },
+    "realtime.agentContext.files": {
+      label: "Agent Voice Context Files",
       advanced: true,
     },
     "realtime.providers": { label: "Realtime Provider Config", advanced: true },
@@ -159,6 +189,10 @@ const VoiceCallToolSchema = Type.Union([
     to: Type.Optional(Type.String({ description: "Call target" })),
     message: Type.String({ description: "Intro message" }),
     mode: Type.Optional(Type.Union([Type.Literal("notify"), Type.Literal("conversation")])),
+    sessionKey: Type.Optional(Type.String({ description: "OpenClaw session key for the call" })),
+    requesterSessionKey: Type.Optional(
+      Type.String({ description: "OpenClaw session key that initiated the call" }),
+    ),
     dtmfSequence: Type.Optional(Type.String({ description: "DTMF digits to play before connect" })),
   }),
   Type.Object({
@@ -189,6 +223,10 @@ const VoiceCallToolSchema = Type.Union([
     to: Type.Optional(Type.String({ description: "Call target" })),
     sid: Type.Optional(Type.String({ description: "Call SID" })),
     message: Type.Optional(Type.String({ description: "Optional intro message" })),
+    sessionKey: Type.Optional(Type.String({ description: "OpenClaw session key for the call" })),
+    requesterSessionKey: Type.Optional(
+      Type.String({ description: "OpenClaw session key that initiated the call" }),
+    ),
     dtmfSequence: Type.Optional(Type.String({ description: "DTMF digits to play before connect" })),
   }),
 ]);
@@ -351,6 +389,7 @@ export default definePluginEntry({
       dtmfSequence?: string;
       agentId?: string;
       sessionKey?: string;
+      requesterSessionKey?: string;
     }) => {
       const result = await params.rt.manager.initiateCall(params.to, params.sessionKey, {
         message: params.message,
@@ -358,6 +397,7 @@ export default definePluginEntry({
         dtmfSequence: params.dtmfSequence,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
+        ...(params.requesterSessionKey ? { requesterSessionKey: params.requesterSessionKey } : {}),
       });
       if (!result.success) {
         respondError(params.respond, result.error || "initiate failed");
@@ -424,6 +464,8 @@ export default definePluginEntry({
             to,
             message,
             mode,
+            sessionKey: normalizeOptionalString(params?.sessionKey),
+            requesterSessionKey: normalizeOptionalString(params?.requesterSessionKey),
           });
         } catch (err) {
           sendError(respond, err);
@@ -627,6 +669,11 @@ export default definePluginEntry({
           // workspace path joins. Trust model is at the plugin-loader
           // boundary: any in-process plugin caller can choose any *valid*
           // agentId; cross-plugin-spoofing scope policy lives at that layer.
+          //
+          // requesterSessionKey is a session marker (consult-delivery routing
+          // back to the originating session), not a routing target — accepted
+          // from any caller; no spoof harm beyond delivering reply to a session
+          // the caller already controls.
           const pluginOwnerId = normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId);
           const rawAgentId = normalizeOptionalString(params?.agentId);
           const rawSessionKey = normalizeOptionalString(params?.sessionKey);
@@ -650,6 +697,7 @@ export default definePluginEntry({
             );
           }
           const sessionKey = pluginOwnerId ? rawSessionKey : undefined;
+          const requesterSessionKey = normalizeOptionalString(params?.requesterSessionKey);
           if (!to) {
             respondError(respond, "to required", ErrorCodes.INVALID_REQUEST);
             return;
@@ -666,6 +714,7 @@ export default definePluginEntry({
             dtmfSequence,
             agentId,
             sessionKey,
+            ...(requesterSessionKey ? { requesterSessionKey } : {}),
           });
         } catch (err) {
           sendError(respond, err);
@@ -702,15 +751,21 @@ export default definePluginEntry({
                   if (!to) {
                     throw new Error("to required");
                   }
-                  const result = await rt.manager.initiateCall(to, undefined, {
-                    message,
-                    dtmfSequence: normalizeOptionalString(rawParams.dtmfSequence),
-                    mode:
-                      rawParams.mode === "notify" || rawParams.mode === "conversation"
-                        ? rawParams.mode
-                        : undefined,
-                    agentId: ctxAgentId,
-                  });
+                  const requesterSessionKey = normalizeOptionalString(rawParams.requesterSessionKey);
+                  const result = await rt.manager.initiateCall(
+                    to,
+                    normalizeOptionalString(rawParams.sessionKey),
+                    {
+                      message,
+                      dtmfSequence: normalizeOptionalString(rawParams.dtmfSequence),
+                      mode:
+                        rawParams.mode === "notify" || rawParams.mode === "conversation"
+                          ? rawParams.mode
+                          : undefined,
+                      agentId: ctxAgentId,
+                      ...(requesterSessionKey ? { requesterSessionKey } : {}),
+                    },
+                  );
                   if (!result.success) {
                     throw new Error(result.error || "initiate failed");
                   }
@@ -789,11 +844,17 @@ export default definePluginEntry({
             if (!to) {
               throw new Error("to required for call");
             }
-            const result = await rt.manager.initiateCall(to, undefined, {
-              dtmfSequence: normalizeOptionalString(rawParams.dtmfSequence),
-              message: normalizeOptionalString(rawParams.message),
-              agentId: ctxAgentId,
-            });
+            const requesterSessionKey = normalizeOptionalString(rawParams.requesterSessionKey);
+            const result = await rt.manager.initiateCall(
+              to,
+              normalizeOptionalString(rawParams.sessionKey),
+              {
+                dtmfSequence: normalizeOptionalString(rawParams.dtmfSequence),
+                message: normalizeOptionalString(rawParams.message),
+                agentId: ctxAgentId,
+                ...(requesterSessionKey ? { requesterSessionKey } : {}),
+              },
+            );
             if (!result.success) {
               throw new Error(result.error || "initiate failed");
             }

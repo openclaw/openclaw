@@ -35,7 +35,7 @@ describe("Google Meet voice-call gateway", () => {
     gatewayMocks.dispatchPluginGatewayRequest.mockResolvedValue({ callId: "call-1" });
   });
 
-  it("starts Twilio Meet calls, sends delayed DTMF, then speaks the intro without TwiML fallback", async () => {
+  it("starts Twilio Meet calls with pre-connect DTMF, then speaks the intro without TwiML fallback", async () => {
     const config = resolveGoogleMeetConfig({
       voiceCall: {
         gatewayUrl: "ws://127.0.0.1:18789",
@@ -50,6 +50,8 @@ describe("Google Meet voice-call gateway", () => {
       dialInNumber: "+15551234567",
       dtmfSequence: "123456#",
       message: "Say exactly: I'm here and listening.",
+      requesterSessionKey: "agent:main:discord:channel:general",
+      sessionKey: "voice:google-meet:meet-1",
     });
 
     await join;
@@ -59,21 +61,15 @@ describe("Google Meet voice-call gateway", () => {
       {
         to: "+15551234567",
         mode: "conversation",
+        dtmfSequence: "123456#",
+        requesterSessionKey: "agent:main:discord:channel:general",
+        sessionKey: "voice:google-meet:meet-1",
       },
       { pluginRuntimeOwnerId: "google-meet" },
     );
     expect(gatewayMocks.dispatchPluginGatewayRequest).toHaveBeenCalledTimes(1);
     expect(gatewayMocks.request).toHaveBeenNthCalledWith(
       1,
-      "voicecall.dtmf",
-      {
-        callId: "call-1",
-        digits: "123456#",
-      },
-      { timeoutMs: 30_000 },
-    );
-    expect(gatewayMocks.request).toHaveBeenNthCalledWith(
-      2,
       "voicecall.speak",
       {
         callId: "call-1",
@@ -82,7 +78,7 @@ describe("Google Meet voice-call gateway", () => {
       },
       { timeoutMs: 30_000 },
     );
-    expect(gatewayMocks.request).toHaveBeenCalledTimes(2);
+    expect(gatewayMocks.request).toHaveBeenCalledTimes(1);
   });
 
   it("forwards agentId and sessionKey on the voicecall.start RPC payload", async () => {
@@ -139,9 +135,10 @@ describe("Google Meet voice-call gateway", () => {
 
   it("skips the intro without failing when the realtime bridge is not ready", async () => {
     gatewayMocks.dispatchPluginGatewayRequest.mockResolvedValueOnce({ callId: "call-1" });
-    gatewayMocks.request
-      .mockResolvedValueOnce({ success: true })
-      .mockResolvedValueOnce({ success: false, error: "No active realtime bridge for call" });
+    gatewayMocks.request.mockResolvedValueOnce({
+      success: false,
+      error: "No active realtime bridge for call",
+    });
     const config = resolveGoogleMeetConfig({
       voiceCall: {
         gatewayUrl: "ws://127.0.0.1:18789",

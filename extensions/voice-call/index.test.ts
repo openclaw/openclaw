@@ -472,6 +472,38 @@ describe("voice-call plugin", () => {
     expect(respond.mock.calls[0]?.[0]).toBe(true);
   });
 
+  it("preserves explicit session keys on voicecall.start when caller is trusted", async () => {
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.start") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          client?: { internal?: { pluginRuntimeOwnerId?: string } };
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+    await handler?.({
+      params: {
+        mode: "conversation",
+        requesterSessionKey: "agent:main:discord:channel:general",
+        sessionKey: "voice:google-meet:meet-1",
+        to: "+15550001234",
+      },
+      client: { internal: { pluginRuntimeOwnerId: "google-meet" } },
+      respond,
+    });
+    expect(runtimeStub.manager.initiateCall).toHaveBeenCalledWith(
+      "+15550001234",
+      "voice:google-meet:meet-1",
+      expect.objectContaining({
+        mode: "conversation",
+        requesterSessionKey: "agent:main:discord:channel:general",
+        sessionKey: "voice:google-meet:meet-1",
+      }),
+    );
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+  });
+
   it("returns call status", async () => {
     const { methods } = setup({ provider: "mock" });
     const handler = methods.get("voicecall.status") as

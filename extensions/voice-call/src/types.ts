@@ -316,4 +316,6 @@ export type OutboundCallOptions = {
    * boundary — silently dropped unless the caller is in-process plugin runtime.
    */
   sessionKey?: string;
+  /** Session that initiated the call, used for agent context/delegated message routing */
+  requesterSessionKey?: string;
 };
