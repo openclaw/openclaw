@@ -55,10 +55,22 @@ type TalkSpeakResult = {
   mimeType?: string;
 };
 
+type TalkConfigResult = {
+  config?: {
+    talk?: {
+      speechLocale?: string;
+    };
+  };
+};
+
 const FALLBACK_ERROR_PATTERNS = [
   /Realtime voice provider ".+" is not configured/i,
   /No realtime voice provider registered/i,
   /OpenAI API key missing/i,
+  /insufficient[_ -]?quota/i,
+  /billing|credit|payment required|quota exceeded|exceeded your current quota|usage limit/i,
+  /rate[- ]?limit|too many requests|429/i,
+  /401|unauthori[sz]ed|invalid api key|incorrect api key|authentication/i,
 ];
 
 function errorMessage(error: unknown): string {
@@ -81,6 +93,11 @@ function getSpeechRecognitionConstructor(): SpeechRecognitionConstructor | null 
 function getBrowserSpeechLanguage(): string {
   const nav = typeof navigator === "undefined" ? null : navigator;
   return nav?.language?.trim() || "nl-NL";
+}
+
+function extractTalkSpeechLocale(result: TalkConfigResult): string | null {
+  const value = result.config?.talk?.speechLocale?.trim();
+  return value || null;
 }
 
 function buildAudioDataUrl(result: TalkSpeakResult): string | null {
@@ -108,7 +125,7 @@ export class BrowserFallbackRealtimeTalkTransport implements RealtimeTalkTranspo
     }
     this.closed = false;
     this.recognition = new Recognition();
-    this.recognition.lang = getBrowserSpeechLanguage();
+    this.recognition.lang = await this.resolveSpeechLanguage();
     this.recognition.continuous = true;
     this.recognition.interimResults = true;
     this.recognition.onstart = () => {
@@ -139,6 +156,15 @@ export class BrowserFallbackRealtimeTalkTransport implements RealtimeTalkTranspo
       this.handleRecognitionResult(event);
     };
     this.startRecognition();
+  }
+
+  private async resolveSpeechLanguage(): Promise<string> {
+    try {
+      const config = await this.ctx.client.request<TalkConfigResult>("talk.config", {});
+      return extractTalkSpeechLocale(config) ?? getBrowserSpeechLanguage();
+    } catch {
+      return getBrowserSpeechLanguage();
+    }
   }
 
   stop(): void {

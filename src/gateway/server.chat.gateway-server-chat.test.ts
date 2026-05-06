@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
@@ -27,6 +27,7 @@ const CHAT_RESPONSE_TIMEOUT_MS = 10_000;
 
 let ws: WebSocket;
 let port: number;
+const previousOfflineThomasDisableModel = process.env.OPENCLAW_OFFLINE_THOMAS_DISABLE_MODEL;
 
 installConnectedControlUiServerSuite((started) => {
   ws = started.ws;
@@ -36,6 +37,15 @@ installConnectedControlUiServerSuite((started) => {
 describe("gateway server chat", () => {
   beforeEach(() => {
     dispatchInboundMessageMock.mockReset();
+    process.env.OPENCLAW_OFFLINE_THOMAS_DISABLE_MODEL = "1";
+  });
+
+  afterEach(() => {
+    if (previousOfflineThomasDisableModel === undefined) {
+      delete process.env.OPENCLAW_OFFLINE_THOMAS_DISABLE_MODEL;
+    } else {
+      process.env.OPENCLAW_OFFLINE_THOMAS_DISABLE_MODEL = previousOfflineThomasDisableModel;
+    }
   });
 
   const removeTempDir = async (dir: string): Promise<void> => {
@@ -954,6 +964,57 @@ describe("gateway server chat", () => {
       expect(text).toContain("free local Thomas mode");
       expect(text).toContain("Can we still talk?");
       expect(text).not.toContain("authentication token");
+
+      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+      expect(historyRes.ok).toBe(true);
+      const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
+      expect(historyTexts).toEqual(
+        expect.arrayContaining([expect.stringContaining("free local Thomas mode")]),
+      );
+    });
+  });
+
+  test("chat.send falls back to local Thomas when dispatch fails before final delivery", async () => {
+    await withMainSessionStore(async () => {
+      dispatchInboundMessageMock.mockRejectedValueOnce(
+        new Error("API provider returned a billing error - your API key has run out of credits."),
+      );
+
+      const finalPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === "idem-offline-thomas-reject",
+        8000,
+      );
+      const errorPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "error" &&
+          o.payload?.runId === "idem-offline-thomas-reject",
+        250,
+      ).catch(() => undefined);
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "Can you talk with me?",
+        idempotencyKey: "idem-offline-thomas-reject",
+      });
+
+      expect(res.ok).toBe(true);
+      const final = await finalPromise;
+      const error = await errorPromise;
+      const text = extractFirstTextBlock(final.payload?.message);
+      expect(error).toBeUndefined();
+      expect(text).toContain("free local Thomas mode");
+      expect(text).toContain("Can you talk with me?");
+      expect(text).not.toContain("billing error");
 
       const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
         sessionKey: "main",

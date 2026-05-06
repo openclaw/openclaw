@@ -93,6 +93,9 @@ describe("BrowserFallbackRealtimeTalkTransport", () => {
   it("uses normal chat plus Talk speech when realtime auth is unavailable", async () => {
     const listeners: GatewayListener[] = [];
     const request = vi.fn(async (method: string) => {
+      if (method === "talk.config") {
+        return { config: { talk: { speechLocale: "nl-NL" } } };
+      }
       if (method === "chat.send") {
         return { runId: "run-1" };
       }
@@ -151,11 +154,48 @@ describe("BrowserFallbackRealtimeTalkTransport", () => {
     expect(onStatus).toHaveBeenCalledWith("thinking", "Asking Thomas...");
   });
 
+  it("uses the gateway Talk speech locale for browser dictation", async () => {
+    Object.defineProperty(navigator, "language", {
+      value: "en-US",
+      configurable: true,
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.config") {
+        return { config: { talk: { speechLocale: "nl-NL" } } };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    const transport = new BrowserFallbackRealtimeTalkTransport({
+      client: { request, addEventListener: vi.fn(() => () => undefined) } as never,
+      sessionKey: "main",
+      callbacks: {},
+    });
+
+    await transport.start();
+    transport.stop();
+
+    expect(request).toHaveBeenCalledWith("talk.config", {});
+    expect(FakeRecognition.instances[0]?.lang).toBe("nl-NL");
+  });
+
   it("recognizes provider setup failures as fallback candidates", () => {
     expect(
       shouldUseBrowserFallbackForRealtimeError(
         new Error('Realtime voice provider "openai" is not configured'),
       ),
+    ).toBe(true);
+    expect(
+      shouldUseBrowserFallbackForRealtimeError(
+        new Error("OpenAI realtime failed with insufficient_quota"),
+      ),
+    ).toBe(true);
+    expect(
+      shouldUseBrowserFallbackForRealtimeError(
+        new Error("payment required: please add credits to continue"),
+      ),
+    ).toBe(true);
+    expect(
+      shouldUseBrowserFallbackForRealtimeError(new Error("401 unauthorized realtime request")),
     ).toBe(true);
     expect(shouldUseBrowserFallbackForRealtimeError(new Error("permission denied"))).toBe(false);
   });

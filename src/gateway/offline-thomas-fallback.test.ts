@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildOfflineThomasFallbackReply,
+  buildOfflineThomasConversationalFallbackReply,
   shouldUseOfflineThomasFallback,
 } from "./offline-thomas-fallback.js";
 
@@ -60,5 +61,65 @@ describe("offline Thomas fallback", () => {
     expect(reply).toContain("can't browse");
     expect(reply).toContain("can't change files");
     expect(reply).toContain("local");
+  });
+
+  it("uses a local conversational model with recent history when available", async () => {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({
+        url: String(url),
+        body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      });
+      return new Response(
+        JSON.stringify({
+          message: {
+            content: "I remember Moos. Let's make this practical.",
+          },
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    };
+
+    const reply = await buildOfflineThomasConversationalFallbackReply({
+      userMessage: "What should I do next?",
+      reason: "billing",
+      history: [
+        { role: "user", text: "My cat is Moos." },
+        { role: "assistant", text: "Moos noted." },
+      ],
+      model: "llama3.2:3b",
+      baseUrl: "http://127.0.0.1:11434",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    expect(reply).toBe("I remember Moos. Let's make this practical.");
+    expect(calls[0]?.url).toBe("http://127.0.0.1:11434/api/chat");
+    expect(calls[0]?.body).toMatchObject({
+      model: "llama3.2:3b",
+      stream: false,
+    });
+    const body = calls[0]?.body as { messages?: Array<{ role: string; content: string }> };
+    expect(body.messages?.map((message) => message.role)).toEqual([
+      "system",
+      "user",
+      "assistant",
+      "user",
+    ]);
+    expect(body.messages?.[1]?.content).toContain("My cat is Moos.");
+    expect(body.messages?.[3]?.content).toBe("What should I do next?");
+  });
+
+  it("falls back to the static local reply when the local model is disabled", async () => {
+    const reply = await buildOfflineThomasConversationalFallbackReply({
+      userMessage: "Hey",
+      reason: "billing",
+      disableLocalModel: true,
+      fetchImpl: (() => {
+        throw new Error("should not be called");
+      }) as typeof fetch,
+    });
+
+    expect(reply).toContain("free local Thomas mode");
+    expect(reply).toContain("Hey");
   });
 });
