@@ -3,7 +3,7 @@ import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { resolveDefaultAgentDir } from "./agent-scope.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
   installModelsConfigTestHooks,
@@ -114,6 +114,24 @@ describe("models-config write serialization", () => {
     });
   });
 
+  it("writes implicit models.json into the configured default agent dir", async () => {
+    await withModelsTempHome(async (home) => {
+      const cfg = {
+        agents: {
+          list: [{ id: "main" }, { id: "ops", default: true }],
+        },
+      };
+
+      const result = await ensureOpenClawModelsJson(cfg);
+
+      expect(result.agentDir).toBe(path.join(home, ".openclaw", "agents", "ops", "agent"));
+      await expect(fs.access(path.join(result.agentDir, "models.json"))).resolves.toBeUndefined();
+      await expect(
+        fs.access(path.join(home, ".openclaw", "agents", "main", "agent", "models.json")),
+      ).rejects.toThrow();
+    });
+  });
+
   it("does not reuse scoped startup discovery cache for a different provider scope", async () => {
     await withModelsTempHome(async (home) => {
       planOpenClawModelsJsonMock.mockImplementation(async () => ({ action: "skip" }));
@@ -151,7 +169,7 @@ describe("models-config write serialization", () => {
       await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
       await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
 
-      const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
+      const modelPath = path.join(resolveDefaultAgentDir({}), "models.json");
       await fs.writeFile(modelPath, `${JSON.stringify({ external: true })}\n`, "utf8");
       const externalMtime = new Date(Date.now() + 2000);
       await fs.utimes(modelPath, externalMtime, externalMtime);

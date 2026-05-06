@@ -1524,14 +1524,28 @@ export async function startGatewayServer(
         onStarted: () => {
           postReadyMaintenanceTimer = null;
         },
-        startMaintenance: earlyRuntime.startMaintenance,
+        startMaintenance: async () => {
+          if (closePreludeStarted) {
+            return null;
+          }
+          return earlyRuntime.startMaintenance();
+        },
         applyMaintenance: (maintenance) => {
+          if (closePreludeStarted) {
+            clearInterval(maintenance.tickInterval);
+            clearInterval(maintenance.healthInterval);
+            clearInterval(maintenance.dedupeCleanup);
+            if (maintenance.mediaCleanup) {
+              clearInterval(maintenance.mediaCleanup);
+            }
+            return;
+          }
           runtimeState.tickInterval = maintenance.tickInterval;
           runtimeState.healthInterval = maintenance.healthInterval;
           runtimeState.dedupeCleanup = maintenance.dedupeCleanup;
           runtimeState.mediaCleanup = maintenance.mediaCleanup;
         },
-        shouldStartCron: () => !gatewayCronStartHandled,
+        shouldStartCron: () => !closePreludeStarted && !gatewayCronStartHandled,
         markCronStartHandled: () => {
           gatewayCronStartHandled = true;
         },

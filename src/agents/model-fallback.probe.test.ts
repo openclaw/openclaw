@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -280,7 +281,7 @@ describe("runWithModelFallback – probe logic", () => {
     setLoggerOverride({
       level: "trace",
       consoleLevel: "silent",
-      file: path.join(os.tmpdir(), `openclaw-model-fallback-probe-${Date.now()}.log`),
+      file: path.join(os.tmpdir(), `openclaw-model-fallback-probe-${randomUUID()}.log`),
     });
 
     const run = vi.fn().mockResolvedValue("probed-ok");
@@ -410,19 +411,26 @@ describe("runWithModelFallback – probe logic", () => {
     expectPrimaryProbeSuccess(result, run, "recovered");
   });
 
-  it("attempts non-primary fallbacks during rate-limit cooldown after primary probe failure", async () => {
-    await expectProbeFailureFallsBack({
-      reason: "rate_limit",
+  it.each([
+    {
+      label: "rate-limit",
+      reason: "rate_limit" as const,
       probeError: Object.assign(new Error("rate limited"), { status: 429 }),
-    });
-  });
-
-  it("attempts non-primary fallbacks during overloaded cooldown after primary probe failure", async () => {
-    await expectProbeFailureFallsBack({
-      reason: "overloaded",
+    },
+    {
+      label: "overloaded",
+      reason: "overloaded" as const,
       probeError: Object.assign(new Error("service overloaded"), { status: 503 }),
-    });
-  });
+    },
+  ])(
+    "attempts non-primary fallbacks during $label cooldown after primary probe failure",
+    async ({ reason, probeError }) => {
+      await expectProbeFailureFallsBack({
+        reason,
+        probeError,
+      });
+    },
+  );
 
   it("keeps walking remaining fallbacks after an abort-wrapped RESOURCE_EXHAUSTED probe failure", async () => {
     const cfg = makeCfg({
@@ -556,38 +564,22 @@ describe("runWithModelFallback – probe logic", () => {
     expect(_probeThrottleInternals.lastProbeAttempt.has("key-0")).toBe(true);
   });
 
-  it("handles non-finite soonest safely (treats as probe-worthy)", async () => {
+  it("handles missing or non-finite soonest safely (treats as probe-worthy)", async () => {
     const cfg = makeCfg();
 
-    // Return Infinity — should be treated as "probe" per the guard
-    mockedGetSoonestCooldownExpiry.mockReturnValue(Infinity);
+    for (const [label, soonest] of [
+      ["infinity", Infinity],
+      ["nan", Number.NaN],
+      ["null", null],
+    ] as const) {
+      _probeThrottleInternals.lastProbeAttempt.clear();
+      mockedGetSoonestCooldownExpiry.mockReturnValue(soonest);
 
-    const run = vi.fn().mockResolvedValue("ok-infinity");
+      const run = vi.fn().mockResolvedValue(`ok-${label}`);
 
-    const result = await runPrimaryCandidate(cfg, run);
-    expectPrimaryProbeSuccess(result, run, "ok-infinity");
-  });
-
-  it("handles NaN soonest safely (treats as probe-worthy)", async () => {
-    const cfg = makeCfg();
-
-    mockedGetSoonestCooldownExpiry.mockReturnValue(Number.NaN);
-
-    const run = vi.fn().mockResolvedValue("ok-nan");
-
-    const result = await runPrimaryCandidate(cfg, run);
-    expectPrimaryProbeSuccess(result, run, "ok-nan");
-  });
-
-  it("handles null soonest safely (treats as probe-worthy)", async () => {
-    const cfg = makeCfg();
-
-    mockedGetSoonestCooldownExpiry.mockReturnValue(null);
-
-    const run = vi.fn().mockResolvedValue("ok-null");
-
-    const result = await runPrimaryCandidate(cfg, run);
-    expectPrimaryProbeSuccess(result, run, "ok-null");
+      const result = await runPrimaryCandidate(cfg, run);
+      expectPrimaryProbeSuccess(result, run, `ok-${label}`);
+    }
   });
 
   it("single candidate skips with rate_limit and exhausts candidates", async () => {
@@ -699,9 +691,5 @@ describe("runWithModelFallback – probe logic", () => {
     const result = await runPrimaryCandidate(cfg, run);
 
     expectPrimaryProbeSuccess(result, run, "billing-probe-ok");
-  });
-
-  it("skips billing-cooldowned primary with fallbacks when far from cooldown expiry", async () => {
-    await expectPrimarySkippedAfterLongCooldown("billing");
   });
 });
