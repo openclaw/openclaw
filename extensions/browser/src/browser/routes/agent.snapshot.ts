@@ -527,16 +527,16 @@ export function registerBrowserAgentSnapshotRoutes(
         if ((plan.labels || plan.mode === "efficient") && plan.format === "aria") {
           return jsonError(res, 400, "labels/mode=efficient require format=ai");
         }
+        const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
+        if (ssrfPolicyOpts.ssrfPolicy) {
+          await assertBrowserNavigationResultAllowed({
+            url: tab.url,
+            ...ssrfPolicyOpts,
+          });
+        }
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-          const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
           if (plan.selectorValue || plan.frameSelectorValue) {
             return jsonError(res, 400, EXISTING_SESSION_LIMITS.snapshot.snapshotSelector);
-          }
-          if (ssrfPolicyOpts.ssrfPolicy) {
-            await assertBrowserNavigationResultAllowed({
-              url: tab.url,
-              ...ssrfPolicyOpts,
-            });
           }
           const snapshot = await takeChromeMcpSnapshot({
             profileName: profileCtx.profile.name,
