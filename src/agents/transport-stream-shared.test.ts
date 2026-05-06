@@ -65,6 +65,35 @@ describe("transport stream shared helpers", () => {
     expect(end).toHaveBeenCalledTimes(1);
   });
 
+  it("propagates output.errorMessage when finalizing an errored stream", () => {
+    const push = vi.fn();
+    const end = vi.fn();
+    const output = {
+      stopReason: "error",
+      errorMessage: "Provider finish_reason: MALFORMED_FUNCTION_CALL",
+    };
+
+    expect(() =>
+      finalizeTransportStream({
+        stream: { push, end },
+        output,
+      }),
+    ).toThrow("Provider finish_reason: MALFORMED_FUNCTION_CALL");
+  });
+
+  it("falls back to generic message when finalizing without errorMessage", () => {
+    const push = vi.fn();
+    const end = vi.fn();
+    const output = { stopReason: "error" };
+
+    expect(() =>
+      finalizeTransportStream({
+        stream: { push, end },
+        output,
+      }),
+    ).toThrow("An unknown error occurred");
+  });
+
   it("marks transport stream failures and runs cleanup", () => {
     const push = vi.fn();
     const end = vi.fn();
