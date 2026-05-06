@@ -595,6 +595,7 @@ export async function applyPluginUninstallDirectoryRemoval(
         "npm",
         "uninstall",
         "--loglevel=error",
+        "--legacy-peer-deps",
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
@@ -605,7 +606,11 @@ export async function applyPluginUninstallDirectoryRemoval(
       {
         cwd: removal.cleanup.npmRoot,
         timeoutMs: 300_000,
-        env: createSafeNpmInstallEnv(process.env, { packageLock: true, quiet: true }),
+        env: createSafeNpmInstallEnv(process.env, {
+          legacyPeerDeps: true,
+          packageLock: true,
+          quiet: true,
+        }),
       },
     );
     if (uninstall.code !== 0) {

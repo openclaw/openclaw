@@ -484,8 +484,21 @@ export async function runCodexAppServerAttempt(
       (await readMirroredSessionHistoryMessages(params.sessionFile)) ?? historyMessages;
   }
   const baseDeveloperInstructions = buildDeveloperInstructions(params);
+  // Build the workspace bootstrap block before finalizing developer
+  // instructions so persona files (SOUL.md, IDENTITY.md, ...) reach Codex
+  // through the explicit `developerInstructions` field.
+  const workspaceBootstrapInstructions = await buildCodexWorkspaceBootstrapInstructions({
+    params,
+    resolvedWorkspace,
+    effectiveWorkspace,
+    sessionKey: sandboxSessionKey,
+    sessionAgentId,
+  });
   let promptText = params.prompt;
-  let developerInstructions = baseDeveloperInstructions;
+  let developerInstructions = joinPresentSections(
+    baseDeveloperInstructions,
+    workspaceBootstrapInstructions,
+  );
   let prePromptMessageCount = historyMessages.length;
   if (activeContextEngine) {
     try {
@@ -512,6 +525,7 @@ export async function runCodexAppServerAttempt(
       promptText = projection.promptText;
       developerInstructions = joinPresentSections(
         baseDeveloperInstructions,
+        workspaceBootstrapInstructions,
         projection.developerInstructionAddition,
       );
       prePromptMessageCount = projection.prePromptMessageCount;
@@ -540,13 +554,6 @@ export async function runCodexAppServerAttempt(
     developerInstructions,
     messages: historyMessages,
     ctx: hookContext,
-  });
-  const workspaceBootstrapInstructions = await buildCodexWorkspaceBootstrapInstructions({
-    params,
-    resolvedWorkspace,
-    effectiveWorkspace,
-    sessionKey: sandboxSessionKey,
-    sessionAgentId,
   });
   const trajectoryRecorder = createCodexTrajectoryRecorder({
     attempt: params,
@@ -583,10 +590,7 @@ export async function runCodexAppServerAttempt(
       : options.nativeHookRelay?.enabled === false
         ? buildCodexNativeHookRelayDisabledConfig()
         : undefined;
-    const threadConfig = mergeCodexConfigInstructions(
-      nativeHookRelayConfig,
-      workspaceBootstrapInstructions,
-    );
+    const threadConfig = nativeHookRelayConfig;
     ({ client, thread } = await withCodexStartupTimeout({
       timeoutMs: params.timeoutMs,
       timeoutFloorMs: options.startupTimeoutFloorMs,
@@ -1511,6 +1515,17 @@ type DynamicToolBuildParams = {
   onYieldDetected: () => void;
 };
 
+function resolveOpenClawCodingToolsSessionKeys(
+  params: EmbeddedRunAttemptParams,
+  sandboxSessionKey: string,
+): Pick<OpenClawCodingToolsOptions, "sessionKey" | "runSessionKey"> {
+  return {
+    sessionKey: sandboxSessionKey,
+    runSessionKey:
+      params.sessionKey && params.sessionKey !== sandboxSessionKey ? params.sessionKey : undefined,
+  };
+}
+
 async function buildDynamicTools(input: DynamicToolBuildParams) {
   const { params } = input;
   if (params.disableTools || !supportsModelTools(params.model)) {
@@ -1521,6 +1536,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
   const createOpenClawCodingTools =
     openClawCodingToolsFactoryForTests ??
     (await import("openclaw/plugin-sdk/agent-harness")).createOpenClawCodingTools;
+  const sessionKeys = resolveOpenClawCodingToolsSessionKeys(params, input.sandboxSessionKey);
   const allTools = createOpenClawCodingTools({
     agentId: input.sessionAgentId,
     ...buildEmbeddedAttemptToolRunContext(params),
@@ -1543,11 +1559,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     senderE164: params.senderE164,
     senderIsOwner: params.senderIsOwner,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-    sessionKey: input.sandboxSessionKey,
-    runSessionKey:
-      params.sessionKey && params.sessionKey !== input.sandboxSessionKey
-        ? params.sessionKey
-        : undefined,
+    ...sessionKeys,
     sessionId: params.sessionId,
     runId: params.runId,
     agentDir,
@@ -1579,7 +1591,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     requireExplicitMessageTarget:
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
     disableMessageTool: params.disableMessageTool,
-    forceMessageTool: params.sourceReplyDeliveryMode === "message_tool_only",
+    forceMessageTool: shouldForceMessageTool(params),
     enableHeartbeatTool: params.trigger === "heartbeat",
     forceHeartbeatTool: params.trigger === "heartbeat",
     onYield: (message) => {
@@ -1611,6 +1623,10 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelApi: params.model.api,
     model: params.model,
   });
+}
+
+function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {
+  return params.sourceReplyDeliveryMode === "message_tool_only";
 }
 
 function shouldProjectMirroredHistoryForCodexStart(params: {
@@ -1871,20 +1887,6 @@ function renderCodexWorkspaceBootstrapInstructions(
   return lines.join("\n").trim();
 }
 
-function mergeCodexConfigInstructions(
-  config: JsonObject | undefined,
-  instructions: string | undefined,
-): JsonObject | undefined {
-  if (!instructions?.trim()) {
-    return config;
-  }
-  const merged: JsonObject = { ...config };
-  const existingInstructions =
-    typeof merged.instructions === "string" ? merged.instructions.trim() : undefined;
-  merged.instructions = joinPresentSections(existingInstructions, instructions);
-  return merged;
-}
-
 function remapCodexContextFilePath(params: {
   file: EmbeddedContextFile;
   sourceWorkspaceDir: string;
@@ -1993,6 +1995,8 @@ export const __testing = {
   buildDynamicTools,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
+  resolveOpenClawCodingToolsSessionKeys,
+  shouldForceMessageTool,
   setOpenClawCodingToolsFactoryForTests(factory: OpenClawCodingToolsFactory): void {
     openClawCodingToolsFactoryForTests = factory;
   },
