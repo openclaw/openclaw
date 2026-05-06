@@ -545,7 +545,7 @@ function extractMcpServerCount(state: AppViewState): number {
   return Object.keys(servers).length;
 }
 
-function extractQuickSettingsSecurity(state: AppViewState): {
+export function extractQuickSettingsSecurity(state: AppViewState): {
   gatewayAuth: string;
   execPolicy: string;
   deviceAuth: boolean;
@@ -584,23 +584,8 @@ function extractQuickSettingsSecurity(state: AppViewState): {
     const exec = (tools as Record<string, unknown>).exec;
     if (exec && typeof exec === "object") {
       const security = (exec as Record<string, unknown>).security;
-      if (typeof security === "string") {
-        execPolicy = security;
-      }
-    }
-  }
-  if (execPolicy === "allowlist") {
-    const agents = cfg.agents;
-    if (agents && typeof agents === "object") {
-      const defaults = (agents as Record<string, unknown>).defaults;
-      if (defaults && typeof defaults === "object") {
-        const exec = (defaults as Record<string, unknown>).exec;
-        if (exec && typeof exec === "object") {
-          const security = (exec as Record<string, unknown>).security;
-          if (typeof security === "string") {
-            execPolicy = security;
-          }
-        }
+      if (typeof security === "string" && security.trim()) {
+        execPolicy = security.trim();
       }
     }
   }
