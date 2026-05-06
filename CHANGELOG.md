@@ -456,6 +456,7 @@ Docs: https://docs.openclaw.ai
 - Models/perf: pre-warm the provider auth-state map at gateway startup so `/models` and every model-listing call short-circuits the per-provider plugin / external-CLI discovery on the hot path. Per-call cost drops from ~20 s to ~5 ms (~4,100×); the one-time startup warm resets and re-warms after hot reloads. (#84816) Thanks @sjf.
 - Release/security: ship the root npm package and OpenClaw-owned npm plugins with generated shrinkwrap, support bundled plugin runtime dependencies for suitable plugin tarballs, and require review for lockfile/shrinkwrap changes so published installs use locked dependency graphs.
 - Tests/perf: isolate doctor core health check unit coverage from real skills/workspace discovery so `doctor-core-checks` no longer dominates unit perf while keeping one real skills-readiness smoke. (#84493) Thanks @frankekn.
+- Plugin hooks/rawBody: add optional `rawBody` field to `before_prompt_build`, `before_agent_start`, and `agent_end` hook events, exposing the clean user input text before channel metadata or hook injections are prepended; `undefined` for non-channel origins (CLI, heartbeat, cron, exec-event, steered messages). Plugins should prefer `event.rawBody ?? extractText(event.messages)` for backward compatibility. (#52664) Thanks @kingdoooo.
 
 ### Fixes
 
