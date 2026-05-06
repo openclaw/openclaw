@@ -1,9 +1,17 @@
 import { randomBytes } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { privateFileStore } from "../infra/private-file-store.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  readOpenClawStateKvJson,
+  writeOpenClawStateKvJson,
+  type OpenClawStateJsonValue,
+} from "../state/openclaw-state-kv.js";
 import {
   DEFAULT_COMMITMENT_EXPIRE_AFTER_HOURS,
   DEFAULT_COMMITMENT_MAX_PER_HEARTBEAT,
@@ -20,20 +28,23 @@ import type {
 
 const STORE_VERSION = 1 as const;
 const ROLLING_DAY_MS = 24 * 60 * 60 * 1000;
+const COMMITMENT_STORE_SCOPE = "commitments";
+const COMMITMENT_STORE_KEY = "store";
+const LEGACY_COMMITMENT_STORE_RELATIVE_PATH = path.join("commitments", "commitments.json");
 
 type LoadedCommitmentStore = {
   store: CommitmentStoreFile;
   hadLegacySourceText: boolean;
 };
 
-function defaultCommitmentStorePath(): string {
-  return path.join(resolveStateDir(), "commitments", "commitments.json");
+function defaultCommitmentStorePath(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveStateDir(env), LEGACY_COMMITMENT_STORE_RELATIVE_PATH);
 }
 
 export function resolveCommitmentStorePath(storePath?: string): string {
   const trimmed = storePath?.trim();
   if (!trimmed) {
-    return defaultCommitmentStorePath();
+    return resolveOpenClawStateSqlitePath();
   }
   if (trimmed.startsWith("~")) {
     return path.resolve(expandHomePrefix(trimmed));
@@ -43,6 +54,10 @@ export function resolveCommitmentStorePath(storePath?: string): string {
 
 function emptyStore(): CommitmentStoreFile {
   return { version: STORE_VERSION, commitments: [] };
+}
+
+function sqliteOptionsForEnv(env: NodeJS.ProcessEnv): OpenClawStateDatabaseOptions {
+  return { env };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -108,37 +123,51 @@ function sanitizeStoreForWrite(store: CommitmentStoreFile): CommitmentStoreFile 
   };
 }
 
-async function loadCommitmentStoreInternal(storePath?: string): Promise<LoadedCommitmentStore> {
-  const resolved = resolveCommitmentStorePath(storePath);
+function coerceCommitmentStore(parsed: unknown): LoadedCommitmentStore {
+  if (!isRecord(parsed) || parsed.version !== STORE_VERSION || !Array.isArray(parsed.commitments)) {
+    return { store: emptyStore(), hadLegacySourceText: false };
+  }
+  let hadLegacySourceText = false;
+  return {
+    store: {
+      version: STORE_VERSION,
+      commitments: parsed.commitments.flatMap((entry) => {
+        hadLegacySourceText ||= hasLegacySourceText(entry);
+        const coerced = coerceCommitment(entry);
+        return coerced ? [coerced] : [];
+      }),
+    },
+    hadLegacySourceText,
+  };
+}
+
+async function loadCommitmentStoreFromFile(resolved: string): Promise<LoadedCommitmentStore> {
   try {
     const parsed = await privateFileStore(path.dirname(resolved)).readJsonIfExists(
       path.basename(resolved),
     );
-    if (
-      !isRecord(parsed) ||
-      parsed.version !== STORE_VERSION ||
-      !Array.isArray(parsed.commitments)
-    ) {
-      return { store: emptyStore(), hadLegacySourceText: false };
-    }
-    let hadLegacySourceText = false;
-    return {
-      store: {
-        version: STORE_VERSION,
-        commitments: parsed.commitments.flatMap((entry) => {
-          hadLegacySourceText ||= hasLegacySourceText(entry);
-          const coerced = coerceCommitment(entry);
-          return coerced ? [coerced] : [];
-        }),
-      },
-      hadLegacySourceText,
-    };
+    return coerceCommitmentStore(parsed);
   } catch (err) {
     if ((err as { code?: unknown })?.code === "ENOENT") {
       return { store: emptyStore(), hadLegacySourceText: false };
     }
     throw err;
   }
+}
+
+function loadCommitmentStoreFromSqlite(
+  env: NodeJS.ProcessEnv = process.env,
+): LoadedCommitmentStore {
+  return coerceCommitmentStore(
+    readOpenClawStateKvJson(COMMITMENT_STORE_SCOPE, COMMITMENT_STORE_KEY, sqliteOptionsForEnv(env)),
+  );
+}
+
+async function loadCommitmentStoreInternal(storePath?: string): Promise<LoadedCommitmentStore> {
+  if (!storePath?.trim()) {
+    return loadCommitmentStoreFromSqlite();
+  }
+  return await loadCommitmentStoreFromFile(resolveCommitmentStorePath(storePath));
 }
 
 export async function loadCommitmentStore(storePath?: string): Promise<CommitmentStoreFile> {
@@ -149,11 +178,45 @@ export async function saveCommitmentStore(
   storePath: string | undefined,
   store: CommitmentStoreFile,
 ): Promise<void> {
+  if (!storePath?.trim()) {
+    writeOpenClawStateKvJson<OpenClawStateJsonValue>(
+      COMMITMENT_STORE_SCOPE,
+      COMMITMENT_STORE_KEY,
+      sanitizeStoreForWrite(store) as unknown as OpenClawStateJsonValue,
+    );
+    return;
+  }
   const resolved = resolveCommitmentStorePath(storePath);
   await privateFileStore(path.dirname(resolved)).writeJson(
     path.basename(resolved),
     sanitizeStoreForWrite(store),
   );
+}
+
+export async function legacyCommitmentStoreFileExists(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<boolean> {
+  try {
+    await fs.access(defaultCommitmentStorePath(env));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function importLegacyCommitmentStoreFileToSqlite(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<{ imported: boolean; commitments: number }> {
+  const filePath = defaultCommitmentStorePath(env);
+  const { store } = await loadCommitmentStoreFromFile(filePath);
+  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
+    COMMITMENT_STORE_SCOPE,
+    COMMITMENT_STORE_KEY,
+    sanitizeStoreForWrite(store) as unknown as OpenClawStateJsonValue,
+    sqliteOptionsForEnv(env),
+  );
+  await fs.rm(filePath, { force: true }).catch(() => undefined);
+  return { imported: true, commitments: store.commitments.length };
 }
 
 function generateCommitmentId(nowMs: number): string {

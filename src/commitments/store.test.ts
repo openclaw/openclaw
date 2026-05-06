@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readOpenClawStateKvJson, writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import {
   listCommitments,
   listDueCommitmentsForSession,
@@ -128,21 +129,11 @@ describe("commitment store delivery selection", () => {
   });
 
   it("rewrites legacy source text fields when due commitments are listed", async () => {
-    const tmpDir = await useTempStateDir();
-    const storePath = path.join(tmpDir, "commitments", "commitments.json");
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          version: 1,
-          commitments: [commitment()],
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
+    await useTempStateDir();
+    writeOpenClawStateKvJson("commitments", "store", {
+      version: 1,
+      commitments: [commitment()],
+    });
 
     const dueCommitments = await listDueCommitmentsForSession({
       cfg: { commitments: { enabled: true } },
@@ -156,7 +147,7 @@ describe("commitment store delivery selection", () => {
     const store = await loadCommitmentStore();
     expect(store.commitments[0]).not.toHaveProperty("sourceUserText");
     expect(store.commitments[0]).not.toHaveProperty("sourceAssistantText");
-    const raw = await fs.readFile(storePath, "utf8");
+    const raw = JSON.stringify(readOpenClawStateKvJson("commitments", "store"));
     expect(raw).not.toContain("I have an interview tomorrow.");
     expect(raw).not.toContain("sourceUserText");
     expect(raw).not.toContain("sourceAssistantText");

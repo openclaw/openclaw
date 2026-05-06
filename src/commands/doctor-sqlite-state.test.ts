@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loadCommitmentStore } from "../commitments/store.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import { loadDeviceAuthStore } from "../infra/device-auth-store.js";
 import { listDevicePairing } from "../infra/device-pairing.js";
@@ -111,6 +112,36 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
           `${JSON.stringify({ version: 1, allowFrom: ["sender-2"] })}\n`,
           "utf8",
         );
+        const commitmentsDir = path.join(stateDir, "commitments");
+        await fs.mkdir(commitmentsDir, { recursive: true });
+        await fs.writeFile(
+          path.join(commitmentsDir, "commitments.json"),
+          `${JSON.stringify({
+            version: 1,
+            commitments: [
+              {
+                id: "cm_legacy",
+                agentId: "main",
+                sessionKey: "agent:main:telegram:sender-1",
+                channel: "telegram",
+                kind: "event_check_in",
+                sensitivity: "routine",
+                source: "inferred_user_context",
+                status: "pending",
+                reason: "Check in later.",
+                suggestedText: "How did it go?",
+                dedupeKey: "legacy-check-in",
+                confidence: 0.9,
+                dueWindow: { earliestMs: 1, latestMs: 2, timezone: "UTC" },
+                createdAtMs: 1,
+                updatedAtMs: 1,
+                attempts: 0,
+                sourceUserText: "legacy raw text",
+              },
+            ],
+          })}\n`,
+          "utf8",
+        );
         await fs.mkdir(path.join(stateDir, "push"), { recursive: true });
         await fs.writeFile(
           path.join(stateDir, "push", "web-push-subscriptions.json"),
@@ -169,6 +200,19 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
         await expect(
           fs.stat(path.join(oauthDir, "telegram-default-allowFrom.json")),
         ).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(loadCommitmentStore()).resolves.toEqual({
+          version: 1,
+          commitments: [
+            expect.objectContaining({
+              id: "cm_legacy",
+              dedupeKey: "legacy-check-in",
+            }),
+          ],
+        });
+        expect((await loadCommitmentStore()).commitments[0]).not.toHaveProperty("sourceUserText");
+        await expect(fs.stat(path.join(commitmentsDir, "commitments.json"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
         await expect(listWebPushSubscriptions(stateDir)).resolves.toEqual([
           expect.objectContaining({ subscriptionId: "sub-1" }),
         ]);
