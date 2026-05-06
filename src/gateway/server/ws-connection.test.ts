@@ -308,4 +308,157 @@ describe("attachGatewayWsConnectionHandler", () => {
     vi.advanceTimersByTime(25_000);
     expect(socket.ping).toHaveBeenCalledTimes(1);
   });
+
+  it("closes with code 1001 when a pong is not received before the next ping (event-loop starvation guard)", async () => {
+    vi.useFakeTimers();
+    const listeners = new Map<string, (...args: unknown[]) => void>();
+    const wss = {
+      on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+        listeners.set(event, handler);
+      }),
+    } as unknown as WebSocketServer;
+    const socket = Object.assign(new EventEmitter(), {
+      _socket: {
+        remoteAddress: "127.0.0.1",
+        remotePort: 1234,
+        localAddress: "127.0.0.1",
+        localPort: 5678,
+      },
+      send: vi.fn(),
+      ping: vi.fn(),
+      close: vi.fn(),
+    });
+    const logWsControl = createLogger();
+    const upgradeReq = {
+      headers: { host: "127.0.0.1:19001" },
+      socket: { localAddress: "127.0.0.1" },
+    };
+
+    attachGatewayWsConnectionHandler({
+      wss,
+      clients: new Set(),
+      preauthConnectionBudget: { release: vi.fn() } as never,
+      port: 19001,
+      canvasHostEnabled: false,
+      resolvedAuth: createResolvedAuth("token"),
+      preauthHandshakeTimeoutMs: 60_000,
+      gatewayMethods: [],
+      events: [],
+      refreshHealthSnapshot: vi.fn(),
+      logGateway: createLogger() as never,
+      logHealth: createLogger() as never,
+      logWsControl: logWsControl as never,
+      extraHandlers: {},
+      broadcast: vi.fn(),
+      buildRequestContext: () =>
+        ({
+          unsubscribeAllSessionEvents: vi.fn(),
+          nodeRegistry: { unregister: vi.fn() },
+          nodeUnsubscribeAll: vi.fn(),
+        }) as never,
+    });
+
+    const onConnection = listeners.get("connection");
+    expect(onConnection).toBeTypeOf("function");
+    onConnection?.(socket, upgradeReq);
+    await waitForLazyMessageHandler();
+
+    const passed = attachGatewayWsMessageHandlerMock.mock.calls[0]?.[0] as {
+      setClient: (client: unknown) => boolean;
+    };
+    passed.setClient({
+      socket,
+      connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
+      connId: "pong-timeout-client",
+      usesSharedGatewayAuth: false,
+    });
+
+    // First ping interval fires — sends ping, marks pongReceived=false.
+    vi.advanceTimersByTime(25_000);
+    expect(socket.ping).toHaveBeenCalledTimes(1);
+    // No pong emitted (simulates event-loop starvation blocking the pong frame).
+
+    // Second ping interval fires — pongReceived is still false → should close 1001.
+    vi.advanceTimersByTime(25_000);
+    expect(socket.close).toHaveBeenCalledWith(1001, "ping timeout");
+    expect(logWsControl.warn).toHaveBeenCalledWith(expect.stringContaining("ping pong timeout"));
+    // No second ping should have been sent after the dead-connection close.
+    expect(socket.ping).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not close when pong is received before the next ping interval", async () => {
+    vi.useFakeTimers();
+    const listeners = new Map<string, (...args: unknown[]) => void>();
+    const wss = {
+      on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+        listeners.set(event, handler);
+      }),
+    } as unknown as WebSocketServer;
+    const socket = Object.assign(new EventEmitter(), {
+      _socket: {
+        remoteAddress: "127.0.0.1",
+        remotePort: 1234,
+        localAddress: "127.0.0.1",
+        localPort: 5678,
+      },
+      send: vi.fn(),
+      ping: vi.fn(),
+      close: vi.fn(),
+    });
+    const upgradeReq = {
+      headers: { host: "127.0.0.1:19001" },
+      socket: { localAddress: "127.0.0.1" },
+    };
+
+    attachGatewayWsConnectionHandler({
+      wss,
+      clients: new Set(),
+      preauthConnectionBudget: { release: vi.fn() } as never,
+      port: 19001,
+      canvasHostEnabled: false,
+      resolvedAuth: createResolvedAuth("token"),
+      preauthHandshakeTimeoutMs: 60_000,
+      gatewayMethods: [],
+      events: [],
+      refreshHealthSnapshot: vi.fn(),
+      logGateway: createLogger() as never,
+      logHealth: createLogger() as never,
+      logWsControl: createLogger() as never,
+      extraHandlers: {},
+      broadcast: vi.fn(),
+      buildRequestContext: () =>
+        ({
+          unsubscribeAllSessionEvents: vi.fn(),
+          nodeRegistry: { unregister: vi.fn() },
+          nodeUnsubscribeAll: vi.fn(),
+        }) as never,
+    });
+
+    const onConnection = listeners.get("connection");
+    expect(onConnection).toBeTypeOf("function");
+    onConnection?.(socket, upgradeReq);
+    await waitForLazyMessageHandler();
+
+    const passed = attachGatewayWsMessageHandlerMock.mock.calls[0]?.[0] as {
+      setClient: (client: unknown) => boolean;
+    };
+    passed.setClient({
+      socket,
+      connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
+      connId: "pong-ok-client",
+      usesSharedGatewayAuth: false,
+    });
+
+    // First ping fires.
+    vi.advanceTimersByTime(25_000);
+    expect(socket.ping).toHaveBeenCalledTimes(1);
+
+    // Client responds with a pong.
+    socket.emit("pong");
+
+    // Second ping interval fires — pong was received, so no close.
+    vi.advanceTimersByTime(25_000);
+    expect(socket.close).not.toHaveBeenCalled();
+    expect(socket.ping).toHaveBeenCalledTimes(2);
+  });
 });

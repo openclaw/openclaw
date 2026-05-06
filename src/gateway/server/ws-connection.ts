@@ -312,6 +312,12 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     });
 
     let pingTimer: ReturnType<typeof setInterval> | undefined;
+    // Tracks whether a pong was received after the most recent ping.
+    // Set to false when a ping is sent; flipped back to true on pong.
+    // If the next ping fires and this is still false, the connection is
+    // considered dead (event-loop starvation or network drop) and is closed
+    // with code 1001 (going away) instead of being left half-open.
+    let pongReceived = true;
 
     const close = (code = 1000, reason?: string) => {
       if (closed) {
@@ -472,7 +478,24 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         releasePreauthBudget();
         client = next;
         clients.add(next);
+        pongReceived = true;
+        socket.on("pong", () => {
+          pongReceived = true;
+        });
         pingTimer = setInterval(() => {
+          if (!pongReceived) {
+            // The previous ping never received a pong. This can happen during
+            // severe event-loop starvation (e.g. a stuck exec tool call) where
+            // the gateway cannot process incoming frames in time. Close cleanly
+            // rather than letting the ws library terminate with 1006.
+            setCloseCause("ping-pong-timeout", { connId });
+            logWsControl.warn(
+              `ping pong timeout conn=${connId} remote=${remoteAddr ?? "?"} — closing (1001)`,
+            );
+            close(1001, "ping timeout");
+            return;
+          }
+          pongReceived = false;
           try {
             socket.ping();
           } catch {
