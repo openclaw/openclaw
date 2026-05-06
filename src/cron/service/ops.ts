@@ -7,6 +7,7 @@ import {
   createRunningTaskRun,
   failTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
+import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { createCronExecutionId } from "../run-id.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
@@ -686,6 +687,7 @@ async function prepareManualRun(
       job,
       startedAt: preflight.now,
     });
+    markCronJobActive(job.id);
     const executionJob = structuredClone(job);
     return {
       ok: true,
@@ -710,92 +712,96 @@ async function finishPreparedManualRun(
   const taskRunId = prepared.taskRunId;
   const runId = prepared.runId;
 
-  let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
   try {
-    coreResult = await executeJobCoreWithTimeout(state, executionJob);
-  } catch (err) {
-    coreResult = { status: "error", error: normalizeCronRunErrorText(err) };
-  }
-  const endedAt = state.deps.nowMs();
-  tryFinishManualTaskRun(state, {
-    taskRunId,
-    coreResult,
-    endedAt,
-  });
-
-  await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
-    const job = state.store?.jobs.find((entry) => entry.id === jobId);
-    if (!job) {
-      return;
+    let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
+    try {
+      coreResult = await executeJobCoreWithTimeout(state, executionJob);
+    } catch (err) {
+      coreResult = { status: "error", error: normalizeCronRunErrorText(err) };
     }
+    const endedAt = state.deps.nowMs();
+    tryFinishManualTaskRun(state, {
+      taskRunId,
+      coreResult,
+      endedAt,
+    });
 
-    const shouldDelete = applyJobResult(
-      state,
-      job,
-      {
+    await locked(state, async () => {
+      await ensureLoaded(state, { skipRecompute: true });
+      const job = state.store?.jobs.find((entry) => entry.id === jobId);
+      if (!job) {
+        return;
+      }
+
+      const shouldDelete = applyJobResult(
+        state,
+        job,
+        {
+          status: coreResult.status,
+          error: coreResult.error,
+          diagnostics: coreResult.diagnostics,
+          delivered: coreResult.delivered,
+          startedAt,
+          endedAt,
+        },
+        { preserveSchedule: mode === "force" },
+      );
+
+      emit(state, {
+        jobId: job.id,
+        action: "finished",
+        job,
         status: coreResult.status,
         error: coreResult.error,
+        summary: coreResult.summary,
         diagnostics: coreResult.diagnostics,
         delivered: coreResult.delivered,
-        startedAt,
-        endedAt,
-      },
-      { preserveSchedule: mode === "force" },
-    );
+        deliveryStatus: job.state.lastDeliveryStatus,
+        deliveryError: job.state.lastDeliveryError,
+        delivery: coreResult.delivery,
+        sessionId: coreResult.sessionId,
+        sessionKey: coreResult.sessionKey,
+        runId,
+        runAtMs: startedAt,
+        durationMs: job.state.lastDurationMs,
+        nextRunAtMs: job.state.nextRunAtMs,
+        model: coreResult.model,
+        provider: coreResult.provider,
+        usage: coreResult.usage,
+      });
 
-    emit(state, {
-      jobId: job.id,
-      action: "finished",
-      job,
-      status: coreResult.status,
-      error: coreResult.error,
-      summary: coreResult.summary,
-      diagnostics: coreResult.diagnostics,
-      delivered: coreResult.delivered,
-      deliveryStatus: job.state.lastDeliveryStatus,
-      deliveryError: job.state.lastDeliveryError,
-      delivery: coreResult.delivery,
-      sessionId: coreResult.sessionId,
-      sessionKey: coreResult.sessionKey,
-      runId,
-      runAtMs: startedAt,
-      durationMs: job.state.lastDurationMs,
-      nextRunAtMs: job.state.nextRunAtMs,
-      model: coreResult.model,
-      provider: coreResult.provider,
-      usage: coreResult.usage,
+      if (shouldDelete && state.store) {
+        state.store.jobs = state.store.jobs.filter((entry) => entry.id !== job.id);
+        emit(state, { jobId: job.id, action: "removed", job });
+      }
+
+      // Manual runs should not advance other due jobs without executing them.
+      // Use maintenance-only recompute to repair missing values while
+      // preserving existing past-due nextRunAtMs entries for future timer ticks.
+      const postRunSnapshot = shouldDelete
+        ? null
+        : {
+            enabled: job.enabled,
+            updatedAtMs: job.updatedAtMs,
+            state: structuredClone(job.state),
+          };
+      const postRunRemoved = shouldDelete;
+      // Isolated Telegram send can persist target writeback directly to disk.
+      // Reload before final persist so manual `cron run` keeps those changes.
+      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      mergeManualRunSnapshotAfterReload({
+        state,
+        jobId,
+        snapshot: postRunSnapshot,
+        removed: postRunRemoved,
+      });
+      recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
+      await persist(state);
+      armTimer(state);
     });
-
-    if (shouldDelete && state.store) {
-      state.store.jobs = state.store.jobs.filter((entry) => entry.id !== job.id);
-      emit(state, { jobId: job.id, action: "removed", job });
-    }
-
-    // Manual runs should not advance other due jobs without executing them.
-    // Use maintenance-only recompute to repair missing values while
-    // preserving existing past-due nextRunAtMs entries for future timer ticks.
-    const postRunSnapshot = shouldDelete
-      ? null
-      : {
-          enabled: job.enabled,
-          updatedAtMs: job.updatedAtMs,
-          state: structuredClone(job.state),
-        };
-    const postRunRemoved = shouldDelete;
-    // Isolated Telegram send can persist target writeback directly to disk.
-    // Reload before final persist so manual `cron run` keeps those changes.
-    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-    mergeManualRunSnapshotAfterReload({
-      state,
-      jobId,
-      snapshot: postRunSnapshot,
-      removed: postRunRemoved,
-    });
-    recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
-    await persist(state);
-    armTimer(state);
-  });
+  } finally {
+    clearCronJobActive(jobId);
+  }
 }
 
 export async function run(
