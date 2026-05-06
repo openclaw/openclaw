@@ -14,6 +14,8 @@ import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
+import { resolveSignalQuoteParams } from "./send-quote.js";
+export { resolveSignalQuoteParams };
 
 export type SignalSendOpts = {
   cfg: OpenClawConfig;
@@ -31,6 +33,16 @@ export type SignalSendOpts = {
   timeoutMs?: number;
   textMode?: "markdown" | "plain";
   textStyles?: SignalTextStyleRange[];
+  /**
+   * Message ID (timestamp string) to quote/reply-to. When provided and quoteTimestamp
+   * is not set, this is parsed as the quote timestamp and `to` is used as quote-author
+   * (best-effort; works for DM inbound replies, skipped for groups).
+   */
+  replyToId?: string;
+  /** Timestamp of the message being quoted (from replyToId). Takes precedence over replyToId. */
+  quoteTimestamp?: number;
+  /** Author of the quoted message (UUID for inbound, phone number for outbound). */
+  quoteAuthor?: string;
 };
 
 export type SignalSendResult = {
@@ -51,7 +63,9 @@ type SignalTarget =
   | { type: "group"; groupId: string }
   | { type: "username"; username: string };
 
-async function resolveSignalRpcAccountInfo(opts: SignalRpcOpts) {
+async function resolveSignalRpcAccountInfo(
+  opts: Pick<SignalSendOpts, "cfg" | "baseUrl" | "account" | "accountId">,
+) {
   if (opts.baseUrl?.trim() && opts.account?.trim()) {
     return undefined;
   }
@@ -203,7 +217,7 @@ export async function sendMessageSignal(
       readFile: opts.mediaReadFile,
     });
     attachments = [resolved.path];
-    const kind = kindFromMime(resolved.contentType ?? undefined);
+    const kind = kindFromMime(resolved.contentType);
     if (!message && kind) {
       // Avoid sending an empty body when only attachments exist.
       message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
@@ -241,6 +255,16 @@ export async function sendMessageSignal(
   }
   if (attachments && attachments.length > 0) {
     params.attachments = attachments;
+  }
+  const resolvedQuote = resolveSignalQuoteParams({
+    to,
+    replyToId: opts.replyToId,
+    quoteTimestamp: opts.quoteTimestamp,
+    quoteAuthor: opts.quoteAuthor,
+  });
+  if (typeof resolvedQuote.quoteTimestamp === "number" && resolvedQuote.quoteAuthor) {
+    params["quote-timestamp"] = resolvedQuote.quoteTimestamp;
+    params["quote-author"] = resolvedQuote.quoteAuthor;
   }
 
   const targetParams = buildTargetParams(target, {

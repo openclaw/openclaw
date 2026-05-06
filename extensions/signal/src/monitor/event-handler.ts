@@ -19,6 +19,7 @@ import {
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
+import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import {
   createInternalHookEvent,
   fireAndForgetHook,
@@ -123,6 +124,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     mediaTypes?: string[];
     commandAuthorized: boolean;
     wasMentioned?: boolean;
+    replyToId?: string;
     replyToBody?: string;
     replyToSender?: string;
     replyToIsQuote?: boolean;
@@ -229,6 +231,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       MediaTypes: entry.mediaTypes,
       WasMentioned: entry.isGroup ? entry.wasMentioned === true : undefined,
       CommandAuthorized: entry.commandAuthorized,
+      ReplyToId: entry.replyToId,
       OriginatingChannel: "signal" as const,
       OriginatingTo: signalTo,
     });
@@ -383,6 +386,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return `signal:${deps.accountId}:${conversationId}:${entry.senderPeerId}`;
     },
     shouldDebounce: (entry) => {
+      // Never coalesce quoted messages — replyToId must not be lost or misbound
+      // when rapid multi-part messages are flushed together.
+      if (entry.replyToId) {
+        return false;
+      }
       return shouldDebounceTextInbound({
         text: entry.bodyText,
         cfg: deps.cfg,
@@ -493,6 +501,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       .filter(Boolean)
       .join(":");
     enqueueSystemEvent(text, { sessionKey: route.sessionKey, contextKey, trusted: false });
+    requestHeartbeat({
+      source: "notifications-event",
+      intent: "event",
+      coalesceMs: 500,
+      sessionKey: route.sessionKey,
+    });
     return true;
   }
 
@@ -573,14 +587,19 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       groupId,
     });
     const quoteText = normalizeOptionalString(dataMessage?.quote?.text) ?? "";
-    const { contextVisibilityMode, quoteSenderAllowed, visibleQuoteText, visibleQuoteSender } =
-      resolveSignalQuoteContext({
-        cfg: deps.cfg,
-        accountId: deps.accountId,
-        isGroup,
-        dataMessage,
-        effectiveGroupAllow,
-      });
+    const {
+      contextVisibilityMode,
+      quoteSenderAllowed,
+      visibleQuoteText,
+      visibleQuoteSender,
+      decision: quoteDecision,
+    } = resolveSignalQuoteContext({
+      cfg: deps.cfg,
+      accountId: deps.accountId,
+      isGroup,
+      dataMessage,
+      effectiveGroupAllow,
+    });
     if (quoteText && !visibleQuoteText && isGroup) {
       logVerbose(
         `signal: drop quote context (mode=${contextVisibilityMode}, sender_allowed=${quoteSenderAllowed ? "yes" : "no"})`,
@@ -879,6 +898,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const senderName = envelope.sourceName ?? senderDisplay;
     const messageId =
       typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined;
+    const quoteId = dataMessage.quote?.id;
     await inboundDebouncer.enqueue({
       senderName,
       senderDisplay,
@@ -897,6 +917,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
       commandAuthorized,
       wasMentioned: effectiveWasMentioned,
+      replyToId: quoteDecision.include && typeof quoteId === "number" ? String(quoteId) : undefined,
       replyToBody: visibleQuoteText || undefined,
       replyToSender: visibleQuoteSender,
       replyToIsQuote: visibleQuoteText ? true : undefined,

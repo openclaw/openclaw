@@ -191,6 +191,7 @@ type ChannelHandlerParams = {
   forceDocument?: boolean;
   silent?: boolean;
   mediaAccess?: OutboundMediaAccess;
+  abortSignal?: AbortSignal;
   gatewayClientScopes?: readonly string[];
   onPlatformSendStart?: () => Promise<void>;
 };
@@ -556,6 +557,7 @@ function createChannelOutboundContextBase(
     mediaAccess: params.mediaAccess,
     mediaLocalRoots: params.mediaAccess?.localRoots,
     mediaReadFile: params.mediaAccess?.readFile,
+    abortSignal: params.abortSignal,
     gatewayClientScopes: params.gatewayClientScopes,
   };
 }
