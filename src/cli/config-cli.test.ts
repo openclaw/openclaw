@@ -2178,6 +2178,63 @@ describe("config cli", () => {
     });
   });
 
+  describe("config reload hint", () => {
+    it("does not print a restart hint for dynamic-read config paths", async () => {
+      const resolved: OpenClawConfig = {
+        tools: { sessions: { visibility: "tree" } },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "tools.sessions.visibility", "all"]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const raw = String(mockLog.mock.calls.at(-1)?.[0]);
+      expect(raw).toContain("Updated tools.sessions.visibility.");
+      expect(raw).toContain("No gateway restart required.");
+      expect(raw).not.toContain("Restart the gateway to apply.");
+    });
+
+    it("keeps the restart hint for restart-required config paths", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "gateway.port", "19001"]);
+
+      const raw = String(mockLog.mock.calls.at(-1)?.[0]);
+      expect(raw).toContain("Updated gateway.port.");
+      expect(raw).toContain("Restart the gateway to apply.");
+    });
+
+    it("prints a hot-reload hint for hot config paths", async () => {
+      const resolved: OpenClawConfig = {
+        hooks: { gmail: { account: "old" } },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "hooks.gmail.account", "new"]);
+
+      const raw = String(mockLog.mock.calls.at(-1)?.[0]);
+      expect(raw).toContain("Updated hooks.gmail.account.");
+      expect(raw).toContain("Gateway hot reload will apply.");
+    });
+
+    it("does not print a restart hint when unsetting a dynamic-read config path", async () => {
+      const resolved: OpenClawConfig = {
+        tools: { sessions: { visibility: "all" } },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "unset", "tools.sessions.visibility"]);
+
+      const raw = String(mockLog.mock.calls.at(-1)?.[0]);
+      expect(raw).toContain("Removed tools.sessions.visibility.");
+      expect(raw).toContain("No gateway restart required.");
+      expect(raw).not.toContain("Restart the gateway to apply.");
+    });
+  });
+
   describe("config unset - issue #6070", () => {
     it("preserves existing config keys when unsetting a value", async () => {
       const resolved: OpenClawConfig = {

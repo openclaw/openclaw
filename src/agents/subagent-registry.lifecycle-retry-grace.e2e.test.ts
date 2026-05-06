@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
 import { __testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.js";
 import { __testing as subagentAnnounceTesting } from "./subagent-announce.js";
+import { listAncestorSessionKeys } from "./subagent-registry-announce-read.js";
 import * as mod from "./subagent-registry.js";
 
 const noop = () => {};
@@ -172,6 +173,7 @@ describe("subagent registry lifecycle error grace", () => {
         countPendingDescendantRunsExcludingRun: mod.countPendingDescendantRunsExcludingRun,
         getLatestSubagentRunByChildSessionKey: mod.getLatestSubagentRunByChildSessionKey,
         isSubagentSessionRunActive: mod.isSubagentSessionRunActive,
+        listAncestorSessionKeys,
         listSubagentRunsForRequester: mod.listSubagentRunsForRequester,
         replaceSubagentRunAfterSteer: mod.replaceSubagentRunAfterSteer,
         resolveRequesterForChildSession: mod.resolveRequesterForChildSession,

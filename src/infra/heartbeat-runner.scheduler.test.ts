@@ -380,12 +380,14 @@ describe("startHeartbeatRunner", () => {
         reason: "cron:job-123",
         agentId: "ops",
         sessionKey: "agent:ops:discord:channel:alerts",
+        parentRunId: "run-parent",
         coalesceMs: 0,
       },
       expectedCall: {
         agentId: "ops",
         reason: "cron:job-123",
         sessionKey: "agent:ops:discord:channel:alerts",
+        parentRunId: "run-parent",
       },
     });
 

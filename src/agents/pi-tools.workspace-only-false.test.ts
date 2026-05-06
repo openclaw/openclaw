@@ -30,6 +30,7 @@ import {
   wrapToolMemoryFlushAppendOnlyWrite,
   wrapToolWorkspaceRootGuard,
 } from "./pi-tools.read.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 describe("FS tools with workspaceOnly=false", () => {
@@ -237,5 +238,65 @@ describe("FS tools with workspaceOnly=false", () => {
       text: "Appended content to memory/2026-03-07.md.",
     });
     await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("seed\nnew note");
+  });
+
+  it("uses the sandbox append primitive for memory-triggered writes", async () => {
+    const allowedRelativePath = "memory/2026-03-07.md";
+    const fallbackWrite = vi.fn(async () => {
+      throw new Error("append-only wrapper should not delegate to base write");
+    });
+    const appendFile = vi.fn(async () => {});
+    const readFile = vi.fn(async () => Buffer.from("stale"));
+    const writeFile = vi.fn(async () => {});
+    const bridge: SandboxFsBridge = {
+      resolvePath: ({ filePath }) => ({
+        relativePath: filePath,
+        containerPath: `/workspace/${filePath}`,
+      }),
+      readFile,
+      writeFile,
+      appendFile,
+      mkdirp: vi.fn(async () => {}),
+      remove: vi.fn(async () => {}),
+      rename: vi.fn(async () => {}),
+      stat: vi.fn(async () => ({ type: "file" as const, size: 5, mtimeMs: 0 })),
+    };
+    const writeTool: AnyAgentTool = {
+      name: "write",
+      label: "write",
+      description: "Write content to a file.",
+      parameters: { type: "object", properties: {} },
+      execute: fallbackWrite,
+    };
+    const wrapped = wrapToolMemoryFlushAppendOnlyWrite(writeTool, {
+      root: workspaceDir,
+      relativePath: allowedRelativePath,
+      sandbox: {
+        root: workspaceDir,
+        bridge,
+      },
+    });
+
+    const result = await wrapped.execute("test-call-memory-sandbox-append", {
+      path: allowedRelativePath,
+      content: "new note",
+    });
+
+    expect(hasToolError(result)).toBe(false);
+    expect(result.content).toContainEqual({
+      type: "text",
+      text: "Appended content to memory/2026-03-07.md.",
+    });
+    expect(appendFile).toHaveBeenCalledWith({
+      filePath: allowedRelativePath,
+      cwd: workspaceDir,
+      data: "new note",
+      mkdir: true,
+      prependNewlineIfNeeded: true,
+      signal: undefined,
+    });
+    expect(readFile).not.toHaveBeenCalled();
+    expect(writeFile).not.toHaveBeenCalled();
+    expect(fallbackWrite).not.toHaveBeenCalled();
   });
 });

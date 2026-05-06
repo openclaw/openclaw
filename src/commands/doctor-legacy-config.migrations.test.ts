@@ -212,21 +212,21 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toEqual([]);
   });
 
-  it("does not add whatsapp config when only auth exists (issue #900)", () => {
+  it("does not add whatsapp config when only auth exists", () => {
     expectNoWhatsAppConfigForLegacyAuth(() => {
       const credsDir = path.join(tempOauthDir ?? "", "whatsapp", "default");
       writeCreds(credsDir);
     });
   });
 
-  it("does not add whatsapp config when only legacy auth exists (issue #900)", () => {
+  it("does not add whatsapp config when only legacy auth exists", () => {
     expectNoWhatsAppConfigForLegacyAuth(() => {
       const credsPath = path.join(tempOauthDir ?? "", "creds.json");
       fs.writeFileSync(credsPath, JSON.stringify({ me: {} }));
     });
   });
 
-  it("does not add whatsapp config when only non-default auth exists (issue #900)", () => {
+  it("does not add whatsapp config when only non-default auth exists", () => {
     expectNoWhatsAppConfigForLegacyAuth(() => {
       const credsDir = path.join(tempOauthDir ?? "", "whatsapp", "work");
       writeCreds(credsDir);

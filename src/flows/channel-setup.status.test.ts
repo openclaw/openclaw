@@ -16,7 +16,10 @@ type NoteChannelPrimerChannels = Parameters<
   typeof import("./channel-setup.status.js").noteChannelPrimer
 >[1];
 
-const listChatChannels = vi.hoisted(() => vi.fn<ListChatChannels>(() => []));
+const listChatChannels = vi.hoisted(() => {
+  vi.resetModules();
+  return vi.fn<ListChatChannels>(() => []);
+});
 const resolveChannelSetupEntries = vi.hoisted(() =>
   vi.fn<ResolveChannelSetupEntries>(() => ({
     entries: [],
@@ -38,15 +41,30 @@ vi.mock("../channels/chat-meta.js", () => ({
   listChatChannels: () => listChatChannels(),
 }));
 
-vi.mock("../channels/registry.js", () => ({
-  formatChannelPrimerLine: (meta: Parameters<FormatChannelPrimerLine>[0]) =>
-    formatChannelPrimerLine(meta),
-  formatChannelSelectionLine: (
-    meta: Parameters<FormatChannelSelectionLine>[0],
-    docsLink: Parameters<FormatChannelSelectionLine>[1],
-  ) => formatChannelSelectionLine(meta, docsLink),
-  normalizeAnyChannelId: (channelId?: string) => channelId?.trim().toLowerCase() ?? null,
-}));
+vi.mock("../channels/registry.js", () => {
+  const normalizeChannel = (channelId?: unknown) =>
+    typeof channelId === "string" ? channelId.trim().toLowerCase() || null : null;
+  return {
+    CHANNEL_IDS: [],
+    CHAT_CHANNEL_ALIASES: {},
+    CHAT_CHANNEL_ORDER: [],
+    formatChannelPrimerLine: (meta: Parameters<FormatChannelPrimerLine>[0]) =>
+      formatChannelPrimerLine(meta),
+    formatChannelSelectionLine: (
+      meta: Parameters<FormatChannelSelectionLine>[0],
+      docsLink: Parameters<FormatChannelSelectionLine>[1],
+    ) => formatChannelSelectionLine(meta, docsLink),
+    getChatChannelMeta: () => null,
+    getRegisteredChannelPluginMeta: () => null,
+    listChatChannelAliases: () => [],
+    listChatChannels: () => listChatChannels(),
+    listRegisteredChannelPluginAliases: () => [],
+    listRegisteredChannelPluginIds: () => [],
+    normalizeAnyChannelId: normalizeChannel,
+    normalizeChannelId: normalizeChannel,
+    normalizeChatChannelId: normalizeChannel,
+  };
+});
 
 vi.mock("../commands/channel-setup/discovery.js", () => ({
   resolveChannelSetupEntries: (params: Parameters<ResolveChannelSetupEntries>[0]) =>

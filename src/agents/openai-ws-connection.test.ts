@@ -774,7 +774,7 @@ describe("OpenAIWebSocketManager", () => {
       const errors = attachErrorCollector(manager);
 
       // Fire two errors in quick succession — previously the second would
-      // be unhandled because .once("error") removed the handler after #1.
+      // be unhandled because .once("error") removed the handler after the first error.
       lastSocket().simulateError(new Error("first error"));
       lastSocket().simulateError(new Error("second error"));
       await p;

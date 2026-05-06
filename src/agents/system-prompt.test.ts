@@ -762,12 +762,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(messagingPrompt).not.toContain("subagents(action=list|steer|kill)");
 
     expect(spawnOnlyPrompt).toContain(
-      '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript.',
+      "- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work.",
     );
     expect(spawnOnlyPrompt).not.toContain("manage already-spawned children");
 
     expect(orchestrationPrompt).toContain(
-      '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript; use `subagents(action=list|steer|kill)` to manage already-spawned children.',
+      "- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; use `subagents(action=list|steer|kill)` to manage already-spawned children.",
     );
   });
 
@@ -1307,5 +1307,64 @@ describe("buildSubagentSystemPrompt", () => {
         expect(prompt, testCase.name).toContain("spawned by the main agent");
       }
     }
+  });
+
+  it("teaches tool-primary continuation when continue_delegate is in toolNames", () => {
+    const prompt = buildSubagentSystemPrompt({
+      childSessionKey: "agent:main:subagent:abc",
+      task: "chain task",
+      childDepth: 1,
+      maxSpawnDepth: 3,
+      toolNames: ["continue_delegate"],
+      continuationEnabled: true,
+    });
+
+    expect(prompt).toContain("## Continuation Chaining");
+    expect(prompt).toContain("Use the `continue_delegate` tool");
+    expect(prompt).toContain("Prefer the tool. Use brackets only as fallback.");
+    expect(prompt).toContain("[[CONTINUE_DELEGATE:");
+  });
+
+  it("teaches bracket-only continuation when continue_delegate is NOT in toolNames", () => {
+    const prompt = buildSubagentSystemPrompt({
+      childSessionKey: "agent:main:subagent:abc",
+      task: "chain task",
+      childDepth: 1,
+      maxSpawnDepth: 3,
+      toolNames: [],
+      continuationEnabled: true,
+    });
+
+    expect(prompt).toContain("## Continuation Chaining");
+    expect(prompt).toContain("end your ENTIRE response with:");
+    expect(prompt).toContain("[[CONTINUE_DELEGATE:");
+    expect(prompt).not.toContain("Use the `continue_delegate` tool");
+    expect(prompt).not.toContain("Prefer the tool");
+  });
+
+  it("teaches bracket-only continuation when toolNames is undefined", () => {
+    const prompt = buildSubagentSystemPrompt({
+      childSessionKey: "agent:main:subagent:abc",
+      task: "chain task",
+      childDepth: 1,
+      maxSpawnDepth: 3,
+      continuationEnabled: true,
+    });
+
+    expect(prompt).toContain("## Continuation Chaining");
+    expect(prompt).not.toContain("Use the `continue_delegate` tool");
+  });
+
+  it("omits continuation chaining for leaf agents even with toolNames", () => {
+    const prompt = buildSubagentSystemPrompt({
+      childSessionKey: "agent:main:subagent:abc:subagent:def",
+      task: "leaf task",
+      childDepth: 2,
+      maxSpawnDepth: 2,
+      toolNames: ["continue_delegate"],
+    });
+
+    expect(prompt).not.toContain("## Continuation Chaining");
+    expect(prompt).not.toContain("continue_delegate");
   });
 });

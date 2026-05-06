@@ -18,6 +18,14 @@ vi.mock("../../agents/sandbox.js", () => ({
 
 vi.mock("../../config/sessions/store.js", () => ({
   updateSessionStore: vi.fn(async () => {}),
+  // Stubbed identity-style resolver. See sister test for rationale.
+  resolveSessionStoreEntry: vi.fn(
+    ({ store, sessionKey }: { store: Record<string, unknown>; sessionKey: string }) => ({
+      normalizedKey: sessionKey,
+      existing: store[sessionKey],
+      legacyKeys: [] as string[],
+    }),
+  ),
 }));
 
 vi.mock("../../infra/system-events.js", () => ({

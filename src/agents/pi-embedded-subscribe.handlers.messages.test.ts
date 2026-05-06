@@ -45,6 +45,7 @@ function createMessageUpdateContext(
       reasoningStreamOpen: false,
       streamReasoning: false,
       deltaBuffer: "",
+      visibleAssistantBuffer: "",
       blockBuffer: "",
       partialBlockState: {
         thinking: false,
@@ -105,6 +106,7 @@ function createMessageEndContext(
       streamReasoning: false,
       blockReplyBreak: "message_end",
       deltaBuffer: "Need send.",
+      visibleAssistantBuffer: "Need send.",
       blockBuffer: "Need send.",
       blockState: {
         thinking: false,
@@ -542,6 +544,19 @@ describe("handleMessageUpdate", () => {
     expect(flushBlockReplyBuffer).not.toHaveBeenCalled();
     expect(ctx.state.deltaBuffer).toBe("");
     expect(ctx.state.blockBuffer).toBe("");
+  });
+
+  it("builds visible partial text incrementally across text_delta events", () => {
+    const onAgentEvent = vi.fn();
+    const stripBlockTags = vi.fn((text: string) => text);
+    const ctx = createMessageUpdateContext({ onAgentEvent });
+    ctx.stripBlockTags = stripBlockTags as unknown as EmbeddedPiSubscribeContext["stripBlockTags"];
+
+    handleMessageUpdate(ctx, createTextUpdateEvent({ type: "text_delta", text: "Hello" }));
+    handleMessageUpdate(ctx, createTextUpdateEvent({ type: "text_delta", text: " world" }));
+
+    expect(stripBlockTags.mock.calls.map(([text]) => text)).toEqual(["Hello", " world"]);
+    expect(ctx.state.visibleAssistantBuffer).toBe("Hello world");
   });
 
   it("suppresses commentary partials even when they contain visible text", () => {

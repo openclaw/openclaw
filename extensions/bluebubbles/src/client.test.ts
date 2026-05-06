@@ -600,5 +600,5 @@ describe("client construction", () => {
 });
 
 // Reference unused import so lint doesn't complain while we keep parity with
-// the existing test-harness module contract (#68xxx).
+// the existing test-harness module contract.
 void _setFetchGuardForTesting;

@@ -67,10 +67,15 @@ vi.mock("../command-detection.js", () => ({
 
 vi.mock("./agent-runner.runtime.js", () => ({
   runReplyAgent: vi.fn().mockResolvedValue({ text: "ok" }),
+  cancelContinuationTimer: vi.fn(),
 }));
 
 vi.mock("./body.js", () => ({
   applySessionHints: vi.fn().mockImplementation(async ({ baseBody }) => baseBody),
+}));
+
+vi.mock("../continuation/context-pressure.js", () => ({
+  checkContextPressure: vi.fn().mockReturnValue({ fired: false, band: 0 }),
 }));
 
 vi.mock("./groups.js", () => ({
@@ -1441,6 +1446,39 @@ describe("runPreparedReply media-only handling", () => {
       | { suppressTyping?: boolean }
       | undefined;
     expect(call?.suppressTyping).toBe(true);
+  });
+
+  it("marks delegate-return turns as continuation wakes and clears delegate-pending state", async () => {
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          continuationTrigger: "delegate-return",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.isContinuationWake).toBe(true);
+  });
+
+  it("marks work-wake turns as continuation wakes without clearing delegate-pending state", async () => {
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          continuationTrigger: "work-wake",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.isContinuationWake).toBe(true);
+  });
+
+  it("leaves ordinary turns unmarked as continuation wakes", async () => {
+    await runPreparedReply(baseParams());
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.isContinuationWake).toBe(false);
   });
 
   it("routes queued system events into user prompt text, not system prompt context", async () => {

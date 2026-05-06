@@ -394,6 +394,18 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toContain("diagnostics.stuckSessionWarnMs");
   });
 
+  it("treats session tool visibility as a dynamic-read path", () => {
+    const plan = buildGatewayReloadPlan(["tools.sessions.visibility"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toContain("tools.sessions.visibility");
+  });
+
+  it("treats continuation delegate limits as dynamic-read paths", () => {
+    const plan = buildGatewayReloadPlan(["agents.defaults.continuation.maxDelegatesPerTurn"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toContain("agents.defaults.continuation.maxDelegatesPerTurn");
+  });
+
   it("restarts for gateway.auth.token changes", () => {
     const plan = buildGatewayReloadPlan(["gateway.auth.token"]);
     expect(plan.restartGateway).toBe(true);

@@ -152,6 +152,10 @@ function createMemoryPatchSandbox(initialFiles: Record<string, string> = {}) {
     writeFile: async ({ filePath, data }) => {
       files.set(filePath, Buffer.isBuffer(data) ? data.toString("utf8") : data);
     },
+    appendFile: async ({ filePath, data }) => {
+      const current = files.get(filePath) ?? "";
+      files.set(filePath, `${current}${Buffer.isBuffer(data) ? data.toString("utf8") : data}`);
+    },
     remove: async ({ filePath }) => {
       files.delete(filePath);
     },

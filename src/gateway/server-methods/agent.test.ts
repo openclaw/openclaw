@@ -962,6 +962,183 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it("reactivates completed subagent sessions and broadcasts send updates", async () => {
+    const childSessionKey = "agent:main:subagent:followup";
+    const completedRun = {
+      runId: "run-old",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      requesterDisplayKey: "main",
+      task: "initial task",
+      cleanup: "keep" as const,
+      createdAt: 1,
+      startedAt: 2,
+      endedAt: 3,
+      outcome: { status: "ok" as const },
+    };
+
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "sess-followup",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: childSessionKey,
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        [childSessionKey]: {
+          sessionId: "sess-followup",
+          updatedAt: Date.now(),
+        },
+      };
+      return await updater(store);
+    });
+    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(completedRun);
+    mocks.replaceSubagentRunAfterSteer.mockReturnValueOnce(true);
+    mocks.loadGatewaySessionRow.mockReturnValueOnce({
+      status: "running",
+      startedAt: 123,
+      endedAt: undefined,
+      runtimeMs: 10,
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    const respond = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    await invokeAgent(
+      {
+        message: "follow-up",
+        sessionKey: childSessionKey,
+        idempotencyKey: "run-new",
+      },
+      {
+        respond,
+        context: {
+          dedupe: new Map(),
+          addChatRun: vi.fn(),
+          chatAbortControllers: new Map(),
+          logGateway: { info: vi.fn(), error: vi.fn() },
+          broadcastToConnIds,
+          getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+          getRuntimeConfig: () => mocks.loadConfigReturn,
+        } as unknown as GatewayRequestContext,
+      },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "run-new",
+        status: "accepted",
+      }),
+      undefined,
+      { runId: "run-new" },
+    );
+    expectSubagentFollowupReactivation({
+      replaceSubagentRunAfterSteerMock: mocks.replaceSubagentRunAfterSteer,
+      broadcastToConnIds,
+      completedRun,
+      childSessionKey,
+    });
+  });
+
+  it("includes live session setting metadata in agent send events", async () => {
+    mockMainSessionEntry({
+      sessionId: "sess-main",
+      updatedAt: Date.now(),
+      fastMode: true,
+      sendPolicy: "deny",
+      lastChannel: "telegram",
+      lastTo: "-100123",
+      lastAccountId: "acct-1",
+      lastThreadId: 42,
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": buildExistingMainStoreEntry({
+          fastMode: true,
+          sendPolicy: "deny",
+          lastChannel: "telegram",
+          lastTo: "-100123",
+          lastAccountId: "acct-1",
+          lastThreadId: 42,
+        }),
+      };
+      return await updater(store);
+    });
+    mocks.loadGatewaySessionRow.mockReturnValue({
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/tmp/subagent",
+      forkedFromParent: true,
+      spawnDepth: 2,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      fastMode: true,
+      sendPolicy: "deny",
+      lastChannel: "telegram",
+      lastTo: "-100123",
+      lastAccountId: "acct-1",
+      lastThreadId: 42,
+      totalTokens: 12,
+      status: "running",
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    const broadcastToConnIds = vi.fn();
+    await invokeAgent(
+      {
+        message: "test",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-live-settings",
+      },
+      {
+        context: {
+          dedupe: new Map(),
+          addChatRun: vi.fn(),
+          chatAbortControllers: new Map(),
+          logGateway: { info: vi.fn(), error: vi.fn() },
+          broadcastToConnIds,
+          getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+          getRuntimeConfig: () => mocks.loadConfigReturn,
+        } as unknown as GatewayRequestContext,
+      },
+    );
+
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        reason: "send",
+        spawnedBy: "agent:main:main",
+        spawnedWorkspaceDir: "/tmp/subagent",
+        forkedFromParent: true,
+        spawnDepth: 2,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        fastMode: true,
+        sendPolicy: "deny",
+        lastChannel: "telegram",
+        lastTo: "-100123",
+        lastAccountId: "acct-1",
+        lastThreadId: 42,
+        totalTokens: 12,
+        status: "running",
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
+  });
+
   it("injects a timestamp into the message passed to agentCommand", async () => {
     setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
 
@@ -1128,6 +1305,27 @@ describe("gateway agent handler", () => {
     expect(callArgs.message).not.toContain("[Inter-session message]");
 
     resetTimeConfig();
+  });
+
+  it("forwards continuationTrigger metadata to the ingress agent command", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "delegate finished",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        continuationTrigger: "delegate-return",
+        idempotencyKey: "test-continuation-trigger-forward",
+      },
+      { reqId: "continuation-trigger-1" },
+    );
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as
+      | { continuationTrigger?: string }
+      | undefined;
+    expect(call?.continuationTrigger).toBe("delegate-return");
   });
 
   it.each([

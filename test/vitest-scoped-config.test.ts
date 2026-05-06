@@ -342,7 +342,10 @@ describe("scoped vitest configs", () => {
   });
 
   it("splits auto-reply into narrower scoped buckets", () => {
-    expect(defaultAutoReplyCoreConfig.test?.include).toEqual(["*.test.ts"]);
+    expect(defaultAutoReplyCoreConfig.test?.include).toEqual([
+      "*.test.ts",
+      "continuation/**/*.test.ts",
+    ]);
     expect(defaultAutoReplyCoreConfig.test?.exclude).toEqual(
       expect.arrayContaining(["reply*.test.ts"]),
     );

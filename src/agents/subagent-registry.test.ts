@@ -60,6 +60,16 @@ vi.mock("../config/sessions.js", () => ({
   resolveAgentIdFromSessionKey: mocks.resolveAgentIdFromSessionKey,
   resolveStorePath: mocks.resolveStorePath,
   updateSessionStore: mocks.updateSessionStore,
+  // Stubbed identity-style resolver returns normalizedKey=sessionKey,
+  // existing=store[sessionKey], no legacyKeys. The real impl applies session-key
+  // normalization; this test's session-key fixtures are already in canonical form.
+  resolveSessionStoreEntry: ({
+    store,
+    sessionKey,
+  }: {
+    store: Record<string, unknown>;
+    sessionKey: string;
+  }) => ({ normalizedKey: sessionKey, existing: store[sessionKey], legacyKeys: [] }),
 }));
 
 vi.mock("../sessions/session-lifecycle-events.js", () => ({

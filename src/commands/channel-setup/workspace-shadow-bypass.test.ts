@@ -34,10 +34,26 @@ vi.mock("../../channels/plugins/catalog.js", () => ({
   getChannelPluginCatalogEntry: (...args: unknown[]) =>
     getChannelPluginCatalogEntry(...(args as [string, Record<string, unknown>])),
 }));
-vi.mock("../../channels/registry.js", () => ({
-  listChatChannels: () => listChatChannels(),
-  normalizeAnyChannelId: (channelId?: string) => channelId?.trim().toLowerCase() ?? null,
-}));
+vi.mock("../../channels/registry.js", () => {
+  const normalizeChannel = (channelId?: unknown) =>
+    typeof channelId === "string" ? channelId.trim().toLowerCase() || null : null;
+  return {
+    CHANNEL_IDS: [],
+    CHAT_CHANNEL_ALIASES: {},
+    CHAT_CHANNEL_ORDER: [],
+    formatChannelPrimerLine: () => "",
+    formatChannelSelectionLine: () => "",
+    getChatChannelMeta: () => null,
+    getRegisteredChannelPluginMeta: () => null,
+    listChatChannelAliases: () => [],
+    listChatChannels: () => listChatChannels(),
+    listRegisteredChannelPluginAliases: () => [],
+    listRegisteredChannelPluginIds: () => [],
+    normalizeAnyChannelId: normalizeChannel,
+    normalizeChannelId: normalizeChannel,
+    normalizeChatChannelId: normalizeChannel,
+  };
+});
 vi.mock("../../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry: (...a: unknown[]) => loadPluginManifestRegistry(...a),
 }));
@@ -76,11 +92,21 @@ beforeEach(() => {
     plugins: [],
     diagnostics: [],
   });
-  loadPluginRegistrySnapshotWithMetadata.mockImplementation((...args: unknown[]) => ({
-    snapshot: loadPluginRegistrySnapshot(...args),
+  loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
     source: "derived",
+    snapshot: {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash: "test",
+      generatedAtMs: 0,
+      installRecords: {},
+      plugins: [],
+      diagnostics: [],
+    },
     diagnostics: [],
-  }));
+  });
   listPluginContributionIds.mockReturnValue([]);
   listChatChannels.mockReturnValue([]);
 });

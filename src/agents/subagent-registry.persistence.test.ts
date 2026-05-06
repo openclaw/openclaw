@@ -253,6 +253,117 @@ describe("subagent registry persistence", () => {
     expect(persisted?.startedAt).toBeLessThanOrEqual(endedAt);
   });
 
+  it("persists silent announce metadata and replays it after restart", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+
+    const { callGateway } = await import("../gateway/call.js");
+    let releaseInitialWait:
+      | ((value: { status: "ok"; startedAt: number; endedAt: number }) => void)
+      | undefined;
+    vi.mocked(callGateway)
+      .mockImplementationOnce(
+        async () =>
+          await new Promise((resolve) => {
+            releaseInitialWait = resolve as typeof releaseInitialWait;
+          }),
+      )
+      .mockResolvedValueOnce({
+        status: "ok",
+        startedAt: 111,
+        endedAt: 222,
+      });
+
+    registerSubagentRun({
+      runId: "run-silent",
+      childSessionKey: "agent:main:subagent:silent-test",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "quiet enrichment",
+      cleanup: "keep",
+      silentAnnounce: true,
+      wakeOnReturn: true,
+      traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+    });
+    await writeChildSessionEntry({
+      sessionKey: "agent:main:subagent:silent-test",
+      sessionId: "sess-silent",
+    });
+
+    const registryPath = path.join(tempStateDir, "subagents", "runs.json");
+    const run = await readPersistedRun<{
+      silentAnnounce?: boolean;
+      wakeOnReturn?: boolean;
+      traceparent?: string;
+    }>(registryPath, "run-silent");
+    expect(run).toMatchObject({
+      silentAnnounce: true,
+      wakeOnReturn: true,
+      traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+    });
+
+    resetSubagentRegistryForTests({ persist: false });
+    initSubagentRegistry();
+    releaseInitialWait?.({
+      status: "ok",
+      startedAt: 111,
+      endedAt: 222,
+    });
+
+    await vi.waitFor(() => {
+      expect(announceSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          childRunId: "run-silent",
+          silentAnnounce: true,
+          wakeOnReturn: true,
+          traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        }),
+      );
+    });
+  });
+
+  it("persists completed subagent timing through the lifecycle (registerSubagentRun → callGateway → persist)", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+
+    const { callGateway } = await import("../gateway/call.js");
+    const now = Date.now();
+    const startedAt = now;
+    const endedAt = now + 500;
+    vi.mocked(callGateway).mockResolvedValueOnce({
+      status: "ok",
+      startedAt,
+      endedAt,
+    });
+
+    const storePath = await writeChildSessionEntry({
+      sessionKey: "agent:main:subagent:timing",
+      sessionId: "sess-timing",
+      updatedAt: startedAt - 1,
+    });
+    registerSubagentRun({
+      runId: "run-session-timing",
+      childSessionKey: "agent:main:subagent:timing",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "persist timing",
+      cleanup: "keep",
+    });
+
+    await waitForRegistryWork(async () => {
+      const store = await readSubagentSessionStore(storePath);
+      return store["agent:main:subagent:timing"]?.endedAt === endedAt;
+    });
+
+    const store = await readSubagentSessionStore(storePath);
+    const persisted = store["agent:main:subagent:timing"];
+    expect(persisted?.endedAt).toBe(endedAt);
+    expect(persisted?.runtimeMs).toBe(500);
+    expect(persisted?.status).toBe("done");
+    expect(persisted?.startedAt).toBeGreaterThanOrEqual(startedAt);
+    expect(persisted?.startedAt).toBeLessThanOrEqual(endedAt);
+  });
+
   it("skips cleanup when cleanupHandled was persisted", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;

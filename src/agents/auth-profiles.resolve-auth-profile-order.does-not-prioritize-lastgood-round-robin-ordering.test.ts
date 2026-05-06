@@ -495,7 +495,7 @@ describe("resolveAuthProfileOrder", () => {
     },
   );
 
-  it("mode: oauth config accepts both oauth and token credentials (issue #559)", () => {
+  it("mode: oauth config accepts both oauth and token credentials", () => {
     const now = Date.now();
     const storeWithBothTypes: AuthProfileStore = {
       version: 1,
@@ -543,7 +543,7 @@ describe("resolveAuthProfileOrder", () => {
     expect(orderTokenCred).toContain("anthropic:token-cred");
   });
 
-  it("mode: token config rejects oauth credentials (issue #559 root cause)", () => {
+  it("mode: token config rejects oauth credentials", () => {
     const now = Date.now();
     const storeWithOauth: AuthProfileStore = {
       version: 1,

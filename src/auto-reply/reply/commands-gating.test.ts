@@ -65,10 +65,25 @@ vi.mock("../../channels/plugins/config-writes.js", () => ({
   resolveConfigWriteTargetFromPath: vi.fn(() => "config"),
 }));
 
-vi.mock("../../channels/registry.js", () => ({
-  normalizeAnyChannelId: vi.fn((value?: string) => value),
-  normalizeChannelId: vi.fn((value?: string) => value),
-}));
+vi.mock("../../channels/registry.js", () => {
+  const normalizeChannel = (value?: string | null) => value?.trim().toLowerCase() || null;
+  return {
+    CHANNEL_IDS: [],
+    CHAT_CHANNEL_ALIASES: {},
+    CHAT_CHANNEL_ORDER: [],
+    formatChannelPrimerLine: vi.fn(() => ""),
+    formatChannelSelectionLine: vi.fn(() => ""),
+    getChatChannelMeta: vi.fn(() => null),
+    getRegisteredChannelPluginMeta: vi.fn(() => null),
+    listChatChannelAliases: vi.fn(() => []),
+    listChatChannels: vi.fn(() => []),
+    listRegisteredChannelPluginAliases: vi.fn(() => []),
+    listRegisteredChannelPluginIds: vi.fn(() => []),
+    normalizeAnyChannelId: vi.fn(normalizeChannel),
+    normalizeChannelId: vi.fn(normalizeChannel),
+    normalizeChatChannelId: vi.fn(normalizeChannel),
+  };
+});
 
 vi.mock("../../config/config-paths.js", () => ({
   getConfigValueAtPath: getConfigValueAtPathMock,

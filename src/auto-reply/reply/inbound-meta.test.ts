@@ -25,9 +25,25 @@ vi.mock("../../channels/plugins/registry-loaded.js", () => ({
       : undefined,
 }));
 
-vi.mock("../../channels/registry.js", () => ({
-  normalizeAnyChannelId: (channelId?: string) => channelId?.trim().toLowerCase(),
-}));
+vi.mock("../../channels/registry.js", () => {
+  const normalizeChannel = (value?: string | null) => value?.trim().toLowerCase() || null;
+  return {
+    CHANNEL_IDS: [],
+    CHAT_CHANNEL_ALIASES: {},
+    CHAT_CHANNEL_ORDER: [],
+    formatChannelPrimerLine: () => "",
+    formatChannelSelectionLine: () => "",
+    getChatChannelMeta: () => null,
+    getRegisteredChannelPluginMeta: () => null,
+    listChatChannelAliases: () => [],
+    listChatChannels: () => [],
+    listRegisteredChannelPluginAliases: () => [],
+    listRegisteredChannelPluginIds: () => [],
+    normalizeAnyChannelId: normalizeChannel,
+    normalizeChannelId: normalizeChannel,
+    normalizeChatChannelId: normalizeChannel,
+  };
+});
 
 function parseInboundMetaPayload(text: string): Record<string, unknown> {
   const match = text.match(/```json\n([\s\S]*?)\n```/);

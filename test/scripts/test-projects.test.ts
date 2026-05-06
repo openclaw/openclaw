@@ -279,6 +279,32 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes the auto-reply directory root to the auto-reply shard", () => {
+    const plans = buildVitestRunPlans(["src/auto-reply"], process.cwd());
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.auto-reply.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/auto-reply/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes the agents directory root to the agents shard", () => {
+    const plans = buildVitestRunPlans(["src/agents"], process.cwd());
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.agents.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/agents/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes browser extension changes to the browser extension lane", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "extensions/browser/src/browser/cdp.helpers.ts",
@@ -590,6 +616,17 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/auto-reply/reply/effective-reply-route.test.ts",
       ],
     });
+  });
+
+  it("routes the top-level auto-reply target to the auto-reply shard", () => {
+    expect(buildVitestRunPlans(["src/auto-reply"], process.cwd())).toEqual([
+      {
+        config: "test/vitest/vitest.auto-reply.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/auto-reply/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
   });
 
   it("routes ACP command source files to ACP command regression tests", () => {

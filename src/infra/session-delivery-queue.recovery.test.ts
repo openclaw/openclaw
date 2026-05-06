@@ -1,14 +1,27 @@
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+import { __resetFailedGcWatermarkForTests } from "./session-delivery-queue-recovery.js";
+import * as storage from "./session-delivery-queue-storage.js";
 import {
   enqueueSessionDelivery,
+  enqueuePostCompactionDelegateDelivery,
   failSessionDelivery,
   isSessionDeliveryEligibleForRetry,
   loadPendingSessionDeliveries,
   recoverPendingSessionDeliveries,
+  resolveSessionDeliveryQueueDir,
 } from "./session-delivery-queue.js";
 
 describe("session-delivery queue recovery", () => {
+  beforeEach(() => {
+    __resetFailedGcWatermarkForTests();
+  });
+  afterEach(() => {
+    __resetFailedGcWatermarkForTests();
+  });
+
   it("replays and acks pending entries on recovery", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       await enqueueSessionDelivery(
@@ -118,6 +131,71 @@ describe("session-delivery queue recovery", () => {
     vi.useRealTimers();
   });
 
+  it("amortizes failed/ prune across rapid recovery ticks via the lastGcAt watermark", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const failedDir = path.join(resolveSessionDeliveryQueueDir(tempDir), "failed");
+      fs.mkdirSync(failedDir, { recursive: true });
+      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const deliver = vi.fn(async () => undefined);
+
+      const pruneSpy = vi
+        .spyOn(storage, "pruneFailedOlderThan")
+        .mockResolvedValue({ scanned: 0, removed: 0 });
+      const nowSpy = vi.spyOn(Date, "now");
+      try {
+        nowSpy.mockReturnValue(1_700_000_000_000);
+        await recoverPendingSessionDeliveries({
+          deliver,
+          stateDir: tempDir,
+          log,
+          failedMaxAgeMs: 14 * 24 * 60 * 60 * 1000,
+        });
+        expect(pruneSpy).toHaveBeenCalledTimes(1);
+
+        // Same wall-clock — within the 60s amortization window — must NOT re-prune.
+        await recoverPendingSessionDeliveries({
+          deliver,
+          stateDir: tempDir,
+          log,
+          failedMaxAgeMs: 14 * 24 * 60 * 60 * 1000,
+        });
+        expect(pruneSpy).toHaveBeenCalledTimes(1);
+
+        // Advance past the amortization window — next tick should prune again.
+        nowSpy.mockReturnValue(1_700_000_000_000 + 61_000);
+        await recoverPendingSessionDeliveries({
+          deliver,
+          stateDir: tempDir,
+          log,
+          failedMaxAgeMs: 14 * 24 * 60 * 60 * 1000,
+        });
+        expect(pruneSpy).toHaveBeenCalledTimes(2);
+      } finally {
+        pruneSpy.mockRestore();
+        nowSpy.mockRestore();
+      }
+    });
+  });
+
+  it("skips failed/ prune entirely when failedMaxAgeMs is not provided", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const pruneSpy = vi
+        .spyOn(storage, "pruneFailedOlderThan")
+        .mockResolvedValue({ scanned: 0, removed: 0 });
+      try {
+        await recoverPendingSessionDeliveries({
+          deliver: vi.fn(async () => undefined),
+          stateDir: tempDir,
+          log,
+        });
+        expect(pruneSpy).not.toHaveBeenCalled();
+      } finally {
+        pruneSpy.mockRestore();
+      }
+    });
+  });
+
   it("uses the persisted retryCount for the first backoff tier", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-23T00:00:00.000Z"));
@@ -147,5 +225,48 @@ describe("session-delivery queue recovery", () => {
     });
 
     vi.useRealTimers();
+  });
+
+  it("logs retry-budget exhaustion for post-compaction delegates before spawn", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const id = await enqueuePostCompactionDelegateDelivery(
+        {
+          sessionKey: "agent:main:main",
+          delegate: {
+            task: "carry state forward",
+            createdAt: 123,
+            silent: true,
+            silentWake: true,
+          },
+          sequence: 0,
+        },
+        tempDir,
+      );
+      for (let i = 0; i < 5; i += 1) {
+        await failSessionDelivery(id, `spawn failed ${i}`, tempDir);
+      }
+      const log = {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      };
+
+      const summary = await recoverPendingSessionDeliveries({
+        deliver: vi.fn(async () => undefined),
+        stateDir: tempDir,
+        log,
+      });
+
+      expect(summary.skippedMaxRetries).toBe(1);
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringContaining("[session-delivery-queue:retry-budget-exhausted] entry"),
+      );
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "hit retry cap before post-compaction delegate spawn for session agent:main:main: carry state forward",
+        ),
+      );
+      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
+    });
   });
 });

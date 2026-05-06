@@ -131,14 +131,26 @@ vi.mock("../channels/plugins/setup-registry.js", () => ({
   listChannelSetupPlugins: () => listChannelSetupPlugins(),
 }));
 
-vi.mock("../channels/registry.js", () => ({
-  getChatChannelMeta: (channelId: string) => ({ id: channelId, label: channelId }),
-  listChatChannels: () => [],
-  normalizeAnyChannelId: (channelId?: unknown) =>
-    typeof channelId === "string" ? channelId.trim().toLowerCase() || null : null,
-  normalizeChatChannelId: (channelId?: unknown) =>
-    typeof channelId === "string" ? channelId.trim().toLowerCase() || null : null,
-}));
+vi.mock("../channels/registry.js", () => {
+  const normalizeChannel = (channelId?: unknown) =>
+    typeof channelId === "string" ? channelId.trim().toLowerCase() || null : null;
+  return {
+    CHANNEL_IDS: [],
+    CHAT_CHANNEL_ALIASES: {},
+    CHAT_CHANNEL_ORDER: [],
+    formatChannelPrimerLine: () => "",
+    formatChannelSelectionLine: () => "",
+    getChatChannelMeta: (channelId: string) => ({ id: channelId, label: channelId }),
+    getRegisteredChannelPluginMeta: () => null,
+    listChatChannelAliases: () => [],
+    listChatChannels: () => [],
+    listRegisteredChannelPluginAliases: () => [],
+    listRegisteredChannelPluginIds: () => [],
+    normalizeAnyChannelId: normalizeChannel,
+    normalizeChannelId: normalizeChannel,
+    normalizeChatChannelId: normalizeChannel,
+  };
+});
 
 vi.mock("../commands/channel-setup/discovery.js", () => ({
   resolveChannelSetupEntries: (params: Parameters<ResolveChannelSetupEntries>[0]) =>
@@ -470,6 +482,8 @@ describe("setupChannels workspace shadow exclusion", () => {
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
+        cfg: {},
+        runtime: {},
         channel: "external-chat",
         pluginId: "external-chat",
         workspaceDir: "/tmp/openclaw-workspace",
@@ -479,6 +493,8 @@ describe("setupChannels workspace shadow exclusion", () => {
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
+        cfg: {},
+        runtime: {},
         channel: "external-chat",
         workspaceDir: "/tmp/openclaw-workspace",
         forceSetupOnlyChannelPlugins: true,

@@ -31,6 +31,10 @@ describe("sandbox fs bridge shell compatibility", () => {
 
       await bridge.readFile({ filePath: "a.txt" });
       await bridge.writeFile({ filePath: "b.txt", data: "hello" });
+      if (!bridge.appendFile) {
+        throw new Error("sandbox fs bridge must support appendFile");
+      }
+      await bridge.appendFile({ filePath: "b.txt", data: " again", prependNewlineIfNeeded: true });
       await bridge.mkdirp({ filePath: "nested" });
       await bridge.remove({ filePath: "b.txt" });
       await bridge.rename({ from: "a.txt", to: "c.txt" });

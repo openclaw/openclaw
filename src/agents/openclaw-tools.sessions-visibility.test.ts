@@ -26,6 +26,15 @@ function getSessionsHistoryTool(options?: { sandboxed?: boolean }) {
   });
 }
 
+function getLiveSessionsHistoryTool(options?: { sandboxed?: boolean }) {
+  return createSessionsHistoryTool({
+    agentSessionKey: "main",
+    sandboxed: options?.sandboxed,
+    getConfig: () => mockConfig as never,
+    callGateway: (opts: unknown) => callGatewayMock(opts),
+  });
+}
+
 function mockGatewayWithHistory(
   extra?: (req: { method?: string; params?: Record<string, unknown> }) => unknown,
 ) {
@@ -89,6 +98,31 @@ describe("sessions tools visibility", () => {
       sessionKey: "agent:main:quietchat:direct:someone-else",
     });
     expect(result.details).toMatchObject({
+      sessionKey: "agent:main:quietchat:direct:someone-else",
+    });
+  });
+
+  it("re-reads live session visibility config at execution time", async () => {
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      tools: { agentToAgent: { enabled: false } },
+    };
+    mockGatewayWithHistory();
+    const tool = getLiveSessionsHistoryTool();
+
+    const denied = await tool.execute("call-live-before", {
+      sessionKey: "agent:main:quietchat:direct:someone-else",
+    });
+    expect(denied.details).toMatchObject({ status: "forbidden" });
+
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: false } },
+    };
+    const allowed = await tool.execute("call-live-after", {
+      sessionKey: "agent:main:quietchat:direct:someone-else",
+    });
+    expect(allowed.details).toMatchObject({
       sessionKey: "agent:main:quietchat:direct:someone-else",
     });
   });

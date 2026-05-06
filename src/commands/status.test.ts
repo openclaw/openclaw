@@ -810,17 +810,27 @@ vi.mock("../channels/chat-meta.js", () => {
     blurb: "mock",
   }));
   const byId = Object.fromEntries(entries.map((entry) => [entry.id, entry]));
+  const normalizeChatChannel = (raw?: string | null) => {
+    const value = raw?.trim().toLowerCase();
+    return mockChatChannels.includes(value as (typeof mockChatChannels)[number])
+      ? (value as (typeof mockChatChannels)[number])
+      : null;
+  };
   return {
+    CHANNEL_IDS: mockChatChannels,
     CHAT_CHANNEL_ALIASES: {},
+    CHAT_CHANNEL_ORDER: mockChatChannels,
+    formatChannelPrimerLine: () => "",
+    formatChannelSelectionLine: () => "",
     listChatChannels: () => entries,
     listChatChannelAliases: () => [],
+    listRegisteredChannelPluginAliases: () => [],
+    listRegisteredChannelPluginIds: () => [],
     getChatChannelMeta: (id: (typeof mockChatChannels)[number]) => byId[id],
-    normalizeChatChannelId: (raw?: string | null) => {
-      const value = raw?.trim().toLowerCase();
-      return mockChatChannels.includes(value as (typeof mockChatChannels)[number])
-        ? (value as (typeof mockChatChannels)[number])
-        : null;
-    },
+    getRegisteredChannelPluginMeta: () => null,
+    normalizeAnyChannelId: normalizeChatChannel,
+    normalizeChannelId: normalizeChatChannel,
+    normalizeChatChannelId: normalizeChatChannel,
   };
 });
 vi.mock("./status.daemon.js", () => ({

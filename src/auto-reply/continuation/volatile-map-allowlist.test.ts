@@ -1,0 +1,436 @@
+import { readFileSync, readdirSync } from "node:fs";
+import { basename, join, posix } from "node:path";
+import ts from "typescript";
+import { describe, expect, it } from "vitest";
+
+type CollectionKind = "Map" | "Set" | "WeakMap";
+
+type AllowlistEntry = {
+  file: string;
+  symbol: string;
+  owner: string;
+  purpose: string;
+  safeVolatileClassification: string;
+  restartContract: string;
+};
+
+type Finding = {
+  file: string;
+  symbol: string;
+  line: number;
+  collectionKind: CollectionKind;
+};
+
+type Candidate = Finding & {
+  expression: ts.NewExpression;
+  typeArguments: readonly string[];
+};
+
+const SOURCE_ROOT = process.cwd();
+
+const ALLOWLIST = [
+  {
+    file: "src/auto-reply/continuation/state.ts",
+    symbol: "continuationTimerHandles",
+    owner: "continuation timer registry",
+    purpose: "Tracks the live setTimeout handles owned by each continuation sessionKey.",
+    safeVolatileClassification:
+      "Timer handles are Node process objects; persisting them would not make a restarted process able to clear or fire the old timeout.",
+    restartContract:
+      "Lost on process restart; durable delayed delegate intent stays in TaskFlow and is reloaded by the next continuation scheduling pass.",
+  },
+  {
+    file: "src/auto-reply/continuation/state.ts",
+    symbol: "continuationTimerRefs",
+    owner: "continuation timer registry",
+    purpose:
+      "Counts currently live continuation timers per sessionKey for process-liveness checks.",
+    safeVolatileClassification:
+      "The ref count mirrors in-process timeout handles only and has no durable meaning without those handles.",
+    restartContract:
+      "Reset to empty on process restart; pending delegate records remain in TaskFlow and rebuild timer state when scheduling resumes.",
+  },
+  {
+    file: "src/auto-reply/continuation/delegate-store.ts",
+    symbol: "delayedReservations",
+    owner: "continuation delegate store delayed-reservation helper",
+    purpose:
+      "Holds per-session reservations that pair delayed timeout callbacks with queued TaskFlow delegates.",
+    safeVolatileClassification:
+      "Reservations are companions to process-local timers; the durable delegate queue is TaskFlow, not this reservation list.",
+    restartContract:
+      "Lost on process restart; queued delegates remain in TaskFlow and can be reserved again when continuation dispatch is re-armed.",
+  },
+  {
+    file: "src/auto-reply/continuation/delegate-dispatch.ts",
+    symbol: "hedgeTimers",
+    owner: "continuation delegate dispatcher",
+    purpose:
+      "Keeps one hedge setTimeout per sessionKey so quiet channels re-check unmatured pending delegates.",
+    safeVolatileClassification:
+      "The map stores timeout handles for the current Node process; the underlying pending delegates are persisted in TaskFlow.",
+    restartContract:
+      "Lost on process restart; the TaskFlow queue remains and the next dispatch/finalize cycle can arm a fresh hedge.",
+  },
+  {
+    file: "src/auto-reply/reply/reply-run-registry.ts",
+    symbol: "activeRunsByKey",
+    owner: "reply run registry singleton",
+    purpose: "Maps sessionKey to the live ReplyOperation currently executing in this process.",
+    safeVolatileClassification:
+      "ReplyOperation wraps live AbortController/backend state and cannot be serialized or resumed across process boundaries.",
+    restartContract:
+      "Lost on process restart; no in-flight operation is reported active and a later request creates a new ReplyOperation.",
+  },
+  {
+    file: "src/auto-reply/reply/reply-run-registry.ts",
+    symbol: "activeSessionIdsByKey",
+    owner: "reply run registry singleton",
+    purpose:
+      "Maps each active sessionKey to the current sessionId bound to its live reply operation.",
+    safeVolatileClassification:
+      "The binding is only meaningful while the in-process ReplyOperation exists.",
+    restartContract:
+      "Lost on process restart together with the live ReplyOperation; durable session identity remains in the session store.",
+  },
+  {
+    file: "src/auto-reply/reply/reply-run-registry.ts",
+    symbol: "activeKeysBySessionId",
+    owner: "reply run registry singleton",
+    purpose:
+      "Provides the reverse sessionId to sessionKey lookup for active in-process reply operations.",
+    safeVolatileClassification:
+      "The reverse index mirrors activeRunsByKey and contains no durable state beyond the live operation registry.",
+    restartContract:
+      "Lost on process restart; lookups return no active run until a new operation registers itself.",
+  },
+  {
+    file: "src/auto-reply/reply/reply-run-registry.ts",
+    symbol: "waitKeysBySessionId",
+    owner: "reply run registry singleton",
+    purpose:
+      "Keeps temporary sessionId to sessionKey wait bindings while a live reply operation may rebind session ids.",
+    safeVolatileClassification:
+      "Wait bindings serve current-process waitForIdle callers and are valid only alongside the live operation.",
+    restartContract:
+      "Lost on process restart; callers waiting in the old process disappear with that process.",
+  },
+  {
+    file: "src/auto-reply/reply/reply-run-registry.ts",
+    symbol: "waitersByKey",
+    owner: "reply run registry singleton",
+    purpose: "Stores waitForIdle promise resolvers and timeout handles by active sessionKey.",
+    safeVolatileClassification:
+      "Waiters and their timeout handles are process-local continuations for callers in this Node process.",
+    restartContract:
+      "Lost on process restart; old waiters cannot be resolved because their callers no longer exist.",
+  },
+  {
+    file: "src/auto-reply/reply/reply-run-registry.ts",
+    symbol: "attachedBackendByOperation",
+    owner: "reply run registry singleton",
+    purpose: "Weakly associates live ReplyOperation objects with their current backend handles.",
+    safeVolatileClassification:
+      "WeakMap keys and backend handles are process objects; persisting either would be meaningless and would defeat weak-reference semantics.",
+    restartContract:
+      "Lost on process restart; new ReplyOperation instances attach fresh backend handles when work resumes.",
+  },
+] as const satisfies readonly AllowlistEntry[];
+
+// These older reply-continuation symbols are already pinned by
+// src/auto-reply/reply/continuation-state.test.ts. OV-5 guards the TaskFlow
+// continuation surface's reviewed 10 safe-volatile remnants.
+const EXISTING_GUARD_OWNED_SYMBOLS = new Set([
+  "src/auto-reply/continuation/context-pressure.ts:lastFiredBand",
+  "src/auto-reply/reply/continuation-state.ts:continuationGenerations",
+  "src/auto-reply/reply/continuation-state.ts:continuationTimerHandles",
+  "src/auto-reply/reply/continuation-state.ts:continuationTimerRefs",
+]);
+
+const MUTATING_COLLECTION_METHODS = new Set(["add", "clear", "delete", "set"]);
+const STATE_KEYWORD_PATTERN = /\b(session|run|task|chain|delegate|queue|operation)\b/i;
+
+function collectContinuationSurfaceFiles(): string[] {
+  const continuationFiles = collectTypeScriptFiles("src/auto-reply/continuation", {
+    recursive: true,
+  });
+  const replyFiles = collectTypeScriptFiles("src/auto-reply/reply", {
+    recursive: false,
+  }).filter((file) => {
+    const name = basename(file);
+    return (
+      name.startsWith("continuation-") ||
+      name.startsWith("post-compaction-") ||
+      name.startsWith("reply-run-")
+    );
+  });
+  const agentFiles = ["src/agents/subagent-announce.ts", "src/agents/subagent-spawn.ts"];
+
+  return [...new Set([...continuationFiles, ...replyFiles, ...agentFiles])].toSorted();
+}
+
+function collectTypeScriptFiles(relativeDir: string, options: { recursive: boolean }): string[] {
+  const absoluteDir = join(SOURCE_ROOT, relativeDir);
+  const files: string[] = [];
+
+  for (const entry of readdirSync(absoluteDir, { withFileTypes: true })) {
+    const relativePath = posix.join(relativeDir, entry.name);
+    if (entry.isDirectory()) {
+      if (options.recursive) {
+        files.push(...collectTypeScriptFiles(relativePath, options));
+      }
+      continue;
+    }
+    if (entry.isFile() && isProductionTypeScriptFile(entry.name)) {
+      files.push(relativePath);
+    }
+  }
+
+  return files;
+}
+
+function isProductionTypeScriptFile(name: string): boolean {
+  return name.endsWith(".ts") && !name.endsWith(".test.ts") && !name.endsWith(".d.ts");
+}
+
+function scanContinuationSurface(): Finding[] {
+  return collectContinuationSurfaceFiles().flatMap(scanFileForVolatileCollections);
+}
+
+function scanFileForVolatileCollections(file: string): Finding[] {
+  const sourceText = readFileSync(join(SOURCE_ROOT, file), "utf8");
+  const sourceFile = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true);
+  const mutatedSymbols = collectMutatedCollectionSymbols(sourceFile);
+  const findings: Finding[] = [];
+
+  function visit(node: ts.Node): void {
+    const candidate = candidateFromNode(file, sourceFile, node);
+    if (candidate && isStateBearingCandidate(candidate, mutatedSymbols)) {
+      findings.push({
+        file: candidate.file,
+        symbol: candidate.symbol,
+        line: candidate.line,
+        collectionKind: candidate.collectionKind,
+      });
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return findings.toSorted(compareFindings);
+}
+
+function collectMutatedCollectionSymbols(sourceFile: ts.SourceFile): Set<string> {
+  const symbols = new Set<string>();
+
+  function visit(node: ts.Node): void {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+      const methodName = node.expression.name.text;
+      if (MUTATING_COLLECTION_METHODS.has(methodName)) {
+        const receiverName = collectionReceiverName(node.expression.expression);
+        if (receiverName) {
+          symbols.add(receiverName);
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return symbols;
+}
+
+function collectionReceiverName(expression: ts.Expression): string | undefined {
+  if (ts.isIdentifier(expression)) {
+    return expression.text;
+  }
+  if (ts.isPropertyAccessExpression(expression)) {
+    return expression.name.text;
+  }
+  return undefined;
+}
+
+function candidateFromNode(
+  file: string,
+  sourceFile: ts.SourceFile,
+  node: ts.Node,
+): Candidate | undefined {
+  if (
+    ts.isVariableDeclaration(node) &&
+    ts.isIdentifier(node.name) &&
+    node.initializer &&
+    isModuleLevelVariableDeclaration(node)
+  ) {
+    return candidateFromInitializer(file, sourceFile, node.name.text, node, node.initializer);
+  }
+
+  if (ts.isPropertyAssignment(node) && hasResolveGlobalSingletonAncestor(node, sourceFile)) {
+    const symbol = propertyNameText(node.name);
+    if (symbol) {
+      return candidateFromInitializer(file, sourceFile, symbol, node, node.initializer);
+    }
+  }
+
+  if (
+    ts.isPropertyDeclaration(node) &&
+    node.initializer &&
+    isModuleLevelClassPropertyDeclaration(node)
+  ) {
+    const symbol = propertyNameText(node.name);
+    if (symbol) {
+      return candidateFromInitializer(file, sourceFile, symbol, node, node.initializer);
+    }
+  }
+
+  return undefined;
+}
+
+function candidateFromInitializer(
+  file: string,
+  sourceFile: ts.SourceFile,
+  symbol: string,
+  node: ts.Node,
+  initializer: ts.Expression,
+): Candidate | undefined {
+  const collectionKind = collectionConstructorName(initializer);
+  if (!collectionKind || !ts.isNewExpression(initializer)) {
+    return undefined;
+  }
+  return {
+    file,
+    symbol,
+    line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+    collectionKind,
+    expression: initializer,
+    typeArguments:
+      initializer.typeArguments?.map((typeArgument) => typeArgument.getText(sourceFile)) ?? [],
+  };
+}
+
+function collectionConstructorName(expression: ts.Expression): CollectionKind | undefined {
+  if (!ts.isNewExpression(expression) || !ts.isIdentifier(expression.expression)) {
+    return undefined;
+  }
+  const constructorName = expression.expression.text;
+  return constructorName === "Map" || constructorName === "Set" || constructorName === "WeakMap"
+    ? constructorName
+    : undefined;
+}
+
+function isModuleLevelVariableDeclaration(node: ts.VariableDeclaration): boolean {
+  return (
+    ts.isVariableDeclarationList(node.parent) &&
+    ts.isVariableStatement(node.parent.parent) &&
+    ts.isSourceFile(node.parent.parent.parent)
+  );
+}
+
+function isModuleLevelClassPropertyDeclaration(node: ts.PropertyDeclaration): boolean {
+  return ts.isClassDeclaration(node.parent) && ts.isSourceFile(node.parent.parent);
+}
+
+function hasResolveGlobalSingletonAncestor(node: ts.Node, sourceFile: ts.SourceFile): boolean {
+  let current: ts.Node | undefined = node.parent;
+  while (current && current !== sourceFile) {
+    if (
+      ts.isCallExpression(current) &&
+      ts.isIdentifier(current.expression) &&
+      current.expression.text === "resolveGlobalSingleton"
+    ) {
+      return true;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
+function propertyNameText(name: ts.PropertyName): string | undefined {
+  if (ts.isIdentifier(name) || ts.isPrivateIdentifier(name)) {
+    return name.text;
+  }
+  if (ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
+    return name.text;
+  }
+  return undefined;
+}
+
+function isStateBearingCandidate(
+  candidate: Candidate,
+  mutatedSymbols: ReadonlySet<string>,
+): boolean {
+  if (EXISTING_GUARD_OWNED_SYMBOLS.has(findingKey(candidate))) {
+    return false;
+  }
+  if (
+    ALLOWLIST.some((entry) => entry.file === candidate.file && entry.symbol === candidate.symbol)
+  ) {
+    return true;
+  }
+  if (candidate.collectionKind === "WeakMap") {
+    return true;
+  }
+  if (
+    hasStateKeyword(candidate.symbol) ||
+    candidate.typeArguments.some(hasStateKeyword) ||
+    mutatedSymbols.has(candidate.symbol)
+  ) {
+    return true;
+  }
+  if (candidate.collectionKind === "Map" && isStringKeyedEmptyMap(candidate)) {
+    return true;
+  }
+  return candidate.collectionKind === "Set" && isEmptyConstructor(candidate.expression);
+}
+
+function hasStateKeyword(value: string): boolean {
+  return STATE_KEYWORD_PATTERN.test(value);
+}
+
+function isStringKeyedEmptyMap(candidate: Candidate): boolean {
+  return (
+    candidate.typeArguments[0]?.replaceAll(/\s+/g, "") === "string" &&
+    isEmptyConstructor(candidate.expression)
+  );
+}
+
+function isEmptyConstructor(expression: ts.NewExpression): boolean {
+  return expression.arguments === undefined || expression.arguments.length === 0;
+}
+
+function findingKey(finding: Pick<Finding, "file" | "symbol">): string {
+  return `${finding.file}:${finding.symbol}`;
+}
+
+function compareFindings(left: Finding, right: Finding): number {
+  return (
+    left.file.localeCompare(right.file) ||
+    left.line - right.line ||
+    left.symbol.localeCompare(right.symbol)
+  );
+}
+
+describe("volatile-map allowlist (continuation surface guard-test)", () => {
+  it("rejects new session-keyed volatile Maps outside the reviewed allowlist", () => {
+    const findings = scanContinuationSurface();
+    const allowlistKeys = new Set(ALLOWLIST.map(findingKey));
+    const findingKeys = new Set(findings.map(findingKey));
+    const unjustified = findings.filter((finding) => !allowlistKeys.has(findingKey(finding)));
+    const missing = ALLOWLIST.filter((entry) => !findingKeys.has(findingKey(entry)));
+
+    for (const entry of ALLOWLIST) {
+      expect(entry.owner).not.toBe("");
+      expect(entry.purpose).not.toBe("");
+      expect(entry.safeVolatileClassification).not.toBe("");
+      expect(entry.restartContract).not.toBe("");
+    }
+
+    expect(
+      { unjustified, missing },
+      JSON.stringify({ unjustified, missing, findings }, null, 2),
+    ).toEqual({
+      unjustified: [],
+      missing: [],
+    });
+    expect(findings, JSON.stringify(findings, null, 2)).toHaveLength(ALLOWLIST.length);
+  });
+});

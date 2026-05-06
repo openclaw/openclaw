@@ -6,6 +6,7 @@ import {
   hasHeartbeatWakeHandler,
   hasPendingHeartbeatWake,
   requestHeartbeat,
+  requestHeartbeatNow,
   resetHeartbeatWakeStateForTests,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
@@ -92,6 +93,39 @@ describe("heartbeat-wake", () => {
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledWith(wake("exec-event"));
     expect(hasPendingHeartbeatWake()).toBe(false);
+  });
+
+  it("preserves parent run id on wake delivery", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
+
+    requestHeartbeatNow({ reason: "continuation", parentRunId: "run-parent", coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "continuation",
+        parentRunId: "run-parent",
+      }),
+    );
+  });
+
+  it("clears parent run id when a later same-target wake coalesces without one", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
+
+    requestHeartbeatNow({ reason: "continuation", parentRunId: "run-parent", coalesceMs: 200 });
+    requestHeartbeatNow({ reason: "continuation", coalesceMs: 200 });
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "continuation",
+      }),
+    );
+    expect(handler.mock.calls[0]?.[0]).not.toHaveProperty("parentRunId");
   });
 
   it("retries requests-in-flight after the default retry delay", async () => {
