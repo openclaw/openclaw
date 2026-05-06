@@ -186,7 +186,9 @@ export function getCachedIMessagePrivateApiStatus(
 ): IMessageProbe["privateApi"] | undefined {
   const key = cliPath?.trim() || "imsg";
   const entry = bridgeStatusCache.get(key);
-  if (!entry) return undefined;
+  if (!entry) {
+    return undefined;
+  }
   // Negative cache entries expire so a flurry of agent actions during a
   // bridge outage don't all serialize on a re-probe.
   if (entry.expiresAt > 0 && entry.expiresAt < Date.now()) {
@@ -216,7 +218,7 @@ export async function probeIMessagePrivateApi(
   if (!options.forceRefresh) {
     const entry = bridgeStatusCache.get(key);
     if (entry) {
-      if (entry.status.available === true) {
+      if (entry.status.available) {
         return entry.status;
       }
       if (entry.expiresAt > Date.now()) {
@@ -249,7 +251,7 @@ export async function probeIMessagePrivateApi(
     };
     bridgeStatusCache.set(key, {
       status,
-      expiresAt: status.available === true ? 0 : Date.now() + PRIVATE_API_NEGATIVE_TTL_MS,
+      expiresAt: status.available ? 0 : Date.now() + PRIVATE_API_NEGATIVE_TTL_MS,
     });
     return status;
   } catch (err) {

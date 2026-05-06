@@ -106,7 +106,9 @@ function hasIMessageEchoMatch(params: {
   // vice-versa).
   const scopes = typeof params.scope === "string" ? [params.scope] : params.scope;
   for (const scope of scopes) {
-    if (!scope) continue;
+    if (!scope) {
+      continue;
+    }
     for (const messageId of params.messageIds) {
       if (params.echoCache.has(scope, { messageId })) {
         return true;
@@ -712,7 +714,9 @@ function buildIMessageEchoScope(params: {
   const scopes: string[] = [];
   if (params.isGroup) {
     const chatIdScope = formatIMessageChatTarget(params.chatId);
-    if (chatIdScope) scopes.push(`${params.accountId}:${chatIdScope}`);
+    if (chatIdScope) {
+      scopes.push(`${params.accountId}:${chatIdScope}`);
+    }
   } else {
     scopes.push(`${params.accountId}:imessage:${params.sender}`);
   }

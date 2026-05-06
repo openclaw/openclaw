@@ -112,7 +112,9 @@ const warnIfImsgUpgradeNeeded = (() => {
       rpcMethods: readonly string[],
       runtime: { log?: (msg: string) => void; error?: (msg: string) => void },
     ) => {
-      if (fired) return;
+      if (fired) {
+        return;
+      }
       fired = true;
       const detail =
         rpcMethods.length === 0
@@ -661,7 +663,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       const shape =
         raw && typeof raw === "object" && !Array.isArray(raw)
           ? Object.keys(raw as Record<string, unknown>)
-              .sort()
+              .toSorted()
               .join(",")
           : typeof raw;
       runtime.error?.(`imessage: dropping malformed RPC message payload (keys=${shape})`);

@@ -389,12 +389,12 @@ describe("imessage message actions", () => {
       const kinds = runtimeMock.sendReaction.mock.calls.map(
         (call: unknown[]) => (call[0] as { reaction: string }).reaction,
       );
-      expect(kinds.sort()).toEqual(
-        ["dislike", "emphasize", "laugh", "like", "love", "question"].sort(),
+      expect(kinds.toSorted()).toEqual(
+        ["dislike", "emphasize", "laugh", "like", "love", "question"].toSorted(),
       );
       expect(
         runtimeMock.sendReaction.mock.calls.every(
-          (call: unknown[]) => (call[0] as { remove: boolean }).remove === true,
+          (call: unknown[]) => (call[0] as { remove: boolean }).remove,
         ),
       ).toBe(true);
     });
