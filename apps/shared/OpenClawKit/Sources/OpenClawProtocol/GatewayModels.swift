@@ -1523,6 +1523,7 @@ public struct SessionsListParams: Codable, Sendable {
     public let spawnedby: String?
     public let agentid: String?
     public let search: String?
+    public let includequarantined: Bool?
 
     public init(
         limit: Int?,
@@ -1534,7 +1535,8 @@ public struct SessionsListParams: Codable, Sendable {
         label: String?,
         spawnedby: String?,
         agentid: String?,
-        search: String?)
+        search: String?,
+        includequarantined: Bool?)
     {
         self.limit = limit
         self.activeminutes = activeminutes
@@ -1546,6 +1548,7 @@ public struct SessionsListParams: Codable, Sendable {
         self.spawnedby = spawnedby
         self.agentid = agentid
         self.search = search
+        self.includequarantined = includequarantined
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1559,6 +1562,7 @@ public struct SessionsListParams: Codable, Sendable {
         case spawnedby = "spawnedBy"
         case agentid = "agentId"
         case search
+        case includequarantined = "includeQuarantined"
     }
 }
 
@@ -4826,6 +4830,7 @@ public struct CronRunsParams: Codable, Sendable {
     public let status: AnyCodable?
     public let deliverystatuses: [AnyCodable]?
     public let deliverystatus: AnyCodable?
+    public let includequarantined: Bool?
     public let query: String?
     public let sortdir: AnyCodable?
 
@@ -4839,6 +4844,7 @@ public struct CronRunsParams: Codable, Sendable {
         status: AnyCodable?,
         deliverystatuses: [AnyCodable]?,
         deliverystatus: AnyCodable?,
+        includequarantined: Bool?,
         query: String?,
         sortdir: AnyCodable?)
     {
@@ -4851,6 +4857,7 @@ public struct CronRunsParams: Codable, Sendable {
         self.status = status
         self.deliverystatuses = deliverystatuses
         self.deliverystatus = deliverystatus
+        self.includequarantined = includequarantined
         self.query = query
         self.sortdir = sortdir
     }
@@ -4865,6 +4872,7 @@ public struct CronRunsParams: Codable, Sendable {
         case status
         case deliverystatuses = "deliveryStatuses"
         case deliverystatus = "deliveryStatus"
+        case includequarantined = "includeQuarantined"
         case query
         case sortdir = "sortDir"
     }
