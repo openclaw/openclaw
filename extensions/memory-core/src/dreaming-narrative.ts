@@ -322,7 +322,7 @@ export function extractNarrativeText(messages: unknown[]): string | null {
 
 export function formatNarrativeDate(epochMs: number, timezone?: string): string {
   const opts: Intl.DateTimeFormatOptions = {
-    timeZone: timezone,
+    timeZone: timezone ?? process.env.TZ,
     year: "numeric",
     month: "long",
     day: "numeric",
