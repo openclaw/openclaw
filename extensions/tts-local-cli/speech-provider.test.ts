@@ -36,8 +36,10 @@ const stdin = await new Promise((resolve) => {
   process.stdin.on("end", () => resolve(data));
 });
 const payload = Buffer.from(JSON.stringify({ args: process.argv.slice(2), stdin, textArg }));
-if (outputPath) {
-  writeFileSync(outputPath, payload);
+const piperOutIndex = process.argv.indexOf("--output_file");
+const piperOutputPath = piperOutIndex >= 0 ? process.argv[piperOutIndex + 1] : "";
+if (outputPath || piperOutputPath) {
+  writeFileSync(outputPath || piperOutputPath, payload);
 } else {
   process.stdout.write(payload);
 }
@@ -139,6 +141,158 @@ describe("buildCliSpeechProvider", () => {
         timeoutMs: 1000,
       }),
     ).toEqual({ command: "canonical-command" });
+  });
+
+  it("accepts friendly local voice aliases and resolves Talk config", () => {
+    const provider = buildCliSpeechProvider();
+
+    expect(provider.aliases).toEqual(
+      expect.arrayContaining(["local-voice", "local", "piper", "say"]),
+    );
+    expect(
+      provider.resolveConfig?.({
+        cfg: TEST_CFG,
+        rawConfig: {
+          providers: {
+            "local-voice": { engine: "say", voiceId: "Xander" },
+          },
+        },
+        timeoutMs: 1000,
+      }),
+    ).toEqual({ engine: "say", voiceId: "Xander" });
+
+    expect(
+      provider.resolveTalkConfig?.({
+        cfg: TEST_CFG,
+        baseTtsConfig: {
+          providers: {
+            "local-voice": { engine: "say", voiceId: "Xander" },
+          },
+        },
+        talkProviderConfig: {
+          engine: "piper",
+          modelPath: "~/models/piper/thomas.onnx",
+          outputFormat: "wav",
+        },
+        timeoutMs: 1000,
+      }),
+    ).toEqual({
+      engine: "piper",
+      voiceId: "Xander",
+      modelPath: "~/models/piper/thomas.onnx",
+      outputFormat: "wav",
+    });
+  });
+
+  it("runs the Piper preset through a local executable and writes text to stdin", async () => {
+    const fixture = createCliFixture();
+    try {
+      const result = await synthesize({
+        providerConfig: {
+          engine: "piper",
+          executable: process.execPath,
+          args: [fixture.script],
+          modelPath: "/tmp/thomas-piper.onnx",
+          outputFormat: "wav",
+          timeoutMs: 1000,
+        },
+        text: "Hallo Thomas",
+      });
+
+      const payload = JSON.parse(result.audioBuffer.toString("utf8"));
+      expect(result).toMatchObject({
+        outputFormat: "wav",
+        fileExtension: ".wav",
+        voiceCompatible: false,
+      });
+      expect(payload.stdin).toBe("Hallo Thomas");
+      expect(payload.args).toEqual(
+        expect.arrayContaining(["--model", "/tmp/thomas-piper.onnx", "--output_file"]),
+      );
+      expect(runFfmpegMock).not.toHaveBeenCalled();
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses a WAV temp file before converting Piper output to another requested format", async () => {
+    const fixture = createCliFixture();
+    try {
+      const result = await synthesize({
+        providerConfig: {
+          engine: "piper",
+          executable: process.execPath,
+          args: [fixture.script],
+          modelPath: "/tmp/thomas-piper.onnx",
+          outputFormat: "mp3",
+          timeoutMs: 1000,
+        },
+        text: "Hallo Thomas",
+      });
+
+      expect(result).toEqual({
+        audioBuffer: Buffer.from("converted:.mp3"),
+        outputFormat: "mp3",
+        fileExtension: ".mp3",
+        voiceCompatible: false,
+      });
+      expect(runFfmpegMock).toHaveBeenCalledWith(
+        expect.arrayContaining(["-i", expect.stringMatching(/speech\.wav$/)]),
+      );
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("runs the macOS say preset with voice and spoken text arguments", async () => {
+    const fixture = createCliFixture();
+    try {
+      const result = await synthesize({
+        providerConfig: {
+          engine: "say",
+          executable: process.execPath,
+          args: [fixture.script],
+          voiceId: "Xander",
+          outputFormat: "wav",
+          timeoutMs: 1000,
+        },
+        text: "Goedemorgen Thomas",
+      });
+
+      const payload = JSON.parse(result.audioBuffer.toString("utf8"));
+      expect(payload.stdin).toBe("");
+      expect(payload.args).toEqual(
+        expect.arrayContaining([
+          "-v",
+          "Xander",
+          "--data-format=LEI16@22050",
+          "-o",
+          "Goedemorgen Thomas",
+        ]),
+      );
+      expect(result.outputFormat).toBe("wav");
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("maps Talk voice and model directives to local voice overrides", () => {
+    const provider = buildCliSpeechProvider();
+
+    expect(
+      provider.resolveTalkOverrides?.({
+        talkProviderConfig: {},
+        params: {
+          voiceId: "Xander",
+          modelId: "/tmp/thomas-piper.onnx",
+          speed: 1.1,
+        },
+      }),
+    ).toEqual({
+      voiceId: "Xander",
+      modelPath: "/tmp/thomas-piper.onnx",
+      speed: 1.1,
+    });
   });
 
   it("passes text through stdin when args omit the text template", async () => {

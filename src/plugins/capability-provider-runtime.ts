@@ -305,8 +305,14 @@ function collectRequestedSpeechProviderIds(cfg: OpenClawConfig | undefined): Set
     typeof cfg?.messages?.tts === "object" && cfg.messages.tts !== null
       ? (cfg.messages.tts as Record<string, unknown>)
       : undefined;
+  const talk =
+    typeof cfg?.talk === "object" && cfg.talk !== null
+      ? (cfg.talk as Record<string, unknown>)
+      : undefined;
   addStringValue(requested, tts?.provider);
   addObjectKeys(requested, tts?.providers);
+  addStringValue(requested, talk?.provider);
+  addObjectKeys(requested, talk?.providers);
   addObjectKeys(requested, cfg?.models?.providers);
   return requested;
 }

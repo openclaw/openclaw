@@ -71,6 +71,11 @@ Supported keys:
       mlx: {
         modelId: "mlx-community/Soprano-80M-bf16",
       },
+      "local-voice": {
+        engine: "say",
+        voiceId: "Xander",
+        outputFormat: "wav",
+      },
       system: {},
     },
     speechLocale: "ru-RU",
@@ -98,8 +103,10 @@ Defaults:
 
 - `interruptOnSpeech`: true
 - `silenceTimeoutMs`: when unset, Talk keeps the platform default pause window before sending the transcript (`700 ms on macOS and Android, 900 ms on iOS`)
-- `provider`: selects the active Talk provider. Use `elevenlabs`, `mlx`, or `system` for the macOS-local playback paths.
+- `provider`: selects the active Talk provider. Use `local-voice` for free gateway-local speech, `elevenlabs` or `openai` for cloud speech, and `system` for app-side fallback playback.
 - `providers.<provider>.voiceId`: falls back to `ELEVENLABS_VOICE_ID` / `SAG_VOICE_ID` for ElevenLabs (or first ElevenLabs voice when API key is available).
+- `providers.local-voice.engine`: `piper`, `say`, `auto`, or `command`. Piper uses an open-source local model; `say` uses macOS system speech.
+- `providers.local-voice.modelPath`: Piper `.onnx` voice model path. If omitted, `voiceId` is searched under `~/.openclaw/models/piper`.
 - `providers.elevenlabs.modelId`: defaults to `eleven_v3` when unset.
 - `providers.mlx.modelId`: defaults to `mlx-community/Soprano-80M-bf16` when unset.
 - `providers.elevenlabs.apiKey`: falls back to `ELEVENLABS_API_KEY` (or gateway shell profile if available).

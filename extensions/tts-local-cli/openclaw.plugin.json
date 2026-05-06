@@ -5,7 +5,7 @@
   },
   "enabledByDefault": true,
   "contracts": {
-    "speechProviders": ["tts-local-cli", "cli"]
+    "speechProviders": ["tts-local-cli", "cli", "local-voice", "local", "piper", "say"]
   },
   "configSchema": {
     "type": "object",
