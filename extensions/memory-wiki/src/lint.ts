@@ -50,27 +50,69 @@ function toExpectedPageType(page: WikiPageSummary): string {
   return page.kind;
 }
 
+function isOpenClawTranscriptDirectiveLinkTarget(linkTarget: string): boolean {
+  return /^reply_to(?:_current|:.+)?$/.test(linkTarget);
+}
+
+function normalizeBridgeLinkTarget(params: {
+  page: WikiPageSummary;
+  linkTarget: string;
+}): string | null {
+  if (!params.page.bridgeRelativePath) return null;
+  if (
+    !params.linkTarget ||
+    params.linkTarget.startsWith("#") ||
+    /^[a-z][a-z0-9+.-]*:/i.test(params.linkTarget)
+  ) {
+    return null;
+  }
+  const cleanTarget = decodeURIComponent(
+    params.linkTarget.split("#")[0]?.split("?")[0] ?? "",
+  )
+    .replace(/\\/g, "/")
+    .trim();
+  if (!cleanTarget || isOpenClawTranscriptDirectiveLinkTarget(cleanTarget)) return null;
+  return path.posix.normalize(
+    path.posix.join(path.posix.dirname(params.page.bridgeRelativePath), cleanTarget),
+  );
+}
+
 function collectBrokenLinkIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[] {
   const validTargets = new Set<string>();
+  const bridgeRelativeTargets = new Set<string>();
   for (const page of pages) {
     const withoutExtension = page.relativePath.replace(/\.md$/i, "");
     validTargets.add(page.relativePath);
     validTargets.add(withoutExtension);
     validTargets.add(path.basename(withoutExtension));
+    if (
+      (page.sourceType === "memory-bridge" || page.sourceType === "memory-bridge-events") &&
+      page.bridgeRelativePath
+    ) {
+      bridgeRelativeTargets.add(path.posix.normalize(page.bridgeRelativePath));
+    }
   }
 
   const issues: MemoryWikiLintIssue[] = [];
   for (const page of pages) {
     for (const linkTarget of page.linkTargets) {
-      if (!validTargets.has(linkTarget)) {
-        issues.push({
-          severity: "warning",
-          category: "links",
-          code: "broken-wikilink",
-          path: page.relativePath,
-          message: `Broken wikilink target \`${linkTarget}\`.`,
-        });
+      if (validTargets.has(linkTarget)) continue;
+      if (isOpenClawTranscriptDirectiveLinkTarget(linkTarget)) continue;
+      const bridgeLinkTarget = normalizeBridgeLinkTarget({ page, linkTarget });
+      if (
+        (page.sourceType === "memory-bridge" || page.sourceType === "memory-bridge-events") &&
+        bridgeLinkTarget &&
+        bridgeRelativeTargets.has(bridgeLinkTarget)
+      ) {
+        continue;
       }
+      issues.push({
+        severity: "warning",
+        category: "links",
+        code: "broken-wikilink",
+        path: page.relativePath,
+        message: `Broken wikilink target \`${linkTarget}\`.`,
+      });
     }
   }
   return issues;
