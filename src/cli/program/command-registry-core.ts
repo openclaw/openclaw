@@ -125,6 +125,11 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
         loadModule: () => import("./register.status-health-sessions.js"),
         exportName: "registerStatusHealthSessionsCommands",
       },
+      {
+        commandNames: ["feature-lab"],
+        loadModule: () => import("./register.feature-lab.js"),
+        exportName: "registerFeatureLabCommand",
+      },
     ]),
   ),
 ];
