@@ -140,7 +140,7 @@ describe("createSlackBoltApp", () => {
     }
   }
 
-  it("uses SocketModeReceiver with OpenClaw-owned reconnects and shared client options", () => {
+  it("uses SocketModeReceiver with native reconnects and shared client options", () => {
     const clientOptions = { teamId: "T1" };
     const { app, receiver } = createSlackBoltApp({
       interop: {
@@ -158,7 +158,7 @@ describe("createSlackBoltApp", () => {
     expect(receiver).toBeInstanceOf(FakeSocketModeReceiver);
     expect((receiver as unknown as FakeSocketModeReceiver).args).toEqual({
       appToken: "xapp-test",
-      autoReconnectEnabled: false,
+      autoReconnectEnabled: true,
       clientPingTimeout: 15_000,
       logger: expect.objectContaining({
         error: expect.any(Function),
@@ -201,7 +201,7 @@ describe("createSlackBoltApp", () => {
 
     expect((receiver as unknown as FakeSocketModeReceiver).args).toEqual({
       appToken: "xapp-test",
-      autoReconnectEnabled: false,
+      autoReconnectEnabled: true,
       clientPingTimeout: 20_000,
       serverPingTimeout: 45_000,
       pingPongLoggingEnabled: true,

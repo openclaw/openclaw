@@ -243,7 +243,7 @@ export function createSlackBoltApp(params: {
   const socketModeLogger = createSlackSocketModeLogger();
   const socketModeReceiverOptions: SlackSocketModeReceiverOptions = {
     appToken: params.appToken ?? "",
-    autoReconnectEnabled: false,
+    autoReconnectEnabled: true,
     clientPingTimeout:
       params.socketMode?.clientPingTimeout ?? OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS,
     logger: socketModeLogger,
