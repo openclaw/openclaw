@@ -103,11 +103,6 @@ type TelegramSendResult = {
   chatId: string;
   delivery?: {
     providerAccepted: boolean;
-    acknowledged?: boolean;
-    confirmation?: {
-      source: "current_session_visible" | "manual_operator_receipt";
-      status: "confirmed" | "visible" | "received";
-    };
   };
 };
 

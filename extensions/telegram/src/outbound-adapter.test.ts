@@ -17,34 +17,7 @@ describe("telegramOutbound", () => {
     sendMessageTelegramMock.mockReset();
   });
 
-  it("advertises and returns current-session-visible receipt when requested", async () => {
-    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-visible", chatId: "12345" });
-
-    expect(telegramOutbound.supportsCurrentSessionVisibleReceipt).toBe(true);
-    expect(await telegramOutbound.supportsReceipt?.("current_session_visible")).toBe(true);
-
-    const result = await telegramOutbound.sendText!({
-      cfg: {} as never,
-      to: "12345",
-      text: "receipt please",
-      deps: { sendTelegram: sendMessageTelegramMock },
-      receiptRequired: "current_session_visible",
-      userVisibleReceiptRequired: true,
-    });
-
-    expect(result).toEqual({
-      channel: "telegram",
-      messageId: "tg-visible",
-      chatId: "12345",
-      delivery: {
-        providerAccepted: true,
-        acknowledged: true,
-        confirmation: { source: "current_session_visible", status: "visible" },
-      },
-    });
-  });
-
-  it("keeps ordinary provider accepted sends separate from receipt confirmation", async () => {
+  it("marks successful text sends as provider accepted", async () => {
     sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-provider", chatId: "12345" });
 
     const result = await telegramOutbound.sendText!({
@@ -89,7 +62,11 @@ describe("telegramOutbound", () => {
         textMode: "html",
       }),
     );
-    expect(result).toEqual({ channel: "telegram", messageId: "tg-media" });
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-media",
+      delivery: { providerAccepted: true },
+    });
   });
 
   it("sends payload media in sequence and keeps buttons on the first message only", async () => {

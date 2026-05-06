@@ -136,11 +136,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     context: true,
     divider: false,
   },
-  supportsReceipt: (receiptMode) => receiptMode === "current_session_visible",
-  supportsCurrentSessionVisibleReceipt: true,
-  supportsUserVisibleReceipt: true,
   deliveryCapabilities: {
-    receipt: { currentSessionVisibleReceipt: true, userVisibleReceipt: true },
     pin: true,
     durableFinal: {
       text: true,
@@ -181,8 +177,6 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       threadId,
       silent,
       gatewayClientScopes,
-      receiptRequired,
-      userVisibleReceiptRequired,
     }) => {
       const { send, baseOpts } = await resolveTelegramSendContext({
         cfg,
@@ -196,17 +190,11 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       const result = await send(to, text, {
         ...baseOpts,
       });
-      const receiptRequested = receiptRequired === "current_session_visible" || userVisibleReceiptRequired === true;
       return {
         ...result,
         delivery: {
+          ...result.delivery,
           providerAccepted: true,
-          ...(receiptRequested
-            ? {
-                acknowledged: true,
-                confirmation: { source: "current_session_visible" as const, status: "visible" as const },
-              }
-            : {}),
         },
       };
     },
@@ -234,13 +222,20 @@ export const telegramOutbound: ChannelOutboundAdapter = {
         silent,
         gatewayClientScopes,
       });
-      return await send(to, text, {
+      const result = await send(to, text, {
         ...baseOpts,
         mediaUrl,
         mediaLocalRoots,
         mediaReadFile,
         forceDocument: forceDocument ?? false,
       });
+      return {
+        ...result,
+        delivery: {
+          ...result.delivery,
+          providerAccepted: true,
+        },
+      };
     },
   }),
   sendPayload: async ({
