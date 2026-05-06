@@ -437,10 +437,6 @@ export abstract class MemoryManagerSyncOps {
       ignoreInitial: true,
       ignored: (watchPath, stats) =>
         shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal),
-      awaitWriteFinish: {
-        stabilityThreshold: this.settings.sync.watchDebounceMs,
-        pollInterval: 100,
-      },
     });
     const markDirty = () => {
       this.dirty = true;
