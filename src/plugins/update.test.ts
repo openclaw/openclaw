@@ -461,6 +461,52 @@ describe("updateNpmInstalledPlugins", () => {
     },
   );
 
+  it("reports npm dry-run target versions from npm resolution metadata", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/acpx",
+      version: "2026.5.5",
+    });
+    mockNpmViewMetadata({
+      name: "@openclaw/acpx",
+      version: "2026.5.6",
+      integrity: "sha512-next",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "acpx",
+      targetDir: installPath,
+      extensions: [],
+      npmResolution: {
+        name: "@openclaw/acpx",
+        version: "2026.5.6",
+        resolvedSpec: "@openclaw/acpx@2026.5.6",
+      },
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "acpx",
+        spec: "@openclaw/acpx",
+        installPath,
+        resolvedName: "@openclaw/acpx",
+        resolvedSpec: "@openclaw/acpx@2026.5.5",
+        resolvedVersion: "2026.5.5",
+      }),
+      pluginIds: ["acpx"],
+      dryRun: true,
+    });
+
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "acpx",
+        status: "updated",
+        currentVersion: "2026.5.5",
+        nextVersion: "2026.5.6",
+        message: "Would update acpx: 2026.5.5 -> 2026.5.6.",
+      },
+    ]);
+  });
+
   it("passes timeout budget to npm plugin metadata checks and installs", async () => {
     const installPath = createInstalledPackageDir({
       name: "@martian-engineering/lossless-claw",
