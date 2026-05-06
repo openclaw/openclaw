@@ -64,8 +64,30 @@ export function resolveIMessageAccount(params: {
   };
 }
 
+function hasDistinctDefaultIMessageRuntime(cfg: OpenClawConfig): boolean {
+  const defaultConfig = cfg.channels?.imessage?.accounts?.default;
+  if (!defaultConfig || typeof defaultConfig !== "object") {
+    return false;
+  }
+  return Boolean(
+    defaultConfig.cliPath?.trim() ||
+    defaultConfig.dbPath?.trim() ||
+    defaultConfig.service ||
+    defaultConfig.region?.trim(),
+  );
+}
+
 export function listEnabledIMessageAccounts(cfg: OpenClawConfig): ResolvedIMessageAccount[] {
-  return listIMessageAccountIds(cfg)
+  const accountIds = listIMessageAccountIds(cfg);
+  const hasNamedAccounts = accountIds.some(
+    (accountId) => normalizeAccountId(accountId) !== "default",
+  );
+  const skipDefaultFallbackMonitor = hasNamedAccounts && !hasDistinctDefaultIMessageRuntime(cfg);
+
+  return accountIds
+    .filter(
+      (accountId) => !(skipDefaultFallbackMonitor && normalizeAccountId(accountId) === "default"),
+    )
     .map((accountId) => resolveIMessageAccount({ cfg, accountId }))
     .filter((account) => account.enabled);
 }
