@@ -625,7 +625,7 @@ describe("buildCodexMigrationProvider", () => {
     const config = {
       agents: { defaults: { workspace: fixture.workspaceDir } },
     } as MigrationProviderContext["config"];
-    const { runtime, getConfig } = createConfigRuntime(config);
+    const { runtime } = createConfigRuntime(config);
     const provider = buildCodexMigrationProvider();
     const plan = await provider.plan(
       makeContext({
@@ -682,7 +682,7 @@ describe("buildCodexMigrationProvider", () => {
     const config = {
       agents: { defaults: { workspace: fixture.workspaceDir } },
     } as MigrationProviderContext["config"];
-    const { runtime, getConfig } = createConfigRuntime(config);
+    const { runtime } = createConfigRuntime(config);
     const provider = buildCodexMigrationProvider();
     const plan = await provider.plan(
       makeContext({
@@ -739,7 +739,7 @@ describe("buildCodexMigrationProvider", () => {
     const config = {
       agents: { defaults: { workspace: fixture.workspaceDir } },
     } as MigrationProviderContext["config"];
-    const { runtime, getConfig } = createConfigRuntime(config);
+    const { runtime } = createConfigRuntime(config);
     const provider = buildCodexMigrationProvider();
     const plan = await provider.plan(
       makeContext({

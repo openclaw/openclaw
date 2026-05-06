@@ -476,9 +476,6 @@ importers:
       ajv:
         specifier: ^8.20.0
         version: 8.20.0
-      typebox:
-        specifier: 1.1.37
-        version: 1.1.37
       ws:
         specifier: ^8.20.0
         version: 8.20.0
