@@ -153,6 +153,24 @@ export default definePluginEntry({
           : undefined;
       },
       ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+      resolveThinkingProfile: (ctx) => {
+        const capabilities = getOpenRouterModelCapabilities(ctx.modelId);
+        const hasReasoning =
+          (capabilities?.reasoning ?? false) &&
+          !isOpenRouterProxyReasoningUnsupportedModel(ctx.modelId);
+        if (!hasReasoning) {
+          return null;
+        }
+        return {
+          levels: [
+            { id: "off" as const },
+            { id: "low" as const },
+            { id: "medium" as const },
+            { id: "high" as const },
+            { id: "xhigh" as const },
+          ],
+        };
+      },
       resolveReasoningOutputMode: () => "native",
       supportsXHighThinking: ({ modelId }) => supportsOpenRouterXHighThinking(modelId),
       resolveThinkingProfile: ({ modelId }) => resolveOpenRouterThinkingProfile(modelId),
