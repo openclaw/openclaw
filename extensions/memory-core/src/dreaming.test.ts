@@ -1348,6 +1348,10 @@ describe("gateway startup reconciliation", () => {
       });
       expect(logger.warn).not.toHaveBeenCalled();
 
+      // Stop the bounded startup retry so this exercises the genuine runtime
+      // failure path instead of the transient startup window.
+      await triggerGatewayStop(onMock);
+
       // Now a runtime heartbeat reconciliation happens and cron is still missing
       // (e.g. the cron service genuinely failed to initialize). The warning must fire.
       const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
@@ -1405,7 +1409,10 @@ describe("gateway startup reconciliation", () => {
 
       await vi.advanceTimersByTimeAsync(constants.STARTUP_CRON_RETRY_DELAY_MS);
       expect(harness.addCalls).toHaveLength(0);
-      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("cron service unavailable"));
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("cron service unavailable"),
+      );
+      expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining("startup retry window"));
 
       cronAvailable = true;
       await vi.advanceTimersByTimeAsync(constants.STARTUP_CRON_RETRY_DELAY_MS);
