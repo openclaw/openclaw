@@ -103,6 +103,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- LINE: ack the webhook with HTTP 200 immediately after signature and payload validation and run agent processing as fire-and-forget, so slow turns no longer cause LINE `request_timeout` retries or false `HTTPFetchError: 429` from expired reply tokens. Fixes #65375. Thanks @myericho.
 - Providers/xAI: stop sending OpenAI-style reasoning effort controls to native Grok Responses models, so `xai/grok-4.3` no longer fails live Docker/Gateway runs with `Invalid reasoning effort`.
 - Providers/xAI: clamp the bundled xAI thinking profile to `off` so live Gateway runs cannot send unsupported reasoning levels to native Grok Responses models.
 - Discord/gateway: measure heartbeat ACK timeouts from the actual heartbeat send, preventing late initial heartbeats from triggering false reconnect loops while the channel is still awaiting readiness. Fixes #77668. (#78087) Thanks @bryce-d-greybeard and @NikolaFC.
