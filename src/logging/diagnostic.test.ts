@@ -522,6 +522,57 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+  it("marks a stale processing ghost idle when recovery finds no active work", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn().mockResolvedValue({
+      status: "noop",
+      action: "none",
+      reason: "no_active_work",
+      sessionId: "s1",
+      sessionKey: "main",
+    });
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+
+      vi.advanceTimersByTime(61_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    } finally {
+      unsubscribe();
+    }
+
+    const state = getDiagnosticSessionState({ sessionId: "s1", sessionKey: "main" });
+    expect(state.state).toBe("idle");
+    expect(state.queueDepth).toBe(0);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "session.recovery.completed",
+        status: "noop",
+        action: "none",
+        outcomeReason: "no_active_work",
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "session.state",
+        state: "idle",
+        reason: "stuck_recovery:noop",
+      }),
+    );
+  });
+
   it("does not mark a newer processing generation idle after a late recovery outcome", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn().mockImplementation(async () => {
