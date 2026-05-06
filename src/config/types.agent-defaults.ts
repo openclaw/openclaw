@@ -1,3 +1,4 @@
+import type { ToolSummaryLocale } from "../auto-reply/tool-meta.js";
 import type {
   SilentReplyPolicyShape,
   SilentReplyRewriteShape,
@@ -316,6 +317,17 @@ export type AgentDefaultsConfig = {
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
+  /**
+   * Tool summary delivery (the short "Read: path" style messages emitted when tools start).
+   * Controls localization and rate limiting only; visibility is still gated by verbose level
+   * and channel/tool-result delivery policy.
+   */
+  toolSummaries?: {
+    /** Minimum interval between emitted tool summaries, in milliseconds (default: 0). */
+    minIntervalMs?: number;
+    /** Locale used for localized tool labels and common exec action hints. Default: "en". */
+    locale?: ToolSummaryLocale;
+  };
   /**
    * Detail mode for user-visible tool progress in /verbose and editable progress drafts.
    * - explain: compact human summary (default)

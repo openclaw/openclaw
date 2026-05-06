@@ -67,4 +67,60 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
   });
+
+  it("localizes and rate-limits tool summaries from agent defaults", async () => {
+    vi.useFakeTimers();
+    try {
+      const onToolResult = vi.fn();
+
+      const toolHarness = createSubscribedSessionHarness({
+        runId: "run-localized-summary",
+        verboseLevel: "on",
+        config: {
+          agents: {
+            defaults: {
+              toolSummaries: {
+                locale: "zh-CN",
+                minIntervalMs: 1000,
+              },
+            },
+          },
+        },
+        onToolResult,
+      });
+
+      toolHarness.emit({
+        type: "tool_execution_start",
+        toolName: "read",
+        toolCallId: "tool-summary-1",
+        args: { path: "/tmp/first.txt" },
+      });
+      await Promise.resolve();
+
+      toolHarness.emit({
+        type: "tool_execution_start",
+        toolName: "read",
+        toolCallId: "tool-summary-2",
+        args: { path: "/tmp/blocked.txt" },
+      });
+      await Promise.resolve();
+
+      await vi.advanceTimersByTimeAsync(1000);
+      toolHarness.emit({
+        type: "tool_execution_start",
+        toolName: "read",
+        toolCallId: "tool-summary-3",
+        args: { path: "/tmp/allowed.txt" },
+      });
+      await Promise.resolve();
+
+      expect(onToolResult).toHaveBeenCalledTimes(2);
+      expect(onToolResult.mock.calls[0][0].text).toContain("读文件");
+      expect(onToolResult.mock.calls[0][0].text).toContain("/tmp/first.txt");
+      expect(onToolResult.mock.calls[1][0].text).toContain("读文件");
+      expect(onToolResult.mock.calls[1][0].text).toContain("/tmp/allowed.txt");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
