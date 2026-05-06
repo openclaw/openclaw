@@ -65,8 +65,13 @@ function assignGatewayClient(
 }
 
 function hasGatewaySocketStarted(plugin: discordGateway.GatewayPlugin): boolean {
+  // Only an actual `ws` reference proves a transport has been started. A bare
+  // `isConnecting=true` flag without a socket is stale bookkeeping left over
+  // from a prior registration attempt that never reached `connect(false)`
+  // (#78104). Treating that as "started" makes us skip `super.registerClient`
+  // and the gateway hangs at "awaiting gateway readiness" forever.
   const state = plugin as unknown as DiscordGatewayRegistrationState;
-  return state.ws != null || state.isConnecting === true;
+  return state.ws != null;
 }
 
 type ResolveDiscordGatewayIntentsParams = {
