@@ -3843,7 +3843,7 @@ describe("dispatchReplyFromConfig", () => {
     const ctx = buildTestCtx({ Provider: "whatsapp" });
     const replyResolver = async () =>
       [
-        { text: "Reasoning:\n_thinking..._", isReasoning: true },
+        { text: "thinking...", isReasoning: true },
         { text: "The answer is 42" },
       ] satisfies ReplyPayload[];
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
