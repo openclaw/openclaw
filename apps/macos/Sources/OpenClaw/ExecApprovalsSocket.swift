@@ -453,10 +453,18 @@ private enum ExecHostExecutor {
             return errorResponse
         }
 
+        var env = context.env ?? ProcessInfo.processInfo.environment
+        if let agentId = request.agentId, !agentId.isEmpty {
+            env["OPENCLAW_AGENT_ID"] = agentId
+        }
+        if let sessionKey = request.sessionKey, !sessionKey.isEmpty {
+            env["OPENCLAW_SESSION_KEY"] = sessionKey
+        }
+
         return await self.runCommand(
             command: validatedRequest.command,
             cwd: request.cwd,
-            env: context.env,
+            env: env,
             timeoutMs: request.timeoutMs)
     }
 

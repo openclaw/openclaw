@@ -663,13 +663,13 @@ async function executeSystemRunPhase(
     segments: phase.segments,
   });
 
-  const shellRuntimeEnv: Record<string, string> = {
+  const execEnv: Record<string, string> = {
     ...(phase.env ?? process.env),
     OPENCLAW_AGENT_ID: phase.agentId ?? "",
     OPENCLAW_SESSION_KEY: phase.sessionKey,
   };
 
-  const result = await opts.runCommand(execArgv, phase.cwd, shellRuntimeEnv, phase.timeoutMs);
+  const result = await opts.runCommand(execArgv, phase.cwd, execEnv, phase.timeoutMs);
   applyOutputTruncation(result);
   await sendSystemRunCompleted(
     opts,
