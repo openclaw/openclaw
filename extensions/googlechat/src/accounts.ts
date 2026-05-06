@@ -12,14 +12,19 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { z } from "openclaw/plugin-sdk/zod";
 import type { GoogleChatAccountConfig } from "./types.config.js";
 
-type GoogleChatCredentialSource = "file" | "inline" | "env" | "none";
+export type GoogleChatCredentialSource =
+  | "file"
+  | "inline"
+  | "env"
+  | "none"
+  | "configured_unavailable";
 
 export type ResolvedGoogleChatAccount = {
   accountId: string;
   name?: string;
   enabled: boolean;
   config: GoogleChatAccountConfig;
-  credentialSource: GoogleChatCredentialSource;
+  credentialSource: Exclude<GoogleChatCredentialSource, "configured_unavailable">;
   credentials?: Record<string, unknown>;
   credentialsFile?: string;
 };
@@ -38,7 +43,7 @@ const {
 } = createAccountListHelpers("googlechat");
 export { listGoogleChatAccountIds, resolveDefaultGoogleChatAccountId };
 
-function mergeGoogleChatAccountConfig(
+export function mergeGoogleChatAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): GoogleChatAccountConfig {
@@ -92,7 +97,7 @@ function parseServiceAccount(value: unknown): Record<string, unknown> | null {
   return safeParseWithSchema(JsonRecordSchema, value);
 }
 
-function resolveCredentialsFromConfig(params: {
+export function inspectCredentialsFromConfig(params: {
   accountId: string;
   account: GoogleChatAccountConfig;
 }): {
@@ -106,16 +111,8 @@ function resolveCredentialsFromConfig(params: {
     return { credentials: inline, source: "inline" };
   }
 
-  if (isSecretRef(account.serviceAccount)) {
-    throw new Error(
-      `channels.googlechat.accounts.${accountId}.serviceAccount: unresolved SecretRef "${account.serviceAccount.source}:${account.serviceAccount.provider}:${account.serviceAccount.id}". Resolve this command against an active gateway runtime snapshot before reading it.`,
-    );
-  }
-
-  if (isSecretRef(account.serviceAccountRef)) {
-    throw new Error(
-      `channels.googlechat.accounts.${accountId}.serviceAccount: unresolved SecretRef "${account.serviceAccountRef.source}:${account.serviceAccountRef.provider}:${account.serviceAccountRef.id}". Resolve this command against an active gateway runtime snapshot before reading it.`,
-    );
+  if (isSecretRef(account.serviceAccount) || isSecretRef(account.serviceAccountRef)) {
+    return { source: "configured_unavailable" };
   }
 
   const file = normalizeOptionalString(account.serviceAccountFile);
@@ -136,6 +133,38 @@ function resolveCredentialsFromConfig(params: {
   }
 
   return { source: "none" };
+}
+
+function resolveCredentialsFromConfig(params: {
+  accountId: string;
+  account: GoogleChatAccountConfig;
+}): {
+  credentials?: Record<string, unknown>;
+  credentialsFile?: string;
+  source: Exclude<GoogleChatCredentialSource, "configured_unavailable">;
+} {
+  const inspected = inspectCredentialsFromConfig(params);
+  if (inspected.source !== "configured_unavailable") {
+    return inspected as {
+      credentials?: Record<string, unknown>;
+      credentialsFile?: string;
+      source: Exclude<GoogleChatCredentialSource, "configured_unavailable">;
+    };
+  }
+  const { account, accountId } = params;
+  if (isSecretRef(account.serviceAccount)) {
+    throw new Error(
+      `channels.googlechat.accounts.${accountId}.serviceAccount: unresolved SecretRef "${account.serviceAccount.source}:${account.serviceAccount.provider}:${account.serviceAccount.id}". Resolve this command against an active gateway runtime snapshot before reading it.`,
+    );
+  }
+  if (isSecretRef(account.serviceAccountRef)) {
+    throw new Error(
+      `channels.googlechat.accounts.${accountId}.serviceAccount: unresolved SecretRef "${account.serviceAccountRef.source}:${account.serviceAccountRef.provider}:${account.serviceAccountRef.id}". Resolve this command against an active gateway runtime snapshot before reading it.`,
+    );
+  }
+  throw new Error(
+    `channels.googlechat.accounts.${accountId}.serviceAccount: unresolved SecretRef. Resolve this command against an active gateway runtime snapshot before reading it.`,
+  );
 }
 
 export function resolveGoogleChatAccount(params: {

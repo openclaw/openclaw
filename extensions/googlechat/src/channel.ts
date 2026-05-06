@@ -28,6 +28,7 @@ import {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
   GoogleChatConfigSchema,
+  inspectGoogleChatAccount,
   isGoogleChatSpaceTarget,
   isGoogleChatUserTarget,
   listGoogleChatAccountIds,
@@ -77,6 +78,7 @@ const googleChatConfigAdapter = createScopedChannelConfigAdapter<
   listAccountIds: listGoogleChatAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveGoogleChatAccount),
   resolveAccessorAccount: resolveGoogleChatConfigAccessorAccount,
+  inspectAccount: adaptScopedAccountAccessor(inspectGoogleChatAccount),
   defaultAccountId: resolveDefaultGoogleChatAccountId,
   clearBaseFields: [
     "serviceAccount",

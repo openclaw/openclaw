@@ -21,6 +21,7 @@ export {
   resolveGoogleChatAccount,
   type ResolvedGoogleChatAccount,
 } from "./accounts.js";
+export { inspectGoogleChatAccount, type InspectedGoogleChatAccount } from "./account-inspect.js";
 export {
   isGoogleChatSpaceTarget,
   isGoogleChatUserTarget,

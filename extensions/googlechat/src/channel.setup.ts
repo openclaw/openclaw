@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { inspectGoogleChatAccount } from "./account-inspect.js";
 import {
   type GoogleChatConfigAccessorAccount,
   listGoogleChatAccountIds,
@@ -34,6 +35,7 @@ const googleChatConfigAdapter = createScopedChannelConfigAdapter<
   listAccountIds: listGoogleChatAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveGoogleChatAccount),
   resolveAccessorAccount: resolveGoogleChatConfigAccessorAccount,
+  inspectAccount: adaptScopedAccountAccessor(inspectGoogleChatAccount),
   defaultAccountId: resolveDefaultGoogleChatAccountId,
   clearBaseFields: [
     "serviceAccount",
