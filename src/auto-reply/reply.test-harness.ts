@@ -74,6 +74,7 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
         agentId: string;
         config: unknown;
         execOverrides?: unknown;
+        fastMode?: unknown;
         inputProvenance?: unknown;
         messageProvider?: string;
         model: string;
@@ -99,6 +100,7 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
       agentId: params.followupRun.run.agentId,
       config: params.followupRun.run.config,
       execOverrides: params.followupRun.run.execOverrides,
+      fastMode: params.followupRun.run.fastMode,
       inputProvenance: params.followupRun.run.inputProvenance,
       messageProvider: params.followupRun.run.messageProvider,
       model: params.followupRun.run.model,
