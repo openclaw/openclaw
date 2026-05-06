@@ -7,7 +7,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 const execFileAsync = promisify(execFile);
 
 export type SubagentModelRouterMode = "off" | "shadow" | "pilot" | "live";
-export type SubagentModelRouterTaskType = "chat" | "coding" | "research" | "visual";
+export type SubagentModelRouterTaskType =
+  | "chat"
+  | "coding"
+  | "writing"
+  | "research"
+  | "batch"
+  | "trivial"
+  | "visual"
+  | "reasoning";
 
 export type SubagentModelRouterConfig = {
   mode?: SubagentModelRouterMode;
@@ -67,21 +75,50 @@ export function resolveSubagentModelRouterConfig(cfg: OpenClawConfig): SubagentM
 }
 
 export function classifySubagentModelRouterTask(task: string): SubagentModelRouterTaskType {
-  if (/\b(code|coding|bug|debug|fix|test|repo|typescript|javascript|python)\b/i.test(task)) {
+  const text = task || "";
+  if (
+    /\b(code|coding|bug|debug|fix|test|repo|typescript|javascript|python)\b/i.test(text) ||
+    /(באג|שגיאה|לוג|לוגים|נפל|נופל|לא עובד|תתקן|תקן|דיבאג|ריפו|בדיקות?)/i.test(text)
+  ) {
     return "coding";
   }
-  if (/\b(research|analyze|analysis|compare|investigate)\b/i.test(task)) {
-    return "research";
-  }
-  if (/\b(image|vision|screenshot|design|ui|ux)\b/i.test(task)) {
+  if (
+    /\b(image|vision|screenshot|design|ui|ux)\b/i.test(text) ||
+    /(תמונה|צילום מסך|עיצוב|ויזואל|ממשק)/i.test(text)
+  ) {
     return "visual";
   }
+  if (
+    /\b(write|draft|copy|post|email|summarize|summary|report)\b/i.test(text) ||
+    /(כתוב|טיוטה|פוסט|מייל|תסכם|סכם|דוח|סקירה)/i.test(text)
+  ) {
+    return "writing";
+  }
+  if (
+    /\b(research|analyze|analysis|compare|investigate|search)\b/i.test(text) ||
+    /(בדוק|חפש|מקורות|השווה|תחקור|נתח)/i.test(text)
+  ) {
+    return "research";
+  }
+  if (
+    /\b(reason|plan|strategy|recommend|decide|should)\b/i.test(text) ||
+    /(מה דעתך|כדאי|המלצות|אסטרטג|תכנון|לתכנן|להחליט)/i.test(text)
+  ) {
+    return "reasoning";
+  }
+  if (text.trim().length < 80) return "trivial";
   return "chat";
 }
 
 function fallbackModelForTaskType(taskType: SubagentModelRouterTaskType): string | undefined {
-  if (taskType === "coding") return "openai-codex/gpt-5.4";
-  if (taskType === "research") return "openrouter/qwen/qwen3-next-80b-a3b-instruct:free";
+  if (taskType === "coding") return "openai-codex/gpt-5.3-codex";
+  if (taskType === "visual") return "xai/grok-3-vision";
+  if (taskType === "chat" || taskType === "writing" || taskType === "reasoning") {
+    return "openai-codex/gpt-5.5";
+  }
+  if (taskType === "research" || taskType === "batch" || taskType === "trivial") {
+    return "openai-codex/gpt-5.1-codex-mini";
+  }
   return undefined;
 }
 

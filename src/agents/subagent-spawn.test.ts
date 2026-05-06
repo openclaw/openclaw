@@ -407,7 +407,7 @@ describe("spawnSubagentDirect seam flow", () => {
         enabled: true,
         mode: "shadow",
         taskType: "coding",
-        recommendedModel: "openai-codex/gpt-5.4",
+        recommendedModel: "openai-codex/gpt-5.3-codex",
         routeEffectApplied: false,
       },
     });
@@ -455,7 +455,7 @@ describe("spawnSubagentDirect seam flow", () => {
       component: "openclaw.subagent_spawn",
       mode: "shadow",
       taskType: "research",
-      recommendedModel: "openrouter/qwen/qwen3-next-80b-a3b-instruct:free",
+      recommendedModel: "openai-codex/gpt-5.1-codex-mini",
       actualModel: "openai/gpt-5.5",
       routeEffectApplied: false,
       status: "accepted",
