@@ -332,6 +332,10 @@ function syncEnabledPluginAllowlist(
     if (allow.includes(pluginId)) {
       return;
     }
+    if (allow.length === 0) {
+      untrackAutoAllowlistedPluginId(state, pluginId);
+      return;
+    }
     setPathValue(draft, ["plugins", "allow"], [...allow, pluginId]);
     trackAutoAllowlistedPluginId(state, pluginId);
     return;
