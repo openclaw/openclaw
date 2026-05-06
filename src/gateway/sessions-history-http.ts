@@ -4,6 +4,7 @@ import path from "node:path";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionStore } from "../config/sessions.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isInternalGatewaySessionKey } from "../routing/session-key.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -136,6 +137,18 @@ export async function handleSessionHistoryHttpRequest(
   const { cfg } = authResult;
 
   const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey });
+
+  if (isInternalGatewaySessionKey(sessionKey) || isInternalGatewaySessionKey(target.canonicalKey)) {
+    sendJson(res, 403, {
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: "internal sessions are not available over HTTP history",
+      },
+    });
+    return true;
+  }
+
   const store = loadSessionStore(target.storePath);
   const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
   if (!entry?.sessionId) {

@@ -111,6 +111,28 @@ async function appendTranscriptMessage(params: {
   return appended.messageId;
 }
 
+async function seedNamedSession(params: { sessionKey: string; sessionId: string; text?: string }) {
+  const storePath = await createSessionStoreFile();
+  await writeSessionStore({
+    entries: {
+      [params.sessionKey]: {
+        sessionId: params.sessionId,
+        updatedAt: Date.now(),
+      },
+    },
+    storePath,
+  });
+  if (params.text) {
+    const appended = await appendAssistantMessageToSessionTranscript({
+      sessionKey: params.sessionKey,
+      text: params.text,
+      storePath,
+    });
+    expect(appended.ok).toBe(true);
+  }
+  return { storePath };
+}
+
 async function fetchSessionHistory(
   port: number,
   sessionKey: string,
@@ -305,6 +327,91 @@ describe("session history HTTP endpoints", () => {
         },
       });
     });
+  });
+
+  test.each([
+    {
+      requestSessionKey: "agent:main:subagent:worker",
+      storedSessionKey: "agent:main:subagent:worker",
+      sessionId: "sess-subagent",
+    },
+    {
+      requestSessionKey: "subagent:worker",
+      storedSessionKey: "agent:main:subagent:worker",
+      sessionId: "sess-subagent-raw",
+    },
+    {
+      requestSessionKey: "agent:main:cron:daily",
+      storedSessionKey: "agent:main:cron:daily",
+      sessionId: "sess-cron",
+    },
+    {
+      requestSessionKey: "cron:daily",
+      storedSessionKey: "agent:main:cron:daily",
+      sessionId: "sess-cron-raw",
+    },
+    {
+      requestSessionKey: "agent:main:acp:session-1",
+      storedSessionKey: "agent:main:acp:session-1",
+      sessionId: "sess-acp",
+    },
+    {
+      requestSessionKey: "acp:session-1",
+      storedSessionKey: "agent:main:acp:session-1",
+      sessionId: "sess-acp-raw",
+    },
+  ])(
+    "rejects internal session history over HTTP for $requestSessionKey",
+    async ({ requestSessionKey, storedSessionKey, sessionId }) => {
+      await seedNamedSession({
+        sessionKey: storedSessionKey,
+        sessionId,
+        text: "internal session transcript",
+      });
+
+      await withGatewayHarness(async (harness) => {
+        const res = await fetchSessionHistory(harness.port, requestSessionKey);
+        expect(res.status).toBe(403);
+        await expect(res.json()).resolves.toMatchObject({
+          ok: false,
+          error: {
+            type: "forbidden",
+            message: "internal sessions are not available over HTTP history",
+          },
+        });
+      });
+    },
+  );
+
+  test("preserves internal session history over WebSocket chat.history", async () => {
+    await seedNamedSession({
+      sessionKey: "agent:main:subagent:worker",
+      sessionId: "sess-subagent-ws",
+      text: "internal session transcript",
+    });
+
+    const started = await startServerWithClient("test-gateway-token-1234567890");
+    const { server, ws, envSnapshot } = started;
+    try {
+      const connect = await connectReq(ws, {
+        token: "test-gateway-token-1234567890",
+        scopes: ["operator.read"],
+      });
+      expect(connect.ok).toBe(true);
+
+      const wsHistory = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "agent:main:subagent:worker",
+        limit: 1,
+      });
+      expect(wsHistory.ok).toBe(true);
+      expect(JSON.stringify(wsHistory.payload?.messages ?? [])).toContain(
+        "internal session transcript",
+      );
+    } finally {
+      ws.close();
+      await server.close();
+      envSnapshot.restore();
+    }
   });
 
   test("prefers the freshest duplicate row for direct history reads", async () => {
