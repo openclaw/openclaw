@@ -215,4 +215,52 @@ describe("createTtsTool", () => {
       "TTS conversion failed: openai: not configured",
     );
   });
+
+  it("strips emoji when skipEmojiSymbols is enabled", async () => {
+    textToSpeechSpy.mockResolvedValue({
+      success: true,
+      audioPath: "/tmp/reply.opus",
+      provider: "test",
+      voiceCompatible: true,
+    });
+
+    const tool = createTtsTool({
+      config: {
+        tts: {
+          skipEmojiSymbols: true,
+        } as any,
+      } as any,
+    });
+    await tool.execute("call-1", { text: "Done ✓" });
+
+    expect(textToSpeechSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Done ",
+      }),
+    );
+  });
+
+  it("preserves emoji when skipEmojiSymbols is disabled", async () => {
+    textToSpeechSpy.mockResolvedValue({
+      success: true,
+      audioPath: "/tmp/reply.opus",
+      provider: "test",
+      voiceCompatible: true,
+    });
+
+    const tool = createTtsTool({
+      config: {
+        tts: {
+          skipEmojiSymbols: false,
+        } as any,
+      } as any,
+    });
+    await tool.execute("call-1", { text: "Done ✓" });
+
+    expect(textToSpeechSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Done ✓",
+      }),
+    );
+  });
 });
