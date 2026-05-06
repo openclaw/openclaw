@@ -122,6 +122,24 @@ struct ExecAllowlistTests {
         #expect(resolutions[1].executableName == "touch")
     }
 
+    @Test func `resolve for allowlist splits posix combined c flag payloads`() {
+        for command in [
+            ["/bin/bash", "-xc", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "-ec", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "-euxc", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "-c/usr/bin/printf safe_marker"],
+        ] {
+            let resolutions = ExecCommandResolution.resolveForAllowlist(
+                command: command,
+                rawCommand: nil,
+                cwd: nil,
+                env: ["PATH": "/usr/bin:/bin"])
+            #expect(resolutions.count == 1)
+            #expect(resolutions[0].resolvedPath == "/usr/bin/printf")
+            #expect(resolutions[0].executableName == "printf")
+        }
+    }
+
     @Test func `resolve for allowlist uses wrapper argv payload even with canonical raw command`() {
         let command = ["/bin/sh", "-lc", "echo allowlisted && /usr/bin/touch /tmp/openclaw-allowlist-test"]
         let canonicalRaw = "/bin/sh -lc \"echo allowlisted && /usr/bin/touch /tmp/openclaw-allowlist-test\""
