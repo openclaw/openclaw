@@ -5450,12 +5450,47 @@ module.exports = {
     });
 
     expect(registry.typedHooks).toEqual([]);
-    const blockedDiagnostics = registry.diagnostics.filter((diag) =>
+    const conversationBlockedDiagnostics = registry.diagnostics.filter((diag) =>
       diag.message.includes(
         "non-bundled plugins must set plugins.entries.conversation-hooks.hooks.allowConversationAccess=true",
       ),
     );
-    expect(blockedDiagnostics).toHaveLength(4);
+    expect(conversationBlockedDiagnostics).toHaveLength(3);
+    const stateBlockedDiagnostics = registry.diagnostics.filter((diag) =>
+      diag.message.includes(
+        "non-bundled plugins must set plugins.entries.conversation-hooks.hooks.allowStateAccess=true",
+      ),
+    );
+    expect(stateBlockedDiagnostics).toHaveLength(1);
+  });
+
+  it("allows agent_end for non-bundled plugins with only allowStateAccess, stripping messages", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "state-hooks-only",
+      filename: "state-hooks-only.cjs",
+      body: `module.exports = { id: "state-hooks-only", register(api) {
+  api.on("agent_end", () => undefined);
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["state-hooks-only"],
+        entries: {
+          "state-hooks-only": {
+            hooks: {
+              allowStateAccess: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual(["agent_end"]);
+    expect(registry.typedHooks[0]?.stateOnly).toBe(true);
+    expect(registry.diagnostics.filter((d) => d.level === "warn")).toHaveLength(0);
   });
 
   it("allows conversation typed hooks for non-bundled plugins when explicitly enabled", () => {
