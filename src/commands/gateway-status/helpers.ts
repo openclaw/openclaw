@@ -2,7 +2,10 @@ import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
-import { resolveGatewayProbeSurfaceAuth } from "../../gateway/auth-surface-resolution.js";
+import {
+  resolveGatewayInteractiveSurfaceAuth,
+  resolveGatewayProbeSurfaceAuth,
+} from "../../gateway/auth-surface-resolution.js";
 import { isLoopbackHost } from "../../gateway/net.js";
 import { type GatewayProbeCapability, type GatewayProbeResult } from "../../gateway/probe.js";
 import { inspectBestEffortPrimaryTailnetIPv4 } from "../../infra/network-discovery-display.js";
@@ -163,17 +166,46 @@ export async function resolveAuthForTarget(
   cfg: OpenClawConfig,
   target: GatewayStatusTarget,
   overrides: { token?: string; password?: string },
-): Promise<{ token?: string; password?: string; diagnostics?: string[] }> {
+): Promise<{ token?: string; password?: string; diagnostics?: string[]; failureReason?: string }> {
   const tokenOverride = normalizeOptionalString(overrides.token);
   const passwordOverride = normalizeOptionalString(overrides.password);
   if (tokenOverride || passwordOverride) {
     return { token: tokenOverride, password: passwordOverride };
   }
 
-  return resolveGatewayProbeSurfaceAuth({
+  const surface =
+    target.kind === "configRemote" || target.kind === "sshTunnel" ? "remote" : "local";
+  const auth = await resolveGatewayProbeSurfaceAuth({
     config: cfg,
-    surface: target.kind === "configRemote" || target.kind === "sshTunnel" ? "remote" : "local",
+    surface,
   });
+  // Only apply the interactive-auth fail-fast when:
+  //   - the target is the known local loopback (not an explicit URL override),
+  //   - no credentials were resolved, and
+  //   - gateway.auth.mode is an explicit credential-requiring mode.
+  // Explicit URL overrides (kind === "explicit") are treated as non-local
+  // for fail-fast purposes: a user pointing at an arbitrary loopback port via
+  // --url should not be blocked by missing local auth config.
+  const authMode = cfg.gateway?.auth?.mode;
+  const isLocalLoopback = target.kind === "localLoopback";
+  const authModeRequiresCredentials =
+    authMode !== undefined && authMode !== "none" && authMode !== "trusted-proxy";
+  if (
+    surface === "local" &&
+    isLocalLoopback &&
+    !auth.token &&
+    !auth.password &&
+    authModeRequiresCredentials
+  ) {
+    const interactive = await resolveGatewayInteractiveSurfaceAuth({
+      config: cfg,
+      surface: "local",
+    });
+    if (interactive.failureReason) {
+      return { ...auth, failureReason: interactive.failureReason };
+    }
+  }
+  return auth;
 }
 
 export { pickGatewaySelfPresence };

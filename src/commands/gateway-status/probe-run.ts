@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.js";
-import { probeGateway } from "../../gateway/probe.js";
+import { probeGateway, type GatewayProbeResult } from "../../gateway/probe.js";
 import {
   discoverGatewayBeacons,
   type GatewayBonjourBeacon,
@@ -121,19 +121,32 @@ export async function runGatewayStatusProbePass(params: {
           token: readStringValue(params.opts.token),
           password: readStringValue(params.opts.password),
         });
-        const probe = await probeGateway({
-          url: target.url,
-          auth: {
-            token: authResolution.token,
-            password: authResolution.password,
-          },
-          tlsFingerprint:
-            target.kind === "localLoopback" && target.url.startsWith("wss://")
-              ? params.localTlsFingerprint
-              : undefined,
-          preauthHandshakeTimeoutMs: params.cfg.gateway?.handshakeTimeoutMs,
-          timeoutMs: resolveProbeBudgetMs(params.overallTimeoutMs, target),
-        });
+        const probe: GatewayProbeResult = authResolution.failureReason
+          ? {
+              ok: false,
+              url: target.url,
+              connectLatencyMs: null,
+              error: authResolution.failureReason,
+              close: null,
+              auth: { role: null, scopes: [], capability: "unknown" },
+              health: null,
+              status: null,
+              presence: null,
+              configSnapshot: null,
+            }
+          : await probeGateway({
+              url: target.url,
+              auth: {
+                token: authResolution.token,
+                password: authResolution.password,
+              },
+              tlsFingerprint:
+                target.kind === "localLoopback" && target.url.startsWith("wss://")
+                  ? params.localTlsFingerprint
+                  : undefined,
+              preauthHandshakeTimeoutMs: params.cfg.gateway?.handshakeTimeoutMs,
+              timeoutMs: resolveProbeBudgetMs(params.overallTimeoutMs, target),
+            });
         return {
           target,
           probe,

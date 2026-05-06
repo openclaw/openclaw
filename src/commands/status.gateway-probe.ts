@@ -11,6 +11,7 @@ export async function resolveGatewayProbeAuthResolution(cfg: OpenClawConfig): Pr
     password?: string;
   };
   warning?: string;
+  failureReason?: string;
 }> {
   const target = resolveGatewayProbeTarget(cfg);
   return resolveGatewayProbeAuthSafeWithSecretInputs({

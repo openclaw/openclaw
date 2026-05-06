@@ -583,13 +583,12 @@ describe("gatherDaemonStatus", () => {
       deep: false,
     });
 
-    expect(callGatewayStatusProbe).toHaveBeenCalledWith(
-      expect.objectContaining({
-        token: undefined,
-        password: undefined,
-      }),
+    expect(callGatewayStatusProbe).not.toHaveBeenCalled();
+    expect(status.rpc?.ok).toBe(false);
+    expect(status.rpc?.error).toContain("gateway.auth.token");
+    expect(status.rpc?.authWarning).toContain(
+      "gateway.auth.token SecretRef is unresolved in this command path",
     );
-    expect(status.rpc?.authWarning).toBeUndefined();
   });
 
   it("surfaces authWarning when daemon probe auth SecretRef is unresolved and probe fails", async () => {
