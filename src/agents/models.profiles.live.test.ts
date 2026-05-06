@@ -747,18 +747,25 @@ describeLive("live models (profile keys)", () => {
 
       const providers = parseProviderFilter(process.env.OPENCLAW_LIVE_PROVIDERS);
       const providerList = providers ? [...providers] : null;
+      logProgress("[live-models] resolving agent dir");
       const agentDir = resolveDefaultAgentDir(cfg);
-      const authStorage = discoverAuthStorage(agentDir, {
-        config: cfg,
-        env: process.env,
-        ...(providerList
-          ? {
-              externalCli: externalCliDiscoveryForProviders({ cfg, providers: providerList }),
-              skipExternalAuthProfiles: true,
-              syntheticAuthProviderRefs: [],
-            }
-          : {}),
-      });
+      logProgress("[live-models] loading auth storage");
+      const authStorage = await withLiveStageTimeout(
+        Promise.resolve().then(() =>
+          discoverAuthStorage(agentDir, {
+            config: cfg,
+            env: process.env,
+            externalCli: externalCliDiscoveryForProviders({ cfg, providers: providerList ?? [] }),
+            ...(providerList
+              ? {
+                  skipExternalAuthProfiles: true,
+                  syntheticAuthProviderRefs: [],
+                }
+              : {}),
+          }),
+        ),
+        "[live-models] load auth storage",
+      );
       logProgress("[live-models] loading model registry");
       const models = await withLiveStageTimeout(
         Promise.resolve().then(() =>
