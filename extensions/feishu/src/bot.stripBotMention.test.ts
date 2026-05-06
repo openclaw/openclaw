@@ -123,4 +123,38 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
     );
     expect(ctx.content).toBe('<at user_id="ou_x">&lt;script&gt;</at> test');
   });
+
+  it("preserves bot self-mention when it appears mid-sentence (#72504 multi-bot groups)", () => {
+    // User @-mentions BotA and BotB together in a group. Each bot must see
+    // its own <at> tag so the LLM doesn't conclude it was unaddressed and
+    // return NO_REPLY. Only the leading addressing prefix gets stripped.
+    const ctx = parseFeishuMessageEvent(
+      makeEvent(
+        "Hey @_bot_a @_bot_b please coordinate",
+        [
+          { key: "@_bot_a", name: "BotA", id: { open_id: "ou_bot" } },
+          { key: "@_bot_b", name: "BotB", id: { open_id: "ou_bot_b" } },
+        ],
+        "group",
+      ),
+      BOT_OPEN_ID,
+    );
+    expect(ctx.content).toBe(
+      'Hey <at user_id="ou_bot">BotA</at> <at user_id="ou_bot_b">BotB</at> please coordinate',
+    );
+  });
+
+  it("strips leading bot mention but keeps inline self-mention (#72504)", () => {
+    // Same bot mentioned twice: leading prefix is addressing (strip),
+    // mid-sentence is semantic (keep, so LLM sees who was named).
+    const ctx = parseFeishuMessageEvent(
+      makeEvent(
+        "@_bot_1 ask @_bot_1 to summarize",
+        [{ key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } }],
+        "group",
+      ),
+      BOT_OPEN_ID,
+    );
+    expect(ctx.content).toBe('ask <at user_id="ou_bot">Bot</at> to summarize');
+  });
 });
