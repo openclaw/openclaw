@@ -33,6 +33,8 @@ const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
   "skills.entries.*.apiKey",
   "tools.web.search.apiKey",
 ] as const;
+const STATIC_WEB_SEARCH_COMMAND_TARGET_IDS = ["tools.web.search.apiKey"] as const;
+
 const STATIC_STATUS_TARGET_IDS = [
   "agents.defaults.memorySearch.remote.apiKey",
   "agents.list[].memorySearch.remote.apiKey",
@@ -74,6 +76,15 @@ function isPluginWebCredentialTargetId(id: string): boolean {
   }
   const configPath = segments.slice(4).join(".");
   return configPath === "webSearch.apiKey" || configPath === "webFetch.apiKey";
+}
+
+function isPluginWebSearchCredentialTargetId(id: string): boolean {
+  const segments = id.split(".");
+  if (segments[0] !== "plugins" || segments[1] !== "entries" || segments[3] !== "config") {
+    return false;
+  }
+  const configPath = segments.slice(4).join(".");
+  return configPath === "webSearch.apiKey";
 }
 
 function getAgentRuntimeBaseTargetIds(): string[] {
@@ -253,6 +264,16 @@ export function getStatusCommandSecretTargetIds(
     ? getConfiguredChannelSecretTargetIds(config, env)
     : getChannelSecretTargetIds();
   return toTargetIdSet([...STATIC_STATUS_TARGET_IDS, ...channelTargetIds]);
+}
+
+export function getWebSearchCommandSecretTargetIds(): Set<string> {
+  return toTargetIdSet([
+    ...STATIC_WEB_SEARCH_COMMAND_TARGET_IDS,
+    ...listSecretTargetRegistryEntries()
+      .map((entry) => entry.id)
+      .filter(isPluginWebSearchCredentialTargetId)
+      .toSorted(),
+  ]);
 }
 
 export function getSecurityAuditCommandSecretTargetIds(): Set<string> {
