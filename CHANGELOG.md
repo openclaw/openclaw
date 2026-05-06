@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Plugin hooks/rawBody: add optional `rawBody` field to `before_prompt_build`, `before_agent_start`, and `agent_end` hook events, exposing the clean user input text before channel metadata or hook injections are prepended; `undefined` for non-channel origins (CLI, heartbeat, cron, exec-event, steered messages). Plugins should prefer `event.rawBody ?? extractText(event.messages)` for backward compatibility. (#52664) Thanks @kingdoooo.
 - Dependencies: refresh provider and tooling dependencies, including AWS SDK, PI runtime packages, AJV, Feishu SDK, Anthropic SDK, tokenjuice, and native TypeScript/oxlint tooling. Thanks @dependabot.
 - Matrix/QA: add live Matrix approval scenarios for exec metadata, chunked fallback, plugin approvals, deny reactions, thread targeting, and `target: "both"` delivery, with redacted artifacts preserving safe approval summaries. Thanks @gumadeiras.
 - Codex: add Computer Use setup for Codex-mode agents, including `/codex computer-use status/install`, marketplace discovery, optional auto-install, and fail-closed MCP server checks before Codex-mode turns start. Fixes #72094. (#71842) Thanks @pash-openai.
