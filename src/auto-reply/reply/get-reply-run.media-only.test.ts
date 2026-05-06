@@ -1306,3 +1306,98 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("low steer this conversation");
   });
 });
+
+describe("runPreparedReply rawBody hook gating", () => {
+  beforeAll(async () => {
+    ({ runPreparedReply } = await import("./get-reply-run.js"));
+    ({ runReplyAgent } = await import("./agent-runner.runtime.js"));
+    ({ routeReply } = await import("./route-reply.runtime.js"));
+  });
+
+  beforeEach(() => {
+    vi.mocked(runReplyAgent).mockClear();
+    vi.mocked(runReplyAgent).mockResolvedValue({ text: "ok" } as never);
+  });
+
+  function paramsForProvider(
+    provider: string,
+    overrides: {
+      body?: string;
+      rawBody?: string;
+      commandBody?: string;
+    } = {},
+  ): Parameters<typeof runPreparedReply>[0] {
+    const body = overrides.body ?? "";
+    return baseParams({
+      ctx: {
+        Body: body,
+        RawBody: overrides.rawBody,
+        CommandBody: overrides.commandBody,
+        ThreadHistoryBody: "",
+        OriginatingChannel: provider,
+        OriginatingTo: "user:1",
+        ChatType: "direct",
+        Provider: provider,
+      } as never,
+      sessionCtx: {
+        Body: body,
+        BodyStripped: body,
+        ThreadHistoryBody: "",
+        Provider: provider,
+        ChatType: "direct",
+        OriginatingChannel: provider,
+        OriginatingTo: "user:1",
+      } as never,
+    });
+  }
+
+  function capturedRawBody(): unknown {
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0] as
+      | { rawBody?: unknown; followupRun?: { rawBody?: unknown } }
+      | undefined;
+    return call?.rawBody;
+  }
+
+  function capturedFollowupRawBody(): unknown {
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0] as
+      | { followupRun?: { rawBody?: unknown } }
+      | undefined;
+    return call?.followupRun?.rawBody;
+  }
+
+  it("passes user text as rawBody for telegram channel runs", async () => {
+    await runPreparedReply(paramsForProvider("telegram", { body: "hello" }));
+    expect(capturedRawBody()).toBe("hello");
+    expect(capturedFollowupRawBody()).toBe("hello");
+  });
+
+  it("gates rawBody to undefined for heartbeat runs", async () => {
+    await runPreparedReply(
+      paramsForProvider("heartbeat", {
+        body: "Read HEARTBEAT.md and run any due maintenance.",
+        rawBody: "Read HEARTBEAT.md and run any due maintenance.",
+        commandBody: "Read HEARTBEAT.md and run any due maintenance.",
+      }),
+    );
+    expect(capturedRawBody()).toBeUndefined();
+    expect(capturedFollowupRawBody()).toBeUndefined();
+  });
+
+  it("gates rawBody to undefined for cron-event runs", async () => {
+    await runPreparedReply(paramsForProvider("cron-event", { body: "scheduled prompt text" }));
+    expect(capturedRawBody()).toBeUndefined();
+    expect(capturedFollowupRawBody()).toBeUndefined();
+  });
+
+  it("gates rawBody to undefined for exec-event runs", async () => {
+    await runPreparedReply(paramsForProvider("exec-event", { body: "exec event prompt" }));
+    expect(capturedRawBody()).toBeUndefined();
+    expect(capturedFollowupRawBody()).toBeUndefined();
+  });
+
+  it("prefers CommandBody over Body for channel rawBody", async () => {
+    await runPreparedReply(paramsForProvider("discord", { body: "raw", commandBody: "!cmd" }));
+    expect(capturedRawBody()).toBe("!cmd");
+    expect(capturedFollowupRawBody()).toBe("!cmd");
+  });
+});
