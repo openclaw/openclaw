@@ -11,9 +11,40 @@ import { pathExists } from "../utils.js";
 export const COMPLETION_SHELLS = ["zsh", "bash", "powershell", "fish"] as const;
 export type CompletionShell = (typeof COMPLETION_SHELLS)[number];
 export const COMPLETION_SKIP_PLUGIN_COMMANDS_ENV = "OPENCLAW_COMPLETION_SKIP_PLUGIN_COMMANDS";
+export const COMPLETION_CACHE_WRITE_TIMEOUT_ENV = "OPENCLAW_COMPLETION_CACHE_WRITE_TIMEOUT_MS";
+const COMPLETION_CACHE_WRITE_TIMEOUT_DEFAULT_MS = 30_000;
 
 export function isCompletionShell(value: string): value is CompletionShell {
   return COMPLETION_SHELLS.includes(value as CompletionShell);
+}
+
+/**
+ * Resolve the spawn timeout (in ms) for `openclaw completion --write-state`.
+ *
+ * Reads `OPENCLAW_COMPLETION_CACHE_WRITE_TIMEOUT_MS` from the environment when
+ * set to a strict positive integer in the safe-integer range; otherwise
+ * returns the 30000ms default. Both the post-update auto-regeneration path and
+ * `openclaw doctor completion` use this so the budget can be extended on
+ * slower targets (Pi-class hardware, throttled containers, low-end VPS)
+ * without source changes.
+ *
+ * Malformed values silently fall back to the default. Examples that fall
+ * back: `"60_000"` (numeric separator), `"1e5"` (exponent notation), `"1.5"`
+ * (non-integer), `"30000abc"` (trailing non-digits), `"0"` and negatives,
+ * values larger than `Number.MAX_SAFE_INTEGER`. The strict check is
+ * intentional — `parseInt` accepts these and silently truncates, which would
+ * surprise operators expecting their literal value to be honored.
+ */
+export function resolveCompletionCacheWriteTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[COMPLETION_CACHE_WRITE_TIMEOUT_ENV]?.trim();
+  if (!raw || !/^[1-9][0-9]*$/.test(raw)) {
+    return COMPLETION_CACHE_WRITE_TIMEOUT_DEFAULT_MS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    return COMPLETION_CACHE_WRITE_TIMEOUT_DEFAULT_MS;
+  }
+  return parsed;
 }
 
 export function resolveShellFromEnv(env: NodeJS.ProcessEnv = process.env): CompletionShell {
