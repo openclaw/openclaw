@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getMachineDisplayName: vi.fn(async () => "Test Machine"),
@@ -13,6 +13,10 @@ vi.mock("./server-discovery-runtime.js", () => ({
   startGatewayDiscovery: mocks.startGatewayDiscovery,
 }));
 
+import {
+  __testing as sessionRunCancelTesting,
+  requestSessionRunCancel,
+} from "../sessions/session-run-cancel.js";
 import { startGatewayEarlyRuntime, startGatewayPluginDiscovery } from "./server-startup-early.js";
 
 describe("startGatewayEarlyRuntime", () => {
@@ -20,6 +24,11 @@ describe("startGatewayEarlyRuntime", () => {
     mocks.getMachineDisplayName.mockClear();
     mocks.startGatewayDiscovery.mockClear();
     mocks.startGatewayDiscovery.mockResolvedValue({ bonjourStop: null });
+    sessionRunCancelTesting.reset();
+  });
+
+  afterEach(() => {
+    sessionRunCancelTesting.reset();
   });
 
   it("does not eagerly start the MCP loopback server", async () => {
@@ -60,6 +69,53 @@ describe("startGatewayEarlyRuntime", () => {
     });
 
     expect(earlyRuntime).not.toHaveProperty("mcpServer");
+  });
+
+  it("does not wire the session-run cancel requester for minimal gateways", async () => {
+    const earlyRuntime = await startGatewayEarlyRuntime({
+      minimalTestGateway: true,
+      cfgAtStart: {} as never,
+      port: 18_789,
+      gatewayTls: { enabled: false },
+      tailscaleMode: "off" as never,
+      log: {
+        info: () => {},
+        warn: () => {},
+      },
+      logDiscovery: {
+        info: () => {},
+        warn: () => {},
+      },
+      nodeRegistry: {} as never,
+      broadcast: () => {},
+      nodeSendToAllSubscribed: () => {},
+      getPresenceVersion: () => 0,
+      getHealthVersion: () => 0,
+      refreshGatewayHealthSnapshot: async () => ({}) as never,
+      logHealth: { error: () => {} },
+      dedupe: new Map(),
+      chatAbortControllers: new Map(),
+      chatRunState: { abortedRuns: new Map() },
+      chatRunBuffers: new Map(),
+      chatDeltaSentAt: new Map(),
+      chatDeltaLastBroadcastLen: new Map(),
+      removeChatRun: () => {},
+      agentRunSeq: new Map(),
+      nodeSendToSession: () => {},
+      skillsRefreshDelayMs: 30_000,
+      getSkillsRefreshTimer: () => null,
+      setSkillsRefreshTimer: () => {},
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const result = await requestSessionRunCancel({
+      kind: "session_run",
+      sessionKey: "agent:test:main",
+      runId: "run-minimal",
+    });
+
+    expect(result).toEqual({ requested: false, aborted: false });
+    earlyRuntime.sessionRunCancelRequesterUnsub();
   });
 
   it("starts discovery with the current plugin registry services", async () => {

@@ -191,6 +191,7 @@
   "response-limit-runtime",
   "session-binding-runtime",
   "session-key-runtime",
+  "session-run-cancel-runtime",
   "session-store-runtime",
   "session-transcript-hit",
   "session-visibility",

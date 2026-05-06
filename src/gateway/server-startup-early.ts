@@ -176,10 +176,33 @@ export async function startGatewayEarlyRuntime(params: {
     });
   };
 
+  // Wire the plugin -> core cancel seam against the live chat-abort state so
+  // delegated-task code (including plugins) can abort the owning run through
+  // `requestSessionRunCancel({ kind: "session_run", sessionKey, runId })`.
+  // Minimal test gateways intentionally skip module-level requester wiring so
+  // tests that import the SDK seam do not inherit live gateway abort state.
+  const sessionRunCancelRequesterUnsub = params.minimalTestGateway
+    ? () => {}
+    : await measureStartup(params.startupTrace, "runtime.early.session-run-cancel", async () => {
+        const { wireSessionRunCancelRequester } = await import("./chat-abort.js");
+        return wireSessionRunCancelRequester({
+          chatAbortControllers: params.chatAbortControllers,
+          chatRunBuffers: params.chatRunBuffers,
+          chatDeltaSentAt: params.chatDeltaSentAt,
+          chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,
+          chatAbortedRuns: params.chatRunState.abortedRuns,
+          removeChatRun: params.removeChatRun,
+          agentRunSeq: params.agentRunSeq,
+          broadcast: params.broadcast,
+          nodeSendToSession: params.nodeSendToSession,
+        });
+      });
+
   return {
     bonjourStop,
     getActiveTaskCount,
     skillsChangeUnsub,
+    sessionRunCancelRequesterUnsub,
     startMaintenance,
   };
 }
