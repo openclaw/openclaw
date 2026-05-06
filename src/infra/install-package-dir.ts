@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { fileExists } from "./archive.js";
+import { pathExists } from "./fs-safe.js";
 import { assertCanonicalPathWithinBase } from "./install-safe-path.js";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
 
@@ -291,7 +291,7 @@ export async function installPackageDir(params: {
     }
   }
 
-  if (params.mode === "update" && (await fileExists(canonicalTargetDir))) {
+  if (params.mode === "update" && (await pathExists(canonicalTargetDir))) {
     const backupRoot = path.join(installBaseRealPath, ".openclaw-install-backups");
     backupDir = path.join(backupRoot, `${path.basename(canonicalTargetDir)}-${Date.now()}`);
     try {

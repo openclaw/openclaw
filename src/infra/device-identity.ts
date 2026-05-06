@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { privateFileStoreSync } from "./private-file-store.js";
 
 export type DeviceIdentity = {
   deviceId: string;
@@ -19,10 +20,6 @@ type StoredIdentity = {
 
 function resolveDefaultIdentityPath(): string {
   return path.join(resolveStateDir(), "identity", "device.json");
-}
-
-function ensureDir(filePath: string) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
 }
 
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
@@ -81,12 +78,9 @@ export function loadOrCreateDeviceIdentity(
             ...parsed,
             deviceId: derivedId,
           };
-          fs.writeFileSync(filePath, `${JSON.stringify(updated, null, 2)}\n`, { mode: 0o600 });
-          try {
-            fs.chmodSync(filePath, 0o600);
-          } catch {
-            // best-effort
-          }
+          privateFileStoreSync(path.dirname(filePath)).writeJson(path.basename(filePath), updated, {
+            trailingNewline: true,
+          });
           return {
             deviceId: derivedId,
             publicKeyPem: parsed.publicKeyPem,
@@ -105,7 +99,6 @@ export function loadOrCreateDeviceIdentity(
   }
 
   const identity = generateIdentity();
-  ensureDir(filePath);
   const stored: StoredIdentity = {
     version: 1,
     deviceId: identity.deviceId,
@@ -113,12 +106,9 @@ export function loadOrCreateDeviceIdentity(
     privateKeyPem: identity.privateKeyPem,
     createdAtMs: Date.now(),
   };
-  fs.writeFileSync(filePath, `${JSON.stringify(stored, null, 2)}\n`, { mode: 0o600 });
-  try {
-    fs.chmodSync(filePath, 0o600);
-  } catch {
-    // best-effort
-  }
+  privateFileStoreSync(path.dirname(filePath)).writeJson(path.basename(filePath), stored, {
+    trailingNewline: true,
+  });
   return identity;
 }
 

@@ -467,31 +467,66 @@ function resolveNpmSpecPackageName(spec: string | undefined): string | undefined
   return spec ? parseRegistryNpmSpec(spec)?.name : undefined;
 }
 
-function isTrustedSourceLinkedOfficialNpmUpdate(params: {
+function resolveClawHubSpecPackageName(spec: string | undefined): string | undefined {
+  return spec ? parseClawHubPluginSpec(spec)?.name : undefined;
+}
+
+export function resolveTrustedSourceLinkedOfficialNpmSpec(params: {
   pluginId: string;
-  spec: string | undefined;
   record: PluginInstallRecord;
-}): boolean {
+}): string | undefined {
   if (params.record.source !== "npm") {
-    return false;
+    return undefined;
   }
   const entry = getOfficialExternalPluginCatalogEntry(params.pluginId);
   if (!entry) {
-    return false;
+    return undefined;
   }
-  const officialPackageName = resolveNpmSpecPackageName(
-    resolveOfficialExternalPluginInstall(entry)?.npmSpec,
-  );
-  const requestedPackageName = resolveNpmSpecPackageName(params.spec);
-  if (!officialPackageName || requestedPackageName !== officialPackageName) {
-    return false;
+  const officialSpec = resolveOfficialExternalPluginInstall(entry)?.npmSpec;
+  const officialPackageName = resolveNpmSpecPackageName(officialSpec);
+  if (!officialSpec || !officialPackageName) {
+    return undefined;
   }
   const recordedPackageNames = [
     params.record.resolvedName,
     resolveNpmSpecPackageName(params.record.spec),
     resolveNpmSpecPackageName(params.record.resolvedSpec),
   ].filter((value): value is string => Boolean(value));
-  return recordedPackageNames.includes(officialPackageName);
+  return recordedPackageNames.includes(officialPackageName) ? officialSpec : undefined;
+}
+
+export function resolveTrustedSourceLinkedOfficialClawHubSpec(params: {
+  pluginId: string;
+  record: PluginInstallRecord;
+}): string | undefined {
+  if (params.record.source !== "clawhub") {
+    return undefined;
+  }
+  const entry = getOfficialExternalPluginCatalogEntry(params.pluginId);
+  if (!entry) {
+    return undefined;
+  }
+  const officialSpec = resolveOfficialExternalPluginInstall(entry)?.clawhubSpec;
+  const officialPackageName = resolveClawHubSpecPackageName(officialSpec);
+  if (!officialSpec || !officialPackageName) {
+    return undefined;
+  }
+  const recordedPackageNames = [
+    params.record.clawhubPackage,
+    resolveClawHubSpecPackageName(params.record.spec),
+  ].filter((value): value is string => Boolean(value));
+  return recordedPackageNames.includes(officialPackageName) ? officialSpec : undefined;
+}
+
+function isTrustedSourceLinkedOfficialNpmUpdate(params: {
+  pluginId: string;
+  spec: string | undefined;
+  record: PluginInstallRecord;
+}): boolean {
+  const officialSpec = resolveTrustedSourceLinkedOfficialNpmSpec(params);
+  const officialPackageName = resolveNpmSpecPackageName(officialSpec);
+  const requestedPackageName = resolveNpmSpecPackageName(params.spec);
+  return Boolean(officialPackageName && requestedPackageName === officialPackageName);
 }
 
 function isTrustedSourceLinkedOfficialBridgeNpmInstall(params: {
@@ -542,6 +577,7 @@ function isBridgeClawHubInstall(params: {
 function resolveNpmUpdateSpecs(params: {
   record: PluginInstallRecord;
   specOverride?: string;
+  officialSpecOverride?: string;
   updateChannel?: UpdateChannel;
 }): {
   installSpec?: string;
@@ -549,7 +585,7 @@ function resolveNpmUpdateSpecs(params: {
   fallbackSpec?: string;
   fallbackLabel?: string;
 } {
-  const recordSpec = params.specOverride ?? params.record.spec;
+  const recordSpec = params.specOverride ?? params.officialSpecOverride ?? params.record.spec;
   if (!recordSpec) {
     return {};
   }
@@ -567,6 +603,7 @@ function resolveNpmUpdateSpecs(params: {
 
 function resolveClawHubUpdateSpecs(params: {
   record: PluginInstallRecord;
+  officialSpecOverride?: string;
   updateChannel?: UpdateChannel;
 }): {
   installSpec?: string;
@@ -574,10 +611,11 @@ function resolveClawHubUpdateSpecs(params: {
   fallbackSpec?: string;
   fallbackLabel?: string;
 } {
-  if (!params.record.clawhubPackage) {
+  if (!params.officialSpecOverride && !params.record.clawhubPackage) {
     return {};
   }
-  const recordSpec = params.record.spec ?? `clawhub:${params.record.clawhubPackage}`;
+  const recordSpec =
+    params.officialSpecOverride ?? params.record.spec ?? `clawhub:${params.record.clawhubPackage}`;
   return resolveClawHubInstallSpecsForUpdateChannel({
     spec: recordSpec,
     updateChannel: params.updateChannel,
@@ -726,6 +764,7 @@ export async function updateNpmInstalledPlugins(params: {
   pluginIds?: string[];
   skipIds?: Set<string>;
   skipDisabledPlugins?: boolean;
+  syncOfficialPluginInstalls?: boolean;
   disableOnFailure?: boolean;
   timeoutMs?: number;
   dryRun?: boolean;
@@ -787,6 +826,13 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
+    const officialNpmSpec = params.syncOfficialPluginInstalls
+      ? resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId, record })
+      : undefined;
+    const officialClawHubSpec = params.syncOfficialPluginInstalls
+      ? resolveTrustedSourceLinkedOfficialClawHubSpec({ pluginId, record })
+      : undefined;
+
     if (normalizedPluginConfig) {
       const enableState = resolveEffectiveEnableState({
         id: pluginId,
@@ -794,7 +840,7 @@ export async function updateNpmInstalledPlugins(params: {
         config: normalizedPluginConfig,
         rootConfig: params.config,
       });
-      if (!enableState.enabled) {
+      if (!enableState.enabled && !officialNpmSpec && !officialClawHubSpec) {
         outcomes.push({
           pluginId,
           status: "skipped",
@@ -823,6 +869,7 @@ export async function updateNpmInstalledPlugins(params: {
         ? resolveNpmUpdateSpecs({
             record,
             specOverride: params.specOverrides?.[pluginId],
+            officialSpecOverride: officialNpmSpec,
             updateChannel: params.updateChannel,
           })
         : undefined;
@@ -830,6 +877,7 @@ export async function updateNpmInstalledPlugins(params: {
       record.source === "clawhub"
         ? resolveClawHubUpdateSpecs({
             record,
+            officialSpecOverride: officialClawHubSpec,
             updateChannel: params.updateChannel,
           })
         : undefined;
@@ -877,7 +925,7 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
-    if (record.source === "clawhub" && !record.clawhubPackage) {
+    if (record.source === "clawhub" && !record.clawhubPackage && !officialClawHubSpec) {
       outcomes.push({
         pluginId,
         status: "skipped",

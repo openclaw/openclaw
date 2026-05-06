@@ -174,6 +174,10 @@ function shouldNeverBundleDependency(id: string): boolean {
   });
 }
 
+function shouldAlwaysBundleDependency(id: string): boolean {
+  return id === "@openclaw/fs-safe" || id.startsWith("@openclaw/fs-safe/");
+}
+
 function listBundledPluginEntrySources(
   entries: Array<{
     id: string;
@@ -297,6 +301,7 @@ export default defineConfig([
     clean: true,
     entry: buildUnifiedDistEntries(),
     deps: {
+      alwaysBundle: shouldAlwaysBundleDependency,
       neverBundle: shouldNeverBundleDependency,
     },
   }),

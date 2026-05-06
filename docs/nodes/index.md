@@ -197,6 +197,9 @@ Node commands must pass two gates before they can be invoked:
 
 Windows and macOS companion nodes allow safe declared commands such as
 `canvas.*`, `camera.list`, `location.get`, and `screen.snapshot` by default.
+Trusted nodes that advertise the `talk` capability or declare `talk.*` commands
+also allow declared push-to-talk commands (`talk.ptt.start`, `talk.ptt.stop`,
+`talk.ptt.cancel`, `talk.ptt.once`) by default, independent of platform label.
 Dangerous or privacy-heavy commands such as `camera.snap`, `camera.clip`, and
 `screen.record` still require explicit opt-in with
 `gateway.nodes.allowCommands`. `gateway.nodes.denyCommands` always wins over

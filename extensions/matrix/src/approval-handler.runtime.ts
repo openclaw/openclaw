@@ -16,6 +16,10 @@ import type {
   PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import {
+  listMessageReceiptPlatformIds,
+  resolveMessageReceiptPrimaryId,
+} from "openclaw/plugin-sdk/channel-message";
+import {
   buildMatrixApprovalReactionHint,
   listMatrixApprovalReactionBindings,
   registerMatrixApprovalReactionTarget,
@@ -42,7 +46,7 @@ const MATRIX_APPROVAL_METADATA_KEY = "com.openclaw.approval" as const;
 
 type PendingMessage = {
   roomId: string;
-  messageIds: readonly string[];
+  platformMessageIds: readonly string[];
   reactionEventId: string;
 };
 type PreparedMatrixTarget = {
@@ -147,7 +151,9 @@ function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext):
 }
 
 function normalizePendingMessageIds(entry: PendingMessage): string[] {
-  return Array.from(new Set(entry.messageIds.map((messageId) => messageId.trim()).filter(Boolean)));
+  return Array.from(
+    new Set(entry.platformMessageIds.map((messageId) => messageId.trim()).filter(Boolean)),
+  );
 }
 
 function normalizeReactionTargetRef(params: ReactionTargetRef): ReactionTargetRef | null {
@@ -438,15 +444,15 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
           extraContent: pendingPayload.extraContent,
         });
       }
-      const messageIds = Array.from(
-        new Set(
-          (result.messageIds ?? [result.messageId])
-            .map((messageId) => messageId.trim())
-            .filter(Boolean),
-        ),
-      );
+      const receiptMessageIds = listMessageReceiptPlatformIds(result.receipt);
+      const platformMessageIds = receiptMessageIds.length
+        ? receiptMessageIds
+        : [result.messageId.trim()].filter(Boolean);
       const reactionEventId =
-        result.primaryMessageId?.trim() || messageIds[0] || result.messageId.trim();
+        resolveMessageReceiptPrimaryId(result.receipt) ||
+        result.primaryMessageId?.trim() ||
+        platformMessageIds[0] ||
+        result.messageId.trim();
       registerMatrixApprovalReactionTarget({
         roomId: result.roomId,
         eventId: reactionEventId,
@@ -467,7 +473,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       );
       return {
         roomId: result.roomId,
-        messageIds,
+        platformMessageIds,
         reactionEventId,
       };
     },

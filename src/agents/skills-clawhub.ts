@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileExists } from "../infra/archive.js";
 import {
   downloadClawHubSkillArchive,
   fetchClawHubSkillDetail,
@@ -10,6 +9,7 @@ import {
   type ClawHubSkillSearchResult,
 } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { pathExists } from "../infra/fs-safe.js";
 import { withExtractedArchiveRoot } from "../infra/install-flow.js";
 import { installPackageDir } from "../infra/install-package-dir.js";
 import { resolveSafeInstallDir } from "../infra/install-safe-path.js";
@@ -133,7 +133,7 @@ function resolveSkillInstallDir(workspaceDir: string, slug: string): string {
 
 async function ensureSkillRoot(rootDir: string): Promise<void> {
   for (const candidate of ["SKILL.md", "skill.md", "skills.md", "SKILL.MD"]) {
-    if (await fileExists(path.join(rootDir, candidate))) {
+    if (await pathExists(path.join(rootDir, candidate))) {
       return;
     }
   }
@@ -274,7 +274,7 @@ async function performClawHubSkillInstall(
       baseUrl: params.baseUrl,
     });
     const targetDir = resolveSkillInstallDir(params.workspaceDir, params.slug);
-    if (!params.force && (await fileExists(targetDir))) {
+    if (!params.force && (await pathExists(targetDir))) {
       return {
         ok: false,
         error: `Skill already exists at ${targetDir}. Re-run with force/update.`,
