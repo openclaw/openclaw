@@ -11,11 +11,11 @@ metadata:
         "install":
           [
             {
-              "id": "brew",
-              "kind": "brew",
-              "formula": "steipete/tap/summarize",
+              "id": "npm",
+              "kind": "node",
+              "package": "@steipete/summarize",
               "bins": ["summarize"],
-              "label": "Install summarize (brew)",
+              "label": "Install summarize (npm)",
             },
           ],
       },

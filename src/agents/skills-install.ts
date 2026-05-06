@@ -87,6 +87,7 @@ function normalizeSkillInstallSpec(spec: SkillInstallSpec): SkillInstallSpecMeta
     ...(spec.bins ? { bins: spec.bins.slice() } : {}),
     ...(spec.os ? { os: spec.os.slice() } : {}),
     ...(spec.formula ? { formula: spec.formula } : {}),
+    ...(spec.cask ? { cask: spec.cask } : {}),
     ...(spec.package ? { package: spec.package } : {}),
     ...(spec.module ? { module: spec.module } : {}),
     ...(spec.url ? { url: spec.url } : {}),
@@ -175,7 +176,10 @@ function buildInstallCommand(
       if (err) {
         return { argv: null, error: err };
       }
-      return { argv: ["brew", "install", spec.formula.trim()] };
+      const argv = spec.cask
+        ? ["brew", "install", "--cask", spec.formula.trim()]
+        : ["brew", "install", spec.formula.trim()];
+      return { argv };
     }
     case "node": {
       if (!spec.package) {
