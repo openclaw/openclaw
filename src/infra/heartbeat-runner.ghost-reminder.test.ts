@@ -348,6 +348,34 @@ describe("Ghost reminder bug (issue #13317)", () => {
       expect(remaining).toHaveLength(1);
       expect(remaining[0].audience).toBe("internal");
       expect(remaining[0].text).toBe("Cron run completed: relayed for awareness only");
+
+      // Second heartbeat run on the same queue must NOT see the internal
+      // event as a cron-tagged trigger (preflight `hasTaggedCronEvents`
+      // must filter audience: "internal"). Otherwise hidden cron-awareness
+      // creates a persistent heartbeat trigger that bypasses file gates
+      // until a normal reply drains the queue. The user-visible signal is
+      // that the second run still resolves as a generic "heartbeat"
+      // provider, not a cron-event prompt — and the awareness text never
+      // reaches the heartbeat ctx Body.
+      const secondResult = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        reason: "interval",
+        deps: {
+          getReplyFromConfig: getReplySpy,
+          telegram: sendTelegram,
+        },
+      });
+      expect(secondResult.status).toBe("ran");
+      const secondCtx = getReplySpy.mock.calls[1]?.[0] as { Provider?: string; Body?: string };
+      expect(secondCtx.Provider).toBe("heartbeat");
+      expect(secondCtx.Body).not.toContain("scheduled reminder has been triggered");
+      expect(secondCtx.Body).not.toContain("Cron run completed: relayed for awareness only");
+
+      // Internal event still queued after the second run as well.
+      const stillRemaining = peekSystemEventEntries(sessionKey);
+      expect(stillRemaining).toHaveLength(1);
+      expect(stillRemaining[0].audience).toBe("internal");
     });
   });
 

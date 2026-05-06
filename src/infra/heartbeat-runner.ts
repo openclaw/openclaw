@@ -870,8 +870,16 @@ async function resolveHeartbeatPreflight(params: {
       )
     : [];
   const turnSourceDeliveryContext = resolveSystemEventDeliveryContext(pendingEventEntries);
-  const hasTaggedCronEvents = pendingEventEntries.some((event) =>
-    event.contextKey?.startsWith("cron:"),
+  // Tagged-cron preflight gates the heartbeat trigger schedule. An
+  // `audience: "internal"` event with a `cron:` contextKey is intentionally
+  // left in the queue (so the wrap-on-drain path can pick it up on the next
+  // normal reply) and must NOT keep firing the cron-tagged heartbeat
+  // trigger every interval — otherwise hidden cron-awareness creates a
+  // persistent heartbeat loop that bypasses file gates until a user
+  // message drains the queue. Mirror the audience filter applied to the
+  // relay/consume selectors below.
+  const hasTaggedCronEvents = pendingEventEntries.some(
+    (event) => event.audience !== "internal" && event.contextKey?.startsWith("cron:"),
   );
   // Wake-triggered runs should only inspect pending events when preflight peeks
   // the same queue that the run itself will execute/drain.
