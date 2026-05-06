@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearCurrentPluginMetadataSnapshot,
+  getCurrentPluginMetadataSnapshot,
   resolvePluginMetadataControlPlaneFingerprint,
   setCurrentPluginMetadataSnapshot,
 } from "./current-plugin-metadata-snapshot.js";
@@ -243,6 +244,51 @@ describe("manifest model id normalization", () => {
 
     process.env.OPENCLAW_STATE_DIR = stateDirB;
     expect(normalizeDemoModel()).toBe("charlie/demo-model");
+  });
+
+  it("re-publishes a freshly loaded snapshot to the current-snapshot slot when a gateway-style plugin-registry workspace is active", () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "normalizer");
+    writeInstallIndex({ stateDir, pluginDir });
+    writeNormalizerManifest({ pluginDir, prefix: "alpha" });
+
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    process.env.OPENCLAW_HOME = undefined;
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = undefined;
+
+    setActivePluginRegistry(
+      createEmptyPluginRegistry(),
+      "workspace-active",
+      "gateway-bindable",
+      stateDir,
+    );
+
+    expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
+    // First lookup falls back to loadPluginMetadataSnapshot and re-publishes
+    // because an active plugin-registry workspace is set (gateway flow).
+    expect(normalizeDemoModel()).toBe("alpha/demo-model");
+    const republished = getCurrentPluginMetadataSnapshot({ workspaceDir: stateDir });
+    expect(republished).toBeDefined();
+    expect(republished?.workspaceDir).toBe(stateDir);
+  });
+
+  it("does not re-publish when no active plugin-registry workspace is set (CLI flow keeps fingerprint-driven freshness)", () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "normalizer");
+    writeInstallIndex({ stateDir, pluginDir });
+    writeNormalizerManifest({ pluginDir, prefix: "alpha" });
+
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    process.env.OPENCLAW_HOME = undefined;
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = undefined;
+
+    expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
+    expect(normalizeDemoModel()).toBe("alpha/demo-model");
+    // No active plugin-registry workspace was published, so the slot must
+    // remain empty so the next call re-reads disk and observes file edits.
+    expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
   });
 
   it("reuses manifest metadata while file fingerprints are unchanged", () => {

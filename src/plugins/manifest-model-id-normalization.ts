@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot,
+} from "./current-plugin-metadata-snapshot.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginManifestModelIdNormalizationProvider } from "./manifest.js";
 import {
@@ -51,14 +54,27 @@ function resolveMetadataSnapshotForPolicies(
   if (current) {
     return { snapshot: current, cacheable: true };
   }
-  return {
-    snapshot: loadPluginMetadataSnapshot({
-      config: params.config ?? {},
+  const fresh = loadPluginMetadataSnapshot({
+    config: params.config ?? {},
+    env,
+    workspaceDir,
+  });
+  // When we are running inside a gateway flow (the runtime state has published an
+  // active plugin-registry workspace), re-fill the architecturally-sanctioned
+  // single-slot handoff so subsequent readers in the same flow can reuse the
+  // freshly loaded snapshot instead of walking the installed plugin index from
+  // disk again. The slot is still invalidated by every persisted-index write
+  // (see writePersistedInstalledPluginIndex), so this does not introduce a stale
+  // cache: we only refill the slot the same way gateway boot does. CLI flows
+  // (no published workspace) keep their original fingerprint-driven freshness.
+  if (getActivePluginRegistryWorkspaceDirFromState() !== undefined && fresh.workspaceDir) {
+    setCurrentPluginMetadataSnapshot(fresh, {
+      ...(params.config !== undefined ? { config: params.config } : {}),
       env,
-      workspaceDir,
-    }),
-    cacheable: false,
-  };
+      workspaceDir: fresh.workspaceDir,
+    });
+  }
+  return { snapshot: fresh, cacheable: true };
 }
 
 function loadManifestModelIdNormalizationPolicies(
