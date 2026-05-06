@@ -191,6 +191,7 @@ function createLegacyStateMigrationDetectionResult(params?: {
     targetAgentId: "main",
     targetMainKey: "main",
     targetScope: undefined,
+    cfg: {},
     env: process.env,
     stateDir: "/tmp/state",
     oauthDir: "/tmp/oauth",

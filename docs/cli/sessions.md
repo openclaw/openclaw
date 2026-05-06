@@ -47,8 +47,10 @@ Scope selection:
 - `--store <path>`: explicit store path (cannot be combined with `--agent` or `--all-agents`)
 
 Canonical per-agent session stores use OpenClaw's shared SQLite state database by
-default. Existing `sessions.json` indexes are imported by `openclaw doctor
---fix`, then removed after SQLite has the rows.
+default. Existing `sessions.json` indexes are imported by the `openclaw doctor`
+fix mode, then removed after SQLite has the rows. Gateway startup does not
+import or rewrite legacy session indexes; run doctor when you intentionally want
+that migration.
 
 - `--limit <n|all>`: max rows to output (default `100`; `all` restores full output)
 

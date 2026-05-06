@@ -3,7 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadSqliteSessionStore } from "../config/sessions/store-backend.sqlite.js";
 import { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { detectLegacyStateMigrations, runLegacyStateMigrations } from "./state-migrations.js";
 
@@ -157,6 +159,7 @@ async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
 }
 
 afterEach(async () => {
+  closeOpenClawStateDatabaseForTest();
   await tempDirs.cleanup();
 });
 
@@ -183,6 +186,7 @@ describe("state migrations", () => {
     expect(detected.preview).toEqual([
       `- Sessions: ${path.join(stateDir, "sessions")} → ${path.join(stateDir, "agents", "worker-1", "sessions")}`,
       `- Sessions: canonicalize legacy keys in ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
+      `- Sessions: import ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")} into SQLite`,
       `- Agent dir: ${path.join(stateDir, "agent")} → ${path.join(stateDir, "agents", "worker-1", "agent")}`,
       `- MobileAuth auth creds.json: ${path.join(stateDir, "credentials", "creds.json")} → ${path.join(stateDir, "credentials", "mobileauth", "default", "creds.json")}`,
       `- ChatApp pairing allowFrom: ${resolveChannelAllowFromPath("chatapp", env)} → ${resolveChannelAllowFromPath("chatapp", env, "alpha")}`,
@@ -204,9 +208,9 @@ describe("state migrations", () => {
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toEqual([
+      `Canonicalized 2 orphaned session key(s) in ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
       `Migrated latest direct-chat session → agent:worker-1:desk`,
-      `Merged sessions store → ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
-      "Canonicalized 2 legacy session key(s)",
+      "Imported 4 session index row(s) into SQLite for agent worker-1",
       "Moved trace.jsonl → agents/worker-1/sessions",
       "Moved agent file settings.json → agents/worker-1/agent",
       `Moved MobileAuth auth creds.json → ${path.join(stateDir, "credentials", "mobileauth", "default", "creds.json")}`,
@@ -214,12 +218,13 @@ describe("state migrations", () => {
       `Copied ChatApp pairing allowFrom → ${resolveChannelAllowFromPath("chatapp", env, "alpha")}`,
     ]);
 
-    const mergedStore = JSON.parse(
-      await fs.readFile(
-        path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json"),
-        "utf8",
-      ),
-    ) as Record<string, { sessionId: string }>;
+    await expect(
+      fs.stat(path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    const mergedStore = loadSqliteSessionStore({
+      agentId: "worker-1",
+      env,
+    }) as Record<string, { sessionId: string }>;
     expect(mergedStore["agent:worker-1:desk"]?.sessionId).toBe("legacy-direct");
     expect(mergedStore["agent:worker-1:mobileauth:group:mobile-room"]?.sessionId).toBe(
       "group-session",

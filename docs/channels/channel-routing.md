@@ -136,7 +136,8 @@ Canonical session metadata lives in the shared state database:
 Legacy `sessions.json` indexes are imported by `openclaw doctor --fix` and
 removed after SQLite has the rows. Custom offline repair stores can still use an
 explicit `--store` path, but per-agent runtime metadata should go through the
-shared state database.
+shared state database. Startup does not import or rewrite legacy session
+indexes.
 
 Gateway and ACP session discovery also scans disk-backed agent stores under the
 default `agents/` root and under templated `session.store` roots. Discovered

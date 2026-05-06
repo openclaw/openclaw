@@ -14,9 +14,8 @@ import {
   resolveStateDir,
 } from "../config/paths.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { saveSessionStore } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
-import { importJsonSessionStoreToSqlite } from "../config/sessions/store-backend.sqlite.js";
+import { mergeSqliteSessionStore } from "../config/sessions/store-backend.sqlite.js";
 import type { SessionScope } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -33,6 +32,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { expandHomePrefix } from "./home-dir.js";
+import { writeTextAtomic } from "./json-files.js";
 import { isWithinDir } from "./path-safety.js";
 import {
   ensureDir,
@@ -47,6 +47,7 @@ export type LegacyStateDetection = {
   targetAgentId: string;
   targetMainKey: string;
   targetScope?: SessionScope;
+  cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   stateDir: string;
   oauthDir: string;
@@ -690,9 +691,13 @@ export async function detectLegacyStateMigrations(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
+  includeSessions?: boolean;
+  includeChannelPlans?: boolean;
 }): Promise<LegacyStateDetection> {
   const env = params.env ?? process.env;
   const homedir = params.homedir ?? os.homedir;
+  const includeSessions = params.includeSessions ?? true;
+  const includeChannelPlans = params.includeChannelPlans ?? true;
   const stateDir = resolveStateDir(env, homedir);
   const oauthDir = resolveOAuthDir(env, stateDir);
 
@@ -708,33 +713,36 @@ export async function detectLegacyStateMigrations(params: {
   const sessionsLegacyStorePath = path.join(sessionsLegacyDir, "sessions.json");
   const sessionsTargetDir = path.join(stateDir, "agents", targetAgentId, "sessions");
   const sessionsTargetStorePath = path.join(sessionsTargetDir, "sessions.json");
-  const hasTargetJsonSessionStore = fileExists(sessionsTargetStorePath);
-  const legacySessionEntries = safeReadDir(sessionsLegacyDir);
+  const hasTargetJsonSessionStore = includeSessions && fileExists(sessionsTargetStorePath);
+  const legacySessionEntries = includeSessions ? safeReadDir(sessionsLegacyDir) : [];
   const hasLegacySessions =
-    fileExists(sessionsLegacyStorePath) ||
+    (includeSessions && fileExists(sessionsLegacyStorePath)) ||
     legacySessionEntries.some((e) => e.isFile() && e.name.endsWith(".jsonl"));
 
-  const targetSessionParsed = fileExists(sessionsTargetStorePath)
+  const targetSessionParsed = hasTargetJsonSessionStore
     ? readSessionStoreJson5(sessionsTargetStorePath)
     : { store: {}, ok: true };
-  const legacyKeys = targetSessionParsed.ok
-    ? listLegacySessionKeys({
-        store: targetSessionParsed.store,
-        agentId: targetAgentId,
-        mainKey: targetMainKey,
-        scope: targetScope,
-      })
-    : [];
+  const legacyKeys =
+    includeSessions && targetSessionParsed.ok
+      ? listLegacySessionKeys({
+          store: targetSessionParsed.store,
+          agentId: targetAgentId,
+          mainKey: targetMainKey,
+          scope: targetScope,
+        })
+      : [];
 
   const legacyAgentDir = path.join(stateDir, "agent");
   const targetAgentDir = path.join(stateDir, "agents", targetAgentId, "agent");
   const hasLegacyAgentDir = existsDir(legacyAgentDir);
-  const channelPlans = await collectChannelLegacyStateMigrationPlans({
-    cfg: params.cfg,
-    env,
-    stateDir,
-    oauthDir,
-  });
+  const channelPlans = includeChannelPlans
+    ? await collectChannelLegacyStateMigrationPlans({
+        cfg: params.cfg,
+        env,
+        stateDir,
+        oauthDir,
+      })
+    : [];
 
   const preview: string[] = [];
   if (hasLegacySessions) {
@@ -757,6 +765,7 @@ export async function detectLegacyStateMigrations(params: {
     targetAgentId,
     targetMainKey,
     targetScope,
+    cfg: params.cfg,
     env,
     stateDir,
     oauthDir,
@@ -857,19 +866,23 @@ async function migrateLegacySessions(
       }
       normalized[key] = normalizedEntry;
     }
-    await saveSessionStore(detected.sessions.targetStorePath, normalized, {
-      skipMaintenance: true,
-    });
-    changes.push(`Merged sessions store → ${detected.sessions.targetStorePath}`);
-    if (fileExists(detected.sessions.targetStorePath)) {
-      const imported = importJsonSessionStoreToSqlite({
+    const imported = mergeSqliteSessionStore(
+      {
         agentId: detected.targetAgentId,
         env: detected.env,
         sourcePath: detected.sessions.targetStorePath,
-      });
-      changes.push(
-        `Imported ${imported.imported} session index row(s) into SQLite for agent ${detected.targetAgentId}`,
-      );
+      },
+      normalized,
+    );
+    changes.push(
+      `Imported ${imported.imported} session index row(s) into SQLite for agent ${detected.targetAgentId}`,
+    );
+    if (targetParsed.ok && fileExists(detected.sessions.targetStorePath)) {
+      try {
+        fs.rmSync(detected.sessions.targetStorePath, { force: true });
+      } catch {
+        // ignore
+      }
     }
     if (canonicalizedTarget.legacyKeys.length > 0) {
       changes.push(`Canonicalized ${canonicalizedTarget.legacyKeys.length} legacy session key(s)`);
@@ -985,12 +998,26 @@ export async function runLegacyStateMigrations(params: {
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const now = params.now ?? (() => Date.now());
   const detected = params.detected;
+  const orphanKeys = await migrateOrphanedSessionKeys({
+    cfg: detected.cfg,
+    env: detected.env,
+  });
   const sessions = await migrateLegacySessions(detected, now);
   const agentDir = await migrateLegacyAgentDir(detected, now);
   const channelPlans = await migrateChannelLegacyStatePlans(detected);
   return {
-    changes: [...sessions.changes, ...agentDir.changes, ...channelPlans.changes],
-    warnings: [...sessions.warnings, ...agentDir.warnings, ...channelPlans.warnings],
+    changes: [
+      ...orphanKeys.changes,
+      ...sessions.changes,
+      ...agentDir.changes,
+      ...channelPlans.changes,
+    ],
+    warnings: [
+      ...orphanKeys.warnings,
+      ...sessions.warnings,
+      ...agentDir.warnings,
+      ...channelPlans.warnings,
+    ],
   };
 }
 
@@ -1126,7 +1153,8 @@ export async function migrateOrphanedSessionKeys(params: {
       }
     }
     try {
-      await saveSessionStore(storePath, normalized, { skipMaintenance: true });
+      ensureDir(path.dirname(storePath));
+      await writeTextAtomic(storePath, `${JSON.stringify(normalized, null, 2)}\n`, { mode: 0o600 });
       changes.push(`Canonicalized ${totalLegacy} orphaned session key(s) in ${storePath}`);
     } catch (err) {
       warnings.push(`Failed to write canonicalized store ${storePath}: ${String(err)}`);
@@ -1173,14 +1201,6 @@ export async function autoMigrateLegacyState(params: {
     log: params.log,
   });
 
-  // Canonicalize orphaned session keys regardless of whether legacy migration
-  // is needed — the orphan-key bug (#29683) affects all installs with
-  // non-default agent IDs or mainKey configuration.
-  const orphanKeys = await migrateOrphanedSessionKeys({
-    cfg: params.cfg,
-    env,
-  });
-
   const logMigrationResults = (changes: string[], warnings: string[]) => {
     const logger = params.log ?? createSubsystemLogger("state-migrations");
     if (changes.length > 0) {
@@ -1196,11 +1216,11 @@ export async function autoMigrateLegacyState(params: {
   };
 
   if (env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim()) {
-    const changes = [...stateDirResult.changes, ...orphanKeys.changes];
-    const warnings = [...stateDirResult.warnings, ...orphanKeys.warnings];
+    const changes = [...stateDirResult.changes];
+    const warnings = [...stateDirResult.warnings];
     logMigrationResults(changes, warnings);
     return {
-      migrated: stateDirResult.migrated || orphanKeys.changes.length > 0,
+      migrated: stateDirResult.migrated,
       skipped: true,
       changes,
       warnings,
@@ -1211,13 +1231,15 @@ export async function autoMigrateLegacyState(params: {
     cfg: params.cfg,
     env,
     homedir: params.homedir,
+    includeSessions: false,
+    includeChannelPlans: false,
   });
-  if (!detected.sessions.hasLegacy && !detected.agentDir.hasLegacy) {
-    const changes = [...stateDirResult.changes, ...orphanKeys.changes];
-    const warnings = [...stateDirResult.warnings, ...orphanKeys.warnings];
+  if (!detected.agentDir.hasLegacy) {
+    const changes = [...stateDirResult.changes];
+    const warnings = [...stateDirResult.warnings];
     logMigrationResults(changes, warnings);
     return {
-      migrated: stateDirResult.migrated || orphanKeys.changes.length > 0,
+      migrated: stateDirResult.migrated,
       skipped: false,
       changes,
       warnings,
@@ -1225,20 +1247,9 @@ export async function autoMigrateLegacyState(params: {
   }
 
   const now = params.now ?? (() => Date.now());
-  const sessions = await migrateLegacySessions(detected, now);
   const agentDir = await migrateLegacyAgentDir(detected, now);
-  const changes = [
-    ...stateDirResult.changes,
-    ...orphanKeys.changes,
-    ...sessions.changes,
-    ...agentDir.changes,
-  ];
-  const warnings = [
-    ...stateDirResult.warnings,
-    ...orphanKeys.warnings,
-    ...sessions.warnings,
-    ...agentDir.warnings,
-  ];
+  const changes = [...stateDirResult.changes, ...agentDir.changes];
+  const warnings = [...stateDirResult.warnings, ...agentDir.warnings];
 
   logMigrationResults(changes, warnings);
 
