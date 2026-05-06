@@ -10,6 +10,7 @@ import type { SessionEntry } from "../api.js";
 import { resolveVoiceCallSessionKey, type VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
+import { resolveCallAgentId } from "./util/resolve-call-agent-id.js";
 
 export type VoiceResponseParams = {
   /** Voice call config */
@@ -24,6 +25,13 @@ export type VoiceResponseParams = {
   sessionKey?: string;
   /** Caller's phone number */
   from: string;
+  /**
+   * Per-call originating agent id (frozen on CallRecord). Optional only for
+   * legacy callers that have no CallRecord; resolution always funnels through
+   * `resolveCallAgentId`, so empty / undefined falls back to
+   * `voiceConfig.agentId` then the literal `"main"` last resort.
+   */
+  agentId?: string;
   /** Conversation transcript */
   transcript: Array<{ speaker: "user" | "bot"; text: string }>;
   /** Latest user message */
@@ -211,7 +219,10 @@ export async function generateVoiceResponse(
     phone: from,
     explicitSessionKey: sessionKey,
   });
-  const agentId = voiceConfig.agentId ?? "main";
+  // Single resolution point: keep `||` semantics aligned with
+  // resolveCallAgentId so an empty-string `params.agentId` cannot poison
+  // workspace path resolution by collapsing to `agents//`.
+  const agentId = resolveCallAgentId({ agentId: params.agentId }, voiceConfig);
 
   // Resolve paths
   const storePath = agentRuntime.session.resolveStorePath(cfg.session?.store, { agentId });

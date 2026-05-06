@@ -41,8 +41,10 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function buildTwilioVoiceCallSessionKey(meetingSessionId: string): string {
-  return `voice:google-meet:${meetingSessionId}`;
+function buildTwilioVoiceCallSessionKey(meetingSessionId: string, agentId?: string): string {
+  return agentId
+    ? `agent:${agentId}:google-meet:${meetingSessionId}`
+    : `voice:google-meet:${meetingSessionId}`;
 }
 
 export function normalizeMeetUrl(input: unknown): string {
@@ -485,12 +487,17 @@ export class GoogleMeetRuntime {
               ...(request.requesterSessionKey
                 ? { requesterSessionKey: request.requesterSessionKey }
                 : {}),
-              sessionKey: buildTwilioVoiceCallSessionKey(session.id),
               message: isGoogleMeetTalkBackMode(mode)
                 ? (request.message ??
                   this.params.config.voiceCall.introMessage ??
                   this.params.config.realtime.introMessage)
                 : undefined,
+              agentId: request.agentId,
+              // Per-meeting/per-agent session key isolates Voice Call sessions
+              // when multiple agents share a Twilio dial-in number. When agentId
+              // is unset, falls back to the legacy voice:google-meet:<sid>
+              // namespace so single-agent setups stay back-compatible.
+              sessionKey: buildTwilioVoiceCallSessionKey(session.id, request.agentId),
             })
           : undefined;
         delegatedTwilioSpoken = Boolean(voiceCallResult?.introSent);

@@ -26,6 +26,7 @@ import { resolveVoiceResponseModel } from "./response-model.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { createTelephonyTtsProvider } from "./telephony-tts.js";
 import { startTunnel, type TunnelResult } from "./tunnel.js";
+import { resolveCallAgentId } from "./util/resolve-call-agent-id.js";
 import {
   isProviderUnreachableWebhookUrl,
   providerRequiresPublicWebhook,
@@ -354,7 +355,7 @@ export async function createVoiceCallRuntime(params: {
               ? call.metadata.numberRouteKey
               : call.to;
           const effectiveConfig = resolveVoiceCallEffectiveConfig(config, numberRouteKey).config;
-          const agentId = effectiveConfig.agentId ?? "main";
+          const agentId = resolveCallAgentId(call, effectiveConfig);
           const sessionKey = resolveVoiceCallConsultSessionKey({
             ...call,
             config: effectiveConfig,

@@ -412,11 +412,72 @@ describe("voice-call plugin", () => {
     expect(respond.mock.calls[0]?.[0]).toBe(true);
   });
 
-  it("preserves explicit session keys on voicecall.start", async () => {
+  it("honors per-call agentId and sessionKey only when caller is in-process plugin runtime", async () => {
     const { methods } = setup({ provider: "mock" });
     const handler = methods.get("voicecall.start") as
       | ((ctx: {
           params: Record<string, unknown>;
+          client?: { internal?: { pluginRuntimeOwnerId?: string } };
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+    await handler?.({
+      params: {
+        to: "+15550001234",
+        message: "Hi",
+        mode: "conversation",
+        agentId: "slack-u123",
+        sessionKey: "agent:slack-u123:google-meet:meet_42",
+      },
+      client: { internal: { pluginRuntimeOwnerId: "google-meet" } },
+      respond,
+    });
+    expect(runtimeStub.manager.initiateCall).toHaveBeenCalledWith(
+      "+15550001234",
+      "agent:slack-u123:google-meet:meet_42",
+      expect.objectContaining({
+        agentId: "slack-u123",
+        message: "Hi",
+        mode: "conversation",
+      }),
+    );
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+  });
+
+  it("drops per-call agentId and sessionKey when caller is not in-process plugin runtime", async () => {
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.start") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          client?: { internal?: { pluginRuntimeOwnerId?: string } };
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+    await handler?.({
+      params: {
+        to: "+15550001234",
+        message: "Hi",
+        mode: "conversation",
+        agentId: "slack-spoof",
+        sessionKey: "agent:spoof:meet:42",
+      },
+      respond,
+    });
+    const initiateArgs = vi.mocked(runtimeStub.manager.initiateCall).mock.calls[0];
+    expect(initiateArgs?.[0]).toBe("+15550001234");
+    expect(initiateArgs?.[1]).toBeUndefined();
+    expect(initiateArgs?.[2]).toEqual(expect.not.objectContaining({ agentId: expect.anything() }));
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+  });
+
+  it("preserves explicit session keys on voicecall.start when caller is trusted", async () => {
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.start") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          client?: { internal?: { pluginRuntimeOwnerId?: string } };
           respond: ReturnType<typeof vi.fn>;
         }) => Promise<void>)
       | undefined;
@@ -428,17 +489,17 @@ describe("voice-call plugin", () => {
         sessionKey: "voice:google-meet:meet-1",
         to: "+15550001234",
       },
+      client: { internal: { pluginRuntimeOwnerId: "google-meet" } },
       respond,
     });
     expect(runtimeStub.manager.initiateCall).toHaveBeenCalledWith(
       "+15550001234",
       "voice:google-meet:meet-1",
-      {
-        dtmfSequence: undefined,
-        message: undefined,
+      expect.objectContaining({
         mode: "conversation",
         requesterSessionKey: "agent:main:discord:channel:general",
-      },
+        sessionKey: "voice:google-meet:meet-1",
+      }),
     );
     expect(respond.mock.calls[0]?.[0]).toBe(true);
   });
@@ -597,9 +658,10 @@ describe("voice-call plugin", () => {
 
   it("tool get_status returns json payload", async () => {
     const { tools } = setup({ provider: "mock" });
-    const tool = tools[0] as {
+    const factory = tools[0] as (ctx: { agentId?: string }) => {
       execute: (id: string, params: unknown) => Promise<unknown>;
     };
+    const tool = factory({});
     const result = (await tool.execute("id", {
       action: "get_status",
       callId: "call-1",
@@ -609,9 +671,10 @@ describe("voice-call plugin", () => {
 
   it("tool send_dtmf returns json payload", async () => {
     const { tools } = setup({ provider: "mock" });
-    const tool = tools[0] as {
+    const factory = tools[0] as (ctx: { agentId?: string }) => {
       execute: (id: string, params: unknown) => Promise<unknown>;
     };
+    const tool = factory({});
     const result = (await tool.execute("id", {
       action: "send_dtmf",
       callId: "call-1",
@@ -623,13 +686,32 @@ describe("voice-call plugin", () => {
 
   it("legacy tool status without sid returns error payload", async () => {
     const { tools } = setup({ provider: "mock" });
-    const tool = tools[0] as {
+    const factory = tools[0] as (ctx: { agentId?: string }) => {
       execute: (id: string, params: unknown) => Promise<unknown>;
     };
+    const tool = factory({});
     const result = (await tool.execute("id", { mode: "status" })) as {
       details: { error?: unknown };
     };
     expect(String(result.details.error)).toContain("sid required");
+  });
+
+  it("voice_call factory captures ctx.agentId for initiate_call", async () => {
+    const { tools } = setup({ provider: "mock", fromNumber: "+15550001234" });
+    const factory = tools[0] as (ctx: { agentId?: string }) => {
+      execute: (id: string, params: unknown) => Promise<unknown>;
+    };
+    const tool = factory({ agentId: "slack-u123" });
+    await tool.execute("id", {
+      action: "initiate_call",
+      to: "+15550009999",
+      message: "hello",
+    });
+    expect(runtimeStub.manager.initiateCall).toHaveBeenCalledWith(
+      "+15550009999",
+      undefined,
+      expect.objectContaining({ agentId: "slack-u123", message: "hello" }),
+    );
   });
 
   it("CLI latency summarizes turn metrics from JSONL", async () => {

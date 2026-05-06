@@ -294,7 +294,7 @@ function mergeGatewayClientInternal(
   };
 }
 
-async function dispatchGatewayMethod<T>(
+export async function dispatchGatewayMethod<T>(
   method: string,
   params: Record<string, unknown>,
   options?: {
