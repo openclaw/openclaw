@@ -39,8 +39,19 @@ final class GatewayConnectionController {
     private(set) var pendingTrustPrompt: TrustPrompt?
 
     private let discovery = GatewayDiscoveryModel()
+    /// Reused instance — avoids creating CLLocationManager on the main thread
+    /// each time currentPermissions() is called, which triggers a UI-thread warning.
+    private let locationManager = CLLocationManager()
     private weak var appModel: NodeAppModel?
     private var didAutoConnect = false
+    private var autoConnectGeneration: Int = 0
+    private var refreshRegistrationGeneration: Int = 0
+    /// Tracks how many `startAutoConnect` Tasks are currently between their
+    /// synchronous setup and their post-await commit. While this is non-zero,
+    /// `attemptAutoReconnectIfNeeded` must stand down so a scene-phase event
+    /// cannot start a competing connect that bumps `autoConnectGeneration` and
+    /// drops the original explicit/user-initiated connect.
+    private var connectInFlightCount: Int = 0
     private var pendingServiceResolvers: [String: GatewayServiceResolver] = [:]
     private var pendingTrustConnect: (url: URL, stableID: String, isManual: Bool)?
 
@@ -234,15 +245,55 @@ final class GatewayConnectionController {
         guard let cfg = appModel.activeGatewayConnectConfig else { return }
         guard appModel.gatewayAutoReconnectEnabled else { return }
 
-        let refreshedConfig = GatewayConnectConfig(
-            url: cfg.url,
-            stableID: cfg.stableID,
-            tls: cfg.tls,
-            token: cfg.token,
-            bootstrapToken: cfg.bootstrapToken,
-            password: cfg.password,
-            nodeOptions: self.makeConnectOptions(stableID: cfg.stableID))
-        appModel.applyGatewayConnectConfig(refreshedConfig)
+        self.refreshRegistrationGeneration &+= 1
+        let generation = self.refreshRegistrationGeneration
+        // Snapshot the connect generation so we can detect a startAutoConnect
+        // that ran during our await — its freshly-computed nodeOptions must
+        // not be overwritten by our older snapshot.
+        let connectGenerationAtStart = self.autoConnectGeneration
+
+        Task { [weak self, weak appModel] in
+            guard let self, let appModel else { return }
+            let connectOptions = await self.makeConnectOptions(stableID: cfg.stableID)
+
+            guard generation == self.refreshRegistrationGeneration,
+                  connectGenerationAtStart == self.autoConnectGeneration,
+                  appModel.gatewayAutoReconnectEnabled,
+                  let latestConfig = appModel.activeGatewayConnectConfig,
+                  latestConfig.effectiveStableID == cfg.effectiveStableID,
+                  latestConfig.url == cfg.url,
+                  Self.sameTLSParams(latestConfig.tls, cfg.tls)
+            else { return }
+
+            // Build the refreshed config from `latestConfig` so any auth credentials
+            // (token/bootstrapToken/password) written by a parallel reconnect during
+            // the await are preserved; the only thing we are refreshing here is
+            // nodeOptions.
+            let refreshedConfig = GatewayConnectConfig(
+                url: latestConfig.url,
+                stableID: latestConfig.stableID,
+                tls: latestConfig.tls,
+                token: latestConfig.token,
+                bootstrapToken: latestConfig.bootstrapToken,
+                password: latestConfig.password,
+                nodeOptions: connectOptions)
+
+            appModel.applyGatewayConnectConfig(refreshedConfig)
+        }
+    }
+
+    private static func sameTLSParams(_ lhs: GatewayTLSParams?, _ rhs: GatewayTLSParams?) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil):
+            return true
+        case let (lhs?, rhs?):
+            return lhs.required == rhs.required
+                && lhs.expectedFingerprint == rhs.expectedFingerprint
+                && lhs.allowTOFU == rhs.allowTOFU
+                && lhs.storeKey == rhs.storeKey
+        default:
+            return false
+        }
     }
 
     func clearPendingTrustPrompt() {
@@ -437,6 +488,11 @@ final class GatewayConnectionController {
     private func attemptAutoReconnectIfNeeded() {
         guard let appModel = self.appModel else { return }
         guard appModel.gatewayAutoReconnectEnabled else { return }
+        // Stand down while a `startAutoConnect` Task is between its synchronous
+        // setup and its post-await commit. Otherwise a scene-phase event during
+        // that window would start a competing connect, bump
+        // `autoConnectGeneration`, and drop the original explicit connect.
+        guard self.connectInFlightCount == 0 else { return }
         // Avoid starting duplicate connect loops while a prior config is active.
         guard appModel.activeGatewayConnectConfig == nil else { return }
         guard UserDefaults.standard.bool(forKey: "gateway.autoconnect") else { return }
@@ -468,10 +524,35 @@ final class GatewayConnectionController {
         password: String?)
     {
         guard let appModel else { return }
-        let connectOptions = self.makeConnectOptions(stableID: gatewayStableID)
 
-        Task { [weak appModel] in
-            guard let appModel else { return }
+        self.autoConnectGeneration &+= 1
+        let generation = self.autoConnectGeneration
+
+        // Mark explicit/manual connect intent immediately so the post-await guard can still reject
+        // a later user Disconnect without blocking a brand-new connect that starts from a
+        // disconnected state.
+        appModel.gatewayAutoReconnectEnabled = true
+        // Track that a connect is in flight so scene-phase events do not race
+        // attemptAutoReconnectIfNeeded against this Task during the await.
+        self.connectInFlightCount += 1
+
+        Task { [weak self, weak appModel] in
+            guard let self, let appModel else {
+                self?.connectInFlightCount -= 1
+                return
+            }
+            defer { self.connectInFlightCount -= 1 }
+            let connectOptions = await self.makeConnectOptions(stableID: gatewayStableID)
+
+            guard generation == self.autoConnectGeneration,
+                  appModel.gatewayAutoReconnectEnabled
+            else { return }
+
+            // `startAutoConnect` is also the entry point for explicit user-driven connect/switch
+            // actions. Those flows must be able to replace an existing config and must work even
+            // if a prior Disconnect temporarily set `gatewayAutoReconnectEnabled = false`.
+            // Generation matching plus the autoReconnect flag rejects stale work after a later
+            // user Disconnect while still allowing fresh explicit reconnect/switch attempts.
             await MainActor.run {
                 appModel.gatewayStatusText = "Connecting…"
             }
@@ -702,7 +783,7 @@ final class GatewayConnectionController {
         "manual|\(host.lowercased())|\(port)"
     }
 
-    private func makeConnectOptions(stableID: String?) -> GatewayConnectOptions {
+    private func makeConnectOptions(stableID: String?) async -> GatewayConnectOptions {
         let defaults = UserDefaults.standard
         let displayName = self.resolvedDisplayName(defaults: defaults)
         let resolvedClientId = self.resolvedClientId(defaults: defaults, stableID: stableID)
@@ -712,7 +793,7 @@ final class GatewayConnectionController {
             scopes: [],
             caps: self.currentCaps(),
             commands: self.currentCommands(),
-            permissions: self.currentPermissions(),
+            permissions: await self.currentPermissions(),
             clientId: resolvedClientId,
             clientMode: "node",
             clientDisplayName: displayName)
@@ -850,13 +931,15 @@ final class GatewayConnectionController {
         return commands
     }
 
-    private func currentPermissions() -> [String: Bool] {
+    private func currentPermissions() async -> [String: Bool] {
+        let speechRecognitionStatus = await Self.currentSpeechRecognitionStatus()
+
         var permissions: [String: Bool] = [:]
         permissions["camera"] = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
         permissions["microphone"] = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-        permissions["speechRecognition"] = SFSpeechRecognizer.authorizationStatus() == .authorized
+        permissions["speechRecognition"] = speechRecognitionStatus == .authorized
         permissions["location"] = Self.isLocationAuthorized(
-            status: CLLocationManager().authorizationStatus)
+            status: self.locationManager.authorizationStatus)
             && CLLocationManager.locationServicesEnabled()
         permissions["screenRecording"] = RPScreenRecorder.shared().isAvailable
 
@@ -882,6 +965,14 @@ final class GatewayConnectionController {
         permissions["watchReachable"] = watchStatus.reachable
 
         return permissions
+    }
+
+    private nonisolated static func currentSpeechRecognitionStatus() async
+        -> SFSpeechRecognizerAuthorizationStatus
+    {
+        await Task.detached(priority: .utility) {
+            SFSpeechRecognizer.authorizationStatus()
+        }.value
     }
 
     private static func isLocationAuthorized(status: CLAuthorizationStatus) -> Bool {
@@ -916,8 +1007,8 @@ extension GatewayConnectionController {
         self.currentCommands()
     }
 
-    func _test_currentPermissions() -> [String: Bool] {
-        self.currentPermissions()
+    func _test_currentPermissions() async -> [String: Bool] {
+        await self.currentPermissions()
     }
 
     func _test_platformString() -> String {
@@ -961,6 +1052,70 @@ extension GatewayConnectionController {
 
     func _test_resolveManualPort(host: String, port: Int, useTLS: Bool) -> Int? {
         self.resolveManualPort(host: host, port: port, useTLS: useTLS)
+    }
+
+    func _test_startAutoConnect(
+        url: URL,
+        gatewayStableID: String,
+        tls: GatewayTLSParams? = nil,
+        token: String? = nil,
+        bootstrapToken: String? = nil,
+        password: String? = nil
+    ) async {
+        self.startAutoConnect(
+            url: url,
+            gatewayStableID: gatewayStableID,
+            tls: tls,
+            token: token,
+            bootstrapToken: bootstrapToken,
+            password: password)
+
+        for _ in 0..<100 {
+            if let cfg = self.appModel?.activeGatewayConnectConfig,
+               cfg.url == url,
+               cfg.effectiveStableID == gatewayStableID
+            {
+                return
+            }
+            await Task.yield()
+        }
+    }
+
+    func _test_startAutoConnectWithoutWaiting(
+        url: URL,
+        gatewayStableID: String,
+        tls: GatewayTLSParams? = nil,
+        token: String? = nil,
+        bootstrapToken: String? = nil,
+        password: String? = nil)
+    {
+        self.startAutoConnect(
+            url: url,
+            gatewayStableID: gatewayStableID,
+            tls: tls,
+            token: token,
+            bootstrapToken: bootstrapToken,
+            password: password)
+    }
+
+    func _test_attemptAutoReconnectIfNeeded() {
+        self.attemptAutoReconnectIfNeeded()
+    }
+
+    func _test_refreshActiveGatewayRegistrationFromSettings() {
+        self.refreshActiveGatewayRegistrationFromSettings()
+    }
+
+    var _test_autoConnectGeneration: Int { self.autoConnectGeneration }
+
+    var _test_connectInFlightCount: Int { self.connectInFlightCount }
+
+    func _test_waitForConnectInFlightToDrain(timeoutSeconds: Double = 5.0) async {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while self.connectInFlightCount > 0 {
+            if Date() >= deadline { return }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
     }
 }
 #endif
