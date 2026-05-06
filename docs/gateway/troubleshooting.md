@@ -147,6 +147,43 @@ Related:
 - [Local models](/gateway/local-models)
 - [OpenAI-compatible endpoints](/gateway/configuration-reference#openai-compatible-endpoints)
 
+## Upstream 403 your request was blocked
+
+Use this when an upstream LLM provider returns:
+`403 Your request was blocked.`
+
+Do not assume this is always an OpenClaw configuration issue. This can also come from an upstream security layer such as Cloudflare, WAF/Bot Management, or reverse-proxy filtering.
+
+```bash
+openclaw status
+openclaw gateway status
+openclaw logs --follow
+```
+
+Look for:
+
+- Multiple models under the same provider failing in the same way.
+- HTML or generic security text instead of a normal API error.
+- Provider-side security events showing blocked requests.
+- Cases where a minimal `curl` succeeds but real SDK-style requests still fail.
+
+Fix approach:
+
+1. Check the provider-side security layer first if the provider is behind Cloudflare or another WAF/CDN.
+2. Confirm whether the upstream response looks like a block page rather than an application error.
+3. If filtering is confirmed, prefer a narrowly scoped allow/skip/exception rule for the required API path.
+4. Avoid disabling protection for the entire site.
+
+<Warning>
+A successful minimal `curl` does not guarantee that real SDK-style requests will pass.
+</Warning>
+
+Related:
+
+- [OpenAI-compatible endpoints](/gateway/configuration-reference#openai-compatible-endpoints)
+- [Provider configuration](/providers)
+- [Logs](/reference/logs)
+
 ## No replies
 
 If channels are up but nothing answers, check routing and policy before reconnecting anything.
