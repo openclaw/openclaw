@@ -8,6 +8,7 @@ import { listDevicePairing } from "../infra/device-pairing.js";
 import { loadApnsRegistration } from "../infra/push-apns.js";
 import { listWebPushSubscriptions } from "../infra/push-web.js";
 import { listChannelPairingRequests, readChannelAllowFromStore } from "../pairing/pairing-store.js";
+import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 
@@ -173,6 +174,97 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
           })}\n`,
           "utf8",
         );
+        await fs.writeFile(
+          path.join(stateDir, "update-check.json"),
+          `${JSON.stringify({
+            lastCheckedAt: "2026-01-17T10:00:00.000Z",
+            lastAvailableVersion: "2.0.0",
+            lastAvailableTag: "latest",
+          })}\n`,
+          "utf8",
+        );
+        const mediaRecordsDir = path.join(stateDir, "media", "outgoing", "records");
+        await fs.mkdir(mediaRecordsDir, { recursive: true });
+        await fs.writeFile(
+          path.join(mediaRecordsDir, "11111111-1111-4111-8111-111111111111.json"),
+          `${JSON.stringify({
+            attachmentId: "11111111-1111-4111-8111-111111111111",
+            sessionKey: "agent:main:main",
+            messageId: "msg-1",
+            createdAt: "2026-01-17T10:00:00.000Z",
+            alt: "legacy image",
+            original: {
+              path: "/tmp/legacy-image.png",
+              contentType: "image/png",
+              width: 1,
+              height: 1,
+              sizeBytes: 1,
+              filename: "legacy-image.png",
+            },
+          })}\n`,
+          "utf8",
+        );
+        await fs.mkdir(path.join(stateDir, "subagents"), { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, "subagents", "runs.json"),
+          `${JSON.stringify({
+            version: 2,
+            runs: {
+              "run-legacy": {
+                runId: "run-legacy",
+                childSessionKey: "agent:main:subagent:legacy",
+                requesterSessionKey: "agent:main:main",
+                requesterDisplayKey: "main",
+                task: "legacy task",
+                cleanup: "keep",
+                createdAt: 1,
+                startedAt: 2,
+                spawnMode: "run",
+              },
+            },
+          })}\n`,
+          "utf8",
+        );
+        await fs.mkdir(path.join(stateDir, "tui"), { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, "tui", "last-session.json"),
+          `${JSON.stringify({
+            "legacy-tui-scope": {
+              sessionKey: "agent:main:tui-legacy",
+              updatedAt: 1000,
+            },
+          })}\n`,
+          "utf8",
+        );
+        const agentDir = path.join(stateDir, "agents", "main", "agent");
+        await fs.mkdir(agentDir, { recursive: true });
+        const authStatePath = path.join(agentDir, "auth-state.json");
+        await fs.writeFile(
+          authStatePath,
+          `${JSON.stringify({
+            version: 1,
+            order: { openai: ["openai:default"] },
+            lastGood: { openai: "openai:default" },
+          })}\n`,
+          "utf8",
+        );
+        await fs.mkdir(path.join(stateDir, "cache"), { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, "cache", "openrouter-models.json"),
+          `${JSON.stringify({
+            models: {
+              "acme/legacy": {
+                name: "Legacy OpenRouter",
+                input: ["text"],
+                reasoning: false,
+                contextWindow: 123,
+                maxTokens: 456,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            },
+          })}\n`,
+          "utf8",
+        );
 
         await maybeRepairLegacyRuntimeStateFiles({
           prompter: { shouldRepair: true },
@@ -219,6 +311,60 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
         await expect(loadApnsRegistration("ios-node", stateDir)).resolves.toMatchObject({
           nodeId: "ios-node",
         });
+        expect(readOpenClawStateKvJson("runtime.update-check", "state", { env })).toMatchObject({
+          lastAvailableVersion: "2.0.0",
+          lastAvailableTag: "latest",
+        });
+        await expect(fs.stat(path.join(stateDir, "update-check.json"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        expect(
+          readOpenClawStateKvJson(
+            "managed_outgoing_image_records",
+            "11111111-1111-4111-8111-111111111111",
+            { env },
+          ),
+        ).toMatchObject({
+          sessionKey: "agent:main:main",
+          alt: "legacy image",
+        });
+        await expect(
+          fs.stat(path.join(mediaRecordsDir, "11111111-1111-4111-8111-111111111111.json")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        expect(readOpenClawStateKvJson("subagent_runs", "run-legacy", { env })).toMatchObject({
+          childSessionKey: "agent:main:subagent:legacy",
+        });
+        await expect(fs.stat(path.join(stateDir, "subagents", "runs.json"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        expect(readOpenClawStateKvJson("tui:last-session", "legacy-tui-scope", { env })).toEqual({
+          sessionKey: "agent:main:tui-legacy",
+          updatedAt: 1000,
+        });
+        await expect(
+          fs.stat(path.join(stateDir, "tui", "last-session.json")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        expect(readOpenClawStateKvJson("auth-profile-state", authStatePath, { env })).toMatchObject(
+          {
+            order: { openai: ["openai:default"] },
+            lastGood: { openai: "openai:default" },
+          },
+        );
+        await expect(fs.stat(authStatePath)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(
+          readOpenClawStateKvJson("openrouter_model_capabilities", "models", { env }),
+        ).toMatchObject({
+          models: {
+            "acme/legacy": {
+              name: "Legacy OpenRouter",
+              contextWindow: 123,
+              maxTokens: 456,
+            },
+          },
+        });
+        await expect(
+          fs.stat(path.join(stateDir, "cache", "openrouter-models.json")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
       });
     });
   });

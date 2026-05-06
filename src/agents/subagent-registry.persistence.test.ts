@@ -30,6 +30,7 @@ import {
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
 import {
+  importLegacySubagentRegistryFileToSqlite,
   loadSubagentRegistryFromDisk,
   resolveSubagentRegistryPath,
   saveSubagentRegistryToDisk,
@@ -121,7 +122,7 @@ describe("subagent registry persistence", () => {
 
   const writePersistedRegistry = async (
     persisted: Record<string, unknown>,
-    opts?: { seedChildSessions?: boolean },
+    opts?: { seedChildSessions?: boolean; importLegacy?: boolean },
   ) => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
@@ -130,6 +131,9 @@ describe("subagent registry persistence", () => {
     await fs.writeFile(registryPath, `${JSON.stringify(persisted)}\n`, "utf8");
     if (opts?.seedChildSessions !== false) {
       await seedChildSessionsForPersistedRuns(persisted);
+    }
+    if (opts?.importLegacy !== false) {
+      importLegacySubagentRegistryFileToSqlite(process.env);
     }
     return registryPath;
   };
@@ -279,6 +283,7 @@ describe("subagent registry persistence", () => {
     };
     await fs.mkdir(path.dirname(registryPath), { recursive: true });
     await fs.writeFile(registryPath, `${JSON.stringify(persisted)}\n`, "utf8");
+    importLegacySubagentRegistryFileToSqlite(process.env);
     await writeChildSessionEntry({
       sessionKey: "agent:main:subagent:two",
       sessionId: "sess-two",
@@ -361,6 +366,60 @@ describe("subagent registry persistence", () => {
       requesterSessionKey: "agent:main:main",
       spawnMode: "run",
     });
+  });
+
+  it("merges legacy registry imports into existing SQLite runs", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    const registryPath = path.join(tempStateDir, "subagents", "runs.json");
+    const existing: SubagentRunRecord = {
+      runId: "run-existing",
+      childSessionKey: "agent:main:subagent:existing",
+      requesterSessionKey: "agent:main:main",
+      controllerSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "existing sqlite run",
+      cleanup: "keep",
+      createdAt: 1,
+      startedAt: 2,
+      spawnMode: "run",
+    };
+    saveSubagentRegistryToDisk(new Map([[existing.runId, existing]]));
+    await fs.mkdir(path.dirname(registryPath), { recursive: true });
+    await fs.writeFile(
+      registryPath,
+      `${JSON.stringify({
+        version: 2,
+        runs: {
+          "run-imported": {
+            runId: "run-imported",
+            childSessionKey: "agent:main:subagent:imported",
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            task: "imported legacy run",
+            cleanup: "keep",
+            createdAt: 3,
+            startedAt: 4,
+            spawnMode: "run",
+          },
+        },
+      })}\n`,
+      "utf8",
+    );
+
+    expect(importLegacySubagentRegistryFileToSqlite(process.env)).toEqual({
+      imported: true,
+      runs: 1,
+    });
+
+    const restored = loadSubagentRegistryFromDisk();
+    expect(restored.get("run-existing")).toMatchObject({
+      childSessionKey: "agent:main:subagent:existing",
+    });
+    expect(restored.get("run-imported")).toMatchObject({
+      childSessionKey: "agent:main:subagent:imported",
+    });
+    await expect(fs.access(registryPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("returns isolated clones for unchanged persisted registry snapshots", async () => {
@@ -762,6 +821,7 @@ describe("subagent registry persistence", () => {
     const registryPath = path.join(tempStateDir, "subagents", "runs.json");
     await fs.mkdir(path.dirname(registryPath), { recursive: true });
     await fs.writeFile(registryPath, `${JSON.stringify(persisted)}\n`, "utf8");
+    importLegacySubagentRegistryFileToSqlite(process.env);
 
     restartRegistry();
     await waitForRegistryWork(async () => {

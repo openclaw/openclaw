@@ -25,15 +25,9 @@ type PersistedSubagentRegistryV2 = {
 
 type PersistedSubagentRegistry = PersistedSubagentRegistryV1 | PersistedSubagentRegistryV2;
 
-const MAX_SUBAGENT_REGISTRY_READ_CACHE_ENTRIES = 32;
 const SUBAGENT_REGISTRY_KV_SCOPE = "subagent_runs";
 
 type PersistedSubagentRunRecord = SubagentRunRecord;
-
-type RegistryCacheEntry = {
-  signature: string;
-  runs: Map<string, SubagentRunRecord>;
-};
 
 type LegacySubagentRunRecord = PersistedSubagentRunRecord & {
   announceCompletedAt?: unknown;
@@ -41,32 +35,6 @@ type LegacySubagentRunRecord = PersistedSubagentRunRecord & {
   requesterChannel?: unknown;
   requesterAccountId?: unknown;
 };
-
-const registryReadCache = new Map<string, RegistryCacheEntry>();
-
-function cloneSubagentRunRecord(entry: SubagentRunRecord): SubagentRunRecord {
-  return structuredClone(entry);
-}
-
-function cloneSubagentRunMap(runs: Map<string, SubagentRunRecord>): Map<string, SubagentRunRecord> {
-  return new Map([...runs].map(([runId, entry]) => [runId, cloneSubagentRunRecord(entry)]));
-}
-
-function setCachedRegistryRead(
-  pathname: string,
-  signature: string,
-  runs: Map<string, SubagentRunRecord>,
-): void {
-  registryReadCache.delete(pathname);
-  registryReadCache.set(pathname, { signature, runs: cloneSubagentRunMap(runs) });
-  if (registryReadCache.size <= MAX_SUBAGENT_REGISTRY_READ_CACHE_ENTRIES) {
-    return;
-  }
-  const oldestKey = registryReadCache.keys().next().value;
-  if (typeof oldestKey === "string") {
-    registryReadCache.delete(oldestKey);
-  }
-}
 
 function resolveSubagentStateDir(env: NodeJS.ProcessEnv = process.env): string {
   const explicit = env.OPENCLAW_STATE_DIR?.trim();
@@ -83,11 +51,17 @@ export function resolveSubagentRegistryPath(): string {
   return path.join(resolveSubagentStateDir(process.env), "subagents", "runs.json");
 }
 
-function subagentRegistryDbOptions(): OpenClawStateDatabaseOptions {
+function resolveSubagentRegistryPathForEnv(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveSubagentStateDir(env), "subagents", "runs.json");
+}
+
+function subagentRegistryDbOptions(
+  env: NodeJS.ProcessEnv = process.env,
+): OpenClawStateDatabaseOptions {
   return {
     env: {
-      ...process.env,
-      OPENCLAW_STATE_DIR: resolveSubagentStateDir(process.env),
+      ...env,
+      OPENCLAW_STATE_DIR: resolveSubagentStateDir(env),
     },
   };
 }
@@ -151,10 +125,12 @@ function normalizePersistedRunRecords(params: {
   return out;
 }
 
-function loadSubagentRegistryFromSqlite(): Map<string, SubagentRunRecord> | null {
+function loadSubagentRegistryFromSqlite(
+  env: NodeJS.ProcessEnv = process.env,
+): Map<string, SubagentRunRecord> | null {
   const entries = listOpenClawStateKvJson<PersistedSubagentRunRecord>(
     SUBAGENT_REGISTRY_KV_SCOPE,
-    subagentRegistryDbOptions(),
+    subagentRegistryDbOptions(env),
   );
   if (entries.length === 0) {
     return null;
@@ -167,88 +143,77 @@ function loadSubagentRegistryFromSqlite(): Map<string, SubagentRunRecord> | null
 }
 
 export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
-  const sqliteRuns = loadSubagentRegistryFromSqlite();
-  if (sqliteRuns) {
-    return sqliteRuns;
+  return loadSubagentRegistryFromSqlite() ?? new Map();
+}
+
+function writeSubagentRegistryRunsToSqlite(
+  runs: Map<string, SubagentRunRecord>,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const dbOptions = subagentRegistryDbOptions(env);
+  for (const [runId, entry] of runs.entries()) {
+    writeOpenClawStateKvJson(SUBAGENT_REGISTRY_KV_SCOPE, runId, entry, dbOptions);
   }
-  const pathname = resolveSubagentRegistryPath();
-  const signature = statRegistryFileSignature(pathname);
-  if (signature === null) {
-    registryReadCache.delete(pathname);
-    return new Map();
-  }
-  const cached = registryReadCache.get(pathname);
-  if (cached?.signature === signature) {
-    registryReadCache.delete(pathname);
-    registryReadCache.set(pathname, cached);
-    return cloneSubagentRunMap(cached.runs);
-  }
+}
+
+function loadLegacySubagentRegistryFile(pathname: string): Map<string, SubagentRunRecord> {
   const raw = loadJsonFile(pathname);
   if (!raw || typeof raw !== "object") {
-    setCachedRegistryRead(pathname, signature, new Map());
     return new Map();
   }
   const record = raw as Partial<PersistedSubagentRegistry>;
   if (record.version !== 1 && record.version !== 2) {
-    setCachedRegistryRead(pathname, signature, new Map());
     return new Map();
   }
   const runsRaw = record.runs;
   if (!runsRaw || typeof runsRaw !== "object") {
-    setCachedRegistryRead(pathname, signature, new Map());
     return new Map();
   }
-  const out = normalizePersistedRunRecords({
+  return normalizePersistedRunRecords({
     runsRaw: runsRaw as Record<string, unknown>,
     isLegacy: record.version === 1,
   });
-  try {
-    saveSubagentRegistryToDisk(out);
-  } catch {
-    setCachedRegistryRead(pathname, signature, out);
-  }
-  return out;
 }
 
-export function saveSubagentRegistryToDisk(runs: Map<string, SubagentRunRecord>) {
-  const pathname = resolveSubagentRegistryPath();
-  const serialized: Record<string, PersistedSubagentRunRecord> = {};
-  for (const [runId, entry] of runs.entries()) {
-    serialized[runId] = entry;
-  }
-  const existing = listOpenClawStateKvJson<PersistedSubagentRunRecord>(
-    SUBAGENT_REGISTRY_KV_SCOPE,
-    subagentRegistryDbOptions(),
-  );
-  for (const entry of existing) {
-    if (!runs.has(entry.key)) {
-      deleteOpenClawStateKvJson(SUBAGENT_REGISTRY_KV_SCOPE, entry.key, subagentRegistryDbOptions());
-    }
-  }
-  for (const [runId, entry] of runs.entries()) {
-    writeOpenClawStateKvJson(SUBAGENT_REGISTRY_KV_SCOPE, runId, entry, subagentRegistryDbOptions());
-  }
+export function legacySubagentRegistryFileExists(env: NodeJS.ProcessEnv = process.env): boolean {
   try {
-    fs.unlinkSync(pathname);
+    return fs.statSync(resolveSubagentRegistryPathForEnv(env)).isFile();
   } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
-      throw error;
-    }
-  }
-  registryReadCache.delete(pathname);
-}
-
-function statRegistryFileSignature(pathname: string): string | null {
-  try {
-    const stat = fs.statSync(pathname, { bigint: true });
-    if (!stat.isFile()) {
-      return null;
-    }
-    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return false;
     }
     throw error;
   }
+}
+
+export function importLegacySubagentRegistryFileToSqlite(env: NodeJS.ProcessEnv = process.env): {
+  imported: boolean;
+  runs: number;
+} {
+  const pathname = resolveSubagentRegistryPathForEnv(env);
+  if (!legacySubagentRegistryFileExists(env)) {
+    return { imported: false, runs: 0 };
+  }
+  const runs = loadLegacySubagentRegistryFile(pathname);
+  writeSubagentRegistryRunsToSqlite(runs, env);
+  try {
+    fs.unlinkSync(pathname);
+  } catch {
+    // Import succeeded; a later doctor pass can remove the stale file.
+  }
+  return { imported: true, runs: runs.size };
+}
+
+export function saveSubagentRegistryToDisk(runs: Map<string, SubagentRunRecord>) {
+  const dbOptions = subagentRegistryDbOptions();
+  const existing = listOpenClawStateKvJson<PersistedSubagentRunRecord>(
+    SUBAGENT_REGISTRY_KV_SCOPE,
+    dbOptions,
+  );
+  for (const entry of existing) {
+    if (!runs.has(entry.key)) {
+      deleteOpenClawStateKvJson(SUBAGENT_REGISTRY_KV_SCOPE, entry.key, dbOptions);
+    }
+  }
+  writeSubagentRegistryRunsToSqlite(runs);
 }

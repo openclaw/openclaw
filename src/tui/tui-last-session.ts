@@ -86,11 +86,38 @@ function writeTuiLastSessionKv(params: {
   );
 }
 
-async function importLegacyTuiLastSessionStore(params: {
+async function readLegacyTuiLastSessionStore(params: {
   stateDir?: string;
 }): Promise<LastSessionStore> {
   const filePath = resolveTuiLastSessionStatePath(params.stateDir);
-  const store = await readStore(filePath);
+  return await readStore(filePath);
+}
+
+export async function legacyTuiLastSessionFileExists(
+  params: {
+    stateDir?: string;
+  } = {},
+): Promise<boolean> {
+  try {
+    await fs.access(resolveTuiLastSessionStatePath(params.stateDir));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function importLegacyTuiLastSessionStoreToSqlite(
+  params: {
+    stateDir?: string;
+  } = {},
+): Promise<{ imported: boolean; pointers: number }> {
+  const filePath = resolveTuiLastSessionStatePath(params.stateDir);
+  const exists = await legacyTuiLastSessionFileExists(params);
+  if (!exists) {
+    return { imported: false, pointers: 0 };
+  }
+  const store = await readLegacyTuiLastSessionStore(params);
+  let pointers = 0;
   for (const [scopeKey, value] of Object.entries(store)) {
     const record = normalizeLastSessionRecord(value);
     if (!record) {
@@ -101,11 +128,10 @@ async function importLegacyTuiLastSessionStore(params: {
       record,
       stateDir: params.stateDir,
     });
+    pointers += 1;
   }
-  if (Object.keys(store).length > 0) {
-    await deleteStore(filePath);
-  }
-  return store;
+  await deleteStore(filePath);
+  return { imported: true, pointers };
 }
 
 function normalizeMarker(value: unknown): string {
@@ -146,17 +172,7 @@ export async function readTuiLastSessionKey(params: {
     return kvRecord.sessionKey;
   }
 
-  const store = await importLegacyTuiLastSessionStore({ stateDir: params.stateDir });
-  const diskRecord = normalizeLastSessionRecord(store[params.scopeKey]);
-  if (!diskRecord) {
-    return null;
-  }
-  writeTuiLastSessionKv({
-    scopeKey: params.scopeKey,
-    record: diskRecord,
-    stateDir: params.stateDir,
-  });
-  return diskRecord.sessionKey;
+  return null;
 }
 
 export async function writeTuiLastSessionKey(params: {
@@ -177,7 +193,6 @@ export async function writeTuiLastSessionKey(params: {
     record,
     stateDir: params.stateDir,
   });
-  await deleteStore(resolveTuiLastSessionStatePath(params.stateDir));
 }
 
 export async function clearTuiLastSessionPointers(params: {
@@ -201,14 +216,6 @@ export async function clearTuiLastSessionPointers(params: {
     }
   }
 
-  const store = await importLegacyTuiLastSessionStore({ stateDir: params.stateDir });
-  for (const [key, value] of Object.entries(store)) {
-    const record = normalizeLastSessionRecord(value);
-    if (record && params.sessionKeys.has(record.sessionKey)) {
-      deleteOpenClawStateKvJson(TUI_LAST_SESSION_KV_SCOPE, key, kvOptions);
-      removedScopeKeys.add(key);
-    }
-  }
   return removedScopeKeys.size;
 }
 

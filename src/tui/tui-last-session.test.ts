@@ -6,6 +6,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import {
   buildTuiLastSessionScopeKey,
   clearTuiLastSessionPointers,
+  importLegacyTuiLastSessionStoreToSqlite,
   isHeartbeatLikeTuiSession,
   readTuiLastSessionKey,
   resolveRememberedTuiSessionKey,
@@ -69,7 +70,7 @@ describe("tui last session state", () => {
     );
   });
 
-  it("imports legacy JSON into SQLite on read and removes it", async () => {
+  it("imports legacy JSON into SQLite through the doctor migration helper", async () => {
     const stateDir = await makeTempStateDir();
     const scopeKey = buildTuiLastSessionScopeKey({
       connectionUrl: "legacy",
@@ -83,16 +84,31 @@ describe("tui last session state", () => {
       JSON.stringify({ [scopeKey]: { sessionKey: "agent:main:legacy-json", updatedAt: 1000 } }),
     );
 
-    await expect(readTuiLastSessionKey({ scopeKey, stateDir })).resolves.toBe(
-      "agent:main:legacy-json",
-    );
+    await expect(readTuiLastSessionKey({ scopeKey, stateDir })).resolves.toBeNull();
+    await expect(importLegacyTuiLastSessionStoreToSqlite({ stateDir })).resolves.toEqual({
+      imported: true,
+      pointers: 1,
+    });
     await expect(fs.access(statePath)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(readTuiLastSessionKey({ scopeKey, stateDir })).resolves.toBe(
       "agent:main:legacy-json",
     );
   });
 
-  it("clears stale pointers from SQLite and imported legacy JSON", async () => {
+  it("removes empty legacy JSON through the doctor migration helper", async () => {
+    const stateDir = await makeTempStateDir();
+    const statePath = resolveTuiLastSessionStatePath(stateDir);
+    await fs.mkdir(path.dirname(statePath), { recursive: true });
+    await fs.writeFile(statePath, "{}\n", "utf8");
+
+    await expect(importLegacyTuiLastSessionStoreToSqlite({ stateDir })).resolves.toEqual({
+      imported: true,
+      pointers: 0,
+    });
+    await expect(fs.access(statePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("clears stale pointers from SQLite after legacy JSON import", async () => {
     const stateDir = await makeTempStateDir();
     const staleScope = buildTuiLastSessionScopeKey({
       connectionUrl: "stale",
@@ -125,6 +141,7 @@ describe("tui last session state", () => {
       statePath,
       JSON.stringify({ [legacyScope]: { sessionKey: "agent:main:legacy-stale", updatedAt: 1000 } }),
     );
+    await importLegacyTuiLastSessionStoreToSqlite({ stateDir });
 
     await expect(
       clearTuiLastSessionPointers({

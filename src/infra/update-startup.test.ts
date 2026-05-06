@@ -1,7 +1,5 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { formatCliCommand } from "../cli/command-format.js";
+import { readOpenClawStateKvJson, writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { UpdateCheckResult } from "./update-check.js";
@@ -150,27 +148,15 @@ describe("update-startup", () => {
       allowInTests: true,
     });
 
-    const statePath = path.join(tempDir, "update-check.json");
-    const parsed = JSON.parse(await fs.readFile(statePath, "utf-8")) as {
+    const parsed = readOpenClawStateKvJson("runtime.update-check", "state", {
+      env: process.env,
+    }) as {
       lastNotifiedVersion?: string;
       lastNotifiedTag?: string;
       lastAvailableVersion?: string;
       lastAvailableTag?: string;
     };
     return { log, parsed };
-  }
-
-  async function expectPathMissing(targetPath: string): Promise<void> {
-    let statError: NodeJS.ErrnoException | undefined;
-    try {
-      await fs.stat(targetPath);
-    } catch (error) {
-      statError = error as NodeJS.ErrnoException;
-    }
-    expect(statError).toBeInstanceOf(Error);
-    expect(statError?.code).toBe("ENOENT");
-    expect(statError?.path).toBe(targetPath);
-    expect(statError?.syscall).toBe("stat");
   }
 
   function createAutoUpdateSuccessMock() {
@@ -243,19 +229,15 @@ describe("update-startup", () => {
   });
 
   it("hydrates cached update from persisted state during throttle window", async () => {
-    const statePath = path.join(tempDir, "update-check.json");
-    await fs.writeFile(
-      statePath,
-      JSON.stringify(
-        {
-          lastCheckedAt: new Date(Date.now()).toISOString(),
-          lastAvailableVersion: "2.0.0",
-          lastAvailableTag: "latest",
-        },
-        null,
-        2,
-      ),
-      "utf-8",
+    writeOpenClawStateKvJson(
+      "runtime.update-check",
+      "state",
+      {
+        lastCheckedAt: new Date(Date.now()).toISOString(),
+        lastAvailableVersion: "2.0.0",
+        lastAvailableTag: "latest",
+      },
+      { env: process.env },
     );
 
     const onUpdateAvailableChange = vi.fn();
@@ -317,7 +299,11 @@ describe("update-startup", () => {
     });
 
     expect(log.info).not.toHaveBeenCalled();
-    await expectPathMissing(path.join(tempDir, "update-check.json"));
+    expect(
+      readOpenClawStateKvJson("runtime.update-check", "state", {
+        env: process.env,
+      }),
+    ).toBeUndefined();
   });
 
   it("defers stable auto-update until rollout window is due", async () => {

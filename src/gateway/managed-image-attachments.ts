@@ -96,11 +96,6 @@ type CleanupManagedOutgoingImageRecordsResult = {
   retainedCount: number;
 };
 
-type ListedManagedImageRecords = {
-  records: ManagedImageRecord[];
-  invalidLegacyRecordPaths: string[];
-};
-
 type SessionManagedOutgoingAttachmentIndex = Set<string>;
 
 type SessionManagedOutgoingAttachmentIndexCacheEntry = {
@@ -283,10 +278,6 @@ function resolveOutgoingOriginalsDir(stateDir = resolveStateDir()) {
   return path.join(stateDir, "media", "outgoing", "originals");
 }
 
-function resolveOutgoingRecordPath(attachmentId: string, stateDir = resolveStateDir()) {
-  return path.join(resolveOutgoingRecordsDir(stateDir), `${attachmentId}.json`);
-}
-
 function managedImageRecordDbOptions(stateDir: string): OpenClawStateDatabaseOptions {
   return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
 }
@@ -380,8 +371,6 @@ async function writeManagedImageRecord(record: ManagedImageRecord, stateDir = re
     record,
     managedImageRecordDbOptions(stateDir),
   );
-  const recordPath = resolveOutgoingRecordPath(record.attachmentId, stateDir);
-  await fs.rm(recordPath, { force: true });
 }
 
 async function deleteManagedImageRecordArtifacts(
@@ -400,11 +389,6 @@ async function deleteManagedImageRecordArtifacts(
     } catch {
       // Ignore cleanup races or already-missing files.
     }
-  }
-  try {
-    await fs.rm(resolveOutgoingRecordPath(record.attachmentId, stateDir), { force: true });
-  } catch {
-    // Ignore cleanup races or already-missing records.
   }
   deleteOpenClawStateKvJson(
     MANAGED_OUTGOING_IMAGE_RECORD_SCOPE,
@@ -450,7 +434,7 @@ async function deleteOrphanManagedImageFiles(params: {
   return deletedFileCount;
 }
 
-async function listManagedImageRecords(stateDir: string): Promise<ListedManagedImageRecords> {
+async function listManagedImageRecords(stateDir: string): Promise<ManagedImageRecord[]> {
   const recordsById = new Map<string, ManagedImageRecord>();
   for (const entry of listOpenClawStateKvJson<ManagedImageRecord>(
     MANAGED_OUTGOING_IMAGE_RECORD_SCOPE,
@@ -458,8 +442,10 @@ async function listManagedImageRecords(stateDir: string): Promise<ListedManagedI
   )) {
     recordsById.set(entry.key, entry.value);
   }
+  return [...recordsById.values()];
+}
 
-  const invalidLegacyRecordPaths: string[] = [];
+async function listLegacyManagedImageRecordPaths(stateDir: string): Promise<string[]> {
   const recordsDir = resolveOutgoingRecordsDir(stateDir);
   let names: string[] = [];
   try {
@@ -467,32 +453,41 @@ async function listManagedImageRecords(stateDir: string): Promise<ListedManagedI
   } catch {
     names = [];
   }
+  const paths: string[] = [];
   for (const name of names) {
     if (!name.endsWith(".json")) {
       continue;
     }
-    const recordPath = path.join(recordsDir, name);
+    paths.push(path.join(recordsDir, name));
+  }
+  return paths;
+}
+
+export async function legacyManagedOutgoingImageRecordFilesExist(
+  stateDir = resolveStateDir(),
+): Promise<boolean> {
+  return (await listLegacyManagedImageRecordPaths(stateDir)).length > 0;
+}
+
+export async function importLegacyManagedOutgoingImageRecordFilesToSqlite(
+  stateDir = resolveStateDir(),
+): Promise<{ files: number; records: number }> {
+  const recordPaths = await listLegacyManagedImageRecordPaths(stateDir);
+  let records = 0;
+  for (const recordPath of recordPaths) {
     const record = await tryReadJson<ManagedImageRecord>(recordPath);
-    if (!record?.attachmentId) {
-      invalidLegacyRecordPaths.push(recordPath);
-      continue;
-    }
-    if (!recordsById.has(record.attachmentId)) {
-      recordsById.set(record.attachmentId, record);
+    if (record?.attachmentId) {
       writeOpenClawStateKvJson(
         MANAGED_OUTGOING_IMAGE_RECORD_SCOPE,
         record.attachmentId,
         record,
         managedImageRecordDbOptions(stateDir),
       );
+      records += 1;
     }
     await fs.rm(recordPath, { force: true }).catch(() => {});
   }
-
-  return {
-    records: [...recordsById.values()],
-    invalidLegacyRecordPaths,
-  };
+  return { files: recordPaths.length, records };
 }
 
 export async function cleanupManagedOutgoingImageRecords(params?: {
@@ -509,18 +504,15 @@ export async function cleanupManagedOutgoingImageRecords(params?: {
   const forceDeleteSessionRecords = params?.forceDeleteSessionRecords === true;
   const listedRecords = await listManagedImageRecords(stateDir);
 
-  let deletedRecordCount = listedRecords.invalidLegacyRecordPaths.length;
+  let deletedRecordCount = 0;
   let deletedFileCount = 0;
   let retainedCount = 0;
-  for (const recordPath of listedRecords.invalidLegacyRecordPaths) {
-    await fs.rm(recordPath, { force: true }).catch(() => {});
-  }
   const retainedReferencedPaths = new Set<string>();
   const transcriptAttachmentIndexCache = new Map<
     string,
     SessionManagedOutgoingAttachmentIndex | null
   >();
-  for (const record of listedRecords.records) {
+  for (const record of listedRecords) {
     if (sessionKeyFilter && record.sessionKey !== sessionKeyFilter) {
       if (record.original?.path) {
         retainedReferencedPaths.add(record.original.path);
@@ -576,22 +568,7 @@ async function readManagedImageRecord(
   if (sqliteRecord) {
     return sqliteRecord;
   }
-  try {
-    const raw = await fs.readFile(resolveOutgoingRecordPath(attachmentId, stateDir), "utf-8");
-    const record = JSON.parse(raw) as ManagedImageRecord;
-    if (record?.attachmentId) {
-      writeOpenClawStateKvJson(
-        MANAGED_OUTGOING_IMAGE_RECORD_SCOPE,
-        record.attachmentId,
-        record,
-        managedImageRecordDbOptions(stateDir),
-      );
-      await fs.rm(resolveOutgoingRecordPath(attachmentId, stateDir), { force: true });
-    }
-    return record;
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 function buildManagedImageBlock(record: ManagedImageRecord): ManagedImageBlock {
