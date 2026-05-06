@@ -59,7 +59,12 @@ Optional default skill allowlist for agents that do not set
 
 ### `agents.defaults.skipBootstrap`
 
-Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`).
+Skips workspace bootstrap files for pre-configured deployments. When set to `true`, OpenClaw both:
+
+1. **Disables automatic creation** of workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`) at workspace setup.
+2. **Skips runtime injection** of any existing workspace bootstrap files into the system prompt on every turn (CLI and embedded runtime).
+
+Use this when the deployment supplies its own system prompt, or when you want a workspace-bootstrap-free environment without keeping stray files out of the prompt manually. If you only want to skip injection but keep the files on disk for tooling, use `agents.defaults.contextInjection: "never"` instead.
 
 ```json5
 {

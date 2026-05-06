@@ -230,7 +230,14 @@ export type AgentDefaultsConfig = {
   systemPromptOverride?: string;
   /** Provider-independent prompt overlays applied by model family. */
   promptOverlays?: PromptOverlaysConfig;
-  /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
+  /**
+   * Skip workspace bootstrap files for pre-configured deployments. When true,
+   * disables automatic creation of `BOOTSTRAP.md` / `AGENTS.md` / `SOUL.md` /
+   * etc., AND skips runtime injection of any existing workspace bootstrap
+   * files into the system prompt (CLI + embedded runtime). Use
+   * `contextInjection: "never"` instead if you want to keep the files on disk
+   * but skip prompt injection only.
+   */
   skipBootstrap?: boolean;
   /**
    * List of optional bootstrap filenames to skip writing to the workspace root.

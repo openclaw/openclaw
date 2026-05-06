@@ -236,19 +236,38 @@ export async function resolveBootstrapFilesForRun(params: {
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
 }): Promise<WorkspaceBootstrapFile[]> {
+  // Honor agents.defaults.skipBootstrap so configured runs do not inject
+  // workspace bootstrap files into the system prompt (#75184). The flag is
+  // already respected at workspace-creation time in agent-command.ts; this
+  // ensures the runtime injection path also skips when set.
+  //
+  // Important: skipBootstrap suppresses the WORKSPACE bootstrap files only —
+  // agent:bootstrap hooks (e.g. the bundled `bootstrap-extra-files` handler in
+  // src/hooks/bundled/bootstrap-extra-files/handler.ts) are still expected to
+  // run so installations that opt out of default workspace files but rely on
+  // hook-injected context still have those files reach prompt assembly. This
+  // path therefore skips the workspace file load and feeds an empty file list
+  // into applyBootstrapHookOverrides; hooks can return their own files which
+  // we then sanitize and return like any other bootstrap result.
+  const skipBootstrap = params.config?.agents?.defaults?.skipBootstrap === true;
   const excludeHeartbeatBootstrapFile = shouldExcludeHeartbeatBootstrapFile(params);
   const sessionKey = params.sessionKey ?? params.sessionId;
-  const rawFiles = params.sessionKey
-    ? await getOrLoadBootstrapFiles({
-        workspaceDir: params.workspaceDir,
-        sessionKey: params.sessionKey,
-      })
-    : await loadWorkspaceBootstrapFiles(params.workspaceDir);
-  const bootstrapFiles = applyContextModeFilter({
-    files: filterBootstrapFilesForSession(rawFiles, sessionKey),
-    contextMode: params.contextMode,
-    runKind: params.runKind,
-  });
+  let bootstrapFiles: WorkspaceBootstrapFile[];
+  if (skipBootstrap) {
+    bootstrapFiles = [];
+  } else {
+    const rawFiles = params.sessionKey
+      ? await getOrLoadBootstrapFiles({
+          workspaceDir: params.workspaceDir,
+          sessionKey: params.sessionKey,
+        })
+      : await loadWorkspaceBootstrapFiles(params.workspaceDir);
+    bootstrapFiles = applyContextModeFilter({
+      files: filterBootstrapFilesForSession(rawFiles, sessionKey),
+      contextMode: params.contextMode,
+      runKind: params.runKind,
+    });
+  }
 
   const updated = await applyBootstrapHookOverrides({
     files: bootstrapFiles,
