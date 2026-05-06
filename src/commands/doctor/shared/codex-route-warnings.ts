@@ -609,10 +609,23 @@ function formatCodexRouteChange(hit: CodexRouteHit, runtime: CodexRepairRuntime)
   return `${hit.path}: ${hit.model} -> ${hit.canonicalModel}${suffix}.`;
 }
 
+function isCodexPluginPresent(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv): boolean {
+  const index = loadInstalledPluginIndex({ config: cfg, env });
+  return getInstalledPluginRecord(index, "codex") !== undefined;
+}
+
+function isCodexOAuthWithoutPlugin(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv): boolean {
+  return hasUsableCodexOAuthProfile(cfg) && !isCodexPluginPresent(cfg, env);
+}
+
 export function collectCodexRouteWarnings(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): string[] {
+  // Suppress: user relies on bare Codex OAuth (no plugin) — openai-codex/* routes are intentional.
+  if (isCodexOAuthWithoutPlugin(params.cfg, params.env)) {
+    return [];
+  }
   const hits = collectConfigModelRefs(params.cfg, params.env);
   if (hits.length === 0) {
     return [];
@@ -637,6 +650,10 @@ export function maybeRepairCodexRoutes(params: {
   shouldRepair: boolean;
   codexRuntimeReady?: boolean;
 }): { cfg: OpenClawConfig; warnings: string[]; changes: string[] } {
+  // When Codex OAuth is present without the plugin, openai-codex/* routes are valid — skip repair.
+  if (isCodexOAuthWithoutPlugin(params.cfg, params.env)) {
+    return { cfg: params.cfg, warnings: [], changes: [] };
+  }
   const hits = collectConfigModelRefs(params.cfg, params.env);
   if (hits.length === 0) {
     return { cfg: params.cfg, warnings: [], changes: [] };
