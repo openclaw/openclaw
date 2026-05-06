@@ -8089,6 +8089,20 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           },
           additionalProperties: false,
         },
+        streaming: {
+          type: "object",
+          properties: {
+            mode: {
+              type: "string",
+              enum: ["partial", "block"],
+            },
+            toolPreview: {
+              type: "string",
+              enum: ["name", "args"],
+            },
+          },
+          additionalProperties: false,
+        },
         replyToMode: {
           type: "string",
           enum: ["off", "first", "all", "batched"],
@@ -8387,6 +8401,20 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     type: "integer",
                     minimum: 0,
                     maximum: 9007199254740991,
+                  },
+                },
+                additionalProperties: false,
+              },
+              streaming: {
+                type: "object",
+                properties: {
+                  mode: {
+                    type: "string",
+                    enum: ["partial", "block"],
+                  },
+                  toolPreview: {
+                    type: "string",
+                    enum: ["name", "args"],
                   },
                 },
                 additionalProperties: false,
