@@ -567,14 +567,20 @@ describe("getMemorySearchManager caching", () => {
     const firstPromise = getMemorySearchManager({ cfg: firstCfg, agentId });
     await Promise.resolve();
     const secondPromise = getMemorySearchManager({ cfg: secondCfg, agentId });
-    await vi.waitFor(() => {
-      expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
-    });
+    await vi.waitFor(
+      () => {
+        expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+      },
+      { interval: 1 },
+    );
 
     firstGate.resolve(firstPrimary as unknown as QmdManagerInstance);
-    await vi.waitFor(() => {
-      expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
-    });
+    await vi.waitFor(
+      () => {
+        expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
+      },
+      { interval: 1 },
+    );
 
     secondGate.resolve(secondPrimary as unknown as QmdManagerInstance);
     const [first, second] = await Promise.all([firstPromise, secondPromise]);
@@ -622,14 +628,20 @@ describe("getMemorySearchManager caching", () => {
     const firstPromise = getMemorySearchManager({ cfg: firstCfg, agentId });
     await Promise.resolve();
     const secondPromise = getMemorySearchManager({ cfg: secondCfg, agentId });
-    await vi.waitFor(() => {
-      expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
-    });
+    await vi.waitFor(
+      () => {
+        expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+      },
+      { interval: 1 },
+    );
 
     firstGate.resolve(firstPrimary as unknown as QmdManagerInstance);
-    await vi.waitFor(() => {
-      expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
-    });
+    await vi.waitFor(
+      () => {
+        expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
+      },
+      { interval: 1 },
+    );
 
     secondGate.resolve(secondPrimary as unknown as QmdManagerInstance);
     const [first, second] = await Promise.all([firstPromise, secondPromise]);
