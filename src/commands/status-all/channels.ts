@@ -14,7 +14,7 @@ import type {
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { asRecord } from "../../shared/record-coerce.js";
+import { asNullableRecord, asRecord } from "../../shared/record-coerce.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   summarizeTokenConfig,
@@ -242,6 +242,141 @@ function collectMissingPaths(accounts: ChannelAccountRow[]): string[] {
     }
   }
   return missing;
+}
+
+type ChannelsTable = {
+  rows: ChannelRow[];
+  details: Array<{
+    title: string;
+    columns: string[];
+    rows: Array<Record<string, string>>;
+  }>;
+};
+
+function readGatewayChannelAccounts(channelsStatus: unknown): Record<string, unknown[]> | null {
+  const status = asNullableRecord(channelsStatus);
+  const raw = asNullableRecord(status?.channelAccounts);
+  if (!raw) {
+    return null;
+  }
+  const out: Record<string, unknown[]> = {};
+  let hasEntries = false;
+  for (const [channelId, accounts] of Object.entries(raw)) {
+    if (!Array.isArray(accounts) || accounts.length === 0) {
+      continue;
+    }
+    out[channelId] = accounts;
+    hasEntries = true;
+  }
+  return hasEntries ? out : null;
+}
+
+function readGatewayChannelLabel(channelsStatus: unknown, channelId: string): string | null {
+  const labels = asNullableRecord(asNullableRecord(channelsStatus)?.channelLabels);
+  const value = labels?.[channelId];
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function deriveSynthesizedChannelRow(
+  channelId: string,
+  accounts: unknown[],
+  channelsStatus: unknown,
+): ChannelRow | null {
+  const enabledAccounts = accounts
+    .map((account) => asNullableRecord(account))
+    .filter((account): account is Record<string, unknown> => account !== null)
+    .filter((account) => account.enabled === true);
+  if (enabledAccounts.length === 0) {
+    return null;
+  }
+  const accountWithError = enabledAccounts.find(
+    (account) => typeof account.lastError === "string" && account.lastError.length > 0,
+  );
+  const allRunning = enabledAccounts.every((account) => account.running === true);
+  const allConnected = enabledAccounts.every((account) => account.connected === true);
+  const allConfigured = enabledAccounts.every((account) => account.configured === true);
+  const accountsCount = enabledAccounts.length;
+
+  // State precedence: error wins; then full health (ok); then transport problems
+  // (warn) win over configuration gaps; only the running+connected-but-unconfigured
+  // case falls through to setup.
+  const state: ChannelRow["state"] = (() => {
+    if (accountWithError) {
+      return "warn";
+    }
+    if (allRunning && allConnected && allConfigured) {
+      return "ok";
+    }
+    if (!allRunning || !allConnected) {
+      return "warn";
+    }
+    return "setup";
+  })();
+
+  const detail = (() => {
+    if (accountWithError) {
+      const message = accountWithError.lastError as string;
+      return accountsCount > 1 ? `${message} · accounts ${accountsCount}` : message;
+    }
+    const bits: string[] = [];
+    bits.push(allRunning ? "running" : "not running");
+    if (allRunning && !allConnected) {
+      bits.push("disconnected");
+    }
+    if (!allConfigured) {
+      bits.push("not configured");
+    }
+    if (accountsCount > 1) {
+      bits.push(`accounts ${accountsCount}`);
+    }
+    return bits.join(" · ");
+  })();
+
+  return {
+    id: channelId as ChannelId,
+    label: readGatewayChannelLabel(channelsStatus, channelId) ?? channelId,
+    enabled: true,
+    state,
+    detail,
+  };
+}
+
+// Augment the read-only `buildChannelsTable` output with rows synthesized from
+// the live `channels.status` gateway snapshot, so `openclaw status` does not
+// render an empty Channels table when the gateway is reachable but the
+// read-only plugin discovery path returned no rows for an actively running
+// channel (#73525).
+export function mergeChannelsTableWithGatewayStatus(params: {
+  channels: ChannelsTable;
+  channelsStatus: unknown;
+}): ChannelsTable {
+  const { channels, channelsStatus } = params;
+  const accountsByChannel = readGatewayChannelAccounts(channelsStatus);
+  if (!accountsByChannel) {
+    return channels;
+  }
+  const known = new Set(channels.rows.map((row) => String(row.id)));
+  const synthesized: ChannelRow[] = [];
+  for (const channelId of Object.keys(accountsByChannel).toSorted()) {
+    if (known.has(channelId)) {
+      continue;
+    }
+    const row = deriveSynthesizedChannelRow(
+      channelId,
+      accountsByChannel[channelId] ?? [],
+      channelsStatus,
+    );
+    if (row) {
+      synthesized.push(row);
+    }
+  }
+  if (synthesized.length === 0) {
+    return channels;
+  }
+  return {
+    rows: [...channels.rows, ...synthesized],
+    details: channels.details,
+  };
 }
 
 // `status --all` channels table.

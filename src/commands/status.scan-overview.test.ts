@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   collectChannelStatusIssues: vi.fn(),
   buildChannelsTable: vi.fn(),
+  mergeChannelsTableWithGatewayStatus: vi.fn(),
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -45,6 +46,7 @@ vi.mock("./status.scan.runtime.js", () => ({
   statusScanRuntime: {
     collectChannelStatusIssues: mocks.collectChannelStatusIssues,
     buildChannelsTable: mocks.buildChannelsTable,
+    mergeChannelsTableWithGatewayStatus: mocks.mergeChannelsTableWithGatewayStatus,
   },
 }));
 
@@ -93,6 +95,9 @@ describe("collectStatusScanOverview", () => {
     mocks.callGateway.mockResolvedValue({ channelAccounts: {} });
     mocks.collectChannelStatusIssues.mockReturnValue([{ channel: "quietchat", message: "boom" }]);
     mocks.buildChannelsTable.mockResolvedValue({ rows: [], details: [] });
+    mocks.mergeChannelsTableWithGatewayStatus.mockImplementation(
+      ({ channels }: { channels: { rows: unknown[]; details: unknown[] } }) => channels,
+    );
   });
 
   it("uses gateway fallback overrides for channels.status when requested", async () => {
@@ -140,6 +145,42 @@ describe("collectStatusScanOverview", () => {
       }),
     );
     expect(result.channelIssues).toEqual([]);
+  });
+
+  it("merges live channels.status accounts into the visible Channels table (issue #73525)", async () => {
+    const gatewayPayload = {
+      channelAccounts: {
+        telegram: [
+          { accountId: "default", enabled: true, configured: true, running: true, connected: true },
+        ],
+      },
+    };
+    const mergedRows = [
+      {
+        id: "telegram",
+        label: "Telegram",
+        enabled: true,
+        state: "ok",
+        detail: "running",
+      },
+    ];
+    mocks.callGateway.mockResolvedValueOnce(gatewayPayload);
+    mocks.mergeChannelsTableWithGatewayStatus.mockReturnValueOnce({
+      rows: mergedRows,
+      details: [],
+    });
+
+    const result = await collectStatusScanOverview({
+      commandName: "status",
+      opts: {},
+      showSecrets: false,
+    });
+
+    expect(mocks.mergeChannelsTableWithGatewayStatus).toHaveBeenCalledWith({
+      channels: { rows: [], details: [] },
+      channelsStatus: gatewayPayload,
+    });
+    expect(result.channels.rows).toEqual(mergedRows);
   });
 
   it("skips channels.status when the gateway is unreachable", async () => {
