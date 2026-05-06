@@ -791,12 +791,18 @@ async function repairOpenClawPeerLinksForNpmInstalls(params: {
       continue;
     }
 
-    await linkOpenClawPeerDependencies({
-      installedDir: installPath,
-      peerDependencies,
-      logger: params.logger,
-    });
-    repaired = !installedPackageNeedsOpenClawPeerLinkRepair(installPath) || repaired;
+    try {
+      await linkOpenClawPeerDependencies({
+        installedDir: installPath,
+        peerDependencies,
+        logger: params.logger,
+      });
+      repaired = !installedPackageNeedsOpenClawPeerLinkRepair(installPath) || repaired;
+    } catch (err) {
+      params.logger.warn?.(
+        `Could not repair openclaw peer link for "${pluginId}" at ${installPath}: ${String(err)}`,
+      );
+    }
   }
   return repaired;
 }

@@ -994,6 +994,87 @@ describe("updateNpmInstalledPlugins", () => {
     }
   });
 
+  it("continues repairing sibling openclaw peer links after one recorded npm install cannot be relinked", async () => {
+    const plugins = [
+      { pluginId: "brave", packageName: "@openclaw/brave-plugin" },
+      { pluginId: "codex", packageName: "@openclaw/codex" },
+    ];
+    const { installPaths, peerLinkPath, linkPeer } = createOpenClawPeerLinkFixtures(plugins);
+    const brokenInstallPath = createInstalledPackageDir({
+      name: "@openclaw/broken-plugin",
+      version: "2026.5.4",
+      peerDependencies: { openclaw: ">=2026.5.4" },
+    });
+    fs.writeFileSync(path.join(brokenInstallPath, "node_modules"), "not a directory");
+    linkPeer("brave");
+    mockNpmViewMetadata({
+      name: "@openclaw/codex",
+      version: "2026.5.4",
+      integrity: "sha512-same",
+      shasum: "same",
+    });
+    installPluginFromNpmSpecMock.mockImplementation(() => {
+      for (const { pluginId } of plugins) {
+        fs.rmSync(peerLinkPath(pluginId), { recursive: true, force: true });
+      }
+      linkPeer("codex");
+      return Promise.resolve(
+        createSuccessfulNpmUpdateResult({
+          pluginId: "codex",
+          targetDir: installPaths.codex,
+          version: "2026.5.4",
+          npmResolution: {
+            name: "@openclaw/codex",
+            version: "2026.5.4",
+            resolvedSpec: "@openclaw/codex@2026.5.4",
+          },
+        }),
+      );
+    });
+    const warnMessages: string[] = [];
+
+    await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            broken: {
+              source: "npm",
+              spec: "@openclaw/broken-plugin",
+              installPath: brokenInstallPath,
+              resolvedName: "@openclaw/broken-plugin",
+              resolvedVersion: "2026.5.4",
+              resolvedSpec: "@openclaw/broken-plugin@2026.5.4",
+            },
+            ...Object.fromEntries(
+              plugins.map(({ pluginId, packageName }) => [
+                pluginId,
+                {
+                  source: "npm",
+                  spec: packageName,
+                  installPath: installPaths[pluginId],
+                  resolvedName: packageName,
+                  resolvedVersion: "2026.5.4",
+                  resolvedSpec: `${packageName}@2026.5.4`,
+                  integrity: "sha512-same",
+                  shasum: "same",
+                },
+              ]),
+            ),
+          },
+        },
+      },
+      pluginIds: ["codex"],
+      logger: { warn: (message) => warnMessages.push(message) },
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+    expect(fs.existsSync(peerLinkPath("brave"))).toBe(true);
+    expect(fs.existsSync(peerLinkPath("codex"))).toBe(true);
+    expect(warnMessages).toContainEqual(
+      expect.stringContaining('Could not repair openclaw peer link for "broken"'),
+    );
+  });
+
   it("refreshes legacy npm install records before skipping unchanged artifacts", async () => {
     const installPath = createInstalledPackageDir({
       name: "@martian-engineering/lossless-claw",
