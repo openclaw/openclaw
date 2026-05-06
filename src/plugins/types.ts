@@ -42,19 +42,20 @@ import type {
   RealtimeTranscriptionSession,
   RealtimeTranscriptionSessionCreateRequest,
 } from "../realtime-transcription/provider-types.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { SecurityAuditFinding } from "../security/audit.types.js";
+import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceBridgeCreateRequest,
+  RealtimeVoiceProviderCapabilities,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderConfiguredContext,
   RealtimeVoiceProviderId,
   RealtimeVoiceProviderResolveConfigContext,
-} from "../realtime-voice/provider-types.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { SecurityAuditFinding } from "../security/audit.types.js";
-import type { JsonSchemaObject } from "../shared/json-schema.types.js";
+} from "../talk/provider-types.js";
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechDirectiveTokenParseResult,
@@ -84,6 +85,9 @@ import type {
   CliBackendNormalizeConfigContext,
   CliBackendPreparedExecution,
   CliBackendPrepareExecutionContext,
+  CliBackendResolveExecutionArgs,
+  CliBackendResolveExecutionArgsContext,
+  CliBackendThinkingLevel,
   CliBackendPlugin,
   CliBundleMcpMode,
   PluginTextReplacement,
@@ -194,6 +198,9 @@ export type {
   CliBackendNativeToolMode,
   CliBackendPreparedExecution,
   CliBackendPrepareExecutionContext,
+  CliBackendResolveExecutionArgs,
+  CliBackendResolveExecutionArgsContext,
+  CliBackendThinkingLevel,
   CliBackendPlugin,
   CliBundleMcpMode,
   PluginTextReplacement,
@@ -1833,6 +1840,7 @@ export type RealtimeVoiceProviderPlugin = {
   aliases?: string[];
   defaultModel?: string;
   autoSelectOrder?: number;
+  capabilities?: RealtimeVoiceProviderCapabilities;
   resolveConfig?: (ctx: RealtimeVoiceProviderResolveConfigContext) => RealtimeVoiceProviderConfig;
   isConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
   createBridge: (req: RealtimeVoiceBridgeCreateRequest) => RealtimeVoiceBridge;
@@ -1980,7 +1988,7 @@ export type OpenClawPluginCommandDefinition = {
   acceptsArgs?: boolean;
   /** Whether only authorized senders can use this command (default: true) */
   requireAuth?: boolean;
-  /** Gateway operator scopes required when invoked through an internal gateway client. */
+  /** Operator scopes required by gateway clients; command owners may satisfy this on chat surfaces. */
   requiredScopes?: OperatorScope[];
   /**
    * Allows a bundled plugin to claim a command name that is otherwise reserved
