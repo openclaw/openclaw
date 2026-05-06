@@ -331,6 +331,134 @@ describe("matrix live qa scenarios", () => {
     }
   });
 
+  it("waits for Matrix SAS device trust after verification completes", async () => {
+    const initiated = {
+      id: "driver-request",
+      transactionId: "tx-sas",
+    };
+    const incoming = {
+      canAccept: true,
+      id: "observer-request",
+      initiatedByMe: false,
+      pending: true,
+      transactionId: "tx-sas",
+    };
+    const ready = {
+      id: "driver-request",
+      phaseName: "ready",
+      transactionId: "tx-sas",
+    };
+    const sas = {
+      emoji: [["🐶", "Dog"]],
+    };
+    const initiatorSas = {
+      hasSas: true,
+      id: "driver-request",
+      sas,
+      transactionId: "tx-sas",
+    };
+    const recipientSas = {
+      hasSas: true,
+      id: "observer-request",
+      sas,
+      transactionId: "tx-sas",
+    };
+    const completedInitiator = {
+      completed: true,
+      id: "driver-request",
+      transactionId: "tx-sas",
+    };
+    const completedRecipient = {
+      completed: true,
+      id: "observer-request",
+      transactionId: "tx-sas",
+    };
+    const driverGetDeviceVerificationStatus = vi
+      .fn()
+      .mockResolvedValueOnce({ verified: false })
+      .mockResolvedValueOnce({ verified: true });
+    const observerGetDeviceVerificationStatus = vi.fn().mockResolvedValue({ verified: true });
+    const driverStop = vi.fn().mockResolvedValue(undefined);
+    const observerStop = vi.fn().mockResolvedValue(undefined);
+
+    createMatrixQaE2eeScenarioClient
+      .mockResolvedValueOnce({
+        bootstrapOwnDeviceVerification: vi.fn().mockResolvedValue({
+          crossSigning: { published: true },
+          success: true,
+          verification: {
+            backupVersion: "1",
+            crossSigningVerified: true,
+            recoveryKeyStored: true,
+            signedByOwner: true,
+            verified: true,
+          },
+        }),
+        confirmVerificationSas: vi.fn().mockResolvedValue(completedInitiator),
+        getDeviceVerificationStatus: driverGetDeviceVerificationStatus,
+        getRecoveryKey: vi.fn().mockResolvedValue({ encodedPrivateKey: "driver-key" }),
+        listVerifications: vi
+          .fn()
+          .mockResolvedValueOnce([ready])
+          .mockResolvedValueOnce([initiatorSas])
+          .mockResolvedValueOnce([completedInitiator]),
+        requestVerification: vi.fn().mockResolvedValue(initiated),
+        resetRoomKeyBackup: vi.fn().mockResolvedValue({ success: true }),
+        startVerification: vi.fn().mockResolvedValue(initiatorSas),
+        stop: driverStop,
+      })
+      .mockResolvedValueOnce({
+        acceptVerification: vi.fn().mockResolvedValue(ready),
+        bootstrapOwnDeviceVerification: vi.fn().mockResolvedValue({
+          crossSigning: { published: true },
+          success: true,
+          verification: {
+            backupVersion: "1",
+            crossSigningVerified: true,
+            recoveryKeyStored: true,
+            signedByOwner: true,
+            verified: true,
+          },
+        }),
+        confirmVerificationSas: vi.fn().mockResolvedValue(completedRecipient),
+        getDeviceVerificationStatus: observerGetDeviceVerificationStatus,
+        getRecoveryKey: vi.fn().mockResolvedValue({ encodedPrivateKey: "observer-key" }),
+        listVerifications: vi
+          .fn()
+          .mockResolvedValueOnce([incoming])
+          .mockResolvedValueOnce([recipientSas])
+          .mockResolvedValueOnce([completedRecipient]),
+        resetRoomKeyBackup: vi.fn().mockResolvedValue({ success: true }),
+        stop: observerStop,
+      });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-e2ee-device-sas-verification",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(
+      runMatrixQaScenario(scenario!, {
+        ...matrixQaScenarioContext(),
+        driverDeviceId: "DRIVERDEVICE",
+        driverPassword: "driver-password",
+        observerDeviceId: "OBSERVERDEVICE",
+        observerPassword: "observer-password",
+        outputDir: "/tmp/matrix-qa",
+        timeoutMs: 80,
+      }),
+    ).resolves.toMatchObject({
+      artifacts: {
+        driverTrustsObserverDevice: true,
+        observerTrustsDriverDevice: true,
+      },
+    });
+
+    expect(driverGetDeviceVerificationStatus).toHaveBeenCalledTimes(2);
+    expect(driverStop).toHaveBeenCalledTimes(1);
+    expect(observerStop).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the Matrix CLI default profile on the full catalog", () => {
     const allIds = scenarioTesting.findMatrixQaScenarios().map((scenario) => scenario.id);
 
