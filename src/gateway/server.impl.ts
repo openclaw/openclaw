@@ -1491,7 +1491,7 @@ export async function startGatewayServer(
         }
       },
       startChannel,
-      stopChannel,
+      stopChannel: (name, opts) => stopChannel(name, undefined, opts),
       reloadPlugins: reloadAttachedGatewayPlugins,
       logHooks,
       logChannels,

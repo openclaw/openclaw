@@ -97,7 +97,7 @@ type GatewayReloadHandlerParams = {
   getState: () => GatewayHotReloadState;
   setState: (state: GatewayHotReloadState) => void;
   startChannel: (name: ChannelKind) => Promise<void>;
-  stopChannel: (name: ChannelKind) => Promise<void>;
+  stopChannel: (name: ChannelKind, opts?: { failOnTimeout?: boolean }) => Promise<void>;
   reloadPlugins: (params: {
     nextConfig: OpenClawConfig;
     changedPaths: readonly string[];
@@ -294,7 +294,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             continue;
           }
           params.logChannels.info(`stopping ${channel} channel before plugin reload`);
-          await params.stopChannel(channel);
+          await params.stopChannel(channel, { failOnTimeout: true });
           channelsStoppedBeforePluginReload.add(channel);
         }
       };
@@ -368,7 +368,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           }
           params.logChannels.info(`restarting ${name} channel`);
           if (!channelsStoppedBeforePluginReload.has(name)) {
-            await params.stopChannel(name);
+            await params.stopChannel(name, { failOnTimeout: true });
           }
           await params.startChannel(name);
         };

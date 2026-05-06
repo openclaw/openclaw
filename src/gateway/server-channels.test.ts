@@ -324,7 +324,36 @@ describe("server-channels auto restart", () => {
     const snapshot = manager.getRuntimeSnapshot();
     const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
     expect(startAccount).toHaveBeenCalledTimes(1);
-    expect(account?.running).toBe(true);
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(false);
+    expect(account?.lastError).toContain("channel stop timed out");
+  });
+
+  it("can fail a stop call when the account task does not drain", async () => {
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+        await new Promise<void>(() => {
+          abortSignal.addEventListener("abort", () => {}, { once: true });
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannels();
+    const stopExpectation = expect(
+      manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { failOnTimeout: true }),
+    ).rejects.toThrow("[discord:default] channel stop timed out after 5000ms");
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await stopExpectation;
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    expect(account?.running).toBe(false);
     expect(account?.restartPending).toBe(false);
     expect(account?.lastError).toContain("channel stop timed out");
   });
