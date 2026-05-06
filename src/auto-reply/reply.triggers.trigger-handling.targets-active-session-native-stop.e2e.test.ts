@@ -14,6 +14,7 @@ import {
   expectBareNewOrResetAcknowledged,
   withTempHome,
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
+import { savePersistedAuthProfileState } from "../agents/auth-profiles/state.js";
 import { loadSessionStore, resolveSessionKey } from "../config/sessions.js";
 import { registerGroupIntroPromptCases } from "./reply.triggers.group-intro-prompts.cases.js";
 import { registerTriggerHandlingUsageSummaryCases } from "./reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.cases.js";
@@ -775,18 +776,13 @@ describe("trigger handling", () => {
           2,
         ),
       );
-      await fs.writeFile(
-        join(authDir, "auth-state.json"),
-        JSON.stringify(
-          {
-            version: 1,
-            order: {
-              "openai-codex": [TEST_PRIMARY_PROFILE_ID],
-            },
+      savePersistedAuthProfileState(
+        {
+          order: {
+            "openai-codex": [TEST_PRIMARY_PROFILE_ID],
           },
-          null,
-          2,
-        ),
+        },
+        authDir,
       );
 
       const slashSessionKey = "telegram:slash:111";

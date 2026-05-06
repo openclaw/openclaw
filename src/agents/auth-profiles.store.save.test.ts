@@ -153,7 +153,7 @@ describe("saveAuthProfileStore", () => {
     }
   });
 
-  it("writes runtime scheduling state to SQLite and auth-state.json compatibility", async () => {
+  it("writes runtime scheduling state to SQLite only", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-state-"));
     try {
       const store: AuthProfileStore = {
@@ -197,14 +197,9 @@ describe("saveAuthProfileStore", () => {
       expect(authProfiles.lastGood).toBeUndefined();
       expect(authProfiles.usageStats).toBeUndefined();
 
-      const authState = JSON.parse(await fs.readFile(resolveAuthStatePath(agentDir), "utf8")) as {
-        order?: Record<string, string[]>;
-        lastGood?: Record<string, string>;
-        usageStats?: Record<string, { lastUsed?: number }>;
-      };
-      expect(authState.order?.anthropic).toEqual(["anthropic:default"]);
-      expect(authState.lastGood?.anthropic).toBe("anthropic:default");
-      expect(authState.usageStats?.["anthropic:default"]?.lastUsed).toBe(123);
+      await expect(fs.access(resolveAuthStatePath(agentDir))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
       const sqliteState = readOpenClawStateKvJson(
         "auth-profile-state",
         resolveAuthStatePath(agentDir),

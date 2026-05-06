@@ -21,7 +21,6 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore: mocks.ensureAuthProfileStore,
   externalCliDiscoveryForProviderAuth: mocks.externalCliDiscoveryForProviderAuth,
   resolveAuthProfileDisplayLabel: mocks.resolveAuthProfileDisplayLabel,
-  resolveAuthStatePathForDisplay: (agentDir: string) => `${agentDir}/auth-state.json`,
 }));
 
 vi.mock("./load-config.js", () => ({
@@ -98,6 +97,7 @@ describe("modelsAuthListCommand", () => {
     expect(JSON.stringify(runtime.jsonPayloads[0])).not.toContain("secret");
     expect(runtime.jsonPayloads[0]).toMatchObject({
       agentId: "coder",
+      authStateStore: "sqlite",
       provider: "openai-codex",
       profiles: [
         {
@@ -118,10 +118,6 @@ describe("modelsAuthListCommand", () => {
 
     await modelsAuthListCommand({}, runtime);
 
-    expect(runtime.logs).toEqual([
-      "Agent: main",
-      "Auth state file: /tmp/openclaw/agents/main/auth-state.json",
-      "Profiles: (none)",
-    ]);
+    expect(runtime.logs).toEqual(["Agent: main", "Auth runtime state: SQLite", "Profiles: (none)"]);
   });
 });

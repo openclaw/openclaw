@@ -70,8 +70,9 @@ OpenClaw separates the selected provider/model from why it was selected. That so
 OpenClaw uses **auth profiles** for both API keys and OAuth tokens.
 
 - Secrets live in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (legacy: `~/.openclaw/agent/auth-profiles.json`).
-- Runtime auth-routing state is SQLite-primary and compatibility-exported to
-  `~/.openclaw/agents/<agentId>/agent/auth-state.json`.
+- Runtime auth-routing state is SQLite-primary. Legacy per-agent
+  `auth-state.json` files are imported into SQLite on first read and removed
+  after import.
 - Config `auth.profiles` / `auth.order` are **metadata + routing only** (no secrets).
 - Legacy import-only OAuth file: `~/.openclaw/credentials/oauth.json` (imported into `auth-profiles.json` on first use).
 
@@ -169,8 +170,7 @@ Cooldowns use exponential backoff:
 - 25 minutes
 - 1 hour (cap)
 
-State is stored in SQLite and compatibility-exported to `auth-state.json` under
-`usageStats`:
+State is stored in SQLite under `usageStats`:
 
 ```json
 {
@@ -194,7 +194,7 @@ Not every billing-shaped response is `402`, and not every HTTP `402` lands here.
 Meanwhile temporary `402` usage-window and organization/workspace spend-limit errors are classified as `rate_limit` when the message looks retryable (for example `weekly usage limit exhausted`, `daily limit reached, resets tomorrow`, or `organization spending limit exceeded`). Those stay on the short cooldown/failover path instead of the long billing-disable path.
 </Note>
 
-State is stored in SQLite and compatibility-exported to `auth-state.json`:
+State is stored in SQLite:
 
 ```json
 {

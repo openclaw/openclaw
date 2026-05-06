@@ -7,7 +7,7 @@
  * Cache layers (checked in order):
  * 1. In-memory Map (instant, cleared on process restart)
  * 2. SQLite KV cache (<stateDir>/state/openclaw.sqlite)
- * 3. Compatibility JSON file (<stateDir>/cache/openrouter-models.json)
+ * 3. Legacy JSON import (<stateDir>/cache/openrouter-models.json)
  * 4. OpenRouter API fetch (populates all layers)
  *
  * Model capabilities are assumed stable — the cache has no TTL expiry.
@@ -19,12 +19,11 @@
  * capabilities instead of the text-only fallback.
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveProxyFetchFromEnv } from "../../infra/net/proxy-fetch.js";
-import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   readOpenClawStateKvJson,
@@ -110,22 +109,8 @@ function writeSqliteCache(map: Map<string, OpenRouterModelCapabilities>): void {
   }
 }
 
-function writeDiskCache(map: Map<string, OpenRouterModelCapabilities>): void {
-  try {
-    const cachePath = resolveDiskCachePath();
-    privateFileStoreSync(dirname(cachePath)).writeJson(
-      basename(cachePath),
-      mapToDiskCachePayload(map),
-    );
-  } catch (err: unknown) {
-    const message = formatErrorMessage(err);
-    log.debug(`Failed to write OpenRouter disk cache: ${message}`);
-  }
-}
-
 function writePersistentCache(map: Map<string, OpenRouterModelCapabilities>): void {
   writeSqliteCache(map);
-  writeDiskCache(map);
 }
 
 function isValidCapabilities(value: unknown): value is OpenRouterModelCapabilities {
@@ -187,6 +172,11 @@ function readPersistentCache(): Map<string, OpenRouterModelCapabilities> | undef
   const diskCache = readDiskCache();
   if (diskCache) {
     writeSqliteCache(diskCache);
+    try {
+      unlinkSync(resolveDiskCachePath());
+    } catch {
+      // Best-effort legacy cache cleanup.
+    }
   }
   return diskCache;
 }
