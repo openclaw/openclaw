@@ -42,6 +42,7 @@ Docs: https://docs.openclaw.ai
 - Docs: clarify that IRC uses raw TCP/TLS sockets outside operator-managed forward proxy routing, so direct IRC egress should be explicitly approved before enabling IRC. Thanks @jesse-merhi.
 - Gateway/performance: defer non-readiness sidecars until after the ready signal, avoid hot-path channel plugin barrel imports, and fast-path trusted bundled plugin metadata during Gateway startup.
 - Gateway/performance: reuse the compatible plugin metadata snapshot across dashboard and channel agent turns so auto-enabled runtime config does not repeatedly rescan plugin metadata before provider calls. Thanks @shakkernerd.
+- Auth/providers: pass `config` and `workspaceDir` lookup context through to provider-id resolution so workspace-scoped auth aliases resolve correctly when no explicit alias map is supplied. Thanks @shakkernerd.
 - Gateway/performance: avoid importing `jiti` on native-loadable plugin startup paths, so compiled bundled plugin surfaces do not pay source-transform loader cost unless fallback loading is actually needed.
 - Gateway/diagnostics: add startup phase spans, active work labels, stale terminal bridge markers, and default sync-I/O tracing in `pnpm gateway:watch` so slow Gateway turns are easier to attribute from logs and stability diagnostics.
 - Plugins/loader: preserve real compiled plugin module evaluation errors on the native fast path instead of treating every thrown `.js` module as a source-transform fallback miss. Thanks @vincentkoc.
