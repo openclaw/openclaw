@@ -125,8 +125,12 @@ async function withAgentCodexHomeEnvironment(
     ...startOptions,
     env: {
       ...startOptions.env,
-      // Expose the operator's real home directory so it is still reachable
-      // after HOME is remapped to the harness sandbox.
+      // REAL_HOME preserves the operator's real home directory path before
+      // HOME is remapped to a per-agent sandbox. This is an opt-in escape
+      // hatch for operator-authored scripts and runbooks that need to
+      // reference user-scoped assets (e.g. ~/.env, ~/.ssh, ~/.aws).
+      // First-party Codex workflows do not depend on REAL_HOME. See docs
+      // at docs/plugins/codex-harness.md#real-home for the full contract.
       ...(realHome ? { [REAL_HOME_ENV_VAR]: realHome } : {}),
       [CODEX_HOME_ENV_VAR]: codexHome,
       [HOME_ENV_VAR]: nativeHome,
