@@ -73,12 +73,24 @@ export async function createChildAdapter(params: {
   });
 
   const child = spawned.child as ChildProcessWithoutNullStreams;
-  if (child.stdin) {
-    if (params.input !== undefined) {
-      child.stdin.write(params.input);
-      child.stdin.end();
-    } else if (stdinMode === "pipe-closed") {
-      child.stdin.end();
+
+  // Guard against async stdin errors (e.g. EPIPE on Linux shell-wrapped spawns
+  // where the real binary is missing). The stream can be writable at check time
+  // and only fail after the first write/end attempt.
+  if (child.stdin && child.stdin.writable) {
+    const stdin = child.stdin;
+    stdin.once("error", () => {
+      // swallow async pipe errors so the gateway does not crash
+    });
+    try {
+      if (params.input !== undefined) {
+        stdin.write(params.input);
+        stdin.end();
+      } else if (stdinMode === "pipe-closed") {
+        stdin.end();
+      }
+    } catch {
+      // swallow synchronous write/end errors
     }
   }
 

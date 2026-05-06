@@ -253,6 +253,79 @@ describe("createChildAdapter", () => {
     expect(settled).toHaveBeenCalledWith({ code: 0, signal: null });
   });
 
+  it("does not throw when stdin exists but is not writable", async () => {
+    const stub = createStubChild(9999);
+    Object.defineProperty(stub.child.stdin!, "writable", { value: false, configurable: true });
+    spawnWithFallbackMock.mockResolvedValue({
+      child: stub.child,
+      usedFallback: false,
+    });
+    const adapter = await createChildAdapter({
+      argv: ["google-gemini-cli"],
+      input: "test input",
+    });
+    expect(adapter).toBeDefined();
+    expect(adapter.stdin).toBeDefined();
+    await new Promise<void>((resolve) => {
+      adapter.stdin!.write("x", (err) => {
+        expect(err).toBeNull();
+        resolve();
+      });
+    });
+  });
+
+  it("routes synchronous write errors to the callback", async () => {
+    const stub = createStubChild(11111);
+    const writeError = new Error("stream error");
+    vi.spyOn(stub.child.stdin!, "write").mockImplementation(() => {
+      throw writeError;
+    });
+    spawnWithFallbackMock.mockResolvedValue({
+      child: stub.child,
+      usedFallback: false,
+    });
+    const adapter = await createChildAdapter({
+      argv: ["google-gemini-cli"],
+      input: "test input",
+    });
+    expect(adapter.stdin).toBeDefined();
+    await new Promise<void>((resolve) => {
+      adapter.stdin!.write("x", (err) => {
+        expect(err).toBe(writeError);
+        resolve();
+      });
+    });
+  });
+
+  it("does not crash when stdin emits an async EPIPE after spawn (shell-wrapped missing binary)", async () => {
+    const stub = createStubChild(11111);
+    // Simulate the real Linux shell-wrapper shape: stdin is initially writable
+    // but the shell emits EPIPE asynchronously after exec fails.
+    Object.defineProperty(stub.child.stdin!, "writable", { value: true, configurable: true });
+    spawnWithFallbackMock.mockResolvedValue({
+      child: stub.child,
+      usedFallback: false,
+    });
+    // Should not throw — the adapter swallows the async error.
+    await expect(
+      createChildAdapter({
+        argv: [
+          "/bin/sh",
+          "-c",
+          'echo 1000 > /proc/self/oom_score_adj 2>/dev/null; exec "$0" "$@"',
+          "nonexistent-binary",
+        ],
+        input: "",
+      }),
+    ).resolves.toBeDefined();
+    // Emit the async EPIPE after adapter creation — must not propagate.
+    const err = new Error("EPIPE: write EPIPE");
+    (err as NodeJS.ErrnoException).code = "EPIPE";
+    stub.child.stdin!.emit("error", err);
+    // Verify the adapter is still usable after the async error.
+    expect(stub.child.stdin!.destroyed).toBe(false);
+  });
+
   it("disables detached mode in service-managed runtime", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
 
