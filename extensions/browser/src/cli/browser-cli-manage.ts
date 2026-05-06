@@ -112,6 +112,19 @@ function runBrowserCommand(action: () => Promise<void>) {
   });
 }
 
+function resolveStartHeadlessQuery(opts: { headless?: boolean; headed?: boolean }) {
+  if (opts.headless && opts.headed) {
+    throw new Error("Use either --headless or --headed, not both.");
+  }
+  if (opts.headless) {
+    return { headless: true };
+  }
+  if (opts.headed) {
+    return { headless: false };
+  }
+  return undefined;
+}
+
 function logBrowserTabs(tabs: BrowserTab[], json?: boolean) {
   if (json) {
     defaultRuntime.writeJson({ tabs });
@@ -352,14 +365,15 @@ export function registerBrowserManageCommands(
     .command("start")
     .description("Start the browser (no-op if already running)")
     .option("--headless", "Launch a local managed browser headless for this start")
-    .action(async (opts: { headless?: boolean }, cmd) => {
+    .option("--headed", "Launch a local managed browser headed for this start")
+    .action(async (opts: { headless?: boolean; headed?: boolean }, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
         await runBrowserToggle(parent, {
           profile,
           path: "/start",
-          query: opts.headless ? { headless: true } : undefined,
+          query: resolveStartHeadlessQuery(opts),
         });
       });
     });
