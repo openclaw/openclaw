@@ -79,6 +79,7 @@ export type IMessageAccountConfig = {
       requireMention?: boolean;
       tools?: GroupToolPolicyConfig;
       toolsBySender?: GroupToolPolicyBySenderConfig;
+      systemPrompt?: string;
     }
   >;
   /** Heartbeat visibility settings for this channel. */
