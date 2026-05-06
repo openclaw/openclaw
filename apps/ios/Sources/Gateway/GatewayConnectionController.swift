@@ -689,7 +689,7 @@ final class GatewayConnectionController {
     }
 
     private func shouldRequireTLS(host: String) -> Bool {
-        !Self.isLoopbackHost(host)
+        !LoopbackHost.isLocalNetworkHost(host)
     }
 
     private func shouldForceTLS(host: String) -> Bool {

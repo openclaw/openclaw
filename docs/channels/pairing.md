@@ -119,9 +119,10 @@ If you use the `device-pair` plugin, you can do first-time device pairing entire
 The setup code is a base64-encoded JSON payload that contains:
 
 - `url`: the Gateway WebSocket URL (`ws://...` or `wss://...`)
-- `bootstrapToken`: a short-lived single-device bootstrap token used for the initial pairing handshake
+- `token` or `password`: the shared Gateway credential resolved from `gateway.auth`
+- legacy payloads may still include `bootstrapToken`
 
-That bootstrap token carries the built-in pairing bootstrap profile:
+When a legacy `bootstrapToken` is present, it carries the built-in pairing bootstrap profile:
 
 - primary handed-off `node` token stays `scopes: []`
 - any handed-off `operator` token stays bounded to the bootstrap allowlist:
@@ -134,12 +135,11 @@ That bootstrap token carries the built-in pairing bootstrap profile:
 
 Treat the setup code like a password while it is valid.
 
-For Tailscale, public, or other non-loopback mobile pairing, use Tailscale
-Serve/Funnel or another `wss://` Gateway URL. Direct non-loopback `ws://` setup
-URLs are rejected before QR/setup-code issuance. Plaintext `ws://` setup codes
-are limited to loopback URLs; private-network `ws://` clients still require the explicit
-`OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` break-glass described in the remote
-Gateway guide.
+For Tailscale, public, or other non-local-network mobile pairing, use Tailscale
+Serve/Funnel or another `wss://` Gateway URL. Direct public `ws://` setup URLs
+are rejected before QR/setup-code issuance. Plaintext `ws://` setup codes are
+limited to loopback, the Android emulator (`10.0.2.2`), or private LAN IP
+addresses.
 
 ### Approve a node device
 

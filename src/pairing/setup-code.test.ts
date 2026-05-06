@@ -1,16 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SecretInput } from "../config/types.secrets.js";
 
-vi.mock("../infra/device-bootstrap.js", () => ({
-  issueDeviceBootstrapToken: vi.fn(async () => ({
-    token: "bootstrap-123",
-    expiresAtMs: 123,
-  })),
-}));
-
 const { encodePairingSetupCode, resolvePairingSetupFromConfig } = await import("./setup-code.js");
-const { issueDeviceBootstrapToken: issueDeviceBootstrapTokenMock } =
-  await import("../infra/device-bootstrap.js");
 
 describe("pairing setup code", () => {
   type ResolvedSetup = Awaited<ReturnType<typeof resolvePairingSetupFromConfig>>;
@@ -78,6 +69,7 @@ describe("pairing setup code", () => {
     resolved: ResolvedSetup,
     params: {
       authLabel: string;
+      authValue?: string;
       url?: string;
       urlSource?: string;
     },
@@ -87,20 +79,8 @@ describe("pairing setup code", () => {
       throw new Error("expected setup resolution to succeed");
     }
     expect(resolved.authLabel).toBe(params.authLabel);
-    expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
-    expect(issueDeviceBootstrapTokenMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        profile: {
-          roles: ["node", "operator"],
-          scopes: [
-            "operator.approvals",
-            "operator.read",
-            "operator.talk.secrets",
-            "operator.write",
-          ],
-        },
-      }),
-    );
+    expect(resolved.payload.bootstrapToken).toBeUndefined();
+    expectAuthField(resolved.payload, params.authLabel, params.authValue);
     if (params.url) {
       expect(resolved.payload.url).toBe(params.url);
     }
@@ -117,11 +97,33 @@ describe("pairing setup code", () => {
     expect(resolved.error).toContain(snippet);
   }
 
+  function expectAuthField(
+    payload: { token?: string; password?: string },
+    label: string,
+    value?: string,
+  ) {
+    if (label === "token") {
+      expect(typeof payload.token).toBe("string");
+      expect(payload.password).toBeUndefined();
+      if (value) {
+        expect(payload.token).toBe(value);
+      }
+      return;
+    }
+
+    expect(typeof payload.password).toBe("string");
+    expect(payload.token).toBeUndefined();
+    if (value) {
+      expect(payload.password).toBe(value);
+    }
+  }
+
   async function expectResolvedSetupSuccessCase(params: {
     config: ResolveSetupConfig;
     options?: ResolveSetupOptions;
     expected: {
       authLabel: string;
+      authValue?: string;
       url: string;
       urlSource: string;
     };
@@ -184,11 +186,6 @@ describe("pairing setup code", () => {
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
     vi.stubEnv("OPENCLAW_GATEWAY_PORT", "");
   });
-
-  beforeEach(() => {
-    vi.mocked(issueDeviceBootstrapTokenMock).mockClear();
-  });
-
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -198,10 +195,9 @@ describe("pairing setup code", () => {
       name: "encodes payload as base64url JSON",
       payload: {
         url: "wss://gateway.example.com:443",
-        bootstrapToken: "abc",
+        token: "abc",
       },
-      expected:
-        "eyJ1cmwiOiJ3c3M6Ly9nYXRld2F5LmV4YW1wbGUuY29tOjQ0MyIsImJvb3RzdHJhcFRva2VuIjoiYWJjIn0",
+      expected: "eyJ1cmwiOiJ3c3M6Ly9nYXRld2F5LmV4YW1wbGUuY29tOjQ0MyIsInRva2VuIjoiYWJjIn0",
     },
   ] as const)("$name", ({ payload, expected }) => {
     expect(encodePairingSetupCode(payload)).toBe(expected);
@@ -237,7 +233,6 @@ describe("pairing setup code", () => {
       },
       expectedError: "Configured gateway.remote.url is invalid.",
     });
-    expect(issueDeviceBootstrapTokenMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -258,7 +253,6 @@ describe("pairing setup code", () => {
       },
       expectedError: "Configured publicUrl is invalid.",
     });
-    expect(issueDeviceBootstrapTokenMock).not.toHaveBeenCalled();
   });
 
   async function resolveCustomGatewaySetup(params: {
@@ -448,6 +442,7 @@ describe("pairing setup code", () => {
       } satisfies ResolveSetupOptions,
       expected: {
         authLabel: "token",
+        authValue: "new-token",
         url: "ws://127.0.0.1:18789",
         urlSource: "gateway.bind=custom",
       },

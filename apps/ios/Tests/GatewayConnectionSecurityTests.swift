@@ -103,13 +103,16 @@ import Testing
         #expect(controller._test_didAutoConnect() == false)
     }
 
-    @Test @MainActor func manualConnectionsForceTLSForNonLoopbackHosts() async {
+    @Test @MainActor func manualConnectionsAllowCleartextForLocalNetworkHosts() async {
         let controller = makeController()
 
         #expect(controller._test_resolveManualUseTLS(host: "gateway.example.com", useTLS: false) == true)
-        #expect(controller._test_resolveManualUseTLS(host: "openclaw.local", useTLS: false) == true)
         #expect(controller._test_resolveManualUseTLS(host: "127.attacker.example", useTLS: false) == true)
 
+        #expect(controller._test_resolveManualUseTLS(host: "openclaw.local", useTLS: false) == false)
+        #expect(controller._test_resolveManualUseTLS(host: "192.168.1.20", useTLS: false) == false)
+        #expect(controller._test_resolveManualUseTLS(host: "100.64.0.10", useTLS: false) == false)
+        #expect(controller._test_resolveManualUseTLS(host: "device.sample.ts.net", useTLS: false) == false)
         #expect(controller._test_resolveManualUseTLS(host: "localhost", useTLS: false) == false)
         #expect(controller._test_resolveManualUseTLS(host: "127.0.0.1", useTLS: false) == false)
         #expect(controller._test_resolveManualUseTLS(host: "::1", useTLS: false) == false)

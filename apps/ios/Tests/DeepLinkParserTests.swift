@@ -162,6 +162,19 @@ private func agentAction(
             password: nil))
     }
 
+    @Test func parseGatewaySetupCodeAllowsLocalNetworkWs() {
+        let payload = #"{"url":"ws://192.168.1.20:18789","token":"tok"}"#
+        let link = GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload))
+
+        #expect(link == .init(
+            host: "192.168.1.20",
+            port: 18789,
+            tls: false,
+            bootstrapToken: nil,
+            token: "tok",
+            password: nil))
+    }
+
     @Test func parseGatewaySetupInputParsesFullCopiedSetupMessage() {
         let payload = #"{"url":"wss://gateway.example.com","bootstrapToken":"tok"}"#
         let link = GatewayConnectDeepLink.fromSetupInput("""

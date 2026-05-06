@@ -75,6 +75,8 @@ function createGatewayTokenRefFixture() {
 function decodeSetupCode(setupCode: string): {
   url?: string;
   bootstrapToken?: string;
+  token?: string;
+  password?: string;
 } {
   const padded = setupCode.replace(/-/g, "+").replace(/_/g, "/");
   const padLength = (4 - (padded.length % 4)) % 4;
@@ -83,6 +85,8 @@ function decodeSetupCode(setupCode: string): {
   return JSON.parse(json) as {
     url?: string;
     bootstrapToken?: string;
+    token?: string;
+    password?: string;
   };
 }
 
@@ -90,7 +94,7 @@ function findSetupCodeLogLine(lines: string[]): string | undefined {
   for (const line of lines) {
     try {
       const payload = decodeSetupCode(line);
-      if (payload.url || payload.bootstrapToken) {
+      if (payload.url || payload.bootstrapToken || payload.token || payload.password) {
         return line;
       }
     } catch {
@@ -143,7 +147,8 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     expect(setupCode).toBeTruthy();
     const payload = decodeSetupCode(setupCode ?? "");
     expect(payload.url).toBe("ws://127.0.0.1:18789");
-    expect(payload.bootstrapToken).toBeTruthy();
+    expect(payload.token).toBe("shared-token-123");
+    expect(payload.bootstrapToken).toBeUndefined();
     expect(runtimeErrors).toEqual([]);
 
     runtimeLogs.length = 0;
