@@ -17,7 +17,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildGatewayReloadPlan,
   diffConfigPaths,
@@ -577,6 +577,33 @@ function makeZeroDebounceHookWrite(persistedHash: string): ConfigWriteNotificati
   };
 }
 
+function makeConfigWrite(
+  sourceConfig: OpenClawConfig,
+  persistedHash: string,
+  runtimeConfig: OpenClawConfig = sourceConfig,
+): ConfigWriteNotification {
+  return {
+    configPath: "/tmp/openclaw.json",
+    sourceConfig,
+    runtimeConfig,
+    persistedHash,
+    revision: 1,
+    fingerprint: `runtime-${persistedHash}`,
+    sourceFingerprint: `source-${persistedHash}`,
+    writtenAtMs: Date.now(),
+  };
+}
+
+function makeTestChannelPlugin(id: string, reload?: ChannelPlugin["reload"]): ChannelPlugin {
+  return {
+    ...createChannelTestPluginBase({
+      id: id as ChannelPlugin["id"],
+      config: { listAccountIds: () => [] },
+    }),
+    ...(reload ? { reload } : {}),
+  };
+}
+
 function createReloaderHarness(
   readSnapshot: () => Promise<ConfigFileSnapshot>,
   options: {
@@ -633,12 +660,238 @@ function createReloaderHarness(
 
 describe("startGatewayConfigReloader", () => {
   beforeEach(() => {
+    resetPluginRuntimeStateForTest();
     vi.useFakeTimers();
   });
 
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    resetPluginRuntimeStateForTest();
+  });
+
+  it("queues restart when an external edit enables an unloaded channel plugin", async () => {
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0, mode: "hot" } },
+      channels: { whatsapp: { enabled: false } },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0, mode: "hot" } },
+      channels: { whatsapp: { enabled: true } },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>();
+    const { onHotReload, onRestart, log, reloader, emitWrite } = createReloaderHarness(
+      readSnapshot,
+      {
+        initialCompareConfig: previousConfig,
+      },
+    );
+
+    emitWrite(makeConfigWrite(nextConfig, "enable-unloaded-whatsapp"));
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+
+    expect(readSnapshot).not.toHaveBeenCalled();
+    expect(onHotReload).not.toHaveBeenCalled();
+    expect(onRestart).toHaveBeenCalledTimes(1);
+    expect(onRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        restartGateway: true,
+        restartReasons: expect.arrayContaining([
+          "channels.whatsapp activation requires restart (whatsapp plugin not loaded)",
+        ]),
+      }),
+      nextConfig,
+    );
+    expect(log.warn).toHaveBeenCalledWith(
+      "config change enables unloaded channel plugin(s): whatsapp; scheduling gateway restart",
+    );
+
+    await reloader.stop();
+  });
+
+  it("does not restart unloaded channel activation when config reload is disabled", async () => {
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0, mode: "off" } },
+      channels: { whatsapp: { enabled: false } },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0, mode: "off" } },
+      channels: { whatsapp: { enabled: true } },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>();
+    const { onHotReload, onRestart, log, reloader, emitWrite } = createReloaderHarness(
+      readSnapshot,
+      {
+        initialCompareConfig: previousConfig,
+      },
+    );
+
+    emitWrite(makeConfigWrite(nextConfig, "enable-unloaded-whatsapp-reload-off"));
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+
+    expect(onHotReload).not.toHaveBeenCalled();
+    expect(onRestart).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith("config reload disabled (gateway.reload.mode=off)");
+    expect(log.warn).not.toHaveBeenCalledWith(expect.stringContaining("unloaded channel plugin"));
+
+    await reloader.stop();
+  });
+
+  it("queues restart when a missing channel block is enabled for an unloaded plugin", async () => {
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0, mode: "hot" } },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0, mode: "hot" } },
+      channels: { whatsapp: { enabled: true } },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>();
+    const { onRestart, reloader, emitWrite } = createReloaderHarness(readSnapshot, {
+      initialCompareConfig: previousConfig,
+    });
+
+    emitWrite(makeConfigWrite(nextConfig, "enable-missing-whatsapp"));
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+
+    expect(onRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        restartReasons: expect.arrayContaining([
+          "channels.whatsapp activation requires restart (whatsapp plugin not loaded)",
+        ]),
+      }),
+      nextConfig,
+    );
+
+    await reloader.stop();
+  });
+
+  it("does not force restart when the enabled channel plugin is already loaded", async () => {
+    const whatsappPlugin = makeTestChannelPlugin("whatsapp", {
+      configPrefixes: ["web"],
+      noopPrefixes: ["channels.whatsapp"],
+    });
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" }]),
+    );
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0, mode: "hot" } },
+      channels: { whatsapp: { enabled: false } },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0, mode: "hot" } },
+      channels: { whatsapp: { enabled: true } },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>();
+    const { onHotReload, onRestart, log, reloader, emitWrite } = createReloaderHarness(
+      readSnapshot,
+      {
+        initialCompareConfig: previousConfig,
+      },
+    );
+
+    emitWrite(makeConfigWrite(nextConfig, "enable-loaded-whatsapp"));
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(onRestart).not.toHaveBeenCalled();
+    expect(onHotReload).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalledWith(expect.stringContaining("unloaded channel plugin"));
+
+    await reloader.stop();
+  });
+
+  it("does not use the unloaded activation guard for non-activation channel edits", async () => {
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0, mode: "hot" } },
+      channels: { whatsapp: { enabled: true, allowFrom: ["+15550100"] } },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0, mode: "hot" } },
+      channels: { whatsapp: { enabled: true, allowFrom: ["+15550101"] } },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>();
+    const { onRestart, log, reloader, emitWrite } = createReloaderHarness(readSnapshot, {
+      initialCompareConfig: previousConfig,
+    });
+
+    emitWrite(makeConfigWrite(nextConfig, "edit-enabled-whatsapp"));
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(onRestart).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      "config reload requires gateway restart; hot mode ignoring (channels.whatsapp.allowFrom)",
+    );
+    expect(log.warn).not.toHaveBeenCalledWith(expect.stringContaining("unloaded channel plugin"));
+
+    await reloader.stop();
+  });
+
+  it("does not use the unloaded activation guard for disable transitions", async () => {
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0, mode: "hot" } },
+      channels: { whatsapp: { enabled: true } },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0, mode: "hot" } },
+      channels: { whatsapp: { enabled: false } },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>();
+    const { onRestart, log, reloader, emitWrite } = createReloaderHarness(readSnapshot, {
+      initialCompareConfig: previousConfig,
+    });
+
+    emitWrite(makeConfigWrite(nextConfig, "disable-whatsapp"));
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(onRestart).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      "config reload requires gateway restart; hot mode ignoring (channels.whatsapp.enabled)",
+    );
+    expect(log.warn).not.toHaveBeenCalledWith(expect.stringContaining("unloaded channel plugin"));
+
+    await reloader.stop();
+  });
+
+  it("reports multiple unloaded channel activations deterministically", async () => {
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0, mode: "hot" } },
+      channels: {
+        whatsapp: { enabled: false },
+        slack: { enabled: false },
+      },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0, mode: "hot" } },
+      channels: {
+        whatsapp: { enabled: true },
+        slack: { enabled: true },
+      },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>();
+    const { onRestart, log, reloader, emitWrite } = createReloaderHarness(readSnapshot, {
+      initialCompareConfig: previousConfig,
+    });
+
+    emitWrite(makeConfigWrite(nextConfig, "enable-multiple-unloaded"));
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+
+    expect(onRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        restartReasons: expect.arrayContaining([
+          "channels.slack activation requires restart (slack plugin not loaded)",
+          "channels.whatsapp activation requires restart (whatsapp plugin not loaded)",
+        ]),
+      }),
+      nextConfig,
+    );
+    expect(log.warn).toHaveBeenCalledWith(
+      "config change enables unloaded channel plugin(s): slack, whatsapp; scheduling gateway restart",
+    );
+
+    await reloader.stop();
   });
 
   it("retries missing snapshots and reloads once config file reappears", async () => {
@@ -1008,6 +1261,40 @@ describe("startGatewayConfigReloader", () => {
     );
 
     await harness.reloader.stop();
+  });
+
+  it("preserves in-process restart intent when enabling an unloaded channel plugin", async () => {
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0, mode: "hot" } },
+      channels: { whatsapp: { enabled: false } },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0, mode: "hot" } },
+      channels: { whatsapp: { enabled: true } },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>();
+    const { onRestart, reloader, emitWrite } = createReloaderHarness(readSnapshot, {
+      initialCompareConfig: previousConfig,
+    });
+
+    emitWrite({
+      ...makeConfigWrite(nextConfig, "enable-unloaded-with-writer-restart"),
+      afterWrite: { mode: "restart", reason: "plugin runtime contract changed" },
+    });
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+
+    expect(onRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        restartReasons: expect.arrayContaining([
+          "channels.whatsapp activation requires restart (whatsapp plugin not loaded)",
+          "plugin runtime contract changed",
+        ]),
+      }),
+      nextConfig,
+    );
+
+    await reloader.stop();
   });
 
   it("plans in-process reloads from source config and ignores runtime materialized paths", async () => {

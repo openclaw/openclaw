@@ -1,5 +1,6 @@
 import chokidar from "chokidar";
 import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh-state.js";
+import { getLoadedChannelPlugin, type ChannelId } from "../channels/plugins/index.js";
 import type { ConfigWriteNotification } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { resolveConfigWriteFollowUp } from "../config/runtime-snapshot.js";
@@ -9,6 +10,7 @@ import {
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
 } from "../plugins/installed-plugin-index-records.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { diffConfigPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
@@ -38,6 +40,10 @@ const MISSING_CONFIG_MAX_RETRIES = 2;
  */
 const SKILLS_INVALIDATION_PREFIXES = ["skills"] as const;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
 function matchesSkillsInvalidationPrefix(path: string): boolean {
   return SKILLS_INVALIDATION_PREFIXES.some(
     (prefix) => path === prefix || path.startsWith(`${prefix}.`),
@@ -65,6 +71,48 @@ function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
     !plan.disposeMcpRuntimes &&
     plan.restartChannels.size === 0
   );
+}
+
+function getChannelEnabledValue(config: OpenClawConfig, channelId: string): boolean | undefined {
+  const channels = isRecord(config.channels) ? config.channels : {};
+  const entry = Object.entries(channels).find(
+    ([key]) => normalizeOptionalLowercaseString(key) === channelId,
+  )?.[1];
+  if (!isRecord(entry)) {
+    return undefined;
+  }
+  return typeof entry.enabled === "boolean" ? entry.enabled : undefined;
+}
+
+function collectEnabledUnloadedChannelPlugins(params: {
+  previousConfig: OpenClawConfig;
+  nextConfig: OpenClawConfig;
+}): ChannelId[] {
+  const nextChannels = isRecord(params.nextConfig.channels) ? params.nextConfig.channels : {};
+  const channelIds = new Set(
+    Object.keys(nextChannels)
+      .map((channelId) => normalizeOptionalLowercaseString(channelId))
+      .filter((channelId): channelId is ChannelId => Boolean(channelId)),
+  );
+  const enabled: ChannelId[] = [];
+
+  for (const channelId of channelIds) {
+    const previousEnabled = getChannelEnabledValue(params.previousConfig, channelId) === true;
+    const nextEnabled = getChannelEnabledValue(params.nextConfig, channelId) === true;
+    if (!previousEnabled && nextEnabled && !getLoadedChannelPlugin(channelId)) {
+      enabled.push(channelId);
+    }
+  }
+
+  return enabled.toSorted((left, right) => left.localeCompare(right));
+}
+
+function addRestartReasons(plan: GatewayReloadPlan, reasons: readonly string[]): GatewayReloadPlan {
+  return {
+    ...plan,
+    restartGateway: true,
+    restartReasons: [...plan.restartReasons, ...reasons],
+  };
 }
 
 type GatewayConfigReloader = {
@@ -182,6 +230,7 @@ export function startGatewayConfigReloader(opts: {
     nextCompareConfig: OpenClawConfig,
     afterWrite?: ConfigWriteNotification["afterWrite"],
   ) => {
+    const previousCompareConfig = currentCompareConfig;
     const configChangedPaths = diffConfigPaths(currentCompareConfig, nextCompareConfig);
     const configPluginInstallTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
       currentCompareConfig,
@@ -255,15 +304,28 @@ export function startGatewayConfigReloader(opts: {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");
       return;
     }
-    if (followUp.requiresRestart) {
-      queueRestart(
-        {
-          ...plan,
-          restartGateway: true,
-          restartReasons: [...plan.restartReasons, followUp.reason],
-        },
-        nextConfig,
+    // Keep writer opt-outs and reload-off above this guard; only unsolicited live edits
+    // should escalate unloaded channel activation from ignored hot reload to restart.
+    const enabledUnloadedChannels = collectEnabledUnloadedChannelPlugins({
+      previousConfig: previousCompareConfig,
+      nextConfig: nextCompareConfig,
+    });
+    if (enabledUnloadedChannels.length > 0) {
+      const reasons = enabledUnloadedChannels.map(
+        (channelId) =>
+          `channels.${channelId} activation requires restart (${channelId} plugin not loaded)`,
       );
+      const allReasons = followUp.requiresRestart ? [...reasons, followUp.reason] : reasons;
+      opts.log.warn(
+        `config change enables unloaded channel plugin(s): ${enabledUnloadedChannels.join(
+          ", ",
+        )}; scheduling gateway restart`,
+      );
+      queueRestart(addRestartReasons(plan, allReasons), nextConfig);
+      return;
+    }
+    if (followUp.requiresRestart) {
+      queueRestart(addRestartReasons(plan, [followUp.reason]), nextConfig);
       return;
     }
     if (settings.mode === "restart") {
