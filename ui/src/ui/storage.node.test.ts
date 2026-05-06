@@ -188,6 +188,7 @@ describe("loadSettings default gateway URL derivation", () => {
     const scopedKey = "openclaw.control.settings.v1:wss://gateway.example:8443/openclaw";
     expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).toEqual({
       gatewayUrl: "wss://gateway.example:8443/openclaw",
+      gatewayUrlAutoDerived: false,
       theme: "claw",
       themeMode: "system",
       chatFocusMode: false,
@@ -283,9 +284,12 @@ describe("loadSettings default gateway URL derivation", () => {
     });
 
     expect(loadSettings()).toMatchObject({
-      gatewayUrl: gwUrl,
-      token: "gateway-a-token",
+      gatewayUrl: otherUrl,
+      token: "",
     });
+    // Verify gwUrl's token is still in sessionStorage (scoped per gateway)
+    const gwScopedKey = `openclaw.control.token.v1:${gwUrl}`;
+    expect(sessionStorage.getItem(gwScopedKey)).toBe("gateway-a-token");
   });
 
   it("does not persist gateway tokens when saving settings", async () => {
@@ -320,6 +324,7 @@ describe("loadSettings default gateway URL derivation", () => {
     const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
     expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).toEqual({
       gatewayUrl: gwUrl,
+      gatewayUrlAutoDerived: true,
       theme: "claw",
       themeMode: "system",
       chatFocusMode: false,
