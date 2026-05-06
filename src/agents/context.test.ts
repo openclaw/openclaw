@@ -4,6 +4,7 @@ import {
   applyConfiguredContextWindows,
   applyDiscoveredContextWindows,
   resolveContextTokensForModel,
+  shouldEagerWarmContextWindowCache,
 } from "./context.js";
 import { createSessionManagerRuntimeRegistry } from "./pi-hooks/session-manager-runtime-registry.js";
 
@@ -468,5 +469,100 @@ describe("resolveContextTokensForModel", () => {
     });
 
     expect(result).toBe(160_000);
+  });
+});
+
+describe("shouldEagerWarmContextWindowCache", () => {
+  it("warms the cache for the long-running gateway daemon (node dist/index.js gateway)", () => {
+    expect(
+      shouldEagerWarmContextWindowCache([
+        "/usr/bin/node",
+        "/home/u/.npm-global/lib/node_modules/openclaw/dist/index.js",
+        "gateway",
+        "--port",
+        "18789",
+      ]),
+    ).toBe(true);
+  });
+
+  it("warms the cache for the openclaw CLI gateway invocation", () => {
+    // Short-lived `openclaw gateway status` and friends. The warmup is async
+    // and best-effort, so it does not block CLI exit; we just need the cache
+    // populated for any synchronous lookups that follow.
+    expect(
+      shouldEagerWarmContextWindowCache([
+        "/usr/bin/node",
+        "/usr/bin/openclaw",
+        "gateway",
+        "status",
+      ]),
+    ).toBe(true);
+  });
+
+  it("warms the cache for a dev-checkout daemon entry", () => {
+    // Local source builds run as `node /home/u/git/openclaw/dist/index.js
+    // gateway ...`. The ancestor-directory check still recognises this as a
+    // genuine OpenClaw entry, not a generic Node script.
+    expect(
+      shouldEagerWarmContextWindowCache([
+        "/usr/bin/node",
+        "/home/u/git/openclaw/dist/index.js",
+        "gateway",
+      ]),
+    ).toBe(true);
+  });
+
+  it("still skips warmup for help/version invocations", () => {
+    expect(
+      shouldEagerWarmContextWindowCache(["/usr/bin/node", "/usr/bin/openclaw", "--version"]),
+    ).toBe(false);
+    expect(
+      shouldEagerWarmContextWindowCache(["/usr/bin/node", "/usr/bin/openclaw", "--help"]),
+    ).toBe(false);
+  });
+
+  it("does not warm when imported from a generic Node script (plugin-sdk surface)", () => {
+    // The bundled plugin-sdk can be imported by arbitrary downstream Node
+    // scripts. If those scripts happen to be named index.js, we must not
+    // trigger eager warmup, because that cascades into
+    // ensureOpenClawModelsJson() and breaks dist/source singleton
+    // assumptions for plugin-sdk consumers.
+    expect(
+      shouldEagerWarmContextWindowCache(["/usr/bin/node", "/some/random/script.js", "gateway"]),
+    ).toBe(false);
+    expect(
+      shouldEagerWarmContextWindowCache([
+        "/usr/bin/node",
+        "/some/random/project/index.js",
+        "gateway",
+      ]),
+    ).toBe(false);
+    expect(
+      shouldEagerWarmContextWindowCache([
+        "/usr/bin/node",
+        "/home/u/projects/my-cool-tool/dist/index.mjs",
+        "gateway",
+      ]),
+    ).toBe(false);
+  });
+
+  it("does not match substrings of openclaw in ancestor directory names", () => {
+    // The ancestor check must compare basenames exactly, not as substrings.
+    // A directory called `my-openclaw-fork` or `openclaw-extras` is not the
+    // canonical install layout and should not trigger warmup.
+    expect(
+      shouldEagerWarmContextWindowCache([
+        "/usr/bin/node",
+        "/home/u/projects/my-openclaw-fork/dist/index.js",
+        "gateway",
+      ]),
+    ).toBe(false);
+    expect(
+      shouldEagerWarmContextWindowCache([
+        "/usr/bin/node",
+        "/home/u/openclaw-extras/dist/index.js",
+        "gateway",
+      ]),
+    ).toBe(false);
   });
 });
