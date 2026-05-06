@@ -227,9 +227,24 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       );
     });
 
-    it("returns [] when lsof returns an error object (e.g. ENOENT)", () => {
+    it("returns [] without warning when lsof is permanently unavailable", () => {
+      const error: NodeJS.ErrnoException = new Error("lsof not found");
+      error.code = "ENOENT";
       mockSpawnSync.mockReturnValue({
-        error: new Error("ENOENT"),
+        error,
+        status: null,
+        stdout: "",
+        stderr: "",
+      });
+      expect(findGatewayPidsOnPortSync(18789)).toEqual([]);
+      expect(mockRestartWarn).not.toHaveBeenCalled();
+    });
+
+    it("logs warning when initial lsof scan returns an unexpected spawn error", () => {
+      const error: NodeJS.ErrnoException = new Error("spawn timed out");
+      error.code = "ETIMEDOUT";
+      mockSpawnSync.mockReturnValue({
+        error,
         status: null,
         stdout: "",
         stderr: "",

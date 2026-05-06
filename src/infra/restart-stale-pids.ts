@@ -307,6 +307,10 @@ function findVerifiedWindowsGatewayPidsOnPortResultSync(port: number): WindowsLi
   );
 }
 
+function isLsofPermanentlyUnavailableError(code: string | undefined): boolean {
+  return code === "ENOENT" || code === "EACCES" || code === "EPERM";
+}
+
 /**
  * Find PIDs of gateway processes listening on the given port using synchronous lsof.
  * Returns only PIDs that belong to openclaw gateway processes (not the current process).
@@ -327,6 +331,9 @@ export function findGatewayPidsOnPortSync(
   });
   if (res.error) {
     const code = (res.error as NodeJS.ErrnoException).code;
+    if (isLsofPermanentlyUnavailableError(code)) {
+      return [];
+    }
     const detail =
       code && code.trim().length > 0
         ? code
@@ -383,7 +390,7 @@ function pollPortOnce(port: number): PollResult {
       // Spawn-level failure. ENOENT / EACCES means lsof is permanently
       // unavailable on this system; other errors (e.g. timeout) are transient.
       const code = (res.error as NodeJS.ErrnoException).code;
-      const permanent = code === "ENOENT" || code === "EACCES" || code === "EPERM";
+      const permanent = isLsofPermanentlyUnavailableError(code);
       return { free: null, permanent };
     }
     if (res.status === 1) {
