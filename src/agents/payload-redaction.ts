@@ -77,7 +77,8 @@ function visitDiagnosticPayload(
   value: unknown,
   opts?: { omitField?: (key: string) => boolean },
 ): unknown {
-  const seen = new WeakSet<object>();
+  const activePath = new WeakSet<object>();
+  const memo = new WeakMap<object, unknown>();
 
   const visit = (input: unknown): unknown => {
     if (Array.isArray(input)) {
@@ -89,10 +90,14 @@ function visitDiagnosticPayload(
     if (!input || typeof input !== "object") {
       return input;
     }
-    if (seen.has(input)) {
+    if (activePath.has(input)) {
       return "[Circular]";
     }
-    seen.add(input);
+    const cached = memo.get(input);
+    if (cached !== undefined) {
+      return cached;
+    }
+    activePath.add(input);
 
     const record = input as Record<string, unknown>;
     const out: Record<string, unknown> = {};
@@ -109,6 +114,8 @@ function visitDiagnosticPayload(
       out.bytes = estimateBase64DecodedBytes(record.data);
       out.sha256 = digestBase64Payload(record.data);
     }
+    activePath.delete(input);
+    memo.set(input, out);
     return out;
   };
 
