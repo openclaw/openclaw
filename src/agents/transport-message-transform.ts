@@ -1,4 +1,5 @@
 import type { Api, Context, Model } from "@mariozechner/pi-ai";
+import { wrapExternalContent } from "../security/external-content.js";
 import { repairToolUseResultPairing } from "./session-transcript-repair.js";
 
 const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
@@ -35,6 +36,60 @@ function isFailedAssistantTurn(message: Context["messages"][number]): boolean {
     return false;
   }
   return message.stopReason === "error" || message.stopReason === "aborted";
+}
+
+function isTransportBoundaryWrapped(text: string): boolean {
+  return (
+    text.includes("EXTERNAL_UNTRUSTED_CONTENT") || text.includes("END_EXTERNAL_UNTRUSTED_CONTENT")
+  );
+}
+
+function wrapTransportBoundaryText(text: string, toolName?: string): string {
+  if (isTransportBoundaryWrapped(text)) {
+    return text;
+  }
+  return wrapExternalContent(text, {
+    source: "api",
+    sender: toolName ? `tool:${toolName}` : "tool-result",
+    includeWarning: true,
+  });
+}
+
+function hardenToolResultBoundary(
+  message: Context["messages"][number],
+): Context["messages"][number] {
+  if (message.role !== "toolResult") {
+    return message;
+  }
+
+  const content = message.content;
+  if (!Array.isArray(content)) {
+    return message;
+  }
+
+  let changed = false;
+  const wrappedContent = content.map((block) => {
+    if (
+      !block ||
+      typeof block !== "object" ||
+      block.type !== "text" ||
+      typeof block.text !== "string"
+    ) {
+      return block;
+    }
+    const wrapped = wrapTransportBoundaryText(block.text, message.toolName);
+    if (wrapped === block.text) {
+      return block;
+    }
+    changed = true;
+    return { ...block, text: wrapped };
+  });
+
+  return changed ? { ...message, content: wrappedContent } : message;
+}
+
+function hardenTransportBoundaries(messages: Context["messages"]): Context["messages"] {
+  return messages.map(hardenToolResultBoundary) as Context["messages"];
 }
 
 export function transformTransportMessages(
@@ -115,15 +170,17 @@ export function transformTransportMessages(
   const replayable = transformed.filter((msg) => !isFailedAssistantTurn(msg));
 
   if (!allowSyntheticToolResults) {
-    return replayable;
+    return hardenTransportBoundaries(replayable);
   }
 
   // PI's local transform can synthesize missing results, but it does not move
   // displaced real results back before an intervening user turn. Shared repair
   // handles both, while preserving the previous transport behavior of dropping
   // aborted/error assistant tool-call turns before replaying strict providers.
-  return repairToolUseResultPairing(replayable, {
-    erroredAssistantResultPolicy: "drop",
-    missingToolResultText: syntheticToolResultText,
-  }).messages as Context["messages"];
+  return hardenTransportBoundaries(
+    repairToolUseResultPairing(replayable, {
+      erroredAssistantResultPolicy: "drop",
+      missingToolResultText: syntheticToolResultText,
+    }).messages as Context["messages"],
+  );
 }
