@@ -17,6 +17,7 @@ import {
   isHighSignalLiveModelRef,
   isModernModelRef,
   isPrioritizedHighSignalLiveModelRef,
+  listPrioritizedHighSignalLiveModelRefs,
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
 } from "./live-model-filter.js";
@@ -650,6 +651,13 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
       }),
     ).toBe(false);
     expect(providerRuntimeMocks.resolveProviderModernModelRef).not.toHaveBeenCalled();
+  });
+
+  it("lists priority refs as provider/id pairs", () => {
+    expect(listPrioritizedHighSignalLiveModelRefs()).toContainEqual({
+      provider: "openai",
+      id: "gpt-5.2",
+    });
   });
 });
 
