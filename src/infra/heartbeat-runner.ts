@@ -1686,23 +1686,10 @@ export async function runHeartbeatOnce(opts: {
       : replyPayload
         ? normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars)
         : { shouldSkip: true, text: "", hasMedia: false };
-    // For exec completion events, don't skip even if the response looks like HEARTBEAT_OK.
-    // The model should be responding with exec results, not ack tokens.
-    // Also, if normalized.text is empty due to token stripping but we have exec completion,
-    // fall back to the original reply text.
-    const execFallbackText =
-      !heartbeatToolResponse &&
-      hasRelayableExecCompletion &&
-      !normalized.text.trim() &&
-      replyPayload?.text?.trim()
-        ? replyPayload.text.trim()
-        : null;
-    if (execFallbackText) {
-      normalized.text = execFallbackText;
-      normalized.shouldSkip = false;
-    }
-    const shouldSkipMain =
-      normalized.shouldSkip && !normalized.hasMedia && !hasRelayableExecCompletion;
+    // HEARTBEAT_OK is a protocol ack, not user content. Even relayable exec
+    // completion wakes must swallow a pure ack; real exec summaries still deliver
+    // because normalization leaves shouldSkip=false for non-ack text.
+    const shouldSkipMain = normalized.shouldSkip && !normalized.hasMedia;
     if (shouldSkipMain && reasoningPayloads.length === 0) {
       await restoreHeartbeatUpdatedAt({
         storePath,
