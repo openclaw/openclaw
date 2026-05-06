@@ -19,6 +19,7 @@ type LockPayload = {
   pid: number;
   createdAt: string;
   configPath: string;
+  port?: number;
   startTime?: number;
 };
 
@@ -26,6 +27,7 @@ const LockPayloadSchema = z.object({
   pid: z.number(),
   createdAt: z.string(),
   configPath: z.string(),
+  port: z.number().int().positive().optional(),
   startTime: z.number().optional(),
 }) as z.ZodType<LockPayload>;
 
@@ -189,6 +191,7 @@ async function resolveGatewayOwnerStatus(
   platform: NodeJS.Platform,
   port: number | undefined,
   readCmdline?: (pid: number) => string[] | null,
+  opts: { trustUnknownCmdlineOwner?: boolean } = {},
 ): Promise<LockOwnerStatus> {
   if (port != null) {
     const portFree = await checkPortFree(port);
@@ -221,7 +224,7 @@ async function resolveGatewayOwnerStatus(
     // start-time), "unknown" lets the stale-lock heuristic eventually reclaim
     // very old locks. On win32/darwin/other, conservatively assume "alive" to
     // preserve single-instance guarantees when wmic/ps is unavailable.
-    return platform === "linux" ? "unknown" : "alive";
+    return platform === "linux" || opts.trustUnknownCmdlineOwner === false ? "unknown" : "alive";
   }
   return isGatewayArgv(args) ? "alive" : "dead";
 }
@@ -241,6 +244,26 @@ function resolveGatewayLockPath(env: NodeJS.ProcessEnv, lockDir = resolveGateway
   const hash = createHash("sha256").update(configPath).digest("hex").slice(0, 8);
   const lockPath = path.join(lockDir, `gateway.${hash}.lock`);
   return { lockPath, configPath };
+}
+
+export async function readActiveGatewayLockPort(
+  opts: Pick<GatewayLockOptions, "env" | "lockDir" | "platform" | "readProcessCmdline"> = {},
+): Promise<number | undefined> {
+  const env = opts.env ?? process.env;
+  const { lockPath } = resolveGatewayLockPath(env, opts.lockDir);
+  const payload = await readLockPayload(lockPath);
+  if (!payload?.pid || !payload.port) {
+    return undefined;
+  }
+  const ownerStatus = await resolveGatewayOwnerStatus(
+    payload.pid,
+    payload,
+    opts.platform ?? process.platform,
+    undefined,
+    opts.readProcessCmdline,
+    { trustUnknownCmdlineOwner: false },
+  );
+  return ownerStatus === "alive" ? payload.port : undefined;
 }
 
 export async function acquireGatewayLock(
@@ -278,6 +301,9 @@ export async function acquireGatewayLock(
         createdAt: new Date(now()).toISOString(),
         configPath,
       };
+      if (typeof port === "number" && Number.isInteger(port) && port > 0) {
+        payload.port = port;
+      }
       if (typeof startTime === "number" && Number.isFinite(startTime)) {
         payload.startTime = startTime;
       }

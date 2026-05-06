@@ -10,6 +10,8 @@ import {
 } from "../gateway/gateway-connection.test-mocks.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 
+const readActiveGatewayLockPortMock = vi.hoisted(() => vi.fn());
+
 vi.mock("../config/config.js", async () => {
   const mocks = await import("../gateway/gateway-connection.test-mocks.js");
   return {
@@ -29,6 +31,10 @@ vi.mock("../gateway/net.js", async () => {
     pickPrimaryLanIPv4: mocks.pickPrimaryLanIPv4Mock,
   };
 });
+
+vi.mock("../infra/gateway-lock.js", () => ({
+  readActiveGatewayLockPort: readActiveGatewayLockPortMock,
+}));
 
 const { GatewayChatClient, resolveGatewayConnection } = await import("./gateway-chat.js");
 const { GatewayClientRequestError } = await import("../gateway/client.js");
@@ -109,11 +115,13 @@ describe("resolveGatewayConnection", () => {
   beforeEach(() => {
     envSnapshot = captureEnv([
       "OPENCLAW_GATEWAY_URL",
+      "OPENCLAW_GATEWAY_PORT",
       "OPENCLAW_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
       "OPENCLAW_TUI_SETUP_AUTH_SOURCE",
     ]);
     loadConfig.mockReset();
+    readActiveGatewayLockPortMock.mockReset();
     resolveGatewayPort.mockReset();
     resolveStateDir.mockReset();
     resolveConfigPath.mockReset();
@@ -126,6 +134,7 @@ describe("resolveGatewayConnection", () => {
         env.OPENCLAW_CONFIG_PATH ?? `${stateDir}/openclaw.json`,
     );
     delete process.env.OPENCLAW_GATEWAY_URL;
+    delete process.env.OPENCLAW_GATEWAY_PORT;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.OPENCLAW_TUI_SETUP_AUTH_SOURCE;
@@ -200,6 +209,78 @@ describe("resolveGatewayConnection", () => {
       const result = await resolveGatewayConnection({});
       expect(result.token).toBe("env-token");
     });
+  });
+
+  it("uses the active local gateway lock port for default TUI connections", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        port: 18789,
+        auth: { token: "config-token" },
+      },
+    });
+    readActiveGatewayLockPortMock.mockResolvedValue(48789);
+
+    const result = await resolveGatewayConnection({});
+
+    expect(result.url).toBe("ws://127.0.0.1:48789");
+    expect(result.token).toBe("config-token");
+  });
+
+  it("keeps the active local gateway lock port ahead of stale gateway port env", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        port: 18789,
+        auth: { token: "config-token" },
+      },
+    });
+    readActiveGatewayLockPortMock.mockResolvedValue(48789);
+
+    await withEnvAsync({ OPENCLAW_GATEWAY_PORT: "18789" }, async () => {
+      const result = await resolveGatewayConnection({});
+
+      expect(result.url).toBe("ws://127.0.0.1:48789");
+      expect(result.token).toBe("config-token");
+    });
+  });
+
+  it("keeps explicit TUI url overrides ahead of the active local gateway lock port", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        port: 18789,
+        auth: { token: "config-token" },
+      },
+    });
+    readActiveGatewayLockPortMock.mockResolvedValue(48789);
+
+    const result = await resolveGatewayConnection({
+      url: "ws://127.0.0.1:19001",
+      token: "override-token",
+    });
+
+    expect(result.url).toBe("ws://127.0.0.1:19001");
+    expect(result.token).toBe("override-token");
+  });
+
+  it("keeps remote TUI config ahead of the active local gateway lock port", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        port: 18789,
+        remote: {
+          url: "wss://gateway.example/ws",
+          token: "remote-token",
+        },
+      },
+    });
+    readActiveGatewayLockPortMock.mockResolvedValue(48789);
+
+    const result = await resolveGatewayConnection({});
+
+    expect(result.url).toBe("wss://gateway.example/ws");
+    expect(result.token).toBe("remote-token");
   });
 
   it("uses local password auth when gateway.auth.mode is unset and password-only is configured", async () => {

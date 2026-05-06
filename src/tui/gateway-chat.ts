@@ -9,6 +9,7 @@ import {
 } from "../gateway/call.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
+import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -23,6 +24,7 @@ import {
   type SessionsPatchParams,
 } from "../gateway/protocol/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { readActiveGatewayLockPort } from "../infra/gateway-lock.js";
 import { VERSION } from "../version.js";
 import { TUI_SETUP_AUTH_SOURCE_CONFIG, TUI_SETUP_AUTH_SOURCE_ENV } from "./setup-launch-env.js";
 import type {
@@ -270,9 +272,12 @@ export async function resolveGatewayConnection(
     explicitAuth,
     errorHint: "Fix: pass --token or --password when using --url.",
   });
-  const url = buildGatewayConnectionDetails({
+  const activeLocalGatewayPort =
+    !urlOverride && !isRemoteMode ? await readActiveGatewayLockPort() : undefined;
+  const url = buildTuiGatewayConnectionDetails({
     config,
-    ...(urlOverride ? { url: urlOverride } : {}),
+    urlOverride,
+    activeLocalGatewayPort,
   }).url;
   const allowInsecureLocalOperatorUi = (() => {
     if (config.gateway?.controlUi?.allowInsecureAuth !== true) {
@@ -353,4 +358,22 @@ export async function resolveGatewayConnection(
     preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
     allowInsecureLocalOperatorUi,
   };
+}
+
+function buildTuiGatewayConnectionDetails(params: {
+  config: ReturnType<typeof getRuntimeConfig>;
+  urlOverride?: string;
+  activeLocalGatewayPort?: number;
+}) {
+  const options = {
+    config: params.config,
+    ...(params.urlOverride ? { url: params.urlOverride } : {}),
+  };
+  if (params.activeLocalGatewayPort == null) {
+    return buildGatewayConnectionDetails(options);
+  }
+  const activeLocalGatewayPort = params.activeLocalGatewayPort;
+  return buildGatewayConnectionDetailsWithResolvers(options, {
+    resolveGatewayPort: () => activeLocalGatewayPort,
+  });
 }
