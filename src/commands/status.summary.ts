@@ -13,6 +13,8 @@ import { hasConfiguredChannelsForReadOnlyScope } from "../plugins/channel-plugin
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import { createEmptyTaskAuditSummary } from "../tasks/task-registry.audit.shared.js";
+import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
 
@@ -102,11 +104,16 @@ export async function getStatusSummary(
   options: {
     includeSensitive?: boolean;
     includeChannelSummary?: boolean;
+    includeTaskSummary?: boolean;
     config?: OpenClawConfig;
     sourceConfig?: OpenClawConfig;
   } = {},
 ): Promise<StatusSummary> {
-  const { includeSensitive = true, includeChannelSummary = true } = options;
+  const {
+    includeSensitive = true,
+    includeChannelSummary = true,
+    includeTaskSummary = true,
+  } = options;
   const {
     classifySessionKey,
     resolveConfiguredStatusModelRef,
@@ -147,12 +154,21 @@ export async function getStatusSummary(
     : [];
   const mainSessionKey = resolveMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
-  const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
-  taskMaintenanceModule.configureTaskRegistryMaintenance({
-    cronStorePath: resolveCronStorePath(cfg.cron?.store),
-  });
-  const tasks = taskMaintenanceModule.getInspectableTaskRegistrySummary();
-  const taskAudit = taskMaintenanceModule.getInspectableTaskAuditSummary();
+  const { tasks, taskAudit } = includeTaskSummary
+    ? await (async () => {
+        const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
+        taskMaintenanceModule.configureTaskRegistryMaintenance({
+          cronStorePath: resolveCronStorePath(cfg.cron?.store),
+        });
+        return {
+          tasks: taskMaintenanceModule.getInspectableTaskRegistrySummary(),
+          taskAudit: taskMaintenanceModule.getInspectableTaskAuditSummary(),
+        };
+      })()
+    : {
+        tasks: createEmptyTaskRegistrySummary(),
+        taskAudit: createEmptyTaskAuditSummary(),
+      };
 
   const resolved = resolveConfiguredStatusModelRef({
     cfg,

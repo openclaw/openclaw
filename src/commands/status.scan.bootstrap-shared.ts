@@ -62,6 +62,11 @@ type StatusScanCoreBootstrapParams<TAgentStatus> = {
   cfg: OpenClawConfig;
   hasConfiguredChannels: boolean;
   opts: { timeoutMs?: number; all?: boolean };
+  includeUpdateCheck?: boolean;
+  includeUpdateFetch?: boolean;
+  includeUpdateRegistry?: boolean;
+  includeLocalStatusRpcFallback?: boolean;
+  gatewayProbeTimeoutMs?: number;
   getTailnetHostname: (runner: StatusScanExecRunner) => Promise<string | null>;
   getUpdateCheckResult: (params: {
     timeoutMs: number;
@@ -81,23 +86,26 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
     hasConfiguredChannels: params.hasConfiguredChannels,
     all: params.opts.all,
   });
-  const updateTimeoutMs = params.opts.all ? 6500 : 2500;
+  const statusTimeoutMs = params.opts.timeoutMs ?? 10_000;
+  const updateTimeoutMs = Math.min(params.opts.all ? 6500 : 2500, statusTimeoutMs);
+  const tailscaleTimeoutMs = Math.min(1200, statusTimeoutMs);
   const tailscaleDnsPromise =
     tailscaleMode === "off"
       ? Promise.resolve<string | null>(null)
       : params
           .getTailnetHostname((cmd, args) =>
-            runExec(cmd, args, { timeoutMs: 1200, maxBuffer: 200_000 }),
+            runExec(cmd, args, { timeoutMs: tailscaleTimeoutMs, maxBuffer: 200_000 }),
           )
           .catch(() => null);
-  const updatePromise = skipColdStartNetworkChecks
-    ? Promise.resolve(buildColdStartUpdateResult())
-    : params.getUpdateCheckResult({
-        timeoutMs: updateTimeoutMs,
-        fetchGit: true,
-        includeRegistry: true,
-        updateConfigChannel: params.cfg.update?.channel ?? null,
-      });
+  const updatePromise =
+    skipColdStartNetworkChecks || params.includeUpdateCheck === false
+      ? Promise.resolve(buildColdStartUpdateResult())
+      : params.getUpdateCheckResult({
+          timeoutMs: updateTimeoutMs,
+          fetchGit: params.includeUpdateFetch !== false,
+          includeRegistry: params.includeUpdateRegistry !== false,
+          updateConfigChannel: params.cfg.update?.channel ?? null,
+        });
   const agentStatusPromise = skipColdStartNetworkChecks
     ? Promise.resolve(buildColdStartAgentLocalStatuses() as TAgentStatus)
     : params.getAgentLocalStatuses(params.cfg);
@@ -105,7 +113,11 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
     cfg: params.cfg,
     opts: {
       ...params.opts,
+      ...(params.gatewayProbeTimeoutMs !== undefined
+        ? { timeoutMs: params.gatewayProbeTimeoutMs }
+        : {}),
       ...(skipColdStartNetworkChecks ? { skipProbe: true } : {}),
+      localStatusRpcFallback: params.includeLocalStatusRpcFallback !== false,
     },
   });
 

@@ -13,6 +13,12 @@ type StatusJsonScanPolicy = {
   commandName: string;
   allowMissingConfigFastPath?: boolean;
   includeChannelSummary?: boolean;
+  includeTaskSummary?: boolean;
+  includeUpdateCheck?: boolean;
+  includeUpdateFetch?: boolean;
+  includeUpdateRegistry?: boolean;
+  includeLocalStatusRpcFallback?: boolean;
+  gatewayProbeTimeoutMs?: number;
   resolveHasConfiguredChannels: (cfg: OpenClawConfig, sourceConfig: OpenClawConfig) => boolean;
   resolveMemory: Parameters<typeof executeStatusScanFromOverview>[0]["resolveMemory"];
 };
@@ -33,12 +39,18 @@ export async function scanStatusJsonWithPolicy(
     allowMissingConfigFastPath: policy.allowMissingConfigFastPath,
     resolveHasConfiguredChannels: policy.resolveHasConfiguredChannels,
     includeChannelsData: false,
+    includeUpdateCheck: policy.includeUpdateCheck,
+    includeUpdateFetch: policy.includeUpdateFetch,
+    includeUpdateRegistry: policy.includeUpdateRegistry,
+    includeLocalStatusRpcFallback: policy.includeLocalStatusRpcFallback,
+    gatewayProbeTimeoutMs: policy.gatewayProbeTimeoutMs,
   });
   return await executeStatusScanFromOverview({
     overview,
     runtime,
     summary: {
       includeChannelSummary: policy.includeChannelSummary,
+      includeTaskSummary: policy.includeTaskSummary,
     },
     resolveMemory: policy.resolveMemory,
     channelIssues: [],
@@ -58,6 +70,12 @@ export async function scanStatusJsonFast(
     commandName: "status --json",
     allowMissingConfigFastPath: true,
     includeChannelSummary: false,
+    includeTaskSummary: opts.all === true,
+    includeUpdateCheck: opts.all === true,
+    includeUpdateFetch: opts.all === true,
+    includeUpdateRegistry: opts.all === true,
+    includeLocalStatusRpcFallback: opts.all === true,
+    gatewayProbeTimeoutMs: opts.all === true ? undefined : Math.min(1000, opts.timeoutMs ?? 1000),
     resolveHasConfiguredChannels: (cfg, sourceConfig) =>
       hasConfiguredChannelsForReadOnlyScope({
         config: cfg,
