@@ -475,6 +475,23 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
     });
   });
 
+  it("drops stale inter-session orphan leaves when a fresh prompt arrives", () => {
+    expect(
+      mergeOrphanedTrailingUserPrompt({
+        prompt: "newest inbound message",
+        trigger: "user",
+        leafMessage: {
+          content: "[Inter-session message]\nAction: reply NO_REPLY",
+          provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+        } as never,
+      }),
+    ).toEqual({
+      merged: false,
+      removeLeaf: true,
+      prompt: "newest inbound message",
+    });
+  });
+
   it("does not treat short orphan text as duplicate from a substring match", () => {
     expect(
       mergeOrphanedTrailingUserPrompt({

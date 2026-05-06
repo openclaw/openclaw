@@ -431,13 +431,26 @@ function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: stri
   );
 }
 
+function isInterSessionOrphanedUserMessage(message: { provenance?: unknown }): boolean {
+  const provenance = message.provenance;
+  return (
+    Boolean(provenance) &&
+    typeof provenance === "object" &&
+    "kind" in provenance &&
+    provenance.kind === "inter_session"
+  );
+}
+
 export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
-  leafMessage: { content?: unknown };
+  leafMessage: { content?: unknown; provenance?: unknown };
 }): { prompt: string; merged: boolean; removeLeaf: boolean } {
   const orphanText = extractUserMessagePromptText(params.leafMessage.content);
   if (!orphanText) {
+    return { prompt: params.prompt, merged: false, removeLeaf: true };
+  }
+  if (params.prompt.trim().length > 0 && isInterSessionOrphanedUserMessage(params.leafMessage)) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
   if (promptAlreadyIncludesQueuedUserMessage(params.prompt, orphanText)) {
