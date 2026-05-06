@@ -19,6 +19,9 @@ export type OutboundMediaLoadParams = {
   optimizeImages?: boolean;
   /** Agent workspace directory for resolving relative MEDIA: paths. */
   workspaceDir?: string;
+  /** Additional MIME types to permit (or replace the default list) for host-read sends. */
+  hostReadAllowedMimes?: readonly string[];
+  hostReadMimePolicy?: "extend" | "override";
 };
 
 export type OutboundMediaLoadOptions = {
@@ -30,6 +33,8 @@ export type OutboundMediaLoadOptions = {
   requestInit?: RequestInit;
   trustExplicitProxyDns?: boolean;
   hostReadCapability?: boolean;
+  hostReadAllowedMimes?: readonly string[];
+  hostReadMimePolicy?: "extend" | "override";
   optimizeImages?: boolean;
   /** Agent workspace directory for resolving relative MEDIA: paths. */
   workspaceDir?: string;
@@ -96,6 +101,8 @@ export function buildOutboundMediaLoadOptions(
         ? { trustExplicitProxyDns: params.trustExplicitProxyDns }
         : {}),
       hostReadCapability: true,
+      ...(params.hostReadAllowedMimes ? { hostReadAllowedMimes: params.hostReadAllowedMimes } : {}),
+      ...(params.hostReadMimePolicy ? { hostReadMimePolicy: params.hostReadMimePolicy } : {}),
       ...(params.optimizeImages !== undefined ? { optimizeImages: params.optimizeImages } : {}),
       ...(workspaceDir ? { workspaceDir } : {}),
     };

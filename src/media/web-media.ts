@@ -56,6 +56,9 @@ type WebMediaOptions = {
   readFile?: (filePath: string) => Promise<Buffer>;
   /** Host-local fs-policy read piggyback; rejects plaintext-like document sends. */
   hostReadCapability?: boolean;
+  /** Additional MIME types to permit for host-read sends. "override" replaces the built-in list. */
+  hostReadAllowedMimes?: readonly string[];
+  hostReadMimePolicy?: "extend" | "override";
 };
 
 async function resolveMediaStoreUriToPath(mediaUrl: string): Promise<string | null> {
@@ -238,6 +241,7 @@ function assertHostReadMediaAllowed(params: {
   filePath?: string;
   kind: MediaKind | undefined;
   buffer?: Buffer;
+  allowedDocumentMimes: ReadonlySet<string>;
 }): void {
   const declaredMime = normalizeMimeType(mimeTypeFromFilePath(params.filePath));
   const normalizedMime = normalizeMimeType(params.contentType);
@@ -259,11 +263,7 @@ function assertHostReadMediaAllowed(params: {
     return;
   }
   const sniffedMime = normalizeMimeType(params.sniffedContentType);
-  if (
-    sniffedKind === "document" &&
-    sniffedMime &&
-    HOST_READ_ALLOWED_DOCUMENT_MIMES.has(sniffedMime)
-  ) {
+  if (sniffedKind === "document" && sniffedMime && params.allowedDocumentMimes.has(sniffedMime)) {
     return;
   }
   if (
@@ -289,7 +289,7 @@ function assertHostReadMediaAllowed(params: {
   if (
     params.kind === "document" &&
     normalizedMime &&
-    HOST_READ_ALLOWED_DOCUMENT_MIMES.has(normalizedMime)
+    params.allowedDocumentMimes.has(normalizedMime)
   ) {
     throw new LocalMediaAccessError(
       "path-not-allowed",
@@ -298,7 +298,7 @@ function assertHostReadMediaAllowed(params: {
   }
   throw new LocalMediaAccessError(
     "path-not-allowed",
-    `Host-local media sends only allow buffer-verified images, audio, video, PDF, and Office documents (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
+    `Host-local media sends only allow buffer-verified images, audio, video, PDF, Office documents, and operator-configured types (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
   );
 }
 
@@ -386,6 +386,8 @@ async function loadWebMediaInternal(
     sandboxValidated = false,
     readFile: readFileOverride,
     hostReadCapability = false,
+    hostReadAllowedMimes,
+    hostReadMimePolicy,
   } = options;
   // Strip MEDIA: prefix used by agent tools (e.g. TTS) to tag media paths.
   // Be lenient: LLM output may add extra whitespace (e.g. "  MEDIA :  /tmp/x.png").
@@ -584,12 +586,18 @@ async function loadWebMediaInternal(
   const mime = await detectMime({ buffer: data, filePath: mediaUrl });
   const kind = kindFromMime(mime);
   if (hostReadCapability) {
+    const configMimes = hostReadAllowedMimes ?? [];
+    const allowedDocumentMimes =
+      hostReadMimePolicy === "override"
+        ? new Set(configMimes)
+        : new Set([...HOST_READ_ALLOWED_DOCUMENT_MIMES, ...configMimes]);
     assertHostReadMediaAllowed({
       sniffedContentType: sniffedMime,
       contentType: mime,
       filePath: mediaUrl,
       kind,
       buffer: data,
+      allowedDocumentMimes,
     });
   }
   let fileName = path.basename(mediaUrl) || undefined;

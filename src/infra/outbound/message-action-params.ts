@@ -202,6 +202,8 @@ export function resolveAttachmentMediaPolicy(params: {
 function buildAttachmentMediaLoadOptions(params: {
   policy: AttachmentMediaPolicy;
   maxBytes?: number;
+  hostReadAllowedMimes?: readonly string[];
+  hostReadMimePolicy?: "extend" | "override";
 }):
   | {
       maxBytes?: number;
@@ -213,6 +215,8 @@ function buildAttachmentMediaLoadOptions(params: {
       localRoots?: readonly string[] | "any";
       readFile?: OutboundMediaReadFile;
       hostReadCapability?: boolean;
+      hostReadAllowedMimes?: readonly string[];
+      hostReadMimePolicy?: "extend" | "override";
     } {
   if (params.policy.mode === "sandbox") {
     const sandboxRoot = params.policy.sandboxRoot.trim();
@@ -232,6 +236,8 @@ function buildAttachmentMediaLoadOptions(params: {
     mediaAccess: params.policy.mediaAccess,
     mediaLocalRoots: params.policy.mediaLocalRoots,
     mediaReadFile: params.policy.mediaReadFile,
+    hostReadAllowedMimes: params.hostReadAllowedMimes,
+    hostReadMimePolicy: params.hostReadMimePolicy,
   });
 }
 
@@ -270,7 +276,12 @@ async function hydrateAttachmentPayload(params: {
     });
     const media = await loadWebMedia(
       mediaSource,
-      buildAttachmentMediaLoadOptions({ policy: params.mediaPolicy, maxBytes }),
+      buildAttachmentMediaLoadOptions({
+        policy: params.mediaPolicy,
+        maxBytes,
+        hostReadAllowedMimes: params.cfg.media?.hostReadAllowedMimes,
+        hostReadMimePolicy: params.cfg.media?.hostReadMimePolicy,
+      }),
     );
     params.args.buffer = media.buffer.toString("base64");
     if (!contentTypeParam && media.contentType) {

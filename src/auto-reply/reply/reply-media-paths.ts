@@ -130,6 +130,8 @@ export function createReplyMediaPathNormalizer(params: {
     }
     const persistPromise = resolveOutboundAttachmentFromUrl(media, maxBytes, {
       mediaAccess: resolveMediaAccessForSource(media),
+      hostReadAllowedMimes: params.cfg.media?.hostReadAllowedMimes,
+      hostReadMimePolicy: params.cfg.media?.hostReadMimePolicy,
     })
       .then((saved) => saved.path)
       .catch((err) => {

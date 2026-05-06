@@ -419,13 +419,13 @@ describe("runMessageAction media behavior", () => {
       }
     });
 
-    it("rejects host-local text attachments even when fs root expansion is enabled", async () => {
+    it("rejects host-local text attachments blocked by the MIME allowlist", async () => {
       await restoreRealMediaLoader();
 
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-attachment-text-"));
       try {
-        const outsidePath = path.join(tempDir, "secret.txt");
-        await fs.writeFile(outsidePath, "secret", "utf8");
+        const outsidePath = path.join(tempDir, "export.txt");
+        await fs.writeFile(outsidePath, "data", "utf8");
 
         await expect(
           runMessageAction({
@@ -441,7 +441,37 @@ describe("runMessageAction media behavior", () => {
               message: "caption",
             },
           }),
-        ).rejects.toThrow(/Host-local media sends only allow/i);
+        ).rejects.toThrow(/only allow buffer-verified/i);
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("allows ZIP attachments when hostReadAllowedMimes includes application/zip", async () => {
+      await restoreRealMediaLoader();
+
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-attachment-zip-"));
+      try {
+        // Minimal ZIP magic bytes — file-type sniffs this as application/zip.
+        const minimalZip = Buffer.from("504b0304", "hex");
+        const zipPath = path.join(tempDir, "archive.zip");
+        await fs.writeFile(zipPath, minimalZip);
+
+        const result = await runMessageAction({
+          cfg: {
+            ...cfg,
+            tools: { fs: { workspaceOnly: false } },
+            media: { hostReadAllowedMimes: ["application/zip"] },
+          },
+          action: "sendAttachment",
+          params: {
+            channel: "attachmentchat",
+            target: "+15551234567",
+            media: zipPath,
+            message: "archive",
+          },
+        });
+        expect(result.kind).toBe("action");
       } finally {
         await fs.rm(tempDir, { recursive: true, force: true });
       }

@@ -124,6 +124,13 @@ export type OpenClawConfig = {
     preserveFilenames?: boolean;
     /** Optional retention window for persisted inbound media cleanup. */
     ttlHours?: number;
+    /**
+     * Additional MIME types permitted for host-read outbound sends.
+     * "extend" (default) adds to the built-in allowlist; "override" replaces it entirely.
+     * Example: ["application/zip", "application/gzip"]
+     */
+    hostReadAllowedMimes?: string[];
+    hostReadMimePolicy?: "extend" | "override";
   };
   messages?: MessagesConfig;
   commands?: CommandsConfig;

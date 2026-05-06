@@ -645,6 +645,8 @@ export const OpenClawSchema = z
           .min(1)
           .max(24 * 7)
           .optional(),
+        hostReadAllowedMimes: z.array(z.string()).optional(),
+        hostReadMimePolicy: z.enum(["extend", "override"]).optional(),
       })
       .strict()
       .optional(),
