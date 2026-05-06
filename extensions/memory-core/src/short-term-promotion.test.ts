@@ -1558,7 +1558,7 @@ describe("short-term promotion", () => {
     });
   });
 
-  it("does not ratchet containment matches away from the nearest range", async () => {
+  it("uses nested tight containment instead of broad stale ranges", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
         "intro",
@@ -1569,12 +1569,12 @@ describe("short-term promotion", () => {
         "",
         "",
         "",
-        "",
+        "Unrelated account note should stay local.",
         "Far prefix Move backups to S3 Glacier. Far suffix.",
       ]);
       await recordShortTermRecalls({
         workspaceDir,
-        query: "glacier ratchet repeated",
+        query: "glacier broad stale range",
         results: [
           {
             path: "memory/2026-04-01.md",
@@ -1602,10 +1602,12 @@ describe("short-term promotion", () => {
       });
 
       expect(applied.applied).toBe(1);
-      expect(applied.appliedCandidates[0]?.startLine).toBeLessThanOrEqual(6);
+      expect(applied.appliedCandidates[0]?.startLine).toBe(10);
       expect(applied.appliedCandidates[0]?.endLine).toBe(10);
       const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
-      expect(memoryText).not.toContain("memory/2026-04-01.md:10-10");
+      expect(memoryText).toContain("memory/2026-04-01.md:10-10");
+      expect(memoryText).not.toContain("nearest envelope before repeated target");
+      expect(memoryText).not.toContain("Unrelated account note should stay local.");
     });
   });
 

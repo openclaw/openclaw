@@ -1420,6 +1420,15 @@ function compareCandidateWindow(
   return { matched: false, quality: 0 };
 }
 
+function rangesOverlap(
+  firstStartLine: number,
+  firstEndLine: number,
+  secondStartLine: number,
+  secondEndLine: number,
+): boolean {
+  return firstStartLine <= secondEndLine && secondStartLine <= firstEndLine;
+}
+
 function relocateCandidateRange(
   lines: string[],
   candidate: PromotionCandidate,
@@ -1448,10 +1457,15 @@ function relocateCandidateRange(
   }
 
   const maxSpan = Math.min(lines.length, Math.max(preferredSpan + 15, 20));
-  let bestMatch:
-    | { startLine: number; endLine: number; snippet: string; quality: number; distance: number }
-    | undefined;
-  let nearestContainingDistance: number | undefined;
+  const matches: Array<{
+    startLine: number;
+    endLine: number;
+    span: number;
+    snippet: string;
+    quality: number;
+    distance: number;
+  }> = [];
+  let smallestContainingSpan: number | undefined;
   for (let startIndex = 0; startIndex < lines.length; startIndex += 1) {
     for (let span = 1; span <= maxSpan && startIndex + span <= lines.length; span += 1) {
       const startLine = startIndex + 1;
@@ -1462,40 +1476,67 @@ function relocateCandidateRange(
         continue;
       }
       const distance = Math.abs(startLine - candidate.startLine);
-      if (
-        comparison.quality === 2 &&
-        (nearestContainingDistance === undefined || distance < nearestContainingDistance)
-      ) {
-        nearestContainingDistance = distance;
+      if (comparison.quality === 2) {
+        smallestContainingSpan =
+          smallestContainingSpan === undefined ? span : Math.min(smallestContainingSpan, span);
       }
-      let shouldReplace = false;
-      if (!bestMatch) {
-        shouldReplace = true;
-      } else if (comparison.quality > bestMatch.quality) {
-        shouldReplace = true;
-      } else if (comparison.quality === bestMatch.quality) {
-        const bestSpan = bestMatch.endLine - bestMatch.startLine + 1;
-        if (comparison.quality === 2) {
-          const containingDistanceLimit = (nearestContainingDistance ?? distance) + 1;
-          shouldReplace =
-            distance < bestMatch.distance ||
-            (span < bestSpan && distance <= containingDistanceLimit);
-        } else {
-          shouldReplace =
-            distance < bestMatch.distance ||
-            (distance === bestMatch.distance &&
-              Math.abs(span - preferredSpan) < Math.abs(bestSpan - preferredSpan));
-        }
+      matches.push({
+        startLine,
+        endLine,
+        span,
+        snippet,
+        quality: comparison.quality,
+        distance,
+      });
+    }
+  }
+
+  const containingSpanLimit =
+    smallestContainingSpan === undefined ? undefined : smallestContainingSpan + 1;
+  let bestMatch:
+    | { startLine: number; endLine: number; snippet: string; quality: number; distance: number }
+    | undefined;
+  for (const match of matches) {
+    if (
+      match.quality === 2 &&
+      containingSpanLimit !== undefined &&
+      match.span > containingSpanLimit
+    ) {
+      continue;
+    }
+    let shouldReplace = false;
+    if (!bestMatch) {
+      shouldReplace = true;
+    } else if (match.quality > bestMatch.quality) {
+      shouldReplace = true;
+    } else if (match.quality === bestMatch.quality) {
+      const bestSpan = bestMatch.endLine - bestMatch.startLine + 1;
+      if (match.quality === 2) {
+        const overlapsBest = rangesOverlap(
+          match.startLine,
+          match.endLine,
+          bestMatch.startLine,
+          bestMatch.endLine,
+        );
+        shouldReplace =
+          (overlapsBest && match.span < bestSpan) ||
+          match.distance < bestMatch.distance ||
+          (match.distance === bestMatch.distance && match.span < bestSpan);
+      } else {
+        shouldReplace =
+          match.distance < bestMatch.distance ||
+          (match.distance === bestMatch.distance &&
+            Math.abs(match.span - preferredSpan) < Math.abs(bestSpan - preferredSpan));
       }
-      if (shouldReplace) {
-        bestMatch = {
-          startLine,
-          endLine,
-          snippet,
-          quality: comparison.quality,
-          distance,
-        };
-      }
+    }
+    if (shouldReplace) {
+      bestMatch = {
+        startLine: match.startLine,
+        endLine: match.endLine,
+        snippet: match.snippet,
+        quality: match.quality,
+        distance: match.distance,
+      };
     }
   }
 
