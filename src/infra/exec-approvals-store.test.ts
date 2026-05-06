@@ -203,6 +203,18 @@ describe("exec approvals store helpers", () => {
     expect(fs.statSync(approvalsFilePath(dir)).mode & 0o777).toBe(0o600);
   });
 
+  it("normalizes the approvals directory to owner-only permissions", () => {
+    const dir = createHomeDir();
+    const approvalsDir = path.dirname(approvalsFilePath(dir));
+    fs.mkdirSync(approvalsDir, { recursive: true });
+    fs.chmodSync(approvalsDir, 0o777);
+
+    saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} });
+
+    expect(fs.readFileSync(approvalsFilePath(dir), "utf8")).toContain('"security": "full"');
+    expect(fs.statSync(approvalsDir).mode & 0o777).toBe(0o700);
+  });
+
   it("falls back to copying when rename cannot overwrite the approvals file", () => {
     const dir = createHomeDir();
     const approvalsPath = approvalsFilePath(dir);

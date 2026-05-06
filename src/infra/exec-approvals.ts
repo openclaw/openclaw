@@ -265,6 +265,13 @@ function ensureDir(filePath: string) {
   if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
     throw new Error(`Refusing to use unsafe exec approvals directory: ${dir}`);
   }
+  try {
+    fs.chmodSync(dir, 0o700);
+  } catch (err) {
+    if (process.platform !== "win32") {
+      throw err;
+    }
+  }
   return dir;
 }
 
