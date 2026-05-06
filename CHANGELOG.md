@@ -100,9 +100,12 @@ Docs: https://docs.openclaw.ai
 - Plugins/catalog: add an `@tencent-weixin/openclaw-weixin` external entry pinned to `2.4.1` so onboarding and `openclaw channels add` can install the Tencent Weixin (personal WeChat) channel by default. (#77269) Thanks @pumpkinxing1.
 - Developer tooling: add checked-in VS Code Gateway debugging configs and an opt-in `OUTPUT_SOURCE_MAPS=1` source-map build path for breakpoints in TypeScript source. (#45710) Thanks @SwissArmyBud.
 - Managed proxy: add `proxy.loopbackMode` for Gateway loopback control-plane traffic, allowing operators to keep the default Gateway loopback bypass, force loopback Gateway traffic through the proxy, or block it. (#77018) Thanks @jesse-merhi.
+- Channels/iMessage: drive the bundled `imessage` plugin over `imsg` JSON-RPC so private API actions (`react`, `edit`, `unsend`, `reply`, `sendWithEffect`, `renameGroup`, `setGroupIcon`, `addParticipant`, `removeParticipant`, `leaveGroup`, `sendAttachment`) are reachable when `imsg launch` is running, capability-gated per-method via `imsg status --json`, and inbound chats are marked read with a typing bubble before dispatch unless `channels.imessage.sendReadReceipts: false` [AI-assisted]. Thanks @omarshahine.
 
 ### Fixes
 
+- Channels/iMessage: probe all persistable echo-cache scope shapes (`chat_id:N`, `chat_guid:<guid>`, `chat_identifier:<id>`, `imessage:<handle>`) on inbound match, so an outbound message addressed by `chat_guid` no longer bypasses the chat_id-only inbound lookup and re-feeds the agent its own reply [AI-assisted]. Thanks @omarshahine.
+- Security/iMessage: clamp `reply-cache.jsonl` to `0600` (parent dir `0700`) on every write/append and chmod existing entries from older gateway versions, blocking same-UID enumeration of conversation guids and shortId injection on multi-user hosts [AI-assisted]. Thanks @omarshahine.
 - Providers/xAI: stop sending OpenAI-style reasoning effort controls to native Grok Responses models, so `xai/grok-4.3` no longer fails live Docker/Gateway runs with `Invalid reasoning effort`.
 - Providers/xAI: clamp the bundled xAI thinking profile to `off` so live Gateway runs cannot send unsupported reasoning levels to native Grok Responses models.
 - Discord/gateway: measure heartbeat ACK timeouts from the actual heartbeat send, preventing late initial heartbeats from triggering false reconnect loops while the channel is still awaiting readiness. Fixes #77668. (#78087) Thanks @bryce-d-greybeard and @NikolaFC.
