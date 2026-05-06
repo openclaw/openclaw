@@ -422,6 +422,7 @@ describe("googlechatPlugin threading", () => {
   });
 
   it("surfaces account reply mode in tool context", () => {
+    const hasRepliedRef = { value: false };
     const result = googlechatThreadingAdapter.buildToolContext({
       cfg: {
         channels: {
@@ -431,11 +432,13 @@ describe("googlechatPlugin threading", () => {
         },
       } as OpenClawConfig,
       context: { MessageThreadId: "spaces/AAA/threads/xyz", To: "googlechat:spaces/AAA" },
+      hasRepliedRef,
     });
     expect(result).toEqual({
       currentChannelId: "spaces/AAA",
       currentThreadTs: "spaces/AAA/threads/xyz",
       replyToMode: "all",
+      hasRepliedRef,
     });
   });
 
@@ -465,10 +468,7 @@ describe("googlechatPlugin threading", () => {
         replyToId: "spaces/AAA/messages/current",
         threadId: "spaces/AAA/threads/inbound",
       }),
-    ).toEqual({
-      replyToId: "spaces/AAA/threads/inbound",
-      threadId: null,
-    });
+    ).toBeNull();
     expect(
       googlechatThreadingAdapter.resolveReplyTransport?.({
         cfg: {} as OpenClawConfig,
@@ -510,11 +510,38 @@ describe("googlechatPlugin threading", () => {
         toolContext: {
           currentChannelId: "spaces/AAA",
           currentThreadTs: "spaces/AAA/threads/inbound",
+          currentMessageId: "spaces/AAA/messages/current",
           replyToMode: "all",
         },
         replyToId: "spaces/AAA/messages/current",
       }),
     ).toBe("spaces/AAA/threads/inbound");
+    expect(
+      googlechatThreadingAdapter.resolveAutoThreadId?.({
+        cfg: {} as OpenClawConfig,
+        to: "spaces/AAA",
+        toolContext: {
+          currentChannelId: "spaces/AAA",
+          currentThreadTs: "spaces/AAA/threads/inbound",
+          currentMessageId: "spaces/AAA/messages/current",
+          replyToMode: "all",
+        },
+        replyToId: "spaces/AAA/messages/other",
+      }),
+    ).toBeUndefined();
+    expect(
+      googlechatThreadingAdapter.resolveAutoThreadId?.({
+        cfg: {} as OpenClawConfig,
+        to: "spaces/AAA",
+        toolContext: {
+          currentChannelId: "spaces/AAA",
+          currentThreadTs: "spaces/AAA/threads/inbound",
+          replyToMode: "first",
+          hasRepliedRef: { value: true },
+        },
+        replyToId: undefined,
+      }),
+    ).toBeUndefined();
     expect(
       googlechatThreadingAdapter.resolveAutoThreadId?.({
         cfg: {} as OpenClawConfig,

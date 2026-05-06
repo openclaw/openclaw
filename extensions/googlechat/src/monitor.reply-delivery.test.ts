@@ -78,6 +78,7 @@ describe("Google Chat reply delivery", () => {
       config,
       statusSink,
       typingMessageName: "spaces/AAA/messages/typing",
+      inboundMessageId: undefined,
       inboundThreadId: undefined,
     });
 
@@ -105,7 +106,7 @@ describe("Google Chat reply delivery", () => {
     );
   });
 
-  it("uses the inbound thread when replyToId resolves to a Google Chat message resource", async () => {
+  it("uses the inbound thread when replyToId resolves to the current Google Chat message resource", async () => {
     const core = createCore({ chunks: ["only chunk"] });
     const runtime = createRuntime();
     mocks.sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/sent" });
@@ -117,6 +118,7 @@ describe("Google Chat reply delivery", () => {
       runtime,
       core,
       config,
+      inboundMessageId: "spaces/AAA/messages/inbound",
       inboundThreadId: "spaces/AAA/threads/inbound-thread",
     });
 
@@ -126,6 +128,27 @@ describe("Google Chat reply delivery", () => {
       text: "only chunk",
       thread: "spaces/AAA/threads/inbound-thread",
     });
+  });
+
+  it("does not map an arbitrary Google Chat message-resource replyTo onto the inbound thread", async () => {
+    const core = createCore({ chunks: ["only chunk"] });
+    const runtime = createRuntime();
+    mocks.sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/sent" });
+
+    await deliverGoogleChatReply({
+      payload: { text: "only chunk", replyToId: "spaces/AAA/messages/other" },
+      account,
+      spaceId: "spaces/AAA",
+      runtime,
+      core,
+      config,
+      inboundMessageId: "spaces/AAA/messages/inbound",
+      inboundThreadId: "spaces/AAA/threads/inbound-thread",
+    });
+
+    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ thread: undefined }),
+    );
   });
 
   it("does not fall back to the inbound thread when no reply target is supplied", async () => {
@@ -140,6 +163,7 @@ describe("Google Chat reply delivery", () => {
       runtime,
       core,
       config,
+      inboundMessageId: undefined,
       inboundThreadId: "spaces/AAA/threads/inbound-thread",
     });
 
@@ -160,6 +184,7 @@ describe("Google Chat reply delivery", () => {
       runtime,
       core,
       config,
+      inboundMessageId: undefined,
       inboundThreadId: "spaces/AAA/threads/inbound-thread",
     });
 
@@ -180,6 +205,7 @@ describe("Google Chat reply delivery", () => {
       runtime,
       core,
       config,
+      inboundMessageId: undefined,
       inboundThreadId: "spaces/AAA/threads/inbound-thread",
     });
 
@@ -209,6 +235,7 @@ describe("Google Chat reply delivery", () => {
       core,
       config,
       typingMessageName: "spaces/AAA/messages/typing",
+      inboundMessageId: undefined,
       inboundThreadId: undefined,
     });
 
@@ -238,6 +265,7 @@ describe("Google Chat reply delivery", () => {
       runtime,
       core,
       config,
+      inboundMessageId: "spaces/AAA/messages/inbound",
       inboundThreadId: "spaces/AAA/messages/not-a-thread",
     });
 

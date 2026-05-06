@@ -282,6 +282,7 @@ async function processMessageWithPipeline(params: {
     }
   }
 
+  const inboundMessageId = message.name;
   const inboundThreadId = message.thread?.name;
 
   await core.channel.turn.run({
@@ -326,6 +327,7 @@ async function processMessageWithPipeline(params: {
               config,
               statusSink,
               typingMessageName,
+              inboundMessageId,
               inboundThreadId,
             });
             // Only use typing message for first delivery

@@ -70,7 +70,9 @@ function createGoogleChatSendReceipt(params: {
 type GoogleChatToolContext = {
   currentChannelId?: string;
   currentThreadTs?: string;
+  currentMessageId?: string | number;
   replyToMode: "off" | "first" | "all" | "batched";
+  hasRepliedRef?: { value: boolean };
 };
 
 function normalizeGoogleChatThreadResourceName(value?: string | number | null): string | undefined {
@@ -85,13 +87,17 @@ function normalizeGoogleChatChannelTarget(value?: string | null): string | undef
 function resolveGoogleChatOutboundThread(params: {
   threadId?: string | number | null;
   replyToId?: string | null;
+  currentMessageId?: string | number | null;
   allowThreadIdOnly?: boolean;
 }): string | undefined {
   const explicitThread = normalizeGoogleChatThreadResourceName(params.replyToId);
   if (explicitThread) {
     return explicitThread;
   }
-  if (isGoogleChatMessageResourceName(params.replyToId)) {
+  if (
+    isGoogleChatMessageResourceName(params.replyToId) &&
+    params.replyToId === params.currentMessageId
+  ) {
     return normalizeGoogleChatThreadResourceName(params.threadId);
   }
   return params.allowThreadIdOnly
@@ -201,6 +207,7 @@ export const googlechatThreadingAdapter = {
     cfg?: OpenClawConfig;
     accountId?: string | null;
     context?: { MessageThreadId?: string | number; To?: string };
+    hasRepliedRef?: { value: boolean };
   }): GoogleChatToolContext => {
     const replyToMode = resolveGoogleChatToolReplyToMode(params);
     const currentChannelId = normalizeGoogleChatChannelTarget(params.context?.To);
@@ -208,6 +215,7 @@ export const googlechatThreadingAdapter = {
     const baseContext: GoogleChatToolContext = {
       ...(currentChannelId ? { currentChannelId } : {}),
       replyToMode,
+      ...(params.hasRepliedRef ? { hasRepliedRef: params.hasRepliedRef } : {}),
     };
     if (!currentThreadTs) {
       return baseContext;
@@ -226,7 +234,9 @@ export const googlechatThreadingAdapter = {
     toolContext?: {
       currentChannelId?: string | null;
       currentThreadTs?: string | null;
+      currentMessageId?: string | number | null;
       replyToMode?: string | null;
+      hasRepliedRef?: { value: boolean };
     };
   }) => {
     if (!allowsImplicitToolThread(toolContext?.replyToMode ?? undefined)) {
@@ -240,6 +250,15 @@ export const googlechatThreadingAdapter = {
       return undefined;
     }
     if (!replyToId && !isCurrentGoogleChatTarget({ to, toolContext })) {
+      return undefined;
+    }
+    if (!replyToId && toolContext?.replyToMode === "first" && toolContext.hasRepliedRef?.value) {
+      return undefined;
+    }
+    if (
+      replyToId &&
+      (!isGoogleChatMessageResourceName(replyToId) || replyToId !== toolContext?.currentMessageId)
+    ) {
       return undefined;
     }
     return inboundThread;
