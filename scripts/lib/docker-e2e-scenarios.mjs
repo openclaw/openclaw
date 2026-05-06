@@ -21,9 +21,10 @@ const LIVE_RETRY_PATTERNS = [
   /ECONNRESET|ETIMEDOUT|ENOTFOUND/i,
 ];
 
-function liveDockerScriptCommand(script, envPrefix = "") {
+function liveDockerScriptCommand(script, envPrefix = "", options = {}) {
   const prefix = envPrefix ? `${envPrefix} ` : "";
-  return `${prefix}OPENCLAW_SKIP_DOCKER_BUILD=1 bash -c 'harness="\${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-}"; if [ -z "$harness" ]; then if [ -d .release-harness/scripts ]; then harness=.release-harness; else harness=.; fi; fi; OPENCLAW_LIVE_DOCKER_REPO_ROOT="\${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/${script}"'`;
+  const skipBuild = options.skipBuild === false ? "" : "OPENCLAW_SKIP_DOCKER_BUILD=1 ";
+  return `${prefix}${skipBuild}bash -c 'harness="\${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-}"; if [ -z "$harness" ]; then if [ -d .release-harness/scripts ]; then harness=.release-harness; else harness=.; fi; fi; OPENCLAW_LIVE_DOCKER_REPO_ROOT="\${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/${script}"'`;
 }
 
 function lane(name, command, options = {}) {
@@ -128,11 +129,19 @@ export const mainLanes = [
     timeoutMs: LIVE_PROFILE_TIMEOUT_MS,
     weight: 4,
   }),
-  liveLane("live-gateway", liveDockerScriptCommand("test-live-gateway-models-docker.sh"), {
-    providers: ["claude-cli", "codex-cli", "google-gemini-cli"],
-    timeoutMs: LIVE_PROFILE_TIMEOUT_MS,
-    weight: 4,
-  }),
+  liveLane(
+    "live-gateway",
+    liveDockerScriptCommand(
+      "test-live-gateway-models-docker.sh",
+      "OPENCLAW_IMAGE=openclaw:local-live-gateway OPENCLAW_DOCKER_BUILD_EXTENSIONS=matrix",
+      { skipBuild: false },
+    ),
+    {
+      providers: ["claude-cli", "codex-cli", "google-gemini-cli"],
+      timeoutMs: LIVE_PROFILE_TIMEOUT_MS,
+      weight: 4,
+    },
+  ),
   liveLane(
     "live-cli-backend-claude",
     liveDockerScriptCommand(
