@@ -90,6 +90,36 @@ describe("temporal decay", () => {
     expect(decayed[1]?.score).toBeCloseTo(0.75);
   });
 
+  it("decays dated memory files in subdirectories", async () => {
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [
+        { path: "memory/2025-01-01.md", score: 1, source: "memory" },
+        { path: "memory/daily-log/2025-01-01.md", score: 1, source: "memory" },
+        { path: "memory/session-log/2025-01-01-1200.md", score: 1, source: "memory" },
+      ],
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+    });
+
+    const baseScore = decayed[0]?.score;
+    if (baseScore === undefined) {
+      throw new Error("expected a decayed score for the base memory entry");
+    }
+    expect(baseScore).toBeLessThan(0.001);
+    expect(decayed[1]?.score).toBeCloseTo(baseScore);
+    expect(decayed[2]?.score).toBeCloseTo(baseScore);
+  });
+
+  it("does not decay date-prefixed evergreen memory files", async () => {
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [{ path: "memory/daily-log/2025-01-01-project-plan.md", score: 0.8, source: "memory" }],
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+    });
+
+    expect(decayed[0]?.score).toBeCloseTo(0.8);
+  });
+
   it("applies decay in hybrid merging before ranking", async () => {
     const merged = await mergeVectorResultsWithTemporalDecay([
       createVectorMemoryEntry({
