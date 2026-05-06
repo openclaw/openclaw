@@ -30,6 +30,7 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
+import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../heartbeat.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import {
   type ElevatedLevel,
@@ -654,7 +655,7 @@ export async function runPreparedReply(
     ? baseBodyForPrompt
     : [inboundUserContext, "[User sent media without caption]"].filter(Boolean).join("\n\n");
   const transcriptBodyBase = isHeartbeat
-    ? effectiveBaseBody
+    ? HEARTBEAT_TRANSCRIPT_PROMPT
     : isBareSessionReset
       ? softResetTail || `[OpenClaw session ${startupAction}]`
       : hasUserBody
