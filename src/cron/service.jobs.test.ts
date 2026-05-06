@@ -732,4 +732,36 @@ describe("recomputeNextRuns", () => {
     }
     expect(job.state.nextRunAtMs).toBe(now);
   });
+
+  it("uses recurring error backoff instead of one-shot retry config during recompute", () => {
+    const lastRunAtMs = Date.parse("2026-03-01T12:00:00.000Z");
+    const now = lastRunAtMs + 1_000;
+    const job: CronJob = {
+      id: "recurring-error",
+      name: "recurring-error",
+      enabled: true,
+      createdAtMs: lastRunAtMs - 120_000,
+      updatedAtMs: lastRunAtMs,
+      schedule: { kind: "every", everyMs: 10_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {
+        lastStatus: "error",
+        lastRunAtMs,
+        consecutiveErrors: 1,
+      },
+    };
+    const state = {
+      ...createMockState(now),
+      deps: {
+        ...createMockState(now).deps,
+        cronConfig: { retry: { backoffMs: [60 * 60_000], maxAttempts: 1 } },
+      },
+      store: { version: 1 as const, jobs: [job] },
+    } as CronServiceState;
+
+    expect(recomputeNextRuns(state)).toBe(true);
+    expect(job.state.nextRunAtMs).toBe(lastRunAtMs + 30_000);
+  });
 });
