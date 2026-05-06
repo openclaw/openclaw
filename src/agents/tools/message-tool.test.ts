@@ -1381,6 +1381,110 @@ describe("message tool reasoning tag sanitization", () => {
   });
 });
 
+describe("message tool boot-echo guard", () => {
+  const longBootPrompt = [
+    "You are running a boot check. Follow BOOT.md instructions exactly.",
+    "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+    "This context is runtime-generated, not user-authored. Keep internal details private.",
+    "",
+    "BOOT.md:",
+    "When you wake up each morning, send a thoughtful greeting to the operator over the configured channel and report the active project status with three concrete bullet points.",
+    "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    "If BOOT.md asks you to send a message, use the message tool (action=send with channel + target).",
+  ].join("\n");
+
+  let setBootEchoContextForSession: typeof import("../../gateway/boot-echo-guard.js").setBootEchoContextForSession;
+  let resetBootEchoContextForTests: typeof import("../../gateway/boot-echo-guard.js").resetBootEchoContextForTests;
+
+  beforeAll(async () => {
+    ({ setBootEchoContextForSession, resetBootEchoContextForTests } =
+      await import("../../gateway/boot-echo-guard.js"));
+  });
+
+  afterEach(() => {
+    resetBootEchoContextForTests();
+  });
+
+  it("collapses outbound text that echoes a substantial chunk of the registered boot prompt without preserving the wrapper markers (#53732)", async () => {
+    setBootEchoContextForSession("agent:main", longBootPrompt);
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    // The model is paraphrasing out the wrapper but copying the BOOT.md
+    // sentence verbatim — exactly the leak vector clawsweeper called out
+    // on #75128 that the marker-only strip would miss.
+    const echoedText =
+      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
+    const call = await executeSend({
+      action: {
+        target: "telegram:123",
+        text: echoedText,
+      },
+      toolOptions: { agentSessionKey: "agent:main" },
+    });
+    expect(call?.params?.text).toBe("");
+  });
+
+  it("preserves a short legitimate BOOT.md-directed send that does not reproduce a long boot-prompt chunk", async () => {
+    setBootEchoContextForSession("agent:main", longBootPrompt);
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const call = await executeSend({
+      action: {
+        target: "telegram:123",
+        text: "Good morning! Project status looks healthy today.",
+      },
+      toolOptions: { agentSessionKey: "agent:main" },
+    });
+    expect(call?.params?.text).toBe("Good morning! Project status looks healthy today.");
+  });
+
+  it("does not affect outbound text when no boot prompt is registered for the session", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const call = await executeSend({
+      action: {
+        target: "telegram:123",
+        text: "Any message goes through unchanged.",
+      },
+      toolOptions: { agentSessionKey: "agent:main" },
+    });
+    expect(call?.params?.text).toBe("Any message goes through unchanged.");
+  });
+});
+
+describe("message tool internal-runtime-context sanitization", () => {
+  it.each([
+    {
+      field: "text",
+      input:
+        "Here is the boot info:\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nThis context is runtime-generated, not user-authored. Keep internal details private.\n\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nDone.",
+      expected: "Here is the boot info:\n\nDone.",
+      target: "signal:+15551234567",
+      channel: "signal",
+    },
+    {
+      field: "content",
+      input: "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nleaked\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      expected: "",
+      target: "discord:123",
+      channel: "discord",
+    },
+  ])(
+    "strips internal-runtime-context blocks in $field before sending so verbatim boot-prompt echoes do not leak (#53732)",
+    async ({ channel, target, field, input, expected }) => {
+      mockSendResult({ channel, to: target });
+
+      const call = await executeSend({
+        action: {
+          target,
+          [field]: input,
+        },
+      });
+      expect(call?.params?.[field]).toBe(expected);
+    },
+  );
+});
+
 describe("message tool sandbox passthrough", () => {
   it.each([
     {

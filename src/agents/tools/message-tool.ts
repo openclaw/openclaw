@@ -15,6 +15,10 @@ import { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  getBootEchoContextForSession,
+  stripBootEchoFromOutboundText,
+} from "../../gateway/boot-echo-guard.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
@@ -25,6 +29,7 @@ import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js"
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { listAllChannelSupportedActions, listChannelSupportedActions } from "../channel-tools.js";
+import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
 import { channelTargetSchema, channelTargetsSchema, stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
@@ -763,11 +768,25 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       // Shallow-copy so we don't mutate the original event args (used for logging/dedup).
       const params = { ...(args as Record<string, unknown>) };
 
-      // Strip reasoning tags from text fields — models may include <think>…</think>
-      // in tool arguments, and the messaging tool send path has no other tag filtering.
+      // Sanitize outbound text fields in three layers:
+      //
+      // 1. `stripReasoningTagsFromText` — drops `<think>...</think>` blocks
+      //    that some models emit into tool arguments.
+      // 2. `stripInternalRuntimeContext` — removes internal-runtime-context
+      //    delimited blocks (the same strip applied to final replies via
+      //    `sanitizeUserFacingText`). Catches wrapped BOOT.md or webchat
+      //    runtime-context echoes that preserve the marker lines.
+      // 3. `stripBootEchoFromOutboundText` — defense-in-depth check against
+      //    the active boot prompt for this session. Catches verbatim echoes
+      //    that paraphrase out the wrapper markers but reproduce a
+      //    substantial chunk of the boot prompt content. Refs #53732.
+      const bootPromptForSession = getBootEchoContextForSession(options?.agentSessionKey);
       for (const field of ["text", "content", "message", "caption"]) {
         if (typeof params[field] === "string") {
-          params[field] = stripFormattedReasoningMessage(params[field]);
+          params[field] = stripBootEchoFromOutboundText(
+            stripInternalRuntimeContext(stripFormattedReasoningMessage(params[field])),
+            bootPromptForSession,
+          );
         }
       }
       params.presentation = sanitizePresentationTextFields(params.presentation);
