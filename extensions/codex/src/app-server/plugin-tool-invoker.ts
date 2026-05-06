@@ -19,6 +19,7 @@ import {
   type CodexPluginBridgeRequest,
   type CodexPluginInventoryRecord,
 } from "./plugin-inventory.js";
+import type { v2 } from "./protocol-generated/typescript/index.js";
 import {
   isJsonObject,
   type CodexServerNotification,
@@ -73,8 +74,10 @@ export async function invokeCodexPluginTool(params: {
   }
 
   const appIdsEnabled = await enableCodexPluginAppsBestEffort({ request, record });
+  const modelRef = resolveCodexPluginToolModel(config);
   const thread = (await request("thread/start", {
-    model: resolveCodexPluginToolModel(config),
+    model: modelRef.model,
+    ...(modelRef.modelProvider ? { modelProvider: modelRef.modelProvider } : {}),
     cwd: params.context?.workspaceDir ?? process.cwd(),
     approvalPolicy: appServer.approvalPolicy,
     approvalsReviewer: appServer.approvalsReviewer,
@@ -117,15 +120,13 @@ async function enableCodexPluginAppsBestEffort(params: {
   request: CodexPluginBridgeRequest;
   record: CodexPluginInventoryRecord;
 }): Promise<string[]> {
-  const apps = (await params.request("app/list", { forceRefetch: true })) as {
-    data?: Array<{ id?: string; pluginDisplayNames?: string[] }>;
-  };
+  const apps = await readAllCodexApps(params.request, { forceRefetch: true });
   const displayNames = new Set([
     params.record.displayName,
     params.record.pluginName,
     params.record.pluginId,
   ]);
-  const appIds = (apps.data ?? [])
+  const appIds = apps
     .filter((app) => app.id && app.pluginDisplayNames?.some((name) => displayNames.has(name)))
     .map((app) => app.id)
     .filter((id): id is string => Boolean(id));
@@ -142,6 +143,23 @@ async function enableCodexPluginAppsBestEffort(params: {
   });
   await refreshCodexPluginRuntimeState(params.request);
   return appIds;
+}
+
+async function readAllCodexApps(
+  request: CodexPluginBridgeRequest,
+  params: Pick<v2.AppsListParams, "forceRefetch">,
+): Promise<v2.AppInfo[]> {
+  const apps: v2.AppInfo[] = [];
+  let cursor: string | null | undefined;
+  do {
+    const response = (await request("app/list", {
+      ...params,
+      ...(cursor ? { cursor } : {}),
+    } satisfies v2.AppsListParams)) as v2.AppsListResponse;
+    apps.push(...(response.data ?? []));
+    cursor = response.nextCursor;
+  } while (cursor);
+  return apps;
 }
 
 async function runCodexPluginTurn(params: {
@@ -174,6 +192,20 @@ async function runCodexPluginTurn(params: {
   );
   timeout.unref?.();
   let idleTimeout: ReturnType<typeof setTimeout> | undefined;
+  const refreshIdleTimeout = () => {
+    if (!turnId || completed) {
+      return;
+    }
+    if (idleTimeout) {
+      clearTimeout(idleTimeout);
+    }
+    idleTimeout = setTimeout(() => {
+      if (!completed) {
+        rejectCompletion?.(new Error("Codex plugin turn idle timed out waiting for completion"));
+      }
+    }, CODEX_PLUGIN_TURN_IDLE_TIMEOUT_MS);
+    idleTimeout.unref?.();
+  };
 
   const notificationCleanup = params.client.addNotificationHandler((notification) => {
     handleCodexPluginNotification({
@@ -187,12 +219,14 @@ async function runCodexPluginTurn(params: {
         terminalError = error;
         resolveCompletion?.();
       },
+      onProgress: refreshIdleTimeout,
     });
   });
   const requestCleanup = params.client.addRequestHandler((request) => {
     if (!turnId || !requestMatchesTurn(request.params, params.threadId, turnId)) {
       return undefined;
     }
+    refreshIdleTimeout();
     if (request.method === "mcpServer/elicitation/request") {
       return buildCodexPluginElicitationResponse(
         params.pluginConfig,
@@ -218,12 +252,7 @@ async function runCodexPluginTurn(params: {
       turn: { id: string; status: string; error?: unknown };
     };
     turnId = response.turn.id;
-    idleTimeout = setTimeout(() => {
-      if (!completed) {
-        rejectCompletion?.(new Error("Codex plugin turn idle timed out waiting for completion"));
-      }
-    }, CODEX_PLUGIN_TURN_IDLE_TIMEOUT_MS);
-    idleTimeout.unref?.();
+    refreshIdleTimeout();
     if (response.turn.status !== "inProgress") {
       completed = true;
       terminalStatus = response.turn.status;
@@ -262,6 +291,7 @@ function handleCodexPluginNotification(params: {
   turnId: string | undefined;
   assistantTextByItem: Map<string, string>;
   onCompleted: (status: string, error?: string) => void;
+  onProgress: () => void;
 }): void {
   const notificationParams = isJsonObject(params.notification.params)
     ? params.notification.params
@@ -269,11 +299,11 @@ function handleCodexPluginNotification(params: {
   if (!notificationParams || notificationParams.threadId !== params.threadId) {
     return;
   }
-  if (
-    params.notification.method === "item/agentMessage/delta" &&
-    params.turnId &&
-    notificationParams.turnId === params.turnId
-  ) {
+  const matchesActiveTurn = Boolean(params.turnId && notificationParams.turnId === params.turnId);
+  if (matchesActiveTurn && params.notification.method !== "turn/completed") {
+    params.onProgress();
+  }
+  if (params.notification.method === "item/agentMessage/delta" && matchesActiveTurn) {
     const itemId = typeof notificationParams.itemId === "string" ? notificationParams.itemId : "";
     const delta = typeof notificationParams.delta === "string" ? notificationParams.delta : "";
     if (itemId && delta) {
@@ -286,8 +316,7 @@ function handleCodexPluginNotification(params: {
   }
   if (
     params.notification.method === "item/completed" &&
-    params.turnId &&
-    notificationParams.turnId === params.turnId &&
+    matchesActiveTurn &&
     isJsonObject(notificationParams.item) &&
     notificationParams.item.type === "agentMessage"
   ) {
@@ -364,14 +393,27 @@ function requestMatchesTurn(
   if (!isJsonObject(value)) {
     return false;
   }
-  return readString(value, "threadId") === threadId && readString(value, "turnId") === turnId;
+  if (readString(value, "threadId") !== threadId) {
+    return false;
+  }
+  const requestTurnId = value.turnId;
+  return requestTurnId === null || requestTurnId === undefined || requestTurnId === turnId;
 }
 
-function resolveCodexPluginToolModel(config: OpenClawConfig | undefined): string {
+function resolveCodexPluginToolModel(config: OpenClawConfig | undefined): {
+  model: string;
+  modelProvider?: string;
+} {
   const rawModel = config?.agents?.defaults?.model;
   const primary = typeof rawModel === "string" ? rawModel : rawModel?.primary;
-  const model = primary?.includes("/") ? primary.split("/").at(-1) : primary;
-  return model || "gpt-5.5";
+  if (primary?.includes("/")) {
+    const [modelProvider, ...modelParts] = primary.split("/");
+    const model = modelParts.join("/");
+    if (modelProvider && model) {
+      return { model, modelProvider };
+    }
+  }
+  return { model: primary || "gpt-5.5" };
 }
 
 function formatActivationFailure(record: CodexPluginInventoryRecord, status: string): string {

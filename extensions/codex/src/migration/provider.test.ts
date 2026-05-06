@@ -324,6 +324,24 @@ describe("buildCodexMigrationProvider", () => {
           }),
         }),
         expect.objectContaining({
+          id: "config:codex-enabled",
+          kind: "config",
+          action: "merge",
+          details: expect.objectContaining({
+            path: ["plugins", "entries", "codex", "enabled"],
+            value: true,
+          }),
+        }),
+        expect.objectContaining({
+          id: "config:codex-plugin-tool-allowlist",
+          kind: "config",
+          action: "merge",
+          details: expect.objectContaining({
+            path: ["tools", "alsoAllow"],
+            value: ["codex"],
+          }),
+        }),
+        expect.objectContaining({
           id: "config:codex-plugins",
           kind: "config",
           action: "merge",
@@ -350,8 +368,8 @@ describe("buildCodexMigrationProvider", () => {
         }),
       ]),
     );
-    expect(plan.items).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: "plugin:documents" })]),
+    expect(plan.items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "plugin:documents:1" })]),
     );
   });
 
@@ -515,6 +533,11 @@ describe("buildCodexMigrationProvider", () => {
     expect(result.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "plugin:gmail", status: "migrated" }),
+        expect.objectContaining({ id: "config:codex-enabled", status: "migrated" }),
+        expect.objectContaining({
+          id: "config:codex-plugin-tool-allowlist",
+          status: "migrated",
+        }),
         expect.objectContaining({ id: "config:codex-plugins", status: "migrated" }),
       ]),
     );
@@ -522,6 +545,7 @@ describe("buildCodexMigrationProvider", () => {
       plugins: {
         entries: {
           codex: {
+            enabled: true,
             config: {
               codexPlugins: {
                 enabled: true,
@@ -539,6 +563,155 @@ describe("buildCodexMigrationProvider", () => {
           },
         },
       },
+      tools: { alsoAllow: ["codex"] },
+    });
+  });
+
+  it("merges Codex into existing plugin and tool allowlists during apply", async () => {
+    const fixture = await createCodexFixture();
+    sourceTesting.setAppServerRequestForTests(async (method: string) => {
+      if (method === "plugin/list") {
+        return pluginListResponse({});
+      }
+      if (method === "app/list") {
+        return appsListResponse();
+      }
+      throw new Error(`unexpected plan ${method}`);
+    });
+    applyTesting.setAppServerRequestForTests(async (method: string) => {
+      if (method === "plugin/list") {
+        return pluginListResponse({});
+      }
+      throw new Error(`unexpected apply ${method}`);
+    });
+    const config = {
+      agents: { defaults: { workspace: fixture.workspaceDir } },
+      plugins: { allow: ["browser"] },
+      tools: { alsoAllow: ["browser"] },
+    } as MigrationProviderContext["config"];
+    const { runtime, getConfig } = createConfigRuntime(config);
+    const provider = buildCodexMigrationProvider();
+    const plan = await provider.plan(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+        plugins: ["gmail"],
+        config,
+      }),
+    );
+
+    expect(plan.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "config:codex-plugin-allowlist", status: "planned" }),
+        expect.objectContaining({ id: "config:codex-plugin-tool-allowlist", status: "planned" }),
+      ]),
+    );
+
+    const result = await provider.apply(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+        reportDir: path.join(fixture.root, "report"),
+        config,
+        runtime,
+      }),
+      plan,
+    );
+
+    expect(result.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "config:codex-plugin-allowlist", status: "migrated" }),
+        expect.objectContaining({ id: "config:codex-plugin-tool-allowlist", status: "migrated" }),
+      ]),
+    );
+    expect(getConfig()).toMatchObject({
+      plugins: { allow: ["browser", "codex"] },
+      tools: { alsoAllow: ["browser", "codex"] },
+    });
+  });
+
+  it("does not enable Codex plugin bridge config when app auth is still required", async () => {
+    const fixture = await createCodexFixture();
+    sourceTesting.setAppServerRequestForTests(async (method: string) => {
+      if (method === "plugin/list") {
+        return pluginListResponse({});
+      }
+      if (method === "app/list") {
+        return appsListResponse();
+      }
+      throw new Error(`unexpected plan ${method}`);
+    });
+    const applyRequest = vi.fn(async (method: string) => {
+      if (method === "plugin/list") {
+        return pluginListResponse({ gmail: { installed: false, enabled: false } });
+      }
+      if (method === "plugin/install") {
+        return {
+          authPolicy: "ON_USE",
+          appsNeedingAuth: [
+            {
+              id: "gmail",
+              name: "Gmail",
+              description: null,
+              installUrl: "https://example.invalid/auth",
+              needsAuth: true,
+            },
+          ],
+        };
+      }
+      if (method === "skills/list") {
+        return { data: [] };
+      }
+      if (method === "config/mcpServer/reload") {
+        return undefined;
+      }
+      if (method === "app/list") {
+        return appsListResponse();
+      }
+      throw new Error(`unexpected apply ${method}`);
+    });
+    applyTesting.setAppServerRequestForTests(applyRequest);
+    const config = {
+      agents: { defaults: { workspace: fixture.workspaceDir } },
+    } as MigrationProviderContext["config"];
+    const { runtime, getConfig } = createConfigRuntime(config);
+    const provider = buildCodexMigrationProvider();
+    const plan = await provider.plan(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+        plugins: ["gmail"],
+        config,
+      }),
+    );
+
+    const result = await provider.apply(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+        reportDir: path.join(fixture.root, "report"),
+        config,
+        runtime,
+      }),
+      plan,
+    );
+
+    expect(result.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "plugin:gmail",
+          status: "error",
+          reason: expect.stringContaining("requires app authorization"),
+        }),
+        expect.objectContaining({ id: "config:codex-plugins", status: "error" }),
+      ]),
+    );
+    expect(getConfig()).not.toMatchObject({
+      plugins: { entries: { codex: { config: { codexPlugins: expect.anything() } } } },
     });
   });
 

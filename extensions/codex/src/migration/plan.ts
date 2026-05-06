@@ -22,10 +22,34 @@ import {
 import { resolveCodexMigrationTargets } from "./targets.js";
 
 const OPENAI_CURATED_MARKETPLACE = "openai-curated";
+const CODEX_PLUGIN_TOOL_ALLOWLIST_ENTRY = "codex";
 
 type CodexMigrationContext = MigrationProviderContext & {
   plugins?: string[];
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function readConfigPath(config: unknown, path: readonly string[]): unknown {
+  let current: unknown = config;
+  for (const segment of path) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[segment];
+  }
+  return current;
+}
+
+function appendUnique(values: readonly string[], value: string): string[] {
+  return values.includes(value) ? [...values] : [...values, value];
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry): entry is string => typeof entry === "string");
+}
 
 function uniqueSkillName(skill: CodexSkillSource, counts: Map<string, number>): string {
   const base = sanitizeName(skill.name) || "codex-skill";
@@ -166,6 +190,86 @@ function buildCodexPluginsConfig(
   };
 }
 
+function buildCodexPluginConfigItems(params: {
+  ctx: MigrationProviderContext;
+  plugins: readonly CodexInstalledPluginSource[];
+}): MigrationItem[] {
+  const items: MigrationItem[] = [];
+  items.push(
+    createMigrationConfigPatchItem({
+      id: "config:codex-enabled",
+      target: "plugins.entries.codex.enabled",
+      path: ["plugins", "entries", "codex", "enabled"],
+      value: true,
+      message: "Enable the bundled Codex plugin so migrated Codex plugin tools can load.",
+      conflict:
+        !params.ctx.overwrite &&
+        hasMigrationConfigPatchConflict(
+          params.ctx.config,
+          ["plugins", "entries", "codex", "enabled"],
+          true,
+        ),
+    }),
+  );
+
+  const pluginAllow = readConfigPath(params.ctx.config, ["plugins", "allow"]);
+  if (isStringArray(pluginAllow)) {
+    const value = appendUnique(pluginAllow, "codex");
+    items.push(
+      createMigrationConfigPatchItem({
+        id: "config:codex-plugin-allowlist",
+        target: "plugins.allow",
+        path: ["plugins", "allow"],
+        value,
+        message: "Include Codex in the plugin allowlist so the enabled plugin can load.",
+      }),
+    );
+  }
+
+  const toolsAllow = readConfigPath(params.ctx.config, ["tools", "allow"]);
+  const toolAllowPath = isStringArray(toolsAllow)
+    ? (["tools", "allow"] as const)
+    : (["tools", "alsoAllow"] as const);
+  const existingToolAllow = readConfigPath(params.ctx.config, toolAllowPath);
+  const toolAllowValue = isStringArray(existingToolAllow)
+    ? appendUnique(existingToolAllow, CODEX_PLUGIN_TOOL_ALLOWLIST_ENTRY)
+    : [CODEX_PLUGIN_TOOL_ALLOWLIST_ENTRY];
+  items.push(
+    createMigrationConfigPatchItem({
+      id: "config:codex-plugin-tool-allowlist",
+      target: toolAllowPath.join("."),
+      path: [...toolAllowPath],
+      value: toolAllowValue,
+      message:
+        "Allow optional Codex plugin tools by plugin id so migrated codex_plugin_* tools are discoverable.",
+      conflict:
+        !params.ctx.overwrite &&
+        existingToolAllow !== undefined &&
+        !isStringArray(existingToolAllow),
+    }),
+  );
+
+  const value = buildCodexPluginsConfig(params.plugins);
+  items.push(
+    createMigrationConfigPatchItem({
+      id: "config:codex-plugins",
+      target: "plugins.entries.codex.config.codexPlugins",
+      path: ["plugins", "entries", "codex", "config", "codexPlugins"],
+      value,
+      message:
+        "Enable migrated source-installed openai-curated Codex plugins with destructive actions disabled.",
+      conflict:
+        !params.ctx.overwrite &&
+        hasMigrationConfigPatchConflict(
+          params.ctx.config,
+          ["plugins", "entries", "codex", "config", "codexPlugins"],
+          value,
+        ),
+    }),
+  );
+  return items;
+}
+
 function buildCodexPluginItems(params: {
   ctx: MigrationProviderContext;
   plugins: CodexInstalledPluginSource[];
@@ -196,24 +300,7 @@ function buildCodexPluginItems(params: {
       }),
     );
   }
-  const value = buildCodexPluginsConfig(params.plugins);
-  items.push(
-    createMigrationConfigPatchItem({
-      id: "config:codex-plugins",
-      target: "plugins.entries.codex.config.codexPlugins",
-      path: ["plugins", "entries", "codex", "config", "codexPlugins"],
-      value,
-      message:
-        "Enable migrated source-installed openai-curated Codex plugins with destructive actions disabled.",
-      conflict:
-        !params.ctx.overwrite &&
-        hasMigrationConfigPatchConflict(
-          params.ctx.config,
-          ["plugins", "entries", "codex", "config", "codexPlugins"],
-          value,
-        ),
-    }),
-  );
+  items.push(...buildCodexPluginConfigItems(params));
   return items;
 }
 

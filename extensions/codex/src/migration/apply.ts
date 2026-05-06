@@ -1,6 +1,9 @@
 import path from "node:path";
 import {
   applyMigrationConfigPatchItem,
+  markMigrationItemConflict,
+  markMigrationItemError,
+  readMigrationConfigPatchDetails,
   summarizeMigrationItems,
 } from "openclaw/plugin-sdk/migration";
 import {
@@ -21,6 +24,10 @@ import { buildCodexMigrationPlan } from "./plan.js";
 
 const OPENAI_CURATED_MARKETPLACE = "openai-curated";
 const CODEX_PLUGIN_APPLY_TIMEOUT_MS = 60_000;
+const CODEX_CONFIG_ALLOWLIST_ITEM_IDS = new Set([
+  "config:codex-plugin-allowlist",
+  "config:codex-plugin-tool-allowlist",
+]);
 
 type CodexMigrationAppServerRequest = (method: string, params?: unknown) => Promise<unknown>;
 
@@ -43,6 +50,50 @@ function readCodexPluginConfigFromOpenClawConfig(config: unknown): unknown {
     return undefined;
   }
   return (codex as { config?: unknown }).config;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function readConfigPath(config: unknown, path: readonly string[]): unknown {
+  let current: unknown = config;
+  for (const segment of path) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[segment];
+  }
+  return current;
+}
+
+function writeConfigPath(root: Record<string, unknown>, path: readonly string[], value: unknown) {
+  let current = root;
+  for (const segment of path.slice(0, -1)) {
+    const existing = current[segment];
+    if (!isRecord(existing)) {
+      current[segment] = {};
+    }
+    current = current[segment] as Record<string, unknown>;
+  }
+  const leaf = path.at(-1);
+  if (leaf) {
+    current[leaf] = value;
+  }
+}
+
+function mergeStringAllowlist(existing: unknown, values: readonly string[]): string[] | undefined {
+  if (existing !== undefined && !Array.isArray(existing)) {
+    return undefined;
+  }
+  if (Array.isArray(existing) && !existing.every((value) => typeof value === "string")) {
+    return undefined;
+  }
+  const next = new Set<string>(Array.isArray(existing) ? existing : []);
+  for (const value of values) {
+    next.add(value);
+  }
+  return [...next];
 }
 
 async function defaultAppServerRequest(
@@ -148,17 +199,71 @@ async function applyCodexPluginActivationItems(params: {
       });
       continue;
     }
-    await request("plugin/install", {
+    const installResponse = (await request("plugin/install", {
       marketplacePath: marketplace.path,
       pluginName: detail.pluginName,
-    } satisfies v2.PluginInstallParams);
+    } satisfies v2.PluginInstallParams)) as v2.PluginInstallResponse;
     changed = true;
+    const appsNeedingAuth = installResponse.appsNeedingAuth ?? [];
+    if (appsNeedingAuth.length > 0) {
+      applied.push({
+        ...item,
+        status: "error",
+        reason: `plugin installed but requires app authorization before migration can enable it: ${appsNeedingAuth
+          .map((app) => app.name || app.id)
+          .join(", ")}`,
+      });
+      continue;
+    }
     applied.push({ ...item, status: "migrated" });
   }
   if (changed) {
     await refreshCodexPluginRuntime(request);
   }
   return applied;
+}
+
+async function applyCodexAllowlistConfigPatchItem(
+  ctx: MigrationProviderContext,
+  item: MigrationItem,
+): Promise<MigrationItem> {
+  if (item.status !== "planned") {
+    return item;
+  }
+  const details = readMigrationConfigPatchDetails(item);
+  const values = details?.value;
+  if (!details || !Array.isArray(values) || !values.every((value) => typeof value === "string")) {
+    return markMigrationItemError(item, "missing allowlist config patch");
+  }
+  const configApi = ctx.runtime?.config;
+  if (!configApi?.current || !configApi.mutateConfigFile) {
+    return markMigrationItemError(item, "config runtime unavailable");
+  }
+  const current = configApi.current() as MigrationProviderContext["config"];
+  const merged = mergeStringAllowlist(readConfigPath(current, details.path), values);
+  if (!merged && !ctx.overwrite) {
+    return markMigrationItemConflict(item, "target exists");
+  }
+  try {
+    await configApi.mutateConfigFile({
+      base: "runtime",
+      afterWrite: { mode: "auto" },
+      mutate(draft) {
+        const existing = readConfigPath(draft, details.path);
+        const next = mergeStringAllowlist(existing, values);
+        if (!next && !ctx.overwrite) {
+          throw new Error("target exists");
+        }
+        writeConfigPath(draft as Record<string, unknown>, details.path, next ?? values);
+      },
+    });
+    return { ...item, status: "migrated" };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    return reason === "target exists"
+      ? markMigrationItemConflict(item, reason)
+      : markMigrationItemError(item, reason);
+  }
 }
 
 export async function applyCodexMigrationPlan(params: {
@@ -191,6 +296,22 @@ export async function applyCodexMigrationPlan(params: {
     }
     if (item.action === "archive") {
       items.push(await archiveMigrationItem(item, reportDir));
+    } else if (
+      item.id === "config:codex-plugins" &&
+      [...appliedPluginItemsById.values()].some((pluginItem) => pluginItem.status !== "migrated")
+    ) {
+      items.push(
+        markMigrationItemError(
+          item,
+          "not enabling Codex plugin bridge config because one or more plugin activation items failed",
+        ),
+      );
+    } else if (
+      item.kind === "config" &&
+      item.action === "merge" &&
+      CODEX_CONFIG_ALLOWLIST_ITEM_IDS.has(item.id)
+    ) {
+      items.push(await applyCodexAllowlistConfigPatchItem(params.ctx, item));
     } else if (item.kind === "config" && item.action === "merge") {
       items.push(await applyMigrationConfigPatchItem(params.ctx, item));
     } else {

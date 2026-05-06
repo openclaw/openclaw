@@ -13,6 +13,7 @@ type RequestHandler = (request: {
 class FakeCodexClient {
   readonly calls: Array<{ method: string; params?: unknown }> = [];
   readonly prompts: string[] = [];
+  readonly elicitationResponses: JsonValue[] = [];
   private readonly notificationHandlers = new Set<
     (notification: CodexServerNotification) => void
   >();
@@ -43,6 +44,10 @@ class FakeCodexClient {
       return { authPolicy: null, appsNeedingAuth: [] } as T;
     }
     if (method === "app/list") {
+      const cursor = (params as { cursor?: unknown } | undefined)?.cursor;
+      if (!cursor) {
+        return { data: [], nextCursor: "page-2" } as T;
+      }
       return {
         data: [
           {
@@ -71,6 +76,19 @@ class FakeCodexClient {
       const prompt = (params as { input: Array<{ text: string }> }).input[0]?.text ?? "";
       this.prompts.push(prompt);
       setTimeout(() => {
+        void this.dispatchRequest({
+          id: "elicitation-1",
+          method: "mcpServer/elicitation/request",
+          params: {
+            threadId: "thread-1",
+            turnId: null,
+            requestedSchema: {
+              properties: {
+                approve: { type: "boolean", title: "Approve action" },
+              },
+            },
+          },
+        });
         this.emit({
           method: "item/completed",
           params: {
@@ -108,6 +126,16 @@ class FakeCodexClient {
       handler(notification);
     }
   }
+
+  private async dispatchRequest(request: Parameters<RequestHandler>[0]): Promise<void> {
+    for (const handler of this.requestHandlers) {
+      const response = await handler(request);
+      if (response !== undefined) {
+        this.elicitationResponses.push(response);
+        return;
+      }
+    }
+  }
 }
 
 describe("Codex plugin tool invoker", () => {
@@ -131,7 +159,10 @@ describe("Codex plugin tool invoker", () => {
       pluginConfig,
       record,
       request: "Find a free slot tomorrow.",
-      context: { workspaceDir: "/tmp/openclaw-codex-plugin-test" },
+      context: {
+        workspaceDir: "/tmp/openclaw-codex-plugin-test",
+        config: { agents: { defaults: { model: "anthropic/claude-sonnet-4.6" } } },
+      },
       clientFactory: async () => fake as unknown as CodexAppServerClient,
     });
 
@@ -141,6 +172,23 @@ describe("Codex plugin tool invoker", () => {
       edits: [{ keyPath: "apps.calendar.enabled", value: true, mergeStrategy: "upsert" }],
       reloadUserConfig: true,
     });
+    expect(fake.calls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ method: "app/list", params: { forceRefetch: true } }),
+        expect.objectContaining({
+          method: "app/list",
+          params: { forceRefetch: true, cursor: "page-2" },
+        }),
+        expect.objectContaining({
+          method: "thread/start",
+          params: expect.objectContaining({
+            model: "claude-sonnet-4.6",
+            modelProvider: "anthropic",
+          }),
+        }),
+      ]),
+    );
+    expect(fake.elicitationResponses).toEqual([{ action: "decline", content: null, _meta: null }]);
     expect(fake.prompts[0]).toContain("[@Google Calendar](plugin://google-calendar)");
     expect(fake.prompts[0]).toContain("Find a free slot tomorrow.");
   });

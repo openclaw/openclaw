@@ -307,7 +307,7 @@ export async function discoverCodexSource(
     pluginConfig: readCodexPluginConfigFromOpenClawConfig(options.config),
     appServerRequest: options.appServerRequest,
   });
-  const plugins = appServerPlugins.error ? await discoverPluginDirs(codexHome) : [];
+  const plugins = await discoverPluginDirs(codexHome);
   const archivePaths: CodexArchiveSource[] = [];
   if (await exists(configPath)) {
     archivePaths.push({
