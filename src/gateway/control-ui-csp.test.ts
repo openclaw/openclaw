@@ -26,6 +26,7 @@ describe("buildControlUiCspHeader", () => {
       "ws:",
       "wss:",
       "https://api.openai.com",
+      "https://tweakcn.com",
     ]);
   });
 
