@@ -167,16 +167,15 @@ export async function maybeHandleResetCommand(
     workspaceDir: params.workspaceDir,
   });
   if (!resetTail) {
-    return {
-      shouldContinue: false,
-      ...(hookResult.routedReply
-        ? {}
-        : {
-            reply: {
-              text: commandAction === "reset" ? "✅ Session reset." : "✅ New session started.",
-            },
-          }),
-    };
+    // When a hook already routed a reply, honor it and stop.
+    // Otherwise fall through (return null) so the LLM turn runs and the
+    // persona greeting fires — this restores the 4.x behavior where bare
+    // /new and /reset trigger an agent-driven greeting instead of a canned
+    // acknowledgment text.
+    if (hookResult.routedReply) {
+      return { shouldContinue: false };
+    }
+    return null;
   }
   return null;
 }
