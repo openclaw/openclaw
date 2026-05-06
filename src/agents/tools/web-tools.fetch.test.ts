@@ -161,6 +161,7 @@ describe("web_fetch extraction fallbacks", () => {
     lookupMock.mockReset();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("wraps fetched text with external content markers", async () => {
@@ -596,5 +597,75 @@ describe("web_fetch extraction fallbacks", () => {
         url: "https://example.com/provider-error",
       }),
     ).resolves.toContain("provider fallback failed");
+  });
+
+  it("cleans up web_fetch timeout timers after success", async () => {
+    vi.useFakeTimers();
+    installPlainTextFetch("timer clean");
+
+    const tool = createFetchTool({ firecrawl: { enabled: false }, timeoutSeconds: 30 });
+    const result = await tool?.execute?.("call", { url: "https://example.com/timer-success" });
+
+    expect((result?.details as { status?: number } | undefined)?.status).toBe(200);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("cleans up web_fetch timeout timers after HTTP errors", async () => {
+    vi.useFakeTimers();
+    installMockFetch(
+      (input: RequestInfo | URL) =>
+        Promise.resolve(
+          errorHtmlResponse("service unavailable", 503, resolveRequestUrl(input), "text/plain"),
+        ) as Promise<Response>,
+    );
+
+    const tool = createFetchTool({ firecrawl: { enabled: false }, timeoutSeconds: 30 });
+    const message = await captureToolErrorMessage({
+      tool,
+      url: "https://example.com/timer-http-error",
+    });
+
+    expect(message).toContain("Web fetch failed (503):");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("cleans up web_fetch timeout timers after direct fetch throws", async () => {
+    vi.useFakeTimers();
+    installMockFetch(() => Promise.reject(new Error("network down")));
+
+    const tool = createFetchTool({ firecrawl: { enabled: false }, timeoutSeconds: 30 });
+    const message = await captureToolErrorMessage({
+      tool,
+      url: "https://example.com/timer-throw",
+    });
+
+    expect(message).toContain("network down");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("cleans up web_fetch timeout timers after timeout abort", async () => {
+    vi.useFakeTimers();
+    installMockFetch(
+      (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(init.signal?.reason ?? new Error("aborted")),
+            { once: true },
+          );
+        }),
+    );
+
+    const tool = createFetchTool({ firecrawl: { enabled: false }, timeoutSeconds: 1 });
+    const pending = captureToolErrorMessage({
+      tool,
+      url: "https://example.com/timer-timeout?token=secret",
+    });
+    await vi.advanceTimersByTimeAsync(1000);
+    const message = await pending;
+
+    expect(message).toContain("request timed out");
+    expect(message).not.toContain("token=secret");
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
+  listAgentEntries,
   listAgentIds,
   resolveAgentConfig,
   resolveAgentEffectiveModelPrimary,
@@ -254,6 +255,20 @@ function resolvePositiveNumber(value: number | null | undefined): number | undef
 
 function resolveNonNegativeNumber(value: number | null | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function resolveConfiguredAgentContextTokens(
+  cfg: OpenClawConfig,
+  agentId: string,
+): number | undefined {
+  const normalizedAgentId = normalizeAgentId(agentId);
+  const agentEntry = listAgentEntries(cfg).find(
+    (entry) => normalizeAgentId(entry.id) === normalizedAgentId,
+  );
+  return (
+    resolvePositiveNumber(agentEntry?.contextTokens) ??
+    resolvePositiveNumber(cfg.agents?.defaults?.contextTokens)
+  );
 }
 
 function resolveLatestCompactionCheckpoint(
@@ -1621,6 +1636,11 @@ export function buildGatewaySessionRow(params: {
       });
   const rowModelProvider = rowModelIdentity.provider;
   const rowModel = rowModelIdentity.model;
+  const rowDefaultModel = resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId });
+  const configuredAgentContextTokens =
+    rowModelProvider === rowDefaultModel.provider && rowModel === rowDefaultModel.model
+      ? resolveConfiguredAgentContextTokens(cfg, sessionAgentId)
+      : undefined;
   const estimatedCostUsd = lightweight
     ? resolveNonNegativeNumber(entry?.estimatedCostUsd)
     : (resolveEstimatedSessionCostUsd({
@@ -1633,6 +1653,7 @@ export function buildGatewaySessionRow(params: {
     ? resolvePositiveNumber(entry?.contextTokens)
     : (resolvePositiveNumber(entry?.contextTokens) ??
       resolvePositiveNumber(transcriptUsage?.contextTokens) ??
+      resolvePositiveNumber(configuredAgentContextTokens) ??
       resolvePositiveNumber(
         resolveContextTokensForModel({
           cfg,

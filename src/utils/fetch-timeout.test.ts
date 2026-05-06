@@ -9,7 +9,7 @@ vi.mock("../logging/subsystem.js", () => ({
   })),
 }));
 
-import { buildTimeoutAbortSignal } from "./fetch-timeout.js";
+import { buildTimeoutAbortSignal, fetchWithTimeout } from "./fetch-timeout.js";
 
 describe("buildTimeoutAbortSignal", () => {
   beforeEach(() => {
@@ -169,5 +169,59 @@ describe("buildTimeoutAbortSignal", () => {
     expect(warn).toHaveBeenCalledTimes(1);
 
     cleanup();
+  });
+
+  it("clears fetchWithTimeout timers after successful responses", async () => {
+    const fetchFn = vi.fn(async () => new Response("ok", { status: 200 }));
+
+    await expect(
+      fetchWithTimeout("https://example.com/success?token=secret", {}, 100, fetchFn as never),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("clears fetchWithTimeout timers after HTTP error responses", async () => {
+    const fetchFn = vi.fn(async () => new Response("nope", { status: 503 }));
+
+    const response = await fetchWithTimeout("https://example.com/error", {}, 100, fetchFn as never);
+
+    expect(response.status).toBe(503);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("clears fetchWithTimeout timers after fetch throws", async () => {
+    const fetchFn = vi.fn(async () => {
+      throw new Error("network down");
+    });
+
+    await expect(
+      fetchWithTimeout("https://example.com/throw", {}, 100, fetchFn as never),
+    ).rejects.toThrow("network down");
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("clears fetchWithTimeout timers after timeout aborts", async () => {
+    const fetchFn = vi.fn(
+      async (_url: RequestInfo | URL, init?: RequestInit) =>
+        await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(init.signal?.reason ?? new Error("aborted")),
+            { once: true },
+          );
+        }),
+    );
+
+    const pending = fetchWithTimeout("https://example.com/slow?api-key=secret", {}, 25, fetchFn);
+    const rejection = expect(pending).rejects.toMatchObject({
+      name: "TimeoutError",
+      message: "request timed out",
+    });
+    await vi.advanceTimersByTimeAsync(25);
+
+    await rejection;
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

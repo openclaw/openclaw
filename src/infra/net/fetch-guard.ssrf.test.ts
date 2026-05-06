@@ -257,6 +257,51 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(warning).not.toContain("#frag");
   });
 
+  it("cleans up timeout timers when a caller-provided signal aborts guarded fetch", async () => {
+    vi.useFakeTimers();
+    try {
+      const caller = new AbortController();
+      let markFetchStarted!: () => void;
+      const fetchStarted = new Promise<void>((resolve) => {
+        markFetchStarted = resolve;
+      });
+      const fetchImpl = vi.fn(
+        async (_input: RequestInfo | URL, init?: RequestInit) =>
+          await new Promise<Response>((_resolve, reject) => {
+            markFetchStarted();
+            if (init?.signal?.aborted) {
+              reject(init.signal.reason ?? new Error("aborted"));
+              return;
+            }
+            init?.signal?.addEventListener(
+              "abort",
+              () => reject(init.signal?.reason ?? new Error("aborted")),
+              { once: true },
+            );
+          }),
+      );
+
+      const pending = fetchWithSsrFGuard({
+        url: "https://public.example/caller-abort?token=secret",
+        fetchImpl,
+        lookupFn: createPublicLookup(),
+        pinDns: false,
+        signal: caller.signal,
+        timeoutMs: 5_000,
+      });
+
+      await fetchStarted;
+      expect(vi.getTimerCount()).toBe(1);
+
+      const rejection = expect(pending).rejects.toThrow("This operation was aborted");
+      caller.abort(new Error("caller abort"));
+      await rejection;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("allows RFC2544 benchmark range IPv4 literal URLs when explicitly opted in", async () => {
     const fetchImpl = vi.fn().mockResolvedValueOnce(new Response("ok", { status: 200 }));
     const result = await fetchWithSsrFGuard({

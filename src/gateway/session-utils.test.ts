@@ -1414,6 +1414,112 @@ describe("listSessionsFromStore selected model display", () => {
     });
   });
 
+  test("uses the configured agent context cap for native Codex default sessions", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          agentRuntime: { id: "codex" },
+          contextTokens: 400_000,
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "gpt-5.5",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 5, cacheRead: 0.5, output: 30, cacheWrite: 0 },
+                contextWindow: 1_050_000,
+                contextTokens: 1_050_000,
+                maxTokens: 128_000,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          modelProvider: "openai",
+          model: "gpt-5.5",
+        } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    expect(result.sessions[0]?.modelProvider).toBe("openai");
+    expect(result.sessions[0]?.model).toBe("gpt-5.5");
+    expect(result.sessions[0]?.agentRuntime).toEqual({ id: "codex", source: "defaults" });
+    expect(result.sessions[0]?.contextTokens).toBe(400_000);
+  });
+
+  test("keeps explicit api-max agent context separate from the Codex default cap", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          agentRuntime: { id: "codex" },
+          contextTokens: 400_000,
+        },
+        list: [
+          {
+            id: "api-max-expensive",
+            model: { primary: "openai/gpt-5.5", fallbacks: [] },
+            agentRuntime: { id: "pi" },
+            contextTokens: 1_050_000,
+          },
+        ],
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "gpt-5.5",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 5, cacheRead: 0.5, output: 30, cacheWrite: 0 },
+                contextWindow: 1_050_000,
+                contextTokens: 1_050_000,
+                maxTokens: 128_000,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:api-max-expensive:main": {
+          sessionId: "sess-api-max",
+          updatedAt: Date.now(),
+          modelProvider: "openai",
+          model: "gpt-5.5",
+        } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    expect(result.sessions[0]?.agentRuntime).toEqual({ id: "pi", source: "agent" });
+    expect(result.sessions[0]?.contextTokens).toBe(1_050_000);
+  });
+
   test("infers canonical provider for bare CLI models before default-provider fallback", () => {
     const cfg = createModelDefaultsConfig({
       primary: "openai/gpt-5.4",

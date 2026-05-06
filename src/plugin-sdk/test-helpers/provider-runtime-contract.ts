@@ -455,7 +455,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
       });
     });
 
-    it("leaves openai gpt-5.5 forward-compat resolution to Pi", () => {
+    it("owns openai gpt-5.5 direct API forward-compat resolution", () => {
       const provider = requireProviderContractProvider("openai");
       const model = provider.resolveDynamicModel?.({
         provider: "openai",
@@ -473,7 +473,25 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
         } as never,
       });
 
-      expect(model).toBeUndefined();
+      expect(model).toMatchObject({
+        id: "gpt-5.5",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        contextWindow: 1_050_000,
+        contextTokens: 1_050_000,
+        maxTokens: 128_000,
+        cost: {
+          input: 5,
+          cacheRead: 0.5,
+          output: 30,
+          cacheWrite: 0,
+          tieredPricing: [
+            { range: [0, 272_000], input: 5, cacheRead: 0.5, output: 30, cacheWrite: 0 },
+            { range: [272_000], input: 10, cacheRead: 1, output: 45, cacheWrite: 0 },
+          ],
+        },
+      });
     });
 
     it("owns openai gpt-5.4 mini forward-compat resolution", () => {
