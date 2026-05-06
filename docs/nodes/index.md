@@ -428,6 +428,7 @@ Notes:
 - The node host stores its node id, token, display name, and gateway connection info in `~/.openclaw/node.json`.
 - Exec approvals are enforced locally via `~/.openclaw/exec-approvals.json`
   (see [Exec approvals](/tools/exec-approvals)).
+- Android/Termux node hosts use `/data/data/com.termux/files/usr/bin/sh` as the shell wrapper for `system.run`.
 - On macOS, the headless node host executes `system.run` locally by default. Set
   `OPENCLAW_NODE_EXEC_HOST=app` to route `system.run` through the companion app exec host; add
   `OPENCLAW_NODE_EXEC_FALLBACK=0` to require the app host and fail closed if it is unavailable.
