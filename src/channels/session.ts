@@ -53,22 +53,60 @@ export async function recordInboundSession(params: {
   params.trackSessionMetaTask?.(metaTask);
   void metaTask;
 
-  const update = params.updateLastRoute;
-  if (!update) {
+  const resolvedUpdate: InboundLastRouteUpdate | undefined =
+    params.updateLastRoute ??
+    (() => {
+      const channel =
+        typeof params.ctx.OriginatingChannel === "string"
+          ? params.ctx.OriginatingChannel.trim()
+          : typeof params.ctx.Provider === "string"
+            ? params.ctx.Provider.trim()
+            : typeof params.ctx.Surface === "string"
+              ? params.ctx.Surface.trim()
+              : "";
+      const to =
+        typeof params.ctx.OriginatingTo === "string"
+          ? params.ctx.OriginatingTo.trim()
+          : typeof params.ctx.To === "string"
+            ? params.ctx.To.trim()
+            : "";
+      if (!channel || !to) {
+        return undefined;
+      }
+      const accountId =
+        typeof params.ctx.AccountId === "string" && params.ctx.AccountId.trim()
+          ? params.ctx.AccountId
+          : undefined;
+      const threadId =
+        typeof params.ctx.MessageThreadId === "string" && params.ctx.MessageThreadId.trim()
+          ? params.ctx.MessageThreadId
+          : typeof params.ctx.MessageThreadId === "number" &&
+              Number.isFinite(params.ctx.MessageThreadId)
+            ? params.ctx.MessageThreadId
+            : undefined;
+      return {
+        sessionKey: params.sessionKey,
+        channel,
+        to,
+        accountId,
+        threadId,
+      };
+    })();
+  if (!resolvedUpdate) {
     return;
   }
-  if (shouldSkipPinnedMainDmRouteUpdate(update.mainDmOwnerPin)) {
+  if (shouldSkipPinnedMainDmRouteUpdate(resolvedUpdate.mainDmOwnerPin)) {
     return;
   }
-  const targetSessionKey = normalizeLowercaseStringOrEmpty(update.sessionKey);
+  const targetSessionKey = normalizeLowercaseStringOrEmpty(resolvedUpdate.sessionKey);
   await runtime.updateLastRoute({
     storePath,
     sessionKey: targetSessionKey,
     deliveryContext: {
-      channel: update.channel,
-      to: update.to,
-      accountId: update.accountId,
-      threadId: update.threadId,
+      channel: resolvedUpdate.channel,
+      to: resolvedUpdate.to,
+      accountId: resolvedUpdate.accountId,
+      threadId: resolvedUpdate.threadId,
     },
     // Avoid leaking inbound origin metadata into a different target session.
     ctx: targetSessionKey === canonicalSessionKey ? ctx : undefined,

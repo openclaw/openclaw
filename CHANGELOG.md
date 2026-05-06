@@ -218,6 +218,7 @@ Docs: https://docs.openclaw.ai
 - WhatsApp/onboarding: canonicalize setup and pairing allowlist entries to WhatsApp's digit-only phone ids while still accepting E.164, JID, and `whatsapp:` inputs, so personal-phone allowlists match WhatsApp Web sender ids after setup. Thanks @vincentkoc.
 - WhatsApp/login: route login success and failure messages through the injected runtime, so setup/onboarding surfaces capture all login output instead of only the QR. Thanks @vincentkoc.
 - Channels/WhatsApp: apply the shared group/channel visible-reply mode during inbound dispatch so group replies stay message-tool-only by default without overriding direct-chat harness defaults. Refs #75178 and #67394. Thanks @scoootscooob.
+- Channels/sessions: persist a fallback inbound delivery route from message context when non-direct channel events omit an explicit last-route update. Thanks @Beandon13.
 - Telegram/media: derive no-caption inbound media placeholders from saved MIME metadata instead of the Telegram `photo` shape, so non-image and mixed attachments no longer reach the model as `<media:image>`. Fixes #69793. Thanks @aspalagin.
 - Telegram/streaming: reuse the active preview as the first chunk for long text finals, so multi-chunk replies no longer create a transient extra bubble that appears and then disappears. Thanks @vincentkoc.
 - Telegram/streaming: sanitize tool-progress draft preview backticks before shared compaction, so long backtick-heavy progress text still renders inside the safe code-formatted preview instead of collapsing to an ellipsis.
