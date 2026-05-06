@@ -30,12 +30,15 @@ export function resolveCronStyleNow(cfg: TimeConfigLike, nowMs: number): CronSty
   return { userTimezone, formattedTime, timeLine };
 }
 
-// Matches the helper's own injected `Current time: ...` line shape exactly
-// (anchored to start of line, format `Current time: YYYY-MM-DD HH:MM (TZ) / YYYY-MM-DD HH:MM UTC`).
-// Restricting to the helper's exact format avoids rewriting user-authored
-// reminder/cron content that happens to start with `Current time:`.
+// Matches the helper's own injected `Current time: ...` line. The natural-language
+// `formattedTime` portion is locale/format-dependent (e.g. `Thursday, April 30th, 2026 - 10:00 AM`
+// from `formatUserTime`, or an ISO fallback), so we anchor on the helper-only deterministic
+// suffix: ` (<userTimezone>) / YYYY-MM-DD HH:MM UTC`. The `(TZ)` group rejects parens (so
+// timezone IDs like `Asia/Seoul` are accepted), and the strict ISO+UTC tail rejects
+// user-authored reminder lines that happen to start with `Current time:` but lack the
+// helper's exact tail format.
 const CURRENT_TIME_LINE_RE =
-  /^Current time: \d{4}-\d{2}-\d{2} \d{2}:\d{2} \([^)]+\) \/ \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$/gm;
+  /^Current time: .+? \([^)]+\) \/ \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$/gm;
 
 export function appendCronStyleCurrentTimeLine(text: string, cfg: TimeConfigLike, nowMs: number) {
   const base = text.trimEnd();
