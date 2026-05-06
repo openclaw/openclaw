@@ -13,6 +13,48 @@ function codexPluginConfig(): Pick<OpenClawConfig, "plugins"> {
 }
 
 describe("collectCodexRouteWarnings", () => {
+  it("leaves openai-codex model refs unchanged in normal warning collection", () => {
+    const cfg = {
+      ...codexPluginConfig(),
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.5",
+            fallbacks: ["openai/gpt-5.5"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const before = structuredClone(cfg);
+
+    collectCodexRouteWarnings({ cfg });
+
+    expect(cfg).toEqual(before);
+  });
+
+  it("accepts native Codex as openai/gpt-5.5 plus agentRuntime.id=codex", () => {
+    const cfg = {
+      ...codexPluginConfig(),
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["openai-codex/gpt-5.5"],
+          },
+          agentRuntime: { id: "codex" },
+        },
+      },
+    } as OpenClawConfig;
+
+    const warnings = collectCodexRouteWarnings({ cfg });
+
+    expect(warnings).toEqual([]);
+    expect(cfg.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["openai-codex/gpt-5.5"],
+    });
+  });
+
   it("warns when the Codex plugin is enabled but openai-codex models still route through PI", () => {
     const warnings = collectCodexRouteWarnings({
       cfg: {

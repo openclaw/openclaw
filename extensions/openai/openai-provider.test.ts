@@ -282,7 +282,7 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
-  it("leaves gpt-5.5 to Pi and resolves gpt-5.5-pro locally", () => {
+  it("resolves direct API gpt-5.5 with long-context pricing metadata", () => {
     const provider = buildOpenAIProvider();
 
     const model = provider.resolveDynamicModel?.({
@@ -306,6 +306,31 @@ describe("buildOpenAIProvider", () => {
             : null,
       } as never,
     });
+
+    expect(model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      contextWindow: 1_050_000,
+      contextTokens: 1_050_000,
+      maxTokens: 128_000,
+      cost: {
+        input: 5,
+        output: 30,
+        cacheRead: 0.5,
+        cacheWrite: 0,
+        tieredPricing: [
+          { range: [0, 272_000], input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+          { range: [272_000], input: 10, output: 45, cacheRead: 1, cacheWrite: 0 },
+        ],
+      },
+    });
+  });
+
+  it("resolves gpt-5.5-pro locally", () => {
+    const provider = buildOpenAIProvider();
+
     const pro = provider.resolveDynamicModel?.({
       provider: "openai",
       modelId: "gpt-5.5-pro",
@@ -328,7 +353,6 @@ describe("buildOpenAIProvider", () => {
       } as never,
     });
 
-    expect(model).toBeUndefined();
     expect(pro).toMatchObject({
       provider: "openai",
       id: "gpt-5.5-pro",
@@ -340,7 +364,7 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
-  it("surfaces gpt-5.5 in xhigh without synthetic catalog metadata", () => {
+  it("surfaces gpt-5.5 in xhigh with synthetic catalog metadata", () => {
     const provider = buildOpenAIProvider();
 
     expect(
@@ -357,10 +381,12 @@ describe("buildOpenAIProvider", () => {
       entries: [{ provider: "openai", id: "gpt-5.4", name: "GPT-5.4" }],
     } as never);
 
-    expect(entries).not.toContainEqual(
+    expect(entries).toContainEqual(
       expect.objectContaining({
         provider: "openai",
         id: "gpt-5.5",
+        contextWindow: 1_050_000,
+        contextTokens: 1_050_000,
       }),
     );
   });

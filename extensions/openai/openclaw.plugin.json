@@ -489,13 +489,30 @@
             "name": "GPT-5.5",
             "reasoning": true,
             "input": ["text", "image"],
-            "contextWindow": 272000,
+            "contextWindow": 1050000,
+            "contextTokens": 1050000,
             "maxTokens": 128000,
             "cost": {
               "input": 5,
               "output": 30,
               "cacheRead": 0.5,
-              "cacheWrite": 0
+              "cacheWrite": 0,
+              "tieredPricing": [
+                {
+                  "range": [0, 272000],
+                  "input": 5,
+                  "output": 30,
+                  "cacheRead": 0.5,
+                  "cacheWrite": 0
+                },
+                {
+                  "range": [272000],
+                  "input": 10,
+                  "output": 45,
+                  "cacheRead": 1,
+                  "cacheWrite": 0
+                }
+              ]
             }
           },
           {

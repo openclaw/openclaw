@@ -16,6 +16,11 @@ function createHeadersWithSymbol(enumerable: boolean): HeadersInit {
 }
 
 describe("normalizeHeadersInitForFetch", () => {
+  it("accepts nullish headers", () => {
+    expect(normalizeHeadersInitForFetch(null)).toBeUndefined();
+    expect(normalizeHeadersInitForFetch(undefined)).toBeUndefined();
+  });
+
   it("keeps Headers instances unchanged", () => {
     const headers = new Headers({ Accept: "application/json" });
 
@@ -28,10 +33,52 @@ describe("normalizeHeadersInitForFetch", () => {
     expect(normalizeHeadersInitForFetch(headers)).toBe(headers);
   });
 
+  it("normalizes tuple headers with non-string values", () => {
+    const normalized = normalizeHeadersInitForFetch([
+      ["X-Count", 3],
+      ["X-Count", "4"],
+    ] as unknown[]);
+
+    const headers = new Headers(normalized);
+    expect(headers.get("x-count")).toBe("3, 4");
+  });
+
+  it("normalizes flat rawHeaders arrays with duplicate and mixed-case names", () => {
+    const normalized = normalizeHeadersInitForFetch([
+      "Content-Type",
+      "application/json",
+      "content-type",
+      "application/problem+json",
+      "X-Trace",
+      42,
+    ]);
+
+    const headers = new Headers(normalized);
+    expect(headers.get("content-type")).toBe("application/json, application/problem+json");
+    expect(headers.get("x-trace")).toBe("42");
+  });
+
+  it("normalizes rawHeaders containers", () => {
+    const normalized = normalizeHeadersInitForFetch({
+      rawHeaders: ["X-Token", "one", "x-token", "two"],
+    });
+
+    expect(new Headers(normalized).get("x-token")).toBe("one, two");
+  });
+
   it("keeps plain string-key dictionaries unchanged when they have no symbol keys", () => {
     const headers = { Accept: "application/json" };
 
     expect(normalizeHeadersInitForFetch(headers)).toBe(headers);
+  });
+
+  it("normalizes plain dictionaries with non-string values", () => {
+    const headers = { Accept: "application/json", "X-Retry": 2 };
+
+    const normalized = normalizeHeadersInitForFetch(headers);
+
+    expect(normalized).not.toBe(headers);
+    expect(new Headers(normalized).get("x-retry")).toBe("2");
   });
 
   it.each([

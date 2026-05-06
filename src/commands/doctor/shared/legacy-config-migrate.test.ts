@@ -356,6 +356,63 @@ describe("legacy migrate sandbox scope aliases", () => {
     });
   });
 
+  it("does not rewrite intentional OpenAI Codex OAuth model routes", () => {
+    const cfg = {
+      plugins: {
+        entries: {
+          codex: { enabled: true },
+        },
+      },
+      auth: {
+        profiles: {
+          "openai-codex:default": {
+            provider: "openai-codex",
+            mode: "oauth",
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.5",
+            fallbacks: ["openai/gpt-5.5"],
+          },
+          models: {
+            "openai-codex/gpt-5.5": {
+              params: { transport: "auto" },
+            },
+          },
+        },
+      },
+    };
+
+    const res = migrateLegacyConfigForTest(cfg);
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+  });
+
+  it("migrates legacy codex runtime refs without touching openai-codex fallback routes", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          model: {
+            primary: "codex/gpt-5.5",
+            fallbacks: ["openai-codex/gpt-5.5"],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults).toEqual({
+      model: {
+        primary: "openai/gpt-5.5",
+        fallbacks: ["openai-codex/gpt-5.5"],
+      },
+      agentRuntime: { id: "codex" },
+    });
+  });
+
   it("moves agents.defaults.sandbox.perSession into scope", () => {
     const res = migrateLegacyConfigForTest({
       agents: {

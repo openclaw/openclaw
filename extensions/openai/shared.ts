@@ -19,6 +19,13 @@ type SyntheticOpenAIModelCatalogCost = {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  tieredPricing?: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    range: [number] | [number, number];
+  }[];
 };
 
 type SyntheticOpenAIModelCatalogEntry = {

@@ -29,12 +29,29 @@ const OPENAI_GPT_54_MODEL_ID = "gpt-5.4";
 const OPENAI_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
 const OPENAI_GPT_54_MINI_MODEL_ID = "gpt-5.4-mini";
 const OPENAI_GPT_54_NANO_MODEL_ID = "gpt-5.4-nano";
+const OPENAI_GPT_55_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_GPT_55_PRO_CONTEXT_TOKENS = 1_000_000;
 const OPENAI_GPT_54_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_GPT_54_PRO_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_GPT_54_MINI_CONTEXT_TOKENS = 400_000;
 const OPENAI_GPT_54_NANO_CONTEXT_TOKENS = 400_000;
 const OPENAI_GPT_54_MAX_TOKENS = 128_000;
+const OPENAI_GPT_55_COST = {
+  input: 5,
+  output: 30,
+  cacheRead: 0.5,
+  cacheWrite: 0,
+  tieredPricing: [
+    {
+      range: [0, 272_000] as [number, number],
+      input: 5,
+      output: 30,
+      cacheRead: 0.5,
+      cacheWrite: 0,
+    },
+    { range: [272_000] as [number], input: 10, output: 45, cacheRead: 1, cacheWrite: 0 },
+  ],
+};
 const OPENAI_GPT_55_PRO_COST = { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 } as const;
 const OPENAI_GPT_54_COST = { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 } as const;
 const OPENAI_GPT_54_PRO_COST = { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 } as const;
@@ -60,6 +77,7 @@ const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.2"] as const;
 const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = ["gpt-5.2-pro", "gpt-5.2"] as const;
 const OPENAI_GPT_54_MINI_TEMPLATE_MODEL_IDS = ["gpt-5-mini"] as const;
 const OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS = ["gpt-5-nano", "gpt-5-mini"] as const;
+const OPENAI_GPT_55_TEMPLATE_MODEL_IDS = [OPENAI_GPT_54_MODEL_ID, "gpt-5.2", "gpt-5"] as const;
 const OPENAI_MODERN_MODEL_IDS = [
   OPENAI_GPT_55_MODEL_ID,
   OPENAI_GPT_55_PRO_MODEL_ID,
@@ -106,7 +124,20 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
   const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
   let templateIds: readonly string[];
   let patch: Partial<ProviderRuntimeModel>;
-  if (lower === OPENAI_GPT_55_PRO_MODEL_ID) {
+  if (lower === OPENAI_GPT_55_MODEL_ID) {
+    templateIds = OPENAI_GPT_55_TEMPLATE_MODEL_IDS;
+    patch = {
+      api: "openai-responses",
+      provider: PROVIDER_ID,
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: OPENAI_GPT_55_COST,
+      contextWindow: OPENAI_GPT_55_CONTEXT_TOKENS,
+      contextTokens: OPENAI_GPT_55_CONTEXT_TOKENS,
+      maxTokens: OPENAI_GPT_54_MAX_TOKENS,
+    };
+  } else if (lower === OPENAI_GPT_55_PRO_MODEL_ID) {
     templateIds = OPENAI_GPT_55_PRO_TEMPLATE_MODEL_IDS;
     patch = {
       api: "openai-responses",
@@ -184,6 +215,7 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
       ...patch,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: patch.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+      contextTokens: patch.contextTokens,
       maxTokens: patch.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
     } as ProviderRuntimeModel)
   );
@@ -245,6 +277,11 @@ export function buildOpenAIProvider(): ProviderPlugin {
         providerId: PROVIDER_ID,
         templateIds: OPENAI_GPT_55_PRO_TEMPLATE_MODEL_IDS,
       });
+      const openAiGpt55Template = findCatalogTemplate({
+        entries: ctx.entries,
+        providerId: PROVIDER_ID,
+        templateIds: OPENAI_GPT_55_TEMPLATE_MODEL_IDS,
+      });
       const openAiGpt54Template = findCatalogTemplate({
         entries: ctx.entries,
         providerId: PROVIDER_ID,
@@ -266,6 +303,14 @@ export function buildOpenAIProvider(): ProviderPlugin {
         templateIds: OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS,
       });
       return [
+        buildOpenAISyntheticCatalogEntry(openAiGpt55Template, {
+          id: OPENAI_GPT_55_MODEL_ID,
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: OPENAI_GPT_55_CONTEXT_TOKENS,
+          contextTokens: OPENAI_GPT_55_CONTEXT_TOKENS,
+          cost: OPENAI_GPT_55_COST,
+        }),
         buildOpenAISyntheticCatalogEntry(openAiGpt55ProTemplate, {
           id: OPENAI_GPT_55_PRO_MODEL_ID,
           reasoning: true,

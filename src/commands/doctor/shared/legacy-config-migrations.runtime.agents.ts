@@ -1,3 +1,4 @@
+import { migrateLegacyRuntimeModelRef } from "../../../agents/model-runtime-aliases.js";
 import {
   defineLegacyConfigMigration,
   ensureRecord,
@@ -7,6 +8,8 @@ import {
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import { isBlockedObjectKey } from "../../../config/prototype-keys.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { normalizeLegacyRuntimeModelRefs } from "./legacy-config-core-normalizers.js";
 
 const AGENT_HEARTBEAT_KEYS = new Set([
   "every",
@@ -77,6 +80,21 @@ const LEGACY_AGENT_RUNTIME_POLICY_RULES: LegacyConfigRule[] = [
     message:
       'agents.list[].embeddedHarness is legacy; use agents.list[].agentRuntime instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyAgentListEmbeddedHarness(value),
+  },
+];
+
+const LEGACY_RUNTIME_MODEL_REF_RULES: LegacyConfigRule[] = [
+  {
+    path: ["agents", "defaults", "model"],
+    message:
+      'agents.defaults.model uses a legacy runtime model ref; use provider model refs plus agents.defaults.agentRuntime. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyRuntimeModelPrimary(value),
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].model uses a legacy runtime model ref; use provider model refs plus agents.list[].agentRuntime. Run "openclaw doctor --fix".',
+    match: (value) => hasAgentListLegacyRuntimeModelPrimary(value),
   },
 ];
 
@@ -178,6 +196,28 @@ function hasAgentListRuntimeFallback(value: unknown): boolean {
   return value.some((agent) => hasAgentRuntimeFallback(getRecord(agent)?.agentRuntime));
 }
 
+function hasLegacyRuntimeModelPrimary(value: unknown): boolean {
+  if (typeof value === "string") {
+    return migrateLegacyRuntimeModelRef(value) !== null;
+  }
+  const model = getRecord(value);
+  return typeof model?.primary === "string" && migrateLegacyRuntimeModelRef(model.primary) !== null;
+}
+
+function hasAgentListLegacyRuntimeModelPrimary(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((agent) => hasLegacyRuntimeModelPrimary(getRecord(agent)?.model));
+}
+
+function replaceRecordContents(target: Record<string, unknown>, source: Record<string, unknown>) {
+  for (const key of Object.keys(target)) {
+    delete target[key];
+  }
+  Object.assign(target, source);
+}
+
 function migrateLegacySandboxPerSession(
   sandbox: Record<string, unknown>,
   pathLabel: string,
@@ -241,6 +281,17 @@ function removeAgentRuntimeFallback(
 }
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "agents.legacy-runtime-model-refs->agentRuntime",
+    describe: "Move legacy runtime model refs to provider refs plus agentRuntime",
+    legacyRules: LEGACY_RUNTIME_MODEL_REF_RULES,
+    apply: (raw, changes) => {
+      const next = normalizeLegacyRuntimeModelRefs(raw as OpenClawConfig, changes);
+      if (next !== raw) {
+        replaceRecordContents(raw, next as Record<string, unknown>);
+      }
+    },
+  }),
   defineLegacyConfigMigration({
     id: "agents.defaults.llm->models.providers.timeoutSeconds",
     describe: "Remove legacy agents.defaults.llm timeout config",
