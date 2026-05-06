@@ -121,9 +121,10 @@ export function resolveConfiguredDoctorSessionStateRoute(params: {
 }
 
 function resolvePluginDoctorSessionRouteStateOwners(params: {
+  cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): DoctorSessionRouteStateOwner[] {
-  return listPluginDoctorSessionRouteStateOwners({ env: params.env });
+  return listPluginDoctorSessionRouteStateOwners({ config: params.cfg, env: params.env });
 }
 
 function entryMayContainPluginSessionRouteState(entry: SessionEntry): boolean {
@@ -460,7 +461,7 @@ export async function runPluginSessionStateDoctorRepairs(params: {
   if (!storeMayContainPluginSessionRouteState(params.store)) {
     return;
   }
-  const owners = resolvePluginDoctorSessionRouteStateOwners({ env: params.env });
+  const owners = resolvePluginDoctorSessionRouteStateOwners({ cfg: params.cfg, env: params.env });
   if (owners.length === 0) {
     return;
   }

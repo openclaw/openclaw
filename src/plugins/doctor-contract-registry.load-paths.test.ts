@@ -8,6 +8,7 @@ import {
   applyPluginDoctorCompatibilityMigrations,
   clearPluginDoctorContractRegistryCache,
   listPluginDoctorLegacyConfigRules,
+  listPluginDoctorSessionRouteStateOwners,
 } from "./doctor-contract-registry.js";
 
 const tempDirs: string[] = [];
@@ -87,6 +88,43 @@ module.exports = {
       changes: ["configured load-path doctor contract LLM policy"],
     };
   },
+};
+`,
+    "utf8",
+  );
+}
+
+function writeDoctorSessionOwnerPlugin(pluginRoot: string, pluginId: string): void {
+  fs.mkdirSync(pluginRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(pluginRoot, "openclaw.plugin.json"),
+    JSON.stringify(
+      {
+        id: pluginId,
+        name: "Load Path Session Owner",
+        version: "0.0.0-test",
+        configSchema: {},
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(pluginRoot, "index.cjs"), "module.exports = {};\n", "utf8");
+  fs.writeFileSync(
+    path.join(pluginRoot, "doctor-contract-api.cjs"),
+    `
+module.exports = {
+  sessionRouteStateOwners: [
+    {
+      id: "load-path-session-owner",
+      label: "Load Path Session Owner",
+      providerIds: ["load-path-provider"],
+      runtimeIds: ["load-path-runtime"],
+      cliSessionKeys: ["load-path-cli"],
+      authProfilePrefixes: ["load-path:"],
+    },
+  ],
 };
 `,
     "utf8",
@@ -174,5 +212,29 @@ describe("doctor contract registry load-path plugins", () => {
       allowedModels: ["openai-codex/gpt-5.4-mini"],
     });
     expect(llm).not.toHaveProperty("allowAgentIdOverride");
+  });
+
+  it("discovers session route-state owners from plugins.load.paths", () => {
+    const stateDir = makeTempDir();
+    const pluginRoot = makeTempDir();
+    const pluginId = "load-path-session-owner";
+    writeDoctorSessionOwnerPlugin(pluginRoot, pluginId);
+    const config = createDoctorPluginConfig(pluginRoot, pluginId);
+
+    expect(
+      listPluginDoctorSessionRouteStateOwners({
+        config,
+        env: makeHermeticDoctorEnv(stateDir),
+      }),
+    ).toEqual([
+      {
+        id: "load-path-session-owner",
+        label: "Load Path Session Owner",
+        providerIds: ["load-path-provider"],
+        runtimeIds: ["load-path-runtime"],
+        cliSessionKeys: ["load-path-cli"],
+        authProfilePrefixes: ["load-path:"],
+      },
+    ]);
   });
 });

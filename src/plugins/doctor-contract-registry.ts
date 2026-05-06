@@ -306,6 +306,7 @@ export function listPluginDoctorLegacyConfigRules(params?: {
 }
 
 export function listPluginDoctorSessionRouteStateOwners(params?: {
+  config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
