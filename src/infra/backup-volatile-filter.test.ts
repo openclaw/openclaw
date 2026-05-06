@@ -58,13 +58,11 @@ describe("isVolatileBackupPath", () => {
   it("normalizes Windows-style separators before anchor checks", () => {
     const winStateDir = "C:\\openclaw\\state";
     const winPlan = { stateDirs: [winStateDir] };
-    expect(
-      isVolatileBackupPath(`${winStateDir}\\sessions\\s-abc\\transcript.jsonl`, winPlan),
-    ).toBe(true);
+    expect(isVolatileBackupPath(`${winStateDir}\\sessions\\s-abc\\transcript.jsonl`, winPlan)).toBe(
+      true,
+    );
     expect(isVolatileBackupPath(`${winStateDir}\\cron\\runs\\2026\\job.log`, winPlan)).toBe(true);
     // `..` escape via backslashes must also be rejected.
-    expect(isVolatileBackupPath(`${winStateDir}\\sessions\\..\\config.jsonl`, winPlan)).toBe(
-      false,
-    );
+    expect(isVolatileBackupPath(`${winStateDir}\\sessions\\..\\config.jsonl`, winPlan)).toBe(false);
   });
 });
