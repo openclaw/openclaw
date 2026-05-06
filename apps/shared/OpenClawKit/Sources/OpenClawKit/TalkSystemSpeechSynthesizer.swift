@@ -37,6 +37,7 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
     public func speak(
         text: String,
         language: String? = nil,
+        voiceName: String? = nil,
         onStart: (() -> Void)? = nil) async throws
     {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -48,7 +49,7 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
         self.didStartCallback = onStart
 
         let utterance = AVSpeechUtterance(string: trimmed)
-        if let language, let voice = AVSpeechSynthesisVoice(language: language) {
+        if let voice = Self.resolveVoice(namedOrIdentifier: voiceName, language: language) {
             utterance.voice = voice
         }
         self.currentUtterance = utterance
@@ -85,6 +86,25 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
         if self.currentToken != token {
             throw SpeakError.canceled
         }
+    }
+
+    private static func resolveVoice(
+        namedOrIdentifier value: String?,
+        language: String?) -> AVSpeechSynthesisVoice?
+    {
+        let requested = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let requested, !requested.isEmpty {
+            let lowercased = requested.lowercased()
+            if let exact = AVSpeechSynthesisVoice.speechVoices().first(where: {
+                $0.identifier.lowercased() == lowercased || $0.name.lowercased() == lowercased
+            }) {
+                return exact
+            }
+        }
+        if let language {
+            return AVSpeechSynthesisVoice(language: language)
+        }
+        return nil
     }
 
     static func watchdogTimeoutSeconds(text: String, language: String?) -> Double {

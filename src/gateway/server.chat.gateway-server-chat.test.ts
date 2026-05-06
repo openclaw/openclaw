@@ -843,6 +843,129 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.send falls back to local Thomas conversation when provider billing fails", async () => {
+    await withMainSessionStore(async () => {
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendFinalReply: (payload: { text: string }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.dispatcher.sendFinalReply({
+          text: "API provider returned a billing error - your API key has run out of credits.",
+        });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return {
+          queuedFinal: true,
+          counts: params.dispatcher.getQueuedCounts(),
+        };
+      });
+
+      const finalPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === "idem-offline-thomas-billing",
+        8000,
+      );
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "What can you do for me?",
+        idempotencyKey: "idem-offline-thomas-billing",
+      });
+
+      expect(res.ok).toBe(true);
+      const final = await finalPromise;
+      const text = extractFirstTextBlock(final.payload?.message);
+      expect(text).toContain("free local Thomas mode");
+      expect(text).toContain("What can you do for me?");
+      expect(text).not.toContain("billing error");
+
+      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+      expect(historyRes.ok).toBe(true);
+      const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
+      expect(historyTexts).toEqual(
+        expect.arrayContaining([expect.stringContaining("free local Thomas mode")]),
+      );
+    });
+  });
+
+  test("chat.send falls back to local Thomas after an agent-started auth failure", async () => {
+    await withMainSessionStore(async () => {
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            replyOptions?: {
+              runId?: string;
+              onAgentRunStart?: (runId: string) => void;
+            };
+            dispatcher: {
+              sendFinalReply: (payload: { text: string }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.replyOptions?.onAgentRunStart?.(
+          params.replyOptions.runId ?? "idem-offline-thomas-auth-started",
+        );
+        params.dispatcher.sendFinalReply({
+          text: "Your authentication token has been invalidated. Please try signing in again.",
+        });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return {
+          queuedFinal: true,
+          counts: params.dispatcher.getQueuedCounts(),
+        };
+      });
+
+      const finalPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === "idem-offline-thomas-auth-started",
+        8000,
+      );
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "Can we still talk?",
+        idempotencyKey: "idem-offline-thomas-auth-started",
+      });
+
+      expect(res.ok).toBe(true);
+      const final = await finalPromise;
+      const text = extractFirstTextBlock(final.payload?.message);
+      expect(text).toContain("free local Thomas mode");
+      expect(text).toContain("Can we still talk?");
+      expect(text).not.toContain("authentication token");
+
+      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+      expect(historyRes.ok).toBe(true);
+      const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
+      expect(historyTexts).toEqual(
+        expect.arrayContaining([expect.stringContaining("free local Thomas mode")]),
+      );
+    });
+  });
+
   test("routes block-streamed /btw replies through side-result events", async () => {
     await withMainSessionStore(async (dir) => {
       await fs.writeFile(

@@ -1138,7 +1138,11 @@ final class TalkModeManager: NSObject {
                     }
                 }
                 self.statusText = "Speaking (System)…"
-                try await TalkSystemSpeechSynthesizer.shared.speak(text: cleaned, language: language)
+                let systemLanguage = language ?? self.gatewaySpeechLocaleID
+                try await TalkSystemSpeechSynthesizer.shared.speak(
+                    text: cleaned,
+                    language: systemLanguage,
+                    voiceName: preferredVoice)
             }
         } catch {
             self.logger.error(
@@ -1154,7 +1158,9 @@ final class TalkModeManager: NSObject {
                     }
                 }
                 self.statusText = "Speaking (System)…"
-                let language = ElevenLabsTTSClient.validatedLanguage(directive?.language)
+                let language =
+                    ElevenLabsTTSClient.validatedLanguage(directive?.language) ??
+                    self.gatewaySpeechLocaleID
                 try await TalkSystemSpeechSynthesizer.shared.speak(text: cleaned, language: language)
             } catch {
                 self.statusText = "Speak failed: \(error.localizedDescription)"

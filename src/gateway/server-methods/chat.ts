@@ -87,6 +87,10 @@ import {
 } from "../managed-image-attachments.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
+  buildOfflineThomasFallbackReply,
+  resolveOfflineThomasFallbackReason,
+} from "../offline-thomas-fallback.js";
+import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -538,6 +542,33 @@ function hasAssistantDisplayMediaContent(
   content: readonly AssistantDisplayContentBlock[] | undefined,
 ): boolean {
   return Boolean(content?.some((block) => block?.type !== "text"));
+}
+
+function maybeReplaceWithOfflineThomasFallback(params: {
+  finalPayloads: ReplyPayload[];
+  userMessage: string;
+}): { applied: boolean; payloads: ReplyPayload[] } {
+  const assistantTexts = params.finalPayloads
+    .map((payload) => payload.text?.trim() ?? "")
+    .filter(Boolean);
+  const reason = resolveOfflineThomasFallbackReason({
+    userMessage: params.userMessage,
+    assistantTexts,
+  });
+  if (!reason) {
+    return { applied: false, payloads: params.finalPayloads };
+  }
+  return {
+    applied: true,
+    payloads: [
+      {
+        text: buildOfflineThomasFallbackReply({
+          userMessage: params.userMessage,
+          reason,
+        }),
+      },
+    ],
+  };
 }
 
 function scheduleChatHistoryManagedImageCleanup(params: {
@@ -2466,6 +2497,75 @@ export const chatHandlers: GatewayRequestHandlers = {
           `webchat transcript append failed for media reply: ${appended.error ?? "unknown error"}`,
         );
       };
+      const appendAndBroadcastOfflineThomasFallbackIfNeeded = async (): Promise<boolean> => {
+        const finalPayloads = deliveredReplies
+          .filter((entry) => entry.kind === "final")
+          .map((entry) => entry.payload);
+        const offlineFallback = maybeReplaceWithOfflineThomasFallback({
+          finalPayloads,
+          userMessage: parsedMessage,
+        });
+        if (!offlineFallback.applied) {
+          return false;
+        }
+        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
+        const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
+        const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
+          sessionKey,
+          payloads: offlineFallback.payloads,
+          includeSensitiveMedia: false,
+          onLocalAudioAccessDenied: (message) => {
+            context.logGateway.warn(`offline thomas audio embedding denied local path: ${message}`);
+          },
+          onManagedImagePrepareError: (message) => {
+            context.logGateway.warn(
+              `offline thomas image embedding skipped attachment: ${message}`,
+            );
+          },
+        });
+        const displayReply =
+          extractAssistantDisplayTextFromContent(assistantContent) ??
+          buildTranscriptReplyText(offlineFallback.payloads);
+        if (!displayReply && !assistantContent?.length) {
+          return false;
+        }
+        const appended = await appendAssistantTranscriptMessage({
+          message: displayReply,
+          ...(assistantContent?.length ? { content: assistantContent } : {}),
+          sessionId,
+          storePath: latestStorePath,
+          sessionFile: latestEntry?.sessionFile,
+          agentId,
+          createIfMissing: true,
+          idempotencyKey: `${clientRunId}:offline-thomas-fallback`,
+          cfg,
+        });
+        let message: Record<string, unknown> | undefined;
+        if (appended.ok && appended.message) {
+          message = assistantContent?.length
+            ? { ...appended.message, content: assistantContent }
+            : appended.message;
+        } else {
+          context.logGateway.warn(
+            `offline thomas transcript append failed: ${appended.error ?? "unknown error"}`,
+          );
+          message = {
+            role: "assistant",
+            content: [{ type: "text", text: displayReply }],
+            text: displayReply,
+            timestamp: Date.now(),
+            stopReason: "stop",
+            usage: { input: 0, output: 0, totalTokens: 0 },
+          };
+        }
+        broadcastChatFinal({
+          context,
+          runId: clientRunId,
+          sessionKey,
+          message,
+        });
+        return true;
+      };
       const dispatcher = createReplyDispatcher({
         ...replyPipeline,
         onError: (err) => {
@@ -2583,12 +2683,16 @@ export const chatHandlers: GatewayRequestHandlers = {
                     : deliveredReplies
                         .filter((entry) => entry.kind === "final")
                         .map((entry) => entry.payload);
+                  const offlineFallback = maybeReplaceWithOfflineThomasFallback({
+                    finalPayloads: rawFinalPayloads,
+                    userMessage: parsedMessage,
+                  });
                   const finalPayloads = await normalizeWebchatReplyMediaPathsForDisplay({
                     cfg,
                     sessionKey,
                     agentId,
                     accountId,
-                    payloads: rawFinalPayloads,
+                    payloads: offlineFallback.payloads,
                   });
                   const { storePath: latestStorePath, entry: latestEntry } =
                     loadSessionEntry(sessionKey);
@@ -2729,12 +2833,15 @@ export const chatHandlers: GatewayRequestHandlers = {
                     message,
                   });
                 }
-              } else if (!hasBeforeAgentRunGate) {
-                await emitUserTranscriptUpdate().catch((transcriptErr) => {
-                  context.logGateway.warn(
-                    `webchat user transcript update failed after agent run: ${formatForLog(transcriptErr)}`,
-                  );
-                });
+              } else {
+                await appendAndBroadcastOfflineThomasFallbackIfNeeded();
+                if (!hasBeforeAgentRunGate) {
+                  await emitUserTranscriptUpdate().catch((transcriptErr) => {
+                    context.logGateway.warn(
+                      `webchat user transcript update failed after agent run: ${formatForLog(transcriptErr)}`,
+                    );
+                  });
+                }
               }
               if (!context.chatAbortedRuns.has(clientRunId)) {
                 setGatewayDedupeEntry({

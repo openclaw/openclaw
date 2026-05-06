@@ -1040,12 +1040,13 @@ actor TalkModeRuntime {
         await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
         self.phase = .speaking
         await TalkSystemSpeechSynthesizer.shared.stop()
-        // Use app locale as fallback when no explicit language is set (e.g. system voice without ElevenLabs directive).
+        // Prefer the gateway Talk locale for system fallback so local voices match the configured assistant language.
         let appLocale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
-        let ttsLanguage = input.language ?? appLocale
+        let ttsLanguage = input.language ?? self.speechLocaleID ?? appLocale
         try await TalkSystemSpeechSynthesizer.shared.speak(
             text: input.cleanedText,
-            language: ttsLanguage)
+            language: ttsLanguage,
+            voiceName: input.voicePreset)
         self.ttsLogger.info("talk system voice done")
     }
 
