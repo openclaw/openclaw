@@ -114,6 +114,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/models: reuse the Gateway-owned workspace-scoped metadata snapshot for unscoped model-id normalization callers so repeated model normalization requests avoid cold metadata rescans. Fixes #78461. (#78480) Thanks @hclsys.
 - Telegram/Codex: generate DM topic labels with Codex-compatible simple-completion requests so auto-created private topics can be renamed instead of staying `New Chat`.
 - Web fetch: bound guarded dispatcher cleanup after request timeouts so timed-out fetches return tool errors instead of leaving Gateway tool lanes active. (#78439) Thanks @obviyus.
 - Gate Slack startup user allowlist resolution [AI]. (#77898) Thanks @pgondhi987.
