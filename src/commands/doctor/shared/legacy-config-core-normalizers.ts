@@ -12,6 +12,7 @@ import {
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { isRecord } from "./legacy-config-record-shared.js";
 import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
+import { resolveMessageToolAvailability } from "./preview-warnings.js";
 export { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
 
 function hasConfiguredChannels(cfg: OpenClawConfig): boolean {
@@ -35,13 +36,17 @@ export function normalizeMissingGroupVisibleRepliesDefault(
     return cfg;
   }
 
+  const messageToolAvailable = resolveMessageToolAvailability({ globalTools: cfg.tools });
+  const recommendedValue = messageToolAvailable ? "message_tool" : "automatic";
   const nextMessages = messages ? { ...messages } : {};
   nextMessages.groupChat = {
     ...messages?.groupChat,
-    visibleReplies: "message_tool",
+    visibleReplies: recommendedValue,
   };
   changes.push(
-    'Set messages.groupChat.visibleReplies to "message_tool" so group/channel replies use the message tool by default.',
+    messageToolAvailable
+      ? 'Set messages.groupChat.visibleReplies to "message_tool" so group/channel replies use the message tool by default.'
+      : 'Set messages.groupChat.visibleReplies to "automatic" (message tool unavailable for the active tool policy).',
   );
 
   return {
