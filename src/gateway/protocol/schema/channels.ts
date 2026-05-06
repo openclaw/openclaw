@@ -644,6 +644,8 @@ export const ChannelsStatusResultSchema = Type.Object(
     channelAccounts: Type.Record(NonEmptyString, Type.Array(ChannelAccountSnapshotSchema)),
     channelDefaultAccountId: Type.Record(NonEmptyString, NonEmptyString),
     eventLoop: Type.Optional(ChannelEventLoopHealthSchema),
+    partial: Type.Optional(Type.Boolean()),
+    warnings: Type.Optional(Type.Array(Type.String())),
   },
   { additionalProperties: false },
 );

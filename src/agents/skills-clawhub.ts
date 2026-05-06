@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import {
   downloadClawHubSkillArchive,
@@ -13,6 +12,7 @@ import { pathExists } from "../infra/fs-safe.js";
 import { withExtractedArchiveRoot } from "../infra/install-flow.js";
 import { installPackageDir } from "../infra/install-package-dir.js";
 import { resolveSafeInstallDir } from "../infra/install-safe-path.js";
+import { tryReadJson, writeJson } from "../infra/json-files.js";
 
 const DOT_DIR = ".clawhub";
 const LEGACY_DOT_DIR = ".clawdhub";
@@ -147,10 +147,8 @@ async function readClawHubSkillsLockfile(workspaceDir: string): Promise<ClawHubS
   ];
   for (const candidate of candidates) {
     try {
-      const raw = JSON.parse(
-        await fs.readFile(candidate, "utf8"),
-      ) as Partial<ClawHubSkillsLockfile>;
-      if (raw.version === 1 && raw.skills && typeof raw.skills === "object") {
+      const raw = await tryReadJson<Partial<ClawHubSkillsLockfile>>(candidate);
+      if (raw?.version === 1 && raw.skills && typeof raw.skills === "object") {
         return {
           version: 1,
           skills: raw.skills,
@@ -168,8 +166,7 @@ async function writeClawHubSkillsLockfile(
   lockfile: ClawHubSkillsLockfile,
 ): Promise<void> {
   const targetPath = path.join(workspaceDir, DOT_DIR, "lock.json");
-  await fs.mkdir(path.dirname(targetPath), { recursive: true });
-  await fs.writeFile(targetPath, `${JSON.stringify(lockfile, null, 2)}\n`, "utf8");
+  await writeJson(targetPath, lockfile, { trailingNewline: true });
 }
 
 async function readClawHubSkillOrigin(skillDir: string): Promise<ClawHubSkillOrigin | null> {
@@ -179,9 +176,9 @@ async function readClawHubSkillOrigin(skillDir: string): Promise<ClawHubSkillOri
   ];
   for (const candidate of candidates) {
     try {
-      const raw = JSON.parse(await fs.readFile(candidate, "utf8")) as Partial<ClawHubSkillOrigin>;
+      const raw = await tryReadJson<Partial<ClawHubSkillOrigin>>(candidate);
       if (
-        raw.version === 1 &&
+        raw?.version === 1 &&
         typeof raw.registry === "string" &&
         typeof raw.slug === "string" &&
         typeof raw.installedVersion === "string" &&
@@ -201,8 +198,7 @@ async function writeClawHubSkillOrigin(
   origin: ClawHubSkillOrigin,
 ): Promise<void> {
   const targetPath = path.join(skillDir, SKILL_ORIGIN_RELATIVE_PATH);
-  await fs.mkdir(path.dirname(targetPath), { recursive: true });
-  await fs.writeFile(targetPath, `${JSON.stringify(origin, null, 2)}\n`, "utf8");
+  await writeJson(targetPath, origin, { trailingNewline: true });
 }
 
 export async function searchSkillsFromClawHub(params: {

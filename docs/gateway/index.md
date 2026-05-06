@@ -83,7 +83,7 @@ After the first successful load, the running process serves the active in-memory
 
 ## OpenAI-compatible endpoints
 
-OpenClaw’s highest-leverage compatibility surface is now:
+OpenClaw's highest-leverage compatibility surface is now:
 
 - `GET /v1/models`
 - `GET /v1/models/{id}`

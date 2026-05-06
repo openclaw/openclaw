@@ -417,6 +417,48 @@ describe("agentCommand", () => {
     });
   });
 
+  it("gap-fills Telegram-visible embedded replies without a runner trace", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      const sendMessageTelegram = vi.fn(async () => undefined);
+      const base = createDefaultAgentResult({ payloads: [{ text: "assistant-visible" }] });
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValueOnce({
+        ...base,
+        meta: {
+          ...base.meta,
+          finalAssistantVisibleText: "assistant-visible",
+        },
+      });
+
+      await agentCommandFromIngress(
+        {
+          message: "call a tool then answer",
+          agentId: "main",
+          to: "+1222",
+          channel: "telegram",
+          messageChannel: "telegram",
+          deliver: true,
+          senderIsOwner: false,
+          allowModelOverride: false,
+        },
+        runtime,
+        { sendMessageTelegram },
+      );
+
+      expect(sendMessageTelegram).toHaveBeenCalledWith(
+        "+1222",
+        "assistant-visible",
+        expect.objectContaining({ verbose: false }),
+      );
+      expect(vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript)).toHaveBeenCalledTimes(1);
+      const persistArgs = vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript).mock
+        .calls[0]?.[0];
+      expect(persistArgs?.embeddedAssistantGapFill).toBe(true);
+      expect(persistArgs?.body).toBe("call a tool then answer");
+    });
+  });
+
   it("passes configured fast mode to embedded runs", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");

@@ -20,6 +20,12 @@ import type { UploadCacheAdapter } from "./media.js";
 import { UPLOAD_PREPARE_FALLBACK_CODE } from "./retry.js";
 import type { TokenManager } from "./token.js";
 
+const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+}));
+
 // ============ Test doubles ============
 
 /** Build a minimal ApiClient stub whose `request` is fully mockable. */
@@ -82,18 +88,17 @@ const FIXTURE_BUFFER = Buffer.from("0123456789abcdefghij"); // 20 bytes
 let originalFetch: typeof globalThis.fetch;
 
 function stubFetchOk(): ReturnType<typeof vi.fn> {
-  const spy = vi.fn(
-    async () =>
-      new Response("", {
-        status: 200,
-        headers: {
-          ETag: '"etag-value"',
-          "x-cos-request-id": "req-id",
-        },
-      }),
-  );
-  globalThis.fetch = spy as unknown as typeof globalThis.fetch;
-  return spy;
+  fetchWithSsrFGuardMock.mockImplementation(async () => ({
+    response: new Response("", {
+      status: 200,
+      headers: {
+        ETag: '"etag-value"',
+        "x-cos-request-id": "req-id",
+      },
+    }),
+    release: vi.fn(),
+  }));
+  return fetchWithSsrFGuardMock;
 }
 
 // ============ Tests ============
@@ -122,6 +127,7 @@ describe("media-chunked: ChunkedMediaApi.uploadChunked", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    fetchWithSsrFGuardMock.mockReset();
     vi.restoreAllMocks();
   });
 
@@ -235,7 +241,7 @@ describe("media-chunked: ChunkedMediaApi.uploadChunked", () => {
 
     // 3 COS PUTs, one per part, each to the presigned URL.
     expect(fetchSpy).toHaveBeenCalledTimes(3);
-    const putUrls = fetchSpy.mock.calls.map((c) => c[0]);
+    const putUrls = fetchSpy.mock.calls.map((c) => (c[0] as { url: string }).url);
     expect(putUrls).toEqual(
       expect.arrayContaining([
         "https://cos.example.com/part-1",

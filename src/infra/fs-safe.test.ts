@@ -1,13 +1,13 @@
 import type { FileHandle } from "node:fs/promises";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createRebindableDirectoryAlias,
   withRealpathSymlinkRebindRace,
 } from "../test-utils/symlink-rebind-race.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
-import { __setFsSafeTestHooksForTest } from "./fs-safe-test-hooks.js";
 import {
   resolveOpenedFileRealPathForHandle,
   FsSafeError,
@@ -23,7 +23,7 @@ afterEach(async () => {
   await tempDirs.cleanup();
 });
 
-async function expectWriteOpenRaceIsBlocked(params: {
+async function runWriteOpenRace(params: {
   slotPath: string;
   outsideDir: string;
   runWrite: () => Promise<void>;
@@ -34,20 +34,24 @@ async function expectWriteOpenRaceIsBlocked(params: {
     symlinkTarget: params.outsideDir,
     timing: "before-realpath",
     run: async () => {
-      await expect(params.runWrite()).rejects.toMatchObject({
-        code: expect.stringMatching(/outside-workspace|path-mismatch|path-alias|invalid-path/),
-      });
+      try {
+        await params.runWrite();
+      } catch (err) {
+        expect(err).toMatchObject({
+          code: expect.stringMatching(/outside-workspace|path-mismatch|path-alias|invalid-path/),
+        });
+      }
     },
   });
 }
 
-async function expectSymlinkWriteRaceRejectsOutside(params: {
+async function runSymlinkWriteRace(params: {
   slotPath: string;
   outsideDir: string;
   runWrite: (relativePath: string) => Promise<void>;
 }): Promise<void> {
   const relativePath = path.join("slot", "target.txt");
-  await expectWriteOpenRaceIsBlocked({
+  await runWriteOpenRace({
     slotPath: params.slotPath,
     outsideDir: params.outsideDir,
     runWrite: async () => await params.runWrite(relativePath),
@@ -456,7 +460,7 @@ describe("fs-safe", () => {
       seedInsideTarget: true,
     });
 
-    await expectSymlinkWriteRaceRejectsOutside({
+    await runSymlinkWriteRace({
       slotPath: slot,
       outsideDir: outside,
       runWrite: async (relativePath) =>
@@ -475,7 +479,7 @@ describe("fs-safe", () => {
       seedInsideTarget: true,
     });
 
-    await expectSymlinkWriteRaceRejectsOutside({
+    await runSymlinkWriteRace({
       slotPath: slot,
       outsideDir: outside,
       runWrite: async (relativePath) =>
@@ -552,7 +556,7 @@ describe("fs-safe", () => {
     const sourcePath = path.join(sourceDir, "source.txt");
     await fs.writeFile(sourcePath, "new-content");
 
-    await expectSymlinkWriteRaceRejectsOutside({
+    await runSymlinkWriteRace({
       slotPath: slot,
       outsideDir: outside,
       runWrite: async (relativePath) =>

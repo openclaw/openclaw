@@ -127,13 +127,6 @@ beforeEach(() => {
         relativePath,
         maxBytes: options?.maxBytes,
       }),
-    copyIn: async (relativePath: string, sourcePath: string, options?: { maxBytes?: number }) =>
-      await rootCopyFromForTest({
-        sourcePath,
-        rootDir,
-        relativePath,
-        maxBytes: options?.maxBytes,
-      }),
   }));
   mediaRootMocks.resolveChannelRemoteInboundAttachmentRoots
     .mockReset()

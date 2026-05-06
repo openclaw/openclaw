@@ -1,9 +1,14 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
+import {
+  clearCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot,
+} from "../plugins/current-plugin-metadata-snapshot.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { FailoverError } from "./failover-error.js";
@@ -25,6 +30,10 @@ vi.mock("../infra/file-lock.js", () => ({
 vi.mock("../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
   resolveExternalAuthProfilesWithPlugins: () => [],
+}));
+
+vi.mock("./provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
 }));
 
 const authSourceCheckMock = vi.hoisted(() => ({
@@ -140,6 +149,17 @@ vi.mock("./model-fallback-auth.runtime.js", () => authRuntimeMock.runtime);
 const makeCfg = makeModelFallbackCfg;
 let authTempRoot = "";
 let authTempCounter = 0;
+
+beforeAll(() => {
+  setCurrentPluginMetadataSnapshot(loadPluginMetadataSnapshot({ config: {}, env: process.env }), {
+    config: {},
+    env: process.env,
+  });
+});
+
+afterAll(() => {
+  clearCurrentPluginMetadataSnapshot();
+});
 
 function resetModelFallbackTestState(): void {
   authRuntimeMock.clear();
@@ -673,6 +693,28 @@ describe("runWithModelFallback", () => {
       classifyEmbeddedPiRunResultForModelFallback({
         provider: "openai-codex",
         model: "gpt-5.4",
+        result: runResult,
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps before_agent_run hook blocks out of empty-result fallback", () => {
+    const runResult: EmbeddedPiRunResult = {
+      payloads: [{ text: "Blocked by before-run policy.", isError: true }],
+      meta: {
+        durationMs: 1,
+        livenessState: "blocked",
+        error: {
+          kind: "hook_block",
+          message: "Blocked by before-run policy.",
+        },
+      },
+    };
+
+    expect(
+      classifyEmbeddedPiRunResultForModelFallback({
+        provider: "atlassian-ai-gateway-openai",
+        model: "gpt-5.5-2026-04-23",
         result: runResult,
       }),
     ).toBeNull();

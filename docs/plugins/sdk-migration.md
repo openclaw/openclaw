@@ -19,18 +19,18 @@ the new architecture, this guide helps you migrate.
 The old plugin system provided two wide-open surfaces that let plugins import
 anything they needed from a single entry point:
 
-- **`openclaw/plugin-sdk/compat`** — a single import that re-exported dozens of
+- **`openclaw/plugin-sdk/compat`** - a single import that re-exported dozens of
   helpers. It was introduced to keep older hook-based plugins working while the
   new plugin architecture was being built.
-- **`openclaw/plugin-sdk/infra-runtime`** — a broad runtime helper barrel that
+- **`openclaw/plugin-sdk/infra-runtime`** - a broad runtime helper barrel that
   mixed system events, heartbeat state, delivery queues, fetch/proxy helpers,
   file helpers, approval types, and unrelated utilities.
-- **`openclaw/plugin-sdk/config-runtime`** — a broad config compatibility barrel
+- **`openclaw/plugin-sdk/config-runtime`** - a broad config compatibility barrel
   that still carries deprecated direct load/write helpers during the migration
   window.
-- **`openclaw/extension-api`** — a bridge that gave plugins direct access to
+- **`openclaw/extension-api`** - a bridge that gave plugins direct access to
   host-side helpers like the embedded agent runner.
-- **`api.registerEmbeddedExtensionFactory(...)`** — a removed Pi-only bundled
+- **`api.registerEmbeddedExtensionFactory(...)`** - a removed Pi-only bundled
   extension hook that could observe embedded-runner events such as
   `tool_result`.
 
@@ -55,9 +55,9 @@ registration behavior.
 
 The old approach caused problems:
 
-- **Slow startup** — importing one helper loaded dozens of unrelated modules
-- **Circular dependencies** — broad re-exports made it easy to create import cycles
-- **Unclear API surface** — no way to tell which exports were stable vs internal
+- **Slow startup** - importing one helper loaded dozens of unrelated modules
+- **Circular dependencies** - broad re-exports made it easy to create import cycles
+- **Unclear API surface** - no way to tell which exports were stable vs internal
 
 The modern plugin SDK fixes this: each import path (`openclaw/plugin-sdk/\<subpath\>`)
 is a small, self-contained module with a clear purpose and documented contract.
@@ -679,7 +679,7 @@ canonical replacement.
     `buildCommandsMessagePaginated`, `buildHelpMessage`.
 
     **New (`openclaw/plugin-sdk/command-status`)**: same signatures, same
-    exports — just imported from the narrower subpath. `command-auth`
+    exports - just imported from the narrower subpath. `command-auth`
     re-exports them as compat stubs.
 
     ```typescript
@@ -698,7 +698,7 @@ canonical replacement.
     `openclaw/plugin-sdk/channel-inbound` or
     `openclaw/plugin-sdk/channel-mention-gating`.
 
-    **New**: `resolveInboundMentionDecision({ facts, policy })` — returns a
+    **New**: `resolveInboundMentionDecision({ facts, policy })` - returns a
     single decision object instead of two split calls.
 
     Downstream channel plugins (Slack, Discord, Matrix, MS Teams) have already
@@ -714,7 +714,7 @@ canonical replacement.
 
     `channelActions*` helpers in `openclaw/plugin-sdk/channel-actions` are
     deprecated alongside raw "actions" channel exports. Expose capabilities
-    through the semantic `presentation` surface instead — channel plugins
+    through the semantic `presentation` surface instead - channel plugins
     declare what they render (cards, buttons, selects) rather than which raw
     action names they accept.
 
@@ -756,7 +756,7 @@ canonical replacement.
     | `ProviderDiscoveryResult` | `ProviderCatalogResult`   |
     | `ProviderPluginDiscovery` | `ProviderPluginCatalog`   |
 
-    Plus the legacy `ProviderCapabilities` static bag — provider plugins
+    Plus the legacy `ProviderCapabilities` static bag - provider plugins
     should use explicit provider hooks such as `buildReplayPolicy`,
     `normalizeToolSchemas`, and `wrapStreamFn` rather than a static object.
 
@@ -809,12 +809,12 @@ canonical replacement.
   </Accordion>
 
   <Accordion title="Memory plugin registration → registerMemoryCapability">
-    **Old**: three separate calls —
+    **Old**: three separate calls -
     `api.registerMemoryPromptSection(...)`,
     `api.registerMemoryFlushPlan(...)`,
     `api.registerMemoryRuntime(...)`.
 
-    **New**: one call on the memory-state API —
+    **New**: one call on the memory-state API -
     `registerMemoryCapability(pluginId, { promptBuilder, flushPlanResolver, runtime })`.
 
     Same slots, single registration call. Additive memory helpers
@@ -906,9 +906,9 @@ This is a temporary escape hatch, not a permanent solution.
 
 ## Related
 
-- [Getting Started](/plugins/building-plugins) — build your first plugin
-- [SDK Overview](/plugins/sdk-overview) — full subpath import reference
-- [Channel Plugins](/plugins/sdk-channel-plugins) — building channel plugins
-- [Provider Plugins](/plugins/sdk-provider-plugins) — building provider plugins
-- [Plugin Internals](/plugins/architecture) — architecture deep dive
-- [Plugin Manifest](/plugins/manifest) — manifest schema reference
+- [Getting Started](/plugins/building-plugins) - build your first plugin
+- [SDK Overview](/plugins/sdk-overview) - full subpath import reference
+- [Channel Plugins](/plugins/sdk-channel-plugins) - building channel plugins
+- [Provider Plugins](/plugins/sdk-provider-plugins) - building provider plugins
+- [Plugin Internals](/plugins/architecture) - architecture deep dive
+- [Plugin Manifest](/plugins/manifest) - manifest schema reference
