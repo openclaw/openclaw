@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -162,6 +162,16 @@ function createLog() {
   };
 }
 
+function createDeferred() {
+  let resolve = (): void => {};
+  const promise = new Promise<undefined>((res) => {
+    resolve = () => {
+      res(undefined);
+    };
+  });
+  return { promise, resolve };
+}
+
 describe("prepareGatewayPluginBootstrap startup plugins", () => {
   beforeEach(() => {
     applyPluginAutoEnable.mockClear();
@@ -179,6 +189,11 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     runChannelPluginStartupMaintenance.mockClear();
     runStartupSessionMigration.mockClear();
   });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("derives startup activation from source config instead of runtime plugin defaults", async () => {
     const sourceConfig = {
       channels: {
@@ -362,5 +377,87 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
         suppressPluginInfoLogs: false,
       }),
     );
+  });
+
+  it("does not block plugin loading on startup maintenance in fast gateway mode", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_FAST_CONFIG", "1");
+    const channelDeferred = createDeferred();
+    const migrationDeferred = createDeferred();
+    runChannelPluginStartupMaintenance.mockReturnValueOnce(channelDeferred.promise);
+    runStartupSessionMigration.mockReturnValueOnce(migrationDeferred.promise);
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+    let settled = false;
+    const bootstrapPromise = prepareGatewayPluginBootstrap({
+      cfgAtStart: {} as OpenClawConfig,
+      startupRuntimeConfig: {} as OpenClawConfig,
+      minimalTestGateway: false,
+      log,
+    }).then(() => {
+      settled = true;
+    });
+
+    await vi.waitFor(() => {
+      expect(settled).toBe(true);
+      expect(loadGatewayStartupPlugins).toHaveBeenCalledOnce();
+      expect(runChannelPluginStartupMaintenance).toHaveBeenCalledOnce();
+      expect(runStartupSessionMigration).toHaveBeenCalledOnce();
+    });
+
+    channelDeferred.resolve();
+    migrationDeferred.resolve();
+    await bootstrapPromise;
+  });
+
+  it("logs deferred startup maintenance failures in fast gateway mode", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_FAST_CONFIG", "1");
+    runChannelPluginStartupMaintenance.mockRejectedValueOnce(new Error("channels boom"));
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    await prepareGatewayPluginBootstrap({
+      cfgAtStart: {} as OpenClawConfig,
+      startupRuntimeConfig: {} as OpenClawConfig,
+      minimalTestGateway: false,
+      log,
+    });
+
+    await vi.waitFor(() => {
+      expect(log.warn).toHaveBeenCalledWith(
+        "channel plugin startup maintenance failed during deferred fast startup: Error: channels boom",
+      );
+    });
+  });
+
+  it("waits for startup maintenance before plugin loading in normal mode", async () => {
+    const channelDeferred = createDeferred();
+    const migrationDeferred = createDeferred();
+    runChannelPluginStartupMaintenance.mockReturnValueOnce(channelDeferred.promise);
+    runStartupSessionMigration.mockReturnValueOnce(migrationDeferred.promise);
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+    let settled = false;
+    const bootstrapPromise = prepareGatewayPluginBootstrap({
+      cfgAtStart: {} as OpenClawConfig,
+      startupRuntimeConfig: {} as OpenClawConfig,
+      minimalTestGateway: false,
+      log,
+    }).then(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(loadGatewayStartupPlugins).not.toHaveBeenCalled();
+
+    channelDeferred.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(loadGatewayStartupPlugins).not.toHaveBeenCalled();
+
+    migrationDeferred.resolve();
+    await bootstrapPromise;
+
+    expect(loadGatewayStartupPlugins).toHaveBeenCalledOnce();
   });
 });

@@ -43,6 +43,8 @@ export async function prepareGatewayPluginBootstrap(params: {
   loadRuntimePlugins?: boolean;
 }) {
   const activationSourceConfig = params.activationSourceConfig ?? params.cfgAtStart;
+  const fastGatewayStartup =
+    !params.minimalTestGateway && process.env.OPENCLAW_GATEWAY_FAST_CONFIG === "1";
   const startupMaintenanceConfig = resolveGatewayStartupMaintenanceConfig({
     cfgAtStart: params.cfgAtStart,
     startupRuntimeConfig: params.startupRuntimeConfig,
@@ -54,23 +56,40 @@ export async function prepareGatewayPluginBootstrap(params: {
     const { runChannelPluginStartupMaintenance } =
       await import("../channels/plugins/lifecycle-startup.js");
     const startupTasks = [
-      runChannelPluginStartupMaintenance({
-        cfg: startupMaintenanceConfig,
-        env: process.env,
-        log: params.log,
-      }),
+      {
+        name: "channel plugin startup maintenance",
+        promise: runChannelPluginStartupMaintenance({
+          cfg: startupMaintenanceConfig,
+          env: process.env,
+          log: params.log,
+        }),
+      },
     ];
     if (!params.minimalTestGateway) {
       const { runStartupSessionMigration } = await import("./server-startup-session-migration.js");
-      startupTasks.push(
-        runStartupSessionMigration({
+      startupTasks.push({
+        name: "startup session migration",
+        promise: runStartupSessionMigration({
           cfg: params.cfgAtStart,
           env: process.env,
           log: params.log,
         }),
-      );
+      });
     }
-    await Promise.all(startupTasks);
+    if (fastGatewayStartup) {
+      void Promise.allSettled(startupTasks.map((task) => task.promise)).then((results) => {
+        for (const [index, result] of results.entries()) {
+          if (result.status !== "rejected") {
+            continue;
+          }
+          params.log.warn(
+            `${startupTasks[index]?.name ?? "startup maintenance"} failed during deferred fast startup: ${String(result.reason)}`,
+          );
+        }
+      });
+    } else {
+      await Promise.all(startupTasks.map((task) => task.promise));
+    }
   }
 
   initSubagentRegistry();
