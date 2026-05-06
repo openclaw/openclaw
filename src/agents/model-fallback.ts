@@ -616,7 +616,18 @@ function resolveFallbackCandidates(params: {
     addExplicitCandidate(resolved.ref);
   }
 
-  if (params.fallbacksOverride === undefined && primary?.provider && primary.model) {
+  // Always include the configured primary as a last-resort fallback.
+  // When fallbacksOverride is explicitly empty (e.g. user session pin → []),
+  // the fallback loop adds nothing and the previous guard
+  // (fallbacksOverride === undefined) prevented the configured primary
+  // from being added, collapsing candidates to length 1.  (#77766)
+  // When fallbacksOverride has explicit entries, respect the caller's
+  // intent and do not inject the configured primary.
+  if (
+    (params.fallbacksOverride === undefined || params.fallbacksOverride.length === 0) &&
+    primary?.provider &&
+    primary.model
+  ) {
     addExplicitCandidate({ provider: primary.provider, model: primary.model });
   }
 

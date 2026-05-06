@@ -751,7 +751,7 @@ describe("agentCommand", () => {
     });
   });
 
-  it("does not use fallback list for user session model overrides", async () => {
+  it("does not use fallback list for user session model overrides but keeps configured primary (#77766)", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions-user-override.json");
       writeSessionStoreSeed(store, {
@@ -781,7 +781,9 @@ describe("agentCommand", () => {
         { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
         { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
       ]);
-      vi.mocked(runEmbeddedPiAgent).mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
+      vi.mocked(runEmbeddedPiAgent)
+        .mockRejectedValueOnce(new Error("connect ECONNREFUSED"))
+        .mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
 
       await expect(
         agentCommand(
@@ -791,12 +793,17 @@ describe("agentCommand", () => {
           },
           runtime,
         ),
-      ).rejects.toThrow("connect ECONNREFUSED");
+      ).rejects.toThrow("All models failed");
 
       const attempts = vi
         .mocked(runEmbeddedPiAgent)
         .mock.calls.map((call) => ({ provider: call[0]?.provider, model: call[0]?.model }));
-      expect(attempts).toEqual([{ provider: "ollama", model: "qwen3.5:27b" }]);
+      // Global fallbacks (gpt-5.4) are NOT used, but the configured primary
+      // (gpt-4.1-mini) is still available as a last-resort fallback (#77766).
+      expect(attempts).toEqual([
+        { provider: "ollama", model: "qwen3.5:27b" },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      ]);
     });
   });
 

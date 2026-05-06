@@ -1417,17 +1417,29 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
-  it("treats an empty fallbacksOverride as disabling global fallbacks", async () => {
+  it("includes configured primary as last resort when fallbacksOverride is empty (#77766)", async () => {
     const cfg = makeFallbacksOnlyCfg();
+    const calls: Array<{ provider: string; model: string }> = [];
 
-    const candidates = __testing.resolveFallbackCandidates({
-      cfg,
-      provider: "anthropic",
-      model: "claude-opus-4-5",
-      fallbacksOverride: [],
-    });
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+        fallbacksOverride: [],
+        run: async (provider, model) => {
+          calls.push({ provider, model });
+          throw new Error("failed");
+        },
+      }),
+    ).rejects.toThrow();
 
-    expect(candidates).toEqual([{ provider: "anthropic", model: "claude-opus-4-5" }]);
+    // Empty fallbacksOverride disables global fallbacks but the configured
+    // primary (default: openai/gpt-5.5) is still included as last resort.
+    expect(calls).toEqual([
+      { provider: "anthropic", model: "claude-opus-4-5" },
+      { provider: "openai", model: "gpt-5.5" },
+    ]);
   });
 
   it("keeps explicit fallbacks reachable when models allowlist is present", async () => {
@@ -1625,6 +1637,101 @@ describe("runWithModelFallback", () => {
           testCase.calls.map(([provider, model]) => ({ provider, model })),
         );
       }
+    });
+
+    it("cross-provider request falls back to configured primary (#77766)", async () => {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-opus-4-6",
+              fallbacks: [],
+            },
+          },
+        },
+      });
+
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('No credentials found for profile "openai:default".'))
+        .mockResolvedValueOnce("config primary worked");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "openai", // Different provider
+        model: "gpt-4.1-mini",
+        run,
+      });
+
+      // Cross-provider requests should skip configured fallbacks but still try configured primary
+      expect(result.result).toBe("config primary worked");
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini"); // Original request
+      expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-opus-4-6"); // Config primary as final fallback
+    });
+
+    it("includes configured primary as fallback when session pin collapses fallback chain (#77766)", async () => {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "venice/claude-sonnet-4-6",
+              fallbacks: ["openai/gpt-5.5"],
+            },
+          },
+        },
+      });
+
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("Rate limit exceeded"))
+        .mockResolvedValueOnce("primary fallback worked");
+
+      // Session pinned to the fallback model with explicit empty fallbacksOverride
+      // (mimics resolveEffectiveModelFallbacks returning [] for user pin).
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.5",
+        fallbacksOverride: [],
+        run,
+      });
+
+      // The configured primary should be tried as last resort
+      expect(result.result).toBe("primary fallback worked");
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-5.5");
+      expect(run).toHaveBeenNthCalledWith(2, "venice", "claude-sonnet-4-6");
+    });
+
+    it("uses fallbacks when session model exactly matches config primary (#77766)", async () => {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-opus-4-6",
+              fallbacks: ["groq/llama-3.3-70b-versatile"],
+            },
+          },
+        },
+      });
+
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("Service unavailable"))
+        .mockResolvedValueOnce("fallback worked");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        run,
+      });
+
+      expect(result.result).toBe("fallback worked");
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-opus-4-6");
+      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile");
     });
   });
 
