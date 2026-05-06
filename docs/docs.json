@@ -1205,6 +1205,7 @@
                     "pages": [
                       "plugins/building-plugins",
                       "plugins/hooks",
+                      "plugins/host-hooks-examples",
                       "plugins/sdk-channel-plugins",
                       "plugins/sdk-channel-message",
                       "plugins/sdk-provider-plugins",

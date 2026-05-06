@@ -133,16 +133,16 @@ plugins.
 
 | Method                                                                   | Contract it owns                                                                                                                  |
 | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| `api.registerSessionExtension(...)`                                      | Plugin-owned, JSON-compatible session state projected through Gateway sessions                                                    |
+| `api.registerSessionExtension(...)`                                      | Plugin-owned, JSON-compatible session state projected through Gateway sessions; guarded `SessionEntry` slot mirrors are in #75609 |
 | `api.enqueueNextTurnInjection(...)`                                      | Durable exactly-once context injected into the next agent turn for one session                                                    |
 | `api.registerTrustedToolPolicy(...)`                                     | Bundled/trusted pre-plugin tool policy that can block or rewrite tool params                                                      |
 | `api.registerToolMetadata(...)`                                          | Tool catalog display metadata without changing the tool implementation                                                            |
-| `api.registerCommand(...)`                                               | Scoped plugin commands; command results can set `continueAgent: true`; Discord native commands support `descriptionLocalizations` |
+| `api.registerCommand(...)`                                               | Scoped plugin commands; command continuation helpers are in #75578; Discord native commands support `descriptionLocalizations`    |
 | `api.registerControlUiDescriptor(...)`                                   | Control UI contribution descriptors for session, tool, run, or settings surfaces                                                  |
 | `api.registerRuntimeLifecycle(...)`                                      | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                 |
 | `api.registerAgentEventSubscription(...)`                                | Sanitized event subscriptions for workflow state and monitors                                                                     |
 | `api.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)` | Per-run plugin scratch state cleared on terminal run lifecycle                                                                    |
-| `api.registerSessionSchedulerJob(...)`                                   | Plugin-owned session scheduler job records with deterministic cleanup                                                             |
+| `api.registerSessionSchedulerJob(...)`                                   | Plugin-owned session scheduler job records with deterministic cleanup; scheduler tag cleanup is in #75588                         |
 
 The contracts intentionally split authority:
 
