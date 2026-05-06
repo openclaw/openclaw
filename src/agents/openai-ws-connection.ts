@@ -41,6 +41,7 @@ export interface ResponseObject {
   created_at: number;
   status: "in_progress" | "completed" | "failed" | "cancelled" | "incomplete";
   model: string;
+  metadata?: Record<string, string>;
   output: OutputItem[];
   usage?: UsageInfo;
   error?: { code: string; message: string };

@@ -3072,6 +3072,91 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent2.input).toEqual([{ type: "message", role: "user", content: "What can you do?" }]);
   });
 
+  it("ignores stale completed events from a previous websocket turn when metadata proves the lineage mismatch", async () => {
+    const sessionId = "sess-stale-final-lineage";
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);
+
+    const ctx1 = {
+      systemPrompt: "You are helpful.",
+      messages: [userMsg("Question A")] as Parameters<typeof convertMessagesToInputItems>[0],
+      tools: [],
+    };
+
+    const stream1 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      ctx1 as Parameters<typeof streamFn>[1],
+    );
+    const done1 = (async () => {
+      for await (const _ of await resolveStream(stream1)) {
+        /* consume */
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    const sent1 = manager.sentEvents[0] as { metadata?: Record<string, string> };
+    const turn1Response = {
+      ...makeResponseObject("resp_turn_a", "Answer A"),
+      metadata: sent1.metadata,
+    };
+    manager.simulateEvent({ type: "response.completed", response: turn1Response });
+    await done1;
+
+    const ctx2 = {
+      systemPrompt: "You are helpful.",
+      messages: [
+        userMsg("Question A"),
+        buildAssistantMessageFromResponse(turn1Response, modelStub),
+        userMsg("Question B: use the tool, then answer B"),
+      ] as Parameters<typeof convertMessagesToInputItems>[0],
+      tools: [],
+    };
+
+    const stream2 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      ctx2 as Parameters<typeof streamFn>[1],
+    );
+    const events2: Array<{ type?: string; message?: { content?: Array<{ text?: string }> } }> = [];
+    const done2 = (async () => {
+      for await (const ev of await resolveStream(stream2)) {
+        events2.push(ev as { type?: string; message?: { content?: Array<{ text?: string }> } });
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const sent2 = manager.sentEvents[1] as {
+      metadata?: Record<string, string>;
+      previous_response_id?: string;
+      input?: Array<{ type: string; role?: string; content?: unknown }>;
+    };
+    expect(sent2.previous_response_id).toBe("resp_turn_a");
+    expect(sent2.input).toEqual([
+      { type: "message", role: "user", content: "Question B: use the tool, then answer B" },
+    ]);
+
+    manager.simulateEvent({
+      type: "response.completed",
+      response: {
+        ...makeResponseObject("resp_stale_replay", "Answer A"),
+        metadata: sent1.metadata,
+      },
+    });
+    await new Promise((r) => setImmediate(r));
+    expect(events2.some((event) => event.type === "done")).toBe(false);
+
+    manager.simulateEvent({
+      type: "response.completed",
+      response: {
+        ...makeResponseObject("resp_turn_b", "Answer B after tool work"),
+        metadata: sent2.metadata,
+      },
+    });
+    await done2;
+
+    const doneEvent = events2.find((event) => event.type === "done");
+    expect(doneEvent?.message?.content?.[0]?.text).toBe("Answer B after tool work");
+  });
+
   it("uses an empty incremental payload when replay context exactly matches the response chain", async () => {
     const sessionId = "sess-full-context-replay";
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);

@@ -553,6 +553,15 @@ function resolveProviderTransportTurnState(
   );
 }
 
+function responseMatchesCurrentWsTurn(params: {
+  response: { metadata?: Record<string, string> | null };
+  requestPayload: { metadata?: Record<string, string> };
+}): boolean {
+  const expectedTurnId = params.requestPayload.metadata?.openclaw_turn_id;
+  const actualTurnId = params.response.metadata?.openclaw_turn_id;
+  return !expectedTurnId || !actualTurnId || actualTurnId === expectedTurnId;
+}
+
 function resolveWebSocketSessionPolicy(
   model: Parameters<StreamFn>[0],
   sessionId: string,
@@ -1179,6 +1188,20 @@ export function createOpenAIWebSocketStreamFn(
               }
 
               if (event.type === "response.completed") {
+                if (
+                  !responseMatchesCurrentWsTurn({
+                    response: event.response,
+                    requestPayload,
+                  })
+                ) {
+                  log.warn(
+                    `[ws-stream] session=${sessionId}: ignored response.completed for stale turn metadata response_id=${event.response.id}`,
+                  );
+                  outputItemPhaseById.clear();
+                  outputTextByPart.clear();
+                  emittedTextByPart.clear();
+                  return;
+                }
                 outputItemPhaseById.clear();
                 outputTextByPart.clear();
                 emittedTextByPart.clear();
@@ -1201,6 +1224,20 @@ export function createOpenAIWebSocketStreamFn(
                 eventStream.push({ type: "done", reason, message: assistantMsg });
                 resolve();
               } else if (event.type === "response.failed") {
+                if (
+                  !responseMatchesCurrentWsTurn({
+                    response: event.response,
+                    requestPayload,
+                  })
+                ) {
+                  log.warn(
+                    `[ws-stream] session=${sessionId}: ignored response.failed for stale turn metadata response_id=${event.response.id}`,
+                  );
+                  outputItemPhaseById.clear();
+                  outputTextByPart.clear();
+                  emittedTextByPart.clear();
+                  return;
+                }
                 outputItemPhaseById.clear();
                 outputTextByPart.clear();
                 emittedTextByPart.clear();
