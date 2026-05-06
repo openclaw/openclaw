@@ -220,6 +220,20 @@ describe("manifest model id normalization", () => {
     expect(normalizeDemoModel()).toBe("bravo/demo-model");
   });
 
+  it("reuses workspace-scoped current metadata when no active runtime workspace is set", () => {
+    setCurrentPluginMetadataSnapshot(
+      createCurrentSnapshot({
+        manifestHash: "alpha",
+        prefix: "alpha",
+        workspaceDir: "/workspace/a",
+      }),
+      { config: {}, env: process.env },
+    );
+
+    expect(normalizeDemoModel()).toBe("alpha/demo-model");
+    expect(normalizeDemoModel("second-model")).toBe("alpha/second-model");
+  });
+
   it("reflects manifest edits and state-dir changes on the next lookup", () => {
     const stateDirA = makeTempDir();
     const pluginDirA = path.join(stateDirA, "extensions", "normalizer");
