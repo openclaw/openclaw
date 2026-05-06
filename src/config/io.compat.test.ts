@@ -148,8 +148,8 @@ describe("config io paths", () => {
         logger,
       });
 
-      io.loadConfig();
-      io.loadConfig();
+      expect(() => io.loadConfig()).toThrow('Unrecognized key: "llm"');
+      expect(() => io.loadConfig()).toThrow('Unrecognized key: "llm"');
 
       const legacyWarnings = logger.warn.mock.calls
         .map(([message]) => String(message))
