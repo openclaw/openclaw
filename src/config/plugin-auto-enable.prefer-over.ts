@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
-import { tryReadJsonSync } from "../infra/json-files.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
@@ -77,12 +76,16 @@ function resolveExternalCatalogPreferOver(channelId: string, env: NodeJS.Process
     if (!fs.existsSync(resolved)) {
       continue;
     }
-    const payload = tryReadJsonSync(resolved);
-    const channel = parseExternalCatalogChannelEntries(payload).find(
-      (entry) => entry.id === channelId,
-    );
-    if (channel) {
-      return channel.preferOver;
+    try {
+      const payload = JSON.parse(fs.readFileSync(resolved, "utf-8")) as unknown;
+      const channel = parseExternalCatalogChannelEntries(payload).find(
+        (entry) => entry.id === channelId,
+      );
+      if (channel) {
+        return channel.preferOver;
+      }
+    } catch {
+      // Ignore invalid catalog files.
     }
   }
   return [];
