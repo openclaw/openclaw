@@ -9,8 +9,15 @@ name: build-runtime-image
 #                        (skipped silently if PLATFORM_CONTEXT_DISPATCH_TOKEN
 #                        isn't set on this repo).
 #
+# Dockerfile.multitenant uses `COPY --from=skills` which expects a
+# named build-context. We vendor saml212/platform-skills (a private
+# sibling repo) into the runner before building.
+#
 # Required CI secrets (set in saml212/platform-runtime Actions secrets):
 #   - GHCR_TOKEN  (classic PAT with write:packages, read:packages)
+#   - PLATFORM_SKILLS_READ_TOKEN  (fine-grained PAT with Contents:Read on
+#     saml212/platform-skills only. Required because platform-skills is
+#     private and the default GITHUB_TOKEN is scoped to this repo only.)
 #
 # Optional CI secrets:
 #   - PLATFORM_CONTEXT_DISPATCH_TOKEN  (PAT with `actions:write` on
@@ -39,9 +46,28 @@ jobs:
       packages: write
     env:
       IMAGE: ghcr.io/saml212/rockielab-runtime-multitenant
+      # Map the secret to env so we can `if:` on it (secrets context is
+      # not available in step-level if expressions; env is).
+      SKILLS_READ_TOKEN: ${{ secrets.PLATFORM_SKILLS_READ_TOKEN }}
     steps:
+      - name: Preflight — require PLATFORM_SKILLS_READ_TOKEN
+        if: env.SKILLS_READ_TOKEN == ''
+        run: |
+          echo "::error::PLATFORM_SKILLS_READ_TOKEN secret is not set on this repo."
+          echo "Generate a fine-grained PAT with Contents:Read on saml212/platform-skills,"
+          echo "then: gh secret set PLATFORM_SKILLS_READ_TOKEN --repo saml212/platform-runtime --body '<pat>'"
+          exit 1
+
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 1
+
+      - name: Checkout platform-skills (vendored at build time)
+        uses: actions/checkout@v4
+        with:
+          repository: saml212/platform-skills
+          path: vendor/platform-skills
+          token: ${{ secrets.PLATFORM_SKILLS_READ_TOKEN }}
           fetch-depth: 1
 
       - name: Free up runner disk
@@ -69,6 +95,11 @@ jobs:
         with:
           context: .
           file: Dockerfile.multitenant
+          # Dockerfile.multitenant has `COPY --from=skills .` which
+          # resolves via this named build-context, fed from the
+          # vendored checkout above.
+          build-contexts: |
+            skills=vendor/platform-skills
           platforms: linux/amd64
           push: true
           tags: |
