@@ -38,6 +38,10 @@ const CHANNEL_ID = "irc" as const;
 
 const escapeIrcRegexLiteral = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+function resolveIrcConversationId(message: IrcInboundMessage): string {
+  return message.isGroup ? message.target : message.senderNick;
+}
+
 function resolveIrcEffectiveAllowlists(params: {
   configAllowFrom: string[];
   configGroupAllowFrom: string[];
@@ -249,7 +253,26 @@ export async function handleIrcInbound(params: {
     return;
   }
 
-  const mentionRegexes = core.channel.mentions.buildMentionRegexes(config as OpenClawConfig);
+  const peerId = resolveIrcConversationId(message);
+  const route = core.channel.routing.resolveAgentRoute({
+    cfg: config as OpenClawConfig,
+    channel: CHANNEL_ID,
+    accountId: account.accountId,
+    peer: {
+      kind: message.isGroup ? "group" : "direct",
+      id: peerId,
+    },
+  });
+
+  const mentionRegexes = core.channel.mentions.resolveMentionPatternsEnabled({
+    cfg: config as OpenClawConfig,
+    provider: CHANNEL_ID,
+    conversationId: peerId,
+    agentId: route.agentId,
+    providerPolicy: account.config.mentionPatternPolicy,
+  })
+    ? core.channel.mentions.buildMentionRegexes(config as OpenClawConfig, route.agentId)
+    : [];
   const mentionNick = connectedNick?.trim() || account.nick;
   const explicitMentionRegex = mentionNick
     ? new RegExp(`\\b${escapeIrcRegexLiteral(mentionNick)}\\b[:,]?`, "i")
@@ -277,17 +300,6 @@ export async function handleIrcInbound(params: {
     runtime.log?.(`irc: drop channel ${message.target} (${mentionGate.reason})`);
     return;
   }
-
-  const peerId = message.isGroup ? message.target : message.senderNick;
-  const route = core.channel.routing.resolveAgentRoute({
-    cfg: config as OpenClawConfig,
-    channel: CHANNEL_ID,
-    accountId: account.accountId,
-    peer: {
-      kind: message.isGroup ? "group" : "direct",
-      id: peerId,
-    },
-  });
 
   const fromLabel = message.isGroup ? message.target : senderDisplay;
   const storePath = core.channel.session.resolveStorePath(config.session?.store, {
@@ -370,5 +382,6 @@ export async function handleIrcInbound(params: {
 }
 
 export const __testing = {
+  resolveIrcConversationId,
   resolveIrcEffectiveAllowlists,
 };

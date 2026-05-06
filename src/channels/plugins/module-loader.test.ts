@@ -61,9 +61,7 @@ describe("channel plugin module loader helpers", () => {
   it("uses native require for eligible JavaScript modules without creating Jiti", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ ok: false })));
     vi.resetModules();
-    vi.doMock("jiti", () => ({
-      createJiti,
-    }));
+    stubPluginModuleLoaderJitiFactory(createJiti as unknown as PluginModuleLoaderFactory);
     const loaderModule = await importFreshModule<typeof import("./module-loader.js")>(
       import.meta.url,
       "./module-loader.js?scope=native-require",
@@ -96,16 +94,17 @@ describe("channel plugin module loader helpers", () => {
     }
     vi.resetModules();
     stubPluginModuleLoaderJitiFactory(createJiti as unknown as PluginModuleLoaderFactory);
-    const loaderModule = await importFreshModule<typeof import("./module-loader.js")>(
-      import.meta.url,
-      "./module-loader.js?scope=source-ts-jiti-fallback",
-    );
-    const rootDir = createTempDir();
-    const modulePath = path.join(rootDir, "extensions", "demo", "index.ts");
-    fs.mkdirSync(path.dirname(modulePath), { recursive: true });
-    fs.writeFileSync(modulePath, 'throw new Error("native source load failed");\n', "utf8");
 
     try {
+      const loaderModule = await importFreshModule<typeof import("./module-loader.js")>(
+        import.meta.url,
+        "./module-loader.js?scope=source-ts-jiti-fallback",
+      );
+      const rootDir = createTempDir();
+      const modulePath = path.join(rootDir, "extensions", "demo", "index.ts");
+      fs.mkdirSync(path.dirname(modulePath), { recursive: true });
+      fs.writeFileSync(modulePath, "export const ok = true;\n", "utf8");
+
       expect(
         loaderModule.loadChannelPluginModule({
           modulePath,

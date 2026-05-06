@@ -11,6 +11,7 @@ type PostbackEvent = webhook.PostbackEvent;
 vi.mock("openclaw/plugin-sdk/channel-inbound", () => ({
   buildMentionRegexes: () => [],
   matchesMentionPatterns: () => false,
+  resolveMentionPatternsEnabled: () => true,
   resolveInboundMentionDecision: (params: {
     facts?: {
       canDetectMention: boolean;

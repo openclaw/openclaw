@@ -5,6 +5,7 @@ import {
   logInboundDrop,
   matchesMentionWithExplicit,
   resolveInboundMentionDecision,
+  resolveMentionPatternsEnabled,
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
@@ -150,6 +151,7 @@ export async function resolveTelegramInboundBody(params: {
   effectiveDmAllow: NormalizedAllowFrom;
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
+  providerMentionPatterns?: Parameters<typeof resolveMentionPatternsEnabled>[0]["providerPolicy"];
   requireMention?: boolean;
   options?: TelegramMessageContextOptions;
   groupHistories: Map<string, HistoryEntry[]>;
@@ -174,6 +176,7 @@ export async function resolveTelegramInboundBody(params: {
     effectiveDmAllow,
     groupConfig,
     topicConfig,
+    providerMentionPatterns,
     requireMention,
     options,
     groupHistories,
@@ -181,7 +184,18 @@ export async function resolveTelegramInboundBody(params: {
     logger,
   } = params;
   const botUsername = normalizeOptionalLowercaseString(primaryCtx.me?.username);
-  const mentionRegexes = buildMentionRegexes(cfg, routeAgentId);
+  const mentionConversationId = isGroup
+    ? buildTelegramGroupPeerId(chatId, resolvedThreadId)
+    : String(chatId);
+  const mentionRegexes = resolveMentionPatternsEnabled({
+    cfg,
+    provider: "telegram",
+    conversationId: mentionConversationId,
+    agentId: routeAgentId,
+    providerPolicy: providerMentionPatterns,
+  })
+    ? buildMentionRegexes(cfg, routeAgentId)
+    : [];
   const messageTextParts = getTelegramTextParts(msg);
   const allowForCommands = isGroup ? effectiveGroupAllow : effectiveDmAllow;
   const senderAllowedForCommands = isSenderAllowed({

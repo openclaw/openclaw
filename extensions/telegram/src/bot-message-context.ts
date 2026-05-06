@@ -444,6 +444,7 @@ export const buildTelegramMessageContext = async ({
     effectiveDmAllow,
     groupConfig,
     topicConfig,
+    providerMentionPatterns: account.config?.mentionPatterns,
     requireMention,
     options,
     groupHistories,

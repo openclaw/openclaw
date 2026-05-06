@@ -1,4 +1,5 @@
 import type { CommonChannelMessagingConfig } from "./types.channel-messaging-common.js";
+import type { MentionPatternsPolicyConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
@@ -13,6 +14,8 @@ export type SignalGroupConfig = {
 };
 
 export type SignalAccountConfig = CommonChannelMessagingConfig & {
+  /** Per-provider mention-pattern allow/deny policy for group/channel conversations. */
+  mentionPatterns?: MentionPatternsPolicyConfig;
   /** Optional explicit E.164 account for signal-cli. */
   account?: string;
   /** Optional account UUID for signal-cli (used for loop protection). */

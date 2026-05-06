@@ -19,6 +19,7 @@ import {
   parseActivationCommand,
   recordPendingHistoryEntryIfEnabled,
   resolveInboundMentionDecision,
+  resolveMentionPatternsEnabled,
 } from "./group-gating.runtime.js";
 import { noteGroupMember } from "./group-members.js";
 
@@ -40,6 +41,7 @@ type ApplyGroupGatingParams = {
   agentId: string;
   sessionKey: string;
   baseMentionConfig: MentionConfig;
+  providerMentionPatterns?: Parameters<typeof resolveMentionPatternsEnabled>[0]["providerPolicy"];
   authDir?: string;
   groupHistories: Map<string, GroupHistoryEntry[]>;
   groupHistoryLimit: number;
@@ -130,8 +132,17 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     ...params.baseMentionConfig,
     allowFrom: inboundPolicy.configuredAllowFrom,
   };
+  const configuredMentionPatternsEnabled = resolveMentionPatternsEnabled({
+    cfg: params.cfg,
+    provider: "whatsapp",
+    conversationId: params.conversationId,
+    agentId: params.agentId,
+    providerPolicy: params.providerMentionPatterns,
+  });
+  const routeMentionConfig = buildMentionConfig(params.cfg, params.agentId);
   const mentionConfig = {
-    ...buildMentionConfig(params.cfg, params.agentId),
+    ...routeMentionConfig,
+    mentionRegexes: configuredMentionPatternsEnabled ? routeMentionConfig.mentionRegexes : [],
     allowFrom: inboundPolicy.configuredAllowFrom,
   };
   const mentionMsg =

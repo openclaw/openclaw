@@ -2,6 +2,32 @@ import { describe, expect, it } from "vitest";
 import { __testing } from "./inbound.js";
 
 describe("irc inbound policy", () => {
+  it("uses sender nick as the DM mention-policy conversation id", () => {
+    expect(
+      __testing.resolveIrcConversationId({
+        messageId: "msg-1",
+        target: "OpenClaw",
+        senderNick: "alice",
+        text: "hello",
+        timestamp: 1,
+        isGroup: false,
+      }),
+    ).toBe("alice");
+  });
+
+  it("uses channel target as the group mention-policy conversation id", () => {
+    expect(
+      __testing.resolveIrcConversationId({
+        messageId: "msg-1",
+        target: "#ops",
+        senderNick: "alice",
+        text: "hello",
+        timestamp: 1,
+        isGroup: true,
+      }),
+    ).toBe("#ops");
+  });
+
   it("keeps DM allowlist merged with pairing-store entries", () => {
     const resolved = __testing.resolveIrcEffectiveAllowlists({
       configAllowFrom: ["owner"],

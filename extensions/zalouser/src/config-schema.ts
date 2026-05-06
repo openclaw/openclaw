@@ -4,6 +4,7 @@ import {
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
+  MentionPatternsPolicySchema,
   ToolPolicySchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "openclaw/plugin-sdk/zod";
@@ -26,6 +27,7 @@ const zalouserAccountSchema = z.object({
   groupAllowFrom: AllowFromListSchema,
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   groups: z.object({}).catchall(groupConfigSchema).optional(),
+  mentionPatterns: MentionPatternsPolicySchema.optional(),
   messagePrefix: z.string().optional(),
   responsePrefix: z.string().optional(),
 });

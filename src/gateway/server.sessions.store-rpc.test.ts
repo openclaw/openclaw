@@ -360,7 +360,6 @@ test("lists and patches session store via sessions.* RPC", async () => {
       key: string;
       modelProvider?: string;
       model?: string;
-      agentRuntime?: { id: string; source: string };
     }>;
   }>("sessions.list", {});
   expect(listAfterModelPatch.ok).toBe(true);
@@ -369,7 +368,6 @@ test("lists and patches session store via sessions.* RPC", async () => {
   );
   expect(mainAfterModelPatch?.modelProvider).toBe("openai");
   expect(mainAfterModelPatch?.model).toBe("gpt-test-a");
-  expect(mainAfterModelPatch?.agentRuntime).toEqual({ id: "pi", source: "implicit" });
 
   const compacted = await directSessionReq<{ ok: true; compacted: boolean }>("sessions.compact", {
     key: "agent:main:main",

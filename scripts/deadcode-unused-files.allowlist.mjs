@@ -31,4 +31,7 @@ export const KNIP_UNUSED_FILE_ALLOWLIST = [
 // Knip can disagree across supported local/CI platforms for files that are
 // only reachable through test-only import graphs. Ignore these when reported,
 // but do not require them to be reported.
-export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = ["src/gateway/test/server-sessions-helpers.ts"];
+export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
+  "extensions/whatsapp/src/auto-reply/session-snapshot.ts",
+  "src/gateway/test/server-sessions-helpers.ts",
+];

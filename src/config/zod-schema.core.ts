@@ -400,14 +400,33 @@ export const VisibleRepliesSchema = z
     return value;
   });
 
+export const MentionPatternsModeSchema = z.union([z.literal("allow"), z.literal("deny")]);
+
+export const ProviderMentionPatternsModeSchema = z.union([
+  z.literal("inherit"),
+  z.literal("allow"),
+  z.literal("deny"),
+]);
+
+export const MentionPatternsPolicySchema = z
+  .object({
+    mode: ProviderMentionPatternsModeSchema.optional(),
+    allowIn: z.array(z.string()).optional(),
+    denyIn: z.array(z.string()).optional(),
+  })
+  .strict();
+
 export const GroupChatSchema = z
   .object({
     mentionPatterns: z.array(z.string()).optional(),
+    mentionPatternsMode: MentionPatternsModeSchema.optional(),
     historyLimit: z.number().int().positive().optional(),
     visibleReplies: VisibleRepliesSchema.optional(),
   })
   .strict()
   .optional();
+
+export const AgentGroupChatSchema = GroupChatSchema;
 
 export const DmConfigSchema = z
   .object({

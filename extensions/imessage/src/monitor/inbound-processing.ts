@@ -7,6 +7,7 @@ import {
   matchesMentionPatterns,
   resolveEnvelopeFormatOptions,
   resolveInboundMentionDecision,
+  resolveMentionPatternsEnabled,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   resolveChannelGroupPolicy,
@@ -159,6 +160,7 @@ export function resolveIMessageInboundDecision(params: {
     ) => boolean;
   };
   selfChatCache?: SelfChatCache;
+  providerMentionPatterns?: Parameters<typeof resolveMentionPatternsEnabled>[0]["providerPolicy"];
   logVerbose?: (msg: string) => void;
 }): IMessageInboundDecision {
   const senderRaw = params.message.sender ?? "";
@@ -326,7 +328,15 @@ export function resolveIMessageInboundDecision(params: {
     sender,
     chatId,
   });
-  const mentionRegexes = buildMentionRegexes(params.cfg, route.agentId);
+  const mentionRegexes = resolveMentionPatternsEnabled({
+    cfg: params.cfg,
+    provider: "imessage",
+    conversationId: isGroup ? String(chatId ?? "unknown") : senderNormalized,
+    agentId: route.agentId,
+    providerPolicy: params.providerMentionPatterns,
+  })
+    ? buildMentionRegexes(params.cfg, route.agentId)
+    : [];
   if (!bodyText) {
     return { kind: "drop", reason: "empty body" };
   }

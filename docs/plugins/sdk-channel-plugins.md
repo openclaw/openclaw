@@ -341,6 +341,17 @@ bundled channel plugins that already depend on runtime injection:
 - `matchesMentionWithExplicit`
 - `implicitMentionKindWhen`
 - `resolveInboundMentionDecision`
+- `resolveMentionPatternPolicy`
+- `resolveMentionPatternsEnabled`
+
+Use `resolveMentionPatternPolicy({ cfg, provider, conversationId, agentId })`
+when a channel supports configured mention regexes and needs the full effective
+policy. The helper combines global `messages.groupChat.mentionPatternsMode`,
+agent-scoped `groupChat.mentionPatternsMode`, and provider-scoped
+`channels.<provider>.mentionPatterns` settings. Provider `allowIn` and `denyIn`
+entries are matched against the channel's stable conversation id; `denyIn` wins
+when both lists match. Use `resolveMentionPatternsEnabled(...)` when you only
+need the boolean decision before building configured regexes.
 
 If you only need `implicitMentionKindWhen` and
 `resolveInboundMentionDecision`, import from

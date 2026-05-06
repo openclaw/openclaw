@@ -566,7 +566,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     warningStarts: "2026-04-26",
     removeAfter: "2026-07-26",
     replacement:
-      "focused channel SDK subpaths, especially `openclaw/plugin-sdk/channel-runtime-context`",
+      "focused channel SDK subpaths, especially the channel runtime context helper subpath",
     docsPath: "/plugins/sdk-migration",
     surfaces: [CHANNEL_RUNTIME_SDK_SURFACE],
     diagnostics: ["plugin SDK compatibility warning"],

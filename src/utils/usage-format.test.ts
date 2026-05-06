@@ -33,15 +33,15 @@ describe("usage-format", () => {
   });
 
   afterEach(async () => {
-    if (originalAgentDir === undefined) {
-      delete process.env.OPENCLAW_AGENT_DIR;
-    } else {
-      process.env.OPENCLAW_AGENT_DIR = originalAgentDir;
-    }
     if (originalStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
       process.env.OPENCLAW_STATE_DIR = originalStateDir;
+    }
+    if (originalAgentDir === undefined) {
+      delete process.env.OPENCLAW_AGENT_DIR;
+    } else {
+      process.env.OPENCLAW_AGENT_DIR = originalAgentDir;
     }
     __resetUsageFormatCachesForTest();
     __resetGatewayModelPricingCacheForTest();

@@ -21,6 +21,11 @@ const INDIRECT_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
     new Set(["zod"]),
   ],
   [
+    "extensions/tlon",
+    // Tlon exposes the packaged skill path through openclaw.plugin.json rather than importing it.
+    new Set(["@tloncorp/tlon-skill"]),
+  ],
+  [
     "extensions/whatsapp",
     // Baileys loads jimp as an optional peer when it needs media thumbnails.
     new Set(["jimp"]),
@@ -34,11 +39,6 @@ const INDIRECT_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
     "extensions/memory-core",
     // Packaged memory tools run through generated OpenClaw runtime chunks that parse JSON5 config.
     new Set(["json5"]),
-  ],
-  [
-    "extensions/tlon",
-    // The Tlon plugin manifest exposes the bundled skill from this package path.
-    new Set(["@tloncorp/tlon-skill"]),
   ],
 ]);
 

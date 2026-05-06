@@ -1,4 +1,5 @@
 import type { ContextVisibilityMode, GroupPolicy } from "./types.base.js";
+import type { MentionPatternsPolicyConfig } from "./types.messages.js";
 
 export type ChannelHeartbeatVisibilityConfig = {
   /** Show HEARTBEAT_OK acknowledgments in chat (default: false). */
@@ -52,6 +53,8 @@ export type ExtensionChannelConfig = {
   groups?: Record<string, unknown>;
   rooms?: Record<string, unknown>;
   mediaMaxMb?: number;
+  /** Controls where configured mention patterns count as mention evidence. */
+  mentionPatterns?: MentionPatternsPolicyConfig;
   callbackBaseUrl?: string;
   interactions?: { callbackBaseUrl?: string; [key: string]: unknown };
   execApprovals?: Record<string, unknown>;

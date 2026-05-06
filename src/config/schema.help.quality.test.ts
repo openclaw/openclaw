@@ -251,6 +251,7 @@ const TARGET_KEYS = [
   "messages.responsePrefix",
   "messages.groupChat",
   "messages.groupChat.mentionPatterns",
+  "messages.groupChat.mentionPatternsMode",
   "messages.groupChat.historyLimit",
   "messages.groupChat.visibleReplies",
   "messages.queue",
