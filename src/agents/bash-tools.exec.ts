@@ -1266,9 +1266,10 @@ export function createExecTool(
       let execCommandOverride: string | undefined;
       const backgroundRequested = params.background === true;
       const yieldRequested = typeof params.yieldMs === "number";
-      if (!allowBackground && (backgroundRequested || yieldRequested)) {
-        warnings.push("Warning: background execution is disabled; running synchronously.");
-      }
+      const backgroundDisabledWarning =
+        !allowBackground && (backgroundRequested || yieldRequested)
+          ? "Warning: background execution is disabled; running synchronously."
+          : undefined;
       const yieldWindow = allowBackground
         ? backgroundRequested
           ? 0
@@ -1546,6 +1547,10 @@ export function createExecTool(
         if (gatewayResult.allowWithoutEnforcedCommand) {
           execCommandOverride = undefined;
         }
+      }
+
+      if (backgroundDisabledWarning) {
+        warnings.push(backgroundDisabledWarning);
       }
 
       const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;

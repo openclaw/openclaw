@@ -20,6 +20,7 @@ import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configur
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
 import { cleanupLegacyPluginDependencyState } from "./shared/plugin-dependency-cleanup.js";
 import { maybeRepairStalePluginConfig } from "./shared/stale-plugin-config.js";
+import { maybeRepairToolCompanionAllowlists } from "./shared/tool-companion-allowlist-repair.js";
 
 const UPDATE_IN_PROGRESS_ENV = "OPENCLAW_UPDATE_IN_PROGRESS";
 
@@ -112,6 +113,7 @@ export async function runDoctorRepairSequence(params: {
   }
 
   applyMutation(maybeRepairLegacyToolsBySenderKeys(state.candidate));
+  applyMutation(maybeRepairToolCompanionAllowlists(state.candidate));
   applyMutation(maybeRepairExecSafeBinProfiles(state.candidate));
   const pluginDependencyCleanup = await cleanupLegacyPluginDependencyState({ env });
   if (pluginDependencyCleanup.changes.length > 0) {

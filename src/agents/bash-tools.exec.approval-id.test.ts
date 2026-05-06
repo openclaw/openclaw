@@ -949,6 +949,37 @@ describe("exec approvals", () => {
     );
   });
 
+  it("does not show the background-disabled warning while gateway exec is waiting for approval", async () => {
+    let approvalRequest: Record<string, unknown> | undefined;
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "exec.approval.request") {
+        approvalRequest = params as Record<string, unknown>;
+        return acceptedApprovalResponse(params);
+      }
+      if (method === "exec.approval.waitDecision") {
+        return { decision: "deny" };
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      security: "full",
+      allowBackground: false,
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-gw-background-approval", {
+      command: "echo ok",
+      background: true,
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+    expect(getResultText(result)).not.toContain("background execution is disabled");
+    expect(approvalRequest?.warningText).toBeUndefined();
+  });
+
   it("continues the original agent session after approved gateway exec completes with an external route", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
 
