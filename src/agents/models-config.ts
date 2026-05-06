@@ -23,8 +23,10 @@ import {
 import { MODELS_JSON_STATE, type ContentHashOutcome } from "./models-config-state.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
 import {
+  normalizeHeaderValues,
   resolveAwsSdkApiKeyVarName,
   resolveEnvApiKeyVarName,
+  type SecretDefaults,
 } from "./models-config.providers.secret-helpers.js";
 
 export { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
@@ -769,6 +771,7 @@ async function readExistingProviderMatchesConfig(
   targetProvider: string,
   configuredProvider: unknown,
   env: NodeJS.ProcessEnv,
+  secretDefaults: SecretDefaults | undefined,
 ): Promise<boolean> {
   if (!isRecord(configuredProvider)) {
     return false;
@@ -894,9 +897,37 @@ async function readExistingProviderMatchesConfig(
   ) {
     return false;
   }
+  // Pre-normalize configuredProvider.headers the same way the planner
+  // does before persisting (Codex P2 round-7 on PR #73261:
+  // "Normalize secret-ref headers before short-circuit compare").
+  // Without this, any provider configured with header SecretRefs
+  // (`${ENV_VAR}` strings or SecretRef objects) compares as not-equal
+  // because configuredProvider holds the raw secret reference while
+  // diskProvider holds the planner's marker string
+  // (`<env-marker:NAME>` for env refs, the non-env marker for
+  // keyring/file/etc), defeating the short-circuit on every restart
+  // for the entire class of header-auth providers.
+  // `normalizeHeaderValues` is idempotent for plain literal values
+  // (returns headers unchanged when nothing is a secret ref), so this
+  // is a safe no-op for the common no-header / literal-header case.
+  // `normalizeHeaderValues` accepts the `ProviderConfig["headers"]`
+  // shape; cast through `unknown` to satisfy the parameter type without
+  // pulling the entire ProviderConfig type into this module.  When the
+  // disk-controlled value is not an object, skip normalization and let
+  // the deep compare reject it (string / number / array / null all fall
+  // through to the existing strict equality check).
+  const normalizedConfiguredHeaders =
+    isRecord(configuredProvider.headers) || configuredProvider.headers === undefined
+      ? normalizeHeaderValues({
+          headers: configuredProvider.headers as Parameters<
+            typeof normalizeHeaderValues
+          >[0]["headers"],
+          secretDefaults,
+        }).headers
+      : configuredProvider.headers;
   if (
     !stableEqualBounded(
-      configuredProvider.headers,
+      normalizedConfiguredHeaders,
       diskProvider.headers,
       SHORT_CIRCUIT_COMPARE_MAX_DEPTH,
     )
@@ -1166,6 +1197,7 @@ export async function ensureOpenClawModelsJson(
         targetProvider,
         configuredProvider,
         env,
+        cfg.secrets?.defaults,
       );
       if (matches) {
         await ensureModelsFileModeForModelsJson(targetPath);

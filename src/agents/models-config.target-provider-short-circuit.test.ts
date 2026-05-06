@@ -691,6 +691,96 @@ describe("ensureOpenClawModelsJson targetProvider short-circuit", () => {
     delete process.env.UNRELATED_TOKEN_VAR;
   });
 
+  it("hit-on-env-ref-header-normalization: short-circuit accepts disk env-marker headers when config holds raw `${ENV_VAR}` refs (Codex P2 round-7)", async () => {
+    // Codex P2 round-7 on PR #73261: "Normalize secret-ref headers
+    // before short-circuit compare". `planOpenClawModelsJson` runs
+    // configured headers through `normalizeHeaderValues` before
+    // persisting, transforming env refs like `${OPENAI_API_KEY}`
+    // into env-marker strings (`secretref-env:OPENAI_API_KEY`) and
+    // SecretRef objects into the non-env marker (`secretref-managed`).
+    // Without this round's fix, the short-circuit's deep compare
+    // always fails for any header-auth provider configured with
+    // secret refs because it compares raw `${...}` against marker
+    // strings, defeating the perf path on every restart.
+    process.env.OPENAI_API_KEY = "sk-env-ref-value";
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    // Config with an env-ref header (the canonical secret-ref shape).
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "sk-tes\u2026alue",
+            api: "openai-completions" as const,
+            headers: {
+              "X-Custom-Auth": "${OPENAI_API_KEY}",
+              "X-Static": "literal-value",
+            },
+            models: [],
+          },
+        },
+      },
+    };
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    // Inject the post-`normalizeHeaderValues` shape the planner would
+    // have written: env ref → env marker; literal → unchanged.
+    const targetPath = path.join(agentDir, "models.json");
+    const parsed = JSON.parse(await fs.readFile(targetPath, "utf8"));
+    parsed.providers.openai.headers = {
+      "X-Custom-Auth": "secretref-env:OPENAI_API_KEY",
+      "X-Static": "literal-value",
+    };
+    await fs.writeFile(targetPath, JSON.stringify(parsed));
+
+    // Second pass: short-circuit must accept disk because the
+    // normalized configured headers match what's on disk.
+    resetModelsJsonReadyCacheForTest();
+    resolveImplicitProvidersCallCount = 0;
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(0);
+  });
+
+  it("miss-on-env-ref-header-mismatch: rejects short-circuit when disk header marker points at a different env var than config (Codex P2 round-7)", async () => {
+    // Even with the round-7 normalization fix, an attacker who can
+    // write models.json shouldn't be able to point a header marker at
+    // an unrelated env var and have the short-circuit bless it.  The
+    // normalized configured headers will hold
+    // `secretref-env:OPENAI_API_KEY` while disk holds
+    // `secretref-env:UNRELATED_TOKEN` — deep compare must reject.
+    process.env.OPENAI_API_KEY = "sk-env-ref-value";
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "sk-tes\u2026alue",
+            api: "openai-completions" as const,
+            headers: { "X-Custom-Auth": "${OPENAI_API_KEY}" },
+            models: [],
+          },
+        },
+      },
+    };
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    // Disk holds a marker pointing at an UNRELATED env var.
+    const targetPath = path.join(agentDir, "models.json");
+    const parsed = JSON.parse(await fs.readFile(targetPath, "utf8"));
+    parsed.providers.openai.headers = {
+      "X-Custom-Auth": "secretref-env:UNRELATED_TOKEN",
+    };
+    await fs.writeFile(targetPath, JSON.stringify(parsed));
+
+    resetModelsJsonReadyCacheForTest();
+    resolveImplicitProvidersCallCount = 0;
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+  });
+
   it("miss-on-malformed-disk-apiKey: non-string disk apiKey rejects the short-circuit when config has no key", async () => {
     // Codex P2 on PR #73261: the previous fail-open branch accepted
     // any non-string disk apiKey when config had no apiKey, leaving
