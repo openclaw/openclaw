@@ -645,6 +645,22 @@ async function prepareCronRunContext(params: {
       input.job.payload.kind === "agentTurn" ? input.job.payload.timeoutSeconds : undefined,
   });
   const agentPayload = input.job.payload.kind === "agentTurn" ? input.job.payload : null;
+
+  // Warn when an isolated agentTurn job has no lightContext or toolsAllow restriction.
+  // Without these, each run bootstraps the full agent context (memory, workspace files,
+  // skills) before doing any work, which can exhaust the timeout budget on cold starts.
+  if (
+    agentPayload !== null &&
+    agentPayload.lightContext !== true &&
+    (!agentPayload.toolsAllow || agentPayload.toolsAllow.length === 0)
+  ) {
+    logWarn(
+      `[cron:${input.job.id}] agentTurn job has no lightContext or toolsAllow; ` +
+        `full context bootstrap may exhaust the timeout budget on cold start. ` +
+        `Consider adding payload.lightContext: true or payload.toolsAllow to reduce startup cost.`,
+    );
+  }
+
   const { deliveryPlan, deliveryRequested, resolvedDelivery, toolPolicy } =
     await resolveCronDeliveryContext({
       cfg: cfgWithAgentDefaults,

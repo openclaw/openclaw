@@ -198,7 +198,12 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       const result = await runCronIsolatedAgentTurn(
         makeSkillParams({
           job: makeSkillJob({
-            payload: { kind: "agentTurn", message: "test", model: "anthropic/claude-sonnet-4-6" },
+            payload: {
+              kind: "agentTurn",
+              lightContext: true,
+              message: "test",
+              model: "anthropic/claude-sonnet-4-6",
+            },
           }),
         }),
       );
