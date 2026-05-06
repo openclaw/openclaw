@@ -846,11 +846,12 @@ export async function ensureChromeMcpAvailable(
   // consent dialog (HIGH attached, MEDIUM uncertain, or LOW with conflicting
   // signals). The gate is bypassed only when there is no Chrome remote
   // debugging session at all (`emptyState`) — in which case spawning the
-  // chrome-mcp child to bring one up is the legitimate caller intent.
-  const cacheKey = buildChromeMcpSessionCacheKey(
-    profileName,
-    normalizeChromeMcpOptions(profileOptions),
-  );
+  // chrome-mcp child to bring one up is the legitimate caller intent. For
+  // Chrome 144+ channel autoConnect (the built-in `user` profile), an
+  // explicit start is also the legitimate first attach when the user toggle is
+  // enabled but Chrome has not yet written a DevToolsActivePort file.
+  const normalizedOptions = normalizeChromeMcpOptions(profileOptions);
+  const cacheKey = buildChromeMcpSessionCacheKey(profileName, normalizedOptions);
   const cached = sessions.get(cacheKey);
   const cacheReady =
     !!cached && cached.transport.pid != null && sessionReadyState.get(cached) === "ready";
@@ -859,6 +860,7 @@ export async function ensureChromeMcpAvailable(
     if (!health.cacheAttached) {
       const gate = decideStartGate(health, {
         explicitStart: options.allowExistingSessionAttach === true,
+        defaultChannelAutoConnect: !normalizedOptions.userDataDir && !normalizedOptions.browserUrl,
       });
       if (!gate.mayStart) {
         throw new BrowserProfileUnavailableError(
@@ -1291,6 +1293,8 @@ export type StartGateDecision =
 type StartGateOptions = {
   /** True only for explicit POST /start, never passive status/list probes. */
   explicitStart?: boolean;
+  /** True for Chrome 144+ channel autoConnect without explicit userDataDir/cdpUrl. */
+  defaultChannelAutoConnect?: boolean;
 };
 
 /**
@@ -1511,6 +1515,15 @@ export function decideStartGate(
     return { mayStart: false, reason: "browser-already-attached", level: "high" };
   }
   if (health.level === "medium") {
+    if (
+      options.explicitStart &&
+      options.defaultChannelAutoConnect === true &&
+      health.port === null &&
+      health.reasons.includes("file:devtools-active-port-unreadable") &&
+      health.reasons.includes("owner:no-port")
+    ) {
+      return { mayStart: true, reason: "browser-live-attach-autoconnect-pending" };
+    }
     if (
       options.explicitStart &&
       health.port !== null &&

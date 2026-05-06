@@ -82,11 +82,23 @@ const chromeMcpMock = vi.hoisted(() => {
       }),
     ),
     decideStartGate: vi.fn(
-      (health: { level: string; emptyState: boolean }): MockStartGateDecision => {
+      (
+        health: { level: string; emptyState: boolean; port?: number | null; reasons?: string[] },
+        options?: { explicitStart?: boolean; defaultChannelAutoConnect?: boolean },
+      ): MockStartGateDecision => {
         if (health.level === "high") {
           return { mayStart: false, reason: "browser-already-attached", level: "high" };
         }
         if (health.level === "medium") {
+          if (
+            options?.explicitStart === true &&
+            options.defaultChannelAutoConnect === true &&
+            health.port === null &&
+            health.reasons?.includes("file:devtools-active-port-unreadable") &&
+            health.reasons?.includes("owner:no-port")
+          ) {
+            return { mayStart: true, reason: "browser-live-attach-autoconnect-pending" };
+          }
           return {
             mayStart: false,
             reason: "browser-auth-visual-verification-required",
@@ -160,11 +172,33 @@ function makeState(): BrowserServerState {
   };
 }
 
+function makeUserAutoConnectState(): BrowserServerState {
+  const state = makeState();
+  state.resolved.defaultProfile = "user";
+  state.resolved.profiles = {
+    user: {
+      color: "#00AA00",
+      driver: "existing-session",
+      attachOnly: true,
+    },
+  };
+  return state;
+}
+
 function expectChromeLiveProfile() {
   return expect.objectContaining({
     name: "chrome-live",
     driver: "existing-session",
     userDataDir: "/tmp/brave-profile",
+  });
+}
+
+function expectUserAutoConnectProfile() {
+  return expect.objectContaining({
+    name: "user",
+    driver: "existing-session",
+    userDataDir: undefined,
+    cdpUrl: "",
   });
 }
 
@@ -334,6 +368,39 @@ describe("browser server-context existing-session profile", () => {
     expect(chromeMcp.listChromeMcpTabs).toHaveBeenCalledWith(
       "chrome-live",
       expectChromeLiveProfile(),
+    );
+  });
+
+  it("forwards default-channel autoConnect to the outer start gate for the built-in user profile", async () => {
+    vi.mocked(chromeMcp.probeChromeMcpHealth).mockResolvedValue({
+      level: "medium",
+      attached: false,
+      mcpPid: null,
+      port: null,
+      browserUuid: null,
+      reasons: ["file:devtools-active-port-unreadable", "owner:no-port"],
+      emptyState: false,
+      cacheAttached: false,
+    });
+
+    const state = makeUserAutoConnectState();
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const live = ctx.forProfile("user");
+
+    await live.ensureBrowserAvailable({ explicitStart: true });
+
+    expect(chromeMcp.decideStartGate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "medium",
+        port: null,
+        reasons: expect.arrayContaining(["file:devtools-active-port-unreadable", "owner:no-port"]),
+      }),
+      { explicitStart: true, defaultChannelAutoConnect: true },
+    );
+    expect(chromeMcp.ensureChromeMcpAvailable).toHaveBeenCalledWith(
+      "user",
+      expectUserAutoConnectProfile(),
+      { allowExistingSessionAttach: true },
     );
   });
 

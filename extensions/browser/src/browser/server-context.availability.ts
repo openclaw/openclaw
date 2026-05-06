@@ -346,7 +346,10 @@ export function createProfileAvailability({
       if (health.cacheAttached) {
         return;
       }
-      const gate = decideStartGate(health, { explicitStart: options?.explicitStart === true });
+      const gate = decideStartGate(health, {
+        explicitStart: options?.explicitStart === true,
+        defaultChannelAutoConnect: !profile.userDataDir && !profile.cdpUrl,
+      });
       if (!gate.mayStart) {
         throw new BrowserProfileUnavailableError(
           formatStartGateBlockedMessage(profile.name, health, gate),

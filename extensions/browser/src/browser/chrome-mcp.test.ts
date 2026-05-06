@@ -1255,6 +1255,37 @@ describe("decideStartGate", () => {
     });
   });
 
+  it("MEDIUM no-port autoConnect pending: explicit start may perform the first attach", () => {
+    const gate = decideStartGate(
+      makeHealth({
+        level: "medium",
+        port: null,
+        reasons: ["file:devtools-active-port-unreadable", "owner:no-port"],
+      }),
+      { explicitStart: true, defaultChannelAutoConnect: true },
+    );
+    expect(gate).toEqual({
+      mayStart: true,
+      reason: "browser-live-attach-autoconnect-pending",
+    });
+  });
+
+  it("MEDIUM no-port autoConnect pending: passive probes remain non-spawning", () => {
+    const gate = decideStartGate(
+      makeHealth({
+        level: "medium",
+        port: null,
+        reasons: ["file:devtools-active-port-unreadable", "owner:no-port"],
+      }),
+      { defaultChannelAutoConnect: true },
+    );
+    expect(gate.mayStart).toBe(false);
+    if (!gate.mayStart) {
+      expect(gate.level).toBe("medium");
+      expect(gate.reason).toBe("browser-auth-visual-verification-required");
+    }
+  });
+
   it("LOW with emptyState: mayStart=true", () => {
     const gate = decideStartGate(makeHealth({ level: "low", emptyState: true }));
     expect(gate).toEqual({ mayStart: true, reason: "browser-not-running" });
@@ -1377,6 +1408,56 @@ describe("ensureChromeMcpAvailable spawn gate", () => {
       { allowExistingSessionAttach: true },
     );
     expect(spawned).toBe(1);
+  });
+
+  it("permits explicit start for default autoConnect when the toggle is on but DevToolsActivePort is absent", async () => {
+    let spawned = 0;
+    const factory: ChromeMcpSessionFactory = async () => {
+      spawned += 1;
+      return createFakeSession();
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+    setBrowserAuthSignalProbesForTest({
+      fileProbe: async () => ({
+        enabled: false,
+        toggleEnabled: true,
+        port: null,
+        browserUuid: null,
+        portListening: false,
+        reason: "devtools-active-port-unreadable",
+      }),
+    });
+
+    await ensureChromeMcpAvailable("user", undefined, { allowExistingSessionAttach: true });
+    expect(spawned).toBe(1);
+  });
+
+  it("keeps explicit userDataDir profiles blocked when DevToolsActivePort is absent", async () => {
+    let spawned = false;
+    const factory: ChromeMcpSessionFactory = async () => {
+      spawned = true;
+      return createFakeSession();
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+    setBrowserAuthSignalProbesForTest({
+      fileProbe: async () => ({
+        enabled: false,
+        toggleEnabled: true,
+        port: null,
+        browserUuid: null,
+        portListening: false,
+        reason: "devtools-active-port-unreadable",
+      }),
+    });
+
+    await expect(
+      ensureChromeMcpAvailable(
+        "chrome-live",
+        { userDataDir: "/tmp/chrome-fake" },
+        { allowExistingSessionAttach: true },
+      ),
+    ).rejects.toThrow(/uncertain|visual confirmation/i);
+    expect(spawned).toBe(false);
   });
 
   it("refuses to spawn when confidence is MEDIUM (visual verifier required)", async () => {
