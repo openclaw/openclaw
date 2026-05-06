@@ -26,6 +26,7 @@ let agentRunListenerStarted = false;
 type AgentRunSnapshot = {
   runId: string;
   status: "ok" | "error" | "timeout";
+  phase?: "end" | "error" | "startup-failed";
   startedAt?: number;
   endedAt?: number;
   error?: string;
@@ -130,19 +131,26 @@ function getPendingAgentRunTimeout(runId: string) {
 
 function createSnapshotFromLifecycleEvent(params: {
   runId: string;
-  phase: "end" | "error";
+  phase: "end" | "error" | "startup-failed";
   data?: Record<string, unknown>;
 }): AgentRunSnapshot {
   const { runId, phase, data } = params;
   const startedAt =
     typeof data?.startedAt === "number" ? data.startedAt : agentRunStarts.get(runId);
   const endedAt = typeof data?.endedAt === "number" ? data.endedAt : undefined;
-  const error = typeof data?.error === "string" ? data.error : undefined;
+  const error =
+    typeof data?.error === "string"
+      ? data.error
+      : typeof data?.reason === "string"
+        ? data.reason
+        : undefined;
   const stopReason = typeof data?.stopReason === "string" ? data.stopReason : undefined;
   const livenessState = typeof data?.livenessState === "string" ? data.livenessState : undefined;
   return {
     runId,
-    status: phase === "error" ? "error" : data?.aborted ? "timeout" : "ok",
+    status:
+      phase === "error" || phase === "startup-failed" ? "error" : data?.aborted ? "timeout" : "ok",
+    phase,
     startedAt,
     endedAt,
     error,
@@ -176,7 +184,11 @@ function ensureAgentRunListener() {
       agentRunCache.delete(evt.runId);
       return;
     }
-    if (phase !== "end" && phase !== "error") {
+    if (phase === "first-progress") {
+      clearPendingAgentRunTimeout(evt.runId);
+      return;
+    }
+    if (phase !== "end" && phase !== "error" && phase !== "startup-failed") {
       return;
     }
     const snapshot = createSnapshotFromLifecycleEvent({
@@ -184,6 +196,10 @@ function ensureAgentRunListener() {
       phase,
       data: evt.data,
     });
+    const existing = getCachedAgentRun(evt.runId);
+    if (phase === "end" && existing?.phase === "startup-failed") {
+      return;
+    }
     agentRunStarts.delete(evt.runId);
     if (phase === "error") {
       schedulePendingAgentRunError(snapshot);
@@ -338,7 +354,7 @@ export async function waitForAgentJob(params: {
         clearPendingTimeoutTimer();
         return;
       }
-      if (phase !== "end" && phase !== "error") {
+      if (phase !== "end" && phase !== "error" && phase !== "startup-failed") {
         return;
       }
       const latest = ignoreCachedSnapshot ? undefined : getCachedAgentRun(runId);
@@ -353,6 +369,11 @@ export async function waitForAgentJob(params: {
       });
       if (phase === "error") {
         scheduleErrorFinish(snapshot);
+        return;
+      }
+      if (phase === "startup-failed") {
+        recordAgentRunSnapshot(snapshot);
+        finish(snapshot);
         return;
       }
       if (snapshot.status === "timeout") {

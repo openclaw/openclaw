@@ -60,6 +60,7 @@ export type EmbeddedPiSubscribeState = {
   lastStreamedAssistant?: string;
   lastStreamedAssistantCleaned?: string;
   emittedAssistantUpdate: boolean;
+  firstProgressEmitted: boolean;
   lastStreamedReasoning?: string;
   lastBlockReplyText?: string;
   reasoningStreamOpen: boolean;
@@ -211,6 +212,7 @@ type ToolHandlerState = Pick<
   | "messagingToolSentMediaUrls"
   | "messagingToolSentTargets"
   | "heartbeatToolResponse"
+  | "firstProgressEmitted"
   | "successfulCronAdds"
   | "deterministicApprovalPromptSent"
 >;
