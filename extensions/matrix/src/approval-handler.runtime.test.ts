@@ -402,6 +402,7 @@ describe("matrixApprovalNativeRuntime", () => {
       },
       request: {} as never,
       approvalKind: "exec",
+      view: buildExecApprovalView(),
       pendingPayload: {} as never,
       plannedTarget: {
         surface: "approver-dm",
