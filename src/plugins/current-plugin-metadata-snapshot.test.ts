@@ -87,6 +87,19 @@ describe("current plugin metadata snapshot", () => {
     expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
   });
 
+  it("can opt into reusing the stored workspace scope for unscoped control-plane readers", () => {
+    const config = { plugins: { allow: ["demo"] } };
+    const snapshot = createSnapshot({ config, workspaceDir: "/workspace/a" });
+    setCurrentPluginMetadataSnapshot(snapshot, { config });
+
+    expect(
+      getCurrentPluginMetadataSnapshot({
+        config,
+        allowWorkspaceScopedSnapshot: true,
+      }),
+    ).toBe(snapshot);
+  });
+
   it("rejects a current snapshot when plugin load paths change", () => {
     const config = { plugins: { load: { paths: ["/plugins/one"] } } };
     const snapshot = createSnapshot({ config });
@@ -98,6 +111,40 @@ describe("current plugin metadata snapshot", () => {
         config: { plugins: { load: { paths: ["/plugins/two"] } } },
       }),
     ).toBeUndefined();
+  });
+
+  it("rejects a current snapshot when env-resolved plugin load paths change", () => {
+    const config = { plugins: { load: { paths: ["~/plugins"] } } };
+    const snapshot = createSnapshot({ config });
+    const snapshotEnv = {
+      HOME: "/home/snapshot",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    const requestedEnv = {
+      HOME: "/home/requested",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    setCurrentPluginMetadataSnapshot(snapshot, { config, env: snapshotEnv });
+
+    expect(getCurrentPluginMetadataSnapshot({ config, env: snapshotEnv })).toBe(snapshot);
+    expect(getCurrentPluginMetadataSnapshot({ config, env: requestedEnv })).toBeUndefined();
+  });
+
+  it("rejects a current snapshot when env-resolved plugin roots change", () => {
+    const config = {};
+    const snapshot = createSnapshot({ config });
+    const snapshotEnv = {
+      HOME: "/home/snapshot",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    const requestedEnv = {
+      HOME: "/home/requested",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    setCurrentPluginMetadataSnapshot(snapshot, { config, env: snapshotEnv });
+
+    expect(getCurrentPluginMetadataSnapshot({ config, env: snapshotEnv })).toBe(snapshot);
+    expect(getCurrentPluginMetadataSnapshot({ config, env: requestedEnv })).toBeUndefined();
   });
 
   it("keeps source-policy compatibility when storing an auto-enabled runtime config", () => {

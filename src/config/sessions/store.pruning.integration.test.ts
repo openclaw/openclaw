@@ -16,6 +16,7 @@ vi.mock("../config.js", async () => ({
 }));
 
 import { getRuntimeConfig } from "../config.js";
+import { runSessionsCleanup } from "./cleanup-service.js";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
@@ -211,6 +212,190 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expect(fs.stat(freshPointer)).resolves.toBeDefined();
   });
 
+  it("sessions cleanup prunes old unreferenced session artifacts without touching referenced files", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const oldDate = new Date(now - 10 * DAY_MS);
+    const freshDate = new Date(now);
+    const referencedCheckpointPath = path.join(
+      testDir,
+      "fresh-session.checkpoint.22222222-2222-4222-8222-222222222222.jsonl",
+    );
+    const store: Record<string, SessionEntry> = {
+      fresh: {
+        sessionId: "fresh-session",
+        updatedAt: now,
+        compactionCheckpoints: [
+          {
+            checkpointId: "referenced",
+            sessionKey: "fresh",
+            sessionId: "fresh-session",
+            createdAt: now,
+            reason: "manual",
+            preCompaction: {
+              sessionId: "fresh-session",
+              sessionFile: referencedCheckpointPath,
+              leafId: "leaf",
+            },
+            postCompaction: { sessionId: "fresh-session" },
+          },
+        ],
+      },
+    };
+    const referencedTranscript = path.join(testDir, "fresh-session.jsonl");
+    const oldOrphanTranscript = path.join(testDir, "orphan-session.jsonl");
+    const freshOrphanTranscript = path.join(testDir, "fresh-orphan.jsonl");
+    const orphanRuntime = path.join(testDir, "orphan-session.trajectory.jsonl");
+    const orphanPointer = path.join(testDir, "orphan-session.trajectory-path.json");
+    const orphanCheckpoint = path.join(
+      testDir,
+      "orphan-session.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
+    );
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+    await fs.writeFile(referencedTranscript, "referenced", "utf-8");
+    await fs.writeFile(referencedCheckpointPath, "referenced checkpoint", "utf-8");
+    await fs.writeFile(oldOrphanTranscript, "orphan transcript", "utf-8");
+    await fs.writeFile(freshOrphanTranscript, "fresh orphan", "utf-8");
+    await fs.writeFile(orphanRuntime, "orphan runtime", "utf-8");
+    await fs.writeFile(orphanPointer, "orphan pointer", "utf-8");
+    await fs.writeFile(orphanCheckpoint, "orphan checkpoint", "utf-8");
+    for (const file of [
+      referencedTranscript,
+      referencedCheckpointPath,
+      oldOrphanTranscript,
+      orphanRuntime,
+      orphanPointer,
+      orphanCheckpoint,
+    ]) {
+      await fs.utimes(file, oldDate, oldDate);
+    }
+    await fs.utimes(freshOrphanTranscript, freshDate, freshDate);
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, dryRun: true, enforce: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+    expect(dryRun.previewResults[0]?.summary.unreferencedArtifacts).toEqual(
+      expect.objectContaining({
+        removedFiles: 4,
+      }),
+    );
+    await expect(fs.stat(oldOrphanTranscript)).resolves.toBeDefined();
+    await expect(fs.stat(orphanRuntime)).resolves.toBeDefined();
+    await expect(fs.stat(orphanPointer)).resolves.toBeDefined();
+    await expect(fs.stat(orphanCheckpoint)).resolves.toBeDefined();
+
+    const applied = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, enforce: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.unreferencedArtifacts).toEqual(
+      expect.objectContaining({
+        removedFiles: 4,
+      }),
+    );
+    await expect(fs.stat(oldOrphanTranscript)).rejects.toThrow();
+    await expect(fs.stat(orphanRuntime)).rejects.toThrow();
+    await expect(fs.stat(orphanPointer)).rejects.toThrow();
+    await expect(fs.stat(orphanCheckpoint)).rejects.toThrow();
+    await expect(fs.stat(referencedTranscript)).resolves.toBeDefined();
+    await expect(fs.stat(referencedCheckpointPath)).resolves.toBeDefined();
+    await expect(fs.stat(freshOrphanTranscript)).resolves.toBeDefined();
+  });
+
+  it("sessions cleanup dry-run does not double-count artifacts already covered by disk budget", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "7d",
+          maxEntries: 500,
+          maxDiskBytes: 1000,
+          highWaterBytes: 900,
+        },
+      },
+    });
+
+    const store: Record<string, SessionEntry> = {
+      fresh: { sessionId: "fresh-session", updatedAt: Date.now() },
+    };
+    const oldOrphanTranscript = path.join(testDir, "orphan-session.jsonl");
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+    await fs.writeFile(oldOrphanTranscript, "x".repeat(2000), "utf-8");
+    const oldDate = new Date(Date.now() - 10 * DAY_MS);
+    await fs.utimes(oldOrphanTranscript, oldDate, oldDate);
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, dryRun: true, enforce: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(dryRun.previewResults[0]?.summary.diskBudget).toEqual(
+      expect.objectContaining({
+        removedFiles: 1,
+      }),
+    );
+    expect(dryRun.previewResults[0]?.summary.unreferencedArtifacts).toEqual(
+      expect.objectContaining({
+        removedFiles: 0,
+      }),
+    );
+    await expect(fs.stat(oldOrphanTranscript)).resolves.toBeDefined();
+  });
+
+  it("sessions cleanup dry-run excludes stale and capped entry transcripts from orphan counts", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "7d",
+          maxEntries: 1,
+        },
+      },
+    });
+
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      stale: { sessionId: "stale-session", updatedAt: now - 30 * DAY_MS },
+      capped: { sessionId: "capped-session", updatedAt: now - DAY_MS },
+      fresh: { sessionId: "fresh-session", updatedAt: now },
+    };
+    const staleTranscript = path.join(testDir, "stale-session.jsonl");
+    const cappedTranscript = path.join(testDir, "capped-session.jsonl");
+    const freshTranscript = path.join(testDir, "fresh-session.jsonl");
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+    await fs.writeFile(staleTranscript, "stale", "utf-8");
+    await fs.writeFile(cappedTranscript, "capped", "utf-8");
+    await fs.writeFile(freshTranscript, "fresh", "utf-8");
+    const oldDate = new Date(now - 10 * DAY_MS);
+    await fs.utimes(staleTranscript, oldDate, oldDate);
+    await fs.utimes(cappedTranscript, oldDate, oldDate);
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, dryRun: true, enforce: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(dryRun.previewResults[0]?.summary).toEqual(
+      expect.objectContaining({
+        pruned: 1,
+        capped: 1,
+        unreferencedArtifacts: expect.objectContaining({
+          removedFiles: 0,
+        }),
+      }),
+    );
+    await expect(fs.stat(staleTranscript)).resolves.toBeDefined();
+    await expect(fs.stat(cappedTranscript)).resolves.toBeDefined();
+    await expect(fs.stat(freshTranscript)).resolves.toBeDefined();
+  });
+
   it("cleans up archived transcripts older than the prune window", async () => {
     applyEnforcedMaintenanceConfig(mockLoadConfig);
 
@@ -301,7 +486,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(Object.keys(loaded)).toHaveLength(2);
   });
 
-  it("loadSessionStore prunes stale entries from oversized stores by default", async () => {
+  it("loadSessionStore leaves oversized stores untouched during normal reads", async () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
       stale: makeEntry(now - 31 * DAY_MS),
@@ -319,12 +504,37 @@ describe("Integration: saveSessionStore with pruning", () => {
       },
     });
 
-    expect(loaded.stale).toBeUndefined();
+    expect(Object.keys(loaded)).toHaveLength(3);
+    expect(loaded.stale).toBeDefined();
     expect(loaded.recent).toBeDefined();
     expect(loaded.newest).toBeDefined();
   });
 
-  it("loadSessionStore caps oversized stores by default", async () => {
+  it("loadSessionStore applies maintenance only when explicitly requested", async () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      stale: makeEntry(now - 31 * DAY_MS),
+      recent: makeEntry(now - DAY_MS),
+      newest: makeEntry(now),
+    };
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+
+    const loaded = loadSessionStore(storePath, {
+      skipCache: true,
+      runMaintenance: true,
+      maintenanceConfig: {
+        ...ENFORCED_MAINTENANCE_OVERRIDE,
+        maxEntries: 1,
+        pruneAfterMs: 7 * DAY_MS,
+      },
+    });
+
+    expect(loaded.stale).toBeUndefined();
+    expect(loaded.recent).toBeUndefined();
+    expect(loaded.newest).toBeDefined();
+  });
+
+  it("loadSessionStore does not cap oversized stores during normal reads", async () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
       oldest: makeEntry(now - 3 * DAY_MS),
@@ -342,13 +552,13 @@ describe("Integration: saveSessionStore with pruning", () => {
       },
     });
 
-    expect(Object.keys(loaded)).toHaveLength(2);
-    expect(loaded.oldest).toBeUndefined();
+    expect(Object.keys(loaded)).toHaveLength(3);
+    expect(loaded.oldest).toBeDefined();
     expect(loaded.recent).toBeDefined();
     expect(loaded.newest).toBeDefined();
   });
 
-  it("loadSessionStore batches entry-count cleanup until the high-water mark", async () => {
+  it("explicit loadSessionStore maintenance batches entry-count cleanup until the high-water mark", async () => {
     const now = Date.now();
     const store = Object.fromEntries(
       Array.from({ length: 51 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
@@ -357,6 +567,7 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const loaded = loadSessionStore(storePath, {
       skipCache: true,
+      runMaintenance: true,
       maintenanceConfig: {
         ...ENFORCED_MAINTENANCE_OVERRIDE,
         maxEntries: 50,
@@ -367,7 +578,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(Object.keys(loaded)).toHaveLength(51);
   });
 
-  it("loadSessionStore caps production-sized stores once they reach the high-water mark", async () => {
+  it("explicit loadSessionStore maintenance caps production-sized stores once they reach the high-water mark", async () => {
     const now = Date.now();
     const store = Object.fromEntries(
       Array.from({ length: 75 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
@@ -376,6 +587,7 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const loaded = loadSessionStore(storePath, {
       skipCache: true,
+      runMaintenance: true,
       maintenanceConfig: {
         ...ENFORCED_MAINTENANCE_OVERRIDE,
         maxEntries: 50,
@@ -385,6 +597,36 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     expect(Object.keys(loaded)).toHaveLength(50);
     expect(loaded["session-0"]).toBeDefined();
+    expect(loaded["session-74"]).toBeUndefined();
+  });
+
+  it("explicit loadSessionStore maintenance preserves channel, thread, and topic session pointers", async () => {
+    const now = Date.now();
+    const channelKey = "agent:main:slack:channel:C123";
+    const threadKey = "agent:main:discord:channel:123456:thread:987654";
+    const topicKey = "agent:main:telegram:group:-100123:topic:77";
+    const store = Object.fromEntries(
+      Array.from({ length: 75 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
+    );
+    store[channelKey] = makeEntry(now - 99 * DAY_MS);
+    store[threadKey] = makeEntry(now - 100 * DAY_MS);
+    store[topicKey] = makeEntry(now - 101 * DAY_MS);
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+
+    const loaded = loadSessionStore(storePath, {
+      skipCache: true,
+      runMaintenance: true,
+      maintenanceConfig: {
+        ...ENFORCED_MAINTENANCE_OVERRIDE,
+        maxEntries: 50,
+        pruneAfterMs: 365 * DAY_MS,
+      },
+    });
+
+    expect(Object.keys(loaded)).toHaveLength(50);
+    expect(loaded[channelKey]).toBeDefined();
+    expect(loaded[threadKey]).toBeDefined();
+    expect(loaded[topicKey]).toBeDefined();
     expect(loaded["session-74"]).toBeUndefined();
   });
 

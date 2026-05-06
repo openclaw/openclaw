@@ -6,6 +6,10 @@ import {
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
 import {
+  isValidControlUiChatMessageMaxWidth,
+  normalizeControlUiChatMessageMaxWidth,
+} from "./control-ui-css.js";
+import {
   SilentReplyPolicyConfigSchema,
   SilentReplyRewriteConfigSchema,
 } from "./zod-schema.agent-defaults.js";
@@ -49,6 +53,28 @@ const NodeHostSchema = z
   .strict()
   .optional();
 
+const AccessGroupsSchema = z
+  .record(
+    z.string().min(1),
+    z.discriminatedUnion("type", [
+      z
+        .object({
+          type: z.literal("discord.channelAudience"),
+          guildId: z.string().min(1),
+          channelId: z.string().min(1),
+          membership: z.literal("canViewChannel").optional(),
+        })
+        .strict(),
+      z
+        .object({
+          type: z.literal("message.senders"),
+          members: z.record(z.string().min(1), z.array(z.string().min(1))),
+        })
+        .strict(),
+    ]),
+  )
+  .optional();
+
 const MemoryQmdPathSchema = z
   .object({
     path: z.string(),
@@ -70,6 +96,8 @@ const MemoryQmdUpdateSchema = z
     interval: z.string().optional(),
     debounceMs: z.number().int().nonnegative().optional(),
     onBoot: z.boolean().optional(),
+    startup: z.enum(["off", "idle", "immediate"]).optional(),
+    startupDelayMs: z.number().int().nonnegative().optional(),
     waitForBootSync: z.boolean().optional(),
     embedInterval: z.string().optional(),
     commandTimeoutMs: z.number().int().nonnegative().optional(),
@@ -162,6 +190,8 @@ const PluginEntrySchema = z
       .object({
         allowPromptInjection: z.boolean().optional(),
         allowConversationAccess: z.boolean().optional(),
+        timeoutMs: z.number().int().positive().max(600_000).optional(),
+        timeouts: z.record(z.string(), z.number().int().positive().max(600_000)).optional(),
       })
       .strict()
       .optional(),
@@ -182,10 +212,44 @@ const TalkProviderEntrySchema = z
   })
   .catchall(z.unknown());
 
+const TalkRealtimeSchema = z
+  .object({
+    provider: z.string().optional(),
+    providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
+    model: z.string().optional(),
+    voice: z.string().optional(),
+    mode: z.enum(["realtime", "stt-tts", "transcription"]).optional(),
+    transport: z.enum(["webrtc", "provider-websocket", "gateway-relay", "managed-room"]).optional(),
+    brain: z.enum(["agent-consult", "direct-tools", "none"]).optional(),
+  })
+  .strict()
+  .superRefine((realtime, ctx) => {
+    const provider = normalizeLowercaseStringOrEmpty(realtime.provider ?? "");
+    const providers = realtime.providers ? Object.keys(realtime.providers) : [];
+
+    if (provider && providers.length > 0 && !(provider in realtime.providers!)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["provider"],
+        message: `talk.realtime.provider must match a key in talk.realtime.providers (missing "${provider}")`,
+      });
+    }
+
+    if (!provider && providers.length > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["provider"],
+        message:
+          "talk.realtime.provider is required when talk.realtime.providers defines multiple providers",
+      });
+    }
+  });
+
 const TalkSchema = z
   .object({
     provider: z.string().optional(),
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
+    realtime: TalkRealtimeSchema.optional(),
     speechLocale: z.string().optional(),
     interruptOnSpeech: z.boolean().optional(),
     silenceTimeoutMs: z.number().int().positive().optional(),
@@ -252,6 +316,14 @@ const CrestodianSchema = z
   .strict()
   .optional();
 
+const CommitmentsSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    maxPerDay: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
 export const OpenClawSchema = z
   .object({
     $schema: z.string().optional(),
@@ -304,6 +376,7 @@ export const OpenClawSchema = z
         enabled: z.boolean().optional(),
         flags: z.array(z.string()).optional(),
         stuckSessionWarnMs: z.number().int().positive().optional(),
+        stuckSessionAbortMs: z.number().int().positive().optional(),
         otel: z
           .object({
             enabled: z.boolean().optional(),
@@ -453,6 +526,15 @@ export const OpenClawSchema = z
           )
           .optional(),
         extraArgs: z.array(z.string()).optional(),
+        tabCleanup: z
+          .object({
+            enabled: z.boolean().optional(),
+            idleMinutes: z.number().int().nonnegative().optional(),
+            maxTabsPerSession: z.number().int().nonnegative().optional(),
+            sweepMinutes: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
@@ -503,6 +585,7 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    accessGroups: AccessGroupsSchema,
     acp: z
       .object({
         enabled: z.boolean().optional(),
@@ -646,6 +729,7 @@ export const OpenClawSchema = z
         }
       })
       .optional(),
+    commitments: CommitmentsSchema,
     hooks: z
       .object({
         enabled: z.boolean().optional(),
@@ -741,6 +825,14 @@ export const OpenClawSchema = z
               .union([z.literal("strict"), z.literal("scripts"), z.literal("trusted")])
               .optional(),
             allowExternalEmbedUrls: z.boolean().optional(),
+            chatMessageMaxWidth: z
+              .string()
+              .transform((value) => normalizeControlUiChatMessageMaxWidth(value))
+              .refine((value) => isValidControlUiChatMessageMaxWidth(value), {
+                message:
+                  "Expected a CSS width value such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem)",
+              })
+              .optional(),
             allowedOrigins: z.array(z.string()).optional(),
             dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
             allowInsecureAuth: z.boolean().optional(),
@@ -1016,6 +1108,7 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         entries: z.record(z.string(), PluginEntrySchema).optional(),
+        bundledDiscovery: z.enum(["compat", "allowlist"]).optional(),
       })
       .strict()
       .optional(),

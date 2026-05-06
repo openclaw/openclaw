@@ -3,11 +3,13 @@ import path from "node:path";
 import process from "node:process";
 import { resolveStateDir } from "../config/paths.js";
 import { registerFatalErrorHook } from "../infra/fatal-error-hooks.js";
+import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import {
   getDiagnosticStabilitySnapshot,
   MAX_DIAGNOSTIC_STABILITY_LIMIT,
   type DiagnosticStabilitySnapshot,
 } from "./diagnostic-stability.js";
+import { redactSensitiveText } from "./redact.js";
 
 export const DIAGNOSTIC_STABILITY_BUNDLE_VERSION = 1;
 export const DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_LIMIT = MAX_DIAGNOSTIC_STABILITY_LIMIT;
@@ -18,6 +20,7 @@ const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
 const BUNDLE_PREFIX = "openclaw-stability-";
 const BUNDLE_SUFFIX = ".json";
 const REDACTED_HOSTNAME = "<redacted-hostname>";
+const MAX_SAFE_ERROR_MESSAGE_LENGTH = 500;
 
 export type DiagnosticStabilityBundle = {
   version: typeof DIAGNOSTIC_STABILITY_BUNDLE_VERSION;
@@ -36,6 +39,7 @@ export type DiagnosticStabilityBundle = {
   error?: {
     name?: string;
     code?: string;
+    message?: string;
   };
   snapshot: DiagnosticStabilitySnapshot;
 };
@@ -113,15 +117,34 @@ function readErrorName(error: unknown): string | undefined {
   return typeof name === "string" && SAFE_REASON_CODE.test(name) ? name : undefined;
 }
 
+function readErrorMessage(error: unknown): string | undefined {
+  if (!error || typeof error !== "object" || !("message" in error)) {
+    return undefined;
+  }
+  const message = (error as { message?: unknown }).message;
+  if (typeof message !== "string") {
+    return undefined;
+  }
+  const sanitized = redactSensitiveText(message, { mode: "tools" }).replace(/\s+/gu, " ").trim();
+  if (!sanitized) {
+    return undefined;
+  }
+  return sanitized.length > MAX_SAFE_ERROR_MESSAGE_LENGTH
+    ? `${sanitized.slice(0, MAX_SAFE_ERROR_MESSAGE_LENGTH)}...`
+    : sanitized;
+}
+
 function readSafeErrorMetadata(error: unknown): DiagnosticStabilityBundle["error"] | undefined {
   const name = readErrorName(error);
   const code = readErrorCode(error);
-  if (!name && !code) {
+  const message = readErrorMessage(error);
+  if (!name && !code && !message) {
     return undefined;
   }
   return {
     ...(name ? { name } : {}),
     ...(code ? { code } : {}),
+    ...(message ? { message } : {}),
   };
 }
 
@@ -326,8 +349,15 @@ function readStabilityEventRecord(
   assignOptionalCodeString(sanitized, "reason", record.reason, `${label}.reason`);
   assignOptionalCodeString(sanitized, "outcome", record.outcome, `${label}.outcome`);
   assignOptionalCodeString(sanitized, "level", record.level, `${label}.level`);
+  assignOptionalCodeString(sanitized, "phase", record.phase, `${label}.phase`);
   assignOptionalCodeString(sanitized, "detector", record.detector, `${label}.detector`);
   assignOptionalCodeString(sanitized, "toolName", record.toolName, `${label}.toolName`);
+  assignOptionalCodeString(
+    sanitized,
+    "activeWorkKind",
+    record.activeWorkKind,
+    `${label}.activeWorkKind`,
+  );
   assignOptionalCodeString(
     sanitized,
     "pairedToolName",
@@ -611,14 +641,14 @@ export function writeDiagnosticStabilityBundleSync(
     };
 
     const dir = resolveDiagnosticStabilityBundleDir(options);
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const file = buildBundlePath(dir, now, reason);
-    const tmpFile = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmpFile, `${JSON.stringify(bundle, null, 2)}\n`, {
-      encoding: "utf8",
+    replaceFileAtomicSync({
+      filePath: file,
+      content: `${JSON.stringify(bundle, null, 2)}\n`,
+      dirMode: 0o700,
       mode: 0o600,
+      tempPrefix: ".openclaw-stability",
     });
-    fs.renameSync(tmpFile, file);
     pruneOldBundles(dir, options.retention ?? DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_RETENTION);
     return { status: "written", path: file, bundle };
   } catch (error) {

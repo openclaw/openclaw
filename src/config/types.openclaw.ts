@@ -2,6 +2,7 @@ import type {
   SilentReplyPolicyShape,
   SilentReplyRewriteShape,
 } from "../shared/silent-reply-policy.js";
+import type { AccessGroupsConfig } from "./types.access-groups.js";
 import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
@@ -10,6 +11,7 @@ import type { DiagnosticsConfig, LoggingConfig, SessionConfig, WebConfig } from 
 import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import type { CliConfig } from "./types.cli.js";
+import type { CommitmentsConfig } from "./types.commitments.js";
 import type { CrestodianConfig } from "./types.crestodian.js";
 import type { CronConfig } from "./types.cron.js";
 import type {
@@ -49,6 +51,7 @@ export type OpenClawConfig = {
     lastTouchedAt?: string;
   };
   auth?: AuthConfig;
+  accessGroups?: AccessGroupsConfig;
   acp?: AcpConfig;
   env?: {
     /** Opt-in: import missing secrets from a login shell environment (exec `$SHELL -l -c 'env -0'`). */
@@ -129,6 +132,7 @@ export type OpenClawConfig = {
   web?: WebConfig;
   channels?: ChannelsConfig;
   cron?: CronConfig;
+  commitments?: CommitmentsConfig;
   hooks?: HooksConfig;
   discovery?: DiscoveryConfig;
   canvasHost?: CanvasHostConfig;

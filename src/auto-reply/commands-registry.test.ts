@@ -109,6 +109,20 @@ describe("commands registry", () => {
     expect(specs.find((spec) => spec.name === "compact")).toBeTruthy();
   });
 
+  it("exposes /side as a BTW text and native alias", () => {
+    const btw = listChatCommands().find((command) => command.key === "btw");
+    expect(btw).toMatchObject({
+      nativeName: "btw",
+      nativeAliases: ["side"],
+      textAliases: ["/btw", "/side"],
+    });
+    expect(normalizeCommandBody("/side what changed?")).toBe("/btw what changed?");
+    expect(findCommandByNativeName("side")?.key).toBe("btw");
+    expect(listNativeCommandSpecs().find((spec) => spec.name === "side")).toMatchObject({
+      acceptsArgs: true,
+    });
+  });
+
   it("filters commands based on config flags", () => {
     const disabled = listChatCommandsForConfig({
       commands: { config: false, plugins: false, debug: false },
@@ -154,6 +168,7 @@ describe("commands registry", () => {
         name: "demo_skill",
         skillName: "demo-skill",
         description: "Demo skill",
+        descriptionLocalizations: { ko: "데모 스킬" },
       },
     ];
     const commands = listChatCommandsForConfig(
@@ -171,7 +186,9 @@ describe("commands registry", () => {
       { commands: { config: false, plugins: false, debug: false, native: true } },
       { skillCommands },
     );
-    expect(native.find((spec) => spec.name === "demo_skill")).toBeTruthy();
+    expect(native.find((spec) => spec.name === "demo_skill")).toMatchObject({
+      descriptionLocalizations: { ko: "데모 스킬" },
+    });
   });
 
   it("applies discord native command overrides", () => {
@@ -461,6 +478,15 @@ describe("commands registry args", () => {
     ]);
   });
 
+  it("keeps verbose full available while preserving no-arg status dispatch", () => {
+    const verbose = listChatCommands().find((command) => command.key === "verbose");
+
+    expect(verbose?.args?.[0]?.choices).toEqual(["on", "off", "full"]);
+    expect(
+      resolveCommandArgMenu({ command: verbose!, args: undefined, cfg: {} as never }),
+    ).toBeNull();
+  });
+
   it("does not show menus when arg already provided", () => {
     const command = createUsageModeCommand();
 
@@ -565,6 +591,40 @@ describe("commands registry args", () => {
     expect(formatCommandArgMenuTitle({ command, menu: menu! })).toBe(
       "Choose level for /think.\nOptions: off, low, medium, high, max.",
     );
+  });
+
+  it("uses configured model compat for /think arg menus", () => {
+    const command = findCommandByNativeName("think");
+    expect(command).toBeTruthy();
+    if (!command) {
+      return;
+    }
+
+    const menu = resolveCommandArgMenu({
+      command,
+      args: undefined,
+      cfg: {
+        models: {
+          providers: {
+            gmn: {
+              models: [
+                {
+                  id: "gpt-5.4",
+                  name: "GPT 5.4 via GMN",
+                  reasoning: true,
+                  compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+                },
+              ],
+            },
+          },
+        },
+      } as never,
+      provider: "gmn",
+      model: "gpt-5.4",
+    });
+
+    expect(menu?.choices.map((choice) => choice.value)).toContain("xhigh");
+    expect(formatCommandArgMenuTitle({ command, menu: menu! })).toContain("xhigh");
   });
 
   it("does not show menus when args were provided as raw text only", () => {

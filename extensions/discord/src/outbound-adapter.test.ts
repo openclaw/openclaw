@@ -49,6 +49,13 @@ describe("normalizeDiscordOutboundTarget", () => {
   it("trims whitespace", () => {
     expect(normalizeDiscordOutboundTarget("  123  ")).toEqual({ ok: true, to: "channel:123" });
   });
+
+  it("normalizes bare IDs in allowFrom to user: targets", () => {
+    expect(normalizeDiscordOutboundTarget("1470130713209602050", ["1470130713209602050"])).toEqual({
+      ok: true,
+      to: "user:1470130713209602050",
+    });
+  });
 });
 
 describe("discordOutbound", () => {
@@ -79,6 +86,18 @@ describe("discordOutbound", () => {
         payload: { text: "<previous_response>null</previous_response>visible" },
       }),
     ).toBe("visible");
+  });
+
+  it("uses allowFrom to disambiguate bare numeric DM delivery targets", () => {
+    expect(
+      discordOutbound.resolveTarget?.({
+        to: "1470130713209602050",
+        allowFrom: ["1470130713209602050"],
+      }),
+    ).toEqual({
+      ok: true,
+      to: "user:1470130713209602050",
+    });
   });
 
   it("preserves Discord-native angle markup while stripping internal scaffolding", () => {
@@ -520,6 +539,38 @@ describe("discordOutbound", () => {
       (hoisted.sendMessageDiscordMock.mock.calls[0]?.[2] as { replyTo?: unknown } | undefined)
         ?.replyTo,
     ).toBe("reply-1");
+  });
+
+  it("sends prepared native Discord payload data through outbound delivery", async () => {
+    await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload: {
+        text: "hello",
+        mediaUrl: "https://example.com/photo.png",
+        channelData: {
+          discord: {
+            components: [{ type: 1, components: [] }],
+            filename: "photo.png",
+          },
+        },
+      },
+      accountId: "default",
+      replyToId: "reply-1",
+    });
+
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:123456",
+      "hello",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/photo.png",
+        components: [{ type: 1, components: [] }],
+        filename: "photo.png",
+        accountId: "default",
+        replyTo: "reply-1",
+      }),
+    );
   });
 
   it("preserves explicit component payload replies when replyToMode is off", async () => {

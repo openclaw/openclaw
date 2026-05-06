@@ -1,6 +1,15 @@
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
-import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
+import {
+  listAcpSessionEntries,
+  readAcpSessionEntry,
+  type AcpSessionStoreEntry,
+} from "../acp/runtime/session-meta.js";
+import {
+  formatSubagentRecoveryWedgedReason,
+  isSubagentRecoveryWedgedEntry,
+} from "../agents/subagent-recovery-state.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronJobActive } from "../cron/active-jobs.js";
 import { readCronRunLogEntriesSync, resolveCronRunLogPath } from "../cron/run-log.js";
@@ -10,17 +19,28 @@ import type { CronJob, CronStoreFile } from "../cron/types.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  isPluginStateDatabaseOpen,
+  sweepExpiredPluginStateEntries,
+} from "../plugin-state/plugin-state-store.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { deriveSessionChatType } from "../sessions/session-chat-type.js";
+import {
+  deriveSessionChatTypeFromKey,
+  type SessionKeyChatType,
+} from "../sessions/session-chat-type-shared.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { tryRecoverTaskBeforeMarkLost } from "./detached-task-runtime.js";
+import {
+  getDetachedTaskLifecycleRuntime,
+  tryRecoverTaskBeforeMarkLost,
+} from "./detached-task-runtime.js";
 import {
   deleteTaskRecordById,
   ensureTaskRegistryReady,
   getTaskById,
+  hasActiveTaskForChildSessionKey,
   listTaskRecords,
   markTaskLostById,
   markTaskTerminalById,
@@ -55,6 +75,7 @@ let configuredCronStorePath: string | undefined;
 let configuredCronRuntimeAuthoritative = false;
 
 type TaskRegistryMaintenanceRuntime = {
+  listAcpSessionEntries: typeof listAcpSessionEntries;
   readAcpSessionEntry: typeof readAcpSessionEntry;
   closeAcpSession?: (params: {
     cfg: OpenClawConfig;
@@ -65,9 +86,11 @@ type TaskRegistryMaintenanceRuntime = {
   unbindSessionBindings?: ReturnType<typeof getSessionBindingService>["unbind"];
   loadSessionStore: typeof loadSessionStore;
   resolveStorePath: typeof resolveStorePath;
+  deriveSessionChatTypeFromKey?: typeof deriveSessionChatTypeFromKey;
   isCronJobActive: typeof isCronJobActive;
   getAgentRunContext: typeof getAgentRunContext;
   parseAgentSessionKey: typeof parseAgentSessionKey;
+  hasActiveTaskForChildSessionKey: typeof hasActiveTaskForChildSessionKey;
   deleteTaskRecordById: typeof deleteTaskRecordById;
   ensureTaskRegistryReady: typeof ensureTaskRegistryReady;
   getTaskById: typeof getTaskById;
@@ -85,6 +108,7 @@ type TaskRegistryMaintenanceRuntime = {
 };
 
 const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
+  listAcpSessionEntries,
   readAcpSessionEntry,
   closeAcpSession: async ({ cfg, sessionKey, reason }) => {
     await getAcpSessionManager().closeSession({
@@ -102,9 +126,11 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   unbindSessionBindings: (input) => getSessionBindingService().unbind(input),
   loadSessionStore,
   resolveStorePath,
+  deriveSessionChatTypeFromKey,
   isCronJobActive,
   getAgentRunContext,
   parseAgentSessionKey,
+  hasActiveTaskForChildSessionKey,
   deleteTaskRecordById,
   ensureTaskRegistryReady,
   getTaskById,
@@ -150,6 +176,16 @@ type CronRecoveryContext = {
   runLogsByJobId: Map<string, CronRunLogEntry[]>;
 };
 
+type SessionStoreLookup = {
+  store: Record<string, SessionEntry>;
+  normalizedEntries?: Map<string, SessionEntry>;
+};
+
+type BackingSessionLookupContext = {
+  sessionStoresByPath: Map<string, SessionStoreLookup>;
+  sessionChatTypesByKey: Map<string, SessionKeyChatType>;
+};
+
 function createCronRecoveryContext(): CronRecoveryContext {
   return {
     storePath: taskRegistryMaintenanceRuntime.resolveCronStorePath(),
@@ -157,18 +193,91 @@ function createCronRecoveryContext(): CronRecoveryContext {
   };
 }
 
-function findSessionEntryByKey(store: Record<string, unknown>, sessionKey: string): unknown {
-  const direct = store[sessionKey];
+function createBackingSessionLookupContext(): BackingSessionLookupContext {
+  return {
+    sessionStoresByPath: new Map<string, SessionStoreLookup>(),
+    sessionChatTypesByKey: new Map<string, SessionKeyChatType>(),
+  };
+}
+
+function getSessionStoreLookup(
+  storePath: string,
+  context?: BackingSessionLookupContext,
+): SessionStoreLookup {
+  if (!context) {
+    return {
+      store: taskRegistryMaintenanceRuntime.loadSessionStore(storePath, { clone: false }),
+    };
+  }
+  const cached = context.sessionStoresByPath.get(storePath);
+  if (cached) {
+    return cached;
+  }
+  const lookup = {
+    store: taskRegistryMaintenanceRuntime.loadSessionStore(storePath, { clone: false }),
+  };
+  context.sessionStoresByPath.set(storePath, lookup);
+  return lookup;
+}
+
+function getNormalizedSessionEntries(lookup: SessionStoreLookup): Map<string, SessionEntry> {
+  if (lookup.normalizedEntries) {
+    return lookup.normalizedEntries;
+  }
+  const entries = new Map<string, SessionEntry>();
+  for (const [key, entry] of Object.entries(lookup.store)) {
+    if (entry) {
+      entries.set(normalizeLowercaseStringOrEmpty(key), entry);
+    }
+  }
+  lookup.normalizedEntries = entries;
+  return entries;
+}
+
+function findSessionEntryByKey(
+  lookup: SessionStoreLookup,
+  sessionKey: string,
+): SessionEntry | undefined {
+  const direct = lookup.store[sessionKey];
   if (direct) {
     return direct;
   }
   const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
-  for (const [key, entry] of Object.entries(store)) {
-    if (normalizeLowercaseStringOrEmpty(key) === normalized) {
-      return entry;
-    }
+  if (!normalized) {
+    return undefined;
   }
-  return undefined;
+  return getNormalizedSessionEntries(lookup).get(normalized);
+}
+
+function resolveSessionChatType(
+  sessionKey: string,
+  context?: BackingSessionLookupContext,
+): SessionKeyChatType {
+  const derive =
+    taskRegistryMaintenanceRuntime.deriveSessionChatTypeFromKey ?? deriveSessionChatTypeFromKey;
+  if (!context) {
+    return derive(sessionKey);
+  }
+  const cached = context.sessionChatTypesByKey.get(sessionKey);
+  if (cached) {
+    return cached;
+  }
+  const chatType = derive(sessionKey);
+  context.sessionChatTypesByKey.set(sessionKey, chatType);
+  return chatType;
+}
+
+function findTaskSessionEntry(
+  task: TaskRecord,
+  context?: BackingSessionLookupContext,
+): SessionEntry | undefined {
+  const childSessionKey = task.childSessionKey?.trim();
+  if (!childSessionKey) {
+    return undefined;
+  }
+  const agentId = taskRegistryMaintenanceRuntime.parseAgentSessionKey(childSessionKey)?.agentId;
+  const storePath = taskRegistryMaintenanceRuntime.resolveStorePath(undefined, { agentId });
+  return findSessionEntryByKey(getSessionStoreLookup(storePath, context), childSessionKey);
 }
 
 function isActiveTask(task: TaskRecord): boolean {
@@ -331,7 +440,7 @@ function hasActiveCliRun(task: TaskRecord): boolean {
   return false;
 }
 
-function hasBackingSession(task: TaskRecord): boolean {
+function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupContext): boolean {
   if (task.runtime === "cron") {
     if (!taskRegistryMaintenanceRuntime.isCronRuntimeAuthoritative()) {
       return true;
@@ -359,28 +468,60 @@ function hasBackingSession(task: TaskRecord): boolean {
   }
   if (task.runtime === "subagent" || task.runtime === "cli") {
     if (task.runtime === "cli") {
-      const chatType = deriveSessionChatType(childSessionKey);
+      const chatType = resolveSessionChatType(childSessionKey, context);
       if (chatType === "channel" || chatType === "group" || chatType === "direct") {
         return false;
       }
     }
-    const agentId = taskRegistryMaintenanceRuntime.parseAgentSessionKey(childSessionKey)?.agentId;
-    const storePath = taskRegistryMaintenanceRuntime.resolveStorePath(undefined, { agentId });
-    const store = taskRegistryMaintenanceRuntime.loadSessionStore(storePath);
-    return Boolean(findSessionEntryByKey(store, childSessionKey));
+    const entry = findTaskSessionEntry(task, context);
+    if (task.runtime === "subagent" && isSubagentRecoveryWedgedEntry(entry)) {
+      return false;
+    }
+    return Boolean(entry);
   }
 
   return true;
 }
 
-function shouldMarkLost(task: TaskRecord, now: number): boolean {
+function resolveTaskLostError(task: TaskRecord, context?: BackingSessionLookupContext): string {
+  if (task.runtime === "subagent") {
+    const entry = findTaskSessionEntry(task, context);
+    if (entry && isSubagentRecoveryWedgedEntry(entry)) {
+      return formatSubagentRecoveryWedgedReason(entry);
+    }
+  }
+  return "backing session missing";
+}
+
+function shouldMarkLost(
+  task: TaskRecord,
+  now: number,
+  context?: BackingSessionLookupContext,
+): boolean {
   if (!isActiveTask(task)) {
     return false;
   }
   if (!hasLostGraceExpired(task, now)) {
     return false;
   }
-  return !hasBackingSession(task);
+  return !hasBackingSession(task, context);
+}
+
+function hasTaskLostDecisionInputChanged(before: TaskRecord, after: TaskRecord): boolean {
+  return (
+    before.status !== after.status ||
+    before.runtime !== after.runtime ||
+    before.childSessionKey !== after.childSessionKey ||
+    before.sourceId !== after.sourceId ||
+    before.runId !== after.runId ||
+    before.createdAt !== after.createdAt ||
+    before.startedAt !== after.startedAt ||
+    before.lastEventAt !== after.lastEventAt
+  );
+}
+
+function hasDetachedTaskRecoveryHook(): boolean {
+  return Boolean(getDetachedTaskLifecycleRuntime().tryRecoverTaskBeforeMarkLost);
 }
 
 function shouldPruneTerminalTask(task: TaskRecord, now: number): boolean {
@@ -407,18 +548,11 @@ function getNormalizedTaskChildSessionKey(task: TaskRecord): string | undefined 
   return normalizeOptionalString(task.childSessionKey);
 }
 
-function isSameTaskChildSession(a: TaskRecord, b: TaskRecord): boolean {
-  const left = getNormalizedTaskChildSessionKey(a);
-  return Boolean(left && left === getNormalizedTaskChildSessionKey(b));
-}
-
-function hasActiveTaskForChildSession(task: TaskRecord, tasks: TaskRecord[]): boolean {
-  return tasks.some(
-    (candidate) =>
-      candidate.taskId !== task.taskId &&
-      isActiveTask(candidate) &&
-      isSameTaskChildSession(task, candidate),
-  );
+function getAcpSessionParentKeys(acpEntry: Pick<AcpSessionStoreEntry, "entry">): string[] {
+  return [
+    normalizeOptionalString(acpEntry.entry?.spawnedBy),
+    normalizeOptionalString(acpEntry.entry?.parentSessionKey),
+  ].filter((value): value is string => Boolean(value));
 }
 
 function isParentOwnedAcpSessionTask(
@@ -431,11 +565,12 @@ function isParentOwnedAcpSessionTask(
   }
   const ownerKey = normalizeOptionalString(task.ownerKey);
   const requesterKey = normalizeOptionalString(task.requesterSessionKey);
-  const parentKeys = [
-    normalizeOptionalString(entry.spawnedBy),
-    normalizeOptionalString(entry.parentSessionKey),
-  ].filter((value): value is string => Boolean(value));
+  const parentKeys = getAcpSessionParentKeys({ entry });
   return parentKeys.some((parentKey) => parentKey === ownerKey || parentKey === requesterKey);
+}
+
+function isParentOwnedAcpSessionEntry(acpEntry: Pick<AcpSessionStoreEntry, "entry">): boolean {
+  return getAcpSessionParentKeys(acpEntry).length > 0;
 }
 
 function hasActiveSessionBinding(sessionKey: string): boolean {
@@ -450,12 +585,18 @@ function hasActiveSessionBinding(sessionKey: string): boolean {
   }
 }
 
-function shouldCloseTerminalAcpSession(task: TaskRecord, tasks: TaskRecord[]): boolean {
+function shouldCloseTerminalAcpSession(task: TaskRecord): boolean {
   if (task.runtime !== "acp" || isActiveTask(task)) {
     return false;
   }
   const sessionKey = getNormalizedTaskChildSessionKey(task);
-  if (!sessionKey || hasActiveTaskForChildSession(task, tasks)) {
+  if (
+    !sessionKey ||
+    taskRegistryMaintenanceRuntime.hasActiveTaskForChildSessionKey({
+      sessionKey,
+      excludeTaskId: task.taskId,
+    })
+  ) {
     return false;
   }
   const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({ sessionKey });
@@ -471,8 +612,25 @@ function shouldCloseTerminalAcpSession(task: TaskRecord, tasks: TaskRecord[]): b
   return !hasActiveSessionBinding(sessionKey);
 }
 
-async function cleanupTerminalAcpSession(task: TaskRecord, tasks: TaskRecord[]): Promise<void> {
-  if (!shouldCloseTerminalAcpSession(task, tasks)) {
+function shouldCloseOrphanedParentOwnedAcpSession(acpEntry: AcpSessionStoreEntry): boolean {
+  if (!acpEntry.entry || !acpEntry.acp || !isParentOwnedAcpSessionEntry(acpEntry)) {
+    return false;
+  }
+  const sessionKey = normalizeOptionalString(acpEntry.sessionKey);
+  if (
+    !sessionKey ||
+    taskRegistryMaintenanceRuntime.hasActiveTaskForChildSessionKey({ sessionKey })
+  ) {
+    return false;
+  }
+  if (acpEntry.acp.mode === "oneshot") {
+    return true;
+  }
+  return !hasActiveSessionBinding(sessionKey);
+}
+
+async function cleanupTerminalAcpSession(task: TaskRecord): Promise<void> {
+  if (!shouldCloseTerminalAcpSession(task)) {
     return;
   }
   const sessionKey = getNormalizedTaskChildSessionKey(task);
@@ -512,14 +670,68 @@ async function cleanupTerminalAcpSession(task: TaskRecord, tasks: TaskRecord[]):
   }
 }
 
-function markTaskLost(task: TaskRecord, now: number): TaskRecord {
-  const cleanupAfter = task.cleanupAfter ?? projectTaskLost(task, now).cleanupAfter;
+async function cleanupOrphanedParentOwnedAcpSessions(): Promise<void> {
+  let acpSessions: AcpSessionStoreEntry[];
+  try {
+    acpSessions = await taskRegistryMaintenanceRuntime.listAcpSessionEntries({});
+  } catch (error) {
+    log.warn("Failed to list ACP sessions during task maintenance", { error });
+    return;
+  }
+  const seenSessionKeys = new Set<string>();
+  for (const acpEntry of acpSessions) {
+    const sessionKey = normalizeOptionalString(acpEntry.sessionKey);
+    if (!sessionKey || seenSessionKeys.has(sessionKey)) {
+      continue;
+    }
+    seenSessionKeys.add(sessionKey);
+    if (!shouldCloseOrphanedParentOwnedAcpSession(acpEntry)) {
+      continue;
+    }
+    const closeAcpSession = taskRegistryMaintenanceRuntime.closeAcpSession;
+    if (!closeAcpSession) {
+      continue;
+    }
+    try {
+      await closeAcpSession({
+        cfg: acpEntry.cfg,
+        sessionKey,
+        reason: "orphaned-parent-task-cleanup",
+      });
+    } catch (error) {
+      log.warn("Failed to close orphaned parent-owned ACP session during task maintenance", {
+        sessionKey,
+        error,
+      });
+      continue;
+    }
+    try {
+      await taskRegistryMaintenanceRuntime.unbindSessionBindings?.({
+        targetSessionKey: sessionKey,
+        reason: "orphaned-parent-task-cleanup",
+      });
+    } catch (error) {
+      log.warn("Failed to unbind orphaned parent-owned ACP session during task maintenance", {
+        sessionKey,
+        error,
+      });
+    }
+  }
+}
+
+function markTaskLost(
+  task: TaskRecord,
+  now: number,
+  context?: BackingSessionLookupContext,
+): TaskRecord {
+  const cleanupAfter =
+    task.cleanupAfter ?? resolveCleanupAfter({ ...task, endedAt: task.endedAt ?? now });
   const updated =
     taskRegistryMaintenanceRuntime.markTaskLostById({
       taskId: task.taskId,
       endedAt: task.endedAt ?? now,
       lastEventAt: now,
-      error: task.error ?? "backing session missing",
+      error: task.error ?? resolveTaskLostError(task, context),
       cleanupAfter,
     }) ?? task;
   void taskRegistryMaintenanceRuntime.maybeDeliverTaskTerminalUpdate(updated.taskId);
@@ -561,13 +773,17 @@ function projectTaskRecovered(task: TaskRecord, recovery: CronTerminalRecovery):
   };
 }
 
-function projectTaskLost(task: TaskRecord, now: number): TaskRecord {
+function projectTaskLost(
+  task: TaskRecord,
+  now: number,
+  context?: BackingSessionLookupContext,
+): TaskRecord {
   const projected: TaskRecord = {
     ...task,
     status: "lost",
     endedAt: task.endedAt ?? now,
     lastEventAt: now,
-    error: task.error ?? "backing session missing",
+    error: task.error ?? resolveTaskLostError(task, context),
   };
   return {
     ...projected,
@@ -577,30 +793,99 @@ function projectTaskLost(task: TaskRecord, now: number): TaskRecord {
   };
 }
 
-export function reconcileTaskRecordForOperatorInspection(
+function reconcileTaskRecordForOperatorInspectionWithContexts(
   task: TaskRecord,
-  context: CronRecoveryContext = createCronRecoveryContext(),
+  context: CronRecoveryContext,
+  backingSessionContext: BackingSessionLookupContext,
 ): TaskRecord {
   const cronRecovery = resolveDurableCronTaskRecovery(task, context);
   if (cronRecovery) {
     return projectTaskRecovered(task, cronRecovery);
   }
   const now = Date.now();
-  if (!shouldMarkLost(task, now)) {
+  if (!shouldMarkLost(task, now, backingSessionContext)) {
     return task;
   }
-  return projectTaskLost(task, now);
+  return projectTaskLost(task, now, backingSessionContext);
+}
+
+export function reconcileTaskRecordForOperatorInspection(
+  task: TaskRecord,
+  context: CronRecoveryContext = createCronRecoveryContext(),
+): TaskRecord {
+  return reconcileTaskRecordForOperatorInspectionWithContexts(
+    task,
+    context,
+    createBackingSessionLookupContext(),
+  );
 }
 
 export function reconcileInspectableTasks(): TaskRecord[] {
   taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
   const cronRecoveryContext = createCronRecoveryContext();
+  const backingSessionContext = createBackingSessionLookupContext();
   return taskRegistryMaintenanceRuntime
     .listTaskRecords()
-    .map((task) => reconcileTaskRecordForOperatorInspection(task, cronRecoveryContext));
+    .map((task) =>
+      reconcileTaskRecordForOperatorInspectionWithContexts(
+        task,
+        cronRecoveryContext,
+        backingSessionContext,
+      ),
+    );
 }
 
 configureTaskAuditTaskProvider(reconcileInspectableTasks);
+
+export type ActiveTaskRestartBlocker = {
+  taskId: string;
+  status: Extract<TaskStatus, "running">;
+  runtime: TaskRecord["runtime"];
+  runId?: string;
+  label?: string;
+  title?: string;
+};
+
+function isActiveTaskRestartBlockerStatus(
+  status: TaskStatus,
+): status is ActiveTaskRestartBlocker["status"] {
+  return status === "running";
+}
+
+function isTaskRestartBlocker(task: TaskRecord): task is TaskRecord & {
+  status: ActiveTaskRestartBlocker["status"];
+} {
+  // A task that is merely queued has not started user work yet; durable queued
+  // work can survive a gateway restart and should not indefinitely block one.
+  // Likewise, stale records that still say "running" but already have endedAt
+  // are registry inconsistencies, not live restart blockers.
+  return isActiveTaskRestartBlockerStatus(task.status) && !task.endedAt;
+}
+
+export function getInspectableActiveTaskRestartBlockers(): ActiveTaskRestartBlocker[] {
+  const blockers: ActiveTaskRestartBlocker[] = [];
+  for (const task of reconcileInspectableTasks()) {
+    if (!isTaskRestartBlocker(task)) {
+      continue;
+    }
+    const blocker: ActiveTaskRestartBlocker = {
+      taskId: task.taskId,
+      status: task.status,
+      runtime: task.runtime,
+    };
+    if (task.runId) {
+      blocker.runId = task.runId;
+    }
+    if (task.label) {
+      blocker.label = task.label;
+    }
+    if (task.task) {
+      blocker.title = task.task;
+    }
+    blockers.push(blocker);
+  }
+  return blockers;
+}
 
 export function getInspectableTaskRegistrySummary(): TaskRegistrySummary {
   return summarizeTaskRecords(reconcileInspectableTasks());
@@ -628,12 +913,13 @@ export function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary
   let cleanupStamped = 0;
   let pruned = 0;
   const cronRecoveryContext = createCronRecoveryContext();
+  const backingSessionContext = createBackingSessionLookupContext();
   for (const task of taskRegistryMaintenanceRuntime.listTaskRecords()) {
     if (resolveDurableCronTaskRecovery(task, cronRecoveryContext)) {
       recovered += 1;
       continue;
     }
-    if (shouldMarkLost(task, now)) {
+    if (shouldMarkLost(task, now, backingSessionContext)) {
       reconciled += 1;
       continue;
     }
@@ -677,6 +963,8 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
   let pruned = 0;
   const tasks = taskRegistryMaintenanceRuntime.listTaskRecords();
   const cronRecoveryContext = createCronRecoveryContext();
+  const backingSessionContext = createBackingSessionLookupContext();
+  const recoveryHookRegistered = hasDetachedTaskRecoveryHook();
   let processed = 0;
   for (const task of tasks) {
     const current = taskRegistryMaintenanceRuntime.getTaskById(task.taskId);
@@ -695,7 +983,7 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
       }
       continue;
     }
-    if (shouldMarkLost(current, now)) {
+    if (shouldMarkLost(current, now, backingSessionContext)) {
       const recovery = await tryRecoverTaskBeforeMarkLost({
         taskId: current.taskId,
         runtime: current.runtime,
@@ -703,12 +991,25 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
         now,
       });
       const freshAfterHook = taskRegistryMaintenanceRuntime.getTaskById(current.taskId);
-      if (!freshAfterHook || !shouldMarkLost(freshAfterHook, now)) {
+      if (!freshAfterHook) {
         processed += 1;
         if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
           await yieldToEventLoop();
         }
         continue;
+      }
+      const shouldRecheckFreshTask =
+        recoveryHookRegistered || hasTaskLostDecisionInputChanged(current, freshAfterHook);
+      let lostContext = backingSessionContext;
+      if (shouldRecheckFreshTask) {
+        lostContext = createBackingSessionLookupContext();
+        if (!shouldMarkLost(freshAfterHook, now, lostContext)) {
+          processed += 1;
+          if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
+            await yieldToEventLoop();
+          }
+          continue;
+        }
       }
       if (recovery.recovered) {
         recovered += 1;
@@ -718,7 +1019,7 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
         }
         continue;
       }
-      const next = markTaskLost(freshAfterHook, now);
+      const next = markTaskLost(freshAfterHook, now, lostContext);
       if (next.status === "lost") {
         reconciled += 1;
       }
@@ -728,7 +1029,7 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
       }
       continue;
     }
-    await cleanupTerminalAcpSession(current, taskRegistryMaintenanceRuntime.listTaskRecords());
+    await cleanupTerminalAcpSession(current);
     if (
       shouldPruneTerminalTask(current, now) &&
       taskRegistryMaintenanceRuntime.deleteTaskRecordById(current.taskId)
@@ -752,6 +1053,14 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
     processed += 1;
     if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
       await yieldToEventLoop();
+    }
+  }
+  await cleanupOrphanedParentOwnedAcpSessions();
+  if (isPluginStateDatabaseOpen()) {
+    try {
+      sweepExpiredPluginStateEntries();
+    } catch (error) {
+      log.warn("Failed to sweep expired plugin state entries", { error });
     }
   }
   return { reconciled, recovered, cleanupStamped, pruned };

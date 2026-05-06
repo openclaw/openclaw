@@ -26,8 +26,10 @@ Primary goals:
 default. For heavy or repetitive tasks, set a cheaper model for sub-agents
 and keep your main agent on a higher-quality model. Configure via
 `agents.defaults.subagents.model` or per-agent overrides. When a child
-genuinely needs the requester's current transcript, the agent can request
-`context: "fork"` on that one spawn.
+    genuinely needs the requester's current transcript, the agent can request
+    `context: "fork"` on that one spawn. Thread-bound subagent sessions default
+    to `context: "fork"` because they branch the current conversation into a
+    follow-up thread.
 </Note>
 
 ## Slash command
@@ -44,6 +46,8 @@ session**:
 /subagents steer <id|#> <message>
 /subagents spawn <agentId> <task> [--model <model>] [--thinking <level>]
 ```
+
+Use top-level [`/steer <message>`](/tools/steer) to steer the current requester session's active run. Use `/subagents steer <id|#> <message>` when the target is a child run.
 
 `/subagents info` shows run metadata (status, timestamps, session id,
 transcript path, cleanup). Use `sessions_history` for a bounded,
@@ -79,7 +83,8 @@ requester chat when the run finishes.
   </Accordion>
   <Accordion title="Manual-spawn delivery resilience">
     - OpenClaw tries direct `agent` delivery first with a stable idempotency key.
-    - If direct delivery fails, it falls back to queue routing.
+    - If the requester-agent completion turn fails, produces no visible output, or returns an obviously incomplete prefix of the captured child result, OpenClaw falls back to direct completion delivery from the captured child result.
+    - If direct delivery cannot be used, it falls back to queue routing.
     - If queue routing is still not available, the announce is retried with a short exponential backoff before final give-up.
     - Completion delivery keeps the resolved requester route: thread-bound or conversation-bound completion routes win when available; if the completion origin only provides a channel, OpenClaw fills the missing target/account from the requester session's resolved route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery still works.
 
@@ -179,7 +184,7 @@ session to confirm the effective tool list.
   `require` rejects spawn unless the target child runtime is sandboxed.
 </ParamField>
 <ParamField path="context" type='"isolated" | "fork"' default="isolated">
-  `fork` branches the requester's current transcript into the child session. Native sub-agents only. Use `fork` only when the child needs the current transcript.
+  `fork` branches the requester's current transcript into the child session. Native sub-agents only. Thread-bound spawns default to `fork`; non-thread spawns default to `isolated`.
 </ParamField>
 
 <Warning>
@@ -203,7 +208,7 @@ persistent thread-bound subagent sessions (`sessions_spawn` with
 `channels.discord.threadBindings.enabled`,
 `channels.discord.threadBindings.idleHours`,
 `channels.discord.threadBindings.maxAgeHours`, and
-`channels.discord.threadBindings.spawnSubagentSessions`.
+`channels.discord.threadBindings.spawnSessions`.
 
 ### Quick flow
 
@@ -511,6 +516,14 @@ their child session is marked `abortedLastRun: true`. Those
 restart-aborted child sessions remain recoverable through the sub-agent
 orphan recovery flow, which sends a synthetic resume message before
 clearing the aborted marker.
+
+Automatic restart recovery is bounded per child session. If the same
+sub-agent child is accepted for orphan recovery repeatedly inside the
+rapid re-wedge window, OpenClaw persists a recovery tombstone on that
+session and stops auto-resuming it on later restarts. Run
+`openclaw tasks maintenance --apply` to reconcile the task record, or
+`openclaw doctor --fix` to clear stale aborted recovery flags on
+tombstoned sessions.
 
 <Note>
 If a sub-agent spawn fails with Gateway `PAIRING_REQUIRED` /

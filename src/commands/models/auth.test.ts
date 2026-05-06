@@ -23,11 +23,13 @@ const mocks = vi.hoisted(() => ({
   isRemoteEnvironment: vi.fn(() => false),
   loadAuthProfileStoreForRuntime: vi.fn(),
   listProfilesForProvider: vi.fn(),
+  promoteAuthProfileInOrder: vi.fn(),
   clearAuthProfileCooldown: vi.fn(),
 }));
 
 vi.mock("../../agents/auth-profiles/profiles.js", () => ({
   listProfilesForProvider: mocks.listProfilesForProvider,
+  promoteAuthProfileInOrder: mocks.promoteAuthProfileInOrder,
   upsertAuthProfile: mocks.upsertAuthProfile,
 }));
 
@@ -117,7 +119,7 @@ vi.mock("../oauth-env.js", () => ({
   isRemoteEnvironment: mocks.isRemoteEnvironment,
 }));
 
-vi.mock("../oauth-flow.js", () => ({
+vi.mock("../../plugins/provider-oauth-flow.js", () => ({
   createVpsAwareOAuthHandlers: vi.fn(() => ({
     onAuth: vi.fn(),
     onPrompt: vi.fn(),
@@ -128,7 +130,7 @@ vi.mock("../auth-token.js", () => ({
   validateAnthropicSetupToken: vi.fn(() => undefined),
 }));
 
-vi.mock("../provider-auth-helpers.js", () => {
+vi.mock("../../plugins/provider-auth-choice-helpers.js", () => {
   const normalize = (value: string | undefined) => value?.trim().toLowerCase() ?? "";
   const isRecord = (value: unknown): value is Record<string, unknown> =>
     Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -278,6 +280,7 @@ describe("modelsAuthLoginCommand", () => {
     mocks.clackSelect.mockReset();
     mocks.clackText.mockReset();
     mocks.upsertAuthProfile.mockReset();
+    mocks.promoteAuthProfileInOrder.mockReset();
 
     mocks.resolveDefaultAgentId.mockReturnValue("main");
     mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/main");
@@ -367,7 +370,13 @@ describe("modelsAuthLoginCommand", () => {
 
     await modelsAuthLoginCommand({ provider: "openai-codex" }, runtime);
 
-    expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/openclaw/agents/main");
+    expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/openclaw/agents/main", {
+      externalCli: {
+        mode: "scoped",
+        allowKeychainPrompt: false,
+        providerIds: ["openai-codex"],
+      },
+    });
     expect(mocks.clearAuthProfileCooldown).toHaveBeenCalledWith({
       store: fakeStore,
       profileId: "openai-codex:user@example.com",
@@ -384,6 +393,11 @@ describe("modelsAuthLoginCommand", () => {
         provider: "openai-codex",
       }),
       agentDir: "/tmp/openclaw/agents/main",
+    });
+    expect(mocks.promoteAuthProfileInOrder).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw/agents/main",
+      provider: "openai-codex",
+      profileId: "openai-codex:user@example.com",
     });
     expect(lastUpdatedConfig?.auth?.profiles?.["openai-codex:user@example.com"]).toMatchObject({
       provider: "openai-codex",
@@ -418,7 +432,16 @@ describe("modelsAuthLoginCommand", () => {
 
     expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
     expect(mocks.resolveAgentDir).toHaveBeenCalledWith(originalConfig, "coder");
-    expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/openclaw/agents/coder");
+    expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith(
+      "/tmp/openclaw/agents/coder",
+      {
+        externalCli: {
+          mode: "scoped",
+          allowKeychainPrompt: false,
+          providerIds: ["openai-codex"],
+        },
+      },
+    );
     expect(runProviderAuth).toHaveBeenCalledWith(
       expect.objectContaining({
         agentDir: "/tmp/openclaw/agents/coder",

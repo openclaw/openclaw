@@ -34,7 +34,16 @@ import { _setFetchGuardForTesting } from "./types.js";
 // Mock dependencies
 vi.mock("./send.js", () => ({
   resolveChatGuidForTarget: vi.fn().mockResolvedValue("iMessage;-;+15551234567"),
-  sendMessageBlueBubbles: vi.fn().mockResolvedValue({ messageId: "msg-123" }),
+  sendMessageBlueBubbles: vi.fn().mockResolvedValue({
+    messageId: "msg-123",
+    receipt: {
+      primaryPlatformMessageId: "msg-123",
+      platformMessageIds: ["msg-123"],
+      parts: [],
+      sentAt: 0,
+      raw: [],
+    },
+  }),
 }));
 
 vi.mock("./chat.js", () => ({
@@ -78,6 +87,20 @@ const DEFAULT_RESOLVED_AGENT_ROUTE: ReturnType<
   matchedBy: "default",
 };
 const mockResolveAgentRoute = vi.fn(() => DEFAULT_RESOLVED_AGENT_ROUTE);
+
+function blueBubblesTestSendResult(messageId: string) {
+  const hasPlatformId = messageId && messageId !== "ok" && messageId !== "unknown";
+  return {
+    messageId,
+    receipt: {
+      ...(hasPlatformId ? { primaryPlatformMessageId: messageId } : {}),
+      platformMessageIds: hasPlatformId ? [messageId] : [],
+      parts: [],
+      sentAt: 0,
+      raw: [],
+    },
+  };
+}
 const mockBuildMentionRegexes = vi.fn(() => [/\bbert\b/i]);
 const mockMatchesMentionPatterns = vi.fn((text: string, regexes: RegExp[]) =>
   regexes.some((r) => r.test(text)),
@@ -408,11 +431,11 @@ describe("BlueBubbles webhook monitor", () => {
       expect(sendMessageBlueBubbles).not.toHaveBeenCalled();
     });
 
-    it("allows all DMs when dmPolicy=open", async () => {
+    it("allows wildcard DMs when dmPolicy=open", async () => {
       setupWebhookTarget({
         account: createMockAccount({
           dmPolicy: "open",
-          allowFrom: [],
+          allowFrom: ["*"],
         }),
       });
 
@@ -483,6 +506,7 @@ describe("BlueBubbles webhook monitor", () => {
         account: createMockAccount({
           groupPolicy: "allowlist",
           dmPolicy: "open",
+          allowFrom: [],
         }),
       });
 
@@ -1876,7 +1900,7 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     });
 
-    it("does not auto-authorize DM control commands in open mode without allowlists", async () => {
+    it("drops DM control commands in open mode without allowlists", async () => {
       mockHasControlCommand.mockReturnValue(true);
 
       setupWebhookTarget({
@@ -1894,12 +1918,7 @@ describe("BlueBubbles webhook monitor", () => {
 
       await dispatchWebhookPayload(payload);
 
-      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
-      const latestDispatch =
-        mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[
-          mockDispatchReplyWithBufferedBlockDispatcher.mock.calls.length - 1
-        ]?.[0];
-      expect(latestDispatch?.ctx?.CommandAuthorized).toBe(false);
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     });
   });
 
@@ -2047,7 +2066,7 @@ describe("BlueBubbles webhook monitor", () => {
       mockEnqueueSystemEvent.mockClear();
 
       const { sendMessageBlueBubbles } = await import("./send.js");
-      vi.mocked(sendMessageBlueBubbles).mockResolvedValueOnce({ messageId: "ok" });
+      vi.mocked(sendMessageBlueBubbles).mockResolvedValueOnce(blueBubblesTestSendResult("ok"));
 
       mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
         await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
@@ -2087,7 +2106,7 @@ describe("BlueBubbles webhook monitor", () => {
       mockEnqueueSystemEvent.mockClear();
 
       const { sendMessageBlueBubbles } = await import("./send.js");
-      vi.mocked(sendMessageBlueBubbles).mockResolvedValueOnce({ messageId: "ok" });
+      vi.mocked(sendMessageBlueBubbles).mockResolvedValueOnce(blueBubblesTestSendResult("ok"));
 
       mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
         await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
@@ -2547,7 +2566,9 @@ describe("BlueBubbles webhook monitor", () => {
       setupWebhookTarget();
 
       const { sendMessageBlueBubbles } = await import("./send.js");
-      vi.mocked(sendMessageBlueBubbles).mockResolvedValueOnce({ messageId: "msg-self-1" });
+      vi.mocked(sendMessageBlueBubbles).mockResolvedValueOnce(
+        blueBubblesTestSendResult("msg-self-1"),
+      );
 
       mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
         await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
@@ -2697,7 +2718,7 @@ describe("BlueBubbles webhook monitor", () => {
       setupWebhookTarget();
 
       const { sendMessageBlueBubbles } = await import("./send.js");
-      vi.mocked(sendMessageBlueBubbles).mockResolvedValueOnce({ messageId: "ok" });
+      vi.mocked(sendMessageBlueBubbles).mockResolvedValueOnce(blueBubblesTestSendResult("ok"));
 
       mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
         await params.dispatcherOptions.deliver({ text: "same text" }, { kind: "final" });

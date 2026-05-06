@@ -3,13 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ChatType } from "../channels/chat-type.js";
 import { resolveStateDir } from "../config/paths.js";
+import { replaceFileAtomic } from "./replace-file.js";
 import { generateSecureUuid } from "./secure-random.js";
 
 const QUEUE_DIRNAME = "session-delivery-queue";
 const FAILED_DIRNAME = "failed";
 const TMP_SWEEP_MAX_AGE_MS = 5_000;
 
-export type SessionDeliveryContext = {
+type SessionDeliveryContext = {
   channel?: string;
   to?: string;
   accountId?: string;
@@ -86,12 +87,12 @@ async function unlinkStaleTmpBestEffort(filePath: string, now: number): Promise<
 }
 
 async function writeQueueEntry(filePath: string, entry: QueuedSessionDelivery): Promise<void> {
-  const tmp = `${filePath}.${process.pid}.tmp`;
-  await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
-    encoding: "utf-8",
+  await replaceFileAtomic({
+    filePath,
+    content: JSON.stringify(entry, null, 2),
     mode: 0o600,
+    tempPrefix: ".session-delivery-queue",
   });
-  await fs.promises.rename(tmp, filePath);
 }
 
 async function readQueueEntry(filePath: string): Promise<QueuedSessionDelivery> {
@@ -121,7 +122,7 @@ function resolveQueueEntryPaths(
   };
 }
 
-export async function ensureSessionDeliveryQueueDir(stateDir?: string): Promise<string> {
+async function ensureSessionDeliveryQueueDir(stateDir?: string): Promise<string> {
   const queueDir = resolveSessionDeliveryQueueDir(stateDir);
   await fs.promises.mkdir(queueDir, { recursive: true, mode: 0o700 });
   await fs.promises.mkdir(resolveFailedDir(stateDir), { recursive: true, mode: 0o700 });

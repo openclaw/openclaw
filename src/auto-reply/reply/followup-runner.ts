@@ -7,7 +7,6 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
-import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   buildAgentRuntimeDeliveryPlan,
@@ -16,7 +15,7 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
@@ -304,9 +303,11 @@ export function createFollowupRunner(params: {
                 skillsSnapshot: run.skillsSnapshot,
                 prompt: queued.prompt,
                 transcriptPrompt: queued.transcriptPrompt,
+                currentTurnContext: queued.currentTurnContext,
                 extraSystemPrompt: run.extraSystemPrompt,
                 silentReplyPromptMode: run.silentReplyPromptMode,
                 sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
+                forceMessageTool: run.sourceReplyDeliveryMode === "message_tool_only",
                 ownerNumbers: run.ownerNumbers,
                 enforceFinalTag: run.enforceFinalTag,
                 allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
@@ -331,14 +332,6 @@ export function createFollowupRunner(params: {
                     bootstrapPromptWarningSignaturesSeen.length - 1
                   ],
                 onAgentEvent: (evt) => {
-                  if (evt.stream.startsWith("codex_app_server.")) {
-                    emitAgentEvent({
-                      runId,
-                      stream: evt.stream,
-                      data: evt.data,
-                      ...(evt.sessionKey ? { sessionKey: evt.sessionKey } : {}),
-                    });
-                  }
                   if (evt.stream !== "compaction") {
                     return;
                   }
@@ -401,7 +394,6 @@ export function createFollowupRunner(params: {
           contextTokensUsed,
           systemPromptReport: runResult.meta?.systemPromptReport,
           cliSessionBinding: runResult.meta?.agentMeta?.cliSessionBinding,
-          usageIsContextSnapshot: isCliProvider(providerUsed, runtimeConfig),
           logLabel: "followup",
         });
       }

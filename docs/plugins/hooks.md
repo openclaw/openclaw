@@ -61,6 +61,32 @@ keep registration order.
   timeout. Omit it to use the default observation/decision timeout that the
   hook runner applies generically.
 
+Operators can also set hook budgets without patching plugin code:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "my-plugin": {
+        "hooks": {
+          "timeoutMs": 30000,
+          "timeouts": {
+            "before_prompt_build": 90000,
+            "agent_end": 60000
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+`hooks.timeouts.<hookName>` overrides `hooks.timeoutMs`, which overrides the
+plugin-authored `api.on(..., { timeoutMs })` value. Each configured value must
+be a positive integer no greater than 600000 milliseconds. Prefer per-hook
+overrides for known slow hooks so one plugin does not get a longer budget
+everywhere.
+
 Each hook receives `event.context.pluginConfig`, the resolved config for the
 plugin that registered that handler. Use it for hook decisions that need
 current plugin options; OpenClaw injects it per handler without mutating the
@@ -212,6 +238,11 @@ Cron-driven runs also expose `ctx.jobId` (the originating cron job id) so
 plugin hooks can scope metrics, side effects, or state to a specific scheduled
 job.
 
+For channel-originated runs, `ctx.messageProvider` is the provider surface such
+as `discord` or `telegram`, while `ctx.channelId` is the conversation target
+identifier when OpenClaw can derive one from the session key or delivery
+metadata.
+
 `agent_end` is an observation hook and runs fire-and-forget after the turn. The
 hook runner applies a 30 second timeout so a wedged plugin or embedding
 endpoint cannot leave the hook promise pending forever. A timeout is logged and
@@ -232,6 +263,22 @@ the harness for one more model pass before finalization, `{ action:
 "finalize", reason? }` to force finalization, or omit a result to continue.
 Codex native `Stop` hooks are relayed into this hook as OpenClaw
 `before_agent_finalize` decisions.
+
+When returning `action: "revise"`, plugins can include `retry` metadata to make
+the extra model pass bounded and replay-safe:
+
+```typescript
+type BeforeAgentFinalizeRetry = {
+  instruction: string;
+  idempotencyKey?: string;
+  maxAttempts?: number;
+};
+```
+
+`instruction` is appended to the revision reason sent to the harness.
+`idempotencyKey` lets the host count retries for the same plugin request across
+equivalent finalize decisions, and `maxAttempts` caps how many extra passes the
+host will allow before continuing with the natural final answer.
 
 Non-bundled plugins that need `llm_input`, `llm_output`,
 `before_agent_finalize`, or `agent_end` must set:

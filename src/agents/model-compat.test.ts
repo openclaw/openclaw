@@ -592,13 +592,31 @@ describe("isHighSignalLiveModelRef", () => {
     ).toBe(false);
   });
 
+  it("drops Fireworks Kimi routes from the default high-thinking live matrix", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
+
+    expect(
+      isHighSignalLiveModelRef({
+        provider: "fireworks",
+        id: "accounts/fireworks/models/kimi-k2p6",
+      }),
+    ).toBe(false);
+    expect(
+      isHighSignalLiveModelRef({
+        provider: "fireworks",
+        id: "accounts/fireworks/routers/kimi-k2p5-turbo",
+      }),
+    ).toBe(false);
+  });
+
   it("keeps only curated xAI routes in the default live matrix", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
 
-    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4-1-fast-non-reasoning" })).toBe(
-      true,
-    );
+    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4.3" })).toBe(true);
     expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-3" })).toBe(false);
+    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4-1-fast-non-reasoning" })).toBe(
+      false,
+    );
     expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4-fast-non-reasoning" })).toBe(
       false,
     );

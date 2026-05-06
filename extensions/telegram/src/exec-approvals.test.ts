@@ -165,6 +165,25 @@ describe("telegram exec approvals", () => {
     expect(isTelegramExecApprovalApprover({ cfg, senderId: "67890" })).toBe(true);
   });
 
+  it("does not require explicit Telegram exec approvers when command owner identifies the Telegram operator", () => {
+    const cfg = {
+      ...buildConfig(),
+      commands: {
+        ownerAllowFrom: ["telegram:12345"],
+      },
+    } as OpenClawConfig;
+
+    expect(cfg.channels?.telegram?.execApprovals?.approvers).toBeUndefined();
+    expect(getTelegramExecApprovalApprovers({ cfg })).toEqual(["12345"]);
+    expect(isTelegramExecApprovalClientEnabled({ cfg })).toBe(true);
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        request: makeForeignChannelApprovalRequest({ id: "discord-diagnostics" }),
+      }),
+    ).toBe(true);
+  });
+
   it("does not infer approvers from Telegram chat allowlists", () => {
     const cfg = buildConfig(
       { enabled: true },

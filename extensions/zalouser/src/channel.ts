@@ -16,6 +16,7 @@ import { DEFAULT_ACCOUNT_ID } from "./channel-api.js";
 import {
   zalouserAuthAdapter,
   zalouserGroupsAdapter,
+  zalouserMessageAdapter,
   zalouserMessageActions,
   zalouserMessagingAdapter,
   zalouserOutboundAdapter,
@@ -131,6 +132,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
       },
       resolver: zalouserResolverAdapter,
       auth: zalouserAuthAdapter,
+      message: zalouserMessageAdapter,
       status: createAsyncComputedAccountStatusAdapter<ResolvedZalouserAccount, ZalouserProbeResult>(
         {
           defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
@@ -217,5 +219,3 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
     },
     outbound: zalouserOutboundAdapter,
   });
-
-export type { ResolvedZalouserAccount };

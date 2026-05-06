@@ -1145,7 +1145,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
 
     const { onBlockReply } = await runMessagingCase({
       agentResult: {
-        ...makeTextReplyDedupeResult(),
+        ...makeTextReplyDedupeResult({ messagingToolSentTexts: ["hello world!"] }),
         messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
         meta: {
           agentMeta: {
@@ -1287,9 +1287,9 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(persistSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         providerUsed: "anthropic",
-        usageIsContextSnapshot: true,
       }),
     );
+    expect(persistSpy.mock.calls[0]?.[0]?.usageIsContextSnapshot).toBeUndefined();
     persistSpy.mockRestore();
   });
 
@@ -1380,6 +1380,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sourceReplyDeliveryMode: "message_tool_only",
+        forceMessageTool: true,
       }),
     );
     expect(routeReplyMock).not.toHaveBeenCalled();

@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import {
   resolveDefaultSessionStorePath,
@@ -8,14 +7,16 @@ import {
 import { loadSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { pathExists } from "../infra/fs-safe.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   exportTrajectoryForCommand,
   formatTrajectoryCommandExportSummary,
+  type TrajectoryCommandExportSummary,
 } from "../trajectory/command-export.js";
 
-export type ExportTrajectoryCommandOptions = {
+type ExportTrajectoryCommandOptions = {
   sessionKey?: string;
   output?: string;
   store?: string;
@@ -113,15 +114,15 @@ export async function exportTrajectoryCommand(
     runtime.exit(1);
     return;
   }
-  if (!fs.existsSync(sessionFile)) {
+  if (!(await pathExists(sessionFile))) {
     runtime.error("Session file not found.");
     runtime.exit(1);
     return;
   }
 
-  let summary: ReturnType<typeof exportTrajectoryForCommand>;
+  let summary: TrajectoryCommandExportSummary;
   try {
-    summary = exportTrajectoryForCommand({
+    summary = await exportTrajectoryForCommand({
       outputPath: resolvedOpts.output,
       sessionFile,
       sessionId: entry.sessionId,

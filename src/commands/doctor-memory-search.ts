@@ -316,6 +316,7 @@ export async function noteMemorySearchHealth(
       checked: boolean;
       ready: boolean;
       error?: string;
+      skipped?: boolean;
     };
   },
 ): Promise<void> {
@@ -335,6 +336,9 @@ export async function noteMemorySearchHealth(
   // separate embedding provider is needed. Skip the provider check entirely.
   const backendConfig = resolveActiveMemoryBackendConfig({ cfg, agentId });
   if (!backendConfig) {
+    if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
+      return;
+    }
     note("No active memory plugin is registered for the current config.", "Memory search");
     return;
   }
@@ -408,6 +412,16 @@ export async function noteMemorySearchHealth(
     }
     if (isKeyOptionalMemoryProvider(resolved.provider)) {
       if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
+        return;
+      }
+      // When the probe was intentionally skipped (skipped: true / checked: false
+      // due to probe:false path), we have no embedding status information — do
+      // not warn. A skipped probe means the user ran `openclaw doctor` without
+      // --deep; it does not mean embeddings are unavailable.
+      // NOTE: a transport timeout also sets checked: false, but skipped stays
+      // false/absent — a timeout is a real diagnostic signal and should fall
+      // through to the warning below.
+      if (opts?.gatewayMemoryProbe?.skipped) {
         return;
       }
       const gatewayProbeWarning = buildGatewayProbeWarning(opts?.gatewayMemoryProbe);
@@ -579,6 +593,7 @@ function buildGatewayProbeWarning(
         checked: boolean;
         ready: boolean;
         error?: string;
+        skipped?: boolean;
       }
     | undefined,
 ): string | null {

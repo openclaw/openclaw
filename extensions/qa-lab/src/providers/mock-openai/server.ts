@@ -149,6 +149,12 @@ const QA_STREAMING_PROMPT_RE = /(?:partial|quiet) streaming qa check/i;
 const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
 const QA_TOOL_PROGRESS_ERROR_PROMPT_RE = /tool progress error qa check/i;
 const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress qa check/i;
+const QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE = /qa group visible reply tool check/i;
+const QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE =
+  /qa group message unavailable fallback check/i;
+const QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE = /telegram current session_status qa check/i;
+const QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE = /telegram long final three chunk qa check/i;
+const QA_TELEGRAM_LONG_FINAL_PROMPT_RE = /telegram long final qa check/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
@@ -559,11 +565,14 @@ function extractFinishExactlyDirective(text: string) {
 }
 
 function extractExactMarkerDirective(text: string) {
-  const backtickedMatch = extractLastCapture(text, /exact marker:\s*`([^`]+)`/i);
+  const backtickedMatch = extractLastCapture(text, /exact marker\b[^:\n]{0,120}:\s*`([^`]+)`/i);
   if (backtickedMatch) {
     return backtickedMatch;
   }
-  return extractLastCapture(text, /exact marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i);
+  return extractLastCapture(
+    text,
+    /exact marker\b[^:\n]{0,120}:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i,
+  );
 }
 
 function extractLabeledMarkerDirective(text: string, label: string) {
@@ -665,6 +674,28 @@ function hasToolErrorOutput(toolJson: Record<string, unknown> | null, toolOutput
     return true;
   }
   return /\b(?:error|failed|failure|not found|no such file|enoent)\b/i.test(toolOutput);
+}
+
+function extractSessionStatusSessionKey(
+  toolJson: Record<string, unknown> | null,
+  toolOutput: string,
+) {
+  const details = toolJson?.details;
+  if (details && typeof details === "object") {
+    const sessionKey = (details as { sessionKey?: unknown }).sessionKey;
+    if (typeof sessionKey === "string" && sessionKey.trim()) {
+      return sessionKey.trim();
+    }
+  }
+  const topLevelSessionKey = toolJson?.sessionKey;
+  if (typeof topLevelSessionKey === "string" && topLevelSessionKey.trim()) {
+    return topLevelSessionKey.trim();
+  }
+  const statusLineSessionKey = /(?:^|\n)[^\n]*Session:\s*([^\s•\n]+)/u.exec(toolOutput)?.[1];
+  if (statusLineSessionKey?.trim()) {
+    return statusLineSessionKey.trim();
+  }
+  return /"sessionKey"\s*:\s*"([^"]+)"/.exec(toolOutput)?.[1]?.trim() ?? "";
 }
 
 function isHeartbeatPrompt(text: string) {
@@ -1005,6 +1036,23 @@ function splitMockStreamingText(text: string, parts = 3) {
   return chunks.length > 1 ? chunks : [text.slice(0, 1), text.slice(1)];
 }
 
+function buildTelegramLongFinalText({
+  endMarker = "TELEGRAM-LONG-FINAL-END",
+  segmentCount = 54,
+  startMarker = "TELEGRAM-LONG-FINAL-BEGIN",
+}: {
+  endMarker?: string;
+  segmentCount?: number;
+  startMarker?: string;
+} = {}) {
+  const body = Array.from(
+    { length: segmentCount },
+    (_, index) =>
+      `telegram-long-final-segment-${String(index + 1).padStart(3, "0")} ${"x".repeat(54)}`,
+  ).join("\n");
+  return `${startMarker}\n${body}\n${endMarker}`;
+}
+
 function buildAssistantOutputItem(spec: MockAssistantMessageSpec) {
   return {
     type: "message",
@@ -1281,6 +1329,32 @@ async function buildResponsesPayload(
     }
     return buildAssistantEvents("");
   }
+  if (QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE.test(allInputText)) {
+    const text = buildTelegramLongFinalText({
+      endMarker: "TELEGRAM-LONG-FINAL-3CHUNK-END",
+      segmentCount: 96,
+      startMarker: "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN",
+    });
+    return buildAssistantEvents([
+      {
+        id: "msg_mock_telegram_long_final_three_chunk",
+        phase: "final_answer",
+        streamDeltas: splitMockStreamingText(text),
+        text,
+      },
+    ]);
+  }
+  if (QA_TELEGRAM_LONG_FINAL_PROMPT_RE.test(allInputText)) {
+    const text = buildTelegramLongFinalText();
+    return buildAssistantEvents([
+      {
+        id: "msg_mock_telegram_long_final",
+        phase: "final_answer",
+        streamDeltas: splitMockStreamingText(text),
+        text,
+      },
+    ]);
+  }
   if (QA_STREAMING_PROMPT_RE.test(allInputText) && exactReplyDirective) {
     return buildAssistantEvents([
       {
@@ -1291,19 +1365,22 @@ async function buildResponsesPayload(
       },
     ]);
   }
-  if (QA_TOOL_PROGRESS_ERROR_PROMPT_RE.test(allInputText) && exactReplyDirective) {
+  const toolProgressReplyDirective = exactReplyDirective ?? exactMarkerDirective;
+  if (QA_TOOL_PROGRESS_ERROR_PROMPT_RE.test(allInputText) && toolProgressReplyDirective) {
     if (!toolOutput) {
       return buildToolProgressReadEvents(QA_TOOL_PROGRESS_ERROR_PROMPT_RE);
     }
     return buildAssistantEvents(
-      hasToolErrorOutput(toolJson, toolOutput) ? exactReplyDirective : "BUG-TOOL-DID-NOT-FAIL",
+      hasToolErrorOutput(toolJson, toolOutput)
+        ? toolProgressReplyDirective
+        : "BUG-TOOL-DID-NOT-FAIL",
     );
   }
-  if (QA_TOOL_PROGRESS_PROMPT_RE.test(allInputText) && exactReplyDirective) {
+  if (QA_TOOL_PROGRESS_PROMPT_RE.test(allInputText) && toolProgressReplyDirective) {
     if (!toolOutput) {
       return buildToolProgressReadEvents(QA_TOOL_PROGRESS_PROMPT_RE);
     }
-    return buildAssistantEvents(exactReplyDirective);
+    return buildAssistantEvents(toolProgressReplyDirective);
   }
   if (
     QA_BLOCK_STREAMING_PROMPT_RE.test(allInputText) &&
@@ -1324,6 +1401,32 @@ async function buildResponsesPayload(
         text: secondExactMarkerDirective,
       },
     ]);
+  }
+  if (QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE.test(allInputText)) {
+    const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-TOOL-OK";
+    if (!toolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "send",
+        message: marker,
+      });
+    }
+    return buildAssistantEvents("");
+  }
+  if (QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE.test(allInputText)) {
+    return buildAssistantEvents(
+      exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-FALLBACK-OK",
+    );
+  }
+  if (QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(allInputText)) {
+    if (!toolOutput && hasDeclaredTool(body, "session_status")) {
+      return buildToolCallEventsWithArgs("session_status", { sessionKey: "current" });
+    }
+    const sessionKey = extractSessionStatusSessionKey(toolJson, toolOutput);
+    return buildAssistantEvents(
+      sessionKey.includes(":telegram:group:")
+        ? `QA-TELEGRAM-CURRENT-SESSION-OK ${sessionKey}`
+        : `QA-TELEGRAM-CURRENT-SESSION-BAD ${sessionKey || "missing-session-key"}`,
+    );
   }
   if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
     return buildAssistantEvents(exactReplyDirective);
@@ -1447,6 +1550,12 @@ async function buildResponsesPayload(
     /silent snack recall check/i.test(allInputText)
   ) {
     if (!toolOutput) {
+      if (!hasDeclaredTool(body, "memory_recall")) {
+        return buildToolCallEventsWithArgs("memory_search", {
+          query: "QA movie night snack lemon pepper wings blue cheese",
+          maxResults: 3,
+        });
+      }
       return buildToolCallEventsWithArgs("memory_recall", {
         query: "QA movie night snack lemon pepper wings blue cheese",
         limit: 3,
@@ -1471,6 +1580,23 @@ async function buildResponsesPayload(
         return buildAssistantEvents(`User usually wants ${snackPreference} for QA movie night.`);
       }
       return buildAssistantEvents("NONE");
+    }
+    const results = Array.isArray(toolJson?.results)
+      ? (toolJson.results as Array<Record<string, unknown>>)
+      : [];
+    const first = results[0];
+    if (typeof first?.path === "string") {
+      const from =
+        typeof first.startLine === "number"
+          ? Math.max(1, first.startLine)
+          : typeof first.endLine === "number"
+            ? Math.max(1, first.endLine)
+            : 1;
+      return buildToolCallEventsWithArgs("memory_get", {
+        path: first.path,
+        from,
+        lines: 4,
+      });
     }
     const memorySnippet = Array.isArray(toolJson?.results)
       ? JSON.stringify(toolJson.results)

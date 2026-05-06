@@ -21,7 +21,7 @@ export type CommandRunner = (
   options: { timeoutMs: number; cwd?: string; env?: NodeJS.ProcessEnv },
 ) => Promise<{ stdout: string; stderr: string; code: number | null }>;
 
-export type ResolvedGlobalInstallCommand = {
+type ResolvedGlobalInstallCommand = {
   manager: GlobalInstallManager;
   command: string;
 };
@@ -41,6 +41,7 @@ const NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS = [
   "--omit=optional",
   ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
 ] as const;
+const NPM_CONFIG_SCRIPT_SHELL_KEYS = ["NPM_CONFIG_SCRIPT_SHELL", "npm_config_script_shell"];
 const FIRST_PACKAGED_DIST_INVENTORY_VERSION = { major: 2026, minor: 4, patch: 15 };
 const OMITTED_PRIVATE_QA_BUNDLED_PLUGIN_ROOTS = new Set([
   "dist/extensions/qa-channel",
@@ -101,6 +102,7 @@ export async function collectInstalledGlobalPackageErrors(params: {
   expectedVersion?: string | null;
 }): Promise<string[]> {
   const errors: string[] = [];
+  errors.push(...(await collectSourceCheckoutInstallErrors(params.packageRoot)));
   const installedVersion = await readPackageVersion(params.packageRoot);
   if (params.expectedVersion && installedVersion !== params.expectedVersion) {
     errors.push(
@@ -115,6 +117,18 @@ export async function collectInstalledGlobalPackageErrors(params: {
     })),
   );
   return errors;
+}
+
+async function collectSourceCheckoutInstallErrors(packageRoot: string): Promise<string[]> {
+  const realPackageRoot = await tryRealpath(packageRoot);
+  const hasSourceCheckoutShape =
+    ((await pathExists(path.join(realPackageRoot, ".git"))) ||
+      (await pathExists(path.join(realPackageRoot, "pnpm-workspace.yaml")))) &&
+    (await pathExists(path.join(realPackageRoot, "src"))) &&
+    (await pathExists(path.join(realPackageRoot, "extensions")));
+  return hasSourceCheckoutShape
+    ? [`global package root resolves to source checkout: ${realPackageRoot}`]
+    : [];
 }
 
 function shouldRequirePackagedDistInventory(version: string | null | undefined): boolean {
@@ -261,13 +275,11 @@ export function canResolveRegistryVersionForPackageTarget(value: string): boolea
   return !isMainPackageTarget(trimmed) && !isExplicitPackageInstallSpec(trimmed);
 }
 
-async function resolvePortableGitPathPrepend(
-  env: NodeJS.ProcessEnv | undefined,
-): Promise<string[]> {
+async function resolvePortableGitPathPrepend(): Promise<string[]> {
   if (process.platform !== "win32") {
     return [];
   }
-  const localAppData = env?.LOCALAPPDATA?.trim() || process.env.LOCALAPPDATA?.trim();
+  const localAppData = process.env.LOCALAPPDATA?.trim();
   if (!localAppData) {
     return [];
   }
@@ -304,6 +316,31 @@ function applyCorepackDownloadPromptEnv(env: Record<string, string>) {
   }
 }
 
+function hasNpmScriptShellSetting(env: NodeJS.ProcessEnv): boolean {
+  return NPM_CONFIG_SCRIPT_SHELL_KEYS.some((key) => Boolean(env[key]?.trim()));
+}
+
+function resolvePosixNpmScriptShell(env: NodeJS.ProcessEnv): string | null {
+  if (process.platform === "win32") {
+    return null;
+  }
+  if (fsSync.existsSync("/bin/sh")) {
+    return "/bin/sh";
+  }
+  const shell = env.SHELL?.trim();
+  return shell && path.isAbsolute(shell) && fsSync.existsSync(shell) ? shell : null;
+}
+
+function applyPosixNpmScriptShellEnv(env: Record<string, string>) {
+  if (hasNpmScriptShellSetting(env)) {
+    return;
+  }
+  const scriptShell = resolvePosixNpmScriptShell(env);
+  if (scriptShell) {
+    env.NPM_CONFIG_SCRIPT_SHELL = scriptShell;
+  }
+}
+
 export function resolveGlobalInstallSpec(params: {
   packageName: string;
   tag: string;
@@ -328,13 +365,18 @@ export function resolveGlobalInstallSpec(params: {
 export async function createGlobalInstallEnv(
   env?: NodeJS.ProcessEnv,
 ): Promise<NodeJS.ProcessEnv | undefined> {
-  const pathPrepend = await resolvePortableGitPathPrepend(env);
+  const pathPrepend = await resolvePortableGitPathPrepend();
   const sourceEnv = env ?? process.env;
   const hasCorepackDownloadPromptSetting = Boolean(
     sourceEnv.COREPACK_ENABLE_DOWNLOAD_PROMPT?.trim(),
   );
+  const missingPosixScriptShell =
+    Boolean(resolvePosixNpmScriptShell(sourceEnv)) && !hasNpmScriptShellSetting(sourceEnv);
   const requiresMergedEnv =
-    pathPrepend.length > 0 || process.platform === "win32" || !hasCorepackDownloadPromptSetting;
+    pathPrepend.length > 0 ||
+    process.platform === "win32" ||
+    !hasCorepackDownloadPromptSetting ||
+    missingPosixScriptShell;
   if (!requiresMergedEnv) {
     return env;
   }
@@ -346,6 +388,7 @@ export async function createGlobalInstallEnv(
   applyPathPrepend(merged, pathPrepend);
   applyWindowsPackageInstallEnv(merged);
   applyCorepackDownloadPromptEnv(merged);
+  applyPosixNpmScriptShellEnv(merged);
   return merged;
 }
 

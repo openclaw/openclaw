@@ -21,6 +21,29 @@ type MatrixPendingPluginApprovalView = Extract<
 
 const MATRIX_APPROVAL_METADATA_KEY = "com.openclaw.approval";
 
+function buildMatrixReceipt(messageIds: readonly string[], roomId = "!room:example.org") {
+  return {
+    primaryPlatformMessageId: messageIds[0],
+    platformMessageIds: [...messageIds],
+    parts: messageIds.map((messageId, index) => ({
+      platformMessageId: messageId,
+      kind: "text" as const,
+      index,
+      raw: {
+        channel: "matrix",
+        messageId,
+        roomId,
+      },
+    })),
+    sentAt: 100,
+    raw: messageIds.map((messageId) => ({
+      channel: "matrix",
+      messageId,
+      roomId,
+    })),
+  };
+}
+
 function buildMatrixApprovalRoomTarget(
   roomId: string,
 ): MatrixDeliverPendingParams["plannedTarget"] {
@@ -142,7 +165,7 @@ describe("matrixApprovalNativeRuntime", () => {
     const sendSingleTextMessage = vi.fn().mockResolvedValue({
       messageId: "$approval",
       primaryMessageId: "$approval",
-      messageIds: ["$approval"],
+      receipt: buildMatrixReceipt(["$approval"]),
       roomId: "!room:example.org",
     });
     const reactMessage = vi.fn().mockResolvedValue(undefined);
@@ -195,7 +218,7 @@ describe("matrixApprovalNativeRuntime", () => {
     const sendSingleTextMessage = vi.fn().mockResolvedValue({
       messageId: "$plugin-approval",
       primaryMessageId: "$plugin-approval",
-      messageIds: ["$plugin-approval"],
+      receipt: buildMatrixReceipt(["$plugin-approval"]),
       roomId: "!room:example.org",
     });
     const reactMessage = vi.fn().mockResolvedValue(undefined);
@@ -266,14 +289,60 @@ describe("matrixApprovalNativeRuntime", () => {
     );
   });
 
+  it("binds Matrix approval reactions before publishing option reactions", async () => {
+    const sendSingleTextMessage = vi.fn().mockResolvedValue({
+      messageId: "$approval",
+      primaryMessageId: "$approval",
+      receipt: buildMatrixReceipt(["$approval"]),
+      roomId: "!room:example.org",
+    });
+    const reactMessage = vi.fn().mockImplementation(async () => {
+      expect(
+        resolveMatrixApprovalReactionTarget({
+          roomId: "!room:example.org",
+          eventId: "$approval",
+          reactionKey: "✅",
+        }),
+      ).toEqual({
+        approvalId: "req-1",
+        decision: "allow-once",
+      });
+    });
+    const view = buildExecApprovalView();
+    const pendingPayload = await buildPendingPayload(view);
+
+    await matrixApprovalNativeRuntime.transport.deliverPending({
+      cfg: {} as never,
+      accountId: "default",
+      context: {
+        client: {} as never,
+        deps: {
+          sendSingleTextMessage,
+          reactMessage,
+        },
+      },
+      request: {} as never,
+      approvalKind: "exec",
+      plannedTarget: buildMatrixApprovalRoomTarget("!room:example.org"),
+      preparedTarget: {
+        to: "room:!room:example.org",
+        roomId: "!room:example.org",
+      },
+      view,
+      pendingPayload,
+    });
+
+    expect(reactMessage).toHaveBeenCalled();
+  });
+
   it("falls back to chunked Matrix delivery when approval content exceeds one event", async () => {
     const sendSingleTextMessage = vi
       .fn()
       .mockRejectedValue(new Error("Matrix single-message text exceeds limit (5000 > 4000)"));
     const sendMessage = vi.fn().mockResolvedValue({
       messageId: "$last",
-      primaryMessageId: "$primary",
-      messageIds: ["$primary", "$last"],
+      primaryMessageId: "$legacy-primary",
+      receipt: buildMatrixReceipt(["$primary", "$last"]),
       roomId: "!room:example.org",
     });
     const reactMessage = vi.fn().mockResolvedValue(undefined);
@@ -329,7 +398,7 @@ describe("matrixApprovalNativeRuntime", () => {
     );
     expect(entry).toMatchObject({
       roomId: "!room:example.org",
-      messageIds: ["$primary", "$last"],
+      platformMessageIds: ["$primary", "$last"],
       reactionEventId: "$primary",
     });
     const bindPending = matrixApprovalNativeRuntime.interactions?.bindPending;

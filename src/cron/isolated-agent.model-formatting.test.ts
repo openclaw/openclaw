@@ -65,6 +65,7 @@ type SelectModelOptions = {
     providerOverride?: string;
   };
   isGmailHook?: boolean;
+  agentId?: string;
 };
 
 function parseModelRef(raw: string): { provider: string; model: string } | { error: string } {
@@ -126,6 +127,7 @@ async function selectModel(options: SelectModelOptions = {}) {
     sessionEntry: options.sessionEntry ?? {},
     payload: options.payload ?? defaultPayload(),
     isGmailHook: options.isGmailHook ?? false,
+    agentId: options.agentId,
   });
 }
 
@@ -320,6 +322,30 @@ describe("cron model formatting and precedence edge cases", () => {
     it("falls through to default when no override is present", async () => {
       await expectDefaultSelectedModel();
     });
+
+    it("does not treat another chat session /model override as a global cron default", async () => {
+      const chatSessionAfterModelDirective = {
+        providerOverride: "openai",
+        modelOverride: "gpt-4.1-mini",
+      };
+
+      await expectSelectedModel(
+        { sessionEntry: chatSessionAfterModelDirective },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      );
+      await expectDefaultSelectedModel({ sessionEntry: {} });
+      await expectSelectedModel(
+        {
+          sessionEntry: {},
+          payload: {
+            kind: "agentTurn",
+            message: DEFAULT_MESSAGE,
+            model: "anthropic/claude-sonnet-4-6",
+          },
+        },
+        { provider: "anthropic", model: "claude-sonnet-4-6" },
+      );
+    });
   });
 
   describe("sequential model switches (CI failure regression)", () => {
@@ -374,6 +400,94 @@ describe("cron model formatting and precedence edge cases", () => {
       );
 
       await expectDefaultSelectedModel();
+    });
+  });
+
+  describe("CLI runtime compatibility", () => {
+    it("keeps the canonical Anthropic provider when a per-agent Claude CLI runtime is configured", async () => {
+      await expectSelectedModel(
+        {
+          cfg: {
+            agents: {
+              defaults: {
+                model: "anthropic/claude-opus-4-6",
+              },
+              list: [
+                {
+                  id: "scheduler",
+                  agentRuntime: { id: "claude-cli" },
+                },
+              ],
+            },
+          },
+          agentId: "scheduler",
+        },
+        { provider: "anthropic", model: "claude-opus-4-6" },
+      );
+    });
+
+    it("keeps an OpenAI payload override on OpenAI when per-agent Claude CLI is configured", async () => {
+      await expectSelectedModel(
+        {
+          cfg: {
+            agents: {
+              defaults: {
+                model: "anthropic/claude-opus-4-6",
+              },
+              list: [
+                {
+                  id: "scheduler",
+                  agentRuntime: { id: "claude-cli" },
+                },
+              ],
+            },
+          },
+          agentId: "scheduler",
+          payload: {
+            kind: "agentTurn",
+            message: DEFAULT_MESSAGE,
+            model: "openai/gpt-4.1-mini",
+          },
+        },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      );
+    });
+
+    it("keeps the canonical Anthropic provider when a default Claude CLI runtime is configured", async () => {
+      await expectSelectedModel(
+        {
+          cfg: {
+            agents: {
+              defaults: {
+                model: "anthropic/claude-opus-4-6",
+                agentRuntime: { id: "claude-cli" },
+              },
+            },
+          },
+        },
+        { provider: "anthropic", model: "claude-opus-4-6" },
+      );
+    });
+
+    it("keeps an OpenAI payload override on OpenAI when default Claude CLI is configured", async () => {
+      await expectSelectedModel(
+        {
+          cfg: {
+            agents: {
+              defaults: {
+                model: "anthropic/claude-opus-4-6",
+                agentRuntime: { id: "claude-cli" },
+              },
+            },
+          },
+          payload: {
+            kind: "agentTurn",
+            message: DEFAULT_MESSAGE,
+            model: "openai/gpt-4.1-mini",
+          },
+        },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      );
     });
   });
 

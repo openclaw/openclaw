@@ -105,12 +105,12 @@ describe("GatewayClient", () => {
     expect(last?.opts.agent).toBeDefined();
   });
 
-  test("does not use the direct control-plane bypass for localhost hostnames", () => {
+  test("uses the direct control-plane bypass for localhost hostnames", () => {
     const client = new GatewayClient({ url: "ws://localhost:1" });
     client.start();
     const last = wsMockState.last as { opts: { agent?: unknown } } | null;
 
-    expect(last?.opts.agent).toBeUndefined();
+    expect(last?.opts.agent).toBeDefined();
   });
 
   test("does not force a direct agent for remote Gateway WebSocket connections", () => {
@@ -322,7 +322,8 @@ describe("gateway broadcaster", () => {
     expect(readSocket.send).toHaveBeenCalledTimes(0);
 
     broadcastToConnIds("tick", { ts: 1 }, new Set(["c-read"]));
-    expect(readSocket.send).toHaveBeenCalledTimes(1);
+    broadcastToConnIds("talk.event", { type: "session.ready" }, new Set(["c-read"]));
+    expect(readSocket.send).toHaveBeenCalledTimes(2);
     expect(approvalsSocket.send).toHaveBeenCalledTimes(1);
     expect(pairingSocket.send).toHaveBeenCalledTimes(1);
   });

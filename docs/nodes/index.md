@@ -197,10 +197,19 @@ Node commands must pass two gates before they can be invoked:
 
 Windows and macOS companion nodes allow safe declared commands such as
 `canvas.*`, `camera.list`, `location.get`, and `screen.snapshot` by default.
+Trusted nodes that advertise the `talk` capability or declare `talk.*` commands
+also allow declared push-to-talk commands (`talk.ptt.start`, `talk.ptt.stop`,
+`talk.ptt.cancel`, `talk.ptt.once`) by default, independent of platform label.
 Dangerous or privacy-heavy commands such as `camera.snap`, `camera.clip`, and
 `screen.record` still require explicit opt-in with
 `gateway.nodes.allowCommands`. `gateway.nodes.denyCommands` always wins over
 defaults and extra allowlist entries.
+
+Plugin-owned node commands can add a Gateway node-invoke policy. That policy
+runs after the allowlist check and before forwarding to the node, so raw
+`node.invoke`, CLI helpers, and dedicated agent tools share the same plugin
+permission boundary. Dangerous plugin node commands still require explicit
+`gateway.nodes.allowCommands` opt-in.
 
 After a node changes its declared command list, reject the old device pairing
 and approve the new request so the gateway stores the updated command snapshot.

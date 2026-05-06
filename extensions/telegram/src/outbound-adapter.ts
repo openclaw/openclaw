@@ -6,7 +6,6 @@ import {
 import {
   presentationToInteractiveReply,
   renderMessagePresentationFallbackText,
-  resolveInteractiveTextFallback,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import {
@@ -21,6 +20,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import { markdownToTelegramHtmlChunks } from "./format.js";
+import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 import { pinMessageTelegram } from "./send.js";
 
@@ -42,6 +42,7 @@ async function resolveTelegramSendContext(params: {
   accountId?: string | null;
   replyToId?: string | null;
   threadId?: string | number | null;
+  silent?: boolean;
   gatewayClientScopes?: readonly string[];
 }): Promise<{
   send: TelegramSendFn;
@@ -52,6 +53,7 @@ async function resolveTelegramSendContext(params: {
     messageThreadId?: number;
     replyToMessageId?: number;
     accountId?: string;
+    silent?: boolean;
     gatewayClientScopes?: readonly string[];
   };
 }> {
@@ -67,6 +69,7 @@ async function resolveTelegramSendContext(params: {
       messageThreadId: parseTelegramThreadId(params.threadId),
       replyToMessageId: parseTelegramReplyToMessageId(params.replyToId),
       accountId: params.accountId ?? undefined,
+      silent: params.silent,
       gatewayClientScopes: params.gatewayClientScopes,
     },
   };
@@ -84,7 +87,7 @@ export async function sendTelegramPayloadMessages(params: {
   const quoteText =
     typeof telegramData?.quoteText === "string" ? telegramData.quoteText : undefined;
   const text =
-    resolveInteractiveTextFallback({
+    resolveTelegramInteractiveTextFallback({
       text: params.payload.text,
       interactive: params.payload.interactive,
     }) ?? "";
@@ -96,6 +99,7 @@ export async function sendTelegramPayloadMessages(params: {
   const payloadOpts = {
     ...params.baseOpts,
     quoteText,
+    ...(params.payload.audioAsVoice === true ? { asVoice: true } : {}),
   };
 
   // Telegram allows reply_markup on media; attach buttons only to the first send.
@@ -134,6 +138,17 @@ export const telegramOutbound: ChannelOutboundAdapter = {
   },
   deliveryCapabilities: {
     pin: true,
+    durableFinal: {
+      text: true,
+      media: true,
+      payload: true,
+      silent: true,
+      replyTo: true,
+      thread: true,
+      nativeQuote: false,
+      messageSendingHooks: true,
+      batch: true,
+    },
   },
   renderPresentation: ({ payload, presentation }) => ({
     ...payload,
@@ -160,6 +175,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       deps,
       replyToId,
       threadId,
+      silent,
       gatewayClientScopes,
     }) => {
       const { send, baseOpts } = await resolveTelegramSendContext({
@@ -168,6 +184,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
         accountId,
         replyToId,
         threadId,
+        silent,
         gatewayClientScopes,
       });
       return await send(to, text, {
@@ -186,6 +203,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       replyToId,
       threadId,
       forceDocument,
+      silent,
       gatewayClientScopes,
     }) => {
       const { send, baseOpts } = await resolveTelegramSendContext({
@@ -194,6 +212,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
         accountId,
         replyToId,
         threadId,
+        silent,
         gatewayClientScopes,
       });
       return await send(to, text, {
@@ -216,6 +235,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     replyToId,
     threadId,
     forceDocument,
+    silent,
     gatewayClientScopes,
   }) => {
     const { send, baseOpts } = await resolveTelegramSendContext({
@@ -224,6 +244,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       accountId,
       replyToId,
       threadId,
+      silent,
       gatewayClientScopes,
     });
     const result = await sendTelegramPayloadMessages({

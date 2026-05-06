@@ -4,11 +4,15 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PluginModuleLoaderFactory } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi, PluginRegistrationMode } from "../plugins/types.js";
 import { defineBundledChannelEntry, loadBundledEntryExportSync } from "./channel-entry-contract.js";
 
 const tempDirs: string[] = [];
+const pluginModuleLoaderJitiFactoryOverrideKey = Symbol.for(
+  "openclaw.pluginModuleLoaderJitiFactoryOverride",
+);
 
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
@@ -17,13 +21,27 @@ afterEach(() => {
   vi.resetModules();
   vi.doUnmock("jiti");
   vi.unstubAllEnvs();
+  delete (
+    globalThis as typeof globalThis & {
+      [pluginModuleLoaderJitiFactoryOverrideKey]?: PluginModuleLoaderFactory;
+    }
+  )[pluginModuleLoaderJitiFactoryOverrideKey];
 });
+
+function stubPluginModuleLoaderJitiFactory(createJiti: PluginModuleLoaderFactory): void {
+  (
+    globalThis as typeof globalThis & {
+      [pluginModuleLoaderJitiFactoryOverrideKey]?: PluginModuleLoaderFactory;
+    }
+  )[pluginModuleLoaderJitiFactoryOverrideKey] = createJiti;
+}
 
 function createApi(registrationMode: PluginRegistrationMode): OpenClawPluginApi {
   return {
     registrationMode,
     runtime: { registrationMode } as unknown as PluginRuntime,
     registerChannel: vi.fn(),
+    registerTool: vi.fn(),
   } as unknown as OpenClawPluginApi;
 }
 
@@ -90,6 +108,46 @@ function createBundledChannelEntry(params: {
 }
 
 describe("defineBundledChannelEntry", () => {
+  it("runs tool registrations without channel sidecar hydration during tool discovery", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-entry-tools-"));
+    tempDirs.push(tempRoot);
+    const runtimeMarker = path.join(tempRoot, "runtime-loaded");
+    const pluginId = "bundled-tool-discovery";
+    const { importerPath } = writeBundledChannelFixture({
+      pluginRoot: path.join(tempRoot, "dist", "extensions", pluginId),
+      pluginId,
+      runtimeMarker,
+    });
+    const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
+    const registerFull = vi.fn<(api: OpenClawPluginApi) => void>((api) => {
+      api.registerTool(
+        {
+          name: "channel_tool",
+          label: "Channel Tool",
+          description: "channel tool",
+          parameters: {},
+          execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
+        },
+        { name: "channel_tool" },
+      );
+    });
+    const entry = createBundledChannelEntry({
+      importerPath,
+      pluginId,
+      registerCliMetadata,
+      registerFull,
+    });
+
+    const api = createApi("tool-discovery");
+    entry.register(api);
+
+    expect(api.registerChannel).not.toHaveBeenCalled();
+    expect(registerCliMetadata).not.toHaveBeenCalled();
+    expect(registerFull).toHaveBeenCalledWith(api);
+    expect(api.registerTool).toHaveBeenCalledTimes(1);
+    expect(fs.existsSync(runtimeMarker)).toBe(false);
+  });
+
   it("loads runtime sidecars during discovery registration", () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-entry-runtime-"));
     tempDirs.push(tempRoot);
@@ -172,8 +230,8 @@ async function expectBuiltArtifactNodeRequireFastPath(
     const importerPath = path.join(pluginRoot, "index.js");
     const sidecarPath = path.join(pluginRoot, "fast-path-sidecar.cjs");
     fs.writeFileSync(importerPath, "export default {};\n", "utf8");
-    // CommonJS so `nodeRequire` succeeds without falling back to jiti, even
-    // after runtime-deps mirroring writes a `type: "module"` package boundary.
+    // CommonJS so `nodeRequire` succeeds without falling back to the source loader, even
+    // inside built plugin artifacts with a `type: "module"` package boundary.
     fs.writeFileSync(sidecarPath, "module.exports = { sentinel: 7 };\n", "utf8");
 
     expect(
@@ -187,10 +245,10 @@ async function expectBuiltArtifactNodeRequireFastPath(
       .map((args) => String(args[0] ?? ""))
       .find((line) => line.startsWith("[plugin-load-profile] phase=bundled-entry-module-load"));
     expect(profileLine, "expected a bundled-entry-module-load profile line").toBeDefined();
-    expect(profileLine).toMatch(/getJitiMs=\d/u);
-    expect(profileLine).toMatch(/jitiCallMs=\d/u);
-    expect(profileLine).not.toMatch(/getJitiMs=-/);
-    expect(profileLine).not.toMatch(/jitiCallMs=-/);
+    expect(profileLine).toMatch(/sourceLoaderCreateMs=\d/u);
+    expect(profileLine).toMatch(/sourceLoaderCallMs=\d/u);
+    expect(profileLine).not.toMatch(/sourceLoaderCreateMs=-/);
+    expect(profileLine).not.toMatch(/sourceLoaderCallMs=-/);
   } finally {
     errorSpy.mockRestore();
   }
@@ -226,11 +284,9 @@ describe("loadBundledEntryExportSync", () => {
     expect(message).toContain("ENOENT");
   });
 
-  it("keeps Windows dist sidecar loads off Jiti native import", async () => {
-    const createJiti = vi.fn(() => vi.fn(() => ({ load: 42 })));
-    vi.doMock("jiti", () => ({
-      createJiti,
-    }));
+  it("keeps Windows dist sidecar loads off source-transform loading", async () => {
+    const createJiti = vi.fn(() => vi.fn(() => ({ load: 0 })));
+    stubPluginModuleLoaderJitiFactory(createJiti as unknown as PluginModuleLoaderFactory);
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
     try {
@@ -244,39 +300,31 @@ describe("loadBundledEntryExportSync", () => {
       fs.mkdirSync(pluginRoot, { recursive: true });
 
       const importerPath = path.join(pluginRoot, "index.js");
-      const helperPath = path.join(pluginRoot, "helper.ts");
+      const helperPath = path.join(pluginRoot, "helper.cjs");
       fs.writeFileSync(importerPath, "export default {};\n", "utf8");
-      fs.writeFileSync(helperPath, "export const load = 42;\n", "utf8");
+      fs.writeFileSync(helperPath, "module.exports = { load: 42 };\n", "utf8");
 
       expect(
         channelEntryContract.loadBundledEntryExportSync<number>(pathToFileURL(importerPath).href, {
-          specifier: "./helper.ts",
+          specifier: "./helper.cjs",
           exportName: "load",
         }),
       ).toBe(42);
-      expect(createJiti).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({
-          tryNative: false,
-        }),
-      );
+      expect(createJiti).not.toHaveBeenCalled();
     } finally {
       platformSpy.mockRestore();
     }
   });
 
-  it("normalizes Windows absolute sidecar paths before Jiti loads them", async () => {
+  it("normalizes Windows absolute sidecar paths before module loads them", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
     tempDirs.push(tempRoot);
     const openedFdPath = path.join(tempRoot, "opened");
     fs.writeFileSync(openedFdPath, "opened\n", "utf8");
     const jitiLoad = vi.fn(() => ({ load: 42 }));
     const createJiti = vi.fn(() => jitiLoad);
-    vi.doMock("jiti", () => ({
-      createJiti,
-    }));
     vi.doMock("../infra/boundary-file-read.js", () => ({
-      openBoundaryFileSync: () => ({
+      openRootFileSync: () => ({
         ok: true,
         path: "C:\\Users\\alice\\openclaw\\dist\\extensions\\feishu\\helper.ts",
         fd: fs.openSync(openedFdPath, "r"),
@@ -296,7 +344,7 @@ describe("loadBundledEntryExportSync", () => {
             specifier: "./helper.ts",
             exportName: "load",
           },
-          { installRuntimeDeps: false },
+          { createLoaderForTest: createJiti as never },
         ),
       ).toBe(42);
       expect(jitiLoad).toHaveBeenCalledWith(
@@ -356,10 +404,10 @@ describe("loadBundledEntryExportSync", () => {
     });
   });
 
-  it("emits non-negative jiti sub-step timings on the built-artifact load path", async () => {
-    // Built artifacts prefer `nodeRequire`, but runtime-deps staging can still
-    // make Node reject a sidecar and fall back through jiti. The profile line
-    // must never report negative or missing jiti sub-step timings either way.
+  it("emits non-negative source-loader sub-step timings on the built-artifact load path", async () => {
+    // Built artifacts prefer `nodeRequire`, but Node can still reject a sidecar
+    // and fall back through jiti. The profile line must never report negative
+    // or missing source-loader sub-step timings either way.
     await expectBuiltArtifactNodeRequireFastPath("built-artifact-profile-fast-path");
   });
 
@@ -368,6 +416,9 @@ describe("loadBundledEntryExportSync", () => {
   });
 
   it("can disable source-tree fallback for dist bundled entry checks", () => {
+    stubPluginModuleLoaderJitiFactory(
+      vi.fn(() => vi.fn(() => ({ sentinel: 42 }))) as unknown as PluginModuleLoaderFactory,
+    );
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
     tempDirs.push(tempRoot);
 

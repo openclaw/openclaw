@@ -173,6 +173,71 @@ describe("cron tool", () => {
     expect(tool.ownerOnly).toBe(true);
   });
 
+  it("allows scoped isolated cron runs to remove the current job", async () => {
+    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+
+    await tool.execute("call-self-remove", {
+      action: "remove",
+      jobId: "job-current",
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.remove");
+    expect(params).toEqual({ id: "job-current" });
+  });
+
+  it("denies scoped isolated cron runs from removing another job", async () => {
+    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+
+    await expect(
+      tool.execute("call-remove-other", {
+        action: "remove",
+        jobId: "job-other",
+      }),
+    ).rejects.toThrow("Cron tool is restricted to removing the current cron job.");
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("denies scoped isolated cron runs from using non-remove cron actions", async () => {
+    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+
+    await expect(
+      tool.execute("call-list", {
+        action: "list",
+      }),
+    ).rejects.toThrow("Cron tool is restricted to removing the current cron job.");
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("filters cron list by the requester agent session", async () => {
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:agent-123:telegram:direct:channing",
+    });
+
+    await tool.execute("call-list", {
+      action: "list",
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.list");
+    expect(params).toEqual({ includeDisabled: false, agentId: "agent-123" });
+  });
+
+  it("prefers explicit cron list agent id over the requester session", async () => {
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:agent-123:telegram:direct:channing",
+    });
+
+    await tool.execute("call-list-explicit", {
+      action: "list",
+      agentId: "ops",
+      includeDisabled: true,
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.list");
+    expect(params).toEqual({ includeDisabled: true, agentId: "ops" });
+  });
+
   it("documents deferred follow-up guidance in the tool description", () => {
     const tool = createTestCronTool();
     expect(tool.description).toContain(

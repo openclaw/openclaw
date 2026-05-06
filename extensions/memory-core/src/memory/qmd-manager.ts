@@ -9,12 +9,13 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import {
   createSubsystemLogger,
+  isPathInside,
+  root,
   resolveAgentContextLimits,
   resolveMemorySearchSyncConfig,
   resolveAgentWorkspaceDir,
   resolveGlobalSingleton,
   resolveStateDir,
-  writeFileWithinRoot,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
@@ -79,7 +80,11 @@ const QMD_EMBED_QUEUE_KEY = Symbol.for("openclaw.qmdEmbedQueueTail");
 const QMD_UPDATE_QUEUE_KEY = Symbol.for("openclaw.qmdUpdateQueueState");
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   ".git",
+  ".cache",
   "node_modules",
+  "vendor",
+  "dist",
+  "build",
   ".pnpm-store",
   ".venv",
   "venv",
@@ -402,6 +407,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private async initialize(mode: QmdManagerMode): Promise<void> {
+    const startTime = Date.now();
     this.bootstrapCollections();
     if (mode === "status") {
       return;
@@ -424,10 +430,16 @@ export class QmdMemoryManager implements MemorySearchManager {
 
     await this.ensureCollections();
     if (mode === "cli") {
+      log.info(
+        `qmd manager initialized for agent "${this.agentId}" mode=cli collections=${this.qmd.collections.length} durationMs=${Date.now() - startTime}`,
+      );
       return;
     }
 
     this.ensureWatcher();
+    log.info(
+      `qmd manager initialized for agent "${this.agentId}" mode=full collections=${this.qmd.collections.length} durationMs=${Date.now() - startTime}`,
+    );
 
     if (this.qmd.update.onBoot) {
       const bootRun = this.runUpdate("boot", true);
@@ -1291,7 +1303,15 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (!absPath.endsWith(".md")) {
       throw new Error("path required");
     }
-    const statResult = await statRegularFile(absPath);
+    let statResult: Awaited<ReturnType<typeof statRegularFile>>;
+    try {
+      statResult = await statRegularFile(absPath);
+    } catch (err) {
+      if (err instanceof Error && err.message === "path must be a regular file") {
+        throw new Error("path required", { cause: err });
+      }
+      throw err;
+    }
     if (statResult.missing) {
       return { text: "", path: relPath };
     }
@@ -1346,6 +1366,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       vector: {
         enabled: qmdUsesVectors(this.qmd.searchMode),
         available: this.vectorAvailable ?? undefined,
+        semanticAvailable: this.vectorAvailable ?? undefined,
         loadError: this.vectorStatusDetail ?? undefined,
       },
       batch: {
@@ -1459,6 +1480,10 @@ export class QmdMemoryManager implements MemorySearchManager {
       return;
     }
     const run = async () => {
+      const startTime = Date.now();
+      log.debug(
+        `qmd sync started for agent "${this.agentId}" reason=${reason} force=${force === true}`,
+      );
       await this.withQmdUpdateQueue(async () => {
         if (this.closed) {
           return;
@@ -1492,6 +1517,9 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       this.lastUpdateAt = Date.now();
       this.docPathCache.clear();
+      log.info(
+        `qmd sync completed for agent "${this.agentId}" reason=${reason} durationMs=${Date.now() - startTime}`,
+      );
     };
     this.pendingUpdate = run().finally(() => {
       this.pendingUpdate = null;
@@ -1513,7 +1541,10 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (watchPaths.size === 0) {
       return;
     }
-    this.watcher = chokidar.watch(Array.from(watchPaths), {
+    const watchPathList = Array.from(watchPaths);
+    const startTime = Date.now();
+    log.info(`qmd watcher starting for agent "${this.agentId}" paths=${watchPathList.length}`);
+    this.watcher = chokidar.watch(watchPathList, {
       ignoreInitial: true,
       ignored: (watchPath) => shouldIgnoreMemoryWatchPath(watchPath),
       awaitWriteFinish: {
@@ -1528,6 +1559,11 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.watcher.on("add", markDirty);
     this.watcher.on("change", markDirty);
     this.watcher.on("unlink", markDirty);
+    this.watcher.once("ready", () => {
+      log.info(
+        `qmd watcher ready for agent "${this.agentId}" paths=${watchPathList.length} durationMs=${Date.now() - startTime}`,
+      );
+    });
   }
 
   private resolveCollectionWatchPath(collection: ManagedCollection): string {
@@ -2176,6 +2212,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const exportDir = this.sessionExporter.dir;
     await fs.mkdir(exportDir, { recursive: true });
+    const exportRoot = await root(exportDir);
     const files = await listSessionFilesForAgent(this.agentId);
     const keep = new Set<string>();
     const tracked = new Set<string>();
@@ -2195,10 +2232,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       tracked.add(sessionFile);
       const state = this.exportedSessionState.get(sessionFile);
       if (!state || state.hash !== entry.hash || state.mtimeMs !== entry.mtimeMs) {
-        await writeFileWithinRoot({
-          rootDir: exportDir,
-          relativePath: targetName,
-          data: this.renderSessionMarkdown(entry),
+        await exportRoot.write(targetName, this.renderSessionMarkdown(entry), {
           encoding: "utf-8",
         });
       }
@@ -2209,18 +2243,18 @@ export class QmdMemoryManager implements MemorySearchManager {
       });
       keep.add(target);
     }
-    const exported = await fs.readdir(exportDir).catch(() => []);
+    const exported = await exportRoot.list(".").catch(() => []);
     for (const name of exported) {
       if (!name.endsWith(".md")) {
         continue;
       }
       const full = path.join(exportDir, name);
       if (!keep.has(full)) {
-        await fs.rm(full, { force: true });
+        await exportRoot.remove(name).catch(() => undefined);
       }
     }
     for (const [sessionFile, state] of this.exportedSessionState) {
-      if (!tracked.has(sessionFile) || !state.target.startsWith(exportDir + path.sep)) {
+      if (!tracked.has(sessionFile) || !isPathInside(exportDir, state.target)) {
         this.exportedSessionState.delete(sessionFile);
       }
     }
@@ -2761,23 +2795,11 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private isWithinWorkspace(absPath: string): boolean {
-    const normalizedWorkspace = this.workspaceDir.endsWith(path.sep)
-      ? this.workspaceDir
-      : `${this.workspaceDir}${path.sep}`;
-    if (absPath === this.workspaceDir) {
-      return true;
-    }
-    const candidate = absPath.endsWith(path.sep) ? absPath : `${absPath}${path.sep}`;
-    return candidate.startsWith(normalizedWorkspace);
+    return isPathInside(this.workspaceDir, absPath);
   }
 
   private isWithinRoot(root: string, candidate: string): boolean {
-    const normalizedRoot = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
-    if (candidate === root) {
-      return true;
-    }
-    const next = candidate.endsWith(path.sep) ? candidate : `${candidate}${path.sep}`;
-    return next.startsWith(normalizedRoot);
+    return isPathInside(root, candidate);
   }
 
   private clampResultsByInjectedChars(results: MemorySearchResult[]): MemorySearchResult[] {
