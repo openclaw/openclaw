@@ -8,6 +8,11 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import {
+  _resetActiveManagedProxyStateForTests,
+  registerActiveManagedProxyUrl,
+  stopActiveManagedProxyRegistration,
+} from "../infra/net/proxy/active-proxy-state.js";
 import { defaultVoiceWakeTriggers } from "../infra/voicewake.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 import {
@@ -35,7 +40,7 @@ function makeControlUiResponse() {
 }
 
 const wsMockState = vi.hoisted(() => ({
-  last: null as { url: unknown; opts: unknown } | null,
+  last: null as { url: unknown; opts: unknown; noProxyDuringConstruction: unknown } | null,
 }));
 
 vi.mock("ws", () => ({
@@ -45,7 +50,15 @@ vi.mock("ws", () => ({
     send = vi.fn();
 
     constructor(url: unknown, opts: unknown) {
-      wsMockState.last = { url, opts };
+      const agent = (global as Record<string, unknown>)["GLOBAL_AGENT"];
+      wsMockState.last = {
+        url,
+        opts,
+        noProxyDuringConstruction:
+          typeof agent === "object" && agent !== null
+            ? (agent as Record<string, unknown>)["NO_PROXY"]
+            : undefined,
+      };
     }
   },
 }));
@@ -59,6 +72,8 @@ describe("GatewayClient", () => {
 
   beforeEach(() => {
     wsMockState.last = null;
+    _resetActiveManagedProxyStateForTests();
+    delete (global as Record<string, unknown>)["GLOBAL_AGENT"];
   });
 
   async function withControlUiRoot(
@@ -119,6 +134,27 @@ describe("GatewayClient", () => {
     const last = wsMockState.last as { opts: { agent?: unknown } } | null;
 
     expect(last?.opts.agent).toBeUndefined();
+  });
+
+  test("scopes Gateway loopback NO_PROXY to WebSocket construction", () => {
+    const agent = { NO_PROXY: "corp.example.com" };
+    (global as Record<string, unknown>)["GLOBAL_AGENT"] = agent;
+    const registration = registerActiveManagedProxyUrl(
+      new URL("http://127.0.0.1:3128"),
+      "gateway-only",
+    );
+
+    try {
+      const client = new GatewayClient({ url: "ws://127.0.0.1:18789" });
+      client.start();
+      const last = wsMockState.last as { noProxyDuringConstruction: unknown } | null;
+
+      expect(last?.noProxyDuringConstruction).toBe("corp.example.com,127.0.0.1:18789");
+      expect(agent.NO_PROXY).toBe("corp.example.com");
+    } finally {
+      stopActiveManagedProxyRegistration(registration);
+      delete (global as Record<string, unknown>)["GLOBAL_AGENT"];
+    }
   });
 
   it("returns 404 for missing static asset paths instead of SPA fallback", async () => {

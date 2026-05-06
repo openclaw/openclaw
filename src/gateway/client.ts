@@ -11,7 +11,6 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
-import { getActiveManagedProxyLoopbackMode } from "../infra/net/proxy/active-proxy-state.js";
 import {
   ensureInheritedManagedProxyRoutingActive,
   registerManagedProxyGatewayLoopbackNoProxy,
@@ -285,9 +284,6 @@ export class GatewayClient {
     }
     // Allow node screen snapshots and other large responses.
     ensureInheritedManagedProxyRoutingActive();
-    const activeLoopbackMode = getActiveManagedProxyLoopbackMode();
-    const unregisterNoProxy =
-      activeLoopbackMode === "proxy" ? undefined : registerManagedProxyGatewayLoopbackNoProxy(url);
     const wsOptions: FingerprintCheckingClientOptions = {
       maxPayload: 25 * 1024 * 1024,
     };
@@ -314,21 +310,15 @@ export class GatewayClient {
         return undefined;
       };
     }
-    const createWebSocket = () => new WebSocket(url, wsOptions as ClientOptions);
-    const ws = createWebSocket();
-    if (
-      unregisterNoProxy &&
-      typeof (ws as { once?: unknown }).once === "function" &&
-      typeof (ws as { off?: unknown }).off === "function"
-    ) {
-      const unregisterOnce = () => {
-        unregisterNoProxy();
-        ws.off("close", unregisterOnce);
-        ws.off("error", unregisterOnce);
-      };
-      ws.once("close", unregisterOnce);
-      ws.once("error", unregisterOnce);
-    }
+    let unregisterNoProxy: (() => void) | undefined;
+    const ws = (() => {
+      try {
+        unregisterNoProxy = registerManagedProxyGatewayLoopbackNoProxy(url);
+        return new WebSocket(url, wsOptions as ClientOptions);
+      } finally {
+        unregisterNoProxy?.();
+      }
+    })();
     this.ws = ws;
     this.socketOpened = false;
     this.connectNonce = null;
