@@ -110,6 +110,24 @@ describe("resolveGroupToolPolicy group context validation", () => {
     ).toEqual({ allow: ["exec", "read", "write", "edit"] });
   });
 
+  it("accepts caller groupId when only Matrix provider-exact case differs from session key", () => {
+    expect(
+      resolveTrustedGroupId({
+        sessionKey: "agent:main:matrix:channel:!mixedroom:example.org",
+        groupId: "!MixedRoom:example.org",
+      }),
+    ).toEqual({ groupId: "!MixedRoom:example.org", dropped: false });
+  });
+
+  it("does not accept case-only groupId variants for non-Matrix sessions", () => {
+    expect(
+      resolveTrustedGroupId({
+        sessionKey: "agent:main:slack:group:MixedRoom",
+        groupId: "mixedroom",
+      }),
+    ).toEqual({ groupId: null, dropped: true });
+  });
+
   it("accepts caller groupId when spawnedBy provides the trusted group context", () => {
     expect(
       resolveTrustedGroupId({

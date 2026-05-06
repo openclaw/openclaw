@@ -309,6 +309,18 @@ function resolveTrustedGroupIdFromContexts(params: {
   if (trustedGroupIds.includes(callerGroupId)) {
     return { groupId: params.groupId, dropped: false };
   }
+  const allowCaseOnlyVariant =
+    params.sessionContext.channel === "matrix" || params.spawnedContext.channel === "matrix";
+  if (
+    allowCaseOnlyVariant &&
+    trustedGroupIds.some(
+      (trustedGroupId) =>
+        normalizeLowercaseStringOrEmpty(trustedGroupId) ===
+        normalizeLowercaseStringOrEmpty(callerGroupId),
+    )
+  ) {
+    return { groupId: params.groupId, dropped: false };
+  }
   return { groupId: null, dropped: true };
 }
 
