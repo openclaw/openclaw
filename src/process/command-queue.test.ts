@@ -30,6 +30,7 @@ let getActiveTaskCount: CommandQueueModule["getActiveTaskCount"];
 let getCommandLaneSnapshot: CommandQueueModule["getCommandLaneSnapshot"];
 let getCommandLaneSnapshots: CommandQueueModule["getCommandLaneSnapshots"];
 let getQueueSize: CommandQueueModule["getQueueSize"];
+let isGatewayDraining: CommandQueueModule["isGatewayDraining"];
 let markGatewayDraining: CommandQueueModule["markGatewayDraining"];
 let resetAllLanes: CommandQueueModule["resetAllLanes"];
 let resetCommandLane: CommandQueueModule["resetCommandLane"];
@@ -72,6 +73,7 @@ describe("command queue", () => {
       getCommandLaneSnapshot,
       getCommandLaneSnapshots,
       getQueueSize,
+      isGatewayDraining,
       markGatewayDraining,
       resetAllLanes,
       resetCommandLane,
@@ -498,7 +500,9 @@ describe("command queue", () => {
   });
 
   it("rejects new enqueues with GatewayDrainingError after markGatewayDraining", async () => {
+    expect(isGatewayDraining()).toBe(false);
     markGatewayDraining();
+    expect(isGatewayDraining()).toBe(true);
     await expect(enqueueCommand(async () => "blocked")).rejects.toBeInstanceOf(
       GatewayDrainingError,
     );

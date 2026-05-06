@@ -65,6 +65,7 @@ function createReadinessHarness(params: {
   accounts: Record<string, Partial<ChannelAccountSnapshot>>;
   getStartupPending?: () => boolean;
   getStartupPendingReason?: Parameters<typeof createReadinessChecker>[0]["getStartupPendingReason"];
+  getGatewayDraining?: Parameters<typeof createReadinessChecker>[0]["getGatewayDraining"];
   getEventLoopHealth?: Parameters<typeof createReadinessChecker>[0]["getEventLoopHealth"];
   shouldSkipChannelReadiness?: Parameters<
     typeof createReadinessChecker
@@ -80,6 +81,7 @@ function createReadinessHarness(params: {
       startedAt,
       getStartupPending: params.getStartupPending,
       getStartupPendingReason: params.getStartupPendingReason,
+      getGatewayDraining: params.getGatewayDraining,
       getEventLoopHealth: params.getEventLoopHealth,
       shouldSkipChannelReadiness: params.shouldSkipChannelReadiness,
       cacheTtlMs: params.cacheTtlMs,
@@ -146,6 +148,45 @@ describe("createReadinessChecker", () => {
       expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
 
       startupPending = false;
+      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_000 });
+      expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("reports not ready while the gateway command queue is draining for restart", () => {
+    withReadinessClock(() => {
+      const { manager, readiness } = createReadinessHarness({
+        startedAgoMs: 5 * 60_000,
+        accounts: {},
+        getGatewayDraining: () => true,
+        cacheTtlMs: 1_000,
+      });
+      expect(readiness()).toEqual({
+        ready: false,
+        failing: ["gateway-draining"],
+        uptimeMs: 300_000,
+      });
+      expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not cache gateway-draining readiness", () => {
+    withReadinessClock(() => {
+      let gatewayDraining = true;
+      const { manager, readiness } = createReadinessHarness({
+        startedAgoMs: 5 * 60_000,
+        accounts: {},
+        getGatewayDraining: () => gatewayDraining,
+        cacheTtlMs: 1_000,
+      });
+      expect(readiness()).toEqual({
+        ready: false,
+        failing: ["gateway-draining"],
+        uptimeMs: 300_000,
+      });
+      expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
+
+      gatewayDraining = false;
       expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_000 });
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
     });
