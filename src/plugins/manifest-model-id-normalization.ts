@@ -41,21 +41,23 @@ function resolveMetadataSnapshotForPolicies(
   snapshot: PluginMetadataSnapshot;
   cacheable: boolean;
 } {
+  const config = params.config ?? {};
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   const current = getCurrentPluginMetadataSnapshot({
-    config: params.config,
+    config,
     env,
-    workspaceDir,
+    ...(workspaceDir !== undefined ? { workspaceDir } : {}),
+    ...(params.workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : {}),
   });
   if (current) {
     return { snapshot: current, cacheable: true };
   }
   return {
     snapshot: loadPluginMetadataSnapshot({
-      config: params.config ?? {},
+      config,
       env,
-      workspaceDir,
+      ...(workspaceDir !== undefined ? { workspaceDir } : {}),
     }),
     cacheable: false,
   };
