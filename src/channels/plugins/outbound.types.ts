@@ -35,6 +35,9 @@ export type ChannelOutboundContext = {
   deps?: OutboundSendDeps;
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
+  /** Request explicit ACK-safe visibility evidence. Channels may fail closed when unsupported. */
+  receiptRequired?: "current_session_visible" | "manual_operator_receipt";
+  userVisibleReceiptRequired?: boolean;
 };
 
 export type ChannelOutboundPayloadContext = ChannelOutboundContext & {
@@ -49,8 +52,14 @@ export type ChannelPresentationCapabilities = {
   divider?: boolean;
 };
 
+export type ChannelReceiptCapabilities = {
+  currentSessionVisibleReceipt?: boolean;
+  userVisibleReceipt?: boolean;
+};
+
 export type ChannelDeliveryCapabilities = {
   pin?: boolean;
+  receipt?: ChannelReceiptCapabilities;
   durableFinal?: {
     text?: boolean;
     media?: boolean;
@@ -169,6 +178,9 @@ export type ChannelOutboundAdapter = {
   sendFormattedMedia?: (
     ctx: ChannelOutboundFormattedContext & { mediaUrl: string },
   ) => Promise<OutboundDeliveryResult>;
+  supportsReceipt?: (receiptMode: "current_session_visible" | "manual_operator_receipt") => boolean | Promise<boolean>;
+  supportsCurrentSessionVisibleReceipt?: boolean;
+  supportsUserVisibleReceipt?: boolean;
   sendText?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
   sendMedia?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
   sendPoll?: (ctx: ChannelPollContext) => Promise<ChannelPollResult>;
