@@ -650,12 +650,21 @@ describe("handleInlineActions", () => {
   it("passes senderIsOwner into inline tool runtimes before owner-only filtering", async () => {
     const typing = createTypingController();
     const toolExecute = vi.fn(async () => ({ text: "updated" }));
+    const adjustedParams = {
+      command: "display name --approved",
+      commandName: "set_profile",
+      skillName: "matrix-profile",
+    };
     createOpenClawToolsMock.mockReturnValue([
       {
         name: "message",
         execute: toolExecute,
       },
     ]);
+    runBeforeToolCallHookMock.mockResolvedValueOnce({
+      blocked: false,
+      params: adjustedParams,
+    });
 
     const ctx = buildTestCtx({
       Body: "/set_profile display name",
@@ -702,7 +711,7 @@ describe("handleInlineActions", () => {
         senderIsOwner: true,
       }),
     );
-    expect(toolExecute).toHaveBeenCalled();
+    expect(toolExecute).toHaveBeenCalledWith(expect.stringMatching(/^cmd_/), adjustedParams);
   });
 
   it("honors before-tool-call hook blocks for inline tool dispatch", async () => {
