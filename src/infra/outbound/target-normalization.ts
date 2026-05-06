@@ -63,6 +63,47 @@ export function normalizeTargetForProvider(provider: string, raw?: string): stri
 
 export type TargetResolveKindLike = ChannelDirectoryEntryKind | "channel";
 
+export function inferTargetResolveKind(params: {
+  channel: ChannelId;
+  raw: string;
+  preferredKind?: TargetResolveKindLike;
+}): TargetResolveKindLike {
+  if (params.preferredKind) {
+    return params.preferredKind;
+  }
+  const trimmed = params.raw.trim();
+  if (!trimmed) {
+    return "group";
+  }
+
+  const inferredChatType = getLoadedChannelPluginForRead(
+    params.channel,
+  )?.messaging?.inferTargetChatType?.({
+    to: params.raw,
+  });
+  if (inferredChatType === "direct") {
+    return "user";
+  }
+  if (inferredChatType === "channel") {
+    return "channel";
+  }
+  if (inferredChatType === "group") {
+    return "group";
+  }
+
+  if (trimmed.startsWith("@") || /^<@!?/.test(trimmed) || /^user:/i.test(trimmed)) {
+    return "user";
+  }
+  if (/^channel:/i.test(trimmed)) {
+    return "channel";
+  }
+  if (trimmed.startsWith("#")) {
+    return "group";
+  }
+
+  return "group";
+}
+
 export type ResolvedPluginMessagingTarget = {
   to: string;
   kind: TargetResolveKindLike;
