@@ -38,8 +38,66 @@ import {
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
 
+const TOOL_CALL_CONTENT_TYPES = new Set([
+  "toolCall",
+  "toolUse",
+  "functionCall",
+  "tool_call",
+  "tool_use",
+  "function_call",
+]);
+
+function suppressPendingAssistantVisibleOutput(ctx: EmbeddedPiSubscribeContext) {
+  ctx.state.suppressBlockChunks = true;
+  ctx.state.deltaBuffer = "";
+  ctx.state.blockBuffer = "";
+  ctx.blockChunker?.reset();
+  ctx.state.lastStreamedAssistant = undefined;
+  ctx.state.lastStreamedAssistantCleaned = undefined;
+  ctx.state.emittedAssistantUpdate = false;
+  ctx.state.lastBlockReplyText = undefined;
+  ctx.state.pendingAssistantReplyDirectives = undefined;
+  if (ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline) {
+    ctx.state.assistantTexts.splice(ctx.state.assistantTextBaseline);
+    ctx.state.lastAssistantTextMessageIndex = -1;
+    ctx.state.lastAssistantTextNormalized = undefined;
+    ctx.state.lastAssistantTextTrimmed = undefined;
+  }
+}
+
+function hasToolUseContinuation(message: AgentMessage | undefined): boolean {
+  if (!message || message.role !== "assistant") {
+    return false;
+  }
+  const stopReason = (message as { stopReason?: unknown }).stopReason;
+  if (stopReason === "toolUse") {
+    return true;
+  }
+  if (typeof stopReason === "string" && stopReason) {
+    return false;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const type = (block as { type?: unknown }).type;
+    return typeof type === "string" && TOOL_CALL_CONTENT_TYPES.has(type);
+  });
+}
+
 function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
-  return resolveAssistantMessagePhase(message) === "commentary";
+  const phase = resolveAssistantMessagePhase(message);
+  if (phase === "commentary") {
+    return true;
+  }
+  if (phase === "final_answer") {
+    return false;
+  }
+  return hasToolUseContinuation(message);
 }
 
 function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage | undefined): boolean {
@@ -406,10 +464,6 @@ export function handleMessageUpdate(
   }
 
   ctx.noteLastAssistant(msg);
-  const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(msg);
-  if (suppressVisibleAssistantOutput) {
-    return;
-  }
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
 
   const assistantEvent = evt.assistantMessageEvent;
@@ -504,7 +558,8 @@ export function handleMessageUpdate(
     }
     ctx.state.lastAssistantStreamItemId = streamItemId;
   }
-  if (deliveryPhase === "commentary") {
+  if (shouldSuppressAssistantVisibleOutput(partialAssistant)) {
+    suppressPendingAssistantVisibleOutput(ctx);
     return;
   }
   if (isPhasePendingOpenAiResponsesTextItem) {
@@ -668,6 +723,7 @@ export function handleMessageEnd(
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   ctx.commitAssistantUsage();
   if (suppressVisibleAssistantOutput) {
+    suppressPendingAssistantVisibleOutput(ctx);
     return;
   }
   promoteThinkingTagsToBlocks(assistantMessage);
