@@ -393,10 +393,17 @@ async function sendTextWithMedia(
     mediaMaxBytes,
   } = ctx;
 
+  // Resolve replyStyle from conversation context instead of hardcoding "top-level".
+  // For channel conversations with a known thread root, use "thread" so the
+  // proactive message lands in the correct thread. For DMs and group chats,
+  // continue using "top-level".
+  const isChannelThread = ctx.conversationType === "channel" && (ref.threadId || ref.activityId);
+  const resolvedReplyStyle = isChannelThread ? "thread" : "top-level";
+
   let platformMessageIds: string[];
   try {
     platformMessageIds = await sendMSTeamsMessages({
-      replyStyle: "top-level",
+      replyStyle: resolvedReplyStyle,
       adapter,
       appId,
       conversationRef: ref,

@@ -574,6 +574,100 @@ describe("msteams messenger", () => {
       expect(reference.conversation?.id).toBe("19:abc@thread.tacv2;messageid=legacy-activity-id");
     });
 
+    it("falls back to proactive send with thread targeting when no context is provided", async () => {
+      const proactiveSent: string[] = [];
+      let capturedReference: unknown;
+
+      const channelRef: StoredConversationReference = {
+        activityId: "thread-root-msg",
+        threadId: "thread-root-msg",
+        user: { id: "user123", name: "User" },
+        agent: { id: "bot123", name: "Bot" },
+        conversation: {
+          id: "19:abc@thread.tacv2",
+          conversationType: "channel",
+        },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com",
+      };
+
+      const adapter: MSTeamsAdapter = {
+        continueConversation: async (_appId, reference, logic) => {
+          capturedReference = reference;
+          await logic({
+            sendActivity: createRecordedSendActivity(proactiveSent),
+            updateActivity: noopUpdateActivity,
+            deleteActivity: noopDeleteActivity,
+          });
+        },
+        process: async () => {},
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
+      };
+
+      // No context provided — simulates the proactive send path
+      const ids = await sendMSTeamsMessages({
+        replyStyle: "thread",
+        adapter,
+        appId: "app123",
+        conversationRef: channelRef,
+        messages: [{ text: "proactive thread reply" }],
+      });
+
+      // Message was delivered via proactive path
+      expect(proactiveSent).toEqual(["proactive thread reply"]);
+      expect(ids).toEqual(["id:proactive thread reply"]);
+
+      // The conversation reference includes the thread suffix
+      const ref = capturedReference as { conversation?: { id?: string } };
+      expect(ref.conversation?.id).toBe("19:abc@thread.tacv2;messageid=thread-root-msg");
+    });
+
+    it("falls back to proactive send using activityId when threadId is absent and no context", async () => {
+      const proactiveSent: string[] = [];
+      let capturedReference: unknown;
+
+      const channelRef: StoredConversationReference = {
+        activityId: "legacy-activity-id",
+        // No threadId — uses activityId fallback
+        user: { id: "user123", name: "User" },
+        agent: { id: "bot123", name: "Bot" },
+        conversation: {
+          id: "19:abc@thread.tacv2",
+          conversationType: "channel",
+        },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com",
+      };
+
+      const adapter: MSTeamsAdapter = {
+        continueConversation: async (_appId, reference, logic) => {
+          capturedReference = reference;
+          await logic({
+            sendActivity: createRecordedSendActivity(proactiveSent),
+            updateActivity: noopUpdateActivity,
+            deleteActivity: noopDeleteActivity,
+          });
+        },
+        process: async () => {},
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
+      };
+
+      const ids = await sendMSTeamsMessages({
+        replyStyle: "thread",
+        adapter,
+        appId: "app123",
+        conversationRef: channelRef,
+        messages: [{ text: "fallback reply" }],
+      });
+
+      expect(proactiveSent).toEqual(["fallback reply"]);
+      expect(ids).toEqual(["id:fallback reply"]);
+      const ref = capturedReference as { conversation?: { id?: string } };
+      expect(ref.conversation?.id).toBe("19:abc@thread.tacv2;messageid=legacy-activity-id");
+    });
+
     it("does not add thread suffix for top-level replyStyle even with threadId set", async () => {
       let capturedReference: unknown;
       const sent: string[] = [];

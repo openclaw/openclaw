@@ -302,6 +302,106 @@ describe("sendMessageMSTeams", () => {
     );
   });
 
+  it("passes replyStyle thread for channel conversations with threadId", async () => {
+    mockState.resolveMSTeamsSendContext.mockResolvedValue({
+      adapter: {},
+      appId: "app-id",
+      conversationId: "19:channel@thread.tacv2",
+      ref: {
+        threadId: "thread-root-123",
+        user: { id: "user-1" },
+        agent: { id: "agent-1" },
+        conversation: { id: "19:channel@thread.tacv2", conversationType: "channel" },
+        channelId: "msteams",
+      },
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      conversationType: "channel",
+      tokenProvider: { getAccessToken: vi.fn(async () => "token") },
+      mediaMaxBytes: 8 * 1024,
+    });
+
+    await sendMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "conversation:19:channel@thread.tacv2",
+      text: "threaded reply",
+    });
+
+    expect(mockState.sendMSTeamsMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ replyStyle: "thread" }),
+    );
+  });
+
+  it("passes replyStyle thread for channel conversations with activityId fallback", async () => {
+    mockState.resolveMSTeamsSendContext.mockResolvedValue({
+      adapter: {},
+      appId: "app-id",
+      conversationId: "19:channel@thread.tacv2",
+      ref: {
+        activityId: "activity-root-456",
+        user: { id: "user-1" },
+        agent: { id: "agent-1" },
+        conversation: { id: "19:channel@thread.tacv2", conversationType: "channel" },
+        channelId: "msteams",
+      },
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      conversationType: "channel",
+      tokenProvider: { getAccessToken: vi.fn(async () => "token") },
+      mediaMaxBytes: 8 * 1024,
+    });
+
+    await sendMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "conversation:19:channel@thread.tacv2",
+      text: "threaded via activityId",
+    });
+
+    expect(mockState.sendMSTeamsMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ replyStyle: "thread" }),
+    );
+  });
+
+  it("passes replyStyle top-level for personal conversations", async () => {
+    // Default mock is personal — verify it stays top-level
+    await sendMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "conversation:19:conversation@thread.tacv2",
+      text: "dm message",
+    });
+
+    expect(mockState.sendMSTeamsMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ replyStyle: "top-level" }),
+    );
+  });
+
+  it("passes replyStyle top-level for channel conversations without thread root", async () => {
+    mockState.resolveMSTeamsSendContext.mockResolvedValue({
+      adapter: {},
+      appId: "app-id",
+      conversationId: "19:channel@thread.tacv2",
+      ref: {
+        // No threadId, no activityId
+        user: { id: "user-1" },
+        agent: { id: "agent-1" },
+        conversation: { id: "19:channel@thread.tacv2", conversationType: "channel" },
+        channelId: "msteams",
+      },
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      conversationType: "channel",
+      tokenProvider: { getAccessToken: vi.fn(async () => "token") },
+      mediaMaxBytes: 8 * 1024,
+    });
+
+    await sendMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "conversation:19:channel@thread.tacv2",
+      text: "no thread root",
+    });
+
+    expect(mockState.sendMSTeamsMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ replyStyle: "top-level" }),
+    );
+  });
+
   it("falls back to conversationId when graphChatId is not available", async () => {
     const botFrameworkConversationId = "19:fallback-id@thread.tacv2";
 
