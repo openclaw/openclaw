@@ -1,7 +1,20 @@
 import { Type } from "typebox";
-import { optionalStringEnum } from "./schema/typebox.js";
+import { optionalStringEnum, stringEnum } from "./schema/typebox.js";
 
 const EXEC_TOOL_HOST_VALUES = ["auto", "sandbox", "gateway", "node"] as const;
+export const PROCESS_ACTION_VALUES = [
+  "list",
+  "attach",
+  "poll",
+  "log",
+  "write",
+  "send-keys",
+  "submit",
+  "paste",
+  "kill",
+  "clear",
+  "remove",
+] as const;
 
 export const execSchema = Type.Object({
   command: Type.String({ description: "Shell command to execute" }),
@@ -50,7 +63,9 @@ export const execSchema = Type.Object({
 });
 
 export const processSchema = Type.Object({
-  action: Type.String({ description: "Process action" }),
+  action: stringEnum(PROCESS_ACTION_VALUES, {
+    description: "Process action.",
+  }),
   sessionId: Type.Optional(Type.String({ description: "Session id for actions other than list" })),
   data: Type.Optional(Type.String({ description: "Data to write for write" })),
   keys: Type.Optional(

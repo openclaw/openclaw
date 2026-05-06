@@ -25,6 +25,9 @@ export type SessionStdin = {
   // When backed by a real Node stream (child.stdin), this exists; for PTY wrappers it may not.
   destroy?: () => void;
   destroyed?: boolean;
+  writable?: boolean;
+  writableEnded?: boolean;
+  writableFinished?: boolean;
 };
 
 export interface ProcessSession {
@@ -40,6 +43,7 @@ export interface ProcessSession {
   stdin?: SessionStdin;
   pid?: number;
   startedAt: number;
+  lastOutputAt?: number;
   cwd?: string;
   maxOutputChars: number;
   pendingMaxOutputChars?: number;
@@ -65,6 +69,7 @@ export interface FinishedSession {
   command: string;
   scopeKey?: string;
   startedAt: number;
+  lastOutputAt?: number;
   endedAt: number;
   cwd?: string;
   status: ProcessStatus;
@@ -131,6 +136,7 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
     session.pendingStderrChars = pendingChars;
   }
   session.totalOutputChars += chunk.length;
+  session.lastOutputAt = Date.now();
   const aggregated = trimWithCap(session.aggregated + chunk, session.maxOutputChars);
   session.truncated =
     session.truncated || aggregated.length < session.aggregated.length + chunk.length;
@@ -209,6 +215,7 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
     command: session.command,
     scopeKey: session.scopeKey,
     startedAt: session.startedAt,
+    lastOutputAt: session.lastOutputAt,
     endedAt: Date.now(),
     cwd: session.cwd,
     status,

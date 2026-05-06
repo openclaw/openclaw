@@ -630,10 +630,10 @@ describe("tool descriptions", () => {
       "rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use process to confirm completion. Use process whenever you need logs, status, input, or intervention.",
     );
     expect(processWithCron.description).toContain(
-      "completion confirmation when automatic completion wake is unavailable.",
+      "Use attach before recovering an interactive CLI",
     );
     expect(processWithCron.description).toContain(
-      "Use write/send-keys/submit/paste/kill for input or intervention.",
+      "write/send-keys/submit/paste/kill for input or intervention.",
     );
     expect(execWithCron.description).toContain(
       "Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead.",
@@ -644,11 +644,9 @@ describe("tool descriptions", () => {
     expect(execTool.description).not.toContain("use cron instead");
     expect(processTool.description).not.toContain("scheduled follow-ups");
     expect(execTool.description).toContain("otherwise use process to confirm completion");
+    expect(processTool.description).toContain("Use attach before recovering an interactive CLI");
     expect(processTool.description).toContain(
-      "completion confirmation when automatic completion wake is unavailable",
-    );
-    expect(processTool.description).toContain(
-      "Use write/send-keys/submit/paste/kill for input or intervention.",
+      "write/send-keys/submit/paste/kill for input or intervention.",
     );
   });
 });

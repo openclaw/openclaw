@@ -5,6 +5,7 @@ export function createProcessSessionFixture(params: {
   id: string;
   command?: string;
   startedAt?: number;
+  lastOutputAt?: number;
   cwd?: string;
   maxOutputChars?: number;
   pendingMaxOutputChars?: number;
@@ -17,6 +18,7 @@ export function createProcessSessionFixture(params: {
     id: params.id,
     command: params.command ?? "test",
     startedAt: params.startedAt ?? Date.now(),
+    lastOutputAt: params.lastOutputAt,
     cwd: params.cwd ?? "/tmp",
     maxOutputChars: params.maxOutputChars ?? 10_000,
     pendingMaxOutputChars: params.pendingMaxOutputChars ?? 30_000,

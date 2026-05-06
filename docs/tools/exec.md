@@ -224,6 +224,12 @@ Background + poll:
 Polling is for on-demand status, not waiting loops. If automatic completion wake
 is enabled, the command can wake the session when it emits output or fails.
 
+Attach before recovering an interactive background command:
+
+```json
+{ "tool": "process", "action": "attach", "sessionId": "<id>" }
+```
+
 Send keys (tmux-style):
 
 ```json

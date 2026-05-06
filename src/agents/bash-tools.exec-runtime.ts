@@ -595,6 +595,7 @@ export async function runExecProcess(opts: {
     stdin: undefined,
     pid: undefined,
     startedAt,
+    lastOutputAt: startedAt,
     cwd: opts.workdir,
     maxOutputChars: opts.maxOutput,
     pendingMaxOutputChars: opts.pendingMaxOutput,
