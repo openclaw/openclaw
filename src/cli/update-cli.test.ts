@@ -689,6 +689,40 @@ describe("update-cli", () => {
     expect(spawnEnv?.OPENCLAW_SERVICE_KIND).toBeUndefined();
   });
 
+  it("passes pre-update plugin install records into the post-core update process", async () => {
+    setupUpdatedRootRefresh();
+    const pluginInstallRecords = {
+      demo: {
+        source: "npm",
+        spec: "@openclaw/demo@1.0.0",
+        installPath: "/tmp/openclaw-demo-plugin",
+      },
+    } as const;
+    let capturedRecords: unknown;
+    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(pluginInstallRecords);
+    spawn.mockImplementationOnce((_node, _argv, options) => {
+      const env = (options as { env?: NodeJS.ProcessEnv }).env;
+      const recordsPath = env?.OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH;
+      if (!recordsPath) {
+        throw new Error("missing post-core install records path");
+      }
+      capturedRecords = JSON.parse(fsSync.readFileSync(recordsPath, "utf-8"));
+      const child = new EventEmitter() as EventEmitter & {
+        once: EventEmitter["once"];
+      };
+      queueMicrotask(() => {
+        child.emit("exit", 0, null);
+      });
+      return child;
+    });
+
+    await updateCommand({ yes: true, restart: false });
+
+    expect(capturedRecords).toEqual(pluginInstallRecords);
+    expect(syncPluginsForUpdateChannel).not.toHaveBeenCalled();
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+  });
+
   it("respawns into the updated git root before requested channel persistence", async () => {
     const { entrypoints } = setupUpdatedRootRefresh({
       gatewayUpdateImpl: async (root) =>
@@ -827,6 +861,48 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
     expect(runGatewayUpdate).not.toHaveBeenCalled();
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("post-core resume mode uses the parent install records snapshot for missing payload warnings", async () => {
+    const resultDir = createCaseDir("openclaw-post-core-records");
+    const recordsPath = path.join(resultDir, "plugin-install-records.json");
+    const installPath = path.join(resultDir, "demo-plugin");
+    await fs.mkdir(installPath, { recursive: true });
+    await fs.writeFile(
+      recordsPath,
+      `${JSON.stringify({
+        demo: {
+          source: "npm",
+          spec: "@openclaw/demo@1.0.0",
+          installPath,
+        },
+      })}\n`,
+      "utf-8",
+    );
+    pathExists.mockImplementation(async (candidate: string) => candidate === installPath);
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+        OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH: recordsPath,
+      },
+      async () => {
+        await updateCommand({ json: true, restart: false });
+      },
+    );
+
+    const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as
+      | UpdateRunResult
+      | undefined;
+    expect(jsonOutput?.postUpdate?.plugins?.status).toBe("warning");
+    expect(jsonOutput?.postUpdate?.plugins?.warnings?.[0]?.reason).toContain(
+      "package.json is missing",
+    );
+    const updateCall = updateNpmInstalledPlugins.mock.calls.at(-1)?.[0] as
+      | { skipIds?: Set<string> }
+      | undefined;
+    expect(updateCall?.skipIds?.has("demo")).toBe(true);
   });
 
   it("post-core resume mode persists the requested update channel with the updated process", async () => {
@@ -1173,6 +1249,40 @@ describe("update-cli", () => {
     expect(logs).toContain("Failed to update demo: registry timeout");
     expect(logs).toContain("Run openclaw doctor --fix to attempt automatic repair.");
     expect(logs).toContain("Run openclaw plugins inspect demo --runtime --json for details.");
+  });
+
+  it("marks disabled-after-failure plugin skips as post-update warnings", async () => {
+    updateNpmInstalledPlugins.mockResolvedValueOnce({
+      changed: true,
+      config: baseConfig,
+      outcomes: [
+        {
+          pluginId: "demo",
+          status: "skipped",
+          message:
+            'Disabled "demo" after plugin update failure; OpenClaw will continue without it. Failed to update demo: registry timeout',
+        },
+      ],
+    });
+    vi.mocked(defaultRuntime.writeJson).mockClear();
+
+    await updateCommand({ json: true, restart: false });
+
+    const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as
+      | UpdateRunResult
+      | undefined;
+    expect(jsonOutput?.postUpdate?.plugins?.status).toBe("warning");
+    expect(jsonOutput?.postUpdate?.plugins?.warnings?.[0]).toMatchObject({
+      pluginId: "demo",
+      guidance: [
+        "Run openclaw doctor --fix to attempt automatic repair.",
+        "Run openclaw plugins inspect demo --runtime --json for details.",
+      ],
+    });
+    expect(jsonOutput?.postUpdate?.plugins?.npm.outcomes[0]).toMatchObject({
+      pluginId: "demo",
+      status: "skipped",
+    });
   });
 
   it("fails unexpected post-core plugin sync exceptions", async () => {
