@@ -320,11 +320,14 @@ export async function processGatewayAllowlist(
       command: params.command,
       resolvedPath,
     });
-  const hasHeredocSegment = allowlistEval.segments.some((segment) =>
-    segment.argv.some((token) => token.startsWith("<<")),
+  // Check raw segment text (not normalized argv) so quote characters
+  // are still present: splitShellArgs strips '"/\ before argv is built,
+  // making a post-hoc argv quote check unreliable.
+  const hasUnquotedHeredocSegment = allowlistEval.segments.some((segment) =>
+    /<<\s*(?!['"\\])(?:[a-zA-Z_]\w*)/.test(segment.raw),
   );
   const requiresHeredocApproval =
-    hostSecurity === "allowlist" && analysisOk && allowlistSatisfied && hasHeredocSegment;
+    hostSecurity === "allowlist" && analysisOk && allowlistSatisfied && hasUnquotedHeredocSegment;
   const requiresInlineEvalApproval = inlineEvalHit !== null;
   const requiresAllowlistPlanApproval =
     hostSecurity === "allowlist" &&
@@ -345,7 +348,7 @@ export async function processGatewayAllowlist(
     requiresInlineEvalApproval;
   if (requiresHeredocApproval) {
     params.warnings.push(
-      "Warning: heredoc execution requires explicit approval in allowlist mode.",
+      "Warning: unquoted heredoc may expand $()/` commands; explicit approval required in allowlist mode.",
     );
   }
   if (requiresAllowlistPlanApproval) {

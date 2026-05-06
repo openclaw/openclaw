@@ -431,4 +431,99 @@ describe("processGatewayAllowlist", () => {
     });
     expect(runExecProcessMock).not.toHaveBeenCalled();
   });
+
+  it("auto-approves quoted heredocs in allowlist mode when binary is in allowlist", async () => {
+    evaluateShellAllowlistMock.mockReturnValue({
+      allowlistMatches: [],
+      analysisOk: true,
+      allowlistSatisfied: true,
+      segments: [{ resolution: null, raw: "cat <<'EOF'", argv: ["cat", "<<'EOF'"] }],
+      segmentAllowlistEntries: [{ pattern: "/usr/bin/cat", source: "allow-always" }],
+    });
+
+    const result = await processGatewayAllowlist({
+      command: "cat <<'EOF'\nhello\nEOF",
+      workdir: process.cwd(),
+      env: process.env as Record<string, string>,
+      pty: false,
+      defaultTimeoutSec: 30,
+      security: "allowlist",
+      ask: "off",
+      safeBins: new Set(),
+      safeBinProfiles: {},
+      warnings: [],
+      approvalRunningNoticeMs: 0,
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+    });
+
+    // Quoted heredoc should NOT trigger extra approval
+    expect(result.pendingResult).toBeUndefined();
+    expect(warnings).toEqual([]);
+    expect(runExecProcessMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("still requires approval for unquoted heredocs in allowlist mode", async () => {
+    evaluateShellAllowlistMock.mockReturnValue({
+      allowlistMatches: [],
+      analysisOk: true,
+      allowlistSatisfied: true,
+      segments: [{ resolution: null, raw: "cat <<EOF", argv: ["cat", "<<EOF"] }],
+      segmentAllowlistEntries: [{ pattern: "/usr/bin/cat", source: "allow-always" }],
+    });
+
+    const result = await processGatewayAllowlist({
+      command: "cat <<EOF\n$HOME\nEOF",
+      workdir: process.cwd(),
+      env: process.env as Record<string, string>,
+      pty: false,
+      defaultTimeoutSec: 30,
+      security: "allowlist",
+      ask: "off",
+      safeBins: new Set(),
+      safeBinProfiles: {},
+      warnings: [],
+      approvalRunningNoticeMs: 0,
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+    });
+
+    // Unquoted heredoc should still require approval
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    expect(warnings).toContain(
+      "Warning: unquoted heredoc may expand $()/` commands; explicit approval required in allowlist mode.",
+    );
+    expect(runExecProcessMock).not.toHaveBeenCalled();
+  });
+
+  it("auto-approves backslash-quoted heredocs in allowlist mode", async () => {
+    evaluateShellAllowlistMock.mockReturnValue({
+      allowlistMatches: [],
+      analysisOk: true,
+      allowlistSatisfied: true,
+      segments: [{ resolution: null, raw: "cat <<\\EOF", argv: ["cat", "\\EOF"] }],
+      segmentAllowlistEntries: [{ pattern: "/usr/bin/cat", source: "allow-always" }],
+    });
+
+    const result = await processGatewayAllowlist({
+      command: "cat <<\\EOF\nhello\nEOF",
+      workdir: process.cwd(),
+      env: process.env as Record<string, string>,
+      pty: false,
+      defaultTimeoutSec: 30,
+      security: "allowlist",
+      ask: "off",
+      safeBins: new Set(),
+      safeBinProfiles: {},
+      warnings: [],
+      approvalRunningNoticeMs: 0,
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+    });
+
+    // Backslash-quoted heredoc should NOT trigger extra approval
+    expect(result.pendingResult).toBeUndefined();
+    expect(warnings).toEqual([]);
+    expect(runExecProcessMock).toHaveBeenCalledTimes(1);
+  });
 });
