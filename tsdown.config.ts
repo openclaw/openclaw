@@ -303,6 +303,11 @@ export default defineConfig([
     deps: {
       alwaysBundle: shouldAlwaysBundleDependency,
       neverBundle: shouldNeverBundleDependency,
+      // zod is re-exported via plugin-sdk/zod.ts for external plugins.
+      // Must be bundled inline so that bare `import "zod"` in the output
+      // does not fail under pnpm global installs where zod is not hoisted
+      // into openclaw/node_modules (fixes #78398).
+      alwaysBundle: ["zod"],
     },
   }),
 ]);
