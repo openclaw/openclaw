@@ -69,6 +69,26 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   }
 
+  it("replaces max-turn sentinel with actionable run context", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["[max turns exceeded]"],
+      sessionKey: "agent:main:telegram:direct:u123",
+      sessionId: "sess-123",
+      runId: "run-456",
+      provider: "openai-codex",
+      model: "gpt-5.5",
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toContain("Run stopped: max turns exceeded.");
+    expect(payloads[0]?.text).toContain("Session: agent:main:telegram:direct:u123.");
+    expect(payloads[0]?.text).toContain("Session ID: sess-123.");
+    expect(payloads[0]?.text).toContain("Run: run-456.");
+    expect(payloads[0]?.text).toContain("Model: openai-codex/gpt-5.5.");
+    expect(payloads[0]?.text).toContain("Recovery: inspect the session transcript/logs");
+    expect(payloads[0]?.text).not.toBe("[max turns exceeded]");
+  });
+
   it("suppresses raw API error JSON when the assistant errored", () => {
     const payloads = buildPayloads({
       assistantTexts: [errorJson],
