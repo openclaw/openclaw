@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
-import { recordTalkDiagnosticEvent } from "../talk/diagnostics.js";
+import { recordTalkObservabilityEvent } from "../talk/observability.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceBrowserAudioContract,
@@ -169,7 +169,7 @@ export function createTalkRealtimeRelaySession(
       brain: "agent-consult",
       provider: params.provider.id,
     },
-    { onEvent: recordTalkDiagnosticEvent },
+    { onEvent: recordTalkObservabilityEvent },
   );
   let relay: RelaySession | undefined;
   const emit = (event: TalkRealtimeRelayEventPayload, talkEvent?: TalkEventInput) =>

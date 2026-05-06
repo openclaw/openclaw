@@ -7,7 +7,7 @@ import {
   createTalkSessionController,
   createRealtimeVoiceBridgeSession,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-  recordTalkDiagnosticEvent,
+  recordTalkObservabilityEvent,
   type RealtimeVoiceBridgeSession,
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceProviderPlugin,
@@ -516,7 +516,7 @@ export class RealtimeCallHandler {
         brain: "agent-consult",
         provider: this.realtimeProvider.id,
       },
-      { onEvent: recordTalkDiagnosticEvent },
+      { onEvent: recordTalkObservabilityEvent },
     );
     const rememberTalkEvent = (event: TalkEvent | undefined): TalkEvent | undefined => {
       if (event) {
