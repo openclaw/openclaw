@@ -115,6 +115,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/context: strip reasoning items from prior-message context when the target model does not support reasoning, preventing 400 validation errors after model switches from reasoning-capable to non-reasoning models mid-session. Fixes #78545. (#78545) Thanks @hclsys.
 - Telegram/Codex: generate DM topic labels with Codex-compatible simple-completion requests so auto-created private topics can be renamed instead of staying `New Chat`.
 - Plugins/runtime fetch: drop third-party symbol metadata from plain request header dictionaries before passing them into native `fetch` or `Headers`, so SDK and guarded/proxy fetch paths do not reject otherwise valid plugin requests. Fixes #77846. Thanks @shakkernerd.
 - Web fetch: bound guarded dispatcher cleanup after request timeouts so timed-out fetches return tool errors instead of leaving Gateway tool lanes active. (#78439) Thanks @obviyus.
