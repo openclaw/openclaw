@@ -1400,6 +1400,7 @@ export const IMessageAccountSchemaBase = z
       .array(z.string().refine(isValidInboundPathRootPattern, "expected absolute path root"))
       .optional(),
     mediaMaxMb: z.number().int().positive().optional(),
+    probeTimeoutMs: z.number().int().positive().optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
