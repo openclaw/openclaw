@@ -5,6 +5,7 @@ import {
   type CodexPluginEntryConfig,
   type ResolvedCodexPluginsConfig,
 } from "./config.js";
+import { readCodexPluginAppsCached } from "./plugin-apps-cache.js";
 import type { v2 } from "./protocol-generated/typescript/index.js";
 
 export const CODEX_PLUGIN_MARKETPLACE_NAME = "openai-curated";
@@ -88,6 +89,7 @@ export async function readCodexPluginInventory(params: {
   pluginConfig?: unknown;
   request: CodexPluginBridgeRequest;
   forceRefetchApps?: boolean;
+  appCacheKey?: string;
 }): Promise<CodexPluginInventory> {
   const config = resolveCodexPluginsConfig({ pluginConfig: params.pluginConfig });
   if (!config.enabled) {
@@ -105,7 +107,11 @@ export async function readCodexPluginInventory(params: {
       diagnostics: [`Codex marketplace ${CODEX_PLUGIN_MARKETPLACE_NAME} was not found.`],
     };
   }
-  const apps = await readAppsBestEffort(params.request, params.forceRefetchApps === true);
+  const apps = await readAppsBestEffort({
+    request: params.request,
+    appCacheKey: params.appCacheKey,
+    forceRefetch: params.forceRefetchApps === true,
+  });
   const records = marketplace.plugins
     .map((plugin) =>
       buildInventoryRecord({
@@ -225,13 +231,17 @@ function resolvePluginEntry(
   return undefined;
 }
 
-async function readAppsBestEffort(
-  request: CodexPluginBridgeRequest,
-  forceRefetch: boolean,
-): Promise<v2.AppInfo[]> {
+async function readAppsBestEffort(params: {
+  request: CodexPluginBridgeRequest;
+  appCacheKey?: string;
+  forceRefetch: boolean;
+}): Promise<v2.AppInfo[]> {
   try {
-    const apps = (await request("app/list", { forceRefetch })) as v2.AppsListResponse;
-    return apps.data;
+    return await readCodexPluginAppsCached({
+      request: params.request,
+      cacheKey: params.appCacheKey,
+      forceRefetch: params.forceRefetch,
+    });
   } catch {
     return [];
   }

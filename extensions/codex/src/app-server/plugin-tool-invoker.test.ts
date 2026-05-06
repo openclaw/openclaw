@@ -174,10 +174,13 @@ describe("Codex plugin tool invoker", () => {
     });
     expect(fake.calls).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ method: "app/list", params: { forceRefetch: true } }),
         expect.objectContaining({
           method: "app/list",
-          params: { forceRefetch: true, cursor: "page-2" },
+          params: expect.objectContaining({ forceRefetch: true }),
+        }),
+        expect.objectContaining({
+          method: "app/list",
+          params: expect.objectContaining({ forceRefetch: true, cursor: "page-2" }),
         }),
         expect.objectContaining({
           method: "thread/start",

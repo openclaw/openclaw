@@ -12,6 +12,7 @@ import {
   type CodexPluginConfig,
 } from "./config.js";
 import { ensureCodexPluginActivated, refreshCodexPluginRuntimeState } from "./plugin-activation.js";
+import { readCodexPluginAppsCached } from "./plugin-apps-cache.js";
 import {
   buildCodexPluginMention,
   readCodexPluginInventory,
@@ -19,7 +20,6 @@ import {
   type CodexPluginBridgeRequest,
   type CodexPluginInventoryRecord,
 } from "./plugin-inventory.js";
-import type { v2 } from "./protocol-generated/typescript/index.js";
 import {
   isJsonObject,
   type CodexServerNotification,
@@ -60,20 +60,22 @@ export async function invokeCodexPluginTool(params: {
   const clientFactory = params.clientFactory ?? defaultCodexAppServerClientFactory;
   const client = await clientFactory(appServer.start, undefined, agentDir, config);
   const request = makeRequest(client, appServer.requestTimeoutMs);
+  const appCacheKey = agentDir ?? params.context?.workspaceDir ?? "default";
 
   const inventory = await readCodexPluginInventory({
     pluginConfig: runtimePluginConfig,
     request,
     forceRefetchApps: true,
+    appCacheKey,
   });
   const record =
     inventory.records.find((candidate) => candidate.key === params.record.key) ?? params.record;
-  const activation = await ensureCodexPluginActivated({ request, record });
+  const activation = await ensureCodexPluginActivated({ request, record, appCacheKey });
   if (activation.status !== "ready") {
     throw new Error(formatActivationFailure(record, activation.status));
   }
 
-  const appIdsEnabled = await enableCodexPluginAppsBestEffort({ request, record });
+  const appIdsEnabled = await enableCodexPluginAppsBestEffort({ request, record, appCacheKey });
   const modelRef = resolveCodexPluginToolModel(config);
   const thread = (await request("thread/start", {
     model: modelRef.model,
@@ -119,8 +121,13 @@ function makeRequest(client: CodexAppServerClient, timeoutMs: number): CodexPlug
 async function enableCodexPluginAppsBestEffort(params: {
   request: CodexPluginBridgeRequest;
   record: CodexPluginInventoryRecord;
+  appCacheKey: string;
 }): Promise<string[]> {
-  const apps = await readAllCodexApps(params.request, { forceRefetch: true });
+  const apps = await readCodexPluginAppsCached({
+    request: params.request,
+    cacheKey: params.appCacheKey,
+    forceRefetch: true,
+  });
   const displayNames = new Set([
     params.record.displayName,
     params.record.pluginName,
@@ -143,23 +150,6 @@ async function enableCodexPluginAppsBestEffort(params: {
   });
   await refreshCodexPluginRuntimeState(params.request);
   return appIds;
-}
-
-async function readAllCodexApps(
-  request: CodexPluginBridgeRequest,
-  params: Pick<v2.AppsListParams, "forceRefetch">,
-): Promise<v2.AppInfo[]> {
-  const apps: v2.AppInfo[] = [];
-  let cursor: string | null | undefined;
-  do {
-    const response = (await request("app/list", {
-      ...params,
-      ...(cursor ? { cursor } : {}),
-    } satisfies v2.AppsListParams)) as v2.AppsListResponse;
-    apps.push(...(response.data ?? []));
-    cursor = response.nextCursor;
-  } while (cursor);
-  return apps;
 }
 
 async function runCodexPluginTurn(params: {

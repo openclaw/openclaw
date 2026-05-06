@@ -102,12 +102,22 @@ async function defaultAppServerRequest(
   const runtimeOptions = resolveCodexAppServerRuntimeOptions({
     pluginConfig: readCodexPluginConfigFromOpenClawConfig(ctx.config),
   });
+  const startOptions =
+    typeof ctx.source === "string" && ctx.source.trim()
+      ? {
+          ...runtimeOptions.start,
+          env: {
+            ...runtimeOptions.start.env,
+            CODEX_HOME: ctx.source,
+          },
+        }
+      : runtimeOptions.start;
   return async (method: string, requestParams?: unknown): Promise<unknown> =>
     await requestCodexAppServerJson({
       method,
       requestParams,
       timeoutMs: CODEX_PLUGIN_APPLY_TIMEOUT_MS,
-      startOptions: runtimeOptions.start,
+      startOptions,
       config: ctx.config,
     });
 }

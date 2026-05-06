@@ -1,3 +1,4 @@
+import { clearCodexPluginAppsCache } from "./plugin-apps-cache.js";
 import type { CodexPluginInventoryRecord, CodexPluginBridgeRequest } from "./plugin-inventory.js";
 import type { v2 } from "./protocol-generated/typescript/index.js";
 
@@ -11,6 +12,7 @@ export type CodexPluginActivationStatus =
 export async function ensureCodexPluginActivated(params: {
   request: CodexPluginBridgeRequest;
   record: CodexPluginInventoryRecord;
+  appCacheKey?: string;
 }): Promise<CodexPluginActivationStatus> {
   const record = params.record;
   if (!record.enabledInOpenClaw) {
@@ -32,6 +34,7 @@ export async function ensureCodexPluginActivated(params: {
     marketplacePath: record.marketplacePath,
     pluginName: record.pluginName,
   } satisfies v2.PluginInstallParams)) as v2.PluginInstallResponse;
+  clearCodexPluginAppsCache(params.appCacheKey);
   await refreshCodexPluginRuntimeState(params.request);
   if (installed.appsNeedingAuth.length > 0) {
     return { status: "auth_required", appsNeedingAuth: installed.appsNeedingAuth };
