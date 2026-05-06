@@ -32,4 +32,68 @@ describe("applyAnthropicEphemeralCacheControlMarkers", () => {
       },
     ]);
   });
+
+  it("marks only the last system/developer message and the trailing user turn", () => {
+    const payload = {
+      messages: [
+        { role: "system", content: "first system" },
+        { role: "developer", content: "last developer" },
+        { role: "user", content: "hello" },
+      ],
+    } satisfies Record<string, unknown>;
+
+    applyAnthropicEphemeralCacheControlMarkers(payload);
+
+    expect(payload.messages).toEqual([
+      { role: "system", content: "first system" },
+      {
+        role: "developer",
+        content: [{ type: "text", text: "last developer", cache_control: { type: "ephemeral" } }],
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello", cache_control: { type: "ephemeral" } }],
+      },
+    ]);
+  });
+
+  it("walks back to the nearest cacheable block", () => {
+    const payload = {
+      messages: [
+        {
+          role: "system",
+          content: [
+            { type: "text", text: "instructions" },
+            { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "describe this" },
+            { type: "document", source: { type: "base64", data: "abc" } },
+          ],
+        },
+      ],
+    } satisfies Record<string, unknown>;
+
+    applyAnthropicEphemeralCacheControlMarkers(payload);
+
+    expect(payload.messages).toEqual([
+      {
+        role: "system",
+        content: [
+          { type: "text", text: "instructions", cache_control: { type: "ephemeral" } },
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "describe this", cache_control: { type: "ephemeral" } },
+          { type: "document", source: { type: "base64", data: "abc" } },
+        ],
+      },
+    ]);
+  });
 });
