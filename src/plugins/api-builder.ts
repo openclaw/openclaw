@@ -1,7 +1,31 @@
+/**
+ * api-builder.ts — Plugin API assembly
+ *
+ * Constructs the `OpenClawPluginApi` object that plugins receive in their
+ * `init()` function. Follows a "partial implementation with safe defaults"
+ * pattern: each API method either delegates to a real handler (provided by
+ * the registry) or falls back to a noop that silently accepts valid inputs
+ * and does nothing. This lets plugins register only the capabilities they
+ * need while keeping the full interface type-safe.
+ *
+ * The noop fallbacks (all the `noop*` functions below) are critical safety
+ * nets — without them, a plugin accessing an unregistered API method would
+ * crash at runtime with `undefined is not a function`.
+ */
+
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { OpenClawPluginApi, PluginLogger } from "./types.js";
 
+/**
+ * Parameters for building a plugin API instance.
+ *
+ * @param id - Unique plugin identifier (e.g. "momo-kanban")
+ * @param handlers - Optional map of real implementations. Any method not
+ *   provided here gets a noop that consumes valid input and returns a safe
+ *   "did nothing" value. This is by design — plugins shouldn't crash just
+ *   because they call an API method the registry didn't wire up.
+ */
 export type BuildPluginApiParams = {
   id: string;
   name: string;
@@ -77,6 +101,17 @@ export type BuildPluginApiParams = {
   >;
 };
 
+// ============================================================
+// Noop default implementations
+//
+// Every method on OpenClawPluginApi has a corresponding noop. When a
+// plugin init() calls a method that wasn't wired by the registry, the
+// noop absorbs the call silently instead of throwing TypeError.
+//
+// Each noop matches its real signature but returns a safe "did nothing"
+// sentinel value (e.g., false, undefined, or { enqueued: false }).
+// ============================================================
+
 const noopRegisterTool: OpenClawPluginApi["registerTool"] = () => {};
 const noopRegisterHook: OpenClawPluginApi["registerHook"] = () => {};
 const noopRegisterHttpRoute: OpenClawPluginApi["registerHttpRoute"] = () => {};
@@ -124,6 +159,10 @@ const noopRegisterCodexAppServerExtensionFactory: OpenClawPluginApi["registerCod
 const noopRegisterAgentToolResultMiddleware: OpenClawPluginApi["registerAgentToolResultMiddleware"] =
   () => {};
 const noopRegisterSessionExtension: OpenClawPluginApi["registerSessionExtension"] = () => {};
+/**
+ * Noop for enqueueNextTurnInjection — returns a clearly-failed result
+ * so callers can detect that injection wasn't actually queued.
+ */
 const noopEnqueueNextTurnInjection: OpenClawPluginApi["enqueueNextTurnInjection"] = async (
   injection,
 ) => ({ enqueued: false, id: "", sessionKey: injection.sessionKey });
@@ -151,6 +190,17 @@ const noopRegisterMemoryEmbeddingProvider: OpenClawPluginApi["registerMemoryEmbe
   () => {};
 const noopOn: OpenClawPluginApi["on"] = () => {};
 
+/**
+ * Assemble a fully-typed OpenClawPluginApi instance.
+ *
+ * Merges the provided real handlers (from the registry) with noop defaults.
+ * The result is a safe, fully-functional API object that a plugin can call
+ * without null-checking every method.
+ *
+ * @param params - Handlers + metadata. See BuildPluginApiParams.
+ * @returns A complete OpenClawPluginApi — real handlers where provided,
+ *   noop fallbacks everywhere else.
+ */
 export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi {
   const handlers = params.handlers ?? {};
   return {
