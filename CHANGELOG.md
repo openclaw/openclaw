@@ -705,6 +705,7 @@ Docs: https://docs.openclaw.ai
 - Tools/llm-task: keep JSON-only embedded model runs from tripping inherited tool allowlists when tools are intentionally disabled, while preserving runtime `toolsAllow` failures. Fixes #74019. Thanks @amknight.
 - Tools/profiles: make `tools.profile: "full"` grant all tools including optional plugin tools such as browser, so the full profile no longer silently drops plugin-provided tools that require an explicit allowlist entry. Fixes #76507. Thanks @amknight.
 - Feishu: keep timeout env parsing separate from the HTTP client wrapper so package security scans no longer report a false env-harvesting hit during install. Thanks @vincentkoc.
+- Feishu: accept nested `operator.user_id` identity fields in Schema 2.0 card action callbacks while preserving Schema 2 `context.open_chat_id` routing, so button callbacks no longer drop as malformed. Refs #71670. Thanks @rubencu.
 - Upgrade/config: validate configured web-search providers and statically suppressed model/provider pairs against the active plugin set at config load, so stale plugin state fails loud before runtime fallback.
 - Status/update: resolve beta update-channel checks from the installed version when config still says `stable`, and let `status --deep` reuse live gateway channel credential state instead of warning on command-path-only token misses.
 - Doctor/plugins: preserve unmanaged third-party plugin `node_modules` during `doctor --fix`, while still pruning OpenClaw-managed runtime dependency caches.
