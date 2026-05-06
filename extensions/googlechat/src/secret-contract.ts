@@ -101,6 +101,9 @@ function collectGoogleChatAccountAssignment(params: {
     expected: "string-or-object",
     apply: (value) => {
       params.target.serviceAccount = value;
+      if (explicitRef) {
+        delete params.target.serviceAccountRef;
+      }
     },
   });
 }

@@ -101,9 +101,10 @@ function resolveCredentialsFromConfig(params: {
   source: GoogleChatCredentialSource;
 } {
   const { account, accountId } = params;
-  const inline = parseServiceAccount(account.serviceAccount);
-  if (inline) {
-    return { credentials: inline, source: "inline" };
+  if (isSecretRef(account.serviceAccountRef)) {
+    throw new Error(
+      `channels.googlechat.accounts.${accountId}.serviceAccount: unresolved SecretRef "${account.serviceAccountRef.source}:${account.serviceAccountRef.provider}:${account.serviceAccountRef.id}". Resolve this command against an active gateway runtime snapshot before reading it.`,
+    );
   }
 
   if (isSecretRef(account.serviceAccount)) {
@@ -112,10 +113,9 @@ function resolveCredentialsFromConfig(params: {
     );
   }
 
-  if (isSecretRef(account.serviceAccountRef)) {
-    throw new Error(
-      `channels.googlechat.accounts.${accountId}.serviceAccount: unresolved SecretRef "${account.serviceAccountRef.source}:${account.serviceAccountRef.provider}:${account.serviceAccountRef.id}". Resolve this command against an active gateway runtime snapshot before reading it.`,
-    );
+  const inline = parseServiceAccount(account.serviceAccount);
+  if (inline) {
+    return { credentials: inline, source: "inline" };
   }
 
   const file = normalizeOptionalString(account.serviceAccountFile);
