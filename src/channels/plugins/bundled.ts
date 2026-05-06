@@ -234,10 +234,30 @@ function loadGeneratedBundledChannelModule(params: {
   }
 }
 
-function describeBundledChannelLoadError(error: unknown, channelId: string): string {
+// Walk the `.cause` chain looking for a Node-style "module not found" code.
+// Native-require failures inside `module-loader.ts` rewrap the original Node
+// error in a new Error with `{ cause }`, so the missing-module code lives on
+// the cause rather than the top-level error.
+function findMissingModuleCodeInChain(error: unknown): string | undefined {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    const code = extractErrorCode(current);
+    if (code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND") {
+      return code;
+    }
+    if (typeof current !== "object") {
+      return undefined;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
+export function describeBundledChannelLoadError(error: unknown, channelId: string): string {
   const detail = formatErrorMessage(error);
-  const code = extractErrorCode(error);
-  if (code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND") {
+  if (findMissingModuleCodeInChain(error) !== undefined) {
     return `${detail} (run \`openclaw doctor --fix\` to install missing bundled runtime dependencies for channel ${channelId})`;
   }
   return detail;
