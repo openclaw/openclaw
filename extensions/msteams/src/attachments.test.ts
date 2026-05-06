@@ -658,12 +658,10 @@ describe("msteams attachments", () => {
         );
 
         expectAttachmentMediaLength(media, 0);
+        // Migration inlines host + error into the message text — the structured
+        // meta object was being dropped by the logger formatter pre-migration.
         expect(logger.warn).toHaveBeenCalledWith(
-          "msteams attachment download failed",
-          expect.objectContaining({
-            error: expect.stringContaining("HTTP 500"),
-            host: expect.any(String),
-          }),
+          expect.stringMatching(/msteams attachment download failed.*host=.*error=.*HTTP 500/),
         );
       });
 

@@ -1,9 +1,3 @@
-import {
-  formatChannelProgressDraftLine,
-  formatChannelProgressDraftLineForEntry,
-  resolveChannelPreviewStreamMode,
-  resolveChannelStreamingBlockEnabled,
-} from "openclaw/plugin-sdk/channel-streaming";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import {
   createChannelMessageReplyPipeline,
@@ -22,7 +16,6 @@ import {
 } from "./errors.js";
 import {
   buildConversationReference,
-  type MSTeamsAdapter,
   type MSTeamsRenderedMessage,
   renderReplyPayloadsToMessages,
   sendMSTeamsMessages,
@@ -32,6 +25,7 @@ import { createTeamsReplyStreamController } from "./reply-stream-controller.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
+import type { MSTeamsApp } from "./sdk.js";
 
 export { pickInformativeStatusText } from "./reply-stream-controller.js";
 
@@ -42,7 +36,7 @@ export function createMSTeamsReplyDispatcher(params: {
   accountId?: string;
   runtime: RuntimeEnv;
   log: MSTeamsMonitorLogger;
-  adapter: MSTeamsAdapter;
+  app: MSTeamsApp;
   appId: string;
   conversationRef: StoredConversationReference;
   context: MSTeamsTurnContext;
@@ -77,11 +71,15 @@ export function createMSTeamsReplyDispatcher(params: {
    */
   const TYPING_KEEPALIVE_MAX_DURATION_MS = 10 * 60_000;
 
-  // Forward reference: sendTypingIndicator is built before the stream
+  // Forward references: sendTypingIndicator is built before the stream
   // controller exists, but the keepalive tick needs to check stream state so
-  // we don't overlay "..." typing on the visible streaming card. The ref is
-  // wired once the stream controller is constructed below.
+  // we don't overlay "..." typing on the visible streaming card, and we want
+  // to suppress typing pulses entirely once the user pressed Stop (otherwise
+  // typing keeps pulsing for the rest of the agent run, fighting the cancel
+  // signal). Both refs are wired once the stream controller is constructed
+  // below.
   const streamActiveRef: { current: () => boolean } = { current: () => false };
+  const streamCanceledRef: { current: () => boolean } = { current: () => false };
 
   const rawSendTypingIndicator = async () => {
     await withRevokedProxyFallback({
@@ -90,13 +88,7 @@ export function createMSTeamsReplyDispatcher(params: {
       },
       onRevoked: async () => {
         const baseRef = buildConversationReference(params.conversationRef);
-        await params.adapter.continueConversation(
-          params.appId,
-          { ...baseRef, activityId: undefined },
-          async (ctx) => {
-            await ctx.sendActivity({ type: "typing" });
-          },
-        );
+        await params.app.send(baseRef.conversation.id, { type: "typing" });
       },
       onRevokedLog: () => {
         params.log.debug?.("turn context revoked, sending typing via proactive messaging");
@@ -114,6 +106,14 @@ export function createMSTeamsReplyDispatcher(params: {
         if (streamActiveRef.current()) {
           return;
         }
+        // Once the user pressed Stop (or Teams ended the stream), suppress
+        // typing pulses too — otherwise the bot keeps pulsing "typing..." in
+        // Teams for the rest of the agent run, fighting the user's explicit
+        // cancel. The agent can't currently be canceled, but it's about to
+        // wind down on its own; in the meantime we honor the cancel visually.
+        if (streamCanceledRef.current()) {
+          return;
+        }
         await rawSendTypingIndicator();
       }
     : async () => {};
@@ -127,7 +127,7 @@ export function createMSTeamsReplyDispatcher(params: {
       start: sendTypingIndicator,
       keepaliveIntervalMs: TYPING_KEEPALIVE_INTERVAL_MS,
       maxDurationMs: TYPING_KEEPALIVE_MAX_DURATION_MS,
-      onStartError: (err) => {
+      onStartError: (err: unknown) => {
         logTypingFailure({
           log: (message) => params.log.debug?.(message),
           channel: "msteams",
@@ -154,15 +154,17 @@ export function createMSTeamsReplyDispatcher(params: {
     feedbackLoopEnabled,
     log: params.log,
     msteamsConfig: msteamsCfg,
+    // Stable seed so the same conversation gets a consistent rotating
+    // "Thinking..." flavor across reconnects. accountId scopes per-bot,
+    // conversation.id scopes per-chat.
     progressSeed: `${params.accountId ?? "default"}:${params.conversationRef.conversation?.id ?? ""}`,
   });
-  // Wire the forward-declared gate used by sendTypingIndicator.
+  // Wire the forward-declared gates used by sendTypingIndicator.
   streamActiveRef.current = () => streamController.isStreamActive();
+  streamCanceledRef.current = () => streamController.wasCanceled();
 
-  const teamsStreamMode = resolveChannelPreviewStreamMode(msteamsCfg, "partial");
-  const resolvedBlockStreamingEnabled =
-    teamsStreamMode === "block" ? true : resolveChannelStreamingBlockEnabled(msteamsCfg);
-  const blockStreamingEnabled = resolvedBlockStreamingEnabled ?? false;
+  const blockStreamingEnabled =
+    typeof msteamsCfg?.blockStreaming === "boolean" ? msteamsCfg.blockStreaming : false;
   const typingIndicatorEnabled =
     typeof msteamsCfg?.typingIndicator === "boolean" ? msteamsCfg.typingIndicator : true;
 
@@ -171,7 +173,7 @@ export function createMSTeamsReplyDispatcher(params: {
   const sendMessages = async (messages: MSTeamsRenderedMessage[]): Promise<string[]> => {
     return sendMSTeamsMessages({
       replyStyle: params.replyStyle,
-      adapter: params.adapter,
+      app: params.app,
       appId: params.appId,
       conversationRef: params.conversationRef,
       context: params.context,
@@ -278,7 +280,7 @@ export function createMSTeamsReplyDispatcher(params: {
     },
     typingCallbacks,
     deliver: async (payload) => {
-      const preparedPayload = await streamController.preparePayload(payload);
+      const preparedPayload = streamController.preparePayload(payload);
       if (!preparedPayload) {
         return;
       }
@@ -345,175 +347,10 @@ export function createMSTeamsReplyDispatcher(params: {
         ? {
             onPartialReply: (payload: { text?: string }) =>
               streamController.onPartialReply(payload),
-            onToolStart: async (payload: { name?: string }) => {
-              await streamController.noteProgressWork({ toolName: payload.name });
-            },
-            onItemEvent: async () => {
-              await streamController.noteProgressWork();
-            },
-            onPlanUpdate: async (payload: { phase?: string }) => {
-              if (payload.phase === "update") {
-                await streamController.noteProgressWork();
-              }
-            },
-            onApprovalEvent: async (payload: { phase?: string }) => {
-              if (payload.phase === "requested") {
-                await streamController.noteProgressWork();
-              }
-            },
-            onCommandOutput: async (payload: { phase?: string }) => {
-              if (payload.phase === "end") {
-                await streamController.noteProgressWork();
-              }
-            },
-            onPatchSummary: async (payload: { phase?: string }) => {
-              if (payload.phase === "end") {
-                await streamController.noteProgressWork();
-              }
-            },
-          }
-        : {}),
-      ...(streamController.shouldSuppressDefaultToolProgressMessages()
-        ? { suppressDefaultToolProgressMessages: true }
-        : {}),
-      ...(streamController.shouldStreamPreviewToolProgress()
-        ? {
-            onToolStart: async (payload: {
-              name?: string;
-              phase?: string;
-              args?: Record<string, unknown>;
-              detailMode?: "explain" | "raw";
-            }) => {
-              await streamController.pushProgressLine(
-                formatChannelProgressDraftLineForEntry(
-                  msteamsCfg,
-                  {
-                    event: "tool",
-                    name: payload.name,
-                    phase: payload.phase,
-                    args: payload.args,
-                  },
-                  payload.detailMode ? { detailMode: payload.detailMode } : undefined,
-                ),
-                { toolName: payload.name },
-              );
-            },
-            onItemEvent: async (payload: {
-              kind?: string;
-              progressText?: string;
-              meta?: string;
-              summary?: string;
-              title?: string;
-              name?: string;
-              phase?: string;
-              status?: string;
-            }) => {
-              await streamController.pushProgressLine(
-                formatChannelProgressDraftLineForEntry(msteamsCfg, {
-                  event: "item",
-                  itemKind: payload.kind,
-                  title: payload.title,
-                  name: payload.name,
-                  phase: payload.phase,
-                  status: payload.status,
-                  summary: payload.summary,
-                  progressText: payload.progressText,
-                  meta: payload.meta,
-                }),
-              );
-            },
-            onPlanUpdate: async (payload: {
-              phase?: string;
-              title?: string;
-              explanation?: string;
-              steps?: string[];
-            }) => {
-              if (payload.phase !== "update") {
-                return;
-              }
-              await streamController.pushProgressLine(
-                formatChannelProgressDraftLine({
-                  event: "plan",
-                  phase: payload.phase,
-                  title: payload.title,
-                  explanation: payload.explanation,
-                  steps: payload.steps,
-                }),
-              );
-            },
-            onApprovalEvent: async (payload: {
-              phase?: string;
-              title?: string;
-              command?: string;
-              reason?: string;
-              message?: string;
-            }) => {
-              if (payload.phase !== "requested") {
-                return;
-              }
-              await streamController.pushProgressLine(
-                formatChannelProgressDraftLine({
-                  event: "approval",
-                  phase: payload.phase,
-                  title: payload.title,
-                  command: payload.command,
-                  reason: payload.reason,
-                  message: payload.message,
-                }),
-              );
-            },
-            onCommandOutput: async (payload: {
-              phase?: string;
-              title?: string;
-              name?: string;
-              status?: string;
-              exitCode?: number | null;
-            }) => {
-              if (payload.phase !== "end") {
-                return;
-              }
-              await streamController.pushProgressLine(
-                formatChannelProgressDraftLine({
-                  event: "command-output",
-                  phase: payload.phase,
-                  title: payload.title,
-                  name: payload.name,
-                  status: payload.status,
-                  exitCode: payload.exitCode,
-                }),
-              );
-            },
-            onPatchSummary: async (payload: {
-              phase?: string;
-              summary?: string;
-              title?: string;
-              name?: string;
-              added?: string[];
-              modified?: string[];
-              deleted?: string[];
-            }) => {
-              if (payload.phase !== "end") {
-                return;
-              }
-              await streamController.pushProgressLine(
-                formatChannelProgressDraftLine({
-                  event: "patch",
-                  phase: payload.phase,
-                  title: payload.title,
-                  name: payload.name,
-                  added: payload.added,
-                  modified: payload.modified,
-                  deleted: payload.deleted,
-                  summary: payload.summary,
-                }),
-              );
-            },
           }
         : {}),
       disableBlockStreaming:
-        typeof resolvedBlockStreamingEnabled === "boolean"
-          ? !resolvedBlockStreamingEnabled
-          : undefined,
+        typeof msteamsCfg?.blockStreaming === "boolean" ? !msteamsCfg.blockStreaming : undefined,
       onModelSelected,
     },
     markDispatchIdle,

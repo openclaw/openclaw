@@ -95,24 +95,22 @@ const registerMSTeamsHandlers = vi.hoisted(() =>
     run: vi.fn(async () => {}),
   })),
 );
-const createMSTeamsAdapter = vi.hoisted(() =>
-  vi.fn(() => ({
-    process: vi.fn(async () => {}),
-  })),
-);
-const jwtValidate = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 const loadMSTeamsSdkWithAuth = vi.hoisted(() =>
   vi.fn(async () => ({
-    sdk: {
-      ActivityHandler: function ActivityHandler() {},
-      MsalTokenProvider: function MsalTokenProvider() {},
-      authorizeJWT:
-        () => (_req: unknown, _res: unknown, next: ((err?: unknown) => void) | undefined) =>
-          next?.(),
+    app: {
+      on: vi.fn(),
+      initialize: vi.fn(async () => {}),
+      tokenManager: {
+        getBotToken: vi.fn(async () => ({ toString: (): string => "bot-token" })),
+        getGraphToken: vi.fn(async () => ({ toString: (): string => "graph-token" })),
+      },
     },
-    authConfig: {},
   })),
 );
+
+vi.mock("@microsoft/teams.apps", () => ({
+  ExpressAdapter: vi.fn(),
+}));
 
 vi.mock("./monitor-handler.js", () => ({
   registerMSTeamsHandlers: () => registerMSTeamsHandlers(),
@@ -124,13 +122,9 @@ vi.mock("./resolve-allowlist.js", () => ({
 }));
 
 vi.mock("./sdk.js", () => ({
-  createMSTeamsAdapter: () => createMSTeamsAdapter(),
   loadMSTeamsSdkWithAuth: () => loadMSTeamsSdkWithAuth(),
   createMSTeamsTokenProvider: () => ({
     getAccessToken: vi.fn().mockResolvedValue("mock-token"),
-  }),
-  createBotFrameworkJwtValidator: vi.fn().mockResolvedValue({
-    validate: jwtValidate,
   }),
 }));
 
@@ -192,7 +186,6 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     vi.clearAllMocks();
     expressControl.mode.value = "listening";
     expressControl.apps.length = 0;
-    jwtValidate.mockReset().mockResolvedValue(true);
   });
 
   it("stays active until aborted", async () => {
@@ -231,7 +224,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     ).rejects.toThrow(/EADDRINUSE/);
   });
 
-  it("runs JWT validation before JSON body parsing", async () => {
+  it("rejects requests without Bearer token before SDK route", async () => {
     const abort = new AbortController();
     const task = monitorMSTeamsProvider({
       cfg: createConfig(0),
@@ -245,32 +238,30 @@ describe("monitorMSTeamsProvider lifecycle", () => {
 
     const app = expressControl.apps.at(-1);
     expect(app).toBeDefined();
-    expect(app!.use).toHaveBeenCalledTimes(4);
+    // Bearer-presence middleware is the first middleware registered
+    expect(app!.use).toHaveBeenCalled();
 
-    const jsonMiddleware = vi.mocked((await import("express")).json).mock.results[0]?.value;
-    expect(jsonMiddleware).toBeDefined();
-    expect(app!.use.mock.calls[1]?.[0]).not.toBe(jsonMiddleware);
-    expect(app!.use.mock.calls[2]?.[0]).toBe(jsonMiddleware);
-
-    const jwtMiddleware = app!.use.mock.calls[1]?.[0] as (
+    const bearerMiddleware = app!.use.mock.calls[0]?.[0] as (
       req: Request,
       res: Response,
       next: (err?: unknown) => void,
     ) => void;
-    const next = vi.fn();
-    jwtMiddleware(
-      { headers: { authorization: "Bearer token" } } as Request,
-      {
-        status: vi.fn().mockReturnThis(),
-        json: vi.fn(),
-      } as unknown as Response,
-      next,
-    );
 
-    await vi.waitFor(() => {
-      expect(jwtValidate).toHaveBeenCalledWith("Bearer token");
-      expect(next).toHaveBeenCalledTimes(1);
-    });
+    // Request without Bearer token should be rejected
+    const statusFn = vi.fn().mockReturnValue({ json: vi.fn() });
+    const next = vi.fn();
+    bearerMiddleware({ headers: {} } as Request, { status: statusFn } as unknown as Response, next);
+    expect(statusFn).toHaveBeenCalledWith(401);
+    expect(next).not.toHaveBeenCalled();
+
+    // Request with Bearer token should pass through
+    const next2 = vi.fn();
+    bearerMiddleware(
+      { headers: { authorization: "Bearer valid-token" } } as Request,
+      {} as Response,
+      next2,
+    );
+    expect(next2).toHaveBeenCalledTimes(1);
 
     abort.abort();
     await task;

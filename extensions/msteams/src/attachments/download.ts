@@ -293,10 +293,10 @@ export async function downloadMSTeamsAttachments(params: {
       });
       out.push(media);
     } catch (err) {
-      params.logger?.warn?.("msteams attachment download failed", {
-        error: err instanceof Error ? err.message : String(err),
-        host: safeHostForLog(candidate.url),
-      });
+      const msg = err instanceof Error ? err.message : String(err);
+      params.logger?.warn?.(
+        `msteams attachment download failed host=${safeHostForLog(candidate.url)} error=${msg}`,
+      );
     }
   }
   return out;
