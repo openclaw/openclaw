@@ -18,6 +18,7 @@ import {
   formatRestartSentinelMessage,
   readRestartSentinel,
   removeRestartSentinelFile,
+  rewriteRestartSentinel,
   type RestartSentinelContinuation,
   type RestartSentinelPayload,
   resolveRestartSentinelPath,
@@ -33,6 +34,10 @@ import {
   type SessionDeliveryRoute,
 } from "../infra/session-delivery-queue.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import {
+  readDetachedUpdateResult,
+  removeDetachedUpdateResult,
+} from "../infra/update-detached-result.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { recordChannelMessageReplyDispatch } from "../plugin-sdk/channel-message.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
@@ -57,6 +62,64 @@ function cloneRestartSentinelPayload(
     return null;
   }
   return JSON.parse(JSON.stringify(payload)) as RestartSentinelPayload;
+}
+
+function normalizeDetachedUpdateReason(params: { ok: boolean; reason?: string }): string {
+  const reason = params.reason?.trim();
+  if (reason) {
+    return reason;
+  }
+  return params.ok ? "install-succeeded" : "detached-update-failed";
+}
+
+function applyDetachedUpdateResultToPayload(
+  payload: RestartSentinelPayload,
+  detached: NonNullable<ReturnType<typeof readDetachedUpdateResult>>,
+): RestartSentinelPayload {
+  const stats = payload.stats ? { ...payload.stats } : {};
+  const reason = normalizeDetachedUpdateReason(detached);
+  stats.detachedResult = {
+    ok: detached.ok,
+    reason,
+    ...(typeof detached.exitCode === "number" ? { exitCode: detached.exitCode } : {}),
+    ...(detached.afterVersion !== undefined ? { afterVersion: detached.afterVersion } : {}),
+    ...(detached.detail ? { detail: detached.detail } : {}),
+  };
+  if (!detached.ok) {
+    stats.reason = reason;
+  }
+  return {
+    ...payload,
+    status: detached.ok ? payload.status : "error",
+    stats,
+  };
+}
+
+async function reconcileDetachedUpdateResult(): Promise<RestartSentinelPayload | null> {
+  const sentinel = await readRestartSentinel();
+  const payload = sentinel?.payload;
+  if (payload?.kind !== "update") {
+    return null;
+  }
+  const resultPath = payload.stats?.detachedResultPath?.trim();
+  if (!resultPath) {
+    return null;
+  }
+  const detached = readDetachedUpdateResult(resultPath);
+  if (!detached) {
+    return null;
+  }
+  const updated = await rewriteRestartSentinel((current) => {
+    if (current.kind !== "update" || current.stats?.detachedResultPath !== resultPath) {
+      return null;
+    }
+    return applyDetachedUpdateResultToPayload(current, detached);
+  });
+  if (!updated) {
+    return null;
+  }
+  removeDetachedUpdateResult(resultPath);
+  return updated.payload;
 }
 
 function hasRoutableDeliveryContext(context?: {
@@ -588,7 +651,10 @@ export function shouldWakeFromRestartSentinel() {
 
 export async function refreshLatestUpdateRestartSentinel(): Promise<RestartSentinelPayload | null> {
   const finalized = await finalizeUpdateRestartSentinelRunningVersion();
-  const sentinel = finalized ?? (await readRestartSentinel());
+  const detachedPayload = await reconcileDetachedUpdateResult();
+  const sentinel = detachedPayload
+    ? { version: 1 as const, payload: detachedPayload }
+    : (finalized ?? (await readRestartSentinel()));
   if (sentinel?.payload.kind === "update") {
     latestUpdateRestartSentinel = cloneRestartSentinelPayload(sentinel.payload);
   }

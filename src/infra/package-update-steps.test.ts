@@ -332,6 +332,67 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
   });
 
+  it("can hand a verified staged npm install to a deferred swap owner", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-deferred-" }, async (base) => {
+      const prefix = path.join(base, "prefix");
+      const globalRoot = path.join(prefix, "lib", "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+      await writePackageRoot(packageRoot, "1.0.0");
+
+      let handedOffStagePrefix = "";
+      const result = await runGlobalPackageUpdateSteps({
+        installTarget: createNpmTarget(globalRoot),
+        installSpec: "openclaw@2.0.0",
+        packageName: "openclaw",
+        packageRoot,
+        runCommand: createRootRunner(globalRoot),
+        runStep: async ({ name, argv, cwd }) => {
+          const prefixIndex = argv.indexOf("--prefix");
+          const stagePrefix = argv[prefixIndex + 1];
+          if (!stagePrefix) {
+            throw new Error("missing staged prefix");
+          }
+          await writePackageRoot(
+            path.join(stagePrefix, "lib", "node_modules", "openclaw"),
+            "2.0.0",
+          );
+          return {
+            name,
+            command: argv.join(" "),
+            cwd: cwd ?? process.cwd(),
+            durationMs: 1,
+            exitCode: 0,
+          };
+        },
+        timeoutMs: 1000,
+        deferStagedNpmSwap: async ({ stage, afterVersion }) => {
+          handedOffStagePrefix = stage.prefix;
+          return {
+            name: "global install swap (detached win32)",
+            command: `swap ${stage.packageRoot} -> ${packageRoot}`,
+            cwd: globalRoot,
+            durationMs: 1,
+            exitCode: 0,
+            stdoutTail: `after=${afterVersion}`,
+            detachedResultPath: path.join(base, "detached-result.json"),
+          };
+        },
+      });
+
+      expect(result.failedStep).toBeNull();
+      expect(result.detachedResultPath).toBe(path.join(base, "detached-result.json"));
+      expect(result.afterVersion).toBe("2.0.0");
+      expect(result.steps.map((step) => step.name)).toEqual([
+        "global update",
+        "global install swap (detached win32)",
+      ]);
+      await expect(fs.access(handedOffStagePrefix)).resolves.toBeUndefined();
+      await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
+        '"version":"1.0.0"',
+      );
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "restores the existing bin shim when staged shim replacement fails",
     async () => {

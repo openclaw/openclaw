@@ -100,7 +100,10 @@ The Gateway core auto-updater (when enabled via config) launches the CLI update 
 outside the live Gateway request handler. Control-plane `update.run` package-manager
 updates force a non-deferred, no-cooldown update restart after the package swap,
 because the old Gateway process may still have in-memory chunks that point at
-files removed by the new package.
+files removed by the new package. On Windows global npm installs, `update.run`
+keeps the same staged install and verification flow, then exits the Gateway so a
+detached helper can perform the final locked package-tree swap and restart the
+Gateway through the managed Scheduled Task.
 
 For package-manager installs, `openclaw update` resolves the target package
 version before invoking the package manager. npm global installs use a staged

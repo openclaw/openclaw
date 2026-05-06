@@ -70,7 +70,9 @@ export const updateHandlers: GatewayRequestHandlers = {
         argv1: process.argv[1],
       });
       const supervisor = detectRespawnSupervisor(process.env, process.platform);
-      if (!isRestartEnabled(config) && !supervisor) {
+      const windowsGlobalUpdateNeedsSupervisor =
+        process.platform === "win32" && installSurface.kind === "global" && !supervisor;
+      if ((!isRestartEnabled(config) && !supervisor) || windowsGlobalUpdateNeedsSupervisor) {
         const beforeVersion = installSurface.root
           ? await readPackageVersion(installSurface.root)
           : null;
@@ -133,6 +135,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         })),
         reason: result.reason ?? null,
         durationMs: result.durationMs,
+        ...(result.detachedResultPath ? { detachedResultPath: result.detachedResultPath } : {}),
       },
     };
 
@@ -142,6 +145,33 @@ export const updateHandlers: GatewayRequestHandlers = {
       recordLatestUpdateRestartSentinel(payload);
     } catch {
       sentinelPath = null;
+    }
+
+    // Windows keeps the live package tree locked. After the verified staged npm
+    // install is delegated, the Gateway must exit so the helper can swap files.
+    if (result.detachedResultPath) {
+      context?.logGateway?.info(
+        `update.run delegated to detached helper ${formatControlPlaneActor(actor)} resultPath=${result.detachedResultPath}`,
+      );
+
+      const exitDelayMs = Math.min(Math.max(restartDelayMs ?? 0, 2000), 55_000);
+      respond(
+        true,
+        {
+          ok: true,
+          result,
+          restart: { ok: true, method: "detached-win32", delayMs: exitDelayMs },
+          sentinel: { path: sentinelPath, payload },
+        },
+        undefined,
+      );
+
+      // Give the response time to flush, then exit so the detached helper can proceed.
+      setTimeout(() => {
+        context?.logGateway?.info("Exiting for detached Windows update...");
+        process.exit(0);
+      }, exitDelayMs);
+      return;
     }
 
     // Only restart the gateway when the update actually succeeded.

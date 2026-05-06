@@ -366,6 +366,54 @@ describe("update.run restart scheduling", () => {
       }),
     );
   });
+
+  it("responds before exiting for detached Windows updates", async () => {
+    vi.useFakeTimers();
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    runGatewayUpdateMock.mockResolvedValueOnce({
+      status: "ok",
+      mode: "npm",
+      detachedResultPath: "/tmp/openclaw-detached-update.json",
+      steps: [],
+      durationMs: 100,
+    });
+
+    let payload:
+      | {
+          ok: boolean;
+          restart?: { method?: string; delayMs?: number };
+          result?: { detachedResultPath?: string };
+        }
+      | undefined;
+
+    try {
+      await invokeUpdateRun({}, (_ok: boolean, response: unknown) => {
+        payload = response as typeof payload;
+      });
+
+      expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+      expect(payload).toEqual(
+        expect.objectContaining({
+          ok: true,
+          restart: expect.objectContaining({
+            method: "detached-win32",
+            delayMs: 2000,
+          }),
+          result: expect.objectContaining({
+            detachedResultPath: "/tmp/openclaw-detached-update.json",
+          }),
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(exitSpy).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(exitSpy).toHaveBeenCalledWith(0);
+    } finally {
+      exitSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("update.status", () => {

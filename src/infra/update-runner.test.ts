@@ -8,7 +8,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { pathExists } from "../utils.js";
 import { writePackageDistInventory } from "./package-dist-inventory.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
-import { runGatewayUpdate } from "./update-runner.js";
+import { normalizeFallbackFailureReason, runGatewayUpdate } from "./update-runner.js";
 
 type CommandResponse = { stdout?: string; stderr?: string; code?: number | null };
 type CommandResult = { stdout: string; stderr: string; code: number | null };
@@ -2027,5 +2027,13 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("ui-assets-missing");
+  });
+});
+
+describe("normalizeFallbackFailureReason", () => {
+  it("reports detached staged npm swap failures as global install failures", () => {
+    expect(normalizeFallbackFailureReason("global install swap (detached win32)")).toBe(
+      "global-install-failed",
+    );
   });
 });

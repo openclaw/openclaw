@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
 
 type LoadedSessionEntry = ReturnType<typeof import("./session-utils.js").loadSessionEntry>;
 type RecordInboundSessionAndDispatchReplyParams = Parameters<
@@ -19,7 +20,7 @@ const mocks = vi.hoisted(() => {
     set queuedSessionDelivery(value: Record<string, unknown> | null) {
       state.queuedSessionDelivery = value;
     },
-    readRestartSentinel: vi.fn(async () => ({
+    readRestartSentinel: vi.fn<() => Promise<unknown>>(async () => ({
       payload: {
         sessionKey: "agent:main:main",
         deliveryContext: {
@@ -30,9 +31,17 @@ const mocks = vi.hoisted(() => {
       },
     })),
     removeRestartSentinelFile: vi.fn(async () => undefined),
+    rewriteRestartSentinel: vi.fn<
+      (
+        rewrite: (payload: RestartSentinelPayload) => RestartSentinelPayload | null,
+      ) => Promise<unknown>
+    >(async () => null),
+    finalizeUpdateRestartSentinelRunningVersion: vi.fn<() => Promise<unknown>>(async () => null),
     resolveRestartSentinelPath: vi.fn(() => "/tmp/restart-sentinel.json"),
     formatRestartSentinelMessage: vi.fn(() => "restart message"),
     summarizeRestartSentinel: vi.fn(() => "restart summary"),
+    readDetachedUpdateResult: vi.fn<() => unknown>(() => null),
+    removeDetachedUpdateResult: vi.fn(),
     resolveMainSessionKeyFromConfig: vi.fn(() => "agent:main:main"),
     parseSessionThreadInfo: vi.fn(
       (): { baseSessionKey: string | null | undefined; threadId: string | undefined } => ({
@@ -131,9 +140,16 @@ vi.mock("../agents/agent-scope.js", () => ({
 vi.mock("../infra/restart-sentinel.js", () => ({
   readRestartSentinel: mocks.readRestartSentinel,
   removeRestartSentinelFile: mocks.removeRestartSentinelFile,
+  rewriteRestartSentinel: mocks.rewriteRestartSentinel,
+  finalizeUpdateRestartSentinelRunningVersion: mocks.finalizeUpdateRestartSentinelRunningVersion,
   resolveRestartSentinelPath: mocks.resolveRestartSentinelPath,
   formatRestartSentinelMessage: mocks.formatRestartSentinelMessage,
   summarizeRestartSentinel: mocks.summarizeRestartSentinel,
+}));
+
+vi.mock("../infra/update-detached-result.js", () => ({
+  readDetachedUpdateResult: mocks.readDetachedUpdateResult,
+  removeDetachedUpdateResult: mocks.removeDetachedUpdateResult,
 }));
 
 vi.mock("../infra/session-delivery-queue.js", () => ({
@@ -226,7 +242,80 @@ vi.mock("./server-methods/agent-timestamp.js", () => ({
   timestampOptsFromConfig: mocks.timestampOptsFromConfig,
 }));
 
-const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
+const { refreshLatestUpdateRestartSentinel, scheduleRestartSentinelWake } =
+  await import("./server-restart-sentinel.js");
+
+describe("refreshLatestUpdateRestartSentinel", () => {
+  beforeEach(() => {
+    mocks.readRestartSentinel.mockReset();
+    mocks.rewriteRestartSentinel.mockReset();
+    mocks.finalizeUpdateRestartSentinelRunningVersion.mockReset();
+    mocks.readDetachedUpdateResult.mockReset();
+    mocks.removeDetachedUpdateResult.mockClear();
+  });
+
+  it("records detached update failures into the cached restart sentinel", async () => {
+    mocks.finalizeUpdateRestartSentinelRunningVersion.mockResolvedValue({
+      version: 1,
+      payload: {
+        kind: "update",
+        status: "ok",
+        ts: 1,
+        stats: {
+          detachedResultPath: "/tmp/detached-result.json",
+          after: { version: "1.0.0" },
+        },
+      },
+    });
+    mocks.readRestartSentinel.mockResolvedValue({
+      version: 1,
+      payload: {
+        kind: "update",
+        status: "ok",
+        ts: 1,
+        stats: {
+          detachedResultPath: "/tmp/detached-result.json",
+          after: { version: "1.0.0" },
+        },
+      },
+    });
+    mocks.readDetachedUpdateResult.mockReturnValue({
+      ok: false,
+      reason: "swap-failed",
+      detail: "EBUSY",
+    });
+    mocks.rewriteRestartSentinel.mockImplementation(async (rewrite) => ({
+      version: 1,
+      payload: rewrite({
+        kind: "update",
+        status: "ok",
+        ts: 1,
+        stats: {
+          detachedResultPath: "/tmp/detached-result.json",
+          after: { version: "1.0.0" },
+        },
+      })!,
+    }));
+
+    const result = await refreshLatestUpdateRestartSentinel();
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        kind: "update",
+        status: "error",
+        stats: expect.objectContaining({
+          reason: "swap-failed",
+          detachedResult: expect.objectContaining({
+            ok: false,
+            reason: "swap-failed",
+            detail: "EBUSY",
+          }),
+        }),
+      }),
+    );
+    expect(mocks.removeDetachedUpdateResult).toHaveBeenCalledWith("/tmp/detached-result.json");
+  });
+});
 
 describe("scheduleRestartSentinelWake", () => {
   afterEach(() => {
@@ -279,6 +368,13 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.drainPendingSessionDeliveries.mockClear();
     mocks.recoverPendingSessionDeliveries.mockClear();
     mocks.removeRestartSentinelFile.mockClear();
+    mocks.rewriteRestartSentinel.mockReset();
+    mocks.rewriteRestartSentinel.mockResolvedValue(null);
+    mocks.finalizeUpdateRestartSentinelRunningVersion.mockReset();
+    mocks.finalizeUpdateRestartSentinelRunningVersion.mockResolvedValue(null);
+    mocks.readDetachedUpdateResult.mockReset();
+    mocks.readDetachedUpdateResult.mockReturnValue(null);
+    mocks.removeDetachedUpdateResult.mockClear();
     mocks.injectTimestamp.mockClear();
     mocks.timestampOptsFromConfig.mockClear();
     mocks.recordInboundSessionAndDispatchReply.mockReset();
@@ -406,7 +502,7 @@ describe("scheduleRestartSentinelWake", () => {
           message: "continue",
         },
       },
-    } as unknown as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    });
 
     const wakePromise = scheduleRestartSentinelWake({ deps: {} as never });
     await Promise.resolve();
@@ -441,7 +537,7 @@ describe("scheduleRestartSentinelWake", () => {
         } as never,
         threadId: "fresh-thread",
       },
-    } as unknown as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    });
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -702,7 +798,7 @@ describe("scheduleRestartSentinelWake", () => {
           message: "continue",
         },
       },
-    } as unknown as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    });
     mocks.deliveryContextFromSession.mockReturnValue({
       channel: "telegram",
       to: "telegram:200482621",
@@ -958,9 +1054,7 @@ describe("scheduleRestartSentinelWake", () => {
           },
         },
       } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>)
-      .mockResolvedValueOnce(
-        null as unknown as Awaited<ReturnType<typeof mocks.readRestartSentinel>>,
-      );
+      .mockResolvedValueOnce(null);
 
     await scheduleRestartSentinelWake({ deps: {} as never });
     await scheduleRestartSentinelWake({ deps: {} as never });
@@ -973,7 +1067,7 @@ describe("scheduleRestartSentinelWake", () => {
       payload: {
         message: "restart message",
       },
-    } as unknown as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    });
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -993,7 +1087,7 @@ describe("scheduleRestartSentinelWake", () => {
           message: "continue",
         },
       },
-    } as unknown as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    });
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
