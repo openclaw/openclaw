@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   __testing,
   filterRecallEntriesWithinLookback,
+  previewRemDreaming,
   runDreamingSweepPhases,
 } from "./dreaming-phases.js";
 import { previewRemHarness } from "./rem-harness.js";
@@ -331,6 +332,17 @@ describe("memory-core dreaming phases", () => {
       expect.stringContaining("narrative session cleanup failed"),
     );
     expect(subagent.deleteSession).not.toHaveBeenCalled();
+  });
+
+  it("renders rem preview section headings as h3 for inline daily-note blocks", () => {
+    const preview = previewRemDreaming({
+      entries: [],
+      limit: 10,
+      minPatternStrength: 0.75,
+    });
+
+    expect(preview.bodyLines[0]).toBe("### Reflections");
+    expect(preview.bodyLines).toContain("### Possible Lasting Truths");
   });
 
   it("does not re-ingest managed light dreaming blocks from daily notes", async () => {

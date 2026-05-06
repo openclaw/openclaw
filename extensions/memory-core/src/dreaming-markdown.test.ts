@@ -89,6 +89,40 @@ describe("dreaming markdown storage", () => {
     await expect(fs.readFile(lowercasePath, "utf-8")).resolves.toBe("# Scratch\n\n");
   });
 
+  it("keeps rem headings nested inline while lowering them for separate reports", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+
+    const result = await writeDailyDreamingPhaseBlock({
+      workspaceDir,
+      phase: "rem",
+      bodyLines: [
+        "### Reflections",
+        "- Theme: `focus` kept surfacing.",
+        "",
+        "### Possible Lasting Truths",
+        "- No strong candidate truths surfaced.",
+      ],
+      nowMs,
+      timezone,
+      storage: {
+        mode: "both",
+        separateReports: false,
+      },
+    });
+
+    const inlineContent = await fs.readFile(result.inlinePath!, "utf-8");
+    expect(inlineContent).toContain("## REM Sleep");
+    expect(inlineContent).toContain("### Reflections");
+    expect(inlineContent).toContain("### Possible Lasting Truths");
+
+    const reportContent = await fs.readFile(result.reportPath!, "utf-8");
+    expect(reportContent).toContain("# REM Sleep");
+    expect(reportContent).toContain("## Reflections");
+    expect(reportContent).toContain("## Possible Lasting Truths");
+    expect(reportContent).not.toContain("### Reflections");
+    expect(reportContent).not.toContain("### Possible Lasting Truths");
+  });
+
   it("still writes deep reports to the per-phase report directory", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
 
