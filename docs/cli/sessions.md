@@ -97,7 +97,7 @@ JSON examples:
 
 ## Cleanup maintenance
 
-Run maintenance now (instead of waiting for the next write cycle):
+Run maintenance explicitly:
 
 ```bash
 openclaw sessions cleanup --dry-run
@@ -112,7 +112,7 @@ openclaw sessions cleanup --json
 `openclaw sessions cleanup` uses `session.maintenance` settings from config:
 
 - Scope note: `openclaw sessions cleanup` maintains session stores, transcripts, and trajectory sidecars. It does not prune cron run logs (`cron/runs/<jobId>.jsonl`), which are managed by `cron.runLog.maxBytes` and `cron.runLog.keepLines` in [Cron configuration](/automation/cron-jobs#configuration) and explained in [Cron maintenance](/automation/cron-jobs#maintenance).
-- Cleanup also prunes unreferenced primary transcripts, compaction checkpoints, and trajectory sidecars older than `session.maintenance.pruneAfter`; files still referenced by `sessions.json` are preserved.
+- Cleanup also prunes unreferenced primary transcripts, compaction checkpoints, and trajectory sidecars older than `session.maintenance.pruneAfter`; files still referenced by the session store are preserved.
 
 - `--dry-run`: preview how many entries would be pruned/capped without writing.
   - In text mode, dry-run prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) so you can see what would be kept vs removed.
@@ -127,7 +127,8 @@ openclaw sessions cleanup --json
 
 When a Gateway is reachable, non-dry-run cleanup for configured agent stores is
 sent through the Gateway so it shares the same session-store writer as runtime
-traffic. Use `--store <path>` for explicit offline repair of a store file.
+traffic. Legacy JSON import belongs to `openclaw doctor --fix`; cleanup no
+longer acts as the migration path for `sessions.json`.
 
 `openclaw sessions cleanup --all-agents --dry-run --json`:
 

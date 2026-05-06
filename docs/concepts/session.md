@@ -92,7 +92,7 @@ sessions should expire on a timer.
 All session state is owned by the **gateway**. UI clients query the gateway for
 session data.
 
-- **Store:** `~/.openclaw/state/openclaw.sqlite` by default; legacy/custom JSON stores use `~/.openclaw/agents/<agentId>/sessions/sessions.json`
+- **Store:** `~/.openclaw/state/openclaw.sqlite` by default. Legacy `sessions.json` indexes are imported by `openclaw doctor --fix`.
 - **Transcripts:** `~/.openclaw/agents/<agentId>/sessions/<sessionId>.jsonl`
 
 The session store keeps separate lifecycle timestamps:
@@ -109,9 +109,10 @@ writes.
 
 ## Session maintenance
 
-OpenClaw automatically bounds session storage over time. By default, it runs
-in `warn` mode (reports what would be cleaned). Set `session.maintenance.mode`
-to `"enforce"` for automatic cleanup:
+OpenClaw bounds session storage through explicit maintenance. By default, it
+runs in `warn` mode (reports what would be cleaned). Set
+`session.maintenance.mode` to `"enforce"` and run `openclaw sessions cleanup`
+when you want cleanup to apply:
 
 ```json5
 {
@@ -125,7 +126,7 @@ to `"enforce"` for automatic cleanup:
 }
 ```
 
-For production-sized `maxEntries` limits, Gateway runtime writes use a small high-water buffer and clean back down to the configured cap in batches. Session store reads do not prune or cap entries during Gateway startup. This avoids running full store cleanup on every startup or isolated cron session. `openclaw sessions cleanup --enforce` applies the cap immediately.
+Gateway runtime writes do not prune, cap, or import session rows. Session store reads also do not prune or cap entries during Gateway startup. This avoids running full store cleanup on every startup or isolated cron session. `openclaw sessions cleanup --enforce` applies the cap immediately.
 
 Maintenance preserves durable external conversation pointers, including group
 sessions and thread-scoped chat sessions, while still allowing synthetic cron,

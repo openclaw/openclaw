@@ -12,7 +12,7 @@ export function useTempSessionsFixture(prefix: string) {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
     sessionsDir = path.join(tempDir, "agents", "main", "sessions");
     fs.mkdirSync(sessionsDir, { recursive: true });
-    storePath = path.join(sessionsDir, "sessions.json");
+    storePath = path.join(tempDir, "session-store.json");
   });
 
   afterEach(() => {

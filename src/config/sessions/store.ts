@@ -33,7 +33,6 @@ import {
   getActiveSessionMaintenanceWarning,
   pruneQuotaSuspensions,
   pruneStaleEntries,
-  shouldRunSessionEntryMaintenance,
   type QuotaSuspensionMaintenanceResult,
   type ResolvedSessionMaintenanceConfig,
   type SessionMaintenanceWarning,
@@ -59,17 +58,10 @@ const log = createSubsystemLogger("sessions/store");
 let sessionArchiveRuntimePromise: Promise<
   typeof import("../../gateway/session-archive.runtime.js")
 > | null = null;
-let trajectoryCleanupRuntimePromise: Promise<typeof import("../../trajectory/cleanup.js")> | null =
-  null;
 
 function loadSessionArchiveRuntime() {
   sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
   return sessionArchiveRuntimePromise;
-}
-
-function loadTrajectoryCleanupRuntime() {
-  trajectoryCleanupRuntimePromise ??= import("../../trajectory/cleanup.js");
-  return trajectoryCleanupRuntimePromise;
 }
 
 function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
@@ -94,19 +86,6 @@ export function readSessionUpdatedAt(params: {
   }
 }
 
-// ============================================================================
-// Session Store Pruning, Capping & File Rotation
-// ============================================================================
-
-export type SessionMaintenanceApplyReport = {
-  mode: ResolvedSessionMaintenanceConfig["mode"];
-  beforeCount: number;
-  afterCount: number;
-  pruned: number;
-  capped: number;
-  diskBudget: SessionDiskBudgetSweepResult | null;
-};
-
 export {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
@@ -116,9 +95,9 @@ export {
 export type { ResolvedSessionMaintenanceConfig, SessionMaintenanceWarning };
 
 type SaveSessionStoreOptions = {
-  /** Skip pruning, capping, and rotation (e.g. during one-time migrations). */
+  /** Deprecated no-op retained for callers that still pass migration-era options. */
   skipMaintenance?: boolean;
-  /** Active session key for warn-only maintenance. */
+  /** Deprecated no-op retained for callers that still pass migration-era options. */
   activeSessionKey?: string;
   /**
    * Session keys that are allowed to drop persisted ACP metadata during this update.
@@ -126,14 +105,6 @@ type SaveSessionStoreOptions = {
    * whole session entry without carrying ACP state forward.
    */
   allowDropAcpMetaSessionKeys?: string[];
-  /** Optional callback for warn-only maintenance. */
-  onWarn?: (warning: SessionMaintenanceWarning) => void | Promise<void>;
-  /** Optional callback with maintenance stats after a save. */
-  onMaintenanceApplied?: (report: SessionMaintenanceApplyReport) => void | Promise<void>;
-  /** Optional overrides used by maintenance commands. */
-  maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
-  /** Fully resolved maintenance settings when the caller already has config loaded. */
-  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
 };
 
 function updateSessionStoreWriteCaches(params: {
@@ -232,148 +203,9 @@ function preserveExistingAcpMetadata(params: {
 async function saveSessionStoreUnlocked(
   storePath: string,
   store: Record<string, SessionEntry>,
-  opts?: SaveSessionStoreOptions,
+  _opts?: SaveSessionStoreOptions,
 ): Promise<void> {
   normalizeSessionStore(store);
-
-  if (!opts?.skipMaintenance) {
-    // Resolve maintenance config once (avoids repeated getRuntimeConfig() calls).
-    const maintenance = opts?.maintenanceConfig
-      ? { ...opts.maintenanceConfig, ...opts?.maintenanceOverride }
-      : { ...resolveMaintenanceConfig(), ...opts?.maintenanceOverride };
-    const shouldWarnOnly = maintenance.mode === "warn";
-    const beforeCount = Object.keys(store).length;
-    const forceMaintenance = opts?.maintenanceOverride !== undefined;
-    const shouldRunEntryMaintenance = shouldRunSessionEntryMaintenance({
-      entryCount: beforeCount,
-      maxEntries: maintenance.maxEntries,
-      force: forceMaintenance,
-    });
-
-    if (shouldWarnOnly) {
-      const activeSessionKey = opts?.activeSessionKey?.trim();
-      if (activeSessionKey && shouldRunEntryMaintenance) {
-        const warning = getActiveSessionMaintenanceWarning({
-          store,
-          activeSessionKey,
-          pruneAfterMs: maintenance.pruneAfterMs,
-          maxEntries: maintenance.maxEntries,
-        });
-        if (warning) {
-          log.warn("session maintenance would evict active session; skipping enforcement", {
-            activeSessionKey: warning.activeSessionKey,
-            wouldPrune: warning.wouldPrune,
-            wouldCap: warning.wouldCap,
-            pruneAfterMs: warning.pruneAfterMs,
-            maxEntries: warning.maxEntries,
-          });
-          await opts?.onWarn?.(warning);
-        }
-      }
-      const diskBudget = await enforceSessionDiskBudget({
-        store,
-        storePath,
-        activeSessionKey: opts?.activeSessionKey,
-        maintenance,
-        warnOnly: true,
-        log,
-      });
-      await opts?.onMaintenanceApplied?.({
-        mode: maintenance.mode,
-        beforeCount,
-        afterCount: Object.keys(store).length,
-        pruned: 0,
-        capped: 0,
-        diskBudget,
-      });
-    } else {
-      const preserveSessionKeys = opts?.activeSessionKey
-        ? new Set([opts.activeSessionKey])
-        : undefined;
-      // Prune stale entries and cap total count before serializing.
-      const removedSessionFiles = new Map<string, string | undefined>();
-      const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
-        onPruned: ({ entry }) => {
-          rememberRemovedSessionFile(removedSessionFiles, entry);
-        },
-        preserveKeys: preserveSessionKeys,
-      });
-      const countAfterPrune = Object.keys(store).length;
-      const shouldRunCapMaintenance =
-        forceMaintenance ||
-        shouldRunSessionEntryMaintenance({
-          entryCount: countAfterPrune,
-          maxEntries: maintenance.maxEntries,
-        });
-      const capped = shouldRunCapMaintenance
-        ? capEntryCount(store, maintenance.maxEntries, {
-            onCapped: ({ entry }) => {
-              rememberRemovedSessionFile(removedSessionFiles, entry);
-            },
-            preserveKeys: preserveSessionKeys,
-          })
-        : 0;
-      const archivedDirs = new Set<string>();
-      const referencedSessionIds = new Set(
-        Object.values(store)
-          .map((entry) => entry?.sessionId)
-          .filter((id): id is string => Boolean(id)),
-      );
-      const archivedForDeletedSessions = await archiveRemovedSessionTranscripts({
-        removedSessionFiles,
-        referencedSessionIds,
-        storePath,
-        reason: "deleted",
-        restrictToStoreDir: true,
-      });
-      if (removedSessionFiles.size > 0) {
-        const { removeRemovedSessionTrajectoryArtifacts } = await loadTrajectoryCleanupRuntime();
-        await removeRemovedSessionTrajectoryArtifacts({
-          removedSessionFiles,
-          referencedSessionIds,
-          storePath,
-          restrictToStoreDir: true,
-        });
-      }
-      for (const archivedDir of archivedForDeletedSessions) {
-        archivedDirs.add(archivedDir);
-      }
-      if (archivedDirs.size > 0 || maintenance.resetArchiveRetentionMs != null) {
-        const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
-        const targetDirs =
-          archivedDirs.size > 0 ? [...archivedDirs] : [path.dirname(path.resolve(storePath))];
-        await cleanupArchivedSessionTranscripts({
-          directories: targetDirs,
-          olderThanMs: maintenance.pruneAfterMs,
-          reason: "deleted",
-        });
-        if (maintenance.resetArchiveRetentionMs != null) {
-          await cleanupArchivedSessionTranscripts({
-            directories: targetDirs,
-            olderThanMs: maintenance.resetArchiveRetentionMs,
-            reason: "reset",
-          });
-        }
-      }
-
-      const diskBudget = await enforceSessionDiskBudget({
-        store,
-        storePath,
-        activeSessionKey: opts?.activeSessionKey,
-        maintenance,
-        warnOnly: false,
-        log,
-      });
-      await opts?.onMaintenanceApplied?.({
-        mode: maintenance.mode,
-        beforeCount,
-        afterCount: Object.keys(store).length,
-        pruned,
-        capped,
-        diskBudget,
-      });
-    }
-  }
 
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
   const json = JSON.stringify(store, null, 2);
@@ -492,15 +324,6 @@ function getErrorCode(error: unknown): string | null {
     return null;
   }
   return String((error as { code?: unknown }).code);
-}
-
-function rememberRemovedSessionFile(
-  removedSessionFiles: Map<string, string | undefined>,
-  entry: SessionEntry,
-): void {
-  if (!removedSessionFiles.has(entry.sessionId) || entry.sessionFile) {
-    removedSessionFiles.set(entry.sessionId, entry.sessionFile);
-  }
 }
 
 export async function archiveRemovedSessionTranscripts(params: {

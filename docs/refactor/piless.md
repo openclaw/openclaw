@@ -1,6 +1,6 @@
 ---
 summary: "Plan for reducing OpenClaw's dependency on external PI packages while moving agent state toward SQLite, VFS scratch storage, and worker isolation"
-title: "Piless runtime and state refactor plan"
+title: "Refactoring"
 read_when:
   - Planning work to internalize PI runtime pieces
   - Moving session, transcript, or agent scratch state from JSON files to SQLite
@@ -49,7 +49,9 @@ This plan has started landing in slices:
 - Canonical per-agent session stores use SQLite by default. The `openclaw doctor`
   fix mode imports legacy `sessions.json` indexes into SQLite and removes the
   JSON index after import, instead of keeping a startup migration or parallel
-  compatibility/export store.
+  compatibility/export store. Runtime session reads and writes no longer run
+  JSON import, pruning, capping, archive cleanup, or disk-budget cleanup; those
+  mutations now live behind explicit doctor/session-cleanup steps.
 - Transcript events have a SQLite store primitive with JSONL import/export.
   Transcript append paths dual-write when the caller already has agent and
   session scope, including gateway-injected assistant messages. Scoped appends
@@ -548,6 +550,8 @@ Phase 1: SQLite session index
   the JSON index.
 - Move session entries to SQLite behind a flag.
 - Prove current session list, patch, reset, cleanup, and UI flows.
+- Remove load-time/startup session JSON migration and write-time pruning from
+  the runtime store path.
 
 Phase 2: VFS scratch
 
