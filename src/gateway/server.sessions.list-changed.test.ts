@@ -374,6 +374,7 @@ test("sessions.changed mutation events include live usage metadata", async () =>
     context: {
       broadcastToConnIds,
       getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+      getSessionMessageSubscriberConnIds: () => new Set(["conn-1"]),
       loadGatewayModelCatalog: async () => ({ providers: [] }),
       getRuntimeConfig: getRuntimeConfig,
     } as never,
@@ -433,6 +434,7 @@ test("sessions.changed mutation events include live session setting metadata", a
     context: {
       broadcastToConnIds,
       getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+      getSessionMessageSubscriberConnIds: () => new Set(["conn-1"]),
       loadGatewayModelCatalog: async () => ({ providers: [] }),
       getRuntimeConfig: getRuntimeConfig,
     } as never,
@@ -487,6 +489,7 @@ test("sessions.changed mutation events include sendPolicy metadata", async () =>
     context: {
       broadcastToConnIds,
       getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+      getSessionMessageSubscriberConnIds: () => new Set(["conn-1"]),
       loadGatewayModelCatalog: async () => ({ providers: [] }),
       getRuntimeConfig: getRuntimeConfig,
     } as never,
@@ -540,6 +543,7 @@ test("sessions.changed mutation events include subagent ownership metadata", asy
     context: {
       broadcastToConnIds,
       getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+      getSessionMessageSubscriberConnIds: () => new Set(["conn-1"]),
       loadGatewayModelCatalog: async () => ({ providers: [] }),
       getRuntimeConfig: getRuntimeConfig,
     } as never,

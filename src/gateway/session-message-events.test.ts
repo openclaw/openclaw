@@ -16,6 +16,16 @@ import {
   writeSessionStore,
 } from "./test-helpers.server.js";
 
+vi.mock("../plugin-sdk/browser-maintenance.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugin-sdk/browser-maintenance.js")>(
+    "../plugin-sdk/browser-maintenance.js",
+  );
+  return {
+    ...actual,
+    closeTrackedBrowserTabsForSessions: vi.fn().mockResolvedValue(0),
+  };
+});
+
 installGatewayTestHooks({ scope: "suite" });
 
 const cleanupDirs: string[] = [];
@@ -25,17 +35,24 @@ let subscribedOperatorWs:
   | Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>
   | undefined;
 
+let previousMinimalGateway: string | undefined;
+
 beforeAll(async () => {
-  harness = await createGatewaySuiteHarness();
+  previousMinimalGateway = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+  delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+  harness = await createGatewaySuiteHarness({ serverOptions: { auth: { mode: "none" } } });
   subscribedOperatorWs = await harness.openWs();
   await connectOk(subscribedOperatorWs, {
-    scopes: ["operator.read"],
+    scopes: ["operator.read", "operator.admin"],
     timeoutMs: SETUP_RPC_TIMEOUT_MS,
   });
   await rpcReq(subscribedOperatorWs, "sessions.subscribe", undefined, SETUP_RPC_TIMEOUT_MS);
 }, 60_000);
 
 afterAll(async () => {
+  if (previousMinimalGateway !== undefined) {
+    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = previousMinimalGateway;
+  }
   subscribedOperatorWs?.close();
   if (harness) {
     await harness.close();
@@ -202,9 +219,9 @@ describe("session.message websocket events", () => {
     const unsubscribedWs = await harness.openWs();
     const nodeWs = await harness.openWs();
     try {
-      await connectOk(subscribedWs, { scopes: ["operator.read"] });
+      await connectOk(subscribedWs, { scopes: ["operator.read", "operator.admin"] });
       await rpcReq(subscribedWs, "sessions.subscribe");
-      await connectOk(unsubscribedWs, { scopes: ["operator.read"] });
+      await connectOk(unsubscribedWs, { scopes: ["operator.read", "operator.admin"] });
       await connectOk(nodeWs, { role: "node", scopes: [] });
 
       const subscribedEvent = onceMessage(
@@ -487,7 +504,7 @@ describe("session.message websocket events", () => {
 
     const ws = await harness.openWs();
     try {
-      await connectOk(ws, { scopes: ["operator.read"] });
+      await connectOk(ws, { scopes: ["operator.read", "operator.admin"] });
       await rpcReq(ws, "sessions.subscribe");
 
       const messageEventPromise = onceMessage(
@@ -621,7 +638,7 @@ describe("session.message websocket events", () => {
 
     const ws = await harness.openWs();
     try {
-      await connectOk(ws, { scopes: ["operator.read"] });
+      await connectOk(ws, { scopes: ["operator.read", "operator.admin"] });
       const subscribeRes = await rpcReq(ws, "sessions.messages.subscribe", {
         key: "agent:main:main",
       });
@@ -745,6 +762,168 @@ describe("session.message websocket events", () => {
         messageId: "msg-shared",
         messageSeq: 1,
       });
+    });
+  });
+
+  test("broadcasts socket.drain event when a session is reset for message subscribers", async () => {
+    vi.useRealTimers();
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-msg-subs-1",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    const ws = await harness.openWs();
+    try {
+      await connectOk(ws, { scopes: ["operator.read", "operator.admin"] });
+      const subRes = await rpcReq(ws, "sessions.messages.subscribe", { key: "agent:main:main" });
+      expect(subRes.ok, JSON.stringify(subRes)).toBe(true);
+      expect(subRes.payload).toMatchObject({
+        subscribed: true,
+        key: "agent:main:main",
+      });
+
+      const socketDrainPromise = onceMessage(
+        ws,
+        (message) =>
+          message.type === "event" &&
+          message.event === "socket.drain" &&
+          (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+            "agent:main:main",
+        5000,
+      );
+
+      const resetRes = await rpcReq(ws, "sessions.reset", { key: "agent:main:main" });
+      expect(resetRes.ok, JSON.stringify(resetRes)).toBe(true);
+
+      const drainEvent = await socketDrainPromise;
+      expect(drainEvent.payload).toMatchObject({
+        sessionKey: "agent:main:main",
+        reason: "reset",
+      });
+      expect(typeof (drainEvent.payload as any).ts).toBe("number");
+    } finally {
+      ws.close();
+    }
+  });
+
+  test("broadcasts socket.drain event when a session is reset", async () => {
+    vi.useRealTimers();
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-reset-1",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const socketDrainPromise = onceMessage(
+        ws,
+        (message) =>
+          message.type === "event" &&
+          message.event === "socket.drain" &&
+          (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+            "agent:main:main",
+        5000,
+      );
+
+      const resetRes = await rpcReq(ws, "sessions.reset", { key: "agent:main:main" });
+      expect(resetRes.ok, JSON.stringify(resetRes)).toBe(true);
+
+      const drainEvent = await socketDrainPromise;
+      expect(drainEvent.payload).toMatchObject({
+        sessionKey: "agent:main:main",
+        reason: "reset",
+      });
+      expect(typeof (drainEvent.payload as any).ts).toBe("number");
+    });
+  });
+
+  test("broadcasts socket.drain event when a session is reset with reason 'new'", async () => {
+    vi.useRealTimers();
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-reset-2",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const socketDrainPromise = onceMessage(
+        ws,
+        (message) =>
+          message.type === "event" &&
+          message.event === "socket.drain" &&
+          (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+            "agent:main:main",
+        5000,
+      );
+
+      const resetRes = await rpcReq(ws, "sessions.reset", {
+        key: "agent:main:main",
+        reason: "new",
+      });
+      expect(resetRes.ok, JSON.stringify(resetRes)).toBe(true);
+
+      const drainEvent = await socketDrainPromise;
+      expect(drainEvent.payload).toMatchObject({
+        sessionKey: "agent:main:main",
+        reason: "new",
+      });
+      expect(typeof (drainEvent.payload as any).ts).toBe("number");
+    });
+  });
+
+  test("broadcasts socket.drain event when a session is deleted", async () => {
+    vi.useRealTimers();
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-deleted-main",
+          updatedAt: Date.now(),
+        },
+        worker: {
+          sessionId: "sess-deleted-worker",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const socketDrainPromise = onceMessage(
+        ws,
+        (message) =>
+          message.type === "event" &&
+          message.event === "socket.drain" &&
+          (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+            "agent:main:worker",
+        5000,
+      );
+
+      const deleteRes = await rpcReq(ws, "sessions.delete", { key: "agent:main:worker" });
+      expect(deleteRes.ok).toBe(true);
+
+      const drainEvent = await socketDrainPromise;
+      expect(drainEvent.payload).toMatchObject({
+        sessionKey: "agent:main:worker",
+        reason: "delete",
+      });
+      expect(typeof (drainEvent.payload as any).ts).toBe("number");
     });
   });
 });

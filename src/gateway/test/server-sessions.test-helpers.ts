@@ -460,6 +460,7 @@ export async function directSessionReq<TPayload = unknown>(
     context: {
       broadcastToConnIds: vi.fn(),
       getSessionEventSubscriberConnIds: () => new Set<string>(),
+      getSessionMessageSubscriberConnIds: () => new Set<string>(),
       loadGatewayModelCatalog: async () => piSdkMock.models,
       getRuntimeConfig: getRuntimeConfig,
       ...opts?.context,

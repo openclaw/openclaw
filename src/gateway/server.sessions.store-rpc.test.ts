@@ -79,6 +79,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const directContext = {
     broadcastToConnIds: vi.fn(),
     getSessionEventSubscriberConnIds: () => new Set<string>(),
+    getSessionMessageSubscriberConnIds: () => new Set<string>(),
     logGateway: { debug: vi.fn() },
     loadGatewayModelCatalog: async () => piSdkMock.models,
     getRuntimeConfig: getRuntimeConfig,
