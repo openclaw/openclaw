@@ -425,6 +425,9 @@ export async function runBeforeToolCallHook(args: {
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
+  // Normalize non-object params (null, undefined, primitives) for loop detection
+  // so the hash matches the normalized params used in recordLoopOutcome.
+  const loopParams = isPlainObject(params) ? params : {};
 
   if (args.ctx?.sessionKey) {
     const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =
@@ -438,7 +441,7 @@ export async function runBeforeToolCallHook(args: {
     const loopResult = detectToolCallLoop(
       sessionState,
       toolName,
-      params,
+      loopParams,
       args.ctx.loopDetection,
       loopScope,
     );
@@ -486,7 +489,7 @@ export async function runBeforeToolCallHook(args: {
     recordToolCall(
       sessionState,
       toolName,
-      params,
+      loopParams,
       args.toolCallId,
       args.ctx.loopDetection,
       loopScope,
