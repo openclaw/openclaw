@@ -33,10 +33,17 @@ type MessagePluginPreloadPlan =
 
 function normalizeMessageOptions(opts: Record<string, unknown>): Record<string, unknown> {
   const { account, timeout, ...rest } = opts;
+  let timeoutMs: number | undefined;
+  if (typeof timeout === "string") {
+    const parsed = parseInt(timeout, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      timeoutMs = parsed;
+    }
+  }
   return {
     ...rest,
     accountId: typeof account === "string" ? account : undefined,
-    timeoutMs: typeof timeout === "string" ? parseInt(timeout, 10) : undefined,
+    timeoutMs,
   };
 }
 
