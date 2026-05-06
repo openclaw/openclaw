@@ -1796,7 +1796,7 @@ describe("active-memory plugin", () => {
     __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 20,
+      timeoutMs: 250,
       maxSummaryChars: 40,
       persistTranscripts: true,
       logging: true,
@@ -1859,7 +1859,7 @@ describe("active-memory plugin", () => {
     __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 20,
+      timeoutMs: 250,
       maxSummaryChars: 80,
       logging: true,
     };

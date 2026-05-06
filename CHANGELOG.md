@@ -102,9 +102,12 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Models CLI: exit cleanly after successful `models list` and `models status` output so non-interactive scripts do not hang after printing results. Thanks @dorukardahan.
+- Control UI/performance: keep chat and channel tabs responsive while history payloads and channel probes are slow, label partial channel status, and record slow chat/config render timings in the event log. Thanks @BunsDev.
+- Control UI/sessions: fire the documented `/new` command and lifecycle hooks only for explicit Control UI session creation, restoring session-memory and custom hook capture without changing SDK parent-session creates. Fixes #76957. Thanks @BunsDev.
 - Slack: preserve Socket Mode SDK error context and structured Slack API fields in reconnect logs, so startup failures no longer collapse to a bare `unknown error`.
 - iOS pairing: allow setup-code and manual `ws://` connects for private LAN and `.local` gateways while keeping Tailscale/public routes on `wss://`, and prefer explicit gateway passwords over stale bootstrap tokens in mixed-auth reconnects. Fixes #47887; carries forward #65185. Thanks @draix and @BunsDev.
 - Plugins/diagnostics: make source-only TypeScript package warnings actionable by explaining that missing compiled runtime output is a publisher packaging issue and pointing users to update/reinstall or disable/uninstall the plugin. Fixes #77835. Thanks @googlerest.
+- Control UI/chat: keep persisted assistant progress text visible when the same transcript turn also contains tool-use metadata, so chat.history reloads no longer make those replies vanish after the next user message. Fixes #77374. Thanks @BunsDev.
 - TUI: skip the generic CLI respawn wrapper for interactive launches, exit cleanly on terminal loss, and refuse to restore heartbeat sessions as the remembered chat session, preventing stale heartbeat history and orphaned `openclaw-tui` processes on first boot. Thanks @vincentkoc.
 - Doctor/sessions: move heartbeat-poisoned default main session store entries to recovery keys and clear stale TUI restore pointers, so `doctor --fix` can repair instances already stuck on `agent:main:main` heartbeat history. Thanks @vincentkoc.
 - Agents/context engines: keep hidden OpenClaw runtime-context custom messages out of context-engine assemble, afterTurn, and ingest hooks so transcript reconstruction plugins only see conversation messages. Thanks @vincentkoc.
