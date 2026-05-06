@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   onAgentEvent as onParentAgentEvent,
@@ -19,6 +20,7 @@ import { serializeWorkerError } from "./errors.js";
 
 function createFixtureWorkerUrl(): URL {
   const source = `
+    import fs from "node:fs/promises";
     import { parentPort } from "node:worker_threads";
 
     let runStarted = false;
@@ -27,7 +29,23 @@ function createFixtureWorkerUrl(): URL {
       parentPort.postMessage(message);
     }
 
-    parentPort.on("message", (message) => {
+    async function writeSessionStoreUpdate(message, tag) {
+      if (!message.params.storePath || !message.params.sessionKey) {
+        return;
+      }
+      await fs.writeFile(
+        message.params.storePath,
+        JSON.stringify({
+          [message.params.sessionKey]: {
+            sessionId: message.params.sessionId,
+            updatedAt: 456,
+            model: "worker-" + tag
+          }
+        }, null, 2)
+      );
+    }
+
+    parentPort.on("message", async (message) => {
       if (message.type === "abort") {
         if (runStarted) {
           post({ type: "error", error: { name: "AbortError", message: "aborted:" + String(message.reason ?? "") } });
@@ -84,6 +102,11 @@ function createFixtureWorkerUrl(): URL {
         post({ type: "error", error: { name: "FixtureError", message: "fixture failed", code: "FIXTURE" } });
         return;
       }
+      if (message.params.body === "mutate-store-then-throw") {
+        await writeSessionStoreUpdate(message, "error");
+        post({ type: "error", error: { name: "FixtureError", message: "fixture failed", code: "FIXTURE" } });
+        return;
+      }
       if (message.params.body === "switch") {
         post({
           type: "error",
@@ -103,6 +126,9 @@ function createFixtureWorkerUrl(): URL {
       }
       if (message.params.body === "wait") {
         return;
+      }
+      if (message.params.body === "mutate-store") {
+        await writeSessionStoreUpdate(message, "result");
       }
 
       post({
@@ -270,6 +296,70 @@ describe("agent runtime worker bridge", () => {
       message: "fixture failed",
       code: "FIXTURE",
     });
+  });
+
+  it("refreshes parent session store state after a worker result", async () => {
+    const params = await makeWorkerParams("mutate-store");
+    const sessionStore: Record<string, SessionEntry> = {
+      [params.sessionKey!]: {
+        sessionId: params.sessionId,
+        updatedAt: 1,
+        model: "parent-stale",
+        cliSessionBindings: { "claude-cli": { sessionId: "stale-cli-session" } },
+      },
+    };
+    const storePath = path.join(path.dirname(params.sessionFile), "sessions.json");
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+    await runAgentAttemptInWorker(
+      {
+        ...params,
+        sessionStore,
+        storePath,
+      },
+      { workerUrl: createFixtureWorkerUrl(), execArgv: [], usePermissions: false },
+    );
+
+    expect(sessionStore[params.sessionKey!]).toMatchObject({
+      sessionId: params.sessionId,
+      updatedAt: 456,
+      model: "worker-result",
+    });
+    expect(sessionStore[params.sessionKey!]?.cliSessionBindings).toBeUndefined();
+  });
+
+  it("refreshes parent session store state after a worker error", async () => {
+    const params = await makeWorkerParams("mutate-store-then-throw");
+    const sessionStore: Record<string, SessionEntry> = {
+      [params.sessionKey!]: {
+        sessionId: params.sessionId,
+        updatedAt: 1,
+        model: "parent-stale",
+        cliSessionBindings: { "claude-cli": { sessionId: "stale-cli-session" } },
+      },
+    };
+    const storePath = path.join(path.dirname(params.sessionFile), "sessions.json");
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+    await expect(
+      runAgentAttemptInWorker(
+        {
+          ...params,
+          sessionStore,
+          storePath,
+        },
+        { workerUrl: createFixtureWorkerUrl(), execArgv: [], usePermissions: false },
+      ),
+    ).rejects.toMatchObject({
+      name: "FixtureError",
+    });
+
+    expect(sessionStore[params.sessionKey!]).toMatchObject({
+      sessionId: params.sessionId,
+      updatedAt: 456,
+      model: "worker-error",
+    });
+    expect(sessionStore[params.sessionKey!]?.cliSessionBindings).toBeUndefined();
   });
 
   it("preserves live model switch errors across the worker boundary", async () => {

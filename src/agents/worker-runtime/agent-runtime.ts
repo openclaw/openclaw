@@ -1,4 +1,7 @@
+import fs from "node:fs";
 import { Worker } from "node:worker_threads";
+import { loadSessionStore } from "../../config/sessions/store.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import type { RunAgentAttemptParams } from "../command/attempt-execution.js";
@@ -153,6 +156,18 @@ function stripWorkerCallbacks(params: RunAgentAttemptParams): AgentRuntimeWorker
   return { ...rest, opts };
 }
 
+function syncParentSessionStoreFromDisk(params: RunAgentAttemptParams): void {
+  if (!params.sessionStore || !params.storePath || !fs.existsSync(params.storePath)) {
+    return;
+  }
+  const latest = loadSessionStore(params.storePath, { skipCache: true, clone: false });
+  const mutableStore = params.sessionStore as Record<string, SessionEntry>;
+  for (const key of Object.keys(mutableStore)) {
+    delete mutableStore[key];
+  }
+  Object.assign(mutableStore, latest);
+}
+
 export async function runAgentAttemptInWorker(
   params: RunAgentAttemptParams,
   options: RunAgentAttemptInWorkerOptions = {},
@@ -194,7 +209,12 @@ export async function runAgentAttemptInWorker(
     worker.once("error", (error) => {
       settled = true;
       cleanup();
-      reject(error);
+      try {
+        syncParentSessionStoreFromDisk(params);
+        reject(error);
+      } catch (syncError) {
+        reject(syncError);
+      }
     });
     worker.once("exit", (code) => {
       if (settled) {
@@ -202,7 +222,12 @@ export async function runAgentAttemptInWorker(
       }
       settled = true;
       cleanup();
-      reject(new Error(`Agent runtime worker exited before completing run (code ${code})`));
+      try {
+        syncParentSessionStoreFromDisk(params);
+        reject(new Error(`Agent runtime worker exited before completing run (code ${code})`));
+      } catch (syncError) {
+        reject(syncError);
+      }
     });
     worker.on("message", (message: AgentWorkerToParentMessage) => {
       if (message.type === "agentEvent") {
@@ -224,15 +249,27 @@ export async function runAgentAttemptInWorker(
       if (message.type === "result") {
         settled = true;
         cleanup();
-        resolve(message.result);
-        void worker.terminate();
+        try {
+          syncParentSessionStoreFromDisk(params);
+          resolve(message.result);
+        } catch (error) {
+          reject(error);
+        } finally {
+          void worker.terminate();
+        }
         return;
       }
       if (message.type === "error") {
         settled = true;
         cleanup();
-        reject(deserializeWorkerError(message));
-        void worker.terminate();
+        try {
+          syncParentSessionStoreFromDisk(params);
+          reject(deserializeWorkerError(message));
+        } catch (error) {
+          reject(error);
+        } finally {
+          void worker.terminate();
+        }
       }
     });
 

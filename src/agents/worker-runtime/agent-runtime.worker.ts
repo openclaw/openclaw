@@ -6,6 +6,7 @@ import type {
   ParentToAgentWorkerMessage,
 } from "./agent-runtime.types.js";
 import { serializeWorkerError } from "./errors.js";
+import { restoreAgentWorkerPluginRuntime } from "./plugin-runtime.js";
 
 function post(message: AgentWorkerToParentMessage): void {
   // oxlint-disable-next-line unicorn/require-post-message-target-origin -- worker_threads MessagePort has no targetOrigin.
@@ -31,6 +32,14 @@ parentPort?.on("message", (message: ParentToAgentWorkerMessage) => {
   const stopRuntimeEventBridge = onAgentEvent((event) => {
     post({ type: "agentEvent", origin: "runtime", event });
   });
+  try {
+    restoreAgentWorkerPluginRuntime(message.params);
+  } catch (error: unknown) {
+    post(serializeWorkerError(error));
+    stopRuntimeEventBridge();
+    abortController = undefined;
+    return;
+  }
   void runAgentAttempt({
     ...message.params,
     opts: {
