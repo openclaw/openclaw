@@ -5,7 +5,9 @@ import {
 } from "../logging/diagnostic-runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
-import { CommandLane } from "./lanes.js";
+import { CommandLane, CommandPriority, STARVATION_PROMOTION_MS } from "./lanes.js";
+
+export { CommandPriority } from "./lanes.js";
 /**
  * Dedicated error type thrown when a queued command is rejected because
  * its lane was cleared.  Callers that fire-and-forget enqueued tasks can
@@ -53,6 +55,7 @@ type QueueEntry = {
   enqueuedAt: number;
   warnAfterMs: number;
   taskTimeoutMs?: number;
+  priority: number;
   onWait?: (waitMs: number, queuedAhead: number) => void;
 };
 
@@ -193,6 +196,29 @@ function normalizeTaskTimeoutMs(value: number | undefined): number | undefined {
   return Math.max(1, Math.floor(value));
 }
 
+const PROMOTED_PRIORITY: number = CommandPriority.High + 1;
+
+function effectivePriority(entry: QueueEntry): number {
+  const age = Date.now() - entry.enqueuedAt;
+  if (age >= STARVATION_PROMOTION_MS) {
+    return PROMOTED_PRIORITY;
+  }
+  return entry.priority;
+}
+
+function pickNextIndex(queue: QueueEntry[]): number {
+  let bestIdx = 0;
+  let bestPri = effectivePriority(queue[0]);
+  for (let i = 1; i < queue.length; i++) {
+    const pri = effectivePriority(queue[i]);
+    if (pri > bestPri) {
+      bestIdx = i;
+      bestPri = pri;
+    }
+  }
+  return bestIdx;
+}
+
 async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unknown> {
   const taskPromise = Promise.resolve().then(entry.task);
   const taskTimeoutMs = normalizeTaskTimeoutMs(entry.taskTimeoutMs);
@@ -243,7 +269,8 @@ function drainLane(lane: string) {
   const pump = () => {
     try {
       while (state.activeTaskIds.size < state.maxConcurrent && state.queue.length > 0) {
-        const entry = state.queue.shift() as QueueEntry;
+        const idx = pickNextIndex(state.queue);
+        const entry = state.queue.splice(idx, 1)[0];
         const waitedMs = Date.now() - entry.enqueuedAt;
         if (waitedMs >= entry.warnAfterMs) {
           try {
@@ -335,6 +362,7 @@ export function enqueueCommandInLane<T>(
       enqueuedAt: Date.now(),
       warnAfterMs,
       taskTimeoutMs: normalizeTaskTimeoutMs(opts?.taskTimeoutMs),
+      priority: opts?.priority ?? CommandPriority.Normal,
       onWait: opts?.onWait,
     });
     logLaneEnqueue(cleaned, getLaneDepth(state));

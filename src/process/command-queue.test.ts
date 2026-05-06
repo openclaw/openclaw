@@ -1,6 +1,6 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { CommandLane } from "./lanes.js";
+import { CommandLane, CommandPriority, STARVATION_PROMOTION_MS } from "./lanes.js";
 
 const diagnosticMocks = vi.hoisted(() => ({
   logLaneEnqueue: vi.fn(),
@@ -586,6 +586,198 @@ describe("command queue", () => {
     } finally {
       release();
       commandQueueA.resetAllLanes();
+    }
+  });
+
+  it("dequeues high-priority entries before normal ones", async () => {
+    const lane = `pri-order-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    const order: string[] = [];
+    const blocker = createDeferred();
+    const first = enqueueCommandInLane(lane, async () => {
+      await blocker.promise;
+    });
+
+    void enqueueCommandInLane(lane, async () => {
+      order.push("normal");
+    });
+    const high = enqueueCommandInLane(
+      lane,
+      async () => {
+        order.push("high");
+      },
+      { priority: CommandPriority.High },
+    );
+
+    blocker.resolve();
+    await first;
+    await high;
+    expect(order).toEqual(["high", "normal"]);
+  });
+
+  it("preserves FIFO within the same priority level", async () => {
+    const lane = `pri-fifo-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    const order: number[] = [];
+    const blocker = createDeferred();
+    const first = enqueueCommandInLane(lane, async () => {
+      await blocker.promise;
+    });
+
+    const tasks = [1, 2, 3].map((id) =>
+      enqueueCommandInLane(
+        lane,
+        async () => {
+          order.push(id);
+        },
+        { priority: CommandPriority.High },
+      ),
+    );
+
+    blocker.resolve();
+    await first;
+    await Promise.all(tasks);
+    expect(order).toEqual([1, 2, 3]);
+  });
+
+  it("defaults to Normal priority when unspecified", async () => {
+    const lane = `pri-default-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    const order: string[] = [];
+    const blocker = createDeferred();
+    const first = enqueueCommandInLane(lane, async () => {
+      await blocker.promise;
+    });
+
+    void enqueueCommandInLane(lane, async () => {
+      order.push("default");
+    });
+    void enqueueCommandInLane(
+      lane,
+      async () => {
+        order.push("low");
+      },
+      { priority: CommandPriority.Low },
+    );
+
+    blocker.resolve();
+    await first;
+    await vi.waitFor(() => expect(order).toEqual(["default", "low"]));
+  });
+
+  it("promotes aged low-priority entry above steady high-priority stream", async () => {
+    const lane = `pri-starve-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      const order: string[] = [];
+      const blocker = createDeferred();
+      const first = enqueueCommandInLane(lane, async () => {
+        await blocker.promise;
+      });
+
+      // Enqueue a low-priority entry that will age past the starvation threshold.
+      void enqueueCommandInLane(
+        lane,
+        async () => {
+          order.push("low-aged");
+        },
+        { priority: CommandPriority.Low },
+      );
+
+      // Advance past the starvation threshold so the low entry ages.
+      await vi.advanceTimersByTimeAsync(STARVATION_PROMOTION_MS + 1);
+
+      // Now enqueue high-priority entries -- they should NOT starve the aged low entry.
+      void enqueueCommandInLane(
+        lane,
+        async () => {
+          order.push("high-1");
+        },
+        { priority: CommandPriority.High },
+      );
+      void enqueueCommandInLane(
+        lane,
+        async () => {
+          order.push("high-2");
+        },
+        { priority: CommandPriority.High },
+      );
+
+      blocker.resolve();
+      await first;
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(order[0]).toBe("low-aged");
+      expect(order).toEqual(["low-aged", "high-1", "high-2"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves onWait accuracy with priority scanning", async () => {
+    const lane = `pri-onwait-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      let reportedWaitMs: number | null = null;
+      const blocker = createDeferred();
+      const first = enqueueCommandInLane(lane, async () => {
+        await blocker.promise;
+      });
+
+      void enqueueCommandInLane(lane, async () => {}, {
+        priority: CommandPriority.Low,
+        warnAfterMs: 5,
+        onWait: (ms) => {
+          reportedWaitMs = ms;
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(10);
+      blocker.resolve();
+      await first;
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(reportedWaitMs).toBeGreaterThanOrEqual(10);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("priority coexists with taskTimeoutMs", async () => {
+    const lane = `pri-timeout-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      const first = enqueueCommandInLane(lane, async () => new Promise<never>(() => {}), {
+        taskTimeoutMs: 25,
+        priority: CommandPriority.High,
+      });
+      const firstRejected = expect(first).rejects.toBeInstanceOf(CommandLaneTaskTimeoutError);
+
+      let secondRan = false;
+      const second = enqueueCommandInLane(
+        lane,
+        async () => {
+          secondRan = true;
+          return "ok";
+        },
+        { priority: CommandPriority.Normal },
+      );
+
+      await vi.advanceTimersByTimeAsync(25);
+      await firstRejected;
+      await expect(second).resolves.toBe("ok");
+      expect(secondRan).toBe(true);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });
