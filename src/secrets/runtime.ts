@@ -37,6 +37,7 @@ export type PreparedSecretsRuntimeSnapshot = {
   authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
   warnings: SecretResolverWarning[];
   webTools: RuntimeWebToolsMetadata;
+  webToolsFromFastPath?: boolean;
 };
 
 type SecretsRuntimeRefreshContext = {
@@ -61,6 +62,7 @@ const RUNTIME_PATH_ENV_KEYS = [
 
 let activeSnapshot: PreparedSecretsRuntimeSnapshot | null = null;
 let activeRefreshContext: SecretsRuntimeRefreshContext | null = null;
+let lastFullResolverSourceConfig: OpenClawConfig | null = null;
 const preparedSnapshotRefreshContext = new WeakMap<
   PreparedSecretsRuntimeSnapshot,
   SecretsRuntimeRefreshContext
@@ -88,6 +90,7 @@ function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecret
     })),
     warnings: snapshot.warnings.map((warning) => ({ ...warning })),
     webTools: structuredClone(snapshot.webTools),
+    webToolsFromFastPath: snapshot.webToolsFromFastPath,
   };
 }
 
@@ -103,6 +106,7 @@ function cloneRefreshContext(context: SecretsRuntimeRefreshContext): SecretsRunt
 function clearActiveSecretsRuntimeState(): void {
   activeSnapshot = null;
   activeRefreshContext = null;
+  lastFullResolverSourceConfig = null;
   clearActiveRuntimeWebToolsMetadata();
   setRuntimeConfigSnapshotRefreshHandler(null);
   clearRuntimeConfigSnapshot();
@@ -355,6 +359,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
       authStores,
       warnings: [],
       webTools: createEmptyRuntimeWebToolsMetadata(),
+      webToolsFromFastPath: true,
     };
     preparedSnapshotRefreshContext.set(snapshot, {
       env: runtimeEnv,
@@ -429,6 +434,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
       resolvedConfig,
       context,
     }),
+    webToolsFromFastPath: false,
   };
   preparedSnapshotRefreshContext.set(snapshot, {
     env: runtimeEnv,
@@ -450,11 +456,32 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
       loadAuthStore: loadAuthProfileStoreForSecretsRuntime,
       loadablePluginOrigins: new Map<string, PluginOrigin>(),
     } satisfies SecretsRuntimeRefreshContext);
+
+  // Determine whether this fast-path activation should preserve existing web tool
+  // metadata. We key off lastFullResolverSourceConfig — the source config from the
+  // most recent full-resolver run — rather than activeSnapshot.sourceConfig.
+  // activeSnapshot.sourceConfig is overwritten on every activation (including fast-path
+  // ones), so after the first fast-path activation it no longer reflects the web surface
+  // that was in effect when the full resolver last ran. Using a separate variable keeps
+  // the "did we ever have a web surface?" signal durable across repeated partial refreshes.
+  const shouldPreserveWebTools =
+    next.webToolsFromFastPath === true &&
+    lastFullResolverSourceConfig !== null &&
+    hasRuntimeWebToolConfigSurface(lastFullResolverSourceConfig);
+
   setRuntimeConfigSnapshot(next.config, next.sourceConfig);
   replaceRuntimeAuthProfileStoreSnapshots(next.authStores);
   activeSnapshot = next;
   activeRefreshContext = cloneRefreshContext(refreshContext);
-  setActiveRuntimeWebToolsMetadata(next.webTools);
+
+  if (!next.webToolsFromFastPath) {
+    lastFullResolverSourceConfig = next.sourceConfig;
+  }
+
+  if (!shouldPreserveWebTools) {
+    setActiveRuntimeWebToolsMetadata(next.webTools);
+  }
+
   setRuntimeConfigSnapshotRefreshHandler({
     refresh: async ({ sourceConfig }) => {
       if (!activeSnapshot || !activeRefreshContext) {

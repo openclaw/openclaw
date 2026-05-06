@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Runtime/Secrets: prevent a fast-path config-write refresh from silently clearing active web tool metadata (web search, web fetch, image generation) when a partial or stripped config snapshot lacks a web surface. The fix tracks whether each prepared snapshot bypassed the full resolver and guards the metadata overwrite accordingly, so plugin-provided tools remain visible in tool lists until the next full-resolver pass explicitly removes them. Fixes #77826. Thanks @openperf.
 - PR triage: mark external pull requests with `proof: supplied` when Barnacle finds structured real behavior proof, keep stale negative proof labels in sync across CRLF-edited PR bodies, and let ClawSweeper own the stronger `proof: sufficient` judgement.
 - Sessions CLI: show the selected agent runtime in the `openclaw sessions` table so terminal output matches the runtime visibility already present in JSON/status surfaces. Thanks @vincentkoc.
 - Talk/voice: unify realtime relay, transcription relay, managed-room handoff, Voice Call, Google Meet, VoiceClaw, and native clients around a shared Talk session controller and add the Gateway-managed `talk.session.*` RPC surface.
