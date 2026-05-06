@@ -37,7 +37,8 @@ const CHANNEL_RESTART_POLICY: BackoffPolicy = {
 };
 const MAX_RESTART_ATTEMPTS = 10;
 const CHANNEL_STOP_ABORT_TIMEOUT_MS = 5_000;
-const CHANNEL_STARTUP_CONCURRENCY = 4;
+const CHANNEL_STARTUP_CONCURRENCY = 1;
+const CHANNEL_STARTUP_STAGGER_MS = 3_000;
 
 type ChannelRuntimeStore = {
   aborts: Map<string, AbortController>;
@@ -618,6 +619,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             });
           handedOffTask = true;
           store.tasks.set(id, trackedPromise);
+          // Stagger handoff completion so the outer concurrency limiter spaces
+          // bot startups out, preventing the simultaneous getMe + model-prewarm
+          // contention that starves the event loop.
+          if (CHANNEL_STARTUP_STAGGER_MS > 0) {
+            await sleepWithAbort(CHANNEL_STARTUP_STAGGER_MS, abort.signal).catch(
+              () => undefined,
+            );
+          }
         } catch (error) {
           if (!handedOffTask) {
             setRuntime(channelId, id, {
