@@ -944,6 +944,35 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
+  // Regression coverage for #78196. Pre-v5.3 external extensions
+  // (e.g. claw-guard, approval-formatter) shipped without
+  // `activation.onCapabilities: ["hook"]` metadata and without explicit
+  // `hooks.*` policy keys; users enabled them via plugins.entries.<id>.enabled
+  // alone. v5.3+ silently skipped them. The fix treats an explicitly-enabled
+  // non-bundled plugin as having legacy hook startup intent.
+  it("loads explicitly enabled legacy external plugins lacking hook-capability metadata (#78196)", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        enabledPluginIds: ["external-hook-policy"],
+        allowPluginIds: ["external-hook-policy"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["external-hook-policy"],
+    });
+  });
+
+  it("does not ambient-load merely allowlisted legacy external plugins (#78196 negative case)", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        allowPluginIds: ["external-hook-policy"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: [],
+    });
+  });
+
   it("blocks hook-capability plugins when plugins are globally disabled", () => {
     expectStartupPluginIdsCase({
       config: {
