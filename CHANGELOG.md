@@ -112,6 +112,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Telegram/media: dedupe identical path/url in inbound media-note formatter so albums no longer render `path | path` for local-only attachments. Fixes #47587. Thanks @yzjJosh.
 - Gate Slack startup user allowlist resolution [AI]. (#77898) Thanks @pgondhi987.
 - OpenAI/Codex: suppress stale `openai-codex` GPT-5.1/5.2/5.3 model refs that ChatGPT/Codex OAuth accounts now reject, keeping model lists, config validation, and forward-compat resolution on current 5.4/5.5 routes. Fixes #67158. Thanks @drpau.
 - Google Meet/Voice Call: wait longer before playing PIN-derived Twilio DTMF for Meet dial-in prompts and retire stale delegated phone sessions instead of reusing completed calls.
