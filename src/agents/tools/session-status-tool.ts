@@ -14,7 +14,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveSessionModelIdentityRef } from "../../gateway/session-utils.js";
+
 import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
@@ -236,8 +236,11 @@ async function resolveModelOverride(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   });
-  const currentProvider = params.sessionEntry?.providerOverride?.trim() || configDefault.provider;
-  const currentModel = params.sessionEntry?.modelOverride?.trim() || configDefault.model;
+  const currentProvider = params.sessionEntry?.providerOverride?.trim() ?? configDefault.provider;
+  const currentModel =
+    params.sessionEntry?.modelOverride?.trim() ??
+    params.sessionEntry?.model?.trim() ??
+    configDefault.model;
 
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
@@ -589,33 +592,36 @@ export function createSessionStatusTool(opts?: {
         }
       }
 
-      const runtimeModelIdentity = resolveSessionModelIdentityRef(
-        cfg,
-        resolved.entry,
-        agentId,
-        `${configured.provider}/${configured.model}`,
-      );
-      const hasExplicitModelOverride = Boolean(
-        resolved.entry.providerOverride?.trim() || resolved.entry.modelOverride?.trim(),
-      );
-      const runtimeProviderForCard = runtimeModelIdentity.provider?.trim();
-      const runtimeModelForCard = runtimeModelIdentity.model.trim();
-      const defaultProviderForCard = hasExplicitModelOverride
-        ? configured.provider
-        : (runtimeProviderForCard ?? "");
-      const defaultModelForCard = hasExplicitModelOverride
-        ? configured.model
-        : runtimeModelForCard || configured.model;
-      const statusSessionEntry =
-        !hasExplicitModelOverride && !runtimeProviderForCard && runtimeModelForCard
-          ? { ...resolved.entry, providerOverride: "" }
-          : resolved.entry;
-      const providerOverrideForCard = statusSessionEntry.providerOverride?.trim();
-      const providerForCard = providerOverrideForCard ?? defaultProviderForCard;
+      const statusSessionEntry = resolved.entry;
+
+      // Preserve providerless runtime model identity:
+      // If a session has only a persisted runtime model (entry.model) with no
+      // providerOverride and no modelOverride, treat it as providerless so the
+      // status card shows it as-is without a provider prefix and without
+      // triggering a model auth lookup (modelAuthOverride: undefined below).
+      const hasProviderOverride = Boolean(statusSessionEntry.providerOverride?.trim());
+      const hasModelOverride = Boolean(statusSessionEntry.modelOverride?.trim());
+      const runtimeModel = statusSessionEntry.model?.trim();
+
+      const providerlessRuntimeModel =
+        runtimeModel && !hasProviderOverride && !hasModelOverride ? runtimeModel : undefined;
+
+      // When providerless, suppress provider so no auth lookup occurs.
+      // When a provider override exists, use it. Otherwise fall back to configured.
+      const providerForCard = hasProviderOverride
+        ? statusSessionEntry.providerOverride!.trim()
+        : providerlessRuntimeModel
+          ? undefined
+          : configured.provider;
+
+      // Prefer explicit model override, then providerless runtime model, then configured default.
+      const modelForCard =
+        (hasModelOverride ? statusSessionEntry.modelOverride!.trim() : undefined) ??
+        providerlessRuntimeModel ??
+        configured.model;
+
       const primaryModelLabel =
-        providerForCard && defaultModelForCard
-          ? `${providerForCard}/${defaultModelForCard}`
-          : defaultModelForCard;
+        providerForCard && modelForCard ? `${providerForCard}/${modelForCard}` : modelForCard;
       const isGroup =
         statusSessionEntry.chatType === "group" ||
         statusSessionEntry.chatType === "channel" ||
@@ -639,8 +645,8 @@ export function createSessionStatusTool(opts?: {
           statusSessionEntry.origin?.provider ??
           "unknown",
         workspaceDir: statusSessionEntry.spawnedWorkspaceDir,
-        provider: providerForCard,
-        model: defaultModelForCard,
+        provider: providerForCard ?? "",
+        model: modelForCard,
         resolvedThinkLevel: statusSessionEntry.thinkingLevel as ThinkLevel | undefined,
         resolvedFastMode: statusSessionEntry.fastMode,
         resolvedVerboseLevel: (statusSessionEntry.verboseLevel ?? "off") as VerboseLevel,
@@ -649,7 +655,7 @@ export function createSessionStatusTool(opts?: {
         resolveDefaultThinkingLevel: async () => {
           const configuredCatalog = buildConfiguredModelCatalog({ cfg });
           const configuredSelectedEntry = configuredCatalog.find(
-            (entry) => entry.provider === providerForCard && entry.id === defaultModelForCard,
+            (entry) => entry.provider === providerForCard && entry.id === modelForCard,
           );
           const shouldHydrateRuntimeCatalog =
             configuredCatalog.length === 0 ||
@@ -659,7 +665,7 @@ export function createSessionStatusTool(opts?: {
             ? await loadModelCatalog({ config: cfg })
             : undefined;
           const runtimeSelectedEntry = runtimeCatalog?.find(
-            (entry) => entry.provider === providerForCard && entry.id === defaultModelForCard,
+            (entry) => entry.provider === providerForCard && entry.id === modelForCard,
           );
           const catalog =
             runtimeSelectedEntry || configuredCatalog.length === 0
@@ -667,8 +673,8 @@ export function createSessionStatusTool(opts?: {
               : configuredCatalog;
           return resolveThinkingDefault({
             cfg,
-            provider: providerForCard,
-            model: defaultModelForCard,
+            provider: providerForCard ?? "",
+            model: modelForCard,
             catalog,
           });
         },
@@ -677,6 +683,7 @@ export function createSessionStatusTool(opts?: {
         taskLineOverride: taskLine,
         skipDefaultTaskLookup: true,
         primaryModelLabelOverride: primaryModelLabel,
+        // Suppress model auth lookup when providerless runtime model is active.
         ...(providerForCard ? {} : { modelAuthOverride: undefined }),
         includeTranscriptUsage: true,
       });
