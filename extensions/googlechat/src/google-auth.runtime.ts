@@ -603,12 +603,9 @@ export async function loadGoogleAuthRuntime(): Promise<GoogleAuthRuntime> {
   if (!googleAuthRuntimePromise) {
     googleAuthRuntimePromise = (async () => {
       try {
-        const [googleAuthModule, gaxiosModule] = await Promise.all([
-          import("google-auth-library"),
-          import("gaxios"),
-        ]);
+        const googleAuthModule = await import("google-auth-library");
         return {
-          Gaxios: gaxiosModule.Gaxios,
+          Gaxios: googleAuthModule.gaxios.Gaxios,
           GoogleAuth: googleAuthModule.GoogleAuth,
           OAuth2Client: googleAuthModule.OAuth2Client,
         };
