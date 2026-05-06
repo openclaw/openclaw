@@ -106,7 +106,7 @@ observation-only.
 - `before_agent_start` - compatibility-only combined phase; prefer the two hooks above
 - **`before_agent_reply`** - short-circuit the model turn with a synthetic reply or silence
 - **`before_agent_finalize`** - inspect the natural final answer and request one more model pass
-- `agent_end` - observe final messages, success state, and run duration
+- `agent_end` - observe final messages, success state, run duration, and optional embedded-run prep stages
 - `heartbeat_prompt_contribution` - add heartbeat-only context for background monitor and lifecycle plugins
 
 **Conversation observation**
@@ -248,6 +248,12 @@ hook runner applies a 30 second timeout so a wedged plugin or embedding
 endpoint cannot leave the hook promise pending forever. A timeout is logged and
 OpenClaw continues; it does not cancel plugin-owned network work unless the
 plugin also uses its own abort signal.
+
+For PI embedded runs, `agent_end` may include `event.prepStages`. This optional
+summary has `totalMs` plus `stages[]` entries with `name`, `durationMs`, and
+`elapsedMs`, allowing telemetry plugins to attribute startup latency without
+parsing logs. Plugins should tolerate the field being absent and should treat
+stage names as diagnostic labels that may grow over time.
 
 Use `model_call_started` and `model_call_ended` for provider-call telemetry
 that should not receive raw prompts, history, responses, headers, request
