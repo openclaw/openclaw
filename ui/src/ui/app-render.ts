@@ -578,17 +578,13 @@ function extractQuickSettingsSecurity(state: AppViewState): {
       gatewayAuth = "none";
     }
   }
-  const agents = cfg.agents;
   let execPolicy = "allowlist";
-  if (agents && typeof agents === "object") {
-    const defaults = (agents as Record<string, unknown>).defaults;
-    if (defaults && typeof defaults === "object") {
-      const exec = (defaults as Record<string, unknown>).exec;
-      if (exec && typeof exec === "object") {
-        const security = (exec as Record<string, unknown>).security;
-        if (typeof security === "string") {
-          execPolicy = security;
-        }
+  if ("tools" in cfg && cfg.tools && typeof cfg.tools === "object") {
+    const tools = cfg.tools as Record<string, unknown>;
+    if (tools.exec && typeof tools.exec === "object") {
+      const security = (tools.exec as Record<string, unknown>).security;
+      if (typeof security === "string") {
+        execPolicy = security;
       }
     }
   }
