@@ -27,7 +27,13 @@ import {
   resolveReconnectPolicy,
   sleepWithAbort,
 } from "../reconnect.js";
-import { formatError, getWebAuthAgeMs, logoutWeb, readWebSelfId } from "../session.js";
+import {
+  formatError,
+  getStatusCode,
+  getWebAuthAgeMs,
+  logoutWeb,
+  readWebSelfId,
+} from "../session.js";
 import { resolveWhatsAppSocketTiming } from "../socket-timing.js";
 import { getRuntimeConfig, getRuntimeConfigSourceSnapshot } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
@@ -95,6 +101,27 @@ function isRetryableAuthUnstableError(error: unknown): error is WhatsAppAuthUnst
       "code" in error &&
       (error as { code?: unknown }).code === WHATSAPP_AUTH_UNSTABLE_CODE)
   );
+}
+
+// Distinguish transport-class WS connect failures (server cycled the session,
+// peer keepalive timed out, intermittent network) from lifecycle-class failures
+// (the operator's session is permanently bad: logged out, conflict, banned).
+// Transport-class errors should be retried inside the monitor without exiting
+// to the channel manager — exiting causes a full plugin restart that re-runs
+// plugin discovery, walks the FS, and amplifies the original disconnect.
+function isTransportClassConnectError(error: unknown): boolean {
+  const status = getStatusCode(error);
+  if (typeof status !== "number") {
+    return false;
+  }
+  // Lifecycle classes: stay throwing so the monitor exits and the operator can
+  // re-link / resolve the conflict. 401 = logged out. 440 = session conflict.
+  if (status === 401 || status === 440) {
+    return false;
+  }
+  // Everything else with a status code is transport: 408 timeout, 428
+  // precondition required, 5xx server, 499 connection lost, etc.
+  return true;
 }
 
 async function clearTerminalWebAuthState(params: {
@@ -371,42 +398,78 @@ export async function monitorWebChannel(
           },
         });
       } catch (error) {
-        if (!isRetryableAuthUnstableError(error)) {
+        const authUnstable = isRetryableAuthUnstableError(error);
+        const transportError = !authUnstable && isTransportClassConnectError(error);
+        if (!authUnstable && !transportError) {
           throw error;
         }
+        const errorMessage = error instanceof Error ? error.message : formatError(error);
         const retryDecision = controller.consumeReconnectAttempt();
         statusController.noteReconnectAttempts(retryDecision.reconnectAttempts);
         statusController.noteClose({
-          error: error.message,
+          error: errorMessage,
           reconnectAttempts: retryDecision.reconnectAttempts,
           healthState: retryDecision.healthState,
+          ...(transportError ? { statusCode: getStatusCode(error) } : {}),
         });
         if (retryDecision.action === "stop") {
-          reconnectLogger.warn(
-            {
-              connectionId,
-              reconnectAttempts: retryDecision.reconnectAttempts,
-              maxAttempts: reconnectPolicy.maxAttempts,
-            },
-            "web reconnect: auth state stayed unstable; max attempts reached",
-          );
-          runtime.error(
-            `WhatsApp auth state is still stabilizing after ${retryDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts} attempts. Stopping web monitoring.`,
-          );
+          if (authUnstable) {
+            reconnectLogger.warn(
+              {
+                connectionId,
+                reconnectAttempts: retryDecision.reconnectAttempts,
+                maxAttempts: reconnectPolicy.maxAttempts,
+              },
+              "web reconnect: auth state stayed unstable; max attempts reached",
+            );
+            runtime.error(
+              `WhatsApp auth state is still stabilizing after ${retryDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts} attempts. Stopping web monitoring.`,
+            );
+          } else {
+            reconnectLogger.warn(
+              {
+                connectionId,
+                statusCode: getStatusCode(error),
+                reconnectAttempts: retryDecision.reconnectAttempts,
+                maxAttempts: reconnectPolicy.maxAttempts,
+                error: errorMessage,
+              },
+              "web reconnect: transport handshake retries exhausted",
+            );
+            runtime.error(
+              `WhatsApp Web handshake failed (status ${getStatusCode(error) ?? "unknown"}) after ${retryDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts} attempts. Stopping web monitoring.`,
+            );
+          }
           await controller.shutdown();
           break;
         }
-        reconnectLogger.info(
-          {
-            connectionId,
-            reconnectAttempts: retryDecision.reconnectAttempts,
-            delayMs: retryDecision.delayMs,
-          },
-          "web reconnect: auth state still stabilizing during inbox attach; retrying",
-        );
-        runtime.error(
-          `WhatsApp auth state is still stabilizing. Retry ${retryDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} for inbox attach in ${formatDurationPrecise(retryDecision.delayMs ?? 0)}.`,
-        );
+        if (authUnstable) {
+          reconnectLogger.info(
+            {
+              connectionId,
+              reconnectAttempts: retryDecision.reconnectAttempts,
+              delayMs: retryDecision.delayMs,
+            },
+            "web reconnect: auth state still stabilizing during inbox attach; retrying",
+          );
+          runtime.error(
+            `WhatsApp auth state is still stabilizing. Retry ${retryDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} for inbox attach in ${formatDurationPrecise(retryDecision.delayMs ?? 0)}.`,
+          );
+        } else {
+          reconnectLogger.info(
+            {
+              connectionId,
+              statusCode: getStatusCode(error),
+              reconnectAttempts: retryDecision.reconnectAttempts,
+              delayMs: retryDecision.delayMs,
+              error: errorMessage,
+            },
+            "web reconnect: transport handshake closed; retrying inside monitor (no plugin restart)",
+          );
+          runtime.error(
+            `WhatsApp Web handshake closed (status ${getStatusCode(error) ?? "unknown"}). Retry ${retryDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} in ${formatDurationPrecise(retryDecision.delayMs ?? 0)}… (${errorMessage})`,
+          );
+        }
         try {
           await controller.waitBeforeRetry(retryDecision.delayMs ?? 0);
         } catch {
