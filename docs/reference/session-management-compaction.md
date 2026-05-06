@@ -76,7 +76,8 @@ Per agent, on the Gateway host:
 
 - Store: `~/.openclaw/state/openclaw.sqlite` by default. `openclaw doctor --fix`
   imports legacy `~/.openclaw/agents/<agentId>/sessions/sessions.json` indexes
-  into SQLite and removes the JSON index after import.
+  into SQLite and removes the JSON index after import; Gateway startup leaves
+  legacy indexes alone.
 - Transcripts: `~/.openclaw/agents/<agentId>/sessions/<sessionId>.jsonl`
   - Telegram topic sessions: `.../<sessionId>-topic-<threadId>.jsonl`
 
@@ -95,7 +96,7 @@ Session persistence has automatic maintenance controls (`session.maintenance`) f
 - `maxDiskBytes`: optional sessions-directory budget
 - `highWaterBytes`: optional target after cleanup (default `80%` of `maxDiskBytes`)
 
-Normal Gateway writes flow through a per-store session writer that serializes in-process mutations. SQLite is the canonical per-agent backend; `sessions.json` is a legacy doctor-import input, not a parallel export/debug store. Runtime code should prefer `updateSessionStore(...)` or `updateSessionStoreEntry(...)`. When a Gateway is reachable, non-dry-run `openclaw sessions cleanup` and `openclaw agents delete` delegate store mutations to the Gateway so cleanup joins the same writer queue. `maxEntries` cleanup is still batched for production-sized caps, so a store may briefly exceed the configured cap before the next high-water cleanup rewrites it back down. Session store reads do not prune or cap entries during Gateway startup; use writes or `openclaw sessions cleanup --enforce` for cleanup. `openclaw sessions cleanup --enforce` still applies the configured cap immediately and prunes old unreferenced transcript, checkpoint, and trajectory artifacts even when no disk budget is configured.
+Normal Gateway writes flow through a per-store session writer that serializes in-process mutations. SQLite is the canonical per-agent backend; `sessions.json` is a legacy doctor-import input, not a parallel export/debug store. Runtime code should prefer `updateSessionStore(...)` or `updateSessionStoreEntry(...)`. When a Gateway is reachable, non-dry-run `openclaw sessions cleanup` and `openclaw agents delete` delegate store mutations to the Gateway so cleanup joins the same writer queue. `maxEntries` cleanup is still batched for production-sized caps, so a store may briefly exceed the configured cap before the next high-water cleanup rewrites it back down. Session store reads do not import, prune, or cap entries during Gateway startup; use `openclaw doctor --fix` for legacy JSON import and writes or `openclaw sessions cleanup --enforce` for cleanup. `openclaw sessions cleanup --enforce` still applies the configured cap immediately and prunes old unreferenced transcript, checkpoint, and trajectory artifacts even when no disk budget is configured.
 
 Maintenance keeps durable external conversation pointers such as group sessions
 and thread-scoped chat sessions, but synthetic runtime entries for cron, hooks,

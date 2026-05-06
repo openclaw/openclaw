@@ -455,7 +455,7 @@ describe("doctor legacy state migrations", () => {
     expect(log.info).toHaveBeenCalled();
   });
 
-  it("auto-migrates legacy sessions on startup", async () => {
+  it("leaves legacy sessions for doctor on startup", async () => {
     const { root, cfg } = await makeRootWithEmptyCfg();
     const legacySessionsDir = writeLegacySessionsFixture({
       root,
@@ -473,14 +473,14 @@ describe("doctor legacy state migrations", () => {
       now: () => 123,
     });
 
-    expect(result.migrated).toBe(true);
-    expect(log.info).toHaveBeenCalled();
+    expect(result.migrated).toBe(false);
+    expect(log.info).not.toHaveBeenCalled();
 
     const targetDir = path.join(root, "agents", "main", "sessions");
-    expect(fs.existsSync(path.join(targetDir, "a.jsonl"))).toBe(true);
-    expect(fs.existsSync(path.join(legacySessionsDir, "a.jsonl"))).toBe(false);
-    expect(fs.existsSync(path.join(targetDir, "sessions.json"))).toBe(false);
-    expect(readSessionsStore({ root, targetDir })["agent:main:+1555"]?.sessionId).toBe("a");
+    expect(fs.existsSync(path.join(targetDir, "a.jsonl"))).toBe(false);
+    expect(fs.existsSync(path.join(legacySessionsDir, "a.jsonl"))).toBe(true);
+    expect(fs.existsSync(path.join(legacySessionsDir, "sessions.json"))).toBe(true);
+    expect(Object.keys(readSessionsStore({ root, targetDir }))).toHaveLength(0);
   });
 
   it("migrates legacy WhatsApp auth files without touching oauth.json", async () => {
@@ -694,7 +694,7 @@ describe("doctor legacy state migrations", () => {
     expect(store["agent:main:slack:channel:C123"]).toBeUndefined();
   });
 
-  it("auto-migrates when only target sessions contain legacy keys", async () => {
+  it("leaves target sessions with legacy keys for doctor on startup", async () => {
     const { root, cfg } = await makeRootWithEmptyCfg();
     const targetDir = path.join(root, "agents", "main", "sessions");
     writeJson5(path.join(targetDir, "sessions.json"), {
@@ -703,12 +703,10 @@ describe("doctor legacy state migrations", () => {
 
     const { result, log } = await runAutoMigrateLegacyStateWithLog({ root, cfg });
 
-    expect(fs.existsSync(path.join(targetDir, "sessions.json"))).toBe(false);
-    const store = readSessionsStore({ root, targetDir });
-    expect(result.migrated).toBe(true);
-    expect(log.info).toHaveBeenCalled();
-    expect(store["main"]).toBeUndefined();
-    expect(store["agent:main:main"]?.sessionId).toBe("legacy");
+    expect(result.migrated).toBe(false);
+    expect(log.info).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(targetDir, "sessions.json"))).toBe(true);
+    expect(Object.keys(readSessionsStore({ root, targetDir }))).toHaveLength(0);
   });
 
   it("does nothing when no legacy state dir exists", async () => {
