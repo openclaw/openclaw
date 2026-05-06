@@ -2224,7 +2224,17 @@ describe("deliverOutboundPayloads", () => {
     });
     expect(sendMatrix).toHaveBeenCalledTimes(2);
 
-    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledTimes(2);
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledWith(
+      "message",
+      "sending",
+      "agent:main:main",
+      expect.objectContaining({
+        to: "!room:example",
+        channelId: "matrix",
+        conversationId: "!room:example",
+      }),
+    );
     expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledWith(
       "message",
       "sent",
@@ -2236,7 +2246,7 @@ describe("deliverOutboundPayloads", () => {
         groupId: "matrix:room:123",
       }),
     );
-    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(2);
   });
 
   it("does not emit internal message:sent hook when neither mirror nor sessionKey is provided", async () => {
@@ -2249,14 +2259,24 @@ describe("deliverOutboundPayloads", () => {
   it("emits internal message:sent hook when sessionKey is provided without mirror", async () => {
     await deliverSingleMatrixForHookTest({ sessionKey: "agent:main:main" });
 
-    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledTimes(2);
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledWith(
+      "message",
+      "sending",
+      "agent:main:main",
+      expect.objectContaining({
+        to: "!room:example",
+        channelId: "matrix",
+        conversationId: "!room:example",
+      }),
+    );
     expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledWith(
       "message",
       "sent",
       "agent:main:main",
       expectSuccessfulMatrixInternalHookPayload({ content: "hello", messageId: "m1" }),
     );
-    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(2);
   });
 
   it("warns when session.agentId is set without a session key", async () => {

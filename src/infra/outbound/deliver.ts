@@ -1401,6 +1401,28 @@ async function deliverOutboundPayloadsCore(
         replyToId: resolveCurrentReplyTo(payload).replyToId,
         threadId: params.threadId,
       });
+      if (sessionKeyForInternalHooks) {
+        fireAndForgetHook(
+          triggerInternalHook(
+            createInternalHookEvent(
+              "message",
+              "sending",
+              sessionKeyForInternalHooks,
+              {
+                to,
+                content: payloadSummary.hookContent ?? payloadSummary.text,
+                channelId: channel,
+                accountId: accountId ?? undefined,
+                conversationId: to,
+              },
+            ),
+          ),
+          "deliverOutboundPayloads: message:sending internal hook failed",
+          (message) => {
+            log.warn(message);
+          },
+        );
+      }
       if (hookResult.cancelled) {
         continue;
       }
