@@ -124,21 +124,23 @@ describe("transitions", () => {
     });
 
     it("returns no action at exact boundary (not > threshold)", () => {
-      // Exactly 30 days — day boundary is not > 30, so no action
-      const entry = makeEntry({
-        last_used_at: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-      });
-      const result = determineTransition(entry, DEFAULT_THRESHOLDS);
-      // At exactly 30 days, daysSinceUsed should be ~30, which is NOT > 30
+      // Use a fixed reference time to avoid timing flakiness
+      const now = new Date("2026-05-06T12:00:00Z");
+      // Exactly 30 days before the fixed now
+      const lastUsed = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      const entry = makeEntry({ last_used_at: lastUsed });
+      const result = determineTransition(entry, DEFAULT_THRESHOLDS, now);
+      // At exactly 30 days, daysSinceUsed = 30.0, NOT > 30 → no action
       expect(result.action).toBe("none");
     });
 
     it("returns mark_stale just past the stale boundary", () => {
-      // 30 days + 1 hour
-      const entry = makeEntry({
-        last_used_at: new Date(Date.now() - (30 * 24 + 1) * 60 * 60 * 1000).toISOString(),
-      });
-      const result = determineTransition(entry, DEFAULT_THRESHOLDS);
+      // Use a fixed reference time
+      const now = new Date("2026-05-06T12:00:00Z");
+      // 30 days + 1 hour before the fixed now
+      const lastUsed = new Date(now.getTime() - (30 * 24 + 1) * 60 * 60 * 1000).toISOString();
+      const entry = makeEntry({ last_used_at: lastUsed });
+      const result = determineTransition(entry, DEFAULT_THRESHOLDS, now);
       expect(result.action).toBe("mark_stale");
     });
   });

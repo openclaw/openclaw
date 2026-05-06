@@ -22,17 +22,9 @@ import {
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
-export interface CuratorConfig {
-  enabled: boolean;
-  interval_hours: number;
-  min_idle_hours: number;
-  stale_after_days: number;
-  archive_after_days: number;
-  backup: {
-    enabled: boolean;
-    keep: number;
-  };
-}
+export type { CuratorConfig } from "./config.js";
+export { resolveConfig } from "./config.js";
+import type { CuratorConfig } from "./config.js";
 
 export interface RunDecision {
   shouldRun: boolean;

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/core";
+import { resolveConfig, type CuratorConfig } from "./config.js";
 import {
   adoptSkill,
   curatorRun,
@@ -11,7 +12,6 @@ import {
   resumeCurator,
   restoreSkill,
   unpinSkill,
-  type CuratorConfig,
 } from "./run.js";
 import { rotateSnapshots } from "./snapshot.js";
 import { loadUsage } from "./telemetry.js";
@@ -29,19 +29,7 @@ function findWorkspaceDir(ctx: PluginCommandContext): string {
 }
 
 function resolveCuratorConfig(api: OpenClawPluginApi): CuratorConfig {
-  const raw = (api.pluginConfig ?? {}) as Record<string, unknown>;
-  const backup = (raw.backup ?? {}) as Record<string, unknown>;
-  return {
-    enabled: raw.enabled !== false,
-    interval_hours: typeof raw.interval_hours === "number" ? raw.interval_hours : 168,
-    min_idle_hours: typeof raw.min_idle_hours === "number" ? raw.min_idle_hours : 2,
-    stale_after_days: typeof raw.stale_after_days === "number" ? raw.stale_after_days : 30,
-    archive_after_days: typeof raw.archive_after_days === "number" ? raw.archive_after_days : 90,
-    backup: {
-      enabled: backup.enabled !== false,
-      keep: typeof backup.keep === "number" ? backup.keep : 5,
-    },
-  };
+  return resolveConfig(api.pluginConfig);
 }
 
 interface CuratorStatus {
