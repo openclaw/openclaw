@@ -169,6 +169,36 @@ describe("getMessageFeishu", () => {
     );
   });
 
+  it("normalizes synthetic reaction message IDs before message lookups", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_reacted",
+            chat_id: "oc_1",
+            msg_type: "text",
+            body: { content: JSON.stringify({ text: "reacted message" }) },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_reacted:reaction:THUMBSUP:fixed-uuid",
+    });
+
+    expect(mockClientGet).toHaveBeenCalledWith({ path: { message_id: "om_reacted" } });
+    expect(result).toEqual(
+      expect.objectContaining({
+        messageId: "om_reacted",
+        chatId: "oc_1",
+        content: "reacted message",
+      }),
+    );
+  });
+
   it("falls through empty interactive card element arrays and locale variants", async () => {
     mockClientGet.mockResolvedValueOnce({
       code: 0,
@@ -485,6 +515,22 @@ describe("editMessageFeishu", () => {
       data: {
         content: JSON.stringify({ schema: "2.0" }),
       },
+    });
+    expect(result).toEqual({ messageId: "om_card", contentType: "interactive" });
+  });
+
+  it("normalizes synthetic reaction message IDs before edits", async () => {
+    mockClientPatch.mockResolvedValueOnce({ code: 0 });
+
+    const result = await editMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_card:reaction:THUMBSUP:fixed-uuid",
+      card: { schema: "2.0" },
+    });
+
+    expect(mockClientPatch).toHaveBeenCalledWith({
+      path: { message_id: "om_card" },
+      data: { content: JSON.stringify({ schema: "2.0" }) },
     });
     expect(result).toEqual({ messageId: "om_card", contentType: "interactive" });
   });

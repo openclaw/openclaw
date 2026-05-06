@@ -107,6 +107,27 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     );
   });
 
+  it("normalizes synthetic reaction message IDs before replying", async () => {
+    replyMock.mockResolvedValue({
+      code: 0,
+      data: { message_id: "om_reply" },
+    });
+
+    const result = await sendMessageFeishu({
+      cfg: {} as never,
+      to: "user:ou_target",
+      text: "hello",
+      replyToMessageId: "om_parent:reaction:THUMBSUP:fixed-uuid",
+    });
+
+    expect(replyMock).toHaveBeenCalledWith({
+      path: { message_id: "om_parent" },
+      data: expect.objectContaining({ msg_type: "post" }),
+    });
+    expect(createMock).not.toHaveBeenCalled();
+    expect(result.messageId).toBe("om_reply");
+  });
+
   it("falls back to create for withdrawn card replies", async () => {
     replyMock.mockResolvedValue({
       code: 231003,
