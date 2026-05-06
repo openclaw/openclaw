@@ -277,6 +277,7 @@ describe("gateway codex harness live helpers", () => {
       ].join("\n"),
       ["Available model overrides here:", "", "- `gpt-5.4`"].join("\n"),
       ["Available model overrides:", "", "- `gpt-5.4`"].join("\n"),
+      ["Available model overrides listed for this session:", "", "- `gpt-5.5`"].join("\n"),
       ["Available models:", "", "- `gpt-5.4`", "- `gpt-5.4-mini`"].join("\n"),
       [
         "Available model overrides exposed in this session are:",
