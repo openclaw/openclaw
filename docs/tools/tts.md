@@ -190,7 +190,8 @@ preset and adapt the provider block:
           apiKey: "${INWORLD_API_KEY}",
           modelId: "inworld-tts-2",
           voiceId: "Sarah",
-          temperature: 0.7,
+          // temperature is honored by `inworld-tts-1.5-*` / `inworld-tts-1*`
+          // models; `inworld-tts-2` ignores it.
         },
       },
     },

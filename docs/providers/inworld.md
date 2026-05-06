@@ -68,13 +68,13 @@ the standard reply-audio pipeline.
 
 ## Configuration options
 
-| Option        | Path                                         | Description                                                       |
-| ------------- | -------------------------------------------- | ----------------------------------------------------------------- |
-| `apiKey`      | `messages.tts.providers.inworld.apiKey`      | Base64 dashboard credential. Falls back to `INWORLD_API_KEY`.     |
-| `baseUrl`     | `messages.tts.providers.inworld.baseUrl`     | Override Inworld API base URL (default `https://api.inworld.ai`). |
-| `voiceId`     | `messages.tts.providers.inworld.voiceId`     | Voice identifier (default `Sarah`).                               |
-| `modelId`     | `messages.tts.providers.inworld.modelId`     | TTS model id (default `inworld-tts-2`).                           |
-| `temperature` | `messages.tts.providers.inworld.temperature` | Sampling temperature `0..2` (optional).                           |
+| Option        | Path                                         | Description                                                                                                              |
+| ------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `apiKey`      | `messages.tts.providers.inworld.apiKey`      | Base64 dashboard credential. Falls back to `INWORLD_API_KEY`.                                                            |
+| `baseUrl`     | `messages.tts.providers.inworld.baseUrl`     | Override Inworld API base URL (default `https://api.inworld.ai`).                                                        |
+| `voiceId`     | `messages.tts.providers.inworld.voiceId`     | Voice identifier (default `Sarah`).                                                                                      |
+| `modelId`     | `messages.tts.providers.inworld.modelId`     | TTS model id (default `inworld-tts-2`).                                                                                  |
+| `temperature` | `messages.tts.providers.inworld.temperature` | Sampling temperature `0..2` (optional). Honored by `inworld-tts-1.5-*` and `inworld-tts-1*`; ignored by `inworld-tts-2`. |
 
 ## Notes
 
@@ -90,7 +90,9 @@ the standard reply-audio pipeline.
     Supported model ids: `inworld-tts-2` (Realtime TTS-2, default),
     `inworld-tts-1.5-max` (Realtime TTS-1.5-Max),
     `inworld-tts-1.5-mini` (Realtime TTS-1.5-Mini), `inworld-tts-1-max`,
-    `inworld-tts-1`.
+    `inworld-tts-1`. The `temperature` option is honored by the
+    `inworld-tts-1.5-*` and `inworld-tts-1*` models; `inworld-tts-2`
+    ignores it without erroring.
   </Accordion>
   <Accordion title="Audio outputs">
     Replies use MP3 by default. When the channel target is `voice-note`
