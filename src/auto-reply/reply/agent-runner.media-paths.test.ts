@@ -208,6 +208,7 @@ describe("runReplyAgent media path normalization", () => {
 
     await runReplyAgent(
       makeRunReplyAgentParams({
+        provider: "webchat",
         resolvedQueue: { mode: "steer" } as QueueSettings,
         shouldSteer: true,
         isStreaming: true,
@@ -220,6 +221,7 @@ describe("runReplyAgent media path normalization", () => {
 
     await runReplyAgent(
       makeRunReplyAgentParams({
+        provider: "webchat",
         resolvedQueue: { mode: "queue" } as QueueSettings,
         shouldSteer: true,
         isStreaming: true,
@@ -229,6 +231,37 @@ describe("runReplyAgent media path normalization", () => {
     expect(queueEmbeddedPiMessageMock).toHaveBeenLastCalledWith("session", "generate chart", {
       steeringMode: "one-at-a-time",
     });
+  });
+
+  it("queues external-channel steer messages as follow-up runs", async () => {
+    queueEmbeddedPiMessageMock.mockReturnValue(true);
+
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        provider: "telegram",
+        resolvedQueue: { mode: "steer", debounceMs: 125 } as QueueSettings,
+        shouldSteer: true,
+        isActive: true,
+        isRunActive: () => true,
+        isStreaming: true,
+      }),
+    );
+
+    expect(queueEmbeddedPiMessageMock).not.toHaveBeenCalled();
+    expect(enqueueFollowupRunMock).toHaveBeenCalledWith(
+      "main",
+      expect.objectContaining({
+        prompt: "generate chart",
+      }),
+      expect.objectContaining({
+        mode: "steer",
+        debounceMs: 125,
+      }),
+      "message-id",
+      expect.any(Function),
+      false,
+    );
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
 
   it("shares one media cache between block accumulation and final payload delivery", async () => {
