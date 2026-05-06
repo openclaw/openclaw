@@ -128,6 +128,7 @@ Docs: https://docs.openclaw.ai
 - Codex/app-server: forward the OpenClaw workspace bootstrap block through Codex `developerInstructions` instead of `config.instructions`, so persona/style guidance reaches the behavior-shaping app-server lane. Fixes #77363. Thanks @lonexreb.
 - MS Teams: route proactive channel sends with stored thread roots through the configured threaded reply path instead of forcing every CLI/message-tool send into a new top-level post. Fixes #78298. Thanks @amknight.
 - CLI/infer: pass minimal instructions to local `openai-codex/*` model probes and surface provider error details when `infer model run` returns no text. Fixes #76464. Thanks @lilesjtu.
+- Channels/model picker: stop synthesizing fake `<defaultProvider>/<aliasName>` entries when an agent's `model.fallbacks` references a configured CLI-runtime alias such as `opus-cli`, so Telegram, Discord, and Mattermost `/model` pickers no longer list those aliases under the wrong provider.
 - Dependencies: override transitive `ip-address` to `10.2.0` so the runtime lockfile no longer includes the vulnerable `10.1.0` build flagged by Dependabot alert 109. Thanks @vincentkoc.
 - Plugins/install: apply OpenClaw's npm security overrides inside managed external plugin npm roots so hoisted plugin dependencies inherit the host package hardening. Thanks @vincentkoc.
 - Feishu: hydrate missing native topic starter thread IDs before session routing so first turns and follow-ups stay in the same topic session. Fixes #78262. Thanks @joeyzenghuan.

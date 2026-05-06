@@ -611,6 +611,10 @@ export function buildAllowedModelSetWithFallbacks(params: {
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
   });
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+  });
   const configuredCatalog = buildConfiguredModelCatalog({ cfg: params.cfg });
   const catalog = mergeModelCatalogEntries({
     primary: params.catalog,
@@ -657,8 +661,30 @@ export function buildAllowedModelSetWithFallbacks(params: {
       allowedRefs.push(ref);
     }
   };
-  const addAllowedModelRef = (raw: string) => {
+  const addAllowedRef = (parsed: ModelRef) => {
+    const key = modelKey(parsed.provider, parsed.model);
+    allowedKeys.add(key);
+    addAllowedCatalogRef(parsed);
+
+    if (
+      !findModelCatalogEntry(catalog, { provider: parsed.provider, modelId: parsed.model }) &&
+      !syntheticCatalogEntries.has(key)
+    ) {
+      syntheticCatalogEntries.set(key, buildSyntheticAllowedCatalogEntry({ parsed, metadata }));
+    }
+  };
+  const addAllowedModelRef = (raw: string, options?: { resolveAliasFirst?: boolean }) => {
     const trimmed = raw.trim();
+    if (!trimmed) {
+      return;
+    }
+    if (options?.resolveAliasFirst && !trimmed.includes("/")) {
+      const aliasMatch = aliasIndex.byAlias.get(normalizeLowercaseStringOrEmpty(trimmed));
+      if (aliasMatch) {
+        addAllowedRef(aliasMatch.ref);
+        return;
+      }
+    }
     const defaultProvider = !trimmed.includes("/")
       ? resolveBareModelDefaultProvider({
           cfg: params.cfg,
@@ -675,16 +701,7 @@ export function buildAllowedModelSetWithFallbacks(params: {
     if (!parsed) {
       return;
     }
-    const key = modelKey(parsed.provider, parsed.model);
-    allowedKeys.add(key);
-    addAllowedCatalogRef(parsed);
-
-    if (
-      !findModelCatalogEntry(catalog, { provider: parsed.provider, modelId: parsed.model }) &&
-      !syntheticCatalogEntries.has(key)
-    ) {
-      syntheticCatalogEntries.set(key, buildSyntheticAllowedCatalogEntry({ parsed, metadata }));
-    }
+    addAllowedRef(parsed);
   };
 
   for (const raw of rawAllowlist) {
@@ -692,7 +709,7 @@ export function buildAllowedModelSetWithFallbacks(params: {
   }
 
   for (const fallback of params.fallbackModels) {
-    addAllowedModelRef(fallback);
+    addAllowedModelRef(fallback, { resolveAliasFirst: true });
   }
 
   if (defaultKey) {
