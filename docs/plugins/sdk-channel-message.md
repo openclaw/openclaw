@@ -109,6 +109,9 @@ The bridge converts old outbound send results into `MessageReceipt` values. New
 code should pass receipts end to end and only derive legacy ids at compatibility
 edges with `listMessageReceiptPlatformIds(...)` or
 `resolveMessageReceiptPrimaryId(...)`.
+If an outbound result includes a provider delivery projection, the bridge also
+copies it into the derived channel-message result so callers can distinguish
+provider acceptance from the receipt itself.
 If no receive policy is supplied, `createChannelMessageAdapterFromOutbound(...)`
 uses `manual` receive acknowledgement policy. That makes plugin-owned platform
 acknowledgement explicit without changing channels that acknowledge webhooks,
@@ -263,6 +266,16 @@ send result. Use `createPreviewMessageReceipt(...)` when a live preview message
 becomes the final receipt. Avoid adding new owner-local `messageIds` fields.
 Legacy `ChannelDeliveryResult.messageIds` is still produced at compatibility
 edges.
+
+`ChannelMessageSendResult.delivery` is an optional provider delivery projection
+for facts that are not receipts. Today it can include
+`providerAccepted: true`, meaning the platform provider accepted the send
+request and returned success. It does **not** mean the user saw, read, or
+acknowledged the message, and it must not be used as a substitute for
+`MessageReceipt` ids. Set it only after successful platform I/O; leave it unset
+for local fallbacks, dry runs, unknown outcomes, or failures. Adapters created
+with `createChannelMessageAdapterFromOutbound(...)` preserve this projection
+from compatible outbound results.
 
 ## Live preview
 
