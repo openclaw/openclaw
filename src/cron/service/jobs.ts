@@ -454,12 +454,7 @@ function recomputeJobNextRunAtMs(params: { state: CronServiceState; job: CronJob
         typeof consecutiveErrorsRaw === "number" && Number.isFinite(consecutiveErrorsRaw)
           ? Math.max(1, Math.floor(consecutiveErrorsRaw))
           : 1;
-      const backoffFloor =
-        params.job.state.lastRunAtMs +
-        errorBackoffMs(
-          consecutiveErrors,
-          params.state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
-        );
+      const backoffFloor = params.job.state.lastRunAtMs + errorBackoffMs(consecutiveErrors);
       if (newNext !== undefined) {
         newNext = Math.max(newNext, backoffFloor);
       }
