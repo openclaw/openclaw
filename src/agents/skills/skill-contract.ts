@@ -6,6 +6,8 @@ export type SourceOrigin = "package" | "top-level";
 export type Skill = CanonicalSkill & {
   // Preserve legacy source reads while keeping the canonical upstream shape.
   source?: string;
+  // Keyword triggers declared in SKILL.md frontmatter for deterministic routing.
+  triggers?: string[];
 };
 
 export function createSyntheticSourceInfo(
@@ -56,6 +58,9 @@ export function formatSkillsForPrompt(skills: Skill[]): string {
     lines.push("  <skill>");
     lines.push(`    <name>${escapeXml(skill.name)}</name>`);
     lines.push(`    <description>${escapeXml(skill.description)}</description>`);
+    if (skill.triggers && skill.triggers.length > 0) {
+      lines.push(`    <triggers>${escapeXml(skill.triggers.join(", "))}</triggers>`);
+    }
     lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
     lines.push("  </skill>");
   }

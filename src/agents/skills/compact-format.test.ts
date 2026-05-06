@@ -71,6 +71,17 @@ describe("formatSkillsCompact", () => {
     expect(out).toContain("hidden");
   });
 
+  it("includes triggers element when skill declares keyword triggers", () => {
+    const skill: Skill = { ...makeSkill("eyes", "Make eyes bigger"), triggers: ["大眼", "big-eye"] };
+    const out = formatSkillsForPrompt([skill]);
+    expect(out).toContain("<triggers>大眼, big-eye</triggers>");
+  });
+
+  it("omits triggers element when skill has no triggers", () => {
+    const out = formatSkillsForPrompt([makeSkill("weather", "Get weather data")]);
+    expect(out).not.toContain("<triggers>");
+  });
+
   it("returns empty string for no skills", () => {
     expect(formatSkillsCompact([])).toBe("");
   });

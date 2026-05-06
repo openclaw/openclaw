@@ -218,6 +218,10 @@ export function resolveSkillInvocationPolicy(
   };
 }
 
+export function resolveSkillTriggers(frontmatter: ParsedSkillFrontmatter): string[] {
+  return normalizeStringList(getFrontmatterString(frontmatter, "triggers"));
+}
+
 export function resolveSkillKey(skill: Skill, entry?: SkillEntry): string {
   return entry?.metadata?.skillKey ?? skill.name;
 }

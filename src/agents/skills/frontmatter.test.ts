@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontmatter.js";
+import { resolveOpenClawMetadata, resolveSkillInvocationPolicy, resolveSkillTriggers } from "./frontmatter.js";
 
 describe("resolveSkillInvocationPolicy", () => {
   it("defaults to enabled behaviors", () => {
@@ -63,5 +63,27 @@ describe("resolveOpenClawMetadata install validation", () => {
       metadata: '{"openclaw":{"install":[{"kind":"download","url":"file:///tmp/payload.tgz"}]}}',
     });
     expect(install).toBeUndefined();
+  });
+});
+
+describe("resolveSkillTriggers", () => {
+  it("returns empty array when triggers frontmatter key is absent", () => {
+    expect(resolveSkillTriggers({})).toEqual([]);
+  });
+
+  it("parses a single trigger keyword", () => {
+    expect(resolveSkillTriggers({ triggers: "大眼" })).toEqual(["大眼"]);
+  });
+
+  it("parses comma-separated trigger keywords", () => {
+    expect(resolveSkillTriggers({ triggers: "大眼, big-eye, eyes" })).toEqual([
+      "大眼",
+      "big-eye",
+      "eyes",
+    ]);
+  });
+
+  it("trims whitespace from each trigger", () => {
+    expect(resolveSkillTriggers({ triggers: "  foo  ,  bar  " })).toEqual(["foo", "bar"]);
   });
 });

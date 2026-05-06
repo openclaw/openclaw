@@ -23,6 +23,7 @@ export type OpenClawSkillMetadata = {
   emoji?: string;
   homepage?: string;
   os?: string[];
+  triggers?: string[];
   requires?: {
     bins?: string[];
     anyBins?: string[];
