@@ -119,6 +119,41 @@ function normalizeFoundryModelName(value?: string | null): string | undefined {
   return trimmed || undefined;
 }
 
+/**
+ * Returns true when the deployment model name belongs to an Anthropic family
+ * (Claude).  The built-in microsoft-foundry provider only supports
+ * OpenAI-compatible Foundry APIs today; Anthropic deployments use a different
+ * endpoint path (`/anthropic/v1/messages`) and API shape that is not yet
+ * wired.  See #60546.
+ */
+export function isAnthropicFoundryDeployment(modelName?: string | null): boolean {
+  const normalized = normalizeFoundryModelName(modelName);
+  if (!normalized) {
+    return false;
+  }
+  return normalized.startsWith("claude");
+}
+
+/**
+ * Split a list of Foundry deployments into ones supported by the built-in
+ * provider and Anthropic (Claude) deployments that require a custom provider.
+ * Single source of truth so the picker and the persisted catalog stay in sync.
+ */
+export function partitionFoundryDeployments<T extends { modelName?: string }>(
+  deployments: readonly T[],
+): { supported: T[]; anthropic: T[] } {
+  const supported: T[] = [];
+  const anthropic: T[] = [];
+  for (const deployment of deployments) {
+    if (isAnthropicFoundryDeployment(deployment.modelName)) {
+      anthropic.push(deployment);
+    } else {
+      supported.push(deployment);
+    }
+  }
+  return { supported, anthropic };
+}
+
 export function usesFoundryResponsesByDefault(value?: string | null): boolean {
   const normalized = normalizeFoundryModelName(value);
   if (!normalized) {

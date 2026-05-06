@@ -25,6 +25,7 @@ import {
   requiresFoundryMaxCompletionTokens,
   DEFAULT_API,
   DEFAULT_GPT5_API,
+  partitionFoundryDeployments,
   usesFoundryResponsesByDefault,
 } from "./shared.js";
 
@@ -166,23 +167,49 @@ export async function selectFoundryDeployment(
   ctx: ProviderAuthContext,
   resource: FoundryResourceOption,
   deployments: AzDeploymentSummary[],
-): Promise<AzDeploymentSummary> {
-  if (deployments.length === 0) {
-    throw new Error(
+): Promise<{ selected: AzDeploymentSummary; supported: AzDeploymentSummary[] }> {
+  // Filter out Anthropic (Claude) deployments — they require a different API
+  // shape (/anthropic/v1/messages) that the built-in provider does not support
+  // yet.  Use a custom provider pointed at the Anthropic Foundry endpoint
+  // instead.  See #60546.  The same `supported` list is reused by the caller
+  // when persisting the deployment catalog so unsupported entries never leak
+  // through into the saved provider config.
+  const { supported, anthropic } = partitionFoundryDeployments(deployments);
+  const anthropicNames = anthropic.map((d) => d.name);
+  if (anthropicNames.length > 0) {
+    await ctx.prompter.note(
       [
-        `No model deployments were found in ${resource.accountName}.`,
-        "Deploy a model in Azure AI Foundry or Azure OpenAI, then rerun onboard.",
-      ].join("\n"),
+        `Skipping ${anthropicNames.length} Anthropic deployment(s) (${anthropicNames.join(", ")}):`,
+        "the built-in Microsoft Foundry provider only supports OpenAI-compatible APIs.",
+        "To use Claude on Azure, configure a custom provider with base URL",
+        "https://<resource>.services.ai.azure.com/anthropic and API: anthropic-messages.",
+      ].join(" "),
+      "Unsupported Deployments",
     );
   }
-  if (deployments.length === 1) {
-    const only = deployments[0];
+  if (supported.length === 0) {
+    const hint =
+      anthropicNames.length > 0
+        ? [
+            `Only Anthropic deployments were found in ${resource.accountName},`,
+            "which are not supported by this provider.",
+            "Use a custom provider with the Anthropic Foundry endpoint, or",
+            "deploy an OpenAI-compatible model and rerun onboard.",
+          ].join(" ")
+        : [
+            `No model deployments were found in ${resource.accountName}.`,
+            "Deploy a model in Azure AI Foundry or Azure OpenAI, then rerun onboard.",
+          ].join("\n");
+    throw new Error(hint);
+  }
+  if (supported.length === 1) {
+    const only = supported[0];
     await ctx.prompter.note(`Using deployment: ${only.name}`, "Model Deployment");
-    return only;
+    return { selected: only, supported };
   }
   const selectedDeploymentName = await ctx.prompter.select({
     message: "Select model deployment",
-    options: deployments.map((deployment) => ({
+    options: supported.map((deployment) => ({
       value: deployment.name,
       label: deployment.name,
       hint: [deployment.modelName, deployment.modelVersion, deployment.sku]
@@ -190,9 +217,9 @@ export async function selectFoundryDeployment(
         .join(" | "),
     })),
   });
-  return (
-    deployments.find((deployment) => deployment.name === selectedDeploymentName) ?? deployments[0]
-  );
+  const selected =
+    supported.find((deployment) => deployment.name === selectedDeploymentName) ?? supported[0];
+  return { selected, supported };
 }
 
 async function promptFoundryApi(

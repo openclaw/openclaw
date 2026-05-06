@@ -121,12 +121,13 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
       if (useDiscoveredResource) {
         const selectedResource = await selectFoundryResource(ctx, selectedSub);
         const resourceDeployments = listResourceDeployments(selectedResource, selectedSub.id);
-        const selectedDeployment = await selectFoundryDeployment(
-          ctx,
-          selectedResource,
-          resourceDeployments,
-        );
-        discoveredDeployments = resourceDeployments.map((deployment) =>
+        const { selected: selectedDeployment, supported: supportedDeployments } =
+          await selectFoundryDeployment(ctx, selectedResource, resourceDeployments);
+        // Persist only supported (non-Anthropic) deployments so the saved
+        // provider catalog matches what the picker offered.  Mixed
+        // resources previously leaked Claude deployments into the catalog
+        // even though they were filtered from the picker.  See #60546.
+        discoveredDeployments = supportedDeployments.map((deployment) =>
           Object.assign(
             { name: deployment.name },
             deployment.modelName ? { modelName: deployment.modelName } : {},

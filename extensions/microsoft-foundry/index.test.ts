@@ -3,11 +3,17 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getAccessTokenResultAsync } from "./cli.js";
 import plugin from "./index.js";
-import { buildFoundryConnectionTest, isValidTenantIdentifier } from "./onboard.js";
+import {
+  buildFoundryConnectionTest,
+  isValidTenantIdentifier,
+  selectFoundryDeployment,
+} from "./onboard.js";
 import { resetFoundryRuntimeAuthCaches } from "./runtime.js";
 import {
   buildFoundryAuthResult,
+  isAnthropicFoundryDeployment,
   normalizeFoundryEndpoint,
+  partitionFoundryDeployments,
   requiresFoundryMaxCompletionTokens,
   supportsFoundryImageInput,
   usesFoundryResponsesByDefault,
@@ -720,4 +726,114 @@ describe("microsoft-foundry plugin", () => {
     ]);
     expect(result.defaultModel).toBe("microsoft-foundry/deployment-gpt5");
   });
+});
+
+describe("partitionFoundryDeployments", () => {
+  it("keeps GPT deployments and skips Claude in mixed resources", () => {
+    const { supported, anthropic } = partitionFoundryDeployments([
+      { name: "prod-gpt", modelName: "gpt-5.4" },
+      { name: "prod-claude", modelName: "claude-opus-4-6" },
+      { name: "prod-mini", modelName: "gpt-4o-mini" },
+    ]);
+    expect(supported.map((d) => d.name)).toEqual(["prod-gpt", "prod-mini"]);
+    expect(anthropic.map((d) => d.name)).toEqual(["prod-claude"]);
+  });
+
+  it("returns empty supported when only Anthropic deployments exist", () => {
+    const { supported, anthropic } = partitionFoundryDeployments([
+      { name: "only-claude", modelName: "claude-3.5-sonnet" },
+    ]);
+    expect(supported).toEqual([]);
+    expect(anthropic.map((d) => d.name)).toEqual(["only-claude"]);
+  });
+
+  it("is a no-op for all-OpenAI resources", () => {
+    const deployments = [
+      { name: "prod-gpt", modelName: "gpt-5.4" },
+      { name: "prod-mini", modelName: "gpt-4o-mini" },
+    ];
+    const { supported, anthropic } = partitionFoundryDeployments(deployments);
+    expect(supported).toEqual(deployments);
+    expect(anthropic).toEqual([]);
+  });
+});
+
+describe("selectFoundryDeployment", () => {
+  function makeCtx(overrides: { selectValue?: string } = {}) {
+    const noteCalls: Array<{ message: string; title: string }> = [];
+    const selectCalls: Array<{ options: Array<{ value: string }> }> = [];
+    const ctx = {
+      prompter: {
+        note: vi.fn(async (message: string, title: string) => {
+          noteCalls.push({ message, title });
+        }),
+        select: vi.fn(async (params: { options: Array<{ value: string }> }) => {
+          selectCalls.push({ options: params.options });
+          return overrides.selectValue ?? params.options[0]?.value;
+        }),
+      },
+    } as never;
+    return { ctx, noteCalls, selectCalls };
+  }
+
+  const fakeResource = {
+    id: "/sub/x/rg/y/account/z",
+    accountName: "foundry-resource",
+    kind: "AIServices" as const,
+    resourceGroup: "rg",
+    endpoint: "https://example.services.ai.azure.com",
+    projects: [],
+  };
+
+  it("persists only supported deployments for mixed GPT+Claude resources", async () => {
+    const { ctx, selectCalls, noteCalls } = makeCtx({ selectValue: "prod-gpt" });
+    const result = await selectFoundryDeployment(ctx, fakeResource, [
+      { name: "prod-gpt", modelName: "gpt-5.4", state: "Succeeded" },
+      { name: "prod-claude", modelName: "claude-opus-4-6", state: "Succeeded" },
+      { name: "prod-mini", modelName: "gpt-4o-mini", state: "Succeeded" },
+    ]);
+
+    expect(result.supported.map((d) => d.name)).toEqual(["prod-gpt", "prod-mini"]);
+    expect(result.selected.name).toBe("prod-gpt");
+    expect(selectCalls[0]?.options.map((o) => o.value)).toEqual(["prod-gpt", "prod-mini"]);
+    expect(noteCalls.some((n) => n.title === "Unsupported Deployments")).toBe(true);
+  });
+
+  it("throws an actionable error when only Anthropic deployments exist", async () => {
+    const { ctx, noteCalls } = makeCtx();
+    await expect(
+      selectFoundryDeployment(ctx, fakeResource, [
+        { name: "only-claude", modelName: "claude-3.5-sonnet", state: "Succeeded" },
+      ]),
+    ).rejects.toThrow(/Only Anthropic deployments/);
+    expect(noteCalls.some((n) => n.title === "Unsupported Deployments")).toBe(true);
+  });
+
+  it("leaves all-OpenAI resources unchanged", async () => {
+    const { ctx, selectCalls, noteCalls } = makeCtx({ selectValue: "prod-mini" });
+    const result = await selectFoundryDeployment(ctx, fakeResource, [
+      { name: "prod-gpt", modelName: "gpt-5.4", state: "Succeeded" },
+      { name: "prod-mini", modelName: "gpt-4o-mini", state: "Succeeded" },
+    ]);
+    expect(result.supported.map((d) => d.name)).toEqual(["prod-gpt", "prod-mini"]);
+    expect(result.selected.name).toBe("prod-mini");
+    expect(selectCalls).toHaveLength(1);
+    expect(noteCalls.some((n) => n.title === "Unsupported Deployments")).toBe(false);
+  });
+});
+
+describe("isAnthropicFoundryDeployment", () => {
+  it.each(["claude-opus-4-6", "Claude-Sonnet-4", "claude-3.5-haiku", "CLAUDE-instant"])(
+    "detects Anthropic model: %s",
+    (name) => {
+      expect(isAnthropicFoundryDeployment(name)).toBe(true);
+    },
+  );
+
+  it.each(["gpt-5.4", "o4-mini", "phi-4", "llama-3", undefined, null, ""])(
+    "rejects non-Anthropic model: %s",
+    (name) => {
+      expect(isAnthropicFoundryDeployment(name)).toBe(false);
+    },
+  );
 });
