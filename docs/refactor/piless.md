@@ -23,7 +23,8 @@ OpenClaw currently embeds PI directly. The main loop still imports
 and `@mariozechner/pi-tui` across agent runtime, tool, provider, transcript, and
 TUI paths. See [PI integration architecture](/pi).
 
-Session state is split across several persistence mechanisms:
+Before this refactor, session and runtime state was split across several
+persistence mechanisms:
 
 - Gateway session index: `sessions.json`
 - Session transcripts: `*.jsonl`
@@ -34,8 +35,10 @@ Session state is split across several persistence mechanisms:
 - Memory indexes: SQLite or QMD-owned SQLite
 - Plugin-specific JSON and JSONL sidecars
 
-This mix is workable, but it creates duplicated read, write, migration, locking,
-maintenance, and diagnostics code.
+That mix was workable, but it created duplicated read, write, migration,
+locking, maintenance, and diagnostics code. The branch now moves canonical
+runtime state into the shared SQLite database and treats old JSON files as
+doctor migration inputs, not runtime compatibility stores.
 
 ## Current Implementation Status
 
@@ -99,8 +102,8 @@ This plan has started landing in slices:
   media-result manifests for generated or captured tool media in the same
   run-scoped artifact store while keeping delivery files on disk.
 - Managed outgoing image attachment metadata now uses the shared SQLite `kv`
-  store as the primary record path. Older per-attachment JSON files import into
-  SQLite when encountered and are removed after import.
+  store as the primary record path. Older per-attachment JSON files are imported
+  and removed by `openclaw doctor --fix`; runtime media reads only SQLite.
 - Cron runtime schedule state and run history now use the shared SQLite state
   database. `openclaw doctor --fix` imports legacy `jobs-state.json` and
   `cron/runs/*.jsonl` files into SQLite and removes those file sources after a
@@ -108,37 +111,41 @@ This plan has started landing in slices:
   run-history JSON files; `jobs.json` remains the hand-editable job definition
   file.
 - The subagent run registry now uses the shared SQLite `kv` store as the
-  primary record path. Legacy `subagents/runs.json` files import into SQLite
-  when SQLite is empty and are removed after import.
+  primary record path. `openclaw doctor --fix` imports legacy
+  `subagents/runs.json` files into SQLite and removes them after import.
+  Runtime paths no longer import or delete that JSON file.
 - Sandbox container and browser registries now use the shared SQLite `kv` store
-  as the primary record path. Existing sharded JSON entries import into SQLite
-  on first read, and the shard files remain compatibility exports for downgrade
-  and debugging workflows.
+  as the primary record path. Legacy monolithic registry files migrate only
+  through `openclaw doctor --fix`; runtime reads no longer import registry JSON.
 - OpenRouter model capability cache now uses the shared SQLite `kv` store as
   the primary persistent cache. The older
-  `cache/openrouter-models.json` file is a legacy import source and is removed
-  after import.
+  `cache/openrouter-models.json` file is imported and removed by
+  `openclaw doctor --fix`, not by runtime cache reads.
 - Codex app-server thread bindings now use the shared SQLite `kv` store as the
   only runtime record path. The old per-session
   `.codex-app-server.json` sidecar reader/writer has been removed from runtime
   and tests now seed the binding store directly. `openclaw doctor --fix`
   imports old sidecars into SQLite and removes the JSON source.
 - TUI last-session restore pointers now use the shared SQLite `kv` store as the
-  primary record path. The older `tui/last-session.json` file is a legacy
-  import source and is removed after import.
+  primary record path. The older `tui/last-session.json` file is imported and
+  removed by `openclaw doctor --fix`; runtime TUI reads only SQLite.
 - Auth profile runtime routing state now uses the shared SQLite `kv` store as
-  the primary record path. The older per-agent `auth-state.json` file is a
-  legacy import source and is removed after import; `auth-profiles.json` still
-  owns credentials and stays file-backed.
+  the primary record path. Older per-agent `auth-state.json` files are imported
+  and removed by `openclaw doctor --fix`; `auth-profiles.json` still owns
+  credentials and stays file-backed.
 - Device identity, local device auth tokens, bootstrap tokens, device/node
   pairing ledgers, channel pairing requests/allowlists, inferred commitment
-  records, web push subscriptions/VAPID keys, and APNs registration state now
+  records, subagent run records, TUI restore pointers, auth routing state,
+  OpenRouter model cache, web push subscriptions/VAPID keys, APNs registration
+  state, and update-check state now
   use the shared SQLite `kv` store. `openclaw doctor --fix` imports the legacy
   `identity/*.json`, `devices/*.json`, `nodes/*.json`,
   `credentials/*-pairing.json`, `credentials/*-allowFrom.json`,
-  `commitments/commitments.json`, and `push/*.json` files into SQLite and
-  removes those files after a successful import. Runtime paths no longer read
-  or write those JSON ledgers.
+  `commitments/commitments.json`, `subagents/runs.json`,
+  `tui/last-session.json`, per-agent `auth-state.json`,
+  `cache/openrouter-models.json`, `push/*.json`, and `update-check.json` files
+  into SQLite and removes those files after a successful import. Runtime paths
+  no longer read or write those JSON ledgers.
 - `AgentRuntimeBackend`, `PreparedAgentRun`, and the Node worker runner exist
   for serializable prepared runs. `RunEventBus` owns serial parent event
   delivery for worker event streams. The worker runner enforces prepared-run
@@ -254,7 +261,7 @@ Use three explicit layers:
 
 ```text
 agent runtime boundary       OpenClaw-owned interface, PI as one backend
-agent state database         SQLite primary store, legacy JSON import where needed
+agent state database         SQLite primary store, doctor-only legacy JSON import
 agent filesystem boundary    VFS scratch plus host capability filesystem
 ```
 
@@ -544,18 +551,17 @@ Add tests before each migration step:
 - Plugin state and task registry coexistence with the shared state DB.
 - Managed outgoing media record import from legacy JSON, legacy file removal
   after import, plus SQLite-primary serving without JSON exports.
-- Subagent run registry import from legacy `subagents/runs.json`, legacy file
-  removal after import, and restore from SQLite without JSON exports.
-- Sandbox container and browser registry reads from SQLite when compatibility
-  shard files are missing, while legacy monolithic registry migration stays an
-  explicit repair operation.
-- OpenRouter model capability cache reads from SQLite when the legacy JSON
-  cache file is missing, imports old cache JSON, and removes it after import.
+- Subagent run registry import from legacy `subagents/runs.json` during doctor,
+  legacy file removal after import, and restore from SQLite without JSON
+  exports.
+- Sandbox container and browser registry reads from SQLite, while legacy
+  monolithic registry migration stays an explicit doctor repair operation.
+- OpenRouter model capability cache reads from SQLite, with old cache JSON
+  imported and removed only by doctor.
 - TUI last-session restore pointers read from SQLite without JSON exports,
-  import legacy JSON on read, remove it, and clear stale pointers from SQLite.
-- Auth profile runtime state reads from SQLite when the compatibility
-  `auth-state.json` file is missing, imports legacy JSON on read, removes it,
-  and deletes SQLite state when runtime state is empty.
+  import legacy JSON only through doctor, and clear stale pointers from SQLite.
+- Auth profile runtime state reads from SQLite, imports legacy JSON only through
+  doctor, and deletes SQLite state when runtime state is empty.
 
 ## Rollout Plan
 

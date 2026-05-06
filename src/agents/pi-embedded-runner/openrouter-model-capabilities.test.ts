@@ -83,7 +83,7 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
-  it("imports legacy JSON cache into SQLite and removes the file", async () => {
+  it("imports legacy JSON cache into SQLite through the doctor migration helper", async () => {
     await withOpenRouterStateDir(async (stateDir) => {
       const cachePath = join(stateDir, "cache", "openrouter-models.json");
       mkdirSync(join(stateDir, "cache"), { recursive: true });
@@ -114,14 +114,21 @@ describe("openrouter-model-capabilities", () => {
 
       const module = await importOpenRouterModelCapabilities("legacy-json-cache");
       await module.loadOpenRouterModelCapabilities("acme/legacy-json");
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
 
-      expect(module.getOpenRouterModelCapabilities("acme/legacy-json")).toMatchObject({
+      expect(module.importLegacyOpenRouterModelCapabilitiesCacheToSqlite()).toEqual({
+        imported: true,
+        models: 1,
+      });
+      const migratedModule = await importOpenRouterModelCapabilities("legacy-json-cache-migrated");
+      await migratedModule.loadOpenRouterModelCapabilities("acme/legacy-json");
+
+      expect(migratedModule.getOpenRouterModelCapabilities("acme/legacy-json")).toMatchObject({
         name: "Legacy JSON",
         contextWindow: 111_000,
         maxTokens: 22_000,
       });
       expect(existsSync(cachePath)).toBe(false);
-      expect(fetchSpy).not.toHaveBeenCalled();
     });
   });
 

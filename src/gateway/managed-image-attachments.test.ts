@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
 import { setMediaStoreNetworkDepsForTest } from "../media/store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
+import { readOpenClawStateKvJson, writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 
 const authorizeGatewayHttpRequestOrReplyMock = vi.fn();
 const resolveOpenAiCompatibleHttpOperatorScopesMock = vi.fn();
@@ -112,13 +112,9 @@ async function createFixture(
       filename: "cat.png",
     },
   };
-  const recordsDir = path.join(stateDir, "media", "outgoing", "records");
-  await fs.mkdir(recordsDir, { recursive: true });
-  await fs.writeFile(
-    path.join(recordsDir, `${attachmentId}.json`),
-    JSON.stringify(record, null, 2),
-    "utf-8",
-  );
+  writeOpenClawStateKvJson("managed_outgoing_image_records", attachmentId, record, {
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  });
   return { attachmentId, sessionKey, originalPath };
 }
 

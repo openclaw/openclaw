@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { readOpenClawStateKvJson } from "../../state/openclaw-state-kv.js";
 import { resolveAuthStatePath } from "./paths.js";
-import { loadPersistedAuthProfileState, savePersistedAuthProfileState } from "./state.js";
+import {
+  importLegacyAuthProfileStateFileToSqlite,
+  loadPersistedAuthProfileState,
+  savePersistedAuthProfileState,
+} from "./state.js";
 
 const AUTH_PROFILE_STATE_KV_SCOPE = "auth-profile-state";
 
@@ -46,7 +50,7 @@ describe("auth profile runtime state persistence", () => {
     });
   });
 
-  it("imports legacy auth-state.json into SQLite on read and removes the file", async () => {
+  it("imports legacy auth-state.json into SQLite through the doctor migration helper", async () => {
     const statePath = resolveAuthStatePath(agentDir);
     await fs.writeFile(
       statePath,
@@ -57,6 +61,8 @@ describe("auth profile runtime state persistence", () => {
       })}\n`,
     );
 
+    expect(loadPersistedAuthProfileState(agentDir)).toEqual({});
+    expect(importLegacyAuthProfileStateFileToSqlite(agentDir)).toEqual({ imported: true });
     expect(loadPersistedAuthProfileState(agentDir)).toEqual({
       order: { anthropic: ["anthropic:default"] },
       lastGood: { anthropic: "anthropic:default" },

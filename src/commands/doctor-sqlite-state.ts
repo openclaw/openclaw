@@ -1,8 +1,24 @@
 import {
+  discoverLegacyAuthProfileStateAgentDirs,
+  importLegacyAuthProfileStateFileToSqlite,
+} from "../agents/auth-profiles/state.js";
+import {
+  importLegacyOpenRouterModelCapabilitiesCacheToSqlite,
+  legacyOpenRouterModelCapabilitiesCacheExists,
+} from "../agents/pi-embedded-runner/openrouter-model-capabilities.js";
+import {
+  importLegacySubagentRegistryFileToSqlite,
+  legacySubagentRegistryFileExists,
+} from "../agents/subagent-registry.store.js";
+import {
   importLegacyCommitmentStoreFileToSqlite,
   legacyCommitmentStoreFileExists,
 } from "../commitments/store.js";
 import { resolveStateDir } from "../config/paths.js";
+import {
+  importLegacyManagedOutgoingImageRecordFilesToSqlite,
+  legacyManagedOutgoingImageRecordFilesExist,
+} from "../gateway/managed-image-attachments.js";
 import {
   importLegacyDeviceAuthFileToSqlite,
   legacyDeviceAuthFileExists,
@@ -27,10 +43,18 @@ import {
 } from "../infra/push-apns.js";
 import { importLegacyWebPushFilesToSqlite, legacyWebPushFilesExist } from "../infra/push-web.js";
 import {
+  importLegacyUpdateCheckFileToSqlite,
+  legacyUpdateCheckFileExists,
+} from "../infra/update-startup.js";
+import {
   importLegacyChannelPairingFilesToSqlite,
   legacyChannelPairingFilesExist,
 } from "../pairing/pairing-store.js";
 import { note } from "../terminal/note.js";
+import {
+  importLegacyTuiLastSessionStoreToSqlite,
+  legacyTuiLastSessionFileExists,
+} from "../tui/tui-last-session.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 type LegacyStateProbe = {
@@ -43,6 +67,12 @@ type LegacyStateProbe = {
   commitments: boolean;
   webPush: boolean;
   apns: boolean;
+  updateCheck: boolean;
+  managedImages: boolean;
+  subagents: boolean;
+  tuiLastSession: boolean;
+  authProfileStateAgentDirs: string[];
+  openRouterModelCache: boolean;
 };
 
 async function probeLegacyRuntimeStateFiles(env: NodeJS.ProcessEnv): Promise<LegacyStateProbe> {
@@ -57,11 +87,17 @@ async function probeLegacyRuntimeStateFiles(env: NodeJS.ProcessEnv): Promise<Leg
     commitments: await legacyCommitmentStoreFileExists(env),
     webPush: await legacyWebPushFilesExist(baseDir),
     apns: await legacyApnsRegistrationFileExists(baseDir),
+    updateCheck: await legacyUpdateCheckFileExists(env),
+    managedImages: await legacyManagedOutgoingImageRecordFilesExist(baseDir),
+    subagents: legacySubagentRegistryFileExists(env),
+    tuiLastSession: await legacyTuiLastSessionFileExists({ stateDir: baseDir }),
+    authProfileStateAgentDirs: discoverLegacyAuthProfileStateAgentDirs(env),
+    openRouterModelCache: legacyOpenRouterModelCapabilitiesCacheExists(env),
   };
 }
 
 function hasLegacyRuntimeStateFiles(probe: LegacyStateProbe): boolean {
-  return Object.values(probe).some(Boolean);
+  return Object.values(probe).some((value) => (Array.isArray(value) ? value.length > 0 : value));
 }
 
 export async function maybeRepairLegacyRuntimeStateFiles(params: {
@@ -76,7 +112,7 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
   }
   if (!params.prompter.shouldRepair) {
     note(
-      "Legacy runtime JSON state files detected. Run `openclaw doctor --fix` to import commitments, device, bootstrap, channel pairing, node pairing, and push state into SQLite.",
+      "Legacy runtime JSON state files detected. Run `openclaw doctor --fix` to import commitments, device, bootstrap, channel pairing, node pairing, push, media, subagent, TUI, auth routing, OpenRouter cache, and update-check state into SQLite.",
       "SQLite state",
     );
     return;
@@ -175,6 +211,62 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
       const result = await importLegacyApnsRegistrationFileToSqlite(baseDir);
       if (result.imported) {
         changes.push(`- Imported ${result.registrations} APNs registration(s) into SQLite.`);
+      }
+    });
+  }
+  if (probe.updateCheck) {
+    await runImport("Update check", async () => {
+      const result = await importLegacyUpdateCheckFileToSqlite(env);
+      if (result.imported) {
+        changes.push("- Imported update-check state into SQLite.");
+      }
+    });
+  }
+  if (probe.managedImages) {
+    await runImport("Managed outgoing image records", async () => {
+      const result = await importLegacyManagedOutgoingImageRecordFilesToSqlite(baseDir);
+      if (result.files > 0) {
+        changes.push(`- Imported ${result.records} managed outgoing image record(s) into SQLite.`);
+      }
+    });
+  }
+  if (probe.subagents) {
+    await runImport("Subagent registry", () => {
+      const result = importLegacySubagentRegistryFileToSqlite(env);
+      if (result.imported) {
+        changes.push(`- Imported ${result.runs} subagent run record(s) into SQLite.`);
+      }
+    });
+  }
+  if (probe.tuiLastSession) {
+    await runImport("TUI last-session", async () => {
+      const result = await importLegacyTuiLastSessionStoreToSqlite({ stateDir: baseDir });
+      if (result.imported) {
+        changes.push(`- Imported ${result.pointers} TUI last-session pointer(s) into SQLite.`);
+      }
+    });
+  }
+  if (probe.authProfileStateAgentDirs.length > 0) {
+    await runImport("Auth profile runtime state", () => {
+      let imported = 0;
+      for (const agentDir of probe.authProfileStateAgentDirs) {
+        const result = importLegacyAuthProfileStateFileToSqlite(agentDir);
+        if (result.imported) {
+          imported += 1;
+        }
+      }
+      if (imported > 0) {
+        changes.push(`- Imported ${imported} auth profile runtime state file(s) into SQLite.`);
+      }
+    });
+  }
+  if (probe.openRouterModelCache) {
+    await runImport("OpenRouter model cache", () => {
+      const result = importLegacyOpenRouterModelCapabilitiesCacheToSqlite(env);
+      if (result.imported) {
+        changes.push(
+          `- Imported ${result.models} OpenRouter model cache entr${result.models === 1 ? "y" : "ies"} into SQLite.`,
+        );
       }
     });
   }

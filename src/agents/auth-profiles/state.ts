@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import path from "node:path";
+import { resolveStateDir } from "../../config/paths.js";
 import { loadJsonFile } from "../../infra/json-file.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
@@ -8,6 +10,7 @@ import {
   type OpenClawStateJsonValue,
 } from "../../state/openclaw-state-kv.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
+import { AUTH_STATE_FILENAME } from "./path-constants.js";
 import { resolveAuthStatePath } from "./paths.js";
 import type { AuthProfileState, AuthProfileStateStore, ProfileUsageStats } from "./types.js";
 
@@ -82,6 +85,10 @@ function authProfileStateToJsonValue(state: AuthProfileStateStore): OpenClawStat
   return state as OpenClawStateJsonValue;
 }
 
+function writeAuthProfileStatePayload(key: string, payload: AuthProfileStateStore): void {
+  writeOpenClawStateKvJson(AUTH_PROFILE_STATE_KV_SCOPE, key, authProfileStateToJsonValue(payload));
+}
+
 export function loadPersistedAuthProfileState(agentDir?: string): AuthProfileState {
   const key = authProfileStateKey(agentDir);
   const sqliteState = readOpenClawStateKvJson(AUTH_PROFILE_STATE_KV_SCOPE, key);
@@ -89,23 +96,7 @@ export function loadPersistedAuthProfileState(agentDir?: string): AuthProfileSta
     return coerceAuthProfileState(sqliteState);
   }
 
-  const legacyState = coerceAuthProfileState(loadJsonFile(key));
-  const payload = buildPersistedAuthProfileState(legacyState);
-  if (payload) {
-    writeOpenClawStateKvJson(
-      AUTH_PROFILE_STATE_KV_SCOPE,
-      key,
-      authProfileStateToJsonValue(payload),
-    );
-    try {
-      fs.unlinkSync(key);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
-        throw error;
-      }
-    }
-  }
-  return legacyState;
+  return {};
 }
 
 function buildPersistedAuthProfileState(store: AuthProfileState): AuthProfileStateStore | null {
@@ -121,34 +112,67 @@ function buildPersistedAuthProfileState(store: AuthProfileState): AuthProfileSta
   };
 }
 
-export function savePersistedAuthProfileState(
-  store: AuthProfileState,
-  agentDir?: string,
-): AuthProfileStateStore | null {
-  const payload = buildPersistedAuthProfileState(store);
-  const statePath = resolveAuthStatePath(agentDir);
-  if (!payload) {
-    deleteOpenClawStateKvJson(AUTH_PROFILE_STATE_KV_SCOPE, authProfileStateKey(agentDir));
-    try {
-      fs.unlinkSync(statePath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
-        throw error;
-      }
+export function legacyAuthProfileStateFileExists(agentDir?: string): boolean {
+  try {
+    return fs.statSync(resolveAuthStatePath(agentDir)).isFile();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return false;
     }
-    return null;
+    throw error;
   }
-  writeOpenClawStateKvJson(
-    AUTH_PROFILE_STATE_KV_SCOPE,
-    authProfileStateKey(agentDir),
-    authProfileStateToJsonValue(payload),
-  );
+}
+
+export function importLegacyAuthProfileStateFileToSqlite(agentDir?: string): { imported: boolean } {
+  const statePath = resolveAuthStatePath(agentDir);
+  if (!legacyAuthProfileStateFileExists(agentDir)) {
+    return { imported: false };
+  }
+  const legacyState = coerceAuthProfileState(loadJsonFile(statePath));
+  const payload = buildPersistedAuthProfileState(legacyState);
+  if (payload) {
+    writeAuthProfileStatePayload(statePath, payload);
+  }
   try {
     fs.unlinkSync(statePath);
+  } catch {
+    // Import succeeded; a later doctor pass can remove the stale file.
+  }
+  return { imported: true };
+}
+
+export function discoverLegacyAuthProfileStateAgentDirs(
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const agentsDir = path.join(resolveStateDir(env), "agents");
+  const out: string[] = [];
+  try {
+    for (const entry of fs.readdirSync(agentsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const agentDir = path.join(agentsDir, entry.name, "agent");
+      if (fs.existsSync(path.join(agentDir, AUTH_STATE_FILENAME))) {
+        out.push(agentDir);
+      }
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
       throw error;
     }
   }
+  return out;
+}
+
+export function savePersistedAuthProfileState(
+  store: AuthProfileState,
+  agentDir?: string,
+): AuthProfileStateStore | null {
+  const payload = buildPersistedAuthProfileState(store);
+  if (!payload) {
+    deleteOpenClawStateKvJson(AUTH_PROFILE_STATE_KV_SCOPE, authProfileStateKey(agentDir));
+    return null;
+  }
+  writeAuthProfileStatePayload(authProfileStateKey(agentDir), payload);
   return payload;
 }
