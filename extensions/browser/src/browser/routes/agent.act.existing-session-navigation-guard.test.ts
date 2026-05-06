@@ -71,6 +71,7 @@ describe("existing-session interaction navigation guard", () => {
       fn.mockClear();
     }
     chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValue("https://example.com");
+    routeState.tab.url = "https://example.com";
     routeState.profileCtx.listTabs.mockReset();
     routeState.profileCtx.listTabs.mockResolvedValue([
       {
@@ -140,7 +141,7 @@ describe("existing-session interaction navigation guard", () => {
     expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenCalledWith(
       expect.objectContaining({ key: "Enter" }),
     );
-    expectNavigationProbeUrls(Array.from({ length: 6 }, () => "https://example.com"));
+    expectNavigationProbeUrls(Array.from({ length: 8 }, () => "https://example.com"));
   });
 
   it("rechecks the page url after delayed navigation-triggering interactions", async () => {
@@ -156,9 +157,29 @@ describe("existing-session interaction navigation guard", () => {
     expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledTimes(4);
     expectNavigationProbeUrls([
       "https://example.com",
+      "https://example.com",
       "http://169.254.169.254/latest/meta-data/",
       "http://169.254.169.254/latest/meta-data/",
     ]);
+  });
+
+  it("blocks evaluate before execution when the current tab URL is disallowed", async () => {
+    routeState.tab.url = "http://169.254.169.254/latest/meta-data/";
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(
+      async (opts?: { url: string }) => {
+        const url = opts?.url ?? "";
+        if (url.includes("169.254.169.254")) {
+          throw new Error("blocked current tab");
+        }
+      },
+    );
+
+    await expectActionToThrow(
+      { kind: "evaluate", fn: "() => document.body.innerText" },
+      "blocked current tab",
+    );
+    expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
+    expectNavigationProbeUrls(["http://169.254.169.254/latest/meta-data/"]);
   });
 
   it("checks URLs for tabs opened during the interaction window", async () => {
@@ -185,6 +206,7 @@ describe("existing-session interaction navigation guard", () => {
     expect(response.statusCode).toBe(200);
     expect(chromeMcpMocks.clickChromeMcpElement).toHaveBeenCalledOnce();
     expectNavigationProbeUrls([
+      "https://example.com",
       "https://example.com",
       "https://example.com",
       "https://example.com",
@@ -231,7 +253,7 @@ describe("existing-session interaction navigation guard", () => {
       .mockResolvedValueOnce("   " as never);
 
     await expectActionToReject({ kind: "evaluate", fn: "() => 1" });
-    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
+    expectNavigationProbeUrls(["https://example.com"]);
   });
 
   it("fails closed when a later post-action probe becomes unreadable", async () => {
@@ -243,7 +265,7 @@ describe("existing-session interaction navigation guard", () => {
       .mockResolvedValueOnce(undefined as never); // follow-up probe - still unreadable
 
     await expectActionToReject({ kind: "evaluate", fn: "() => 1" });
-    expectNavigationProbeUrls(["https://example.com"]);
+    expectNavigationProbeUrls(["https://example.com", "https://example.com"]);
   });
 
   it("confirms stability via follow-up probe when URL changes on the last loop iteration", async () => {
@@ -266,6 +288,7 @@ describe("existing-session interaction navigation guard", () => {
     expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledTimes(5);
     expectNavigationProbeUrls([
       "https://example.com",
+      "https://example.com",
       "https://safe-redirect.com",
       "https://safe-redirect.com",
     ]);
@@ -284,6 +307,7 @@ describe("existing-session interaction navigation guard", () => {
     expect(response.statusCode).toBe(200);
     expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledTimes(5);
     expectNavigationProbeUrls([
+      "https://example.com",
       "https://example.com",
       "https://example.com",
       "https://safe-redirect.com",
@@ -313,7 +337,11 @@ describe("existing-session interaction navigation guard", () => {
       .mockRejectedValueOnce(new Error("context destroyed") as never); // follow-up → still errored
 
     await expectActionToReject({ kind: "evaluate", fn: "() => 1" });
-    expectNavigationProbeUrls(["https://example.com", "https://example.com"]);
+    expectNavigationProbeUrls([
+      "https://example.com",
+      "https://example.com",
+      "https://example.com",
+    ]);
   });
 
   it("skips the guard when no SSRF policy is configured", async () => {
