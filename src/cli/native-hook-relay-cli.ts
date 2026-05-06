@@ -45,13 +45,14 @@ export async function runNativeHookRelayCli(
   }
 
   try {
+    const timeoutMs = normalizeTimeoutMs(opts.timeout);
     const response = await invokeNativeHookRelayBridge({
       provider,
       relayId,
       event,
       rawPayload,
-      registrationTimeoutMs: 100,
-      timeoutMs: normalizeTimeoutMs(opts.timeout),
+      registrationTimeoutMs: timeoutMs,
+      timeoutMs,
     });
     writeText(stdout, response.stdout);
     writeText(stderr, response.stderr);
