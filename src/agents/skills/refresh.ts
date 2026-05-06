@@ -92,10 +92,10 @@ export function shouldIgnoreSkillsWatchPath(
   if (DEFAULT_SKILLS_WATCH_IGNORED.some((re) => re.test(watchPath))) {
     return true;
   }
-  if (stats?.isDirectory?.()) {
+  if (!stats) {
     return false;
   }
-  if (!stats) {
+  if (stats.isDirectory?.()) {
     return false;
   }
   const normalized = watchPath.replaceAll("\\", "/");
