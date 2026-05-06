@@ -171,7 +171,8 @@ class GatewaySession(
     pendingDeviceTokenRetry = false
     deviceTokenRetryBudgetUsed = false
     reconnectPausedForAuthFailure = false
-    if (job == null) {
+    val existingJob = job
+    if (existingJob == null || !existingJob.isActive) {
       job = scope.launch(Dispatchers.IO) { runLoop() }
     }
   }
