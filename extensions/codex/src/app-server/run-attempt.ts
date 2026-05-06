@@ -99,6 +99,12 @@ import {
   startOrResumeThread,
 } from "./thread-lifecycle.js";
 import {
+  inferCodexDynamicToolMeta,
+  resolveCodexToolProgressDetailMode,
+  sanitizeCodexToolArguments,
+  sanitizeCodexToolResponse,
+} from "./tool-progress-normalization.js";
+import {
   createCodexTrajectoryRecorder,
   normalizeCodexTrajectoryError,
   recordCodexTrajectoryCompletion,
@@ -478,8 +484,21 @@ export async function runCodexAppServerAttempt(
       (await readMirroredSessionHistoryMessages(params.sessionFile)) ?? historyMessages;
   }
   const baseDeveloperInstructions = buildDeveloperInstructions(params);
+  // Build the workspace bootstrap block before finalizing developer
+  // instructions so persona files (SOUL.md, IDENTITY.md, ...) reach Codex
+  // through the explicit `developerInstructions` field.
+  const workspaceBootstrapInstructions = await buildCodexWorkspaceBootstrapInstructions({
+    params,
+    resolvedWorkspace,
+    effectiveWorkspace,
+    sessionKey: sandboxSessionKey,
+    sessionAgentId,
+  });
   let promptText = params.prompt;
-  let developerInstructions = baseDeveloperInstructions;
+  let developerInstructions = joinPresentSections(
+    baseDeveloperInstructions,
+    workspaceBootstrapInstructions,
+  );
   let prePromptMessageCount = historyMessages.length;
   if (activeContextEngine) {
     try {
@@ -506,6 +525,7 @@ export async function runCodexAppServerAttempt(
       promptText = projection.promptText;
       developerInstructions = joinPresentSections(
         baseDeveloperInstructions,
+        workspaceBootstrapInstructions,
         projection.developerInstructionAddition,
       );
       prePromptMessageCount = projection.prePromptMessageCount;
@@ -534,13 +554,6 @@ export async function runCodexAppServerAttempt(
     developerInstructions,
     messages: historyMessages,
     ctx: hookContext,
-  });
-  const workspaceBootstrapInstructions = await buildCodexWorkspaceBootstrapInstructions({
-    params,
-    resolvedWorkspace,
-    effectiveWorkspace,
-    sessionKey: sandboxSessionKey,
-    sessionAgentId,
   });
   const trajectoryRecorder = createCodexTrajectoryRecorder({
     attempt: params,
@@ -577,10 +590,7 @@ export async function runCodexAppServerAttempt(
       : options.nativeHookRelay?.enabled === false
         ? buildCodexNativeHookRelayDisabledConfig()
         : undefined;
-    const threadConfig = mergeCodexConfigInstructions(
-      nativeHookRelayConfig,
-      workspaceBootstrapInstructions,
-    );
+    const threadConfig = nativeHookRelayConfig;
     ({ client, thread } = await withCodexStartupTimeout({
       timeoutMs: params.timeoutMs,
       timeoutFloorMs: options.startupTimeoutFloorMs,
@@ -973,6 +983,19 @@ export async function runCodexAppServerAttempt(
         name: call.tool,
         arguments: call.arguments,
       });
+      const toolProgressDetailMode = resolveCodexToolProgressDetailMode(params.toolProgressDetail);
+      const toolMeta = inferCodexDynamicToolMeta(call, toolProgressDetailMode);
+      const toolArgs = sanitizeCodexToolArguments(call.arguments);
+      emitCodexAppServerEvent(params, {
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: call.tool,
+          toolCallId: call.callId,
+          ...(toolMeta ? { meta: toolMeta } : {}),
+          ...(toolArgs ? { args: toolArgs } : {}),
+        },
+      });
       const response = await handleDynamicToolCallWithTimeout({
         call,
         toolBridge,
@@ -995,6 +1018,17 @@ export async function runCodexAppServerAttempt(
         name: call.tool,
         success: response.success,
         contentItems: response.contentItems,
+      });
+      emitCodexAppServerEvent(params, {
+        stream: "tool",
+        data: {
+          phase: "result",
+          name: call.tool,
+          toolCallId: call.callId,
+          ...(toolMeta ? { meta: toolMeta } : {}),
+          isError: !response.success,
+          result: sanitizeCodexToolResponse(response),
+        },
       });
       return response as JsonValue;
     } finally {
@@ -1839,20 +1873,6 @@ function renderCodexWorkspaceBootstrapInstructions(
     lines.push(`## ${file.path}`, "", file.content, "");
   }
   return lines.join("\n").trim();
-}
-
-function mergeCodexConfigInstructions(
-  config: JsonObject | undefined,
-  instructions: string | undefined,
-): JsonObject | undefined {
-  if (!instructions?.trim()) {
-    return config;
-  }
-  const merged: JsonObject = { ...config };
-  const existingInstructions =
-    typeof merged.instructions === "string" ? merged.instructions.trim() : undefined;
-  merged.instructions = joinPresentSections(existingInstructions, instructions);
-  return merged;
 }
 
 function remapCodexContextFilePath(params: {
