@@ -37,6 +37,7 @@ export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "Available model overrides:",
   "Available model overrides exposed in this session",
   "Available model overrides here:",
+  "Available model overrides listed for this session:",
   "Available model overrides listed in this session:",
   "Available model overrides shown in this session:",
   "Available model overrides in this session:",
@@ -209,6 +210,7 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
     normalized.includes("visible options:") ||
     normalized.includes("available codex agent model:") ||
     normalized.includes("available codex agent models:") ||
+    normalized.includes("available model overrides listed for this session:") ||
     normalized.includes("available model overrides listed in this session:") ||
     normalized.includes("available model overrides shown in this session:") ||
     normalized.includes("available here:") ||

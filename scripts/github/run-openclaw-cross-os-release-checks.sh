@@ -51,7 +51,13 @@ command -v "${npm_cmd}" >/dev/null 2>&1 || {
 
 if [[ ! -f "${loader_path}" ]]; then
   mkdir -p "${tool_dir}"
-  if ! "${npm_cmd}" install --prefix "${npm_tool_dir}" --no-save --no-package-lock "tsx@${tsx_version}" >/dev/null; then
+  if command -v cygpath >/dev/null 2>&1 && [[ "${npm_cmd}" == *.cmd ]]; then
+    npm_install_cmd="\"${npm_cmd}\" install --prefix \"${npm_tool_dir}\" --no-save --no-package-lock \"tsx@${tsx_version}\""
+    if ! cmd.exe /d /s /c "${npm_install_cmd}" >/dev/null; then
+      echo "failed to install cross-OS release-check loader with ${npm_cmd}." >&2
+      exit 127
+    fi
+  elif ! "${npm_cmd}" install --prefix "${npm_tool_dir}" --no-save --no-package-lock "tsx@${tsx_version}" >/dev/null; then
     echo "failed to install cross-OS release-check loader with ${npm_cmd}." >&2
     exit 127
   fi
