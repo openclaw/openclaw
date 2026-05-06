@@ -1,0 +1,44 @@
+{
+  "id": "temporal-context",
+  "name": "Temporal Context",
+  "description": "Injects current local date/time and elapsed-time grounding into agent turns.",
+  "kind": "runtime",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Enable temporal context injection."
+      },
+      "timeZone": {
+        "type": "string",
+        "description": "IANA timezone used for local date/time formatting, e.g. America/Toronto."
+      },
+      "locale": {
+        "type": "string",
+        "description": "Intl locale used for human-readable date/time formatting."
+      },
+      "statePath": {
+        "type": "string",
+        "description": "Optional path for per-session temporal state. Supports ~ and $OPENCLAW_HOME."
+      },
+      "maxStateEntries": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10000,
+        "description": "Maximum number of recent sessions to retain in the state file."
+      },
+      "debug": {
+        "type": "boolean",
+        "description": "Log temporal injection decisions."
+      }
+    }
+  },
+  "hooks": {
+    "allowPromptInjection": true
+  }
+}
