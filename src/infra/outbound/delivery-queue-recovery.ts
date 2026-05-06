@@ -31,6 +31,8 @@ export type DeliverFn = (
   params: {
     cfg: OpenClawConfig;
   } & QueuedDeliveryPayload & {
+      deliveryQueueId?: string;
+      deliveryQueueStateDir?: string;
       skipQueue?: boolean;
       deferCommitHooks?: boolean;
     },
@@ -120,7 +122,7 @@ export async function withActiveDeliveryClaim<T>(
   }
 }
 
-function buildRecoveryDeliverParams(entry: QueuedDelivery, cfg: OpenClawConfig) {
+function buildRecoveryDeliverParams(entry: QueuedDelivery, cfg: OpenClawConfig, stateDir?: string) {
   return {
     cfg,
     channel: entry.channel,
@@ -140,6 +142,8 @@ function buildRecoveryDeliverParams(entry: QueuedDelivery, cfg: OpenClawConfig) 
     mirror: entry.mirror,
     session: entry.session,
     gatewayClientScopes: entry.gatewayClientScopes,
+    deliveryQueueId: entry.id,
+    deliveryQueueStateDir: stateDir,
     skipQueue: true, // Prevent re-enqueueing during recovery.
     deferCommitHooks: true,
   } satisfies Parameters<DeliverFn>[0];
@@ -413,7 +417,7 @@ async function drainQueuedEntry(opts: {
           : `delivery state is ${entry.recoveryState}; refusing blind replay without adapter reconciliation`;
       opts.log.warn(`Delivery entry ${entry.id} ${errMsg}`);
       opts.onFailed?.(entry, errMsg);
-      if (reconciliation === null || reconciliation.retryable === true) {
+      if (reconciliation?.status === "unresolved" && reconciliation.retryable === true) {
         try {
           await failDelivery(entry.id, errMsg, opts.stateDir);
           return "failed";
@@ -436,7 +440,7 @@ async function drainQueuedEntry(opts: {
     }
   }
   try {
-    const result = await opts.deliver(buildRecoveryDeliverParams(entry, opts.cfg));
+    const result = await opts.deliver(buildRecoveryDeliverParams(entry, opts.cfg, opts.stateDir));
     await ackDelivery(entry.id, opts.stateDir);
     if (isOutboundDeliveryResultArray(result)) {
       await runOutboundDeliveryCommitHooks(result);

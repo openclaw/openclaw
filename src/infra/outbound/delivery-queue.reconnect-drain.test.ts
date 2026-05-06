@@ -8,7 +8,7 @@ import {
   enqueueDelivery,
   failDelivery,
   MAX_RETRIES,
-  markDeliveryPlatformSendStarted,
+  markDeliveryPlatformOutcomeUnknown,
   type RecoveryLogger,
   recoverPendingDeliveries,
   withActiveDeliveryClaim,
@@ -164,14 +164,16 @@ describe("drainPendingDeliveries for reconnect", () => {
     const log = createRecoveryLog();
     const deliver = vi.fn<DeliverFn>(async () => {});
     const id = await enqueueFailedDirectChatDelivery({ accountId: "acct1", stateDir: tmpDir });
-    await markDeliveryPlatformSendStarted(id, tmpDir);
+    await markDeliveryPlatformOutcomeUnknown(id, tmpDir);
 
     await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
 
     expect(deliver).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(tmpDir, "delivery-queue", `${id}.json`))).toBe(false);
     expect(fs.existsSync(path.join(tmpDir, "delivery-queue", "failed", `${id}.json`))).toBe(true);
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("unknown platform send outcome"));
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("refusing blind replay without adapter reconciliation"),
+    );
   });
 
   it("skips entries where retryCount >= MAX_RETRIES", async () => {

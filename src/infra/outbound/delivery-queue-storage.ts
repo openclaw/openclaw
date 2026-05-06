@@ -105,7 +105,7 @@ async function writeQueueEntry(filePath: string, entry: QueuedDelivery): Promise
   await replaceFileAtomic({
     filePath,
     content: JSON.stringify(entry, null, 2),
-    fileMode: 0o600,
+    mode: 0o600,
     tempPrefix: ".delivery-queue",
   });
 }

@@ -5,7 +5,7 @@ import { attachOutboundDeliveryCommitHook } from "./delivery-commit-hooks.js";
 import {
   enqueueDelivery,
   loadPendingDeliveries,
-  markDeliveryPlatformSendStarted,
+  markDeliveryPlatformOutcomeUnknown,
   MAX_RETRIES,
   recoverPendingDeliveries,
 } from "./delivery-queue.js";
@@ -110,7 +110,7 @@ describe("delivery-queue recovery", () => {
     expect(entries[0]?.lastError).toBe("network down");
   });
 
-  it("retains entries abandoned after platform send may have started without reconciliation", async () => {
+  it("moves entries abandoned after platform send may have started to failed without reconciliation", async () => {
     const id = await enqueueDelivery(
       { channel: "demo-channel-a", to: "+1", payloads: [{ text: "maybe sent" }] },
       tmpDir(),
@@ -132,15 +132,12 @@ describe("delivery-queue recovery", () => {
       skippedMaxRetries: 0,
       deferredBackoff: 0,
     });
-    const entries = await loadPendingDeliveries(tmpDir());
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.id).toBe(id);
-    expect(entries[0]?.retryCount).toBe(1);
-    expect(entries[0]?.lastError).toContain("unknown_after_send");
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(true);
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("unknown_after_send"));
   });
 
-  it("retains started entries without reconciliation instead of blindly replaying", async () => {
+  it("moves started entries without reconciliation to failed instead of blindly replaying", async () => {
     const id = await enqueueDelivery(
       { channel: "demo-channel-a", to: "+1", payloads: [{ text: "not yet sent" }] },
       tmpDir(),
@@ -162,11 +159,8 @@ describe("delivery-queue recovery", () => {
       skippedMaxRetries: 0,
       deferredBackoff: 0,
     });
-    const entries = await loadPendingDeliveries(tmpDir());
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.id).toBe(id);
-    expect(entries[0]?.retryCount).toBe(1);
-    expect(entries[0]?.lastError).toContain("send_attempt_started");
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(true);
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining("refusing blind replay without adapter reconciliation"),
     );
@@ -448,10 +442,8 @@ describe("delivery-queue recovery", () => {
     expect(reconcileUnknownSend).not.toHaveBeenCalled();
     expect(deliver).not.toHaveBeenCalled();
     expect(result.failed).toBe(1);
-    const entries = await loadPendingDeliveries(tmpDir());
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.id).toBe(id);
-    expect(entries[0]?.retryCount).toBe(1);
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(true);
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining("refusing blind replay without adapter reconciliation"),
     );
@@ -520,7 +512,7 @@ describe("delivery-queue recovery", () => {
       { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
       tmpDir(),
     );
-    await markDeliveryPlatformSendStarted(id, tmpDir());
+    await markDeliveryPlatformOutcomeUnknown(id, tmpDir());
 
     const deliver = vi.fn().mockResolvedValue([]);
     const { result, log } = await runRecovery({ deliver });
@@ -534,7 +526,9 @@ describe("delivery-queue recovery", () => {
     });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(true);
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("unknown platform send outcome"));
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("refusing blind replay without adapter reconciliation"),
+    );
   });
 
   it("runs recovered send commit hooks only after the queue entry is acked", async () => {
