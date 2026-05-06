@@ -5,7 +5,11 @@ import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
-import { normalizeThinkLevel } from "../thinking.ts";
+import {
+  formatInheritedThinkingLabel,
+  formatThinkingOverrideLabel,
+  normalizeThinkingOptionValue,
+} from "../thinking-labels.ts";
 import type {
   AgentIdentityResult,
   GatewaySessionRow,
@@ -88,16 +92,10 @@ function getAgentIdentity(
     : null;
 }
 
-function normalizeThinkingOptionValue(raw: string): string {
-  return normalizeThinkLevel(raw) ?? normalizeLowercaseStringOrEmpty(raw);
-}
-
 function resolveThinkLevelOptions(
   row: GatewaySessionRow,
 ): readonly { value: string; label: string }[] {
-  const defaultLabel = row.thinkingDefault
-    ? t("sessionsView.defaultOption", { value: row.thinkingDefault })
-    : t("sessionsView.inherit");
+  const defaultLabel = formatInheritedThinkingLabel(row.thinkingDefault);
   const options: readonly GatewayThinkingLevelOption[] = row.thinkingLevels?.length
     ? row.thinkingLevels
     : (row.thinkingOptions?.length ? row.thinkingOptions : DEFAULT_THINK_LEVELS).map((label) => ({
@@ -108,7 +106,7 @@ function resolveThinkLevelOptions(
     { value: "", label: defaultLabel },
     ...options.map((option) => ({
       value: normalizeThinkingOptionValue(option.id),
-      label: option.label,
+      label: formatThinkingOverrideLabel(option.id, option.label),
     })),
   ];
 }
@@ -133,10 +131,7 @@ function withCurrentLabeledOption(
   if (options.some((option) => option.value === current)) {
     return [...options];
   }
-  return [
-    ...options,
-    { value: current, label: t("sessionsView.customOption", { value: current }) },
-  ];
+  return [...options, { value: current, label: formatThinkingOverrideLabel(current) }];
 }
 
 function buildVerboseLevelOptions(): Array<{ value: string; label: string }> {
