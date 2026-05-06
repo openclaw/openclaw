@@ -6,6 +6,23 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Browser/config: allow local managed Chrome launch discovery and post-launch
+  CDP readiness timeouts to be raised for slower hosts such as Raspberry Pi.
+  Fixes #66803. Thanks @beat843796.
+- Discord: allow `channels.discord.voice.model` to override the LLM used for voice channel responses while keeping STT and TTS on their existing media settings. (#64368) Thanks @mrdavey.
+- Browser/CLI: add `openclaw browser start --headless` as a one-shot local managed browser launch override without rewriting persisted browser config. Thanks @BenediktSchackenberg.
+- CLI/Crestodian: open interactive Crestodian in the full OpenClaw TUI shell instead of a basic readline prompt.
+- CLI/Crestodian: shorten the startup greeting to the active planner/model, config state, Gateway probe result, and next debug action instead of dumping every discovered backend.
+- Plugins: migrate the local plugin registry automatically during package install/update, preserving legacy config and install-ledger state while indexing existing plugin manifests for the new cold registry path. Thanks @vincentkoc.
+- Diagnostics/OTEL: add bounded outbound message delivery lifecycle diagnostics and export them as low-cardinality delivery spans/metrics without message body, recipient, room, or media-path data. (#71471) Thanks @vincentkoc and @jlapenna.
+- Diagnostics/OTEL: emit bounded exec-process diagnostics and export them as `openclaw.exec` spans without exposing command text, working directories, or container identifiers. (#71451) Thanks @vincentkoc and @jlapenna.
+- Diagnostics/OTEL: support `OPENCLAW_OTEL_PRELOADED=1` so the plugin can reuse an already-registered OpenTelemetry SDK while keeping OpenClaw diagnostic listeners wired. (#71450) Thanks @vincentkoc and @jlapenna.
+- Control UI: refine the agent Tool Access panel with compact live-tool chips, collapsible tool groups, direct per-tool toggles, and clearer runtime/source provenance. (#71405) Thanks @BunsDev.
+- Memory-core/hybrid search: expose raw `vectorScore` and `textScore` alongside the combined `score` on hybrid memory search results, so callers can inspect vector-versus-text retrieval contribution before temporal decay or MMR reordering. Fixes #68166. (#68286) Thanks @ajfonthemove.
+- Providers/Xiaomi: add MiMo TTS as a bundled speech provider with MP3/WAV output and voice-note Opus transcoding. Fixes #52376. (#55614) Thanks @zoujiejun.
+- Providers/ElevenLabs: include `eleven_v3` in the bundled TTS model catalog so model selection surfaces can offer ElevenLabs v3. (#68321) Thanks @itsuzef.
+- Providers/Local CLI TTS: add a bundled local command speech provider with file/stdout input, voice-note Opus conversion, and telephony PCM output. (#56239) Thanks @solar2ain.
+- feat(tool-display): show node name in exec tool transparency message when `node=` parameter is used (#77796)
 - Plugins/install: add `npm-pack:<path.tgz>` installs so local npm pack artifacts run through the same managed npm-root install, lockfile verification, dependency scan, and install-record path as registry npm plugins.
 - Plugin skills/Windows: publish plugin-provided skill directories as junctions on Windows so standard users without Developer Mode can register plugin skills without symlink EPERM failures. Fixes #77958. (#77971) Thanks @hclsys and @jarro.
 - MS Teams: surface blocked Bot Framework egress by logging JWKS fetch network failures and adding a Bot Connector send hint for transport-level reply failures. Fixes #77674. (#78081) Thanks @Beandon13.

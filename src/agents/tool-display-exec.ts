@@ -401,6 +401,11 @@ export function resolveExecDetail(
     return undefined;
   }
 
+  const nodeRaw = record.node ?? record.nodeId;
+  const safeNode = typeof nodeRaw === "string" && nodeRaw.length > 0
+    ? nodeRaw.replace(/[^a-zA-Z0-9._-]/g, "").trim()
+    : undefined;
+
   const unwrapped = unwrapShellWrapper(raw);
   const result = summarizeExecCommand(unwrapped) ?? summarizeExecCommand(raw);
   const summary = result?.text || "run command";
@@ -414,15 +419,23 @@ export function resolveExecDetail(
   const cwd = cwdRaw?.trim() || result?.chdirPath || undefined;
 
   const compact = compactRawCommand(unwrapped);
-  if (result?.allGeneric !== false && isGenericSummary(summary)) {
-    return cwd ? `${compact} (in ${cwd})` : compact;
+
+  let displayText = summary;
+  if (safeNode) {
+    displayText = `(${safeNode}) ${displayText}`;
   }
 
-  const displaySummary = cwd ? `${summary} (in ${cwd})` : summary;
+  const displaySummary = cwd ? `${displayText} (in ${cwd})` : displayText;
+
+  if (result?.allGeneric !== false && isGenericSummary(summary)) {
+    const finalCompact = cwd ? `${compact} (in ${cwd})` : compact;
+    return safeNode ? `(${safeNode}) ${finalCompact}` : finalCompact;
+  }
+
   if (
     options?.detailMode !== "explain" &&
-    compact &&
-    compact !== displaySummary &&
+    compact && 
+    compact !== displaySummary && 
     compact !== summary
   ) {
     return `${displaySummary} · \`${compact}\``;
@@ -430,3 +443,4 @@ export function resolveExecDetail(
 
   return displaySummary;
 }
+
