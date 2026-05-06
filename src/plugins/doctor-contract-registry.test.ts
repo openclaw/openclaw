@@ -214,6 +214,48 @@ describe("doctor-contract-registry module loader", () => {
     ]);
   });
 
+  it("passes active config to manifest registry discovery", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(pluginRoot, "doctor-contract-api.cjs"),
+      "module.exports = { legacyConfigRules: [{ path: ['plugins', 'entries', 'load-path-doctor', 'config', 'summaryModel'], message: 'load path contract' }] };\n",
+      "utf-8",
+    );
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [{ id: "load-path-doctor", rootDir: pluginRoot }],
+      diagnostics: [],
+    });
+    const config = {
+      plugins: {
+        load: { paths: [pluginRoot] },
+        entries: {
+          "load-path-doctor": {
+            config: {
+              summaryModel: "openai-codex/gpt-5.4-mini",
+            },
+          },
+        },
+      },
+    };
+
+    expect(
+      listPluginDoctorLegacyConfigRules({
+        config,
+        workspaceDir: "/workspace",
+        env: {},
+        pluginIds: ["load-path-doctor"],
+      }),
+    ).toEqual([
+      {
+        path: ["plugins", "entries", "load-path-doctor", "config", "summaryModel"],
+        message: "load path contract",
+      },
+    ]);
+    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({ config }),
+    );
+  });
+
   it("reads doctor contracts from the current manifest registry on each call", () => {
     const firstRoot = makeTempDir();
     const secondRoot = makeTempDir();
