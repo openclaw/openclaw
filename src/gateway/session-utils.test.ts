@@ -91,6 +91,8 @@ describe("gateway session utils", () => {
         {
           sessionId: `session-${index}`,
           updatedAt: 1_000 - index,
+          modelProvider: "openai",
+          model: "gpt-5.4",
         } satisfies SessionEntry,
       ]),
     );
@@ -1257,6 +1259,8 @@ describe("listSessionsFromStore selected model display", () => {
         store[`agent:main:${sessionId}`] = {
           sessionId,
           updatedAt: now - i,
+          modelProvider: "openai",
+          model: "gpt-5.4",
           totalTokens: 1,
           totalTokensFresh: true,
           contextTokens: 1,
@@ -1322,6 +1326,8 @@ describe("listSessionsFromStore selected model display", () => {
         store[`agent:main:${sessionId}`] = {
           sessionId,
           updatedAt: now - i,
+          modelProvider: "openai",
+          model: "gpt-5.4",
         } as SessionEntry;
         if (i === 0 || i === 99 || i === 100) {
           fs.writeFileSync(
