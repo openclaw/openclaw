@@ -393,6 +393,8 @@ describe("cron tool", () => {
       { action: "update", id: "job-2", patch: { foo: "bar" } },
       { id: "job-2", patch: { foo: "bar" } },
     ],
+    ["get", { action: "get", jobId: "job-1" }, { id: "job-1" }],
+    ["get", { action: "get", id: "job-2" }, { id: "job-2" }],
     ["remove", { action: "remove", jobId: "job-1" }, { id: "job-1" }],
     ["remove", { action: "remove", id: "job-2" }, { id: "job-2" }],
     ["run", { action: "run", jobId: "job-1" }, { id: "job-1", mode: "force" }],

@@ -131,6 +131,7 @@ async function cleanupCronTestRun(params: {
     testState.sessionConfig = undefined;
   }
   testState.cronEnabled = undefined;
+  resetConfigRuntimeState();
   if (params.prevSkipCron === undefined) {
     delete process.env.OPENCLAW_SKIP_CRON;
     return;
@@ -150,6 +151,7 @@ async function setupCronTestRun(params: {
   testState.cronStorePath = storePath;
   testState.sessionConfig = params.sessionConfig;
   testState.cronEnabled = params.cronEnabled;
+  resetConfigRuntimeState();
   await fs.writeFile(
     testState.cronStorePath,
     params.jobs ? JSON.stringify({ version: 1, jobs: params.jobs }) : EMPTY_CRON_STORE_CONTENT,
@@ -430,6 +432,16 @@ describe("gateway server cron", () => {
         detail: "webhook",
       });
 
+      const getRes = await directCronReq(cronState, "cron.get", { id: String(dailyJobId) });
+      expect(getRes.ok).toBe(true);
+      expect((getRes.payload as { id?: unknown; name?: unknown } | null)?.id).toBe(dailyJobId);
+      expect((getRes.payload as { name?: unknown } | null)?.name).toBe("daily");
+
+      const missingGetRes = await directCronReq(cronState, "cron.get", { id: "missing-job-id" });
+      expect(missingGetRes.ok).toBe(false);
+      expect(missingGetRes.error?.code).toBe("INVALID_REQUEST");
+      expect(missingGetRes.error?.message).toContain("cron job not found");
+
       const routeAtMs = Date.now() - 1;
       const routeRes = await directCronReq(cronState, "cron.add", {
         name: "route test",
@@ -630,6 +642,37 @@ describe("gateway server cron", () => {
         prevSkipCron,
         clearSessionConfig: true,
       });
+    }
+  });
+
+  test("gets persisted cron jobs from a cold disabled scheduler", { timeout: 45_000 }, async () => {
+    const persistedJob = {
+      id: "persisted-cold-job",
+      name: "persisted cold job",
+      enabled: true,
+      createdAtMs: Date.now(),
+      updatedAtMs: Date.now(),
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "hello" },
+      state: {},
+    };
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-get-cold-",
+      cronEnabled: false,
+      jobs: [persistedJob],
+    });
+
+    const cronState = await createDirectCronState();
+
+    try {
+      const getRes = await directCronReq(cronState, "cron.get", { jobId: persistedJob.id });
+      expect(getRes.ok).toBe(true);
+      expect((getRes.payload as { id?: unknown; name?: unknown } | null)?.id).toBe(persistedJob.id);
+      expect((getRes.payload as { name?: unknown } | null)?.name).toBe(persistedJob.name);
+    } finally {
+      await cleanupCronTestRun({ cronState, prevSkipCron });
     }
   });
 

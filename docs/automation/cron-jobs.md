@@ -27,6 +27,7 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
   <Step title="Check your jobs">
     ```bash
     openclaw cron list
+    openclaw cron get <job-id>
     openclaw cron show <job-id>
     ```
   </Step>
@@ -360,6 +361,9 @@ openclaw cron list
 
 # Show one job, including resolved delivery route
 openclaw cron show <jobId>
+
+# Get one stored job definition as JSON
+openclaw cron get <jobId>
 
 # Edit a job
 openclaw cron edit <jobId> --message "Updated prompt" --model "opus"

@@ -22,6 +22,7 @@ import {
   errorShape,
   formatValidationErrors,
   validateCronAddParams,
+  validateCronGetParams,
   validateCronListParams,
   validateCronRemoveParams,
   validateCronRunParams,
@@ -218,6 +219,39 @@ export const cronHandlers: GatewayRequestHandlers = {
     });
     respond(true, { ...page, deliveryPreviews }, undefined);
   },
+  "cron.get": async ({ params, respond, context }) => {
+    if (!validateCronGetParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid cron.get params: ${formatValidationErrors(validateCronGetParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const p = params as { id?: string; jobId?: string };
+    const jobId = p.id ?? p.jobId;
+    if (!jobId) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid cron.get params: missing id"),
+      );
+      return;
+    }
+    const job = await context.cron.getJob(jobId);
+    if (!job) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `cron job not found: ${jobId}`),
+      );
+      return;
+    }
+    respond(true, job, undefined);
+  },
   "cron.status": async ({ params, respond, context }) => {
     if (!validateCronStatusParams(params)) {
       respond(
@@ -367,11 +401,12 @@ export const cronHandlers: GatewayRequestHandlers = {
         return;
       }
     }
+    const currentJob = await context.cron.getJob(jobId);
     try {
       assertValidCronUpdateDelivery({
         cfg,
         defaultAgentId: context.cron.getDefaultAgentId(),
-        currentJob: context.cron.getJob(jobId),
+        currentJob,
         patch,
       });
     } catch (err) {

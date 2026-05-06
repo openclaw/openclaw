@@ -33,7 +33,7 @@ Run `openclaw cron --help` for the full command surface. See [Cron jobs](/automa
 
 ## Delivery
 
-`openclaw cron list` and `openclaw cron show <job-id>` preview the resolved delivery route. For `channel: "last"`, the preview shows whether the route resolved from the main or current session, or will fail closed.
+`openclaw cron list` and `openclaw cron show <job-id>` preview the resolved delivery route. `openclaw cron get <job-id>` returns the stored job definition for scripting. For `channel: "last"`, the preview shows whether the route resolved from the main or current session, or will fail closed.
 
 Provider-prefixed targets can disambiguate unresolved announce channels. For example, `to: "telegram:123"` selects Telegram when `delivery.channel` is omitted or `last`. Only prefixes advertised by the loaded plugin are provider selectors. If `delivery.channel` is explicit, the prefix must match that channel; `channel: "whatsapp"` with `to: "telegram:123"` is rejected. Service prefixes such as `imessage:` and `sms:` remain channel-owned target syntax.
 
@@ -212,6 +212,7 @@ Manual run and inspection:
 ```bash
 openclaw cron list
 openclaw cron list --agent ops
+openclaw cron get <job-id>
 openclaw cron show <job-id>
 openclaw cron run <job-id>
 openclaw cron run <job-id> --due

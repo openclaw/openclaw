@@ -76,7 +76,7 @@ function createCronContext(currentJob?: CronJob) {
       add: vi.fn(async () => ({ id: "cron-1" })),
       update: vi.fn(async () => ({ id: "cron-1" })),
       getDefaultAgentId: vi.fn(() => "main"),
-      getJob: vi.fn(() => currentJob),
+      getJob: vi.fn(async () => currentJob),
     },
     logGateway: {
       info: vi.fn(),
@@ -103,6 +103,20 @@ async function invokeCronUpdate(params: Record<string, unknown>, currentJob: Cro
   const context = createCronContext(currentJob);
   const respond = vi.fn();
   await cronHandlers["cron.update"]({
+    req: {} as never,
+    params: params as never,
+    respond: respond as never,
+    context: context as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+  return { context, respond };
+}
+
+async function invokeCronGet(params: Record<string, unknown>, currentJob?: CronJob) {
+  const context = createCronContext(currentJob);
+  const respond = vi.fn();
+  await cronHandlers["cron.get"]({
     req: {} as never,
     params: params as never,
     respond: respond as never,
@@ -180,6 +194,35 @@ describe("cron method validation", () => {
       }),
     );
     expect(respond).toHaveBeenCalledWith(true, { id: "cron-1" }, undefined);
+  });
+
+  it("returns the stored cron job for cron.get", async () => {
+    const currentJob = createCronJob();
+    const { context, respond } = await invokeCronGet({ id: "cron-1" }, currentJob);
+
+    expect(context.cron.getJob).toHaveBeenCalledWith("cron-1");
+    expect(respond).toHaveBeenCalledWith(true, currentJob, undefined);
+  });
+
+  it("returns the stored cron job for cron.get with jobId", async () => {
+    const currentJob = createCronJob();
+    const { context, respond } = await invokeCronGet({ jobId: "cron-1" }, currentJob);
+
+    expect(context.cron.getJob).toHaveBeenCalledWith("cron-1");
+    expect(respond).toHaveBeenCalledWith(true, currentJob, undefined);
+  });
+
+  it("returns INVALID_REQUEST when cron.get cannot find the job", async () => {
+    const { respond } = await invokeCronGet({ jobId: "missing-cron" });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: "cron job not found: missing-cron",
+      }),
+    );
   });
 
   it("accepts threadId on announce delivery update params", async () => {
