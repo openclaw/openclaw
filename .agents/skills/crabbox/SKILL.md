@@ -229,6 +229,21 @@ Raw Blacksmith footguns:
 - Treat `blacksmith testbox list` as cleanup diagnostics, not a shared reusable
   queue.
 
+Blacksmith queue/outage mode:
+
+```sh
+blacksmith --version
+blacksmith testbox list --all
+blacksmith testbox status --id <tbx_id>
+```
+
+If the CLI can list/status boxes but new warmups stay `queued` with no IP or
+Actions run URL after a couple of minutes, treat it as Blacksmith provider,
+org-limit, billing, or queue pressure. Stop the queued ids you created and do
+not warm more boxes into the same stalled queue. Check the Blacksmith dashboard,
+billing, and org limits out-of-band, then use Owned Cloud Fallback below for
+maintainer proof.
+
 Escalate to owned AWS/Hetzner only when Blacksmith is down, quota-limited,
 missing the needed environment, or owned capacity is the explicit goal. Use the
 Owned Cloud Fallback section below.
@@ -262,6 +277,9 @@ Important Blacksmith footguns:
 
 - Always run from repo root. The CLI syncs the current directory.
 - Raw commit SHAs are not reliable `warmup --ref` refs; use a branch or tag.
+- If `blacksmith testbox list --all` works but warmups stay `queued`, this is
+  not a Crabbox bug. Stop the queued ids and switch to owned AWS/Hetzner instead
+  of retrying.
 - If auth is missing and browser auth is acceptable:
 
 ```sh
