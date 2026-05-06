@@ -7,8 +7,15 @@ import {
 } from "./discovery.js";
 import { createMantleAnthropicStreamFn } from "./mantle-anthropic.runtime.js";
 
+type BedrockMantlePluginConfig = {
+  discovery?: {
+    enabled?: boolean;
+  };
+};
+
 export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
   const providerId = "amazon-bedrock-mantle";
+  const pluginConfig = (api.pluginConfig ?? {}) as BedrockMantlePluginConfig;
 
   api.registerProvider({
     id: providerId,
@@ -18,6 +25,9 @@ export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
     catalog: {
       order: "simple",
       run: async (ctx) => {
+        if (pluginConfig.discovery?.enabled === false) {
+          return null;
+        }
         const implicit = await resolveImplicitMantleProvider({
           env: ctx.env,
         });
