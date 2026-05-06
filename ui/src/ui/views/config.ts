@@ -431,7 +431,7 @@ const SECTION_CATEGORIES: SectionCategory[] = [
   },
   {
     id: "communication",
-    label: "Communication",
+    label: uiText("Communication", "Liên lạc"),
     sections: [
       { key: "channels", label: "Channels" },
       { key: "messages", label: "Messages" },
@@ -444,12 +444,12 @@ const SECTION_CATEGORIES: SectionCategory[] = [
     id: "automation",
     label: "Automation",
     sections: [
-      { key: "commands", label: "Commands" },
-      { key: "hooks", label: "Hooks" },
-      { key: "bindings", label: "Bindings" },
-      { key: "cron", label: "Cron" },
-      { key: "approvals", label: "Approvals" },
-      { key: "plugins", label: "Plugins" },
+      { key: "commands", label: uiText("Commands", "Lệnh") },
+      { key: "hooks", label: uiText("Hooks", "Hook") },
+      { key: "bindings", label: uiText("Bindings", "Liên kết") },
+      { key: "cron", label: uiText("Cron", "Tác vụ Cron") },
+      { key: "approvals", label: uiText("Approvals", "Phê duyệt") },
+      { key: "plugins", label: uiText("Plugins", "Tiện ích") },
     ],
   },
   {
@@ -1218,16 +1218,27 @@ export function renderConfig(props: ConfigProps) {
   const schemaProps = analysis.schema?.properties ?? {};
 
   const VIRTUAL_SECTIONS = new Set(["__appearance__", "__notifications__"]);
-  const visibleCategories = SECTION_CATEGORIES.map((cat) =>
-    Object.assign({}, cat, {
-      sections: cat.sections.filter(
-        (s) =>
-          ((includeVirtualSections && VIRTUAL_SECTIONS.has(s.key)) || s.key in schemaProps) &&
-          (!include || include.has(s.key)) &&
-          (!exclude || !exclude.has(s.key)),
-      ),
-    }),
-  ).filter((cat) => cat.sections.length > 0);
+  const localizedCategories = SECTION_CATEGORIES.map((cat) => ({
+    ...cat,
+    label: translateConfigLabel(cat.label) ?? cat.label,
+    sections: cat.sections.map((section) => ({
+      ...section,
+      label: translateConfigLabel(section.label) ?? section.label,
+    })),
+  }));
+
+  const visibleCategories = localizedCategories
+    .map((cat) =>
+      Object.assign({}, cat, {
+        sections: cat.sections.filter(
+          (s) =>
+            ((includeVirtualSections && VIRTUAL_SECTIONS.has(s.key)) || s.key in schemaProps) &&
+            (!include || include.has(s.key)) &&
+            (!exclude || !exclude.has(s.key)),
+        ),
+      }),
+    )
+    .filter((cat) => cat.sections.length > 0);
 
   // Catch any schema keys not in our categories
   const extraSections = Object.keys(schemaProps)
