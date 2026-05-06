@@ -41,6 +41,8 @@ export type TelegramDraftStream = {
   forceNewMessage: () => void;
   /** True when a preview sendMessage was attempted but the response was lost. */
   sendMayHaveLanded?: () => boolean;
+  /** Wait for any in-flight Telegram API send/edit to be acknowledged. */
+  waitForDrain?: () => Promise<void>;
 };
 
 type TelegramDraftPreview = {
@@ -304,5 +306,6 @@ export function createTelegramDraftStream(params: {
     materialize,
     forceNewMessage,
     sendMayHaveLanded: () => messageSendAttempted && typeof streamMessageId !== "number",
+    waitForDrain: loop.waitForInFlight,
   };
 }

@@ -5,6 +5,7 @@ export type DraftStreamLoop = {
   resetPending: () => void;
   resetThrottleWindow: () => void;
   waitForInFlight: () => Promise<void>;
+  stopAndDrain: () => Promise<void>;
 };
 
 export function createDraftStreamLoop(params: {
@@ -99,6 +100,10 @@ export function createDraftStreamLoop(params: {
       if (inFlightPromise) {
         await inFlightPromise;
       }
+    },
+    stopAndDrain: async () => {
+      await flush();
+      stop();
     },
   };
 }
