@@ -640,11 +640,6 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
  */
 export function validateConfigObjectRaw(
   raw: unknown,
-  opts?: {
-    sourceRaw?: unknown;
-    touchedPaths?: ReadonlyArray<ReadonlyArray<string>>;
-    validateBundledChannels?: boolean;
-  },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
   const normalizedRaw = stripDeprecatedValidationKeys(raw);
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(normalizedRaw);
@@ -658,9 +653,7 @@ export function validateConfigObjectRaw(
   }
   const validatedConfig = validated.data as OpenClawConfig;
   const channelIssues =
-    policyIssues.length > 0 || opts?.validateBundledChannels
-      ? collectRawBundledChannelConfigIssues(validatedConfig)
-      : [];
+    policyIssues.length > 0 ? collectRawBundledChannelConfigIssues(validatedConfig) : [];
   if (channelIssues.length > 0) {
     return {
       ok: false,
@@ -703,7 +696,7 @@ export function validateConfigObject(
     sourceRaw?: unknown;
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const result = validateConfigObjectRaw(raw, opts);
+  const result = validateConfigObjectRaw(raw);
   if (!result.ok) {
     return result;
   }
@@ -769,7 +762,7 @@ function validateConfigObjectWithPluginsBase(
   raw: unknown,
   opts: ValidateConfigWithPluginsParams & { applyDefaults: boolean },
 ): ValidateConfigWithPluginsResult {
-  const base = validateConfigObjectRaw(raw, { sourceRaw: opts.sourceRaw });
+  const base = validateConfigObjectRaw(raw);
   if (!base.ok) {
     return { ok: false, issues: base.issues, warnings: [] };
   }
@@ -957,11 +950,7 @@ function validateConfigObjectWithPluginsBase(
   > => {
     const info = ensureRegistry();
     if (!info.channelSchemas) {
-      info.channelSchemas = new Map(
-        GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map(
-          (entry) => [entry.channelId, { schema: entry.schema }] as const,
-        ),
-      );
+      info.channelSchemas = new Map();
       for (const entry of collectChannelSchemaMetadata(info.registry)) {
         const current = info.channelSchemas.get(entry.id);
         if (entry.configSchema) {
