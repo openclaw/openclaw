@@ -85,10 +85,19 @@ function resolveOpenClawHome(): string {
  * disappear when an operator adds `OPENCLAW_HOME` after the fact.
  */
 export function getQQBotDataPath(...subPaths: string[]): string {
-  return path.join(getHomeDir(), ".openclaw", "qqbot", ...subPaths);
+  return path.join(getQQBotDataBaseDir(), ...subPaths);
 }
 
-/** Return a path under `~/.openclaw/qqbot`, creating it on demand. */
+/** Return the base QQBot data directory, respecting QQBOT_DATA_DIR env var. */
+function getQQBotDataBaseDir(): string {
+  const envDataDir = process.env.QQBOT_DATA_DIR;
+  if (envDataDir) {
+    return normalizePath(envDataDir);
+  }
+  return path.join(getHomeDir(), ".openclaw", "qqbot");
+}
+
+/** Return a path under `~/.openclaw/qqbot` (or QQBOT_DATA_DIR), creating it on demand. */
 export function getQQBotDataDir(...subPaths: string[]): string {
   const dir = getQQBotDataPath(...subPaths);
   if (!fs.existsSync(dir)) {
