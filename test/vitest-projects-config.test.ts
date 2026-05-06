@@ -57,7 +57,7 @@ describe("projects vitest config", () => {
     expect(createCommandsVitestConfig().test.pool).toBe("threads");
     expect(createPluginSdkLightVitestConfig().test.pool).toBe("threads");
     expect(createUnitFastVitestConfig().test.pool).toBe("threads");
-    expect(createContractsVitestConfig(pluginContractPatterns).test.pool).toBe("forks");
+    expect(createContractsVitestConfig(pluginContractPatterns).test.pool).toBe("threads");
   });
 
   it("honors explicit worker caps in CI vitest lanes", () => {
@@ -93,9 +93,9 @@ describe("projects vitest config", () => {
     });
   });
 
-  it("keeps contract shards on the non-isolated fork runner by default", () => {
+  it("keeps contract shards on the non-isolated runner by default", () => {
     const config = createContractsVitestConfig(pluginContractPatterns);
-    expect(config.test.pool).toBe("forks");
+    expect(config.test.pool).toBe("threads");
     expect(config.test.isolate).toBe(false);
     expect(normalizeConfigPath(config.test.runner)).toBe("test/non-isolated-runner.ts");
   });
