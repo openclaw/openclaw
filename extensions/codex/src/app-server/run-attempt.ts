@@ -60,6 +60,7 @@ import { ensureCodexComputerUse } from "./computer-use.js";
 import {
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
+  type CodexAppServerRuntimeOptions,
   type CodexPluginConfig,
 } from "./config.js";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
@@ -121,6 +122,8 @@ const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
 const LOG_FIELD_MAX_LENGTH = 160;
 const CODEX_NATIVE_PROJECT_DOC_BASENAMES = new Set(["agents.md"]);
+const CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS =
+  CODEX_NATIVE_HOOK_RELAY_EVENTS.filter((event) => event !== "permission_request");
 const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
   ["soul.md", 10],
   ["identity.md", 20],
@@ -370,6 +373,10 @@ export async function runCodexAppServerAttempt(
   const attemptClientFactory = resolveCodexAppServerClientFactory();
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+  const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
+    configuredEvents: options.nativeHookRelay?.events,
+    appServer,
+  });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sandboxSessionKey =
@@ -574,6 +581,7 @@ export async function runCodexAppServerAttempt(
     });
     nativeHookRelay = createCodexNativeHookRelay({
       options: options.nativeHookRelay,
+      events: nativeHookRelayEvents,
       agentId: sessionAgentId,
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
@@ -584,7 +592,7 @@ export async function runCodexAppServerAttempt(
     const nativeHookRelayConfig = nativeHookRelay
       ? buildCodexNativeHookRelayConfig({
           relay: nativeHookRelay,
-          events: options.nativeHookRelay?.events,
+          events: nativeHookRelayEvents,
           hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
         })
       : options.nativeHookRelay?.enabled === false
@@ -1439,11 +1447,11 @@ function createCodexNativeHookRelay(params: {
   options:
     | {
         enabled?: boolean;
-        events?: readonly NativeHookRelayEvent[];
         ttlMs?: number;
         gatewayTimeoutMs?: number;
       }
     | undefined;
+  events: readonly NativeHookRelayEvent[];
   agentId: string | undefined;
   sessionId: string;
   sessionKey: string | undefined;
@@ -1466,13 +1474,29 @@ function createCodexNativeHookRelay(params: {
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.config ? { config: params.config } : {}),
     runId: params.runId,
-    allowedEvents: params.options?.events ?? CODEX_NATIVE_HOOK_RELAY_EVENTS,
+    allowedEvents: params.events,
     ttlMs: params.options?.ttlMs,
     signal: params.signal,
     command: {
       timeoutMs: params.options?.gatewayTimeoutMs,
     },
   });
+}
+
+function resolveCodexNativeHookRelayEvents(params: {
+  configuredEvents?: readonly NativeHookRelayEvent[];
+  appServer: Pick<CodexAppServerRuntimeOptions, "approvalPolicy">;
+}): readonly NativeHookRelayEvent[] {
+  if (params.configuredEvents?.length) {
+    return params.configuredEvents;
+  }
+  // Codex emits PermissionRequest before the app-server approval reviewer has
+  // resolved the command. In native approval modes, let Codex's app-server
+  // approval bridge own the real escalation instead of surfacing a stale
+  // pre-guardian OpenClaw plugin approval prompt.
+  return params.appServer.approvalPolicy === "never"
+    ? CODEX_NATIVE_HOOK_RELAY_EVENTS
+    : CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS;
 }
 
 function buildCodexNativeHookRelayId(params: {

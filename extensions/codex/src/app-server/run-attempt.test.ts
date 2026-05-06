@@ -364,13 +364,28 @@ type AppServerRequestHandler = (request: {
 }) => Promise<unknown>;
 
 function extractRelayIdFromThreadRequest(params: unknown): string {
-  const command = (
-    params as {
-      config?: {
-        "hooks.PreToolUse"?: Array<{ hooks?: Array<{ command?: string }> }>;
-      };
+  const config = (params as { config?: Record<string, unknown> }).config;
+  let command: string | undefined;
+  for (const key of [
+    "hooks.PreToolUse",
+    "hooks.PostToolUse",
+    "hooks.PermissionRequest",
+    "hooks.Stop",
+  ]) {
+    const entries = config?.[key];
+    if (!Array.isArray(entries)) {
+      continue;
     }
-  ).config?.["hooks.PreToolUse"]?.[0]?.hooks?.[0]?.command;
+    for (const entry of entries as Array<{ hooks?: Array<{ command?: string }> }>) {
+      command = entry.hooks?.find((hook) => typeof hook.command === "string")?.command;
+      if (command) {
+        break;
+      }
+    }
+    if (command) {
+      break;
+    }
+  }
   const match = command?.match(/--relay-id ([^ ]+)/);
   if (!match?.[1]) {
     throw new Error(`relay id missing from command: ${command}`);
@@ -1150,6 +1165,85 @@ describe("runCodexAppServerAttempt", () => {
       }),
     );
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("lets Codex app-server approval modes own native permission requests by default", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      pluginConfig: {
+        appServer: {
+          mode: "guardian",
+        },
+      },
+    });
+    await harness.waitForMethod("turn/start");
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    expect(startRequest?.params).toEqual(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          "features.codex_hooks": true,
+          "hooks.PreToolUse": expect.any(Array),
+          "hooks.PostToolUse": expect.any(Array),
+          "hooks.Stop": expect.any(Array),
+        }),
+      }),
+    );
+    expect(startRequest?.params).toEqual(
+      expect.objectContaining({
+        config: expect.not.objectContaining({
+          "hooks.PermissionRequest": expect.anything(),
+        }),
+      }),
+    );
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toMatchObject({
+      allowedEvents: ["pre_tool_use", "post_tool_use", "before_agent_finalize"],
+    });
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("preserves explicit native permission request relay events in app-server approval modes", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      pluginConfig: {
+        appServer: {
+          mode: "guardian",
+        },
+      },
+      nativeHookRelay: {
+        enabled: true,
+        events: ["permission_request"],
+      },
+    });
+    await harness.waitForMethod("turn/start");
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    expect(startRequest?.params).toEqual(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          "features.codex_hooks": true,
+          "hooks.PermissionRequest": expect.any(Array),
+        }),
+      }),
+    );
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toMatchObject({
+      allowedEvents: ["permission_request"],
+    });
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
