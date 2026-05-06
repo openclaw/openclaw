@@ -581,7 +581,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expectFields(replyPayloads[0], {
+    expect(replyPayloads[0]).toMatchObject({
       text: "⚠️ write failed: Memory flush writes are restricted to memory/2026-05-05.md; use that path only.",
       isError: true,
     });
