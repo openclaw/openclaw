@@ -939,7 +939,7 @@ describe("runCodexAppServerAttempt", () => {
     params.onAgentEvent = onRunAgentEvent;
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await vi.waitFor(() => expect(llmInput).toHaveBeenCalled(), { interval: 1 });
+    expect(llmInput).toHaveBeenCalled();
 
     expect(llmInput.mock.calls).toEqual(
       expect.arrayContaining([
@@ -976,8 +976,8 @@ describe("runCodexAppServerAttempt", () => {
     const result = await run;
 
     expect(result.assistantTexts).toEqual(["hello back"]);
-    await vi.waitFor(() => expect(llmOutput).toHaveBeenCalledTimes(1), { interval: 1 });
-    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), { interval: 1 });
+    expect(llmOutput).toHaveBeenCalledTimes(1);
+    expect(agentEnd).toHaveBeenCalledTimes(1);
     const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event);
     expect(agentEvents).toEqual(
       expect.arrayContaining([
@@ -1387,7 +1387,7 @@ describe("runCodexAppServerAttempt", () => {
     const result = await run;
 
     expect(result.promptError).toBe("codex exploded");
-    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), { interval: 1 });
+    expect(agentEnd).toHaveBeenCalledTimes(1);
     const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event);
     expect(agentEvents).toEqual(
       expect.arrayContaining([
@@ -1446,9 +1446,9 @@ describe("runCodexAppServerAttempt", () => {
       runCodexAppServerAttempt(createParamsWithRuntimePlan(sessionFile, workspaceDir)),
     ).rejects.toThrow("turn start exploded");
 
-    await vi.waitFor(() => expect(llmInput).toHaveBeenCalledTimes(1), { interval: 1 });
-    await vi.waitFor(() => expect(llmOutput).toHaveBeenCalledTimes(1), { interval: 1 });
-    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), { interval: 1 });
+    expect(llmInput).toHaveBeenCalledTimes(1);
+    expect(llmOutput).toHaveBeenCalledTimes(1);
+    expect(agentEnd).toHaveBeenCalledTimes(1);
     expect(llmOutput).toHaveBeenCalledWith(
       expect.objectContaining({
         assistantTexts: [],
@@ -1489,7 +1489,7 @@ describe("runCodexAppServerAttempt", () => {
 
     const result = await run;
     expect(result.aborted).toBe(true);
-    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), { interval: 1 });
+    expect(agentEnd).toHaveBeenCalledTimes(1);
     expect(agentEnd).toHaveBeenCalledWith(
       expect.objectContaining({
         success: false,
