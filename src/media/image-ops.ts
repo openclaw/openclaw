@@ -365,7 +365,7 @@ async function withImageTemp<T>(fn: (workspace: TempWorkspace) => Promise<T>): P
 
 async function sipsMetadataFromBuffer(buffer: Buffer): Promise<ImageMetadata | null> {
   return await withImageTemp(async (workspace) => {
-    const input = await workspace.writePrivate("in.img", buffer);
+    const input = await workspace.write("in.img", buffer);
     const { stdout } = await runExec(
       "/usr/bin/sips",
       ["-g", "pixelWidth", "-g", "pixelHeight", input],
@@ -397,8 +397,8 @@ async function sipsResizeToJpeg(params: {
   quality: number;
 }): Promise<Buffer> {
   return await withImageTemp(async (workspace) => {
-    const input = await workspace.writePrivate("in.img", params.buffer);
-    const output = workspace.file("out.jpg");
+    const input = await workspace.write("in.img", params.buffer);
+    const output = workspace.path("out.jpg");
     await runExec(
       "/usr/bin/sips",
       [
@@ -422,8 +422,8 @@ async function sipsResizeToJpeg(params: {
 
 async function sipsConvertToJpeg(buffer: Buffer): Promise<Buffer> {
   return await withImageTemp(async (workspace) => {
-    const input = await workspace.writePrivate("in.heic", buffer);
-    const output = workspace.file("out.jpg");
+    const input = await workspace.write("in.heic", buffer);
+    const output = workspace.path("out.jpg");
     await runExec("/usr/bin/sips", ["-s", "format", "jpeg", input, "--out", output], {
       timeoutMs: 20_000,
       maxBuffer: 1024 * 1024,
@@ -490,8 +490,8 @@ async function sipsApplyOrientation(buffer: Buffer, orientation: number): Promis
   }
 
   return await withImageTemp(async (workspace) => {
-    const input = await workspace.writePrivate("in.jpg", buffer);
-    const output = workspace.file("out.jpg");
+    const input = await workspace.write("in.jpg", buffer);
+    const output = workspace.path("out.jpg");
     await runExec("/usr/bin/sips", [...ops, input, "--out", output], {
       timeoutMs: 20_000,
       maxBuffer: 1024 * 1024,

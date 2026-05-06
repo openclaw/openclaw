@@ -56,7 +56,7 @@ export async function transcodeAudioBufferToOpus(params: {
       prefix: normalizeTempPrefix(params.tempPrefix),
     },
     async (workspace) => {
-      const inputPath = await workspace.writePrivate(
+      const inputPath = await workspace.write(
         `input${normalizeAudioExtension(params)}`,
         params.audioBuffer,
       );

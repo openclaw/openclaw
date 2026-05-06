@@ -43,7 +43,7 @@ maintainers off the local-only `link:../fs-safe` dependency.
 
 Current pin:
 
-- `github:openclaw/fs-safe#542657b9d2fc43b8833b4fd6f29724bdcc1d5538`
+- `github:openclaw/fs-safe#02b9a9d2ae80f6f93a2d78a9e630c831ce5beb6c`
 
 fs-safe keeps a source prepack helper so pnpm can build the package from the
 GitHub tarball. After npm publish, replace the source pin with a semver range
@@ -272,7 +272,7 @@ Keep stable public temp surface small:
 
 ```ts
 await using workspace = await tempWorkspace({ prefix: "openclaw-" });
-const target = workspace.file("payload.bin");
+const target = workspace.path("payload.bin");
 ```
 
 Move one-shot temp target helpers and sibling-temp helpers to advanced/internal

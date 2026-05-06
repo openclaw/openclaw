@@ -156,7 +156,7 @@ export async function writeVoiceWavFile(
     prefix: "discord-voice-",
   });
   const wav = buildWavBuffer(pcm);
-  const filePath = await workspace.writePrivate("segment.wav", wav);
+  const filePath = await workspace.write("segment.wav", wav);
   scheduleTempCleanup(workspace.dir);
   return { path: filePath, durationSeconds: estimateDurationSeconds(pcm) };
 }

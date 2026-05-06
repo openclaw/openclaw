@@ -1120,7 +1120,7 @@ export async function textToSpeech(params: {
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "tts-",
   });
-  const audioPath = temp.writePrivate(`voice-${Date.now()}${fileExtension}`, audioBuffer);
+  const audioPath = temp.write(`voice-${Date.now()}${fileExtension}`, audioBuffer);
   scheduleCleanup(temp.dir);
 
   return {

@@ -188,7 +188,7 @@ async function transcodeToWhatsAppVoiceOpus(params: {
     async (workspace) => {
       const ext = path.extname(params.fileName).toLowerCase();
       const inputExt = ext && ext.length <= 12 ? ext : ".audio";
-      const inputPath = await workspace.writePrivate(`input${inputExt}`, params.buffer);
+      const inputPath = await workspace.write(`input${inputExt}`, params.buffer);
       const outputPath = workspace.path(WHATSAPP_VOICE_FILE_NAME);
       await runFfmpeg([
         "-hide_banner",

@@ -756,7 +756,7 @@ async function transcodeToFeishuVoiceOpus(params: {
     async (workspace) => {
       const ext = normalizeLowercaseStringOrEmpty(path.extname(params.fileName));
       const inputExt = ext && ext.length <= 12 ? ext : ".audio";
-      const inputPath = await workspace.writePrivate(`input${inputExt}`, params.buffer);
+      const inputPath = await workspace.write(`input${inputExt}`, params.buffer);
       const outputPath = workspace.path(FEISHU_VOICE_FILE_NAME);
       await runFfmpeg([
         "-hide_banner",

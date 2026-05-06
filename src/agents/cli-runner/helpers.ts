@@ -314,7 +314,7 @@ export async function writeCliSystemPromptFile(params: {
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-cli-system-prompt-",
   });
-  const filePath = await workspace.writePrivate(
+  const filePath = await workspace.write(
     "system-prompt.md",
     stripSystemPromptCacheBoundary(params.systemPrompt),
   );

@@ -58,7 +58,7 @@ async function materializeVoiceMessageInput(
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "voice-src-",
   });
-  const filePath = await workspace.writePrivate(`input${ext}`, media.buffer);
+  const filePath = await workspace.write(`input${ext}`, media.buffer);
   return { filePath, cleanup: async () => await workspace.cleanup() };
 }
 

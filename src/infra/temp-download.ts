@@ -66,7 +66,7 @@ function buildTempDownloadTarget(
   fileName: string | undefined,
 ): TempDownloadTarget {
   const file = (nextName?: string) =>
-    workspace.file(sanitizeTempFileName(nextName ?? fileName ?? "download.bin"));
+    workspace.path(sanitizeTempFileName(nextName ?? fileName ?? "download.bin"));
   return {
     dir: workspace.dir,
     path: file(),

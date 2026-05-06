@@ -355,7 +355,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
             const inputFile =
               result.audioPath ?? path.join(tempDir, `input${getFileExt(result.actualFormat)}`);
             if (!result.audioPath) {
-              await temp.writePrivate(`input${getFileExt(result.actualFormat)}`, result.buffer);
+              await temp.write(`input${getFileExt(result.actualFormat)}`, result.buffer);
             }
             buffer = await convertAudio(inputFile, tempDir, "opus");
             format = "opus";
@@ -369,7 +369,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
             const inputFile =
               result.audioPath ?? path.join(tempDir, `input${getFileExt(result.actualFormat)}`);
             if (!result.audioPath) {
-              await temp.writePrivate(`input${getFileExt(result.actualFormat)}`, result.buffer);
+              await temp.write(`input${getFileExt(result.actualFormat)}`, result.buffer);
             }
             buffer = await convertAudio(inputFile, tempDir, desired);
             format = desired;
@@ -421,7 +421,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
         const inputFile =
           result.audioPath ?? path.join(tempDir, `input${getFileExt(result.actualFormat)}`);
         if (!result.audioPath) {
-          await temp.writePrivate(`input${getFileExt(result.actualFormat)}`, result.buffer);
+          await temp.write(`input${getFileExt(result.actualFormat)}`, result.buffer);
         }
 
         // Convert to raw 16kHz mono PCM for telephony (no WAV headers)
