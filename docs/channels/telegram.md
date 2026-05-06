@@ -7,6 +7,8 @@ title: "Telegram"
 
 Production-ready for bot DMs and groups via grammY. Long polling is the default mode; webhook mode is optional.
 
+**Transport:** Long polling (default) or inbound webhook. In long-polling mode, the gateway polls the Telegram Bot API for updates — no public endpoint needed. In webhook mode, Telegram pushes updates to a URL you provide, which requires a publicly reachable HTTPS endpoint (reverse proxy, ALB, tunnel, etc.). See the **Long polling vs webhook** section below for configuration.
+
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
     Default DM policy for Telegram is pairing.
