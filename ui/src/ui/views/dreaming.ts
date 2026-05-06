@@ -7,6 +7,7 @@ import type {
   WikiMemoryPalace,
 } from "../controllers/dreaming.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
+import { viDashboardText as uiText } from "../vi-dashboard-text.ts";
 
 // ── Diary entry parser ─────────────────────────────────────────────────
 
@@ -481,17 +482,21 @@ function basename(value: string): string {
 function formatKindLabel(kind: "entity" | "concept" | "source" | "synthesis" | "report"): string {
   switch (kind) {
     case "entity":
-      return "entity";
+      return uiText("entity", "thực thể");
     case "concept":
-      return "concept";
+      return uiText("concept", "khái niệm");
     case "source":
-      return "source";
+      return uiText("source", "nguồn");
     case "synthesis":
-      return "synthesis";
+      return uiText("synthesis", "tổng hợp");
     case "report":
-      return "report";
+      return uiText("report", "báo cáo");
   }
   return kind;
+}
+
+function formatCount(count: number, singular: string, plural: string, viUnit: string): string {
+  return uiText(`${count} ${count === 1 ? singular : plural}`, `${count} ${viUnit}`);
 }
 
 function formatImportBadge(item: {
@@ -499,19 +504,19 @@ function formatImportBadge(item: {
   riskLevel: "low" | "medium" | "high" | "unknown";
 }): string {
   if (item.digestStatus === "withheld") {
-    return "needs review";
+    return uiText("needs review", "cần rà soát");
   }
   switch (item.riskLevel) {
     case "low":
-      return "low risk";
+      return uiText("low risk", "rủi ro thấp");
     case "medium":
-      return "medium risk";
+      return uiText("medium risk", "rủi ro vừa");
     case "high":
-      return "high risk";
+      return uiText("high risk", "rủi ro cao");
     case "unknown":
-      return "unknown risk";
+      return uiText("unknown risk", "chưa rõ rủi ro");
   }
-  return "unknown risk";
+  return uiText("unknown risk", "chưa rõ rủi ro");
 }
 
 function toggleExpandedCard(bucket: Set<string>, key: string, requestUpdate?: () => void): void {
@@ -537,7 +542,10 @@ async function openWikiPreview(lookup: string, props: DreamingProps): Promise<vo
   try {
     const preview = await props.onOpenWikiPage(lookup);
     if (!preview) {
-      _wikiPreviewError = `No wiki page found for ${lookup}.`;
+      _wikiPreviewError = uiText(
+        `No wiki page found for ${lookup}.`,
+        `Không tìm thấy trang wiki cho ${lookup}.`,
+      );
       return;
     }
     _wikiPreviewTitle = preview.title;
@@ -579,7 +587,9 @@ function renderWikiPreviewOverlay(props: DreamingProps) {
       <div class="dreams-diary__preview-panel" @click=${(event: Event) => event.stopPropagation()}>
         <div class="dreams-diary__preview-header">
           <div>
-            <div class="dreams-diary__preview-title">${_wikiPreviewTitle || "Wiki page"}</div>
+            <div class="dreams-diary__preview-title">
+              ${_wikiPreviewTitle || uiText("Wiki page", "Trang wiki")}
+            </div>
             <div class="dreams-diary__preview-meta">
               ${_wikiPreviewPath} ${_wikiPreviewUpdatedAt ? ` · ${_wikiPreviewUpdatedAt}` : ""}
             </div>
@@ -588,21 +598,28 @@ function renderWikiPreviewOverlay(props: DreamingProps) {
             class="btn btn--subtle btn--sm"
             @click=${() => closeWikiPreview(props.onRequestUpdate)}
           >
-            Close
+            ${uiText("Close", "Đóng")}
           </button>
         </div>
         <div class="dreams-diary__preview-body">
           ${_wikiPreviewLoading
-            ? html`<div class="dreams-diary__empty-text">Loading wiki page…</div>`
+            ? html`<div class="dreams-diary__empty-text">
+                ${uiText("Loading wiki page…", "Đang tải trang wiki…")}
+              </div>`
             : _wikiPreviewError
               ? html`<div class="dreams-diary__error">${_wikiPreviewError}</div>`
               : html`
                   ${_wikiPreviewTruncated
                     ? html`
                         <div class="dreams-diary__preview-hint">
-                          Showing the first chunk of this
-                          page${_wikiPreviewTotalLines !== null
-                            ? ` (${_wikiPreviewTotalLines} total lines)`
+                          ${uiText(
+                            "Showing the first chunk of this page",
+                            "Đang hiển thị phần đầu của trang này",
+                          )}${_wikiPreviewTotalLines !== null
+                            ? uiText(
+                                ` (${_wikiPreviewTotalLines} total lines)`,
+                                ` (tổng ${_wikiPreviewTotalLines} dòng)`,
+                              )
                             : ""}.
                         </div>
                       `
@@ -620,24 +637,28 @@ function renderDiarySubtabExplainer() {
     case "dreams":
       return html`
         <p class="dreams-diary__explainer">
-          This is the raw dream diary the system writes while replaying and consolidating memory;
-          use it to inspect what the memory system is noticing, and where it still looks noisy or
-          thin.
+          ${uiText(
+            "This is the raw dream diary the system writes while replaying and consolidating memory; use it to inspect what the memory system is noticing, and where it still looks noisy or thin.",
+            "Đây là nhật ký mơ thô mà hệ thống ghi khi replay và hợp nhất bộ nhớ; dùng mục này để xem hệ thống bộ nhớ đang nhận ra điều gì, phần nào còn nhiễu hoặc còn mỏng.",
+          )}
         </p>
       `;
     case "insights":
       return html`
         <p class="dreams-diary__explainer">
-          These are imported insights clustered from external history; use them to review what
-          imports surfaced before any of it graduates into durable memory.
+          ${uiText(
+            "These are imported insights clustered from external history; use them to review what imports surfaced before any of it graduates into durable memory.",
+            "Đây là các insight được nhập và gom cụm từ lịch sử bên ngoài; dùng để rà những gì import đã phát hiện trước khi nội dung đó được đưa vào bộ nhớ bền vững.",
+          )}
         </p>
       `;
     case "palace":
       return html`
         <p class="dreams-diary__explainer">
-          This is the compiled memory wiki surface the system can search and reason over; use it to
-          inspect actual memory pages, claims, open questions, and contradictions rather than raw
-          imported source chats.
+          ${uiText(
+            "This is the compiled memory wiki surface the system can search and reason over; use it to inspect actual memory pages, claims, open questions, and contradictions rather than raw imported source chats.",
+            "Đây là bề mặt Memory Wiki đã biên dịch để hệ thống tìm kiếm và suy luận; dùng để kiểm tra các trang bộ nhớ, luận điểm, câu hỏi mở và mâu thuẫn thay vì xem thô các chat nguồn đã import.",
+          )}
         </p>
       `;
   }
@@ -825,7 +846,7 @@ function renderAdvancedSection(props: DreamingProps) {
                         ?disabled=${props.dreamDiaryActionLoading}
                         @click=${() => props.onCopyDreamingArchivePath()}
                       >
-                        Copy archive path
+                        ${uiText("Copy archive path", "Sao chép đường dẫn archive")}
                       </button>
                     `
                   : nothing}
@@ -854,8 +875,12 @@ function renderAdvancedSection(props: DreamingProps) {
             entry.groundedCount > 0
               ? `${entry.groundedCount} ${t("dreaming.stats.grounded").toLowerCase()}`
               : "",
-            entry.recallCount > 0 ? `${entry.recallCount} recall` : "",
-            entry.dailyCount > 0 ? `${entry.dailyCount} daily` : "",
+            entry.recallCount > 0
+              ? formatCount(entry.recallCount, "recall", "recalls", "lần recall")
+              : "",
+            entry.dailyCount > 0
+              ? formatCount(entry.dailyCount, "daily", "daily", "mục hằng ngày")
+              : "",
           ],
         })}
         ${renderAdvancedEntryList({
@@ -892,12 +917,18 @@ function renderAdvancedSection(props: DreamingProps) {
           badge: (entry) => describeWaitingEntryOrigin(entry),
           meta: (entry) => [
             `${entry.totalSignalCount} ${t("dreaming.stats.signals").toLowerCase()}`,
-            entry.recallCount > 0 ? `${entry.recallCount} recall` : "",
-            entry.dailyCount > 0 ? `${entry.dailyCount} daily` : "",
+            entry.recallCount > 0
+              ? formatCount(entry.recallCount, "recall", "recalls", "lần recall")
+              : "",
+            entry.dailyCount > 0
+              ? formatCount(entry.dailyCount, "daily", "daily", "mục hằng ngày")
+              : "",
             entry.groundedCount > 0
               ? `${entry.groundedCount} ${t("dreaming.stats.grounded").toLowerCase()}`
               : "",
-            entry.phaseHitCount > 0 ? `${entry.phaseHitCount} phase hit` : "",
+            entry.phaseHitCount > 0
+              ? formatCount(entry.phaseHitCount, "phase hit", "phase hits", "lần khớp phase")
+              : "",
           ],
         })}
         ${renderAdvancedEntryList({
@@ -934,7 +965,9 @@ function renderDiaryImportsSection(props: DreamingProps) {
   if (props.wikiImportInsightsLoading && clusters.length === 0) {
     return html`
       <div class="dreams-diary__empty">
-        <div class="dreams-diary__empty-text">Loading imported insights…</div>
+        <div class="dreams-diary__empty-text">
+          ${uiText("Loading imported insights…", "Đang tải insight đã import…")}
+        </div>
       </div>
     `;
   }
@@ -942,9 +975,14 @@ function renderDiaryImportsSection(props: DreamingProps) {
   if (clusters.length === 0) {
     return html`
       <div class="dreams-diary__empty">
-        <div class="dreams-diary__empty-text">No imported insights yet</div>
+        <div class="dreams-diary__empty-text">
+          ${uiText("No imported insights yet", "Chưa có insight đã import")}
+        </div>
         <div class="dreams-diary__empty-hint">
-          Run a ChatGPT import with apply to surface clustered imported insights here.
+          ${uiText(
+            "Run a ChatGPT import with apply to surface clustered imported insights here.",
+            "Chạy import ChatGPT với apply để hiện các insight đã gom cụm tại đây.",
+          )}
         </div>
       </div>
     `;
@@ -976,17 +1014,25 @@ function renderDiaryImportsSection(props: DreamingProps) {
     <article class="dreams-diary__entry" key="imports-${cluster.key}">
       <div class="dreams-diary__accent"></div>
       <div class="dreams-diary__date">
-        ${cluster.label} · ${cluster.itemCount} chats
-        ${cluster.highRiskCount > 0 ? html`· ${cluster.highRiskCount} sensitive` : nothing}
+        ${cluster.label} · ${formatCount(cluster.itemCount, "chat", "chats", "chat")}
+        ${cluster.highRiskCount > 0
+          ? html`· ${formatCount(cluster.highRiskCount, "sensitive", "sensitive", "nhạy cảm")}`
+          : nothing}
         ${cluster.preferenceSignalCount > 0
-          ? html`· ${cluster.preferenceSignalCount} signals`
+          ? html`· ${formatCount(cluster.preferenceSignalCount, "signal", "signals", "tín hiệu")}`
           : nothing}
       </div>
       <div class="dreams-diary__prose">
         <p class="dreams-diary__para">
-          Imported chats clustered around ${cluster.label.toLowerCase()}.
+          ${uiText(
+            `Imported chats clustered around ${cluster.label.toLowerCase()}.`,
+            `Các chat đã import được gom quanh ${cluster.label.toLowerCase()}.`,
+          )}
           ${cluster.withheldCount > 0
-            ? ` ${cluster.withheldCount} digest${cluster.withheldCount === 1 ? " was" : "s were"} withheld pending review.`
+            ? uiText(
+                ` ${cluster.withheldCount} digest${cluster.withheldCount === 1 ? " was" : "s were"} withheld pending review.`,
+                ` ${cluster.withheldCount} bản tóm tắt đang được giữ lại để chờ rà soát.`,
+              )
             : ""}
         </p>
       </div>
@@ -1010,13 +1056,20 @@ function renderDiaryImportsSection(props: DreamingProps) {
               </div>
               <div class="dreams-diary__insight-meta">
                 ${item.updatedAt ? formatCompactDateTime(item.updatedAt) : basename(item.pagePath)}
-                ${item.activeBranchMessages > 0 ? ` · ${item.activeBranchMessages} messages` : ""}
+                ${item.activeBranchMessages > 0
+                  ? uiText(
+                      ` · ${item.activeBranchMessages} messages`,
+                      ` · ${item.activeBranchMessages} tin nhắn`,
+                    )
+                  : ""}
               </div>
               <p class="dreams-diary__insight-line">${item.summary}</p>
               ${item.candidateSignals.length > 0
                 ? html`
                     <div class="dreams-diary__insight-list">
-                      <strong>Potentially useful signals</strong>
+                      <strong
+                        >${uiText("Potentially useful signals", "Tín hiệu có thể hữu ích")}</strong
+                      >
                       ${item.candidateSignals.map(
                         (signal) => html`<p class="dreams-diary__insight-line">• ${signal}</p>`,
                       )}
@@ -1026,7 +1079,9 @@ function renderDiaryImportsSection(props: DreamingProps) {
               ${item.correctionSignals.length > 0
                 ? html`
                     <div class="dreams-diary__insight-list">
-                      <strong>Corrections or revisions</strong>
+                      <strong
+                        >${uiText("Corrections or revisions", "Điều chỉnh hoặc đính chính")}</strong
+                      >
                       ${item.correctionSignals.map(
                         (signal) => html`<p class="dreams-diary__insight-line">• ${signal}</p>`,
                       )}
@@ -1036,36 +1091,46 @@ function renderDiaryImportsSection(props: DreamingProps) {
               ${expanded
                 ? html`
                     <div class="dreams-diary__insight-list">
-                      <strong>Import details</strong>
+                      <strong>${uiText("Import details", "Chi tiết import")}</strong>
                       ${item.firstUserLine
                         ? html`
                             <p class="dreams-diary__insight-line">
-                              <strong>Started with:</strong> ${item.firstUserLine}
+                              <strong>${uiText("Started with:", "Bắt đầu bằng:")}</strong>
+                              ${item.firstUserLine}
                             </p>
                           `
                         : nothing}
                       ${item.lastUserLine && item.lastUserLine !== item.firstUserLine
                         ? html`
                             <p class="dreams-diary__insight-line">
-                              <strong>Ended on:</strong> ${item.lastUserLine}
+                              <strong>${uiText("Ended on:", "Kết thúc ở:")}</strong>
+                              ${item.lastUserLine}
                             </p>
                           `
                         : nothing}
                       <p class="dreams-diary__insight-line">
-                        <strong>Messages:</strong> ${item.userMessageCount} user ·
-                        ${item.assistantMessageCount} assistant
+                        <strong>${uiText("Messages:", "Tin nhắn:")}</strong>
+                        ${formatCount(item.userMessageCount, "user", "user", "người dùng")} ·
+                        ${formatCount(
+                          item.assistantMessageCount,
+                          "assistant",
+                          "assistant",
+                          "trợ lý",
+                        )}
                       </p>
                       ${item.riskReasons.length > 0
                         ? html`
                             <p class="dreams-diary__insight-line">
-                              <strong>Risk reasons:</strong> ${item.riskReasons.join(", ")}
+                              <strong>${uiText("Risk reasons:", "Lý do rủi ro:")}</strong>
+                              ${item.riskReasons.join(", ")}
                             </p>
                           `
                         : nothing}
                       ${item.labels.length > 0
                         ? html`
                             <p class="dreams-diary__insight-line">
-                              <strong>Labels:</strong> ${item.labels.join(", ")}
+                              <strong>${uiText("Labels:", "Nhãn:")}</strong>
+                              ${item.labels.join(", ")}
                             </p>
                           `
                         : nothing}
@@ -1090,7 +1155,9 @@ function renderDiaryImportsSection(props: DreamingProps) {
                     toggleExpandedCard(_expandedInsightCards, item.pagePath, props.onRequestUpdate);
                   }}
                 >
-                  ${expanded ? "Hide details" : "Details"}
+                  ${expanded
+                    ? uiText("Hide details", "Ẩn chi tiết")
+                    : uiText("Details", "Chi tiết")}
                 </button>
                 <button
                   class="btn btn--subtle btn--sm"
@@ -1099,7 +1166,7 @@ function renderDiaryImportsSection(props: DreamingProps) {
                     void openWikiPreview(item.pagePath, props);
                   }}
                 >
-                  Open source page
+                  ${uiText("Open source page", "Mở trang nguồn")}
                 </button>
               </div>
             </article>
@@ -1117,7 +1184,9 @@ function renderMemoryPalaceSection(props: DreamingProps) {
   if (props.wikiMemoryPalaceLoading && clusters.length === 0) {
     return html`
       <div class="dreams-diary__empty">
-        <div class="dreams-diary__empty-text">Loading memory palace…</div>
+        <div class="dreams-diary__empty-text">
+          ${uiText("Loading memory palace…", "Đang tải Memory Palace…")}
+        </div>
       </div>
     `;
   }
@@ -1125,10 +1194,14 @@ function renderMemoryPalaceSection(props: DreamingProps) {
   if (clusters.length === 0) {
     return html`
       <div class="dreams-diary__empty">
-        <div class="dreams-diary__empty-text">Memory palace is not populated yet</div>
+        <div class="dreams-diary__empty-text">
+          ${uiText("Memory palace is not populated yet", "Memory Palace chưa có dữ liệu")}
+        </div>
         <div class="dreams-diary__empty-hint">
-          Right now the wiki mostly has raw source imports and operational reports. This tab becomes
-          useful once syntheses, entities, or concepts start getting written.
+          ${uiText(
+            "Right now the wiki mostly has raw source imports and operational reports. This tab becomes useful once syntheses, entities, or concepts start getting written.",
+            "Hiện wiki chủ yếu có import nguồn thô và báo cáo vận hành. Tab này sẽ hữu ích hơn khi các bản tổng hợp, thực thể hoặc khái niệm bắt đầu được ghi.",
+          )}
         </div>
       </div>
     `;
@@ -1160,17 +1233,35 @@ function renderMemoryPalaceSection(props: DreamingProps) {
     <article class="dreams-diary__entry" key="palace-${cluster.key}">
       <div class="dreams-diary__accent"></div>
       <div class="dreams-diary__date">
-        ${cluster.label} · ${cluster.itemCount} pages
-        ${cluster.claimCount > 0 ? html`· ${cluster.claimCount} claims` : nothing}
-        ${cluster.questionCount > 0 ? html`· ${cluster.questionCount} questions` : nothing}
+        ${cluster.label} · ${formatCount(cluster.itemCount, "page", "pages", "trang")}
+        ${cluster.claimCount > 0
+          ? html`· ${formatCount(cluster.claimCount, "claim", "claims", "luận điểm")}`
+          : nothing}
+        ${cluster.questionCount > 0
+          ? html`· ${formatCount(cluster.questionCount, "question", "questions", "câu hỏi")}`
+          : nothing}
         ${cluster.contradictionCount > 0
-          ? html`· ${cluster.contradictionCount} contradictions`
+          ? html`·
+            ${formatCount(
+              cluster.contradictionCount,
+              "contradiction",
+              "contradictions",
+              "mâu thuẫn",
+            )}`
           : nothing}
       </div>
       <div class="dreams-diary__prose">
         <p class="dreams-diary__para">
-          Compiled wiki pages currently grouped under ${cluster.label.toLowerCase()}.
-          ${cluster.updatedAt ? ` Latest update ${formatCompactDateTime(cluster.updatedAt)}.` : ""}
+          ${uiText(
+            `Compiled wiki pages currently grouped under ${cluster.label.toLowerCase()}.`,
+            `Các trang wiki đã biên dịch đang được gom dưới ${cluster.label.toLowerCase()}.`,
+          )}
+          ${cluster.updatedAt
+            ? uiText(
+                ` Latest update ${formatCompactDateTime(cluster.updatedAt)}.`,
+                ` Cập nhật gần nhất ${formatCompactDateTime(cluster.updatedAt)}.`,
+              )
+            : ""}
         </p>
       </div>
       <div class="dreams-diary__insights">
@@ -1199,7 +1290,7 @@ function renderMemoryPalaceSection(props: DreamingProps) {
               ${item.claims.length > 0
                 ? html`
                     <div class="dreams-diary__insight-list">
-                      <strong>Claims</strong>
+                      <strong>${uiText("Claims", "Luận điểm")}</strong>
                       ${item.claims.map(
                         (claim) => html`<p class="dreams-diary__insight-line">• ${claim}</p>`,
                       )}
@@ -1209,7 +1300,7 @@ function renderMemoryPalaceSection(props: DreamingProps) {
               ${item.questions.length > 0
                 ? html`
                     <div class="dreams-diary__insight-list">
-                      <strong>Open questions</strong>
+                      <strong>${uiText("Open questions", "Câu hỏi mở")}</strong>
                       ${item.questions.map(
                         (question) => html`<p class="dreams-diary__insight-line">• ${question}</p>`,
                       )}
@@ -1219,7 +1310,7 @@ function renderMemoryPalaceSection(props: DreamingProps) {
               ${item.contradictions.length > 0
                 ? html`
                     <div class="dreams-diary__insight-list">
-                      <strong>Contradictions</strong>
+                      <strong>${uiText("Contradictions", "Mâu thuẫn")}</strong>
                       ${item.contradictions.map(
                         (entry) => html`<p class="dreams-diary__insight-line">• ${entry}</p>`,
                       )}
@@ -1229,14 +1320,14 @@ function renderMemoryPalaceSection(props: DreamingProps) {
               ${expanded
                 ? html`
                     <div class="dreams-diary__insight-list">
-                      <strong>Page details</strong>
+                      <strong>${uiText("Page details", "Chi tiết trang")}</strong>
                       <p class="dreams-diary__insight-line">
-                        <strong>Wiki page:</strong> ${item.pagePath}
+                        <strong>${uiText("Wiki page:", "Trang wiki:")}</strong> ${item.pagePath}
                       </p>
                       ${item.id
                         ? html`
                             <p class="dreams-diary__insight-line">
-                              <strong>Id:</strong> ${item.id}
+                              <strong>${uiText("Id:", "ID:")}</strong> ${item.id}
                             </p>
                           `
                         : nothing}
@@ -1251,7 +1342,9 @@ function renderMemoryPalaceSection(props: DreamingProps) {
                     toggleExpandedCard(_expandedPalaceCards, item.pagePath, props.onRequestUpdate);
                   }}
                 >
-                  ${expanded ? "Hide details" : "Details"}
+                  ${expanded
+                    ? uiText("Hide details", "Ẩn chi tiết")
+                    : uiText("Details", "Chi tiết")}
                 </button>
                 <button
                   class="btn btn--subtle btn--sm"
@@ -1260,7 +1353,7 @@ function renderMemoryPalaceSection(props: DreamingProps) {
                     void openWikiPreview(item.pagePath, props);
                   }}
                 >
-                  Open wiki page
+                  ${uiText("Open wiki page", "Mở trang wiki")}
                 </button>
               </div>
             </article>
@@ -1372,7 +1465,7 @@ function renderDiarySection(props: DreamingProps) {
                 props.onRequestUpdate?.();
               }}
             >
-              Dreams
+              ${uiText("Dreams", "Giấc mơ")}
             </button>
             <button
               class="dreams-diary__subtab ${_diarySubTab === "insights"
@@ -1385,7 +1478,7 @@ function renderDiarySection(props: DreamingProps) {
                 props.onRequestUpdate?.();
               }}
             >
-              Imported Insights
+              ${uiText("Imported Insights", "Insight đã import")}
             </button>
             <button
               class="dreams-diary__subtab ${_diarySubTab === "palace"
@@ -1398,7 +1491,7 @@ function renderDiarySection(props: DreamingProps) {
                 props.onRequestUpdate?.();
               }}
             >
-              Memory Palace
+              ${uiText("Memory Palace", "Memory Palace")}
             </button>
           </div>
           <button
@@ -1425,18 +1518,18 @@ function renderDiarySection(props: DreamingProps) {
             }}
           >
             ${memoryWikiUnavailable
-              ? "How to enable"
+              ? uiText("How to enable", "Cách bật")
               : _diarySubTab === "dreams"
                 ? props.dreamDiaryLoading
                   ? t("dreaming.diary.reloading")
                   : t("dreaming.diary.reload")
                 : _diarySubTab === "insights"
                   ? props.wikiImportInsightsLoading
-                    ? "Reloading…"
-                    : "Reload"
+                    ? uiText("Reloading…", "Đang tải lại…")
+                    : uiText("Reload", "Tải lại")
                   : props.wikiMemoryPalaceLoading
-                    ? "Reloading…"
-                    : "Reload"}
+                    ? uiText("Reloading…", "Đang tải lại…")
+                    : uiText("Reload", "Tải lại")}
           </button>
         </div>
         ${renderDiarySubtabExplainer()}
@@ -1445,18 +1538,24 @@ function renderDiarySection(props: DreamingProps) {
       ${memoryWikiUnavailable
         ? html`
             <div class="dreams-diary__empty">
-              <div class="dreams-diary__empty-text">Memory Wiki is not enabled</div>
-              <div class="dreams-diary__empty-hint">
-                Imported Insights and Memory Palace are provided by the bundled
-                <code>memory-wiki</code> plugin.
+              <div class="dreams-diary__empty-text">
+                ${uiText("Memory Wiki is not enabled", "Memory Wiki chưa được bật")}
               </div>
               <div class="dreams-diary__empty-hint">
-                Enable <code>plugins.entries.memory-wiki.enabled = true</code>, then reload this
-                tab.
+                ${uiText(
+                  "Imported Insights and Memory Palace are provided by the bundled",
+                  "Insight đã import và Memory Palace được cung cấp bởi plugin tích hợp",
+                )}
+                <code>memory-wiki</code>.
+              </div>
+              <div class="dreams-diary__empty-hint">
+                ${uiText("Enable", "Bật")}
+                <code>plugins.entries.memory-wiki.enabled = true</code>,
+                ${uiText("then reload this tab.", "rồi tải lại tab này.")}
               </div>
               <div class="dreams-diary__empty-actions">
                 <button class="btn btn--subtle btn--sm" @click=${() => props.onOpenConfig()}>
-                  Open Config
+                  ${uiText("Open Config", "Mở Cấu hình")}
                 </button>
               </div>
             </div>

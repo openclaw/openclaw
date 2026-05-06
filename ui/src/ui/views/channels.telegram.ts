@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import type { ChannelAccountSnapshot, TelegramStatus } from "../types.ts";
+import { viDashboardText as uiText } from "../vi-dashboard-text.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
 import {
   formatNullableBoolean,
@@ -59,7 +60,9 @@ export function renderTelegramCard(params: {
     return html`
       <div class="card">
         <div class="card-title">Telegram</div>
-        <div class="card-sub">Bot status and channel configuration.</div>
+        <div class="card-sub">
+          ${uiText("Bot status and channel configuration.", "Trạng thái bot và cấu hình kênh.")}
+        </div>
         ${accountCountLabel}
 
         <div class="account-card-list">
@@ -86,7 +89,7 @@ export function renderTelegramCard(params: {
 
   return renderSingleAccountChannelCard({
     title: "Telegram",
-    subtitle: "Bot status and channel configuration.",
+    subtitle: uiText("Bot status and channel configuration.", "Trạng thái bot và cấu hình kênh."),
     accountCountLabel,
     statusRows: [
       { label: t("common.configured"), value: formatNullableBoolean(configured) },

@@ -9,6 +9,7 @@ import type {
   ToolsEffectiveEntry,
   ToolsEffectiveResult,
 } from "../types.ts";
+import { viDashboardText as uiText } from "../vi-dashboard-text.ts";
 import {
   type AgentToolEntry,
   type AgentToolSection,
@@ -45,10 +46,10 @@ function buildCatalogBadgeLabels(section: AgentToolSection, tool: AgentToolEntry
   if (source === "plugin" && pluginId) {
     badges.push(`Plugin: ${pluginId}`);
   } else if (source === "core") {
-    badges.push("Built-In");
+    badges.push(uiText("Built-In", "Tích hợp sẵn"));
   }
   if (tool.optional) {
-    badges.push("Optional");
+    badges.push(uiText("Optional", "Tùy chọn"));
   }
   return badges;
 }
@@ -60,7 +61,7 @@ function buildRowStatusBadges(params: {
 }) {
   const badges = buildCatalogBadgeLabels(params.section, params.tool);
   if (params.activeEntry) {
-    badges.unshift("Live Now");
+    badges.unshift(uiText("Live Now", "Đang live"));
   }
   return badges;
 }
@@ -71,15 +72,15 @@ function formatToolPolicyState(params: {
   denied: boolean;
 }) {
   if (params.denied) {
-    return "Disabled by agent override.";
+    return uiText("Disabled by agent override.", "Đã tắt bởi ghi đè agent.");
   }
   if (params.allowed && params.baseAllowed) {
-    return "Enabled by the current profile.";
+    return uiText("Enabled by the current profile.", "Được bật bởi hồ sơ hiện tại.");
   }
   if (params.allowed) {
-    return "Enabled by agent override.";
+    return uiText("Enabled by agent override.", "Được bật bởi ghi đè agent.");
   }
-  return "Not included in the current profile.";
+  return uiText("Not included in the current profile.", "Không có trong hồ sơ hiện tại.");
 }
 
 function formatToolSourceLabel(section: AgentToolSection, tool: AgentToolEntry) {
@@ -88,7 +89,7 @@ function formatToolSourceLabel(section: AgentToolSection, tool: AgentToolEntry) 
   if (source === "plugin" && pluginId) {
     return `Plugin: ${pluginId}`;
   }
-  return "Built-In";
+  return uiText("Built-In", "Tích hợp sẵn");
 }
 
 function formatToolAccessSummary(params: {
@@ -97,15 +98,15 @@ function formatToolAccessSummary(params: {
   denied: boolean;
 }) {
   if (params.denied) {
-    return "Override Off";
+    return uiText("Override Off", "Ghi đè tắt");
   }
   if (params.allowed && params.baseAllowed) {
-    return "Enabled";
+    return uiText("Enabled", "Đã bật");
   }
   if (params.allowed) {
-    return "Override On";
+    return uiText("Override On", "Ghi đè bật");
   }
-  return "Profile Off";
+  return uiText("Profile Off", "Hồ sơ tắt");
 }
 
 function formatToolRuntimeSummary(params: {
@@ -113,12 +114,12 @@ function formatToolRuntimeSummary(params: {
   runtimeSessionMatchesSelectedAgent: boolean;
 }) {
   if (params.activeEntry) {
-    return "Live Now";
+    return uiText("Live Now", "Đang live");
   }
   if (params.runtimeSessionMatchesSelectedAgent) {
-    return "Not Live";
+    return uiText("Not Live", "Chưa live");
   }
-  return "Other Agent";
+  return uiText("Other Agent", "Agent khác");
 }
 
 function toToolAnchorId(toolId: string) {
@@ -127,7 +128,10 @@ function toToolAnchorId(toolId: string) {
 }
 
 function formatCountLabel(count: number, singular: string, plural = `${singular}s`) {
-  return `${count} ${count === 1 ? singular : plural}`;
+  return uiText(
+    `${count} ${count === 1 ? singular : plural}`,
+    `${count} ${singular === "Tool" || singular.includes("Tool") ? "công cụ" : singular}`,
+  );
 }
 
 function flattenEffectiveTools(groups: ToolsEffectiveResult["groups"] | null | undefined) {
@@ -337,18 +341,22 @@ export function renderAgentTools(params: {
     <section class="card">
       <div class="agent-tools-header">
         <div class="agent-tools-header__intro">
-          <div class="card-title">Tool Access</div>
+          <div class="card-title">${uiText("Tool Access", "Quyền công cụ")}</div>
           <div class="card-sub">
-            Profile + per-tool overrides for this agent.
-            <span class="mono">${enabledCount}/${toolIds.length}</span> enabled.
+            ${uiText(
+              "Profile + per-tool overrides for this agent.",
+              "Hồ sơ + ghi đè từng công cụ cho agent này.",
+            )}
+            <span class="mono">${enabledCount}/${toolIds.length}</span>
+            ${uiText("enabled.", "đã bật.")}
           </div>
         </div>
         <div class="agent-tools-header__actions">
           <button class="btn btn--sm" ?disabled=${!editable} @click=${() => updateAll(true)}>
-            Enable All
+            ${uiText("Enable All", "Bật tất cả")}
           </button>
           <button class="btn btn--sm" ?disabled=${!editable} @click=${() => updateAll(false)}>
-            Disable All
+            ${uiText("Disable All", "Tắt tất cả")}
           </button>
           <button
             class="btn btn--sm"
@@ -362,7 +370,7 @@ export function renderAgentTools(params: {
             ?disabled=${params.configSaving || !params.configDirty}
             @click=${params.onConfigSave}
           >
-            ${params.configSaving ? "Saving…" : "Save"}
+            ${params.configSaving ? uiText("Saving…", "Đang lưu…") : uiText("Save", "Lưu")}
           </button>
         </div>
       </div>
@@ -370,35 +378,47 @@ export function renderAgentTools(params: {
       ${!params.configForm
         ? html`
             <div class="callout info" style="margin-top: 12px">
-              Load the gateway config to adjust tool profiles.
+              ${uiText(
+                "Load the gateway config to adjust tool profiles.",
+                "Tải cấu hình gateway để chỉnh hồ sơ công cụ.",
+              )}
             </div>
           `
         : nothing}
       ${hasAgentAllow
         ? html`
             <div class="callout info" style="margin-top: 12px">
-              This agent is using an explicit allowlist in config. Tool overrides are managed in the
-              Config tab.
+              ${uiText(
+                "This agent is using an explicit allowlist in config. Tool overrides are managed in the Config tab.",
+                "Agent này đang dùng allowlist rõ ràng trong cấu hình. Ghi đè công cụ được quản lý trong tab Cấu hình.",
+              )}
             </div>
           `
         : nothing}
       ${hasGlobalAllow
         ? html`
             <div class="callout info" style="margin-top: 12px">
-              Global tools.allow is set. Agent overrides cannot enable tools that are globally
-              blocked.
+              ${uiText(
+                "Global tools.allow is set. Agent overrides cannot enable tools that are globally blocked.",
+                "Đã đặt tools.allow toàn cục. Ghi đè agent không thể bật công cụ bị chặn toàn cục.",
+              )}
             </div>
           `
         : nothing}
       ${params.toolsCatalogLoading && !params.toolsCatalogResult && !params.toolsCatalogError
         ? html`
-            <div class="callout info" style="margin-top: 12px">Loading runtime tool catalog…</div>
+            <div class="callout info" style="margin-top: 12px">
+              ${uiText("Loading runtime tool catalog…", "Đang tải danh mục công cụ runtime…")}
+            </div>
           `
         : nothing}
       ${params.toolsCatalogError
         ? html`
             <div class="callout info" style="margin-top: 12px">
-              Could not load runtime tool catalog. Showing built-in fallback list instead.
+              ${uiText(
+                "Could not load runtime tool catalog. Showing built-in fallback list instead.",
+                "Không tải được danh mục công cụ runtime. Đang hiển thị danh sách fallback tích hợp.",
+              )}
             </div>
           `
         : nothing}
@@ -406,15 +426,21 @@ export function renderAgentTools(params: {
       <div class="agent-tools-overview">
         <div class="agent-tools-overview__primary">
           <div class="agent-tools-pane">
-            <div class="label">Available Right Now</div>
+            <div class="label">${uiText("Available Right Now", "Có sẵn ngay lúc này")}</div>
             <div class="card-sub">
-              What this agent can use in the current chat session.
+              ${uiText(
+                "What this agent can use in the current chat session.",
+                "Những gì agent này có thể dùng trong phiên chat hiện tại.",
+              )}
               <span class="mono">${params.runtimeSessionKey || "no session"}</span>
             </div>
             ${!params.runtimeSessionMatchesSelectedAgent
               ? html`
                   <div class="callout info" style="margin-top: 12px">
-                    Switch chat to this agent to view its live runtime tools.
+                    ${uiText(
+                      "Switch chat to this agent to view its live runtime tools.",
+                      "Chuyển chat sang agent này để xem công cụ runtime live.",
+                    )}
                   </div>
                 `
               : params.toolsEffectiveLoading &&
@@ -422,19 +448,25 @@ export function renderAgentTools(params: {
                   !params.toolsEffectiveError
                 ? html`
                     <div class="callout info" style="margin-top: 12px">
-                      Loading available tools…
+                      ${uiText("Loading available tools…", "Đang tải công cụ khả dụng…")}
                     </div>
                   `
                 : params.toolsEffectiveError
                   ? html`
                       <div class="callout info" style="margin-top: 12px">
-                        Could not load available tools for this session.
+                        ${uiText(
+                          "Could not load available tools for this session.",
+                          "Không tải được công cụ khả dụng cho phiên này.",
+                        )}
                       </div>
                     `
                   : (params.toolsEffectiveResult?.groups?.length ?? 0) === 0
                     ? html`
                         <div class="callout info" style="margin-top: 12px">
-                          No tools are available for this session right now.
+                          ${uiText(
+                            "No tools are available for this session right now.",
+                            "Hiện chưa có công cụ nào khả dụng cho phiên này.",
+                          )}
                         </div>
                       `
                     : html`
@@ -460,7 +492,10 @@ export function renderAgentTools(params: {
                                   class="agent-tools-runtime-chip agent-tools-runtime-chip--more"
                                   title=${`${hiddenEffectiveToolCount} more live tools are available in the groups below.`}
                                 >
-                                  +${hiddenEffectiveToolCount} more live tools
+                                  ${uiText(
+                                    `+${hiddenEffectiveToolCount} more live tools`,
+                                    `+${hiddenEffectiveToolCount} công cụ live khác`,
+                                  )}
                                 </span>
                               `
                             : nothing}
@@ -469,7 +504,7 @@ export function renderAgentTools(params: {
           </div>
 
           <div class="agent-tools-pane">
-            <div class="label">Quick Presets</div>
+            <div class="label">${uiText("Quick Presets", "Preset nhanh")}</div>
             <div class="agent-tools-buttons">
               ${profileOptions.map(
                 (option) => html`
@@ -487,7 +522,7 @@ export function renderAgentTools(params: {
                 ?disabled=${!editable}
                 @click=${() => params.onProfileChange(params.agentId, null, false)}
               >
-                Inherit
+                ${uiText("Inherit", "Kế thừa")}
               </button>
             </div>
           </div>
@@ -495,25 +530,29 @@ export function renderAgentTools(params: {
 
         <div class="agent-tools-facts">
           <div class="agent-tools-fact">
-            <div class="label">Profile</div>
+            <div class="label">${uiText("Profile", "Hồ sơ")}</div>
             <div class="mono">${profile}</div>
           </div>
           <div class="agent-tools-fact">
-            <div class="label">Source</div>
+            <div class="label">${uiText("Source", "Nguồn")}</div>
             <div>${profileSource}</div>
           </div>
           <div class="agent-tools-fact">
-            <div class="label">Enabled</div>
+            <div class="label">${uiText("Enabled", "Đã bật")}</div>
             <div class="mono">${enabledCount}/${toolIds.length}</div>
           </div>
           <div class="agent-tools-fact">
-            <div class="label">Live</div>
+            <div class="label">${uiText("Live", "Live")}</div>
             <div class="mono">${liveToolCount}</div>
           </div>
           <div class="agent-tools-fact">
-            <div class="label">Status</div>
+            <div class="label">${uiText("Status", "Trạng thái")}</div>
             <div class="mono">
-              ${params.configSaving ? "saving…" : params.configDirty ? "unsaved" : "saved"}
+              ${params.configSaving
+                ? uiText("saving…", "đang lưu…")
+                : params.configDirty
+                  ? uiText("unsaved", "chưa lưu")
+                  : uiText("saved", "đã lưu")}
             </div>
           </div>
         </div>
@@ -540,7 +579,10 @@ export function renderAgentTools(params: {
                       ? html`<span class="agent-pill">Plugin: ${section.pluginId}</span>`
                       : nothing}
                   </span>
-                  <span class="agent-tools-group__preview" aria-label="Tool preview">
+                  <span
+                    class="agent-tools-group__preview"
+                    aria-label=${uiText("Tool preview", "Xem trước công cụ")}
+                  >
                     ${previewTools.map(
                       (tool) =>
                         html`<span class="mono" translate="no" title=${tool.label}
@@ -548,7 +590,12 @@ export function renderAgentTools(params: {
                         >`,
                     )}
                     ${remainingPreviewCount > 0
-                      ? html`<span>+${remainingPreviewCount} more</span>`
+                      ? html`<span>
+                          ${uiText(
+                            `+${remainingPreviewCount} more`,
+                            `+${remainingPreviewCount} nữa`,
+                          )}
+                        </span>`
                       : nothing}
                   </span>
                 </span>
@@ -587,11 +634,11 @@ export function renderAgentTools(params: {
                         </div>
                         <dl class="agent-tool-summary__facts">
                           <div class="agent-tool-summary__fact">
-                            <dt class="label">Access</dt>
+                            <dt class="label">${uiText("Access", "Quyền")}</dt>
                             <dd>${accessSummary}</dd>
                           </div>
                           <div class="agent-tool-summary__fact">
-                            <dt class="label">Session</dt>
+                            <dt class="label">${uiText("Session", "Phiên")}</dt>
                             <dd>${runtimeSummary}</dd>
                           </div>
                         </dl>
@@ -607,7 +654,7 @@ export function renderAgentTools(params: {
                             type="checkbox"
                             .checked=${resolved.allowed}
                             ?disabled=${!editable}
-                            aria-label=${`${resolved.allowed ? "Disable" : "Enable"} ${tool.label}`}
+                            aria-label=${`${resolved.allowed ? uiText("Disable", "Tắt") : uiText("Enable", "Bật")} ${tool.label}`}
                             @change=${(e: Event) =>
                               updateTool(tool.id, (e.target as HTMLInputElement).checked)}
                           />
@@ -617,17 +664,19 @@ export function renderAgentTools(params: {
                       <div class="agent-tool-details">
                         <div class="agent-tool-details-strip">
                           <div class="agent-tool-detail agent-tool-detail--inline">
-                            <div class="label">Access</div>
+                            <div class="label">${uiText("Access", "Quyền")}</div>
                             <div>${formatToolPolicyState(resolved)}</div>
                           </div>
                           <div class="agent-tool-detail agent-tool-detail--inline">
-                            <div class="label">Source</div>
+                            <div class="label">${uiText("Source", "Nguồn")}</div>
                             <div>${formatToolSourceLabel(section, tool)}</div>
                           </div>
                           ${defaultProfiles.length > 0
                             ? html`
                                 <div class="agent-tool-detail agent-tool-detail--inline">
-                                  <div class="label">Default Presets</div>
+                                  <div class="label">
+                                    ${uiText("Default Presets", "Preset mặc định")}
+                                  </div>
                                   <div class="agent-tool-badges">
                                     ${defaultProfiles.map(
                                       (profileId) =>
@@ -638,16 +687,27 @@ export function renderAgentTools(params: {
                               `
                             : nothing}
                           <div class="agent-tool-detail agent-tool-detail--inline">
-                            <div class="label">Current Session</div>
+                            <div class="label">${uiText("Current Session", "Phiên hiện tại")}</div>
                             <div>
                               ${activeEntry
-                                ? `Available now via ${renderEffectiveToolBadge(activeEntry)}.`
+                                ? uiText(
+                                    `Available now via ${renderEffectiveToolBadge(activeEntry)}.`,
+                                    `Đang khả dụng qua ${renderEffectiveToolBadge(activeEntry)}.`,
+                                  )
                                 : params.runtimeSessionMatchesSelectedAgent
-                                  ? "Not available in this chat session right now."
-                                  : "Switch chat to this agent to inspect live availability."}
+                                  ? uiText(
+                                      "Not available in this chat session right now.",
+                                      "Hiện không khả dụng trong phiên chat này.",
+                                    )
+                                  : uiText(
+                                      "Switch chat to this agent to inspect live availability.",
+                                      "Chuyển chat sang agent này để kiểm tra khả dụng live.",
+                                    )}
                             </div>
                           </div>
-                          <a class="agent-tool-jump" href="#${anchorId}"> Link to This Tool </a>
+                          <a class="agent-tool-jump" href="#${anchorId}">
+                            ${uiText("Link to This Tool", "Liên kết tới công cụ này")}
+                          </a>
                         </div>
                       </div>
                     </details>
@@ -706,9 +766,12 @@ export function renderAgentSkills(params: {
     <section class="card">
       <div class="row" style="justify-content: space-between; flex-wrap: wrap;">
         <div style="min-width: 0;">
-          <div class="card-title">Skills</div>
+          <div class="card-title">${uiText("Skills", "Kỹ năng")}</div>
           <div class="card-sub">
-            Per-agent skill allowlist and workspace skills.
+            ${uiText(
+              "Per-agent skill allowlist and workspace skills.",
+              "Allowlist kỹ năng theo agent và kỹ năng workspace.",
+            )}
             ${totalCount > 0
               ? html`<span class="mono">${enabledCount}/${totalCount}</span>`
               : nothing}
@@ -724,22 +787,25 @@ export function renderAgentSkills(params: {
               ?disabled=${!editable}
               @click=${() => params.onClear(params.agentId)}
             >
-              Enable All
+              ${uiText("Enable All", "Bật tất cả")}
             </button>
             <button
               class="btn btn--sm"
               ?disabled=${!editable}
               @click=${() => params.onDisableAll(params.agentId)}
             >
-              Disable All
+              ${uiText("Disable All", "Tắt tất cả")}
             </button>
             <button
               class="btn btn--sm"
               ?disabled=${!editable || !usingAllowlist}
               @click=${() => params.onClear(params.agentId)}
-              title="Remove per-agent allowlist and use all skills"
+              title=${uiText(
+                "Remove per-agent allowlist and use all skills",
+                "Xóa allowlist theo agent và dùng tất cả kỹ năng",
+              )}
             >
-              Reset
+              ${uiText("Reset", "Đặt lại")}
             </button>
           </div>
           <button
@@ -757,7 +823,7 @@ export function renderAgentSkills(params: {
             ?disabled=${params.configSaving || !params.configDirty}
             @click=${params.onConfigSave}
           >
-            ${params.configSaving ? "Saving…" : "Save"}
+            ${params.configSaving ? uiText("Saving…", "Đang lưu…") : uiText("Save", "Lưu")}
           </button>
         </div>
       </div>
@@ -765,25 +831,37 @@ export function renderAgentSkills(params: {
       ${!params.configForm
         ? html`
             <div class="callout info" style="margin-top: 12px">
-              Load the gateway config to set per-agent skills.
+              ${uiText(
+                "Load the gateway config to set per-agent skills.",
+                "Tải cấu hình gateway để đặt kỹ năng theo agent.",
+              )}
             </div>
           `
         : nothing}
       ${usingAllowlist
         ? html`
             <div class="callout info" style="margin-top: 12px">
-              This agent uses a custom skill allowlist.
+              ${uiText(
+                "This agent uses a custom skill allowlist.",
+                "Agent này dùng allowlist kỹ năng tùy chỉnh.",
+              )}
             </div>
           `
         : html`
             <div class="callout info" style="margin-top: 12px">
-              All skills are enabled. Disabling any skill will create a per-agent allowlist.
+              ${uiText(
+                "All skills are enabled. Disabling any skill will create a per-agent allowlist.",
+                "Tất cả kỹ năng đang bật. Tắt bất kỳ kỹ năng nào sẽ tạo allowlist theo agent.",
+              )}
             </div>
           `}
       ${!reportReady && !params.loading
         ? html`
             <div class="callout info" style="margin-top: 12px">
-              Load skills for this agent to view workspace-specific entries.
+              ${uiText(
+                "Load skills for this agent to view workspace-specific entries.",
+                "Tải kỹ năng cho agent này để xem mục riêng của workspace.",
+              )}
             </div>
           `
         : nothing}
@@ -793,20 +871,26 @@ export function renderAgentSkills(params: {
 
       <div class="filters" style="margin-top: 14px;">
         <label class="field" style="flex: 1;">
-          <span>Filter</span>
+          <span>${uiText("Filter", "Bộ lọc")}</span>
           <input
             .value=${params.filter}
             @input=${(e: Event) => params.onFilterChange((e.target as HTMLInputElement).value)}
-            placeholder="Search skills"
+            placeholder=${uiText("Search skills", "Tìm kiếm kỹ năng")}
             autocomplete="off"
             name="agent-skills-filter"
           />
         </label>
-        <div class="muted">${filtered.length} shown</div>
+        <div class="muted">
+          ${uiText(`${filtered.length} shown`, `${filtered.length} đang hiển thị`)}
+        </div>
       </div>
 
       ${filtered.length === 0
-        ? html` <div class="muted" style="margin-top: 16px">No skills found.</div> `
+        ? html`
+            <div class="muted" style="margin-top: 16px">
+              ${uiText("No skills found.", "Không tìm thấy kỹ năng.")}
+            </div>
+          `
         : html`
             <div class="agent-skills-groups" style="margin-top: 16px;">
               ${groups.map((group) =>

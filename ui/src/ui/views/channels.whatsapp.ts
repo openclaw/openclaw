@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { WhatsAppStatus } from "../types.ts";
+import { viDashboardText as uiText } from "../vi-dashboard-text.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
 import {
   formatNullableBoolean,
@@ -22,7 +23,10 @@ export function renderWhatsAppCard(params: {
 
   return renderSingleAccountChannelCard({
     title: "WhatsApp",
-    subtitle: "Link WhatsApp Web and monitor connection health.",
+    subtitle: uiText(
+      "Link WhatsApp Web and monitor connection health.",
+      "Liên kết WhatsApp Web và theo dõi tình trạng kết nối.",
+    ),
     accountCountLabel,
     statusRows: [
       { label: t("common.configured"), value: formatNullableBoolean(configured) },
@@ -57,7 +61,7 @@ export function renderWhatsAppCard(params: {
         : nothing}
       ${props.whatsappQrDataUrl
         ? html`<div class="qr-wrap">
-            <img src=${props.whatsappQrDataUrl} alt="WhatsApp QR" />
+            <img src=${props.whatsappQrDataUrl} alt=${uiText("WhatsApp QR", "Mã QR WhatsApp")} />
           </div>`
         : nothing}
     `,

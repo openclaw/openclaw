@@ -8,6 +8,7 @@ import { t } from "../../i18n/index.ts";
 import type { DeviceTokenSummary, PairedDevice, PendingDevice } from "../controllers/devices.ts";
 import { formatRelativeTimestamp, formatList } from "../format.ts";
 import { normalizeOptionalString } from "../string-coerce.ts";
+import { viDashboardText as uiText } from "../vi-dashboard-text.ts";
 import { renderExecApprovals, resolveExecApprovalsState } from "./nodes-exec-approvals.ts";
 import { resolveConfigAgents, resolveNodeTargets, type NodeTargetOption } from "./nodes-shared.ts";
 export type { NodesProps } from "./nodes.types.ts";
@@ -21,8 +22,10 @@ export function renderNodes(props: NodesProps) {
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Nodes</div>
-          <div class="card-sub">Paired devices and live links.</div>
+          <div class="card-title">${uiText("Nodes", "Node")}</div>
+          <div class="card-sub">
+            ${uiText("Paired devices and live links.", "Thiết bị đã ghép đôi và liên kết live.")}
+          </div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
           ${props.loading ? t("common.loading") : t("common.refresh")}
@@ -30,7 +33,7 @@ export function renderNodes(props: NodesProps) {
       </div>
       <div class="list" style="margin-top: 16px;">
         ${props.nodes.length === 0
-          ? html` <div class="muted">No nodes found.</div> `
+          ? html` <div class="muted">${uiText("No nodes found.", "Không tìm thấy node.")}</div> `
           : props.nodes.map((n) => renderNode(n))}
       </div>
     </section>
@@ -50,8 +53,10 @@ function renderDevices(props: NodesProps) {
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Devices</div>
-          <div class="card-sub">Pairing requests + role tokens.</div>
+          <div class="card-title">${uiText("Devices", "Thiết bị")}</div>
+          <div class="card-sub">
+            ${uiText("Pairing requests + role tokens.", "Yêu cầu ghép đôi + token vai trò.")}
+          </div>
         </div>
         <button class="btn" ?disabled=${props.devicesLoading} @click=${props.onDevicesRefresh}>
           ${props.devicesLoading ? t("common.loading") : t("common.refresh")}
@@ -63,7 +68,7 @@ function renderDevices(props: NodesProps) {
       <div class="list" style="margin-top: 16px;">
         ${pending.length > 0
           ? html`
-              <div class="muted" style="margin-bottom: 8px;">Pending</div>
+              <div class="muted" style="margin-bottom: 8px;">${uiText("Pending", "Đang chờ")}</div>
               ${pending.map((req) =>
                 renderPendingDevice(req, props, lookupPairedDevice(pairedByDeviceId, req)),
               )}
@@ -71,12 +76,18 @@ function renderDevices(props: NodesProps) {
           : nothing}
         ${paired.length > 0
           ? html`
-              <div class="muted" style="margin-top: 12px; margin-bottom: 8px;">Paired</div>
+              <div class="muted" style="margin-top: 12px; margin-bottom: 8px;">
+                ${uiText("Paired", "Đã ghép đôi")}
+              </div>
               ${paired.map((device) => renderPairedDevice(device, props))}
             `
           : nothing}
         ${pending.length === 0 && paired.length === 0
-          ? html` <div class="muted">No paired devices.</div> `
+          ? html`
+              <div class="muted">
+                ${uiText("No paired devices.", "Không có thiết bị đã ghép đôi.")}
+              </div>
+            `
           : nothing}
       </div>
     </section>
@@ -105,7 +116,7 @@ function lookupPairedDevice(
 
 function formatAccessSummary(access: DevicePairingAccessSummary | null): string {
   if (!access) {
-    return "none";
+    return uiText("none", "không có");
   }
   return `roles: ${formatList(access.roles)} · scopes: ${formatList(access.scopes)}`;
 }
@@ -113,13 +124,16 @@ function formatAccessSummary(access: DevicePairingAccessSummary | null): string 
 function renderPendingApprovalNote(kind: PendingDeviceApprovalKind) {
   switch (kind) {
     case "scope-upgrade":
-      return "scope upgrade requires approval";
+      return uiText("scope upgrade requires approval", "nâng cấp phạm vi cần phê duyệt");
     case "role-upgrade":
-      return "role upgrade requires approval";
+      return uiText("role upgrade requires approval", "nâng cấp vai trò cần phê duyệt");
     case "re-approval":
-      return "reconnect details changed; approval required";
+      return uiText(
+        "reconnect details changed; approval required",
+        "chi tiết kết nối lại đã thay đổi; cần phê duyệt",
+      );
     case "new-pairing":
-      return "new device pairing request";
+      return uiText("new device pairing request", "yêu cầu ghép đôi thiết bị mới");
   }
   const exhaustiveKind: never = kind;
   void exhaustiveKind;
@@ -138,15 +152,17 @@ function renderPendingDevice(req: PendingDevice, props: NodesProps, paired?: Pai
         <div class="list-title">${name}</div>
         <div class="list-sub">${req.deviceId}${ip}</div>
         <div class="muted" style="margin-top: 6px;">
-          ${renderPendingApprovalNote(approval.kind)} · requested ${age}${repair}
+          ${renderPendingApprovalNote(approval.kind)} · ${uiText("requested", "yêu cầu")}
+          ${age}${repair}
         </div>
         <div class="muted" style="margin-top: 6px;">
-          requested: ${formatAccessSummary(approval.requested)}
+          ${uiText("requested:", "yêu cầu:")} ${formatAccessSummary(approval.requested)}
         </div>
         ${approval.approved
           ? html`
               <div class="muted" style="margin-top: 6px;">
-                approved now: ${formatAccessSummary(approval.approved)}
+                ${uiText("approved now:", "đã phê duyệt:")}
+                ${formatAccessSummary(approval.approved)}
               </div>
             `
           : nothing}
@@ -154,10 +170,10 @@ function renderPendingDevice(req: PendingDevice, props: NodesProps, paired?: Pai
       <div class="list-meta">
         <div class="row" style="justify-content: flex-end; gap: 8px; flex-wrap: wrap;">
           <button class="btn btn--sm primary" @click=${() => props.onDeviceApprove(req.requestId)}>
-            Approve
+            ${uiText("Approve", "Phê duyệt")}
           </button>
           <button class="btn btn--sm" @click=${() => props.onDeviceReject(req.requestId)}>
-            Reject
+            ${uiText("Reject", "Từ chối")}
           </button>
         </div>
       </div>
@@ -178,9 +194,13 @@ function renderPairedDevice(device: PairedDevice, props: NodesProps) {
         <div class="list-sub">${device.deviceId}${ip}</div>
         <div class="muted" style="margin-top: 6px;">${roles} · ${scopes}</div>
         ${tokens.length === 0
-          ? html` <div class="muted" style="margin-top: 6px">Tokens: none</div> `
+          ? html`
+              <div class="muted" style="margin-top: 6px">
+                ${uiText("Tokens: none", "Token: không có")}
+              </div>
+            `
           : html`
-              <div class="muted" style="margin-top: 10px;">Tokens</div>
+              <div class="muted" style="margin-top: 10px;">${uiText("Tokens", "Token")}</div>
               <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 6px;">
                 ${tokens.map((token) => renderTokenRow(device.deviceId, token, props))}
               </div>
@@ -204,7 +224,7 @@ function renderTokenRow(deviceId: string, token: DeviceTokenSummary, props: Node
           class="btn btn--sm"
           @click=${() => props.onDeviceRotate(deviceId, token.role, token.scopes)}
         >
-          Rotate
+          ${uiText("Rotate", "Xoay vòng")}
         </button>
         ${token.revokedAtMs
           ? nothing
@@ -213,7 +233,7 @@ function renderTokenRow(deviceId: string, token: DeviceTokenSummary, props: Node
                 class="btn btn--sm danger"
                 @click=${() => props.onDeviceRevoke(deviceId, token.role)}
               >
-                Revoke
+                ${uiText("Revoke", "Thu hồi")}
               </button>
             `}
       </div>
@@ -321,7 +341,9 @@ function renderBindings(state: BindingState) {
                         state.onBindDefault(value ? value : null);
                       }}
                     >
-                      <option value="" ?selected=${defaultValue === ""}>Any node</option>
+                      <option value="" ?selected=${defaultValue === ""}>
+                        ${uiText("Any node", "Bất kỳ node nào")}
+                      </option>
                       ${state.nodes.map(
                         (node) =>
                           html`<option value=${node.id} ?selected=${defaultValue === node.id}>
@@ -331,13 +353,22 @@ function renderBindings(state: BindingState) {
                     </select>
                   </label>
                   ${!supportsBinding
-                    ? html` <div class="muted">No nodes with system.run available.</div> `
+                    ? html`
+                        <div class="muted">
+                          ${uiText(
+                            "No nodes with system.run available.",
+                            "Không có node nào có system.run.",
+                          )}
+                        </div>
+                      `
                     : nothing}
                 </div>
               </div>
 
               ${state.agents.length === 0
-                ? html` <div class="muted">No agents found.</div> `
+                ? html`
+                    <div class="muted">${uiText("No agents found.", "Không tìm thấy agent.")}</div>
+                  `
                 : state.agents.map((agent) => renderAgentBinding(agent, state))}
             </div>
           `}
@@ -354,15 +385,18 @@ function renderAgentBinding(agent: BindingAgent, state: BindingState) {
       <div class="list-main">
         <div class="list-title">${label}</div>
         <div class="list-sub">
-          ${agent.isDefault ? "default agent" : "agent"} ·
+          ${agent.isDefault ? uiText("default agent", "agent mặc định") : "agent"} ·
           ${bindingValue === "__default__"
-            ? `uses default (${state.defaultBinding ?? "any"})`
-            : `override: ${agent.binding}`}
+            ? uiText(
+                `uses default (${state.defaultBinding ?? "any"})`,
+                `dùng mặc định (${state.defaultBinding ?? "bất kỳ"})`,
+              )
+            : uiText(`override: ${agent.binding}`, `ghi đè: ${agent.binding}`)}
         </div>
       </div>
       <div class="list-meta">
         <label class="field">
-          <span>Binding</span>
+          <span>${uiText("Binding", "Binding")}</span>
           <select
             ?disabled=${state.disabled || !supportsBinding}
             @change=${(event: Event) => {
@@ -372,7 +406,7 @@ function renderAgentBinding(agent: BindingAgent, state: BindingState) {
             }}
           >
             <option value="__default__" ?selected=${bindingValue === "__default__"}>
-              Use default
+              ${uiText("Use default", "Dùng mặc định")}
             </option>
             ${state.nodes.map(
               (node) =>

@@ -6,6 +6,7 @@ import type {
   AgentsListResult,
   ModelCatalogEntry,
 } from "../types.ts";
+import { viDashboardText as uiText } from "../vi-dashboard-text.ts";
 import {
   buildModelOptions,
   normalizeModelValue,
@@ -103,50 +104,63 @@ export function renderAgentOverview(params: {
 
   return html`
     <section class="card">
-      <div class="card-title">Overview</div>
-      <div class="card-sub">Workspace paths and identity metadata.</div>
+      <div class="card-title">${t("agents.tabs.overview")}</div>
+      <div class="card-sub">
+        ${uiText(
+          "Workspace paths and identity metadata.",
+          "Đường dẫn workspace và metadata định danh.",
+        )}
+      </div>
 
       <div class="agents-overview-grid" style="margin-top: 16px;">
         <div class="agent-kv">
-          <div class="label">Workspace</div>
+          <div class="label">${t("agents.context.workspace")}</div>
           <div>
             <button
               type="button"
               class="workspace-link mono"
               @click=${() => onSelectPanel("files")}
-              title="Open Files tab"
+              title=${t("agents.context.openFilesTab")}
             >
               ${workspace}
             </button>
           </div>
         </div>
         <div class="agent-kv">
-          <div class="label">Primary Model</div>
+          <div class="label">${t("agents.context.primaryModel")}</div>
           <div class="mono">${model}</div>
         </div>
         <div class="agent-kv">
-          <div class="label">Runtime</div>
+          <div class="label">${t("agents.context.runtime")}</div>
           <div class="mono">${runtime}</div>
         </div>
         <div class="agent-kv">
-          <div class="label">Skills Filter</div>
-          <div>${skillFilter ? `${skillCount} selected` : "all skills"}</div>
+          <div class="label">${t("agents.context.skillsFilter")}</div>
+          <div>
+            ${skillFilter
+              ? uiText(`${skillCount} selected`, `Đã chọn ${skillCount}`)
+              : uiText("all skills", "tất cả kỹ năng")}
+          </div>
         </div>
       </div>
 
       ${configDirty
         ? html`
             <div class="callout warn" style="margin-top: 16px">
-              You have unsaved config changes.
+              ${uiText("You have unsaved config changes.", "Anh có thay đổi cấu hình chưa lưu.")}
             </div>
           `
         : nothing}
 
       <div class="agent-model-select" style="margin-top: 20px;">
-        <div class="label">Model Selection</div>
+        <div class="label">${uiText("Model Selection", "Chọn mô hình")}</div>
         <div class="agent-model-fields">
           <label class="field">
-            <span>Primary model${isDefault ? " (default)" : ""}</span>
+            <span
+              >${uiText("Primary model", "Mô hình chính")}${isDefault
+                ? uiText(" (default)", " (mặc định)")
+                : ""}</span
+            >
             <select
               .value=${selectedPrimary ?? ""}
               ?disabled=${disabled}
@@ -154,10 +168,19 @@ export function renderAgentOverview(params: {
                 onModelChange(agent.id, (e.target as HTMLSelectElement).value || null)}
             >
               ${isDefault
-                ? html` <option value="" ?selected=${!selectedPrimary}>Not set</option> `
+                ? html`
+                    <option value="" ?selected=${!selectedPrimary}>
+                      ${uiText("Not set", "Chưa đặt")}
+                    </option>
+                  `
                 : html`
                     <option value="" ?selected=${!selectedPrimary}>
-                      ${defaultPrimary ? `Inherit default (${defaultPrimary})` : "Inherit default"}
+                      ${defaultPrimary
+                        ? uiText(
+                            `Inherit default (${defaultPrimary})`,
+                            `Kế thừa mặc định (${defaultPrimary})`,
+                          )
+                        : uiText("Inherit default", "Kế thừa mặc định")}
                     </option>
                   `}
               ${buildModelOptions(
@@ -169,7 +192,7 @@ export function renderAgentOverview(params: {
             </select>
           </label>
           <div class="field">
-            <span>Fallbacks</span>
+            <span>${uiText("Fallbacks", "Fallback")}</span>
             <div
               class="agent-chip-input"
               @click=${(e: Event) => {
@@ -226,7 +249,7 @@ export function renderAgentOverview(params: {
             ?disabled=${configSaving || !configDirty}
             @click=${onConfigSave}
           >
-            ${configSaving ? "Saving…" : "Save"}
+            ${configSaving ? t("common.saving") : t("common.save")}
           </button>
         </div>
       </div>
