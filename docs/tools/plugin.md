@@ -127,6 +127,34 @@ visible plugin without importing runtime code or repairing dependencies.
 See [Plugin dependency resolution](/plugins/dependency-resolution) for the
 install-time lifecycle.
 
+### Blocked plugin path ownership
+
+If plugin diagnostics say
+`blocked plugin candidate: suspicious ownership (... uid=1000, expected uid=0 or root)`
+and config validation follows with `plugin present but blocked`, OpenClaw found
+plugin files owned by a different Unix user than the process that is loading
+them. Keep the plugin config in place; fix the filesystem ownership or run
+OpenClaw as the same user that owns the state directory.
+
+For Docker installs, the official image runs as `node` (uid `1000`), so the
+host bind-mounted OpenClaw config and workspace directories should normally be
+owned by uid `1000`:
+
+```bash
+sudo chown -R 1000:1000 /path/to/openclaw-config /path/to/openclaw-workspace
+```
+
+If you intentionally run OpenClaw as root, repair the managed plugin root to
+root ownership instead:
+
+```bash
+sudo chown -R root:root /path/to/openclaw-config/npm
+```
+
+After fixing ownership, rerun `openclaw doctor --fix` or
+`openclaw plugins registry --refresh` so the persisted plugin registry matches
+the repaired files.
+
 For npm installs, mutable selectors such as `latest` or a dist-tag are resolved
 before installation and then pinned to the exact verified version in OpenClaw's
 managed npm root. After npm finishes, OpenClaw verifies the installed
