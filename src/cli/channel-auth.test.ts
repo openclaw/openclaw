@@ -210,6 +210,31 @@ describe("channel-auth", () => {
     );
   });
 
+  it("fails explicit login before saving auth when the channel config block is missing", async () => {
+    mocks.loadConfig.mockReturnValue({});
+
+    await expect(
+      runChannelLogin({ channel: "whatsapp", account: "acct-1" }, runtime),
+    ).rejects.toThrow(
+      "Channel whatsapp is not configured. Add channels.whatsapp to your config before logging in.",
+    );
+
+    expect(mocks.login).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("fails explicit login before saving auth when the channel config block is disabled", async () => {
+    mocks.loadConfig.mockReturnValue({ channels: { whatsapp: { enabled: false } } });
+
+    await expect(
+      runChannelLogin({ channel: "whatsapp", account: "acct-1" }, runtime),
+    ).rejects.toThrow("Channel whatsapp is disabled. Enable channels.whatsapp before logging in.");
+
+    expect(mocks.login).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
   it("auto-picks the single configured channel that supports login when opts are empty", async () => {
     await runChannelLogin({}, runtime);
 

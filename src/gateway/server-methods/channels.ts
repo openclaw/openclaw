@@ -1,3 +1,4 @@
+import { resolveChannelConfigBlockError } from "../../channels/config-block.js";
 import { buildChannelUiCatalog } from "../../channels/plugins/catalog.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
@@ -497,6 +498,15 @@ export const channelsHandlers: GatewayRequestHandlers = {
         config: context.getRuntimeConfig(),
         env: process.env,
       }).config;
+      const configBlockError = resolveChannelConfigBlockError({
+        cfg,
+        channelId,
+        action: "starting it",
+      });
+      if (configBlockError) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, configBlockError));
+        return;
+      }
       const payload = await startChannelAccount({
         channelId,
         accountId: (params as { accountId?: string | null }).accountId,
