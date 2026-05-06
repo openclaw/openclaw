@@ -6,6 +6,7 @@ const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
 const fetchPluralKitMessageInfoMock = vi.hoisted(() => vi.fn());
 const resolveDiscordDmCommandAccessMock = vi.hoisted(() => vi.fn());
 const handleDiscordDmCommandDecisionMock = vi.hoisted(() => vi.fn(async () => {}));
+const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../pluralkit.js", () => ({
   fetchPluralKitMessageInfo: (...args: unknown[]) => fetchPluralKitMessageInfoMock(...args),
@@ -18,6 +19,9 @@ vi.mock("./dm-command-auth.js", () => ({
 }));
 vi.mock("./dm-command-decision.js", () => ({
   handleDiscordDmCommandDecision: handleDiscordDmCommandDecisionMock,
+}));
+vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
+  enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
 }));
 import {
   __testing as sessionBindingTesting,
@@ -51,6 +55,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   fetchPluralKitMessageInfoMock.mockReset();
+  enqueueSystemEventMock.mockReset();
 });
 
 function createThreadBinding(
@@ -1048,6 +1053,49 @@ describe("preflightDiscordMessage", () => {
     });
 
     expect(result).toBeNull();
+  });
+
+  it("queues Discord system events as untrusted context", async () => {
+    const channelId = "channel-system-event";
+    const guildId = "guild-system-event";
+    const message = createDiscordMessage({
+      id: "m-system-event",
+      channelId,
+      content: "",
+      type: MessageType.ChannelPinnedMessage,
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {} as DiscordConfig,
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Discord system: Alice pinned a message in Guild One #general",
+      {
+        sessionKey: `agent:main:discord:channel:${channelId}`,
+        contextKey: `discord:system:${channelId}:${message.id}`,
+        trusted: false,
+      },
+    );
   });
 
   it("does not mask mention gating when bot id is missing but mention patterns can detect", async () => {
