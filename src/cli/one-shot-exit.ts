@@ -26,22 +26,26 @@ export function exitAfterOneShotOutput(
   }
 
   const exit = () => runtime.exit(0);
-  const pendingStreams = [process.stdout, process.stderr].filter(
-    (stream) => stream.writableLength > 0,
-  );
-  if (pendingStreams.length === 0) {
-    setImmediate(exit);
+  let pendingStreams = 0;
+
+  const maybeDrain = (stream: NodeJS.WriteStream) => {
+    if (stream.writableLength <= 0) {
+      return;
+    }
+    pendingStreams += 1;
+    stream.write("", () => {
+      pendingStreams -= 1;
+      if (pendingStreams === 0) {
+        exit();
+      }
+    });
+  };
+
+  maybeDrain(process.stdout);
+  maybeDrain(process.stderr);
+
+  if (pendingStreams > 0) {
     return;
   }
-
-  let remaining = pendingStreams.length;
-  const complete = () => {
-    remaining -= 1;
-    if (remaining === 0) {
-      exit();
-    }
-  };
-  for (const stream of pendingStreams) {
-    stream.write("", complete);
-  }
+  setImmediate(exit);
 }
