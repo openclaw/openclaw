@@ -1767,6 +1767,7 @@
     "@aws-sdk/client-bedrock-runtime": "$@aws-sdk/client-bedrock-runtime",
     "axios": "1.16.0",
     "follow-redirects": "1.16.0",
+    "ip-address": "10.2.0",
     "node-domexception": "npm:@nolyfill/domexception@1.0.28",
     "uuid": "14.0.0"
   },
@@ -1789,6 +1790,7 @@
       "basic-ftp": "5.3.0",
       "file-type": "22.0.1",
       "form-data": "2.5.4",
+      "ip-address": "10.2.0",
       "minimatch": "10.2.5",
       "path-to-regexp": "8.4.0",
       "qs": "6.14.2",
