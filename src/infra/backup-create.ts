@@ -13,7 +13,6 @@ import {
 import { isPathWithin } from "../commands/cleanup-utils.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import { writeJson } from "./json-files.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
 import { writeJson } from "./json-files.js";
 
