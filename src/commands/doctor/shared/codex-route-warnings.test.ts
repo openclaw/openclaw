@@ -121,6 +121,60 @@ describe("collectCodexRouteWarnings", () => {
     expect(warnings).toEqual([]);
   });
 
+  it("does not warn when a usable Codex OAuth profile is present (openai-codex/* route is intentional)", () => {
+    const profileId = "openai-codex:default";
+    mocks.resolveAuthProfileOrder.mockReturnValue([profileId]);
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      profiles: {
+        [profileId]: { type: "oauth", accessToken: "tok", expiresAt: Date.now() + 3_600_000 },
+      },
+      usageStats: {},
+    });
+    mocks.evaluateStoredCredentialEligibility.mockReturnValue({ eligible: true, reasonCode: "ok" });
+    mocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(null);
+
+    const warnings = collectCodexRouteWarnings({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai-codex/gpt-5.5",
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(warnings).toEqual([]);
+  });
+
+  it("does not repair openai-codex/* refs when a usable Codex OAuth profile is present", () => {
+    const profileId = "openai-codex:default";
+    mocks.resolveAuthProfileOrder.mockReturnValue([profileId]);
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      profiles: {
+        [profileId]: { type: "oauth", accessToken: "tok", expiresAt: Date.now() + 3_600_000 },
+      },
+      usageStats: {},
+    });
+    mocks.evaluateStoredCredentialEligibility.mockReturnValue({ eligible: true, reasonCode: "ok" });
+    mocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(null);
+
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai-codex/gpt-5.5",
+          },
+        },
+      } as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    // Config must be left untouched — openai-codex/* route is valid with OAuth.
+    expect(result.cfg.agents?.defaults?.model).toBe("openai-codex/gpt-5.5");
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([]);
+  });
+
   it("repairs configured Codex model refs to canonical OpenAI refs with the Codex runtime when ready", () => {
     const result = maybeRepairCodexRoutes({
       cfg: {
