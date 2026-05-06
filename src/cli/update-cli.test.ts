@@ -2434,6 +2434,47 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
+  it("does not repair legacy config during a dry run", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    const legacyConfig = {
+      channels: {
+        slack: {
+          streaming: "partial",
+          nativeStreaming: false,
+        },
+      },
+    } as OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot).mockResolvedValueOnce({
+      ...baseSnapshot,
+      parsed: legacyConfig,
+      resolved: legacyConfig,
+      sourceConfig: legacyConfig,
+      config: legacyConfig,
+      runtimeConfig: legacyConfig,
+      valid: false,
+      hash: "legacy-hash",
+      issues: [
+        {
+          path: "channels.slack.streaming",
+          message: "Invalid input: expected object, received string",
+        },
+      ],
+      legacyIssues: [
+        {
+          path: "channels.slack",
+          message: "legacy slack streaming keys",
+        },
+      ],
+    });
+
+    await updateCommand({ dryRun: true, channel: "beta", yes: true });
+
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("does not persist the requested channel when the package update fails", async () => {
     const tempDir = createCaseDir("openclaw-update");
     mockPackageInstallStatus(tempDir);

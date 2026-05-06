@@ -1972,7 +1972,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   }
 
   let configSnapshot = await readConfigFileSnapshot();
-  if (opts.channel && !configSnapshot.valid) {
+  if (opts.channel && !opts.dryRun && !configSnapshot.valid) {
     configSnapshot = await maybeRepairLegacyConfigForUpdateChannel({
       configSnapshot,
       jsonMode: Boolean(opts.json),
