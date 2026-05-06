@@ -812,9 +812,9 @@ Restricted isolated runs may only self status/list, current get/runs/remove, and
             const includeDisabled = Boolean(params.includeDisabled);
             let offset = 0;
             let result: unknown;
-            let shouldContinue = true;
+            let shouldContinueListing = true;
             let useCompactList = true;
-            while (shouldContinue) {
+            while (shouldContinueListing) {
               try {
                 result = await callGateway("cron.list", gatewayOpts, {
                   includeDisabled,
@@ -832,11 +832,11 @@ Restricted isolated runs may only self status/list, current get/runs/remove, and
                 continue;
               }
               if (!selfRemoveOnlyJobId || cronListResultHasJob(result, selfRemoveOnlyJobId)) {
-                shouldContinue = false;
+                shouldContinueListing = false;
               } else {
                 const nextOffset = readCronListNextOffset(result, offset);
                 if (nextOffset === undefined) {
-                  shouldContinue = false;
+                  shouldContinueListing = false;
                 } else {
                   offset = nextOffset;
                 }
