@@ -242,6 +242,7 @@ async function resolveModelOverride(params: {
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: currentProvider,
+    agentId: params.agentId,
   });
   const catalog = await loadModelCatalog({ config: params.cfg });
   const allowed = buildAllowedModelSet({
@@ -253,8 +254,10 @@ async function resolveModelOverride(params: {
   });
 
   const resolved = resolveModelRefFromString({
+    cfg: params.cfg,
     raw,
     defaultProvider: currentProvider,
+    agentId: params.agentId,
     aliasIndex,
   });
   if (!resolved) {

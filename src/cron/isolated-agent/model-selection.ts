@@ -57,6 +57,7 @@ export async function resolveCronModelSelection(
     cfg: params.cfgWithAgentDefaults,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    agentId: params.agentId,
   });
   let provider = resolvedDefault.provider;
   let model = resolvedDefault.model;
@@ -80,6 +81,7 @@ export async function resolveCronModelSelection(
       raw: subagentModelRaw,
       defaultProvider: resolvedDefault.provider,
       defaultModel: resolvedDefault.model,
+      agentId: params.agentId,
     });
     if (!("error" in resolvedSubagent)) {
       provider = resolvedSubagent.ref.provider;
@@ -101,6 +103,7 @@ export async function resolveCronModelSelection(
       ref: hooksGmailModelRef,
       defaultProvider: resolvedDefault.provider,
       defaultModel: resolvedDefault.model,
+      agentId: params.agentId,
     });
     if (status.allowed) {
       provider = hooksGmailModelRef.provider;
@@ -118,6 +121,7 @@ export async function resolveCronModelSelection(
       raw: modelOverride,
       defaultProvider: resolvedDefault.provider,
       defaultModel: resolvedDefault.model,
+      agentId: params.agentId,
     });
     if ("error" in resolvedOverride) {
       return {
@@ -140,6 +144,7 @@ export async function resolveCronModelSelection(
         raw: `${sessionProviderOverride}/${sessionModelOverride}`,
         defaultProvider: resolvedDefault.provider,
         defaultModel: resolvedDefault.model,
+        agentId: params.agentId,
       });
       if (!("error" in resolvedSessionOverride)) {
         provider = resolvedSessionOverride.ref.provider;

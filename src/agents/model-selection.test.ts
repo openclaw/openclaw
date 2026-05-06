@@ -622,6 +622,38 @@ describe("model-selection", () => {
       expect(index.byAlias.get("smart")?.ref).toEqual({ provider: "openai", model: "gpt-4o" });
       expect(index.byKey.get(modelKey("anthropic", "claude-3-5-sonnet"))).toEqual(["fast"]);
     });
+
+    it("uses per-agent aliases when agentId is provided", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-6": { alias: "opus" },
+            },
+          },
+          list: [
+            {
+              id: "family",
+              models: {
+                "openai/gpt-5.4-mini": { alias: "cheap" },
+              },
+            },
+          ],
+        },
+      };
+
+      const index = buildModelAliasIndex({
+        cfg: cfg as OpenClawConfig,
+        defaultProvider: "openai",
+        agentId: "family",
+      });
+
+      expect(index.byAlias.get("cheap")?.ref).toEqual({
+        provider: "openai",
+        model: "gpt-5.4-mini",
+      });
+      expect(index.byAlias.has("opus")).toBe(false);
+    });
   });
 
   describe("buildAllowedModelSet", () => {
@@ -813,6 +845,49 @@ describe("model-selection", () => {
           reasoning: true,
           compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
         },
+      ]);
+    });
+
+    it("uses per-agent model allowlists when agentId is provided", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: {
+              fallbacks: ["google/gemini-3-pro"],
+            },
+            models: {
+              "anthropic/claude-opus-4-6": { alias: "opus" },
+            },
+          },
+          list: [
+            {
+              id: "family",
+              models: {
+                "openai/gpt-5.4-mini": { alias: "cheap" },
+              },
+            },
+          ],
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [
+          { provider: "anthropic", id: "claude-opus-4-6", name: "Opus" },
+          { provider: "openai", id: "gpt-5.4-mini", name: "GPT Mini" },
+          { provider: "google", id: "gemini-3-pro", name: "Gemini Pro" },
+        ],
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+        agentId: "family",
+      });
+
+      expect(result.allowAny).toBe(false);
+      expect(result.allowedKeys.has("openai/gpt-5.4-mini")).toBe(true);
+      expect(result.allowedKeys.has("anthropic/claude-opus-4-6")).toBe(false);
+      expect(result.allowedKeys.has("google/gemini-3-pro")).toBe(false);
+      expect(result.allowedCatalog).toEqual([
+        { provider: "openai", id: "gpt-5.4-mini", name: "GPT Mini", alias: "cheap" },
       ]);
     });
 
@@ -1723,6 +1798,59 @@ describe("resolveDefaultModelForAgent", () => {
     expect(resolveDefaultModelForAgent({ cfg, agentId: "main" })).toEqual({
       provider: "openai-codex",
       model: "gpt-5.5",
+    });
+  });
+
+  it("resolves agent primary aliases from the per-agent model allowlist", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+          models: {
+            "anthropic/claude-opus-4-6": { alias: "opus" },
+          },
+        },
+        list: [
+          {
+            id: "family",
+            model: { primary: "cheap" },
+            models: {
+              "openai/gpt-5.4-mini": { alias: "cheap" },
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolveDefaultModelForAgent({ cfg, agentId: "family" })).toEqual({
+      provider: "openai",
+      model: "gpt-5.4-mini",
+    });
+  });
+
+  it("uses the first per-agent allowed model when inherited default is not allowed", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+          models: {
+            "anthropic/claude-opus-4-6": { alias: "opus" },
+          },
+        },
+        list: [
+          {
+            id: "family",
+            models: {
+              "openai/gpt-5.4-mini": { alias: "cheap" },
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolveDefaultModelForAgent({ cfg, agentId: "family" })).toEqual({
+      provider: "openai",
+      model: "gpt-5.4-mini",
     });
   });
 });

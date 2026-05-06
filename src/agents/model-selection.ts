@@ -227,11 +227,42 @@ export function resolveDefaultModelForAgent(params: {
           },
         }
       : params.cfg;
-  return resolveConfiguredModelRef({
+  const resolved = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    agentId: params.agentId,
   });
+  const agentModels = params.agentId ? resolveAgentConfig(cfg, params.agentId)?.models : undefined;
+  if (!agentModels || Object.keys(agentModels).length === 0) {
+    return resolved;
+  }
+  const allowedKeys = buildConfiguredAllowlistKeys({
+    cfg,
+    defaultProvider: resolved.provider,
+    agentId: params.agentId,
+  });
+  if (!allowedKeys || allowedKeys.has(modelKey(resolved.provider, resolved.model))) {
+    return resolved;
+  }
+  const aliasIndex = buildModelAliasIndex({
+    cfg,
+    defaultProvider: resolved.provider,
+    agentId: params.agentId,
+  });
+  for (const raw of Object.keys(agentModels)) {
+    const candidate = resolveModelRefFromString({
+      cfg,
+      raw,
+      defaultProvider: resolved.provider,
+      agentId: params.agentId,
+      aliasIndex,
+    });
+    if (candidate) {
+      return candidate.ref;
+    }
+  }
+  return resolved;
 }
 
 function resolveAllowedFallbacks(params: { cfg: OpenClawConfig; agentId?: string }): string[] {
@@ -239,6 +270,10 @@ function resolveAllowedFallbacks(params: { cfg: OpenClawConfig; agentId?: string
     const override = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
     if (override !== undefined) {
       return override;
+    }
+    const agentModels = resolveAgentConfig(params.cfg, params.agentId)?.models;
+    if (agentModels && Object.keys(agentModels).length > 0) {
+      return [];
     }
   }
   return resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
@@ -296,6 +331,7 @@ export function resolveSubagentSpawnModelSelection(params: {
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: runtimeDefault.provider,
+    agentId: params.agentId,
   });
   return resolveModelThroughAliases(raw, aliasIndex);
 }
@@ -320,6 +356,7 @@ export function buildAllowedModelSet(params: {
       cfg: params.cfg,
       agentId: params.agentId,
     }),
+    agentId: params.agentId,
   });
 }
 
@@ -329,6 +366,7 @@ export function getModelRefStatus(params: {
   ref: ModelRef;
   defaultProvider: string;
   defaultModel?: string;
+  agentId?: string;
 }): ModelRefStatus {
   return getModelRefStatusWithFallbackModels({
     cfg: params.cfg,
@@ -338,7 +376,9 @@ export function getModelRefStatus(params: {
     defaultModel: params.defaultModel,
     fallbackModels: resolveAllowedFallbacks({
       cfg: params.cfg,
+      agentId: params.agentId,
     }),
+    agentId: params.agentId,
   });
 }
 
@@ -348,6 +388,7 @@ function getModelRefStatusForResolve(
     catalog: ModelCatalogEntry[];
     defaultProvider: string;
     defaultModel?: string;
+    agentId?: string;
   },
   ref: ModelRef,
 ): ModelRefStatus {
@@ -357,6 +398,7 @@ function getModelRefStatusForResolve(
     ref,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    agentId: params.agentId,
   });
 }
 
@@ -366,6 +408,7 @@ export function resolveAllowedModelRef(params: {
   raw: string;
   defaultProvider: string;
   defaultModel?: string;
+  agentId?: string;
 }):
   | { ref: ModelRef; key: string }
   | {
@@ -379,12 +422,14 @@ export function resolveAllowedModelRef(params: {
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
+    agentId: params.agentId,
   });
 
   const openrouterCompatRef = resolveConfiguredOpenRouterCompatAlias({
     cfg: params.cfg,
     raw: trimmed,
     defaultProvider: params.defaultProvider,
+    agentId: params.agentId,
   });
   if (openrouterCompatRef) {
     const status = getModelRefStatusForResolve(params, openrouterCompatRef);
@@ -398,6 +443,7 @@ export function resolveAllowedModelRef(params: {
     cfg: params.cfg,
     raw: params.raw,
     defaultProvider: params.defaultProvider,
+    agentId: params.agentId,
     aliasIndex,
     getStatus: (ref) => getModelRefStatusForResolve(params, ref),
   });

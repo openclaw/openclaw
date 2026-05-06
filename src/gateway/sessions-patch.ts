@@ -434,6 +434,7 @@ export async function applySessionsPatchToStore(params: {
         raw: trimmed,
         defaultProvider: resolvedDefault.provider,
         defaultModel: subagentModelHint ?? resolvedDefault.model,
+        agentId: sessionAgentId,
       });
       if ("error" in resolved) {
         return invalid(resolved.error);

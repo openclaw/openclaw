@@ -202,9 +202,20 @@ export function hasConfiguredModelFallbacks(params: {
   agentId?: string | null;
   sessionKey?: string | null;
 }): boolean {
-  const fallbacksOverride = resolveRunModelFallbacksOverride(params);
-  const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg?.agents?.defaults?.model);
-  return (fallbacksOverride ?? defaultFallbacks).length > 0;
+  if (!params.cfg) {
+    return false;
+  }
+  const agentId = resolveFallbackAgentId({
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  const fallbacksOverride = resolveAgentModelFallbacksOverride(params.cfg, agentId);
+  const agentModelAllowlist = resolveAgentConfig(params.cfg, agentId)?.models;
+  const hasAgentModelAllowlist = Boolean(
+    agentModelAllowlist && Object.keys(agentModelAllowlist).length > 0,
+  );
+  const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
+  return (fallbacksOverride ?? (hasAgentModelAllowlist ? [] : defaultFallbacks)).length > 0;
 }
 
 export function resolveEffectiveModelFallbacks(params: {
@@ -214,14 +225,18 @@ export function resolveEffectiveModelFallbacks(params: {
   modelOverrideSource?: "auto" | "user";
 }): string[] | undefined {
   const agentFallbacksOverride = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
+  const agentModelAllowlist = resolveAgentConfig(params.cfg, params.agentId)?.models;
+  const hasAgentModelAllowlist = Boolean(
+    agentModelAllowlist && Object.keys(agentModelAllowlist).length > 0,
+  );
   if (!params.hasSessionModelOverride) {
-    return agentFallbacksOverride;
+    return agentFallbacksOverride ?? (hasAgentModelAllowlist ? [] : undefined);
   }
   if (params.modelOverrideSource !== "auto") {
     return [];
   }
   const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
-  return agentFallbacksOverride ?? defaultFallbacks;
+  return agentFallbacksOverride ?? (hasAgentModelAllowlist ? [] : defaultFallbacks);
 }
 
 function normalizePathForComparison(input: string): string {

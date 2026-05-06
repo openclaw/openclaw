@@ -184,6 +184,23 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts per-agent model allowlists", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "family",
+            models: {
+              "openai/gpt-5.4-mini": { alias: "cheap" },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts pdf default model and limits", () => {
     const res = validateConfigObject({
       agents: {

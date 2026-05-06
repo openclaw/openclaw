@@ -300,6 +300,39 @@ describe("resolveAgentConfig", () => {
       }),
     ).toEqual([]);
 
+    const cfgPerAgentModelsNoFallbacks: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            fallbacks: ["anthropic/claude-opus-4-6"],
+          },
+        },
+        list: [
+          {
+            id: "linus",
+            models: {
+              "openai/gpt-5.4-mini": { alias: "cheap" },
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    expect(
+      resolveEffectiveModelFallbacks({
+        cfg: cfgPerAgentModelsNoFallbacks,
+        agentId: "linus",
+        hasSessionModelOverride: false,
+      }),
+    ).toEqual([]);
+    expect(
+      resolveEffectiveModelFallbacks({
+        cfg: cfgPerAgentModelsNoFallbacks,
+        agentId: "linus",
+        hasSessionModelOverride: true,
+        modelOverrideSource: "auto",
+      }),
+    ).toEqual([]);
+
     const cfgInheritDefaultsWithoutAgentModel: OpenClawConfig = {
       agents: {
         defaults: {
@@ -480,6 +513,31 @@ describe("resolveAgentConfig", () => {
         cfg: cfgAgentOverrideOnly,
         agentId: "main",
         sessionKey: "agent:main:session",
+      }),
+    ).toBe(false);
+
+    const cfgPerAgentModelsNoFallbacks: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            fallbacks: ["anthropic/claude-opus-4-6"],
+          },
+        },
+        list: [
+          {
+            id: "family",
+            models: {
+              "openai/gpt-5.4-mini": { alias: "cheap" },
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    expect(
+      hasConfiguredModelFallbacks({
+        cfg: cfgPerAgentModelsNoFallbacks,
+        agentId: "family",
+        sessionKey: "agent:family:session",
       }),
     ).toBe(false);
   });

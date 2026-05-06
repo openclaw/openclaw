@@ -122,7 +122,9 @@ export async function createModelSelectionState(params: {
   let provider = params.provider;
   let model = params.model;
 
-  const hasAllowlist = agentCfg?.models && Object.keys(agentCfg.models).length > 0;
+  const effectiveModelAllowlist = agentCfg?.models ?? cfg.agents?.defaults?.models;
+  const hasAllowlist =
+    Boolean(effectiveModelAllowlist) && Object.keys(effectiveModelAllowlist ?? {}).length > 0;
   const configuredModelCatalog = buildConfiguredModelCatalog({ cfg });
   const needsModelCatalog = params.hasModelDirective;
 
