@@ -374,6 +374,7 @@ export class AcpSessionManager {
         cwd: effectiveCwd,
         state: "idle",
         lastActivityAt: Date.now(),
+        ...(typeof handle.pid === "number" ? { pid: handle.pid } : {}),
       };
 
       let persisted: SessionEntry | null = null;
@@ -501,6 +502,11 @@ export class AcpSessionManager {
           runtimeStatus,
           lastActivityAt: meta.lastActivityAt,
           lastError: meta.lastError,
+          ...(typeof runtimeStatus?.pid === "number"
+            ? { pid: runtimeStatus.pid }
+            : typeof meta.pid === "number"
+              ? { pid: meta.pid }
+              : {}),
         };
       },
       params.signal,
@@ -1513,6 +1519,11 @@ export class AcpSessionManager {
       state: previousMeta.state,
       lastActivityAt: now,
       ...(previousMeta.lastError ? { lastError: previousMeta.lastError } : {}),
+      ...(typeof ensured.pid === "number"
+        ? { pid: ensured.pid }
+        : typeof previousMeta.pid === "number"
+          ? { pid: previousMeta.pid }
+          : {}),
     };
     const shouldPersistMeta =
       previousMeta.backend !== nextMeta.backend ||
@@ -1521,6 +1532,7 @@ export class AcpSessionManager {
       previousMeta.agent !== nextMeta.agent ||
       previousMeta.cwd !== nextMeta.cwd ||
       !runtimeOptionsEqual(previousMeta.runtimeOptions, nextMeta.runtimeOptions) ||
+      previousMeta.pid !== nextMeta.pid ||
       hasLegacyAcpIdentityProjection(previousMeta);
     if (shouldPersistMeta) {
       await this.writeSessionMeta({
@@ -1621,6 +1633,7 @@ export class AcpSessionManager {
           state: base.state,
           lastActivityAt: Date.now(),
           ...(base.lastError ? { lastError: base.lastError } : {}),
+          ...(typeof base.pid === "number" ? { pid: base.pid } : {}),
         };
       },
       failOnError: true,
@@ -1777,6 +1790,7 @@ export class AcpSessionManager {
           state: base.state,
           lastActivityAt: now,
           ...(base.lastError ? { lastError: base.lastError } : {}),
+          ...(typeof base.pid === "number" ? { pid: base.pid } : {}),
         };
       },
     });
@@ -1826,6 +1840,7 @@ export class AcpSessionManager {
           ...(base.cwd ? { cwd: base.cwd } : {}),
           state: "idle",
           lastActivityAt: now,
+          ...(typeof base.pid === "number" ? { pid: base.pid } : {}),
         };
       },
       failOnError: true,
@@ -1924,6 +1939,7 @@ export class AcpSessionManager {
           state: params.state,
           lastActivityAt: Date.now(),
           ...(base.lastError ? { lastError: base.lastError } : {}),
+          ...(typeof base.pid === "number" ? { pid: base.pid } : {}),
         };
         const lastError = normalizeText(params.lastError);
         if (lastError) {

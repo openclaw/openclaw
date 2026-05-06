@@ -29,6 +29,8 @@ export type AcpRuntimeHandle = {
   backendSessionId?: string;
   /** Upstream harness session identifier, if exposed by adapter/runtime. */
   agentSessionId?: string;
+  /** OS process PID of the ACP adapter/child agent process, if available. */
+  pid?: number;
 };
 
 export type AcpRuntimeEnsureInput = {
@@ -75,6 +77,8 @@ export type AcpRuntimeStatus = {
   backendSessionId?: string;
   /** Upstream harness session identifier, if known at status time. */
   agentSessionId?: string;
+  /** OS process PID of the ACP adapter/child agent process, if available. */
+  pid?: number;
   details?: Record<string, unknown>;
 };
 

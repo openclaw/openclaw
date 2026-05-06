@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { AcpRuntimeHandle as CoreAcpRuntimeHandle, AcpRuntimeStatus as CoreAcpRuntimeStatus } from "openclaw/plugin-sdk/acp-runtime-backend";
 import {
   ACPX_BACKEND_ID,
   AcpxRuntime as BaseAcpxRuntime,
@@ -392,6 +393,31 @@ function shouldUseDistinctBridgeDelegate(options: AcpRuntimeOptions): boolean {
   return Array.isArray(mcpServers) && mcpServers.length > 0;
 }
 
+function resolvePidFromHandle(handle: AcpRuntimeHandle): CoreAcpRuntimeHandle {
+  const pid = resolvePidFromUnknown(handle);
+  return {
+    ...handle,
+    ...(typeof pid === "number" ? { pid } : {}),
+  };
+}
+
+function resolvePidFromStatus(status: AcpRuntimeStatus): CoreAcpRuntimeStatus {
+  const pid = resolvePidFromUnknown(status) ?? resolvePidFromUnknown(status.details);
+  return {
+    ...status,
+    ...(typeof pid === "number" ? { pid } : {}),
+  };
+}
+
+function resolvePidFromUnknown(value: unknown): number | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const obj = value as Record<string, unknown>;
+  const pid = obj["pid"];
+  return typeof pid === "number" && Number.isInteger(pid) && pid > 0 ? pid : undefined;
+}
+
 export class AcpxRuntime implements AcpRuntime {
   private readonly sessionStore: ResetAwareSessionStore;
   private readonly agentRegistry: AcpAgentRegistry;
@@ -491,7 +517,7 @@ export class AcpxRuntime implements AcpRuntime {
         : undefined;
 
     if (!codexModelOverride) {
-      return delegate.ensureSession(input);
+      return resolvePidFromHandle(await delegate.ensureSession(input));
     }
 
     const normalizedInput = {
@@ -500,8 +526,10 @@ export class AcpxRuntime implements AcpRuntime {
         ? { model: codexAcpSessionModelId(codexModelOverride) }
         : {}),
     };
-    return this.codexAcpModelOverrideScope.run(codexModelOverride, () =>
-      delegate.ensureSession(normalizedInput),
+    return resolvePidFromHandle(
+      await this.codexAcpModelOverrideScope.run(codexModelOverride, () =>
+        delegate.ensureSession(normalizedInput),
+      ),
     );
   }
 
@@ -517,7 +545,7 @@ export class AcpxRuntime implements AcpRuntime {
     input: Parameters<NonNullable<AcpRuntime["getStatus"]>>[0],
   ): Promise<AcpRuntimeStatus> {
     const delegate = await this.resolveDelegateForHandle(input.handle);
-    return delegate.getStatus(input);
+    return resolvePidFromStatus(await delegate.getStatus(input));
   }
 
   async setMode(input: Parameters<NonNullable<AcpRuntime["setMode"]>>[0]): Promise<void> {
