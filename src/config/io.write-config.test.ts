@@ -434,6 +434,30 @@ describe("config io write", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "leaves state dir mode alone when OPENCLAW_SKIP_STATE_DIR_HARDEN=1",
+    async () => {
+      await withSuiteHome(async (home) => {
+        const stateDir = path.join(home, ".openclaw");
+        // setgid + rwx for owner and group; no "other" — represents the
+        // multi-uid shared-volume setup that this opt-out exists for.
+        await fs.mkdir(stateDir, { recursive: true });
+        await fs.chmod(stateDir, 0o2770);
+
+        const io = createConfigIO({
+          env: { OPENCLAW_SKIP_STATE_DIR_HARDEN: "1" } as NodeJS.ProcessEnv,
+          homedir: () => home,
+          logger: silentLogger,
+        });
+
+        await io.writeConfigFile({ gateway: { mode: "local" } });
+
+        const stat = await fs.stat(stateDir);
+        expect(stat.mode & 0o7777).toBe(0o2770);
+      });
+    },
+  );
+
   it("keeps writes inside an OPENCLAW_STATE_DIR override even when the real home config exists", async () => {
     await withSuiteHome(async (home) => {
       const liveConfigPath = path.join(home, ".openclaw", "openclaw.json");

@@ -6,6 +6,7 @@ import JSON5 from "json5";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import { loadDotEnv } from "../infra/dotenv.js";
+import { isTruthyEnvValue, logAcceptedEnvOption } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { replaceFileAtomic, replaceFileAtomicSync } from "../infra/replace-file.js";
@@ -262,6 +263,18 @@ async function tightenStateDirPermissionsIfNeeded(params: {
   fsModule: typeof fs;
 }): Promise<void> {
   if (process.platform === "win32") {
+    return;
+  }
+  // Opt-out for multi-uid shared-volume deployments (e.g. Fly Machines running
+  // a bridge + gateway sidecar pair under different uids that share the state
+  // dir via a group-writable setgid directory). chmod(configDir, 0o700) strips
+  // the group-x bit and locks out the sibling uid. Setting
+  // OPENCLAW_SKIP_STATE_DIR_HARDEN=1 leaves the caller's directory mode alone.
+  if (isTruthyEnvValue(params.env.OPENCLAW_SKIP_STATE_DIR_HARDEN)) {
+    logAcceptedEnvOption({
+      key: "OPENCLAW_SKIP_STATE_DIR_HARDEN",
+      description: "skipping state-dir chmod hardening for multi-uid shared-volume deployment",
+    });
     return;
   }
   const stateDir = resolveStateDir(params.env, params.homedir);
