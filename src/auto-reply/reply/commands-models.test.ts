@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -414,5 +414,84 @@ describe("handleModelsCommand", () => {
       shouldContinue: false,
       reply: { text: MODELS_ADD_DEPRECATED_TEXT },
     });
+  });
+});
+
+describe("buildModelsProviderData cache", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function buildCfg(): OpenClawConfig {
+    return {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+        },
+      },
+      commands: { text: true },
+    } as OpenClawConfig;
+  }
+
+  it("returns the cached result on a second call with the same cfg/agentId/options", async () => {
+    const cfg = buildCfg();
+    const first = await buildModelsProviderData(cfg, "main", { view: "default" });
+    const callsAfterFirst = modelCatalogMocks.loadModelCatalog.mock.calls.length;
+    const second = await buildModelsProviderData(cfg, "main", { view: "default" });
+
+    expect(modelCatalogMocks.loadModelCatalog).toHaveBeenCalledTimes(callsAfterFirst);
+    expect(second).toBe(first);
+  });
+
+  it("rebuilds when any cache-key field differs", async () => {
+    const cfg = buildCfg();
+    await buildModelsProviderData(cfg, "main", { view: "default" });
+    const callsAfterFirst = modelCatalogMocks.loadModelCatalog.mock.calls.length;
+
+    await buildModelsProviderData(cfg, "other", { view: "default" });
+    expect(
+      modelCatalogMocks.loadModelCatalog.mock.calls.length,
+    ).toBeGreaterThan(callsAfterFirst);
+
+    const callsAfterSecond = modelCatalogMocks.loadModelCatalog.mock.calls.length;
+    await buildModelsProviderData(cfg, "main", { view: "all" });
+    expect(
+      modelCatalogMocks.loadModelCatalog.mock.calls.length,
+    ).toBeGreaterThan(callsAfterSecond);
+  });
+
+  it("treats different cfg objects as separate cache entries", async () => {
+    const cfgA = buildCfg();
+    const cfgB = buildCfg();
+    await buildModelsProviderData(cfgA, "main", { view: "default" });
+    const callsAfterFirst = modelCatalogMocks.loadModelCatalog.mock.calls.length;
+
+    await buildModelsProviderData(cfgB, "main", { view: "default" });
+
+    expect(
+      modelCatalogMocks.loadModelCatalog.mock.calls.length,
+    ).toBeGreaterThan(callsAfterFirst);
+  });
+
+  it("expires cached entries after the 60s TTL", async () => {
+    const cfg = buildCfg();
+    await buildModelsProviderData(cfg, "main", { view: "default" });
+    const callsAfterFirst = modelCatalogMocks.loadModelCatalog.mock.calls.length;
+
+    // Within TTL: cache hit.
+    await vi.advanceTimersByTimeAsync(30_000);
+    await buildModelsProviderData(cfg, "main", { view: "default" });
+    expect(modelCatalogMocks.loadModelCatalog).toHaveBeenCalledTimes(callsAfterFirst);
+
+    // Past TTL: rebuild.
+    await vi.advanceTimersByTimeAsync(31_000);
+    await buildModelsProviderData(cfg, "main", { view: "default" });
+    expect(
+      modelCatalogMocks.loadModelCatalog.mock.calls.length,
+    ).toBeGreaterThan(callsAfterFirst);
   });
 });
