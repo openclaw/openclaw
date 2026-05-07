@@ -25,6 +25,7 @@
 import { promises as fs } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import {
+  OcEmitSentinelError,
   OcPathError,
   REDACTED_SENTINEL,
   emitJsonc,
@@ -233,7 +234,28 @@ export async function pathSetCommand(
   }
   const fsPath = resolveFsPath(ocPath, options);
   const ast = await loadAst(fsPath, ocPath.file);
-  const result: SetResult = setOcPath(ast, ocPath, value);
+  // `setOcPath` invokes the per-kind editor which calls back into
+  // emit during rebuildRaw; the redaction-sentinel guard fires there
+  // and throws `OcEmitSentinelError` for sentinel-bearing values.
+  // Catch the throw here so it goes through the structured CLI error
+  // path instead of escaping to commander's runCommandWithRuntime
+  // (which would print raw String(err) and bypass --json scrubbing).
+  let result: SetResult;
+  try {
+    result = setOcPath(ast, ocPath, value);
+  } catch (err) {
+    if (err instanceof OcEmitSentinelError) {
+      emitError(
+        runtime,
+        mode,
+        `set refused: ${err.message}`,
+        "OC_EMIT_SENTINEL",
+      );
+      runtime.exit(1);
+      return;
+    }
+    throw err;
+  }
   if (!result.ok) {
     const detail = "detail" in result ? result.detail : undefined;
     emit(
@@ -246,7 +268,30 @@ export async function pathSetCommand(
     runtime.exit(1);
     return;
   }
-  const newBytes = emitForKind(result.ast);
+  // `setOcPath` accepted the value into the AST, but the per-kind
+  // emit can still refuse to serialize it — most notably when the
+  // value contains the redaction sentinel (defense-in-depth: the
+  // substrate's emit guard fires there). The throw must NOT escape
+  // to commander's runCommandWithRuntime, which would print
+  // `String(err)` raw and bypass the CLI's JSON/human scrubbed-error
+  // boundary. Catch and route through `emitError` like every other
+  // refusal path.
+  let newBytes: string;
+  try {
+    newBytes = emitForKind(result.ast);
+  } catch (err) {
+    if (err instanceof OcEmitSentinelError) {
+      emitError(
+        runtime,
+        mode,
+        `emit refused: ${err.message}`,
+        "OC_EMIT_SENTINEL",
+      );
+      runtime.exit(1);
+      return;
+    }
+    throw err;
+  }
   // Edit-then-emit through render mode drops jsonc comments and yaml
   // formatting. Self-hosters running `openclaw path set` on a
   // commented file should see the warning explicitly.
@@ -437,10 +482,34 @@ export async function pathEmitCommand(
     runtime.exit(2);
     return;
   }
-  const fsPath = resolvePath(fileArg);
+  // Resolve the file slot through the same `--cwd`/`--file` rules the
+  // sibling subcommands use: `--file` (when set) is the absolute path
+  // override; otherwise resolve `fileArg` against `--cwd` (defaulting
+  // to `process.cwd()`). Without this, the flags are accepted by
+  // commander but ignored by the handler — exactly the bug-shape
+  // ClawSweeper flagged for the doc/option mismatch.
+  const fsPath =
+    options.file !== undefined
+      ? resolvePath(options.file)
+      : resolvePath(options.cwd ?? process.cwd(), fileArg);
   const fileName = fsPath.split(/[\\/]/).pop() ?? fileArg;
   const ast = await loadAst(fsPath, fileName);
-  const bytes = emitForKind(ast);
+  let bytes: string;
+  try {
+    bytes = emitForKind(ast);
+  } catch (err) {
+    if (err instanceof OcEmitSentinelError) {
+      emitError(
+        runtime,
+        mode,
+        `emit refused: ${err.message}`,
+        "OC_EMIT_SENTINEL",
+      );
+      runtime.exit(1);
+      return;
+    }
+    throw err;
+  }
   if (mode === "json") {
     runtime.writeStdout(JSON.stringify({ ok: true, kind: ast.kind, bytes }));
     return;

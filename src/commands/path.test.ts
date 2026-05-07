@@ -170,14 +170,21 @@ describe("openclaw path CLI", () => {
       const filePath = join(workspaceDir, "gateway.jsonc");
       writeFileSync(filePath, '{ "token": "x" }', "utf-8");
       const rt = createTestRuntime();
-      await expect(
-        pathSetCommand(
-          "oc://gateway.jsonc/token",
-          "__OPENCLAW_REDACTED__",
-          { cwd: workspaceDir, json: true },
-          rt,
-        ),
-      ).rejects.toThrow();
+      // The sentinel-bearing value is accepted into the AST by setOcPath,
+      // but `emitForKind` refuses to serialize it (defense-in-depth at
+      // the per-kind emit boundary). The CLI handler must catch that
+      // refusal and route it through the structured error boundary —
+      // a thrown error escaping commander would print raw `String(err)`
+      // and bypass our JSON/human scrubbing. Pin the structured shape:
+      // exit code 1, stable code OC_EMIT_SENTINEL, message scrubbed.
+      await pathSetCommand(
+        "oc://gateway.jsonc/token",
+        "__OPENCLAW_REDACTED__",
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
+      expect(rt.exitCode).toBe(1);
+      expect(stderrText(rt)).toContain("OC_EMIT_SENTINEL");
     });
 
     it("CLI-S04 missing args returns 2", async () => {
@@ -255,6 +262,23 @@ describe("openclaw path CLI", () => {
       const out = JSON.parse(stdoutText(rt));
       expect(out.kind).toBe("md");
       expect(out.bytes).toBe(before);
+    });
+
+    it("CLI-E03 emit --cwd resolves <file> against the supplied directory", async () => {
+      // Closes round-10 finding F2: emit advertises --cwd / --file in
+      // the docs but the handler resolved <file> against process.cwd()
+      // ignoring both. Pin the new wiring: a relative <file> resolves
+      // against --cwd, not against process.cwd().
+      const filePath = join(workspaceDir, "AGENTS.md");
+      writeFileSync(filePath, "## Tools\n- gh\n", "utf-8");
+      const rt = createTestRuntime();
+      // Pass a RELATIVE filename + explicit --cwd. If the handler
+      // ignored --cwd, loadAst would ENOENT against process.cwd().
+      await pathEmitCommand("AGENTS.md", { cwd: workspaceDir, json: true }, rt);
+      expect(rt.exitCode).toBe(0);
+      const out = JSON.parse(stdoutText(rt));
+      expect(out.kind).toBe("md");
+      expect(out.bytes).toBe("## Tools\n- gh\n");
     });
   });
 });

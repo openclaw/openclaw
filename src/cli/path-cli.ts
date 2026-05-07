@@ -99,6 +99,8 @@ export function registerPathCli(program: Command) {
     .command("emit")
     .description("Round-trip a file through parseXxx + emitXxx (byte-fidelity diagnostic)")
     .argument("<file>", "Path to a workspace file (md / jsonc / jsonl / yaml)")
+    .option("--cwd <dir>", "Resolve <file> against this directory (default: process.cwd())")
+    .option("--file <file>", "Override the file's resolved path (absolute access)")
     .option("--json", "Force JSON output")
     .option("--human", "Force human output")
     .action(async (fileArg: string, opts: RawPathOptions) => {
