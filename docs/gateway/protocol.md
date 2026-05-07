@@ -525,8 +525,9 @@ enumeration of `src/gateway/server-methods/*.ts`.
 - Operators may call `skills.install` (`operator.admin`) in two modes:
   - ClawHub mode: `{ source: "clawhub", slug, version?, force? }` installs a
     skill folder into the default agent workspace `skills/` directory.
-  - Gateway installer mode: `{ name, installId, dangerouslyForceUnsafeInstall?, timeoutMs? }`
+  - Gateway installer mode: `{ name, installId, timeoutMs? }`
     runs a declared `metadata.openclaw.install` action on the gateway host.
+    Plugin security scans are always enforced for remote gateway installs.
 - Operators may call `skills.update` (`operator.admin`) in two modes:
   - ClawHub mode updates one tracked slug or all tracked ClawHub installs in
     the default agent workspace.
