@@ -35,10 +35,6 @@ installer has its own `--verbose` flag, but that flag is not part of
 the beta tag is missing or older than the latest stable release. Use `--tag beta`
 if you want the raw npm beta dist-tag for a one-off package update.
 
-OpenClaw does not yet expose an LTS or monthly support update channel. We are
-working toward SemVer-compatible monthly support lines, but today the supported
-channels are still `stable`, `beta`, and `dev`.
-
 See [Development channels](/install/development-channels) for channel semantics.
 
 ## Switch between npm and git installs
