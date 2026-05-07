@@ -458,9 +458,14 @@
           },
           "additionalProperties": false
         },
-        "canvasHostUrl": {
-          "type": "string",
-          "minLength": 1
+        "pluginSurfaceUrls": {
+          "type": "object",
+          "patternProperties": {
+            "^.*$": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
         },
         "auth": {
           "type": "object",
@@ -2664,6 +2669,9 @@
         "includeUnknown": {
           "type": "boolean"
         },
+        "configuredAgentsOnly": {
+          "type": "boolean"
+        },
         "includeDerivedTitles": {
           "type": "boolean"
         },
@@ -2707,6 +2715,9 @@
           "minLength": 1
         },
         "fixMissing": {
+          "type": "boolean"
+        },
+        "fixDmScope": {
           "type": "boolean"
         }
       },
@@ -14702,6 +14713,19 @@
         },
         "toolCallId": {
           "type": "string"
+        },
+        "allowedDecisions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "allow-once",
+              "allow-always",
+              "deny"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 3
         },
         "agentId": {
           "type": "string"
