@@ -75,7 +75,7 @@ export type CodexThreadStartParams = JsonObject & {
   cwd?: string;
   model?: string;
   modelProvider?: string | null;
-  approvalPolicy?: string;
+  approvalPolicy?: string | JsonObject;
   approvalsReviewer?: string | null;
   sandbox?: CodexSandboxPolicy;
   serviceTier?: CodexServiceTier | null;
@@ -108,7 +108,7 @@ export type CodexTurnStartParams = JsonObject & {
   input?: CodexUserInput[];
   cwd?: string;
   model?: string;
-  approvalPolicy?: string;
+  approvalPolicy?: string | JsonObject;
   approvalsReviewer?: string | null;
   sandboxPolicy?: CodexSandboxPolicy;
   serviceTier?: CodexServiceTier | null;

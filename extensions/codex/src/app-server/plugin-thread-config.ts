@@ -62,8 +62,19 @@ export type BuildCodexPluginThreadConfigParams = {
   nowMs?: number;
 };
 
+const CURATED_PLUGIN_DESTRUCTIVE_TOOL_NAMES: Readonly<Record<string, readonly string[]>> = {
+  "google-calendar": [
+    "create_event",
+    "update_event",
+    "delete_event",
+    "calendar_create_event",
+    "calendar_update_event",
+    "calendar_delete_event",
+  ],
+};
+
 export function shouldBuildCodexPluginThreadConfig(pluginConfig?: unknown): boolean {
-  return resolveCodexPluginsPolicy(pluginConfig).enabled;
+  return resolveCodexPluginsPolicy(pluginConfig).configured;
 }
 
 export function buildCodexPluginThreadConfigInputFingerprint(params: {
@@ -88,7 +99,11 @@ export async function buildCodexPluginThreadConfig(
   });
   const policy = resolveCodexPluginsPolicy(params.pluginConfig);
   if (!policy.enabled) {
-    return emptyPluginThreadConfig({ enabled: false, inputFingerprint });
+    return emptyPluginThreadConfig({
+      enabled: false,
+      inputFingerprint,
+      configPatch: buildDisabledAppsConfigPatch(),
+    });
   }
 
   let inventory = await readCodexPluginInventory({
@@ -186,13 +201,18 @@ export async function buildCodexPluginThreadConfig(
         });
         continue;
       }
-      apps[app.id] = {
+      const appConfig: JsonObject = {
         enabled: true,
-        destructive_enabled: true,
+        destructive_enabled: record.policy.allowDestructiveActions,
         open_world_enabled: false,
         default_tools_enabled: true,
         default_tools_approval_mode: "prompt",
       };
+      const destructiveToolsConfig = buildDestructiveToolsConfig(record.policy);
+      if (destructiveToolsConfig) {
+        appConfig.tools = destructiveToolsConfig;
+      }
+      apps[app.id] = appConfig;
       policyApps[app.id] = {
         appId: app.id,
         configKey: record.identity.configKey,
@@ -220,6 +240,19 @@ export async function buildCodexPluginThreadConfig(
     inventory,
     diagnostics,
   };
+}
+
+function buildDestructiveToolsConfig(policy: ResolvedCodexPluginPolicy): JsonObject | undefined {
+  if (policy.allowDestructiveActions) {
+    return undefined;
+  }
+  const toolNames = CURATED_PLUGIN_DESTRUCTIVE_TOOL_NAMES[policy.pluginName];
+  if (!toolNames?.length) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    toolNames.map((toolName) => [toolName, { enabled: false } satisfies JsonObject]),
+  );
 }
 
 export function mergeCodexThreadConfigs(
@@ -260,6 +293,7 @@ export function isCodexPluginThreadBindingStale(params: {
 function emptyPluginThreadConfig(params: {
   enabled: boolean;
   inputFingerprint: string;
+  configPatch?: JsonObject;
 }): CodexPluginThreadConfig {
   const policyContext = buildPluginAppPolicyContext({}, {});
   return {
@@ -267,12 +301,25 @@ function emptyPluginThreadConfig(params: {
     fingerprint: fingerprintJson({
       version: 1,
       inputFingerprint: params.inputFingerprint,
-      configPatch: null,
+      configPatch: params.configPatch ?? null,
       policyContext,
     }),
     inputFingerprint: params.inputFingerprint,
+    ...(params.configPatch ? { configPatch: params.configPatch } : {}),
     policyContext,
     diagnostics: [],
+  };
+}
+
+function buildDisabledAppsConfigPatch(): JsonObject {
+  return {
+    apps: {
+      _default: {
+        enabled: false,
+        destructive_enabled: false,
+        open_world_enabled: false,
+      },
+    },
   };
 }
 

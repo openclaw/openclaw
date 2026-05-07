@@ -183,6 +183,7 @@ describe("Codex app-server config", () => {
 
     const policy = resolveCodexPluginsPolicy(config);
     expect(policy).toEqual({
+      configured: true,
       enabled: true,
       allowDestructiveActions: false,
       migratedPlugins: [

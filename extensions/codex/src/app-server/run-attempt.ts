@@ -68,6 +68,7 @@ import {
   readCodexPluginConfig,
   resolveCodexPluginsPolicy,
   resolveCodexAppServerRuntimeOptions,
+  withMcpElicitationsApprovalPolicy,
   type CodexAppServerRuntimeOptions,
   type CodexPluginConfig,
 } from "./config.js";
@@ -433,6 +434,7 @@ export async function runCodexAppServerAttempt(
   const attemptClientFactory = resolveCodexAppServerClientFactory();
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+  let pluginAppServer: CodexAppServerRuntimeOptions = appServer;
   const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
     configuredEvents: options.nativeHookRelay?.events,
     appServer,
@@ -686,12 +688,22 @@ export async function runCodexAppServerAttempt(
           appCacheKey: pluginAppCacheKey,
         })
       : undefined;
-    const enabledPluginConfigKeys = pluginThreadConfigEnabled
+    const resolvedPluginPolicy = pluginThreadConfigEnabled
       ? resolveCodexPluginsPolicy(pluginConfig)
-          .pluginPolicies.filter((plugin) => plugin.enabled)
+      : undefined;
+    const enabledPluginConfigKeys = resolvedPluginPolicy
+      ? resolvedPluginPolicy.pluginPolicies
+          .filter((plugin) => plugin.enabled)
           .map((plugin) => plugin.configKey)
           .toSorted()
       : undefined;
+    pluginAppServer =
+      resolvedPluginPolicy?.enabled === true
+        ? {
+            ...appServer,
+            approvalPolicy: withMcpElicitationsApprovalPolicy(appServer.approvalPolicy),
+          }
+        : appServer;
     ({ client, thread } = await withCodexStartupTimeout({
       timeoutMs: params.timeoutMs,
       timeoutFloorMs: options.startupTimeoutFloorMs,
@@ -718,7 +730,7 @@ export async function runCodexAppServerAttempt(
             params: runtimeParams,
             cwd: effectiveWorkspace,
             dynamicTools: toolBridge.specs,
-            appServer,
+            appServer: pluginAppServer,
             developerInstructions: promptBuild.developerInstructions,
             config: threadConfig,
             pluginThreadConfig: pluginThreadConfigEnabled
@@ -1240,7 +1252,7 @@ export async function runCodexAppServerAttempt(
         buildTurnStartParams(params, {
           threadId: thread.threadId,
           cwd: effectiveWorkspace,
-          appServer,
+          appServer: pluginAppServer,
           promptText: promptBuild.prompt,
         }),
         { timeoutMs: params.timeoutMs, signal: runAbortController.signal },

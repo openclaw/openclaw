@@ -2687,6 +2687,27 @@ describe("runCodexAppServerAttempt", () => {
         }),
       }),
     );
+    expect(request).toHaveBeenCalledWith(
+      "thread/start",
+      expect.objectContaining({
+        approvalPolicy: {
+          granular: expect.objectContaining({
+            mcp_elicitations: true,
+          }),
+        },
+      }),
+    );
+    expect(request).toHaveBeenCalledWith(
+      "turn/start",
+      expect.objectContaining({
+        approvalPolicy: {
+          granular: expect.objectContaining({
+            mcp_elicitations: true,
+          }),
+        },
+      }),
+      expect.anything(),
+    );
 
     await notify({
       method: "turn/completed",

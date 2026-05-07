@@ -7,6 +7,17 @@ const START_OPTIONS_KEY_SECRET = randomBytes(32);
 type CodexAppServerTransportMode = "stdio" | "websocket";
 type CodexAppServerPolicyMode = "yolo" | "guardian";
 export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
+export type CodexAppServerEffectiveApprovalPolicy =
+  | CodexAppServerApprovalPolicy
+  | {
+      granular: {
+        mcp_elicitations: boolean;
+        rules: boolean;
+        sandbox_approval: boolean;
+        request_permissions?: boolean;
+        skill_approval?: boolean;
+      };
+    };
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
 type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
@@ -63,6 +74,7 @@ export type ResolvedCodexPluginPolicy = CodexMigratedPluginIdentity & {
 };
 
 export type ResolvedCodexPluginsPolicy = {
+  configured: boolean;
   enabled: boolean;
   allowDestructiveActions: CodexPluginDestructivePolicy;
   migratedPlugins: CodexMigratedPluginIdentity[];
@@ -85,7 +97,7 @@ export type CodexAppServerRuntimeOptions = {
   start: CodexAppServerStartOptions;
   requestTimeoutMs: number;
   turnCompletionIdleTimeoutMs: number;
-  approvalPolicy: CodexAppServerApprovalPolicy;
+  approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
   serviceTier?: CodexServiceTier;
@@ -266,6 +278,7 @@ export function readCodexPluginConfig(value: unknown): CodexPluginConfig {
 
 export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodexPluginsPolicy {
   const config = readCodexPluginConfig(pluginConfig).codexPlugins;
+  const configured = config !== undefined;
   const enabled = config?.enabled === true;
   const allowDestructiveActions = config?.allow_destructive_actions ?? false;
   const migratedPlugins = Object.entries(config?.plugins ?? {})
@@ -291,6 +304,7 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
     };
   });
   return {
+    configured,
     enabled,
     allowDestructiveActions,
     migratedPlugins,
@@ -459,6 +473,35 @@ export function codexSandboxPolicyForTurn(
     networkAccess: false,
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false,
+  };
+}
+
+export function withMcpElicitationsApprovalPolicy(
+  policy: CodexAppServerEffectiveApprovalPolicy,
+): CodexAppServerEffectiveApprovalPolicy {
+  if (typeof policy !== "string") {
+    return {
+      granular: {
+        ...policy.granular,
+        mcp_elicitations: true,
+      },
+    };
+  }
+  if (policy === "never") {
+    return {
+      granular: {
+        mcp_elicitations: true,
+        rules: false,
+        sandbox_approval: false,
+      },
+    };
+  }
+  return {
+    granular: {
+      mcp_elicitations: true,
+      rules: true,
+      sandbox_approval: true,
+    },
   };
 }
 
