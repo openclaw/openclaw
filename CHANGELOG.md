@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 - Memory/providers: move the local llama.cpp runtime into its provider plugin, batch embeddings across files, persist the agent model catalog cache, and keep QMD JSON search one-shot while filtering stale REM recall previews. (#91324, #89138, #90457, #91837, #91851) Thanks @osolmaz, @mushuiyu886, @ai-hpc, and @TurboTheTurtle.
 - Channels/mobile: add the QQBot group mention toggle, improve iPad and iPhone control surfaces, and expose the active connection host in the TUI footer. (#91423, #91557, #89909) Thanks @cxyhhhhh, @Solvely-Colin, and @baskduf.
 - Performance: prewarm TUI runtime plugins, deduplicate plugin auto-enable fanout, trim dense text-delta snapshots, and reuse prepared startup model metadata. (#90782, #89978, #91580, #91531) Thanks @RomneyDa and @ai-hpc.
+- Gateway/HTTP: register the bash `exec` tool on the `/tools/invoke` HTTP surface so `gateway.tools.allow: ["exec"]` actually exposes it; default-deny is preserved and the new entry is owner-only and reuses the configured `tools.exec` host/node/security/ask/safeBins/safeBinProfiles bindings via the shared exec-config resolver. (#79106) Thanks @outofcoffee.
 
 ### Fixes
 

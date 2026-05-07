@@ -11,24 +11,15 @@ import {
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
-import { resolveExecCommandHighlighting } from "../config/exec-command-highlighting.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
-import {
-  type ExecAsk,
-  type ExecMode,
-  type ExecSecurity,
-  resolveExecPolicyForMode,
-} from "../infra/exec-approvals.js";
-import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
-import { resolveAgentConfig } from "./agent-scope.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import {
   type ToolOutcomeObserver,
@@ -67,6 +58,7 @@ import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import { execSchema, processSchema } from "./bash-tools.schemas.js";
 import { listChannelAgentTools } from "./channel-tools.js";
 import { shouldSuppressManagedWebSearchTool } from "./codex-native-web-search.js";
+import { applyExecPolicyLayer, resolveExecConfig } from "./exec-config-resolution.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import {
   filterLocalModelLeanTools,
@@ -323,72 +315,6 @@ function isApplyPatchAllowedForModel(params: {
     }
     return normalized === normalizedModelId || normalized === normalizedFull;
   });
-}
-
-type ExecPolicyLayer = {
-  mode?: ExecMode;
-  security?: ExecSecurity;
-  ask?: ExecAsk;
-};
-
-function hasLegacyExecPolicy(exec?: ExecPolicyLayer): boolean {
-  return exec?.security !== undefined || exec?.ask !== undefined;
-}
-
-function applyExecPolicyLayer(base: ExecPolicyLayer, layer?: ExecPolicyLayer): ExecPolicyLayer {
-  if (!layer) {
-    return base;
-  }
-  if (layer.mode) {
-    return {
-      mode: layer.mode,
-      ...resolveExecPolicyForMode(layer.mode),
-    };
-  }
-  if (hasLegacyExecPolicy(layer)) {
-    return {
-      security: layer.security ?? base.security,
-      ask: layer.ask ?? base.ask,
-    };
-  }
-  return base;
-}
-
-function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
-  const cfg = params.cfg;
-  const globalExec = cfg?.tools?.exec;
-  const agentExec =
-    cfg && params.agentId ? resolveAgentConfig(cfg, params.agentId)?.tools?.exec : undefined;
-  const layeredPolicy = applyExecPolicyLayer(applyExecPolicyLayer({}, globalExec), agentExec);
-  return {
-    host: agentExec?.host ?? globalExec?.host,
-    mode: layeredPolicy.mode,
-    security: layeredPolicy.security,
-    ask: layeredPolicy.ask,
-    node: agentExec?.node ?? globalExec?.node,
-    pathPrepend: agentExec?.pathPrepend ?? globalExec?.pathPrepend,
-    safeBins: agentExec?.safeBins ?? globalExec?.safeBins,
-    strictInlineEval: agentExec?.strictInlineEval ?? globalExec?.strictInlineEval,
-    commandHighlighting: resolveExecCommandHighlighting({
-      config: cfg,
-      agentId: params.agentId,
-    }),
-    safeBinTrustedDirs: agentExec?.safeBinTrustedDirs ?? globalExec?.safeBinTrustedDirs,
-    safeBinProfiles: resolveMergedSafeBinProfileFixtures({
-      global: globalExec,
-      local: agentExec,
-    }),
-    reviewer: agentExec?.reviewer ?? globalExec?.reviewer,
-    backgroundMs: agentExec?.backgroundMs ?? globalExec?.backgroundMs,
-    timeoutSec: agentExec?.timeoutSec ?? globalExec?.timeoutSec,
-    approvalRunningNoticeMs:
-      agentExec?.approvalRunningNoticeMs ?? globalExec?.approvalRunningNoticeMs,
-    cleanupMs: agentExec?.cleanupMs ?? globalExec?.cleanupMs,
-    notifyOnExit: agentExec?.notifyOnExit ?? globalExec?.notifyOnExit,
-    notifyOnExitEmptySuccess:
-      agentExec?.notifyOnExitEmptySuccess ?? globalExec?.notifyOnExitEmptySuccess,
-    applyPatch: agentExec?.applyPatch ?? globalExec?.applyPatch,
-  };
 }
 
 export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
