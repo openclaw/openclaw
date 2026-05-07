@@ -896,9 +896,9 @@ describe("gateway server chat", () => {
       expect(res.ok).toBe(true);
       const final = await finalPromise;
       const text = extractFirstTextBlock(final.payload?.message);
-      expect(text).toContain("free local Thomas mode");
       expect(text).toContain("What can you do for me?");
       expect(text).not.toContain("billing error");
+      expect(text).not.toMatch(/free local Thomas mode|cloud model|fallback|credits/i);
 
       const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
         sessionKey: "main",
@@ -906,8 +906,76 @@ describe("gateway server chat", () => {
       expect(historyRes.ok).toBe(true);
       const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
       expect(historyTexts).toEqual(
-        expect.arrayContaining([expect.stringContaining("free local Thomas mode")]),
+        expect.arrayContaining([expect.stringContaining("What can you do for me?")]),
       );
+    });
+  });
+
+  test("chat.send skips a failing cloud retry for deluxe Talk after a recent local Thomas fallback", async () => {
+    await withMainSessionStore(async () => {
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendFinalReply: (payload: { text: string }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.dispatcher.sendFinalReply({
+          text: "API provider returned a billing error - your API key has run out of credits.",
+        });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return {
+          queuedFinal: true,
+          counts: params.dispatcher.getQueuedCounts(),
+        };
+      });
+
+      const firstFinalPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === "idem-deluxe-first-fallback",
+        8000,
+      );
+      const firstRes = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "Can we talk?",
+        idempotencyKey: "idem-deluxe-first-fallback",
+        conversationEngine: "deluxe-thomas",
+      });
+      expect(firstRes.ok).toBe(true);
+      await firstFinalPromise;
+
+      dispatchInboundMessageMock.mockClear();
+      const secondFinalPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === "idem-deluxe-fast-fallback",
+        8000,
+      );
+      const secondRes = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "Hoe gaat het met je?",
+        idempotencyKey: "idem-deluxe-fast-fallback",
+        conversationEngine: "deluxe-thomas",
+      });
+
+      expect(secondRes.ok).toBe(true);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      const secondFinal = await secondFinalPromise;
+      const text = extractFirstTextBlock(secondFinal.payload?.message);
+      expect(text).toMatch(/goed|prima|hier|zin|vertel|Thomas/i);
+      expect(text).not.toMatch(/auth|billing|cloud|fallback|local|lokaal/i);
     });
   });
 
@@ -934,8 +1002,8 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       const final = await finalPromise;
       const text = extractFirstTextBlock(final.payload?.message);
-      expect(text).toContain("local Thomas mode");
       expect(text).toContain("Can we talk without cloud models?");
+      expect(text).not.toMatch(/local Thomas mode|free local Thomas mode|fallback/i);
 
       const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
         sessionKey: "main",
@@ -943,7 +1011,7 @@ describe("gateway server chat", () => {
       expect(historyRes.ok).toBe(true);
       const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
       expect(historyTexts).toEqual(
-        expect.arrayContaining([expect.stringContaining("local Thomas mode")]),
+        expect.arrayContaining([expect.stringContaining("Can we talk without cloud models?")]),
       );
     });
   });
@@ -971,7 +1039,8 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       const final = await finalPromise;
       const finalText = extractFirstTextBlock(final.payload?.message);
-      expect(finalText).toContain("local Thomas mode");
+      expect(finalText).toContain("Start a brand new local Talk session.");
+      expect(finalText).not.toMatch(/local Thomas mode|free local Thomas mode|fallback/i);
 
       const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
         sessionKey: "fresh-local-talk",
@@ -979,10 +1048,7 @@ describe("gateway server chat", () => {
       expect(historyRes.ok).toBe(true);
       const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
       expect(historyTexts).toEqual(
-        expect.arrayContaining([
-          expect.stringContaining("Start a brand new local Talk session."),
-          expect.stringContaining("local Thomas mode"),
-        ]),
+        expect.arrayContaining([expect.stringContaining("Start a brand new local Talk session.")]),
       );
     });
   });
@@ -1056,9 +1122,9 @@ describe("gateway server chat", () => {
       const error = await errorPromise;
       const text = extractFirstTextBlock(final.payload?.message);
       expect(error).toBeUndefined();
-      expect(text).toContain("free local Thomas mode");
       expect(text).toContain("Can we still talk?");
       expect(text).not.toContain("authentication token");
+      expect(text).not.toMatch(/free local Thomas mode|cloud model|fallback|credentials/i);
 
       const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
         sessionKey: "main",
@@ -1066,7 +1132,7 @@ describe("gateway server chat", () => {
       expect(historyRes.ok).toBe(true);
       const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
       expect(historyTexts).toEqual(
-        expect.arrayContaining([expect.stringContaining("free local Thomas mode")]),
+        expect.arrayContaining([expect.stringContaining("Can we still talk?")]),
       );
     });
   });
@@ -1107,9 +1173,9 @@ describe("gateway server chat", () => {
       const error = await errorPromise;
       const text = extractFirstTextBlock(final.payload?.message);
       expect(error).toBeUndefined();
-      expect(text).toContain("free local Thomas mode");
       expect(text).toContain("Can you talk with me?");
       expect(text).not.toContain("billing error");
+      expect(text).not.toMatch(/free local Thomas mode|cloud model|fallback|credits/i);
 
       const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
         sessionKey: "main",
@@ -1117,7 +1183,7 @@ describe("gateway server chat", () => {
       expect(historyRes.ok).toBe(true);
       const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
       expect(historyTexts).toEqual(
-        expect.arrayContaining([expect.stringContaining("free local Thomas mode")]),
+        expect.arrayContaining([expect.stringContaining("Can you talk with me?")]),
       );
     });
   });

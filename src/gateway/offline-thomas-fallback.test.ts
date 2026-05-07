@@ -46,10 +46,9 @@ describe("offline Thomas fallback", () => {
       reason: "billing",
     });
 
-    expect(reply).toContain("free local Thomas mode");
-    expect(reply).toContain("cloud model");
     expect(reply).toContain("What can you do for me?");
     expect(reply).toMatch(/talk|plan|draft|organize/i);
+    expect(reply).not.toMatch(/local|cloud|fallback|credits|credentials/i);
   });
 
   it("is honest when the user asks it to perform external work", () => {
@@ -60,7 +59,17 @@ describe("offline Thomas fallback", () => {
 
     expect(reply).toContain("can't browse");
     expect(reply).toContain("can't change files");
-    expect(reply).toContain("local");
+    expect(reply).toContain("Talk Mode");
+  });
+
+  it("keeps ordinary conversation out of outage/status language", () => {
+    const reply = buildOfflineThomasFallbackReply({
+      userMessage: "Hoe gaat het met je?",
+      reason: "auth",
+    });
+
+    expect(reply).toMatch(/goed|prima|hier|zin|vertel/i);
+    expect(reply).not.toMatch(/local|lokaal|cloud|fallback|auth|credential|cannot|can't|kan niet/i);
   });
 
   it("uses a local conversational model with recent history when available", async () => {
@@ -107,6 +116,63 @@ describe("offline Thomas fallback", () => {
     ]);
     expect(body.messages?.[1]?.content).toContain("My cat is Moos.");
     expect(body.messages?.[3]?.content).toBe("What should I do next?");
+    expect(body.messages?.[0]?.content).not.toMatch(
+      /running locally because|cloud model|Current local mode reason|local fallback/i,
+    );
+  });
+
+  it("does not replay prior fallback status chatter into the conversational model", async () => {
+    const calls: Array<{ body: unknown }> = [];
+    const fetchImpl = async (_url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      return new Response(JSON.stringify({ message: { content: "Ik ben er. Vertel." } }), {
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    await buildOfflineThomasConversationalFallbackReply({
+      userMessage: "Hoe gaat het met je?",
+      reason: "auth",
+      history: [
+        {
+          role: "assistant",
+          text: "Ik ben local gegaan vanwege auth issues en kan niet met tools communiceren.",
+        },
+        {
+          role: "assistant",
+          text: "Dat ik niet in de cloud ben heeft ook wat beperkingen, maar ik kan nog steeds praten.",
+        },
+        { role: "user", text: "Omdat AI" },
+      ],
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    const body = calls[0]?.body as { messages?: Array<{ role: string; content: string }> };
+    const historyText = body.messages?.map((message) => message.content).join("\n") ?? "";
+    expect(historyText).not.toMatch(
+      /local|auth issues|kan niet|cloud|beperkingen|tools communiceren/i,
+    );
+  });
+
+  it("rejects local model outage chatter for normal conversation", async () => {
+    const reply = await buildOfflineThomasConversationalFallbackReply({
+      userMessage: "Hoe gaat het met je?",
+      reason: "auth",
+      history: [{ role: "user", text: "Nou je bent lokaal." }],
+      fetchImpl: (async () =>
+        new Response(
+          JSON.stringify({
+            message: {
+              content:
+                "Ik ben best! Een beetje gestrest vanwege de auth issues, maar ik kan nog praten.",
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        )) as typeof fetch,
+    });
+
+    expect(reply).toMatch(/goed|prima|hier|zin|vertel/i);
+    expect(reply).not.toMatch(/auth issues|local|lokaal|cloud|fallback|kan niet/i);
   });
 
   it("falls back to the static local reply when the local model is disabled", async () => {
@@ -119,7 +185,7 @@ describe("offline Thomas fallback", () => {
       }) as typeof fetch,
     });
 
-    expect(reply).toContain("free local Thomas mode");
     expect(reply).toContain("Hey");
+    expect(reply).not.toMatch(/free local Thomas mode|cloud model|fallback|credits/i);
   });
 });

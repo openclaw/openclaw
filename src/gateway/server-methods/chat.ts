@@ -253,6 +253,7 @@ type ChatSendOriginatingRoute = {
 };
 
 const ACTIVE_CHAT_SEND_DEDUPE_PREFIX = "chat:active-send";
+const RECENT_TALK_OFFLINE_FALLBACK_SKIP_MS = 10 * 60 * 1_000;
 
 function resolveActiveChatSendRunId(value: unknown): string | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -260,6 +261,31 @@ function resolveActiveChatSendRunId(value: unknown): string | null {
   }
   const runId = (value as { runId?: unknown }).runId;
   return typeof runId === "string" && runId.trim() ? runId : null;
+}
+
+function isRecentOfflineThomasFallbackTranscriptMessage(message: unknown, nowMs: number): boolean {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  if (entry.role !== "assistant") {
+    return false;
+  }
+  if (entry.model !== "gateway-injected") {
+    return false;
+  }
+  const idempotencyKey =
+    typeof entry.idempotencyKey === "string"
+      ? entry.idempotencyKey
+      : typeof (entry.__openclaw as { idempotencyKey?: unknown } | undefined)?.idempotencyKey ===
+          "string"
+        ? ((entry.__openclaw as { idempotencyKey: string }).idempotencyKey as string)
+        : "";
+  if (!idempotencyKey.includes("offline-thomas-fallback")) {
+    return false;
+  }
+  const timestamp = typeof entry.timestamp === "number" ? entry.timestamp : 0;
+  return timestamp > 0 && nowMs - timestamp <= RECENT_TALK_OFFLINE_FALLBACK_SKIP_MS;
 }
 
 function buildActiveChatSendDedupeKey(params: {
@@ -2657,6 +2683,29 @@ export const chatHandlers: GatewayRequestHandlers = {
           context,
         });
       };
+      const hasRecentOfflineThomasFallback = async (): Promise<boolean> => {
+        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
+        const sessionId = latestEntry?.sessionId ?? backingSessionId;
+        if (!sessionId) {
+          return false;
+        }
+        try {
+          const messages = await readRecentSessionMessagesAsync(
+            sessionId,
+            latestStorePath,
+            latestEntry?.sessionFile ?? entry?.sessionFile,
+            { maxMessages: 12, maxBytes: 96 * 1024 },
+          );
+          return messages.some((message) =>
+            isRecentOfflineThomasFallbackTranscriptMessage(message, Date.now()),
+          );
+        } catch (error) {
+          context.logGateway.debug(
+            `offline thomas recent fallback probe unavailable: ${formatForLog(error)}`,
+          );
+          return false;
+        }
+      };
       const appendWebchatAgentMediaTranscriptIfNeeded = async (payload: ReplyPayload) => {
         if (!agentRunStarted || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
           return;
@@ -2823,7 +2872,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         });
         return true;
       };
-      if (p.conversationEngine === "local-thomas") {
+      const runOfflineThomasConversation = (reason: OfflineThomasFallbackReason) => {
         void (async () => {
           try {
             const ensured = await ensureLocalThomasSessionEntry();
@@ -2831,7 +2880,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               throw new Error(ensured.error);
             }
             await appendLocalThomasUserTranscript();
-            const applied = await appendAndBroadcastOfflineThomasFallbackIfNeeded("local");
+            const applied = await appendAndBroadcastOfflineThomasFallbackIfNeeded(reason);
             if (!applied) {
               throw new Error("local Thomas reply unavailable");
             }
@@ -2873,6 +2922,13 @@ export const chatHandlers: GatewayRequestHandlers = {
             context.removeChatRun(clientRunId, clientRunId, sessionKey);
           }
         })();
+      };
+      if (p.conversationEngine === "local-thomas") {
+        runOfflineThomasConversation("local");
+        return;
+      }
+      if (p.conversationEngine === "deluxe-thomas" && (await hasRecentOfflineThomasFallback())) {
+        runOfflineThomasConversation("unavailable");
         return;
       }
       const dispatcher = createReplyDispatcher({
@@ -3098,6 +3154,9 @@ export const chatHandlers: GatewayRequestHandlers = {
                       sessionFile: latestEntry?.sessionFile,
                       agentId,
                       createIfMissing: true,
+                      idempotencyKey: offlineFallback.applied
+                        ? `${clientRunId}:offline-thomas-fallback`
+                        : undefined,
                       cfg,
                     });
                     if (appended.ok) {

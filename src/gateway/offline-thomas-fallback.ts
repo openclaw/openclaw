@@ -18,10 +18,12 @@ type OfflineThomasFallbackTriggerParams = {
 const FALLBACK_NOTICE_MAX_USER_CHARS = 180;
 const DEFAULT_LOCAL_MODEL_BASE_URL = "http://127.0.0.1:11434";
 const DEFAULT_LOCAL_MODEL = "llama3.2:3b";
-const DEFAULT_LOCAL_MODEL_TIMEOUT_MS = 45_000;
+const DEFAULT_LOCAL_MODEL_TIMEOUT_MS = 6_000;
 const LOCAL_MODEL_HISTORY_MAX_MESSAGES = 8;
 const LOCAL_MODEL_HISTORY_MAX_CHARS = 6_000;
 const LOCAL_MODEL_REPLY_MAX_CHARS = 2_500;
+const INFRASTRUCTURE_STATUS_PATTERN =
+  /\b(local|lokaal|cloud|fallback|auth|credentials?|credits?|quota|billing|beperkingen|limitation|unavailable|niet beschikbaar|op locatie|locale modus)\b/iu;
 
 function normalizeForMatch(value: string): string {
   return value
@@ -137,21 +139,6 @@ export function shouldUseOfflineThomasFallback(
   return resolveOfflineThomasFallbackReason(params) !== undefined;
 }
 
-function reasonLine(reason: OfflineThomasFallbackReason): string {
-  switch (reason) {
-    case "billing":
-      return "I'm in free local Thomas mode because the cloud model account is out of credits.";
-    case "auth":
-      return "I'm in free local Thomas mode because the cloud model credentials are not working.";
-    case "rate_limit":
-      return "I'm in free local Thomas mode because the cloud model is rate-limited right now.";
-    case "unavailable":
-      return "I'm in free local Thomas mode because the cloud model is unavailable right now.";
-    case "local":
-      return "I'm in local Thomas mode.";
-  }
-}
-
 function asksForExternalWork(message: string): boolean {
   const lower = message.toLowerCase();
   return [
@@ -167,6 +154,14 @@ function asksForExternalWork(message: string): boolean {
     "send email",
     "calendar",
   ].some((needle) => lower.includes(needle));
+}
+
+function looksLikeFallbackStatusChatter(text: string): boolean {
+  const lower = normalizeForMatch(text);
+  if (!lower) {
+    return false;
+  }
+  return INFRASTRUCTURE_STATUS_PATTERN.test(lower);
 }
 
 function asksCapabilities(message: string): boolean {
@@ -199,50 +194,43 @@ export function buildOfflineThomasFallbackReply(params: {
   reason: OfflineThomasFallbackReason;
 }): string {
   const userPreview = previewUserMessage(params.userMessage);
-  const opener = reasonLine(params.reason);
   const subjectLine = userPreview ? `You said: "${userPreview}"` : "I'm here.";
 
   if (asksForExternalWork(params.userMessage)) {
     return [
-      `${opener} Small brain, big enthusiasm.`,
+      "I can't browse, can't call live tools, and can't change files from Talk Mode.",
       subjectLine,
-      "I can't browse, can't call cloud tools, and can't change files from this local fallback, but I can still help you think through the next move. Tell me the goal and the constraints, and I will turn it into a clean checklist, draft, or decision path.",
+      "But I can still help with the next step: plan it, draft it, structure the decision, or build the right checklist. Give me the goal and constraints, and I’ll make it concrete.",
     ].join("\n\n");
   }
 
   if (asksCapabilities(params.userMessage)) {
     return [
-      `${opener} Small brain, big enthusiasm.`,
       subjectLine,
-      "What I can still do right now: talk, plan, draft, organize messy thoughts, break problems into next steps, and keep you company with Thomas-flavored honesty. What I cannot do in this mode: use live tools, browse, inspect files, or make model-grade claims.",
-      "Give me a topic, a worry, or a half-formed idea and I will help shape it.",
+      "I can talk things through, plan, draft, organize messy thoughts, break problems into next steps, and keep you company with Thomas-flavored honesty.",
+      "Give me a topic, a worry, or a half-formed idea and I’ll help shape it into something useful.",
     ].join("\n\n");
   }
 
   if (asksGreeting(params.userMessage)) {
-    return [
-      `${opener} Small brain, big enthusiasm.`,
-      "Hey. Thomas is still here, just running on the emergency local batteries. We can talk, sketch plans, draft messages, or untangle whatever is in your head.",
-    ].join("\n\n");
+    return "Hey. Thomas is here. We can talk, sketch plans, draft messages, or untangle whatever is in your head.";
   }
 
   if (asksPlanning(params.userMessage)) {
     return [
-      `${opener} Small brain, big enthusiasm.`,
       subjectLine,
-      "My local take: first make the next step smaller, then make it visible, then do one pass without trying to perfect it.",
+      "My take: first make the next step smaller, then make it visible, then do one pass without trying to perfect it.",
       "A useful starting shape: 1. name the outcome, 2. list the blockers, 3. pick the smallest action that creates momentum.",
     ].join("\n\n");
   }
 
-  return [
-    `${opener} Small brain, big enthusiasm.`,
-    subjectLine,
-    params.reason === "local"
-      ? "I can have a real conversation here. I will be honest when I am guessing, keep things practical, and help you turn the thought into something usable."
-      : "I can still have a real conversation in this local fallback. I will be honest when I am guessing, keep things practical, and help you turn the thought into something usable.",
-    "Say what you want to unpack next.",
-  ].join("\n\n");
+  if (/hoe gaat het met je/i.test(params.userMessage)) {
+    return "Goed genoeg om mee te denken, scherp genoeg om niet te gaan zwammen. Vertel, wat speelt er?";
+  }
+
+  return [subjectLine, "Ik ben er. Vertel wat je wilt uitpakken, dan maak ik het praktisch."].join(
+    "\n\n",
+  );
 }
 
 function normalizeHistory(
@@ -258,6 +246,9 @@ function normalizeHistory(
     if (!text || remainingChars <= 0) {
       continue;
     }
+    if (item.role === "assistant" && looksLikeFallbackStatusChatter(text)) {
+      continue;
+    }
     const capped = text.length > remainingChars ? text.slice(0, remainingChars).trimEnd() : text;
     remainingChars -= capped.length;
     normalized.push({ role: item.role, text: capped });
@@ -265,17 +256,13 @@ function normalizeHistory(
   return normalized.reverse();
 }
 
-function localModelSystemPrompt(reason: OfflineThomasFallbackReason): string {
+function localModelSystemPrompt(): string {
   return [
-    "You are Thomas, OpenClaw's local conversation assistant.",
-    reason === "local"
-      ? "You are the primary no-key Talk Mode conversation engine."
-      : "You are running locally because the normal cloud model or realtime account is unavailable.",
-    `Current local mode reason: ${reason}.`,
+    "You are Thomas, OpenClaw's Talk Mode conversation assistant.",
     "Keep Thomas's personality: useful, personal, lightly funny, proactive, and honest.",
-    "Answer the user's actual message directly. Do not give a canned outage notice unless it matters.",
-    "You cannot browse, call cloud tools, inspect files, send messages, or change the project from this local mode.",
-    "If the user asks for external actions, be honest about that limit and still help them plan, draft, decide, or think.",
+    "Answer the user's actual message directly. Never give a canned outage notice.",
+    "Do not mention backend, account, or status details unless the user directly asks why a specific external action is unavailable.",
+    "If the user asks for external actions, say briefly that you cannot perform that live action from Talk Mode and still help them plan, draft, decide, or think.",
     "Match the user's language when practical. If they speak Dutch, answer in Dutch.",
     "Keep replies conversational and compact enough for spoken Talk Mode.",
   ].join("\n");
@@ -309,7 +296,7 @@ async function fetchLocalModelReply(params: {
   fetchImpl: typeof fetch;
 }): Promise<string | undefined> {
   const messages = [
-    { role: "system", content: localModelSystemPrompt(params.reason) },
+    { role: "system", content: localModelSystemPrompt() },
     ...normalizeHistory(params.history).map((message) => ({
       role: message.role,
       content: message.text,
@@ -345,7 +332,15 @@ async function fetchLocalModelReply(params: {
       message?: { content?: unknown };
       response?: unknown;
     };
-    return sanitizeLocalModelReply(data.message?.content ?? data.response);
+    const reply = sanitizeLocalModelReply(data.message?.content ?? data.response);
+    if (
+      reply &&
+      !asksForExternalWork(params.userMessage) &&
+      looksLikeFallbackStatusChatter(reply)
+    ) {
+      return undefined;
+    }
+    return reply;
   } catch {
     return undefined;
   } finally {
