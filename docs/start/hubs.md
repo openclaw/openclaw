@@ -73,7 +73,6 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Discord](/channels/discord)
 - [Mattermost](/channels/mattermost)
 - [Signal](/channels/signal)
-- [BlueBubbles (legacy iMessage bridge)](/channels/bluebubbles)
 - [QQ Bot](/channels/qqbot)
 - [iMessage](/channels/imessage)
 - [Location parsing](/channels/location)

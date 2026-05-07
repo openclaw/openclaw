@@ -7,17 +7,17 @@ title: "iMessage"
 ---
 
 <Note>
-For new OpenClaw iMessage deployments, start here when you can run `imsg` on a signed-in macOS Messages host. BlueBubbles remains available as a legacy fallback for existing setups that depend on its HTTP server, webhooks, or richer private-API actions.
+For OpenClaw iMessage deployments, use `imsg` on a signed-in macOS Messages host. If your Gateway runs on Linux or Windows, point `channels.imessage.cliPath` at an SSH wrapper that runs `imsg` on the Mac.
 </Note>
 
 Status: native external CLI integration. Gateway spawns `imsg rpc` and communicates over JSON-RPC on stdio (no separate daemon/port).
 
 <CardGroup cols={3}>
-  <Card title="BlueBubbles (legacy fallback)" icon="message-circle" href="/channels/bluebubbles">
-    Keep using it for existing BlueBubbles-backed routing; avoid it for new setups when imsg fits.
-  </Card>
   <Card title="Pairing" icon="link" href="/channels/pairing">
     iMessage DMs default to pairing mode.
+  </Card>
+  <Card title="Remote Mac" icon="terminal" href="#remote-mac-over-ssh">
+    Use an SSH wrapper when the Gateway is not running on the Messages Mac.
   </Card>
   <Card title="Configuration reference" icon="settings" href="/gateway/config-channels#imessage">
     Full iMessage field reference.
@@ -362,7 +362,23 @@ imsg rpc --help
 openclaw channels status --probe
 ```
 
-    If probe reports RPC unsupported, update `imsg`.
+    If probe reports RPC unsupported, update `imsg`. If the Gateway is not running on macOS, use the Remote Mac over SSH setup above instead of the default local `imsg` path.
+
+  </Accordion>
+
+  <Accordion title="Gateway is not running on macOS">
+    The default `cliPath: "imsg"` must run on the Mac signed into Messages. On Linux or Windows, set `channels.imessage.cliPath` to a wrapper script that SSHes to that Mac and runs `imsg "$@"`.
+
+```bash
+#!/usr/bin/env bash
+exec ssh -T messages-mac imsg "$@"
+```
+
+    Then run:
+
+```bash
+openclaw channels status --probe --channel imessage
+```
 
   </Accordion>
 
@@ -414,7 +430,6 @@ imsg send <handle> "test"
 - [Configuration reference - iMessage](/gateway/config-channels#imessage)
 - [Gateway configuration](/gateway/configuration)
 - [Pairing](/channels/pairing)
-- [BlueBubbles](/channels/bluebubbles)
 
 ## Related
 
