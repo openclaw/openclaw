@@ -9,6 +9,8 @@ import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
 let embeddedAgentBaseStreamFnCache = new WeakMap<object, StreamFn | undefined>();
 
+type EmbeddedAgentCurrentStreamFnOrigin = "embedded-session-default";
+
 export function resolveEmbeddedAgentBaseStreamFn(params: {
   session: { agent: { streamFn?: StreamFn } };
 }): StreamFn | undefined {
@@ -27,6 +29,7 @@ export function resetEmbeddedAgentBaseStreamFnCacheForTest(): void {
 
 export function describeEmbeddedAgentStreamStrategy(params: {
   currentStreamFn: StreamFn | undefined;
+  currentStreamFnOrigin?: EmbeddedAgentCurrentStreamFnOrigin;
   providerStreamFn?: StreamFn;
   shouldUseWebSocketTransport: boolean;
   wsApiKey?: string;
@@ -41,7 +44,7 @@ export function describeEmbeddedAgentStreamStrategy(params: {
   if (params.model.provider === "anthropic-vertex") {
     return "anthropic-vertex";
   }
-  if (params.currentStreamFn === undefined || params.currentStreamFn === streamSimple) {
+  if (isEmbeddedAgentDefaultStreamFn(params)) {
     return createBoundaryAwareStreamFnForModel(params.model)
       ? `boundary-aware:${params.model.api}`
       : "stream-simple";
@@ -63,6 +66,7 @@ export async function resolveEmbeddedAgentApiKey(params: {
 
 export function resolveEmbeddedAgentStreamFn(params: {
   currentStreamFn: StreamFn | undefined;
+  currentStreamFnOrigin?: EmbeddedAgentCurrentStreamFnOrigin;
   providerStreamFn?: StreamFn;
   shouldUseWebSocketTransport: boolean;
   wsApiKey?: string;
@@ -104,7 +108,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
     return createAnthropicVertexStreamFnForModel(params.model);
   }
 
-  if (params.currentStreamFn === undefined || params.currentStreamFn === streamSimple) {
+  if (isEmbeddedAgentDefaultStreamFn(params)) {
     const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
     if (boundaryAwareStreamFn) {
       // Boundary-aware transports read credentials from options.apiKey just
@@ -122,6 +126,19 @@ export function resolveEmbeddedAgentStreamFn(params: {
   }
 
   return currentStreamFn;
+}
+
+function isEmbeddedAgentDefaultStreamFn(params: {
+  currentStreamFn: StreamFn | undefined;
+  currentStreamFnOrigin?: EmbeddedAgentCurrentStreamFnOrigin;
+}): boolean {
+  // PI createAgentSession installs an auth-wrapped default stream, so the
+  // session-default path cannot rely on streamSimple identity alone.
+  return (
+    params.currentStreamFn === undefined ||
+    params.currentStreamFn === streamSimple ||
+    params.currentStreamFnOrigin === "embedded-session-default"
+  );
 }
 
 function wrapEmbeddedAgentStreamFn(

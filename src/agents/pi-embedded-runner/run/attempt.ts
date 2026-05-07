@@ -1912,6 +1912,7 @@ export async function runEmbeddedAttempt(
       }
       const streamStrategy = describeEmbeddedAgentStreamStrategy({
         currentStreamFn: defaultSessionStreamFn,
+        currentStreamFnOrigin: "embedded-session-default",
         providerStreamFn,
         shouldUseWebSocketTransport,
         wsApiKey,
@@ -1919,6 +1920,7 @@ export async function runEmbeddedAttempt(
       });
       activeSession.agent.streamFn = resolveEmbeddedAgentStreamFn({
         currentStreamFn: defaultSessionStreamFn,
+        currentStreamFnOrigin: "embedded-session-default",
         providerStreamFn,
         shouldUseWebSocketTransport,
         wsApiKey,

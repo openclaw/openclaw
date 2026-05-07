@@ -201,6 +201,7 @@ function prepareCompactionSessionAgent(params: {
 }) {
   params.session.agent.streamFn = resolveEmbeddedAgentStreamFn({
     currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session: params.session as never }),
+    currentStreamFnOrigin: "embedded-session-default",
     providerStreamFn: params.providerStreamFn as never,
     shouldUseWebSocketTransport: params.shouldUseWebSocketTransport,
     wsApiKey: params.wsApiKey,
