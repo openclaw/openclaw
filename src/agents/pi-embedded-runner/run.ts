@@ -514,6 +514,7 @@ export async function runEmbeddedPiAgent(
           // first generating PI models.json. This keeps one-shot model runs from
           // blocking on unrelated provider discovery.
           skipPiDiscovery: true,
+          workspaceDir: resolvedWorkspace,
         },
       );
       const modelResolution =
@@ -523,7 +524,9 @@ export async function runEmbeddedPiAgent(
               await ensureOpenClawModelsJson(params.config, agentDir, {
                 workspaceDir: resolvedWorkspace,
               });
-              return await resolveModelAsync(provider, modelId, agentDir, params.config);
+              return await resolveModelAsync(provider, modelId, agentDir, params.config, {
+                workspaceDir: resolvedWorkspace,
+              });
             })();
       const { model, error, authStorage, modelRegistry } = modelResolution;
       if (!model) {

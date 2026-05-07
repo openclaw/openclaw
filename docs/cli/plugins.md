@@ -359,7 +359,7 @@ openclaw plugins inspect <id> --json
 
 Inspect shows identity, load status, source, manifest capabilities, policy flags, diagnostics, install metadata, bundle capabilities, and any detected MCP or LSP server support without importing plugin runtime by default. Add `--runtime` to load the plugin module and include registered hooks, tools, commands, services, gateway methods, and HTTP routes. Runtime inspection reports missing plugin dependencies directly; installs and repairs stay in `openclaw plugins install`, `openclaw plugins update`, and `openclaw doctor --fix`.
 
-Plugin-owned CLI commands are installed as root `openclaw` command groups. After `inspect --runtime` shows a command under `cliCommands`, run it as `openclaw <command> ...`; for example a plugin that registers `demo-git` can be verified with `openclaw demo-git ping`.
+Plugin-owned CLI commands are usually installed as root `openclaw` command groups, but plugins may also register nested commands under a core parent such as `openclaw nodes`. After `inspect --runtime` shows a command under `cliCommands`, run it at the listed path; for example a plugin that registers `demo-git` can be verified with `openclaw demo-git ping`.
 
 Each plugin is classified by what it actually registers at runtime:
 
