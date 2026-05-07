@@ -265,14 +265,7 @@ async function resolveAutoAudioModelId(params: {
   providerRegistry: ProviderRegistry;
   explicitModel?: string;
 }): Promise<string | undefined> {
-  const explicit = normalizeOptionalString(params.explicitModel);
-  if (explicit) {
-    return explicit;
-  }
-  const configuredModel = resolveConfiguredAudioModelId(params);
-  if (configuredModel) {
-    return configuredModel;
-  }
+  // First check if provider has a default audio model configured
   const defaultModel = resolveDefaultMediaModelFromRegistry({
     providerId: params.providerId,
     capability: "audio",
@@ -280,6 +273,14 @@ async function resolveAutoAudioModelId(params: {
   });
   if (defaultModel) {
     return defaultModel;
+  }
+  const explicit = normalizeOptionalString(params.explicitModel);
+  if (explicit) {
+    return explicit;
+  }
+  const configuredModel = resolveConfiguredAudioModelId(params);
+  if (configuredModel) {
+    return configuredModel;
   }
   const { resolveDefaultMediaModel } = await import("./defaults.js");
   const bundledDefaultModel = resolveDefaultMediaModel({
@@ -305,14 +306,7 @@ async function resolveAutoVideoModelId(params: {
   providerRegistry: ProviderRegistry;
   explicitModel?: string;
 }): Promise<string | undefined> {
-  const explicit = normalizeOptionalString(params.explicitModel);
-  if (explicit) {
-    return explicit;
-  }
-  const configuredModel = resolveConfiguredVideoModelId(params);
-  if (configuredModel) {
-    return configuredModel;
-  }
+  // First check if provider has a default video model configured
   const defaultModel = resolveDefaultMediaModelFromRegistry({
     providerId: params.providerId,
     capability: "video",
@@ -320,6 +314,14 @@ async function resolveAutoVideoModelId(params: {
   });
   if (defaultModel) {
     return defaultModel;
+  }
+  const explicit = normalizeOptionalString(params.explicitModel);
+  if (explicit) {
+    return explicit;
+  }
+  const configuredModel = resolveConfiguredVideoModelId(params);
+  if (configuredModel) {
+    return configuredModel;
   }
   const { resolveDefaultMediaModel } = await import("./defaults.js");
   const bundledDefaultModel = resolveDefaultMediaModel({
