@@ -59,12 +59,6 @@ function formatLegacyIssuePreview(issues: Partial<Record<string, number>>): stri
       `- ${pluralize(issues.legacyPayloadProvider, "job")} still uses payload \`provider\` as a delivery alias`,
     );
   }
-  if (issues.invalidCronPayloadModel) {
-    const verb = issues.invalidCronPayloadModel === 1 ? "stores" : "store";
-    lines.push(
-      `- ${pluralize(issues.invalidCronPayloadModel, "job")} ${verb} an invalid cron payload model inheritance sentinel`,
-    );
-  }
   if (issues.legacyTopLevelPayloadFields) {
     lines.push(
       `- ${pluralize(issues.legacyTopLevelPayloadFields, "job")} still uses top-level payload fields`,

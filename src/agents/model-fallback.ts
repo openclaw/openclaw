@@ -17,7 +17,6 @@ import {
   FailoverError,
   coerceToFailoverError,
   describeFailoverError,
-  hasSessionWriteLockTimeout,
   isFailoverError,
   isTimeoutError,
 } from "./failover-error.js";
@@ -1134,9 +1133,6 @@ export async function runWithModelFallback<T>(params: {
           sessionId: params.sessionId,
           lane: params.lane,
         }) ?? err;
-      if (hasSessionWriteLockTimeout(normalized)) {
-        throw err;
-      }
 
       // LiveSessionModelSwitchError during fallback may point at a later
       // candidate that is already the active live-session selection.  Jump

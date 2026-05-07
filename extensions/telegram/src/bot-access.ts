@@ -4,11 +4,11 @@ import {
   mergeDmAllowFromSources,
   type AllowlistMatch,
 } from "openclaw/plugin-sdk/allow-from";
-import {
-  parseAccessGroupAllowFromEntry,
-  resolveAccessGroupAllowFromMatches,
-} from "openclaw/plugin-sdk/command-auth";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type {
+  DmPolicy,
+  TelegramDirectConfig,
+  TelegramGroupConfig,
+} from "openclaw/plugin-sdk/config-types";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
@@ -72,6 +72,17 @@ export const normalizeDmAllowFromWithStore = (params: {
   dmPolicy?: string;
 }): NormalizedAllowFrom => normalizeAllowFrom(mergeDmAllowFromSources(params));
 
+export function resolveTelegramEffectiveDmPolicy(params: {
+  isGroup: boolean;
+  groupConfig?: TelegramDirectConfig | TelegramGroupConfig;
+  dmPolicy?: DmPolicy;
+}): DmPolicy {
+  if (!params.isGroup && params.groupConfig && "dmPolicy" in params.groupConfig) {
+    return params.groupConfig.dmPolicy ?? params.dmPolicy ?? "pairing";
+  }
+  return params.dmPolicy ?? "pairing";
+}
+
 export const isSenderAllowed = (params: {
   allow: NormalizedAllowFrom;
   senderId?: string;
@@ -80,39 +91,6 @@ export const isSenderAllowed = (params: {
   const { allow, senderId } = params;
   return isSenderIdAllowed(allow, senderId, true);
 };
-
-export async function expandTelegramAllowFromWithAccessGroups(params: {
-  cfg?: OpenClawConfig;
-  allowFrom?: Array<string | number>;
-  accountId?: string;
-  senderId?: string;
-}): Promise<string[]> {
-  const allowFrom = (params.allowFrom ?? []).map(String);
-  if (!params.senderId) {
-    return allowFrom;
-  }
-  const matched = await resolveAccessGroupAllowFromMatches({
-    cfg: params.cfg,
-    allowFrom,
-    channel: "telegram",
-    accountId: params.accountId ?? "default",
-    senderId: params.senderId,
-    isSenderAllowed: (senderId, entries) =>
-      isSenderAllowed({
-        allow: normalizeAllowFrom(entries),
-        senderId,
-      }),
-  });
-  if (matched.length === 0) {
-    return allowFrom;
-  }
-  const matchedGroups = new Set(matched);
-  const expanded = allowFrom.filter((entry) => {
-    const groupName = parseAccessGroupAllowFromEntry(entry);
-    return groupName == null || !matchedGroups.has(`accessGroup:${groupName}`);
-  });
-  return Array.from(new Set([...expanded, params.senderId]));
-}
 
 export { firstDefined };
 

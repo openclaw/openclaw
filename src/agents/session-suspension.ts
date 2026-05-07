@@ -4,7 +4,6 @@ import { updateSessionStoreEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
-import { CommandLane } from "../process/lanes.js";
 import { resolveStoredSessionKeyForSessionId } from "./command/session.js";
 
 const log = createSubsystemLogger("session-suspension");
@@ -16,12 +15,12 @@ const laneResumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function resolveLaneResumeConcurrency(cfg: OpenClawConfig | undefined, laneId: string): number {
   switch (laneId) {
-    case CommandLane.Main:
+    case "main":
       return resolveAgentMaxConcurrent(cfg);
-    case CommandLane.Subagent:
+    case "subagent":
       return resolveSubagentMaxConcurrent(cfg);
-    case CommandLane.Cron:
-    case CommandLane.CronNested: {
+    case "cron":
+    case "cron-nested": {
       const raw = cfg?.cron?.maxConcurrentRuns;
       return typeof raw === "number" && Number.isFinite(raw) ? Math.max(1, Math.floor(raw)) : 1;
     }

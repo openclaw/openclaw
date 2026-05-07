@@ -235,7 +235,6 @@ current OpenClaw or a local checkout until a newer npm package is published.
 
 | Plugin          | Package                    | Docs                                       |
 | --------------- | -------------------------- | ------------------------------------------ |
-| BlueBubbles     | `@openclaw/bluebubbles`    | [BlueBubbles](/channels/bluebubbles)       |
 | Discord         | `@openclaw/discord`        | [Discord](/channels/discord)               |
 | Feishu          | `@openclaw/feishu`         | [Feishu](/channels/feishu)                 |
 | Matrix          | `@openclaw/matrix`         | [Matrix](/channels/matrix)                 |
@@ -593,10 +592,6 @@ without downloading, reinstalling, or rewriting config.
 When `openclaw update` runs on the beta channel, default-line npm and ClawHub
 plugin records try `@beta` first and fall back to default/latest when no plugin
 beta release exists. Exact versions and explicit tags stay pinned.
-
-OpenClaw does not yet expose LTS or monthly support plugin channels. Planned
-monthly support-line work will need plugin npm and ClawHub tags to follow the
-same support line as the core package instead of silently using `latest`.
 
 `--pin` is npm-only. It is not supported with `--marketplace`, because
 marketplace installs persist marketplace source metadata instead of an npm spec.

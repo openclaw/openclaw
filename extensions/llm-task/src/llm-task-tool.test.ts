@@ -1,14 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-
-vi.mock("typebox", () => ({
-  Type: {
-    Object: (schema: unknown) => schema,
-    String: (schema?: unknown) => schema,
-    Optional: (schema: unknown) => schema,
-    Unknown: (schema?: unknown) => schema,
-    Number: (schema?: unknown) => schema,
-  },
-}));
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("ajv", () => ({
   default: class MockAjv {
@@ -42,6 +32,12 @@ vi.mock("../api.js", async () => {
     ...actual,
     resolvePreferredOpenClawTmpDir: () => "/tmp",
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("ajv");
+  vi.doUnmock("../api.js");
+  vi.resetModules();
 });
 
 import { createLlmTaskTool } from "./llm-task-tool.js";
@@ -106,6 +102,16 @@ function mockEmbeddedRunJson(payload: unknown) {
   });
 }
 
+function resetRunnerMocks() {
+  runEmbeddedPiAgent.mockReset();
+  runEmbeddedPiAgent.mockImplementation(async () => ({
+    meta: { startedAt: Date.now() },
+    payloads: [{ text: "{}" }],
+  }));
+  resolveThinkingPolicy.mockClear();
+  normalizeThinkingLevel.mockClear();
+}
+
 async function executeEmbeddedRun(input: Record<string, unknown>) {
   const tool = createLlmTaskTool(fakeApi());
   await tool.execute("id", input);
@@ -113,7 +119,9 @@ async function executeEmbeddedRun(input: Record<string, unknown>) {
 }
 
 describe("llm-task tool (json-only)", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    resetRunnerMocks();
+  });
 
   it("returns parsed json", async () => {
     (runEmbeddedPiAgent as any).mockResolvedValueOnce({

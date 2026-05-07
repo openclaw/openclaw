@@ -6,7 +6,7 @@ import {
   buildPluginApi,
   registerSingleProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setAwsSharedIniFileLoaderForTest } from "./aws-credential-refresh.js";
 import { resetBedrockDiscoveryCacheForTest } from "./discovery.js";
 import amazonBedrockPlugin from "./index.js";
@@ -239,6 +239,13 @@ describe("amazon-bedrock provider plugin", () => {
   afterEach(() => {
     setBedrockAppProfileControlPlaneForTest(undefined);
     setAwsSharedIniFileLoaderForTest(undefined);
+    resetBedrockDiscoveryCacheForTest();
+    resetBedrockAppProfileCacheEligibilityForTest();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("@aws-sdk/client-bedrock");
+    vi.resetModules();
   });
 
   it("marks Claude 4.6 Bedrock models as adaptive by default", async () => {

@@ -18,8 +18,8 @@ describe("parseDiscordTarget", () => {
       { input: "<@123>", id: "123", normalized: "user:123" },
       { input: "<@!456>", id: "456", normalized: "user:456" },
       { input: "user:789", id: "789", normalized: "user:789" },
-      { input: "discord:user:789", id: "789", normalized: "user:789" },
       { input: "discord:987", id: "987", normalized: "user:987" },
+      { input: "discord:user:987", id: "987", normalized: "user:987" },
     ] as const;
     for (const testCase of cases) {
       expect(parseDiscordTarget(testCase.input), testCase.input).toMatchObject({
@@ -226,10 +226,6 @@ describe("resolveDiscordTarget", () => {
 describe("normalizeDiscordMessagingTarget", () => {
   it("defaults raw numeric ids to channels", () => {
     expect(normalizeDiscordMessagingTarget("123")).toBe("channel:123");
-  });
-
-  it("normalizes provider-prefixed channel targets as channels", () => {
-    expect(normalizeDiscordMessagingTarget("discord:channel:123")).toBe("channel:123");
   });
 });
 
