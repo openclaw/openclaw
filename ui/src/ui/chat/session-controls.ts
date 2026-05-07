@@ -155,7 +155,11 @@ function renderChatModelSelect(state: AppViewState) {
   const busy =
     state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
   const disabled =
-    !state.connected || busy || (state.chatModelsLoading && options.length === 0) || !state.client;
+    !state.connected ||
+    busy ||
+    Boolean(state.chatModelSwitchPromises?.[state.sessionKey]) ||
+    (state.chatModelsLoading && options.length === 0) ||
+    !state.client;
   const selectedLabel =
     currentOverride === ""
       ? defaultLabel
@@ -326,13 +330,13 @@ export function renderChatThinkingSelect(state: AppViewState) {
   `;
 }
 
-async function switchChatModel(state: AppViewState, nextModel: string) {
+async function switchChatModel(state: AppViewState, nextModel: string): Promise<boolean> {
   if (!state.client || !state.connected) {
-    return;
+    return false;
   }
   const currentOverride = resolveChatModelOverrideValue(state);
   if (currentOverride === nextModel) {
-    return;
+    return true;
   }
   const targetSessionKey = state.sessionKey;
   const prevOverride = state.chatModelOverrides[targetSessionKey];
@@ -342,18 +346,38 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
     ...state.chatModelOverrides,
     [targetSessionKey]: createChatModelOverride(nextModel),
   };
-  try {
-    await state.client.request("sessions.patch", {
-      key: targetSessionKey,
-      model: nextModel || null,
-    });
-    void refreshVisibleToolsEffectiveForCurrentSessionLazy(state);
-    await refreshSessionOptions(state);
-  } catch (err) {
-    // Roll back so the picker reflects the actual server model.
-    state.chatModelOverrides = { ...state.chatModelOverrides, [targetSessionKey]: prevOverride };
-    state.lastError = `Failed to set model: ${String(err)}`;
-  }
+  const client = state.client;
+  let switchPromise: Promise<boolean>;
+  const clearPendingSwitch = () => {
+    if (state.chatModelSwitchPromises?.[targetSessionKey] === switchPromise) {
+      const nextSwitches = { ...(state.chatModelSwitchPromises ?? {}) };
+      delete nextSwitches[targetSessionKey];
+      state.chatModelSwitchPromises = nextSwitches;
+    }
+  };
+  switchPromise = (async () => {
+    try {
+      await client.request("sessions.patch", {
+        key: targetSessionKey,
+        model: nextModel || null,
+      });
+      void refreshVisibleToolsEffectiveForCurrentSessionLazy(state);
+      await refreshSessionOptions(state);
+      return true;
+    } catch (err) {
+      // Roll back so the picker reflects the actual server model.
+      state.chatModelOverrides = { ...state.chatModelOverrides, [targetSessionKey]: prevOverride };
+      state.lastError = `Failed to set model: ${String(err)}`;
+      return false;
+    } finally {
+      clearPendingSwitch();
+    }
+  })();
+  state.chatModelSwitchPromises = {
+    ...(state.chatModelSwitchPromises ?? {}),
+    [targetSessionKey]: switchPromise,
+  };
+  return switchPromise;
 }
 
 function patchSessionThinkingLevel(

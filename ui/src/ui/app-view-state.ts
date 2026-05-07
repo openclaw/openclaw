@@ -106,6 +106,7 @@ export type AppViewState = {
   chatAvatarReason?: string | null;
   chatThinkingLevel: string | null;
   chatModelOverrides: Record<string, ChatModelOverride | null>;
+  chatModelSwitchPromises: Record<string, Promise<boolean>>;
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
   sessionSwitchNotice: { id: number; text: string } | null;
