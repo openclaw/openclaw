@@ -262,23 +262,21 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
-  const [dmAllow, expandedGroupAllowFrom] = await Promise.all([
-    resolveTelegramDmAllow({
-      cfg: freshCfg,
-      groupAllowOverride,
-      allowFrom,
-      accountId: account.accountId,
-      senderId,
-      storeAllowFrom,
-      dmPolicy: effectiveDmPolicy,
-    }),
-    expandTelegramAllowFromWithAccessGroups({
-      cfg: freshCfg,
-      allowFrom: groupAllowOverride ?? groupAllowFrom,
-      accountId: account.accountId,
-      senderId,
-    }),
-  ]);
+  const dmAllow = await resolveTelegramDmAllow({
+    cfg: freshCfg,
+    groupAllowOverride,
+    allowFrom,
+    accountId: account.accountId,
+    senderId,
+    storeAllowFrom,
+    dmPolicy: effectiveDmPolicy,
+  });
+  const expandedGroupAllowFrom = await expandTelegramAllowFromWithAccessGroups({
+    cfg: freshCfg,
+    allowFrom: groupAllowOverride ?? groupAllowFrom,
+    accountId: account.accountId,
+    senderId,
+  });
   const effectiveGroupAllow = normalizeAllowFrom(expandedGroupAllowFrom);
   const hasGroupAllowOverride = groupAllowOverride !== undefined;
   const senderUsername = msg.from?.username ?? "";
