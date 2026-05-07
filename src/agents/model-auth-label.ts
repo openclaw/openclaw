@@ -90,6 +90,13 @@ export function resolveModelAuthLabel(params: {
     return "oauth (claude-cli)";
   }
 
+  if (
+    providerKey === "claude-cli" &&
+    readClaudeCliCredentialsCached({ ttlMs: 5_000, allowKeychainPrompt: false })
+  ) {
+    return "oauth (claude-cli)";
+  }
+
   const customKey = resolveUsableCustomProviderApiKey({
     cfg: params.cfg,
     provider: providerKey,

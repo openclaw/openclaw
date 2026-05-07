@@ -47,6 +47,8 @@ describe("resolveModelAuthLabel", () => {
     mocks.readClaudeCliCredentialsCached.mockReturnValue(null);
     mocks.readCodexCliCredentialsCached.mockReset();
     mocks.readCodexCliCredentialsCached.mockReturnValue(null);
+    mocks.readClaudeCliCredentialsCached.mockReset();
+    mocks.readClaudeCliCredentialsCached.mockReturnValue(null);
   });
 
   it("does not include token value in label for token profiles", () => {
