@@ -5,26 +5,32 @@ import { appendFileSync } from "node:fs";
 export const RUNNER_LABELS = {
   runner_4vcpu_ubuntu: {
     fallback: "ubuntu-24.04",
+    family: "ubuntu-2404",
     primary: "blacksmith-4vcpu-ubuntu-2404",
   },
   runner_8vcpu_ubuntu: {
     fallback: "ubuntu-24.04",
+    family: "ubuntu-2404",
     primary: "blacksmith-8vcpu-ubuntu-2404",
   },
   runner_16vcpu_ubuntu: {
     fallback: "ubuntu-24.04",
+    family: "ubuntu-2404",
     primary: "blacksmith-16vcpu-ubuntu-2404",
   },
   runner_16vcpu_windows: {
     fallback: "windows-2025",
+    family: "windows-2025",
     primary: "blacksmith-16vcpu-windows-2025",
   },
   runner_6vcpu_macos: {
     fallback: "macos-latest",
+    family: "macos-latest",
     primary: "blacksmith-6vcpu-macos-latest",
   },
   runner_12vcpu_macos: {
     fallback: "macos-latest",
+    family: "macos-latest",
     primary: "blacksmith-12vcpu-macos-latest",
   },
 };
@@ -60,10 +66,19 @@ export function selectRunnerLabels({
   queueThreshold = DEFAULT_QUEUE_THRESHOLD,
 } = {}) {
   const selected = {};
+  const queuedCountsByFamily = {};
+  for (const [label, count] of Object.entries(queuedCountsByLabel)) {
+    const family = Object.values(RUNNER_LABELS).find((runner) => runner.primary === label)?.family;
+    if (family) {
+      queuedCountsByFamily[family] = (queuedCountsByFamily[family] ?? 0) + count;
+    }
+  }
   for (const [outputName, label] of Object.entries(RUNNER_LABELS)) {
     const queuedCount = queuedCountsByLabel[label.primary] ?? 0;
+    const familyQueuedCount = queuedCountsByFamily[label.family] ?? 0;
     selected[outputName] =
-      !canonicalRepository || (fallbackEnabled && queuedCount >= queueThreshold)
+      !canonicalRepository ||
+      (fallbackEnabled && (queuedCount >= queueThreshold || familyQueuedCount >= queueThreshold))
         ? label.fallback
         : label.primary;
   }

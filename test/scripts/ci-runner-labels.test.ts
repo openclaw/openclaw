@@ -10,7 +10,7 @@ describe("scripts/ci-runner-labels.mjs", () => {
     });
   });
 
-  it("falls back only for backed-up Blacksmith labels", () => {
+  it("falls back within backed-up Blacksmith runner families", () => {
     expect(
       selectRunnerLabels({
         queuedCountsByLabel: {
@@ -21,7 +21,9 @@ describe("scripts/ci-runner-labels.mjs", () => {
       }),
     ).toMatchObject({
       runner_4vcpu_ubuntu: "ubuntu-24.04",
-      runner_8vcpu_ubuntu: "blacksmith-8vcpu-ubuntu-2404",
+      runner_8vcpu_ubuntu: "ubuntu-24.04",
+      runner_16vcpu_ubuntu: "ubuntu-24.04",
+      runner_16vcpu_windows: "blacksmith-16vcpu-windows-2025",
     });
   });
 
