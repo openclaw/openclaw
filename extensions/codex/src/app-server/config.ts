@@ -15,7 +15,6 @@ export type CodexDynamicToolsLoading = "searchable" | "direct";
 export type CodexPluginDestructivePolicy = boolean;
 
 export const CODEX_PLUGINS_MARKETPLACE_NAME = "openai-curated";
-export const CODEX_PLUGINS_UNSUPPORTED_WILDCARD_KEY = "*";
 
 export type CodexComputerUseConfig = {
   enabled?: boolean;
@@ -199,18 +198,7 @@ const codexPluginsConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
     allow_destructive_actions: z.boolean().optional(),
-    plugins: z
-      .record(z.string(), codexPluginEntryConfigSchema)
-      .superRefine((plugins, ctx) => {
-        if (Object.hasOwn(plugins, CODEX_PLUGINS_UNSUPPORTED_WILDCARD_KEY)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: [CODEX_PLUGINS_UNSUPPORTED_WILDCARD_KEY],
-            message: 'plugins["*"] is not supported; use codexPlugins.enabled',
-          });
-        }
-      })
-      .optional(),
+    plugins: z.record(z.string(), codexPluginEntryConfigSchema).optional(),
   })
   .strict();
 
@@ -282,11 +270,7 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
   const allowDestructiveActions = config?.allow_destructive_actions ?? false;
   const migratedPlugins = Object.entries(config?.plugins ?? {})
     .flatMap(([configKey, entry]): CodexMigratedPluginIdentity[] => {
-      if (
-        configKey === CODEX_PLUGINS_UNSUPPORTED_WILDCARD_KEY ||
-        entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME ||
-        !entry.pluginName
-      ) {
+      if (entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME || !entry.pluginName) {
         return [];
       }
       return [

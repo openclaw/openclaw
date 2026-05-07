@@ -90,9 +90,7 @@ type CodexAppServerRequestResultMap = {
   "feedback/upload": v2.FeedbackUploadResponse;
   "app/list": v2.AppsListResponse;
   "config/mcpServer/reload": v2.McpServerRefreshResponse;
-  "experimentalFeature/enablement/set": v2.ExperimentalFeatureEnablementSetResponse;
   "hooks/list": v2.HooksListResponse;
-  "marketplace/add": v2.MarketplaceAddResponse;
   "mcpServerStatus/list": v2.ListMcpServerStatusResponse;
   "model/list": v2.ModelListResponse;
   "plugin/install": v2.PluginInstallResponse;

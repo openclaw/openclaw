@@ -212,29 +212,6 @@ describe("Codex app-server config", () => {
     });
   });
 
-  it("fails native plugin policy closed without discarding sibling codex config", () => {
-    const config = readCodexPluginConfig({
-      appServer: { mode: "guardian" },
-      computerUse: { enabled: true },
-      codexPlugins: {
-        enabled: true,
-        plugins: {
-          "*": { enabled: true },
-        },
-      },
-    });
-
-    expect(config.appServer?.mode).toBe("guardian");
-    expect(config.computerUse?.enabled).toBe(true);
-    expect(config.codexPlugins).toBeUndefined();
-    expect(resolveCodexPluginsPolicy(config)).toEqual({
-      enabled: false,
-      allowDestructiveActions: false,
-      migratedPlugins: [],
-      pluginPolicies: [],
-    });
-  });
-
   it("rejects non-curated native plugin identities", () => {
     const config = readCodexPluginConfig({
       codexPlugins: {
