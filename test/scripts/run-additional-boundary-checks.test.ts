@@ -30,14 +30,6 @@ describe("run-additional-boundary-checks", () => {
     });
   });
 
-  it("runs managed proxy runtime mutation guard in CI", () => {
-    expect(BOUNDARY_CHECKS).toContainEqual({
-      label: "lint:tmp:managed-proxy-runtime-mutation",
-      command: "pnpm",
-      args: ["run", "lint:tmp:managed-proxy-runtime-mutation"],
-    });
-  });
-
   it("runs raw socket classification guard in CI", () => {
     expect(BOUNDARY_CHECKS).toContainEqual({
       label: "lint:tmp:raw-socket-classification",

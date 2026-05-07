@@ -6,19 +6,6 @@ import {
   resolveSourceRoots,
 } from "./ts-guard-utils.mjs";
 
-function normalizeViolation(rawViolation, relPath) {
-  if (typeof rawViolation === "number") {
-    return {
-      line: rawViolation,
-      callsite: `${relPath}:${rawViolation}`,
-    };
-  }
-  return {
-    ...rawViolation,
-    callsite: rawViolation.callsite ?? `${relPath}:${rawViolation.line}`,
-  };
-}
-
 export async function runCallsiteGuard(params) {
   const repoRoot = resolveRepoRoot(params.importMetaUrl);
   const sourceRoots = resolveSourceRoots(repoRoot, params.sourceRoots);
@@ -33,30 +20,12 @@ export async function runCallsiteGuard(params) {
       continue;
     }
     const content = await fs.readFile(filePath, "utf8");
-    const rawViolations = params.findCallViolations
-      ? params.findCallViolations(content, filePath)
-      : params.findCallLines(content, filePath);
-    for (const rawViolation of rawViolations) {
-      const violation = normalizeViolation(rawViolation, relPath);
-      if (
-        params.allowViolation?.({
-          ...violation,
-          relativePath: relPath,
-          filePath,
-        }) ??
-        params.allowCallsite?.(violation.callsite, violation)
-      ) {
+    for (const line of params.findCallLines(content, filePath)) {
+      const callsite = `${relPath}:${line}`;
+      if (params.allowCallsite?.(callsite)) {
         continue;
       }
-      violations.push(
-        params.formatViolation
-          ? params.formatViolation({
-              ...violation,
-              relativePath: relPath,
-              filePath,
-            })
-          : violation.callsite,
-      );
+      violations.push(callsite);
     }
   }
 
