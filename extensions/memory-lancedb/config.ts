@@ -16,6 +16,7 @@ export type MemoryConfig = {
   autoRecall?: boolean;
   captureMaxChars?: number;
   customTriggers?: string[];
+  captureMinChars?: number;
   recallMaxChars?: number;
   storageOptions?: Record<string, string>;
 };
@@ -25,6 +26,7 @@ export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
 const DEFAULT_MODEL = "text-embedding-3-small";
 export const DEFAULT_CAPTURE_MAX_CHARS = 500;
+export const DEFAULT_CAPTURE_MIN_CHARS = 4;
 export const DEFAULT_RECALL_MAX_CHARS = 1000;
 const LEGACY_STATE_DIRS: string[] = [];
 
@@ -111,6 +113,7 @@ export const memoryConfigSchema = {
         "autoRecall",
         "captureMaxChars",
         "customTriggers",
+        "captureMinChars",
         "recallMaxChars",
         "storageOptions",
       ],
@@ -134,6 +137,8 @@ export const memoryConfigSchema = {
 
     const captureMaxChars =
       typeof cfg.captureMaxChars === "number" ? Math.floor(cfg.captureMaxChars) : undefined;
+    const captureMinChars =
+      typeof cfg.captureMinChars === "number" ? Math.floor(cfg.captureMinChars) : undefined;
     const recallMaxChars =
       typeof cfg.recallMaxChars === "number" ? Math.floor(cfg.recallMaxChars) : undefined;
     if (
@@ -141,6 +146,18 @@ export const memoryConfigSchema = {
       (captureMaxChars < 100 || captureMaxChars > 10_000)
     ) {
       throw new Error("captureMaxChars must be between 100 and 10000");
+    }
+
+    if (typeof captureMinChars === "number" && (captureMinChars < 1 || captureMinChars > 10_000)) {
+      throw new Error("captureMinChars must be between 1 and 10000");
+    }
+
+    if (
+      typeof captureMinChars === "number" &&
+      typeof captureMaxChars === "number" &&
+      captureMinChars > captureMaxChars
+    ) {
+      throw new Error("captureMinChars cannot be greater than captureMaxChars");
     }
     if (typeof recallMaxChars === "number" && (recallMaxChars < 100 || recallMaxChars > 10_000)) {
       throw new Error("recallMaxChars must be between 100 and 10000");
@@ -209,6 +226,7 @@ export const memoryConfigSchema = {
       autoRecall: cfg.autoRecall !== false,
       captureMaxChars: captureMaxChars ?? DEFAULT_CAPTURE_MAX_CHARS,
       ...(customTriggers ? { customTriggers } : {}),
+      captureMinChars: captureMinChars ?? DEFAULT_CAPTURE_MIN_CHARS,
       recallMaxChars: recallMaxChars ?? DEFAULT_RECALL_MAX_CHARS,
       ...(storageOptions ? { storageOptions } : {}),
     };
@@ -263,9 +281,15 @@ export const memoryConfigSchema = {
       placeholder: String(DEFAULT_CAPTURE_MAX_CHARS),
     },
     customTriggers: {
-      label: "Custom Triggers",
-      help: "Literal phrases that should make auto-capture consider a message memory-worthy",
+        label: "Custom Triggers",
+        help: "Literal phrases that should make auto-capture consider a message memory-worthy",
+        advanced: true,
+    },
+    captureMinChars: {
+      label: "Capture Min Chars",
+      help: "Minimum message length eligible for auto-capture",
       advanced: true,
+      placeholder: String(DEFAULT_CAPTURE_MIN_CHARS),
     },
     recallMaxChars: {
       label: "Recall Query Max Chars",
