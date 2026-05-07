@@ -117,6 +117,22 @@ const LEGACY_PLUGIN_INSTALL_RUNTIME_COMPAT_ALIASES = [
   aliasFileName: PLUGIN_INSTALL_RUNTIME_ALIAS.aliasFileName,
   sourceIncludes: LEGACY_PLUGIN_INSTALL_RUNTIME_MARKERS,
 }));
+const LEGACY_ROOT_CHUNK_COMPAT_ALIASES = [
+  // v2026.5.6 package swaps can leave already-loaded tool chunks resolving
+  // sibling chunks by their old hashed filenames until the gateway restarts.
+  {
+    legacyFileName: "bash-tools-GSoqmeZd.js",
+    sourceIncludes: ["export { createExecTool, createProcessTool, describeExecTool"],
+  },
+  {
+    legacyFileName: "manager-DzRWrKSA.js",
+    sourceIncludes: ["export { AcpSessionManager, __testing, getAcpSessionManager"],
+  },
+  {
+    legacyFileName: "runtime-CeGN4XUC.js",
+    sourceIncludes: ["export { isWebFetchProviderConfigured, listConfiguredWebFetchProviders"],
+  },
+];
 const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
   {
     dest: "dist/memory-state-CcqRgDZU.js",
@@ -305,6 +321,38 @@ function resolveRootRuntimeCandidateByMarkers(params) {
   return candidates.length === 1 ? candidates[0] : null;
 }
 
+function resolveRootChunkCandidateByMarkers(params) {
+  if (!params.sourceIncludes?.length) {
+    return null;
+  }
+  let entries = [];
+  try {
+    entries = params.fsImpl.readdirSync(params.distDir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const candidates = [];
+  for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
+    if (!entry.isFile() || !entry.name.endsWith(".js")) {
+      continue;
+    }
+    if (entry.name === params.legacyFileName) {
+      continue;
+    }
+    const candidatePath = path.join(params.distDir, entry.name);
+    let source;
+    try {
+      source = params.fsImpl.readFileSync(candidatePath, "utf8");
+    } catch {
+      continue;
+    }
+    if (params.sourceIncludes.every((marker) => source.includes(marker))) {
+      candidates.push(entry.name);
+    }
+  }
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
 function resolveLegacyRootRuntimeCompatTarget(params) {
   if (
     params.aliasFileName &&
@@ -320,6 +368,15 @@ function resolveLegacyRootRuntimeCompatTarget(params) {
     distDir: params.distDir,
     fsImpl: params.fsImpl,
     aliasFileName: `${match.groups.base}.js`,
+    sourceIncludes: params.sourceIncludes,
+  });
+}
+
+function resolveLegacyRootChunkCompatTarget(params) {
+  return resolveRootChunkCandidateByMarkers({
+    distDir: params.distDir,
+    fsImpl: params.fsImpl,
+    legacyFileName: params.legacyFileName,
     sourceIncludes: params.sourceIncludes,
   });
 }
@@ -345,6 +402,23 @@ export function writeLegacyRootRuntimeCompatAliases(params = {}) {
       fsImpl,
       legacyFileName,
       aliasFileName: entry.aliasFileName,
+      sourceIncludes: entry.sourceIncludes,
+    });
+    if (!targetFileName) {
+      continue;
+    }
+    writeTextFileIfChanged(legacyPath, `export * from "./${targetFileName}";\n`);
+  }
+  for (const entry of LEGACY_ROOT_CHUNK_COMPAT_ALIASES) {
+    const { legacyFileName } = entry;
+    const legacyPath = path.join(distDir, legacyFileName);
+    if (fsImpl.existsSync(legacyPath)) {
+      continue;
+    }
+    const targetFileName = resolveLegacyRootChunkCompatTarget({
+      distDir,
+      fsImpl,
+      legacyFileName,
       sourceIncludes: entry.sourceIncludes,
     });
     if (!targetFileName) {

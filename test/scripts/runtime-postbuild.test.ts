@@ -476,6 +476,45 @@ describe("runtime postbuild static assets", () => {
     );
   });
 
+  it("writes compatibility aliases for stale tool and web-fetch chunks", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(
+      path.join(distDir, "bash-tools-NewHash.js"),
+      [
+        "export { createExecTool, createProcessTool, describeExecTool, describeProcessTool };",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "manager-NewHash.js"),
+      ["export { AcpSessionManager, __testing, getAcpSessionManager };", ""].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "runtime-NewHash.js"),
+      [
+        "export { isWebFetchProviderConfigured, listConfiguredWebFetchProviders, listWebFetchProviders, resolveWebFetchDefinition, resolveWebFetchEnabled, resolveWebFetchProviderId };",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    writeLegacyRootRuntimeCompatAliases({ rootDir });
+
+    expect(await fs.readFile(path.join(distDir, "bash-tools-GSoqmeZd.js"), "utf8")).toBe(
+      'export * from "./bash-tools-NewHash.js";\n',
+    );
+    expect(await fs.readFile(path.join(distDir, "manager-DzRWrKSA.js"), "utf8")).toBe(
+      'export * from "./manager-NewHash.js";\n',
+    );
+    expect(await fs.readFile(path.join(distDir, "runtime-CeGN4XUC.js"), "utf8")).toBe(
+      'export * from "./runtime-NewHash.js";\n',
+    );
+  });
+
   it("writes legacy CLI exit compatibility chunks", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
 
