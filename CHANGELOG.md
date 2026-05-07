@@ -141,6 +141,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - llm-task: resolve configured model aliases before embedded dispatch so `model="gemini-flash"` and other aliases route to the intended provider instead of the agent default. Fixes #54166.
+- Media generation: resolve slash-containing model-only overrides like `fal-ai/flux/dev` through registered provider model metadata so FAL image/video models do not get misparsed as provider `fal-ai`. Fixes #77444.
 - CLI backends: keep versioned OAuth identity matches reusable when auth profile ids rotate, so Claude CLI sessions do not reset and lose continuity during same-account OAuth refresh/profile alias changes. Fixes #78541.
 - Model providers: normalize APNG sniffed PNG uploads, preserve Gemini 3 tool-call thought-signature replay with documented fallback signatures, accept legacy `__env__:VAR` custom-provider keys, and repair snake_case tool-call transcript sanitization. Fixes #51881, #48915, #77566, and #42858.
 - Telegram/models: parse provider ids containing dots in `/models` callback buttons so `hf.co` model lists render as inline keyboard buttons. Fixes #38745.
