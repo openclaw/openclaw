@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { copyA2uiAssets } from "../../extensions/canvas/scripts/copy-a2ui.mjs";
-import { withTempDir } from "../test-utils/temp-dir.js";
+import { copyA2uiAssets } from "./copy-a2ui.mjs";
 
 const ORIGINAL_SKIP_MISSING = process.env.OPENCLAW_A2UI_SKIP_MISSING;
 const ORIGINAL_SPARSE_PROFILE = process.env.OPENCLAW_SPARSE_PROFILE;
@@ -28,7 +28,12 @@ describe("canvas a2ui copy", () => {
   });
 
   async function withA2uiFixture(run: (dir: string) => Promise<void>) {
-    await withTempDir("openclaw-a2ui-", run);
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-a2ui-"));
+    try {
+      await run(dir);
+    } finally {
+      await fs.rm(dir, { force: true, recursive: true });
+    }
   }
 
   it("throws a helpful error when assets are missing", async () => {

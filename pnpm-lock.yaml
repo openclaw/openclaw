@@ -455,9 +455,24 @@ importers:
 
   extensions/canvas:
     dependencies:
+      '@a2ui/lit':
+        specifier: 0.9.3
+        version: 0.9.3(signal-polyfill@0.2.2)
+      '@lit/context':
+        specifier: ^1.1.6
+        version: 1.1.6
+      chokidar:
+        specifier: ^5.0.0
+        version: 5.0.0
+      lit:
+        specifier: ^3.3.2
+        version: 3.3.2
       typebox:
         specifier: 1.1.37
         version: 1.1.37
+      ws:
+        specifier: ^8.20.0
+        version: 8.20.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
