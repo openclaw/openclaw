@@ -2,7 +2,7 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
-import type { v2 } from "../app-server/protocol-generated/typescript/index.js";
+import type { v2 } from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
 import {
   exists,

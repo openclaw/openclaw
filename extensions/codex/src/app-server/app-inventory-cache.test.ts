@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { CodexAppInventoryCache, buildCodexAppInventoryCacheKey } from "./app-inventory-cache.js";
-import type { v2 } from "./protocol-generated/typescript/index.js";
+import type { v2 } from "./protocol.js";
 
 describe("Codex app inventory cache", () => {
   it("returns missing while scheduling one coalesced app/list refresh", async () => {

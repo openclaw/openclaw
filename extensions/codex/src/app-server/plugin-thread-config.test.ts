@@ -8,7 +8,7 @@ import {
   mergeCodexThreadConfigs,
   shouldBuildCodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
-import type { v2 } from "./protocol-generated/typescript/index.js";
+import type { v2 } from "./protocol.js";
 
 describe("Codex plugin thread config", () => {
   it("builds restrictive app config for accessible migrated plugin apps", async () => {

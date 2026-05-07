@@ -4,7 +4,7 @@ import path from "node:path";
 import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
-import type { v2 } from "../app-server/protocol-generated/typescript/index.js";
+import type { v2 } from "../app-server/protocol.js";
 import { buildCodexMigrationProvider } from "./provider.js";
 
 const appServerRequest = vi.hoisted(() => vi.fn());

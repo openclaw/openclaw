@@ -1,4 +1,4 @@
-import type { v2 } from "./protocol-generated/typescript/index.js";
+import type { v2 } from "./protocol.js";
 
 export const CODEX_APP_INVENTORY_CACHE_TTL_MS = 60 * 60 * 1_000;
 

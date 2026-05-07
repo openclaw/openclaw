@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { CodexAppInventoryCache } from "./app-inventory-cache.js";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./config.js";
 import { readCodexPluginInventory } from "./plugin-inventory.js";
-import type { v2 } from "./protocol-generated/typescript/index.js";
+import type { v2 } from "./protocol.js";
 
 describe("Codex plugin inventory", () => {
   it("returns enabled migrated curated plugins with stable owned app ids", async () => {

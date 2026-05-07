@@ -6,7 +6,7 @@ import {
   ensureCodexPluginActivation,
   upsertTomlBoolean,
 } from "./plugin-activation.js";
-import type { v2 } from "./protocol-generated/typescript/index.js";
+import type { v2 } from "./protocol.js";
 
 describe("Codex plugin activation", () => {
   it("skips plugin/install when the migrated plugin is already active", async () => {

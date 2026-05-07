@@ -26,7 +26,7 @@ import {
   type CodexMigratedPluginIdentity,
 } from "../app-server/config.js";
 import { ensureCodexPluginActivation } from "../app-server/plugin-activation.js";
-import type { v2 } from "../app-server/protocol-generated/typescript/index.js";
+import type { v2 } from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
 import { buildCodexMigrationPlan } from "./plan.js";
 import {

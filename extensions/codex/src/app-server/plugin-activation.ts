@@ -11,7 +11,7 @@ import {
   type CodexPluginMarketplaceRef,
   type CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
-import type { v2 } from "./protocol-generated/typescript/index.js";
+import type { v2 } from "./protocol.js";
 
 export type CodexPluginActivationReason =
   | "already_active"

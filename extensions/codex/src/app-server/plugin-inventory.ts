@@ -10,7 +10,7 @@ import {
   type ResolvedCodexPluginPolicy,
   type ResolvedCodexPluginsPolicy,
 } from "./config.js";
-import type { v2 } from "./protocol-generated/typescript/index.js";
+import type { v2 } from "./protocol.js";
 
 export type CodexPluginRuntimeRequest = (method: string, params?: unknown) => Promise<unknown>;
 
