@@ -61,6 +61,89 @@ describe("codex conversation controls", () => {
     });
   });
 
+  it("uses workspace-policy fallback for default permissions and rejects yolo when full access is forbidden", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const requirementsPath = path.join(tempDir, "requirements.toml");
+    vi.stubEnv("OPENCLAW_CODEX_APP_SERVER_REQUIREMENTS_POLICY_PATH", requirementsPath);
+    await fs.writeFile(
+      requirementsPath,
+      'allowed_sandbox_modes = ["ReadOnly", "WorkspaceWrite"]\n',
+    );
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+
+    await expect(setCodexConversationPermissions({ sessionFile, mode: "default" })).resolves.toBe(
+      "Codex permissions set to default.",
+    );
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+      permissionSources: expect.objectContaining({
+        approvalPolicy: "workspace-policy",
+        sandbox: "workspace-policy",
+        requirementsPolicyPath: requirementsPath,
+      }),
+    });
+
+    await expect(setCodexConversationPermissions({ sessionFile, mode: "yolo" })).rejects.toThrow(
+      "/codex permissions yolo requests danger-full-access",
+    );
+  });
+
+  it("reports permissions status without resolving conflicting runtime policy", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const requirementsPath = path.join(tempDir, "requirements.toml");
+    vi.stubEnv("OPENCLAW_CODEX_APP_SERVER_REQUIREMENTS_POLICY_PATH", requirementsPath);
+    await fs.writeFile(
+      requirementsPath,
+      'allowed_sandbox_modes = ["ReadOnly", "WorkspaceWrite"]\n',
+    );
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+
+    await expect(
+      setCodexConversationPermissions({
+        sessionFile,
+        pluginConfig: { appServer: { mode: "yolo" } },
+      }),
+    ).resolves.toBe("Codex permissions: full access.");
+  });
+
+  it("keeps default permissions workspace-scoped when requirements omit sandbox allowlists", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const requirementsPath = path.join(tempDir, "requirements.toml");
+    vi.stubEnv("OPENCLAW_CODEX_APP_SERVER_REQUIREMENTS_POLICY_PATH", requirementsPath);
+    await fs.writeFile(requirementsPath, 'allowed_web_search_modes = ["cached"]\n');
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+
+    await expect(setCodexConversationPermissions({ sessionFile, mode: "default" })).resolves.toBe(
+      "Codex permissions set to default.",
+    );
+
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+      permissionSources: expect.objectContaining({
+        approvalPolicy: "command",
+        sandbox: "command",
+        requirementsPolicyPath: requirementsPath,
+      }),
+    });
+  });
+
   it("does not persist public OpenAI provider after model changes on native auth bindings", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     upsertAuthProfile({

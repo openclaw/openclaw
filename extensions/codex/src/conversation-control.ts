@@ -2,9 +2,16 @@ import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import {
   resolveCodexAppServerRuntimeOptions,
   type CodexAppServerApprovalPolicy,
+  type CodexAppServerPermissionSources,
   type CodexAppServerSandboxMode,
 } from "./app-server/config.js";
 import type { CodexServiceTier, CodexThreadResumeResponse } from "./app-server/protocol.js";
+import {
+  CodexRequirementsPolicyConflictError,
+  isCodexSandboxAllowedByPolicy,
+  preferredCodexSandboxForPolicy,
+  type CodexRequirementsPolicy,
+} from "./app-server/requirements-policy.js";
 import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
@@ -127,6 +134,7 @@ export async function setCodexConversationModel(params: {
     modelProvider: response.modelProvider ?? binding.modelProvider,
     approvalPolicy: binding.approvalPolicy,
     sandbox: binding.sandbox,
+    permissionSources: binding.permissionSources,
     serviceTier: binding.serviceTier ?? runtime.serviceTier,
   });
   return `Codex model set to ${formatCodexDisplayText(response.model ?? model)}.`;
@@ -160,13 +168,15 @@ export async function setCodexConversationPermissions(params: {
   if (!params.mode) {
     return `Codex permissions: ${formatPermissionsMode(binding)}.`;
   }
-  const policy = permissionsForMode(params.mode);
+  const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig: params.pluginConfig });
+  const policy = permissionsForMode(params.mode, runtime);
   // Native bound turns pass these settings at turn/start time, so this command
   // can update the local binding even when app-server resume overrides fail.
   await writeCodexAppServerBinding(params.sessionFile, {
     ...binding,
     approvalPolicy: policy.approvalPolicy,
     sandbox: policy.sandbox,
+    permissionSources: policy.permissionSources,
   });
   return `Codex permissions set to ${params.mode === "yolo" ? "full access" : "default"}.`;
 }
@@ -246,11 +256,62 @@ async function resumeThreadWithOverrides(params: {
   );
 }
 
-function permissionsForMode(mode: PermissionsMode): {
+function permissionsForMode(
+  mode: PermissionsMode,
+  runtime: ReturnType<typeof resolveCodexAppServerRuntimeOptions>,
+): {
   approvalPolicy: CodexAppServerApprovalPolicy;
   sandbox: CodexAppServerSandboxMode;
+  permissionSources: CodexAppServerPermissionSources;
 } {
-  return mode === "yolo"
-    ? { approvalPolicy: "never", sandbox: "danger-full-access" }
-    : { approvalPolicy: "on-request", sandbox: "workspace-write" };
+  if (mode === "default") {
+    const requirementsPolicy = requirementsPolicyFromRuntime(runtime);
+    const hasSandboxAllowlist = Boolean(requirementsPolicy?.allowedSandboxModes?.length);
+    return {
+      approvalPolicy: "on-request",
+      sandbox: hasSandboxAllowlist
+        ? preferredCodexSandboxForPolicy(requirementsPolicy)
+        : "workspace-write",
+      permissionSources: {
+        ...runtime.permissionSources,
+        approvalPolicy: hasSandboxAllowlist ? "workspace-policy" : "command",
+        sandbox: hasSandboxAllowlist ? "workspace-policy" : "command",
+        approvalsReviewer: hasSandboxAllowlist ? "workspace-policy" : "command",
+      },
+    };
+  }
+  const requirementsPolicy = requirementsPolicyFromRuntime(runtime);
+  if (!isCodexSandboxAllowedByPolicy(requirementsPolicy, "danger-full-access")) {
+    throw new CodexRequirementsPolicyConflictError({
+      sourcePath: requirementsPolicy?.sourcePath ?? "/etc/codex/requirements.toml",
+      allowedSandboxModes: requirementsPolicy?.allowedSandboxModes ?? [],
+      requestedSandboxMode: "danger-full-access",
+      reason:
+        "/codex permissions yolo requests danger-full-access, but the workspace policy forbids it",
+    });
+  }
+  return {
+    approvalPolicy: "never",
+    sandbox: "danger-full-access",
+    permissionSources: {
+      ...runtime.permissionSources,
+      approvalPolicy: "command",
+      sandbox: "command",
+      approvalsReviewer: "command",
+    },
+  };
+}
+
+function requirementsPolicyFromRuntime(
+  runtime: ReturnType<typeof resolveCodexAppServerRuntimeOptions>,
+): CodexRequirementsPolicy | undefined {
+  if (!runtime.permissionSources.requirementsPolicyPath) {
+    return undefined;
+  }
+  return {
+    sourcePath: runtime.permissionSources.requirementsPolicyPath,
+    ...(runtime.permissionSources.allowedSandboxModes
+      ? { allowedSandboxModes: runtime.permissionSources.allowedSandboxModes }
+      : {}),
+  };
 }

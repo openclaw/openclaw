@@ -1,6 +1,15 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { z } from "openclaw/plugin-sdk/zod";
 import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
+import {
+  CodexRequirementsPolicyConflictError,
+  DEFAULT_CODEX_REQUIREMENTS_POLICY_PATH,
+  isCodexSandboxAllowedByPolicy,
+  preferredCodexSandboxForPolicy,
+  readCodexRequirementsPolicy,
+  type CodexAppServerSandboxMode,
+  type CodexRequirementsPolicy,
+} from "./requirements-policy.js";
 
 const START_OPTIONS_KEY_SECRET = randomBytes(32);
 
@@ -18,14 +27,31 @@ export type CodexAppServerEffectiveApprovalPolicy =
         skill_approval?: boolean;
       };
     };
-export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
-type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
+export type { CodexAppServerSandboxMode } from "./requirements-policy.js";
+export type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
 type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
 type CodexDynamicToolsProfile = "native-first" | "openclaw-compat";
 export type CodexDynamicToolsLoading = "searchable" | "direct";
 export type CodexPluginDestructivePolicy = boolean;
 
 export const CODEX_PLUGINS_MARKETPLACE_NAME = "openai-curated";
+
+export type CodexAppServerPermissionSource =
+  | "config"
+  | "env"
+  | "mode"
+  | "default"
+  | "workspace-policy"
+  | "command"
+  | "legacy";
+
+export type CodexAppServerPermissionSources = {
+  approvalPolicy: CodexAppServerPermissionSource;
+  sandbox: CodexAppServerPermissionSource;
+  approvalsReviewer: CodexAppServerPermissionSource;
+  requirementsPolicyPath?: string;
+  allowedSandboxModes?: CodexAppServerSandboxMode[];
+};
 
 export type CodexComputerUseConfig = {
   enabled?: boolean;
@@ -96,6 +122,7 @@ export type CodexAppServerRuntimeOptions = {
   approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
+  permissionSources: CodexAppServerPermissionSources;
   serviceTier?: CodexServiceTier;
 };
 
@@ -305,6 +332,9 @@ export function resolveCodexAppServerRuntimeOptions(
   params: {
     pluginConfig?: unknown;
     env?: NodeJS.ProcessEnv;
+    requirementsPolicy?: CodexRequirementsPolicy | false;
+    requirementsPolicyPath?: string;
+    readRequirementsPolicyFile?: (path: string) => string;
   } = {},
 ): CodexAppServerRuntimeOptions {
   const env = params.env ?? process.env;
@@ -323,16 +353,33 @@ export function resolveCodexAppServerRuntimeOptions(
   const clearEnv = normalizeStringList(config.clearEnv);
   const authToken = readNonEmptyString(config.authToken);
   const url = readNonEmptyString(config.url);
-  const policyMode =
-    resolvePolicyMode(config.mode) ??
-    resolvePolicyMode(env.OPENCLAW_CODEX_APP_SERVER_MODE) ??
-    "yolo";
+  const configMode = resolvePolicyMode(config.mode);
+  const envMode = resolvePolicyMode(env.OPENCLAW_CODEX_APP_SERVER_MODE);
+  const policyMode = configMode ?? envMode ?? "yolo";
+  const policyModeSource: CodexAppServerPermissionSource =
+    configMode || envMode ? "mode" : "default";
   const serviceTier = resolveServiceTier(config.serviceTier);
   if (transport === "websocket" && !url) {
     throw new Error(
       "plugins.entries.codex.config.appServer.url is required when appServer.transport is websocket",
     );
   }
+
+  const requirementsPolicy = resolveRequirementsPolicy({
+    transport,
+    providedPolicy: params.requirementsPolicy,
+    sourcePath:
+      params.requirementsPolicyPath ??
+      readNonEmptyString(env.OPENCLAW_CODEX_APP_SERVER_REQUIREMENTS_POLICY_PATH),
+    readFile: params.readRequirementsPolicyFile,
+  });
+  const permissions = resolveRuntimePermissions({
+    config,
+    env,
+    policyMode,
+    policyModeSource,
+    requirementsPolicy,
+  });
 
   return {
     start: {
@@ -350,17 +397,10 @@ export function resolveCodexAppServerRuntimeOptions(
       config.turnCompletionIdleTimeoutMs,
       60_000,
     ),
-    approvalPolicy:
-      resolveApprovalPolicy(config.approvalPolicy) ??
-      resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY) ??
-      (policyMode === "guardian" ? "on-request" : "never"),
-    sandbox:
-      resolveSandbox(config.sandbox) ??
-      resolveSandbox(env.OPENCLAW_CODEX_APP_SERVER_SANDBOX) ??
-      (policyMode === "guardian" ? "workspace-write" : "danger-full-access"),
-    approvalsReviewer:
-      resolveApprovalsReviewer(config.approvalsReviewer) ??
-      (policyMode === "guardian" ? "auto_review" : "user"),
+    approvalPolicy: permissions.approvalPolicy,
+    sandbox: permissions.sandbox,
+    approvalsReviewer: permissions.approvalsReviewer,
+    permissionSources: permissions.permissionSources,
     ...(serviceTier ? { serviceTier } : {}),
   };
 }
@@ -521,6 +561,200 @@ function resolveApprovalsReviewer(value: unknown): CodexAppServerApprovalsReview
   return value === "auto_review" || value === "guardian_subagent" || value === "user"
     ? value
     : undefined;
+}
+
+function resolveRequirementsPolicy(params: {
+  transport: CodexAppServerTransportMode;
+  providedPolicy?: CodexRequirementsPolicy | false;
+  sourcePath?: string;
+  readFile?: (path: string) => string;
+}): CodexRequirementsPolicy | undefined {
+  if (params.transport !== "stdio") {
+    return undefined;
+  }
+  if (params.providedPolicy !== undefined) {
+    return params.providedPolicy || undefined;
+  }
+  return readCodexRequirementsPolicy({
+    sourcePath: params.sourcePath ?? DEFAULT_CODEX_REQUIREMENTS_POLICY_PATH,
+    readFile: params.readFile,
+  });
+}
+
+function resolveRuntimePermissions(params: {
+  config: NonNullable<CodexPluginConfig["appServer"]>;
+  env: NodeJS.ProcessEnv;
+  policyMode: CodexAppServerPolicyMode;
+  policyModeSource: CodexAppServerPermissionSource;
+  requirementsPolicy?: CodexRequirementsPolicy;
+}): {
+  approvalPolicy: CodexAppServerApprovalPolicy;
+  sandbox: CodexAppServerSandboxMode;
+  approvalsReviewer: CodexAppServerApprovalsReviewer;
+  permissionSources: CodexAppServerPermissionSources;
+} {
+  const approvalPolicy = resolveValueWithSource<CodexAppServerApprovalPolicy>(
+    resolveApprovalPolicy(params.config.approvalPolicy),
+    resolveApprovalPolicy(params.env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY),
+    params.policyMode === "guardian" ? "on-request" : "never",
+    params.policyModeSource,
+  );
+  const sandbox = resolveValueWithSource<CodexAppServerSandboxMode>(
+    resolveSandbox(params.config.sandbox),
+    resolveSandbox(params.env.OPENCLAW_CODEX_APP_SERVER_SANDBOX),
+    params.policyMode === "guardian" ? "workspace-write" : "danger-full-access",
+    params.policyModeSource,
+  );
+  const approvalsReviewer = resolveValueWithSource<CodexAppServerApprovalsReviewer>(
+    resolveApprovalsReviewer(params.config.approvalsReviewer),
+    undefined,
+    params.policyMode === "guardian" ? "auto_review" : "user",
+    params.policyModeSource,
+  );
+  const permissionSources: CodexAppServerPermissionSources = {
+    approvalPolicy: approvalPolicy.source,
+    sandbox: sandbox.source,
+    approvalsReviewer: approvalsReviewer.source,
+    ...(params.requirementsPolicy
+      ? {
+          requirementsPolicyPath: params.requirementsPolicy.sourcePath,
+          ...(params.requirementsPolicy.allowedSandboxModes
+            ? { allowedSandboxModes: params.requirementsPolicy.allowedSandboxModes }
+            : {}),
+        }
+      : {}),
+  };
+  const explicitFieldCount = [
+    approvalPolicy.source,
+    sandbox.source,
+    approvalsReviewer.source,
+  ].filter((source) => source === "config" || source === "env").length;
+  const defaultYoloTuple =
+    params.policyMode === "yolo" &&
+    params.policyModeSource === "default" &&
+    explicitFieldCount === 0;
+  const guardianModeTuple = params.policyMode === "guardian" && explicitFieldCount === 0;
+  const fullAccessDisallowed = !isCodexSandboxAllowedByPolicy(
+    params.requirementsPolicy,
+    "danger-full-access",
+  );
+
+  if (
+    fullAccessDisallowed &&
+    params.policyMode === "yolo" &&
+    params.policyModeSource !== "default" &&
+    explicitFieldCount === 0
+  ) {
+    throwPolicyConflict({
+      requirementsPolicy: params.requirementsPolicy,
+      requestedSandboxMode: "danger-full-access",
+      reason:
+        "appServer.mode=yolo requests danger-full-access, but the workspace policy forbids it",
+    });
+  }
+
+  if (
+    fullAccessDisallowed &&
+    sandbox.value === "danger-full-access" &&
+    (sandbox.source === "config" || sandbox.source === "env")
+  ) {
+    throwPolicyConflict({
+      requirementsPolicy: params.requirementsPolicy,
+      requestedSandboxMode: sandbox.value,
+      reason: `requested sandbox ${sandbox.value} is not allowed by the workspace policy`,
+    });
+  }
+
+  if (
+    fullAccessDisallowed &&
+    params.policyMode === "yolo" &&
+    params.policyModeSource === "default" &&
+    explicitFieldCount > 0 &&
+    !isGuardianPermissionTuple({
+      approvalPolicy: approvalPolicy.value,
+      sandbox: sandbox.value,
+      approvalsReviewer: approvalsReviewer.value,
+    })
+  ) {
+    throwPolicyConflict({
+      requirementsPolicy: params.requirementsPolicy,
+      requestedSandboxMode: sandbox.value,
+      reason:
+        "a partial app-server permission override would mix explicit values with the restricted workspace-policy fallback",
+    });
+  }
+
+  if (!isCodexSandboxAllowedByPolicy(params.requirementsPolicy, sandbox.value)) {
+    if (defaultYoloTuple || guardianModeTuple) {
+      const fallbackSandbox = preferredCodexSandboxForPolicy(params.requirementsPolicy);
+      return {
+        approvalPolicy: "on-request",
+        sandbox: fallbackSandbox,
+        approvalsReviewer: "auto_review",
+        permissionSources: {
+          ...permissionSources,
+          approvalPolicy: "workspace-policy",
+          sandbox: "workspace-policy",
+          approvalsReviewer: "workspace-policy",
+        },
+      };
+    }
+    throwPolicyConflict({
+      requirementsPolicy: params.requirementsPolicy,
+      requestedSandboxMode: sandbox.value,
+      reason: `requested sandbox ${sandbox.value} is not allowed by the workspace policy`,
+    });
+  }
+
+  return {
+    approvalPolicy: approvalPolicy.value,
+    sandbox: sandbox.value,
+    approvalsReviewer: approvalsReviewer.value,
+    permissionSources,
+  };
+}
+
+function resolveValueWithSource<T>(
+  configValue: T | undefined,
+  envValue: T | undefined,
+  defaultValue: T,
+  derivedSource: CodexAppServerPermissionSource,
+): { value: T; source: CodexAppServerPermissionSource } {
+  if (configValue !== undefined) {
+    return { value: configValue, source: "config" };
+  }
+  if (envValue !== undefined) {
+    return { value: envValue, source: "env" };
+  }
+  return {
+    value: defaultValue,
+    source: derivedSource === "mode" ? "mode" : "default",
+  };
+}
+
+function isGuardianPermissionTuple(params: {
+  approvalPolicy: CodexAppServerApprovalPolicy;
+  sandbox: CodexAppServerSandboxMode;
+  approvalsReviewer: CodexAppServerApprovalsReviewer;
+}): boolean {
+  return (
+    params.approvalPolicy !== "never" &&
+    params.sandbox !== "danger-full-access" &&
+    params.approvalsReviewer !== "user"
+  );
+}
+
+function throwPolicyConflict(params: {
+  requirementsPolicy?: CodexRequirementsPolicy;
+  requestedSandboxMode: CodexAppServerSandboxMode;
+  reason: string;
+}): never {
+  throw new CodexRequirementsPolicyConflictError({
+    sourcePath: params.requirementsPolicy?.sourcePath ?? DEFAULT_CODEX_REQUIREMENTS_POLICY_PATH,
+    allowedSandboxModes: params.requirementsPolicy?.allowedSandboxModes ?? [],
+    requestedSandboxMode: params.requestedSandboxMode,
+    reason: params.reason,
+  });
 }
 
 function resolveServiceTier(value: unknown): CodexServiceTier | undefined {

@@ -46,6 +46,11 @@ function createAppServerOptions(): Parameters<typeof startOrResumeThread>[0]["ap
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
+    permissionSources: {
+      approvalPolicy: "default",
+      sandbox: "default",
+      approvalsReviewer: "default",
+    },
   };
 }
 

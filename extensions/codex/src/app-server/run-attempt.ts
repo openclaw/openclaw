@@ -106,6 +106,7 @@ import {
 } from "./protocol.js";
 import { readRecentCodexRateLimits, rememberCodexRateLimits } from "./rate-limit-cache.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
+import { classifyCodexRequirementsPolicyError } from "./requirements-policy.js";
 import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import { clearSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
@@ -1260,7 +1261,10 @@ export async function runCodexAppServerAttempt(
     );
   } catch (error) {
     const usageLimitError = formatCodexTurnStartUsageLimitError(error, pendingNotifications);
-    const turnStartErrorMessage = usageLimitError ?? formatErrorMessage(error);
+    const turnStartErrorMessage =
+      usageLimitError ??
+      classifyCodexRequirementsPolicyError(error)?.message ??
+      formatErrorMessage(error);
     emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
       data: { phase: "turn_start_failed", error: turnStartErrorMessage },

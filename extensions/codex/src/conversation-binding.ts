@@ -11,6 +11,8 @@ import {
   codexSandboxPolicyForTurn,
   resolveCodexAppServerRuntimeOptions,
   type CodexAppServerApprovalPolicy,
+  type CodexAppServerPermissionSources,
+  type CodexAppServerRuntimeOptions,
   type CodexAppServerSandboxMode,
 } from "./app-server/config.js";
 import {
@@ -20,6 +22,12 @@ import {
   type CodexTurnStartResponse,
   type JsonValue,
 } from "./app-server/protocol.js";
+import {
+  CodexRequirementsPolicyConflictError,
+  classifyCodexRequirementsPolicyError,
+  isCodexSandboxAllowedByPolicy,
+  type CodexRequirementsPolicy,
+} from "./app-server/requirements-policy.js";
 import {
   clearCodexAppServerBinding,
   isCodexAppServerNativeAuthProfile,
@@ -162,7 +170,7 @@ export async function handleCodexConversationInboundClaim(
     return {
       handled: true,
       reply: {
-        text: `Codex app-server turn failed: ${formatCodexDisplayText(formatErrorMessage(error))}`,
+        text: `Codex app-server turn failed: ${formatCodexDisplayText(formatCodexPolicyAwareErrorMessage(error))}`,
       },
     };
   }
@@ -207,15 +215,20 @@ async function attachExistingThread(params: {
     timeoutMs: runtime.requestTimeoutMs,
     authProfileId: params.authProfileId,
   });
+  const permissions = resolveRequestedThreadPermissions({
+    runtime,
+    approvalPolicy: params.approvalPolicy,
+    sandbox: params.sandbox,
+  });
   const response: CodexThreadResumeResponse = await client.request(
     CODEX_CONTROL_METHODS.resumeThread,
     {
       threadId: params.threadId,
       ...(params.model ? { model: params.model } : {}),
       ...(modelProvider ? { modelProvider } : {}),
-      approvalPolicy: params.approvalPolicy ?? runtime.approvalPolicy,
+      approvalPolicy: permissions.approvalPolicy,
       approvalsReviewer: runtime.approvalsReviewer,
-      sandbox: params.sandbox ?? runtime.sandbox,
+      sandbox: permissions.sandbox,
       ...((params.serviceTier ?? runtime.serviceTier)
         ? { serviceTier: params.serviceTier ?? runtime.serviceTier }
         : {}),
@@ -224,8 +237,6 @@ async function attachExistingThread(params: {
     { timeoutMs: runtime.requestTimeoutMs },
   );
   const thread = response.thread;
-  const runtimeApprovalPolicy =
-    typeof runtime.approvalPolicy === "string" ? runtime.approvalPolicy : undefined;
   await writeCodexAppServerBinding(
     params.sessionFile,
     {
@@ -238,8 +249,9 @@ async function attachExistingThread(params: {
         authProfileId: params.authProfileId,
         modelProvider: response.modelProvider ?? params.modelProvider,
       }),
-      approvalPolicy: params.approvalPolicy ?? runtimeApprovalPolicy,
-      sandbox: params.sandbox ?? runtime.sandbox,
+      approvalPolicy: permissions.approvalPolicy,
+      sandbox: permissions.sandbox,
+      permissionSources: permissions.permissionSources,
       serviceTier: params.serviceTier ?? runtime.serviceTier,
     },
     {
@@ -273,15 +285,20 @@ async function createThread(params: {
     timeoutMs: runtime.requestTimeoutMs,
     authProfileId: params.authProfileId,
   });
+  const permissions = resolveRequestedThreadPermissions({
+    runtime,
+    approvalPolicy: params.approvalPolicy,
+    sandbox: params.sandbox,
+  });
   const response: CodexThreadStartResponse = await client.request(
     "thread/start",
     {
       cwd: params.workspaceDir,
       ...(params.model ? { model: params.model } : {}),
       ...(modelProvider ? { modelProvider } : {}),
-      approvalPolicy: params.approvalPolicy ?? runtime.approvalPolicy,
+      approvalPolicy: permissions.approvalPolicy,
       approvalsReviewer: runtime.approvalsReviewer,
-      sandbox: params.sandbox ?? runtime.sandbox,
+      sandbox: permissions.sandbox,
       ...((params.serviceTier ?? runtime.serviceTier)
         ? { serviceTier: params.serviceTier ?? runtime.serviceTier }
         : {}),
@@ -292,8 +309,6 @@ async function createThread(params: {
     },
     { timeoutMs: runtime.requestTimeoutMs },
   );
-  const runtimeApprovalPolicy =
-    typeof runtime.approvalPolicy === "string" ? runtime.approvalPolicy : undefined;
   await writeCodexAppServerBinding(
     params.sessionFile,
     {
@@ -306,8 +321,9 @@ async function createThread(params: {
         authProfileId: params.authProfileId,
         modelProvider: response.modelProvider ?? params.modelProvider,
       }),
-      approvalPolicy: params.approvalPolicy ?? runtimeApprovalPolicy,
-      sandbox: params.sandbox ?? runtime.sandbox,
+      approvalPolicy: permissions.approvalPolicy,
+      sandbox: permissions.sandbox,
+      permissionSources: permissions.permissionSources,
       serviceTier: params.serviceTier ?? runtime.serviceTier,
     },
     {
@@ -331,6 +347,11 @@ async function runBoundTurn(params: {
   if (!threadId) {
     throw new Error("bound Codex conversation has no thread binding");
   }
+  const permissions = await resolveBoundTurnPermissions({
+    sessionFile: params.data.sessionFile,
+    binding,
+    runtime,
+  });
 
   const client = await getSharedCodexAppServerClient({
     startOptions: runtime.start,
@@ -387,10 +408,10 @@ async function runBoundTurn(params: {
           event: params.event,
         }),
         cwd: binding.cwd || params.data.workspaceDir,
-        approvalPolicy: binding.approvalPolicy ?? runtime.approvalPolicy,
+        approvalPolicy: permissions.approvalPolicy,
         approvalsReviewer: runtime.approvalsReviewer,
         sandboxPolicy: codexSandboxPolicyForTurn(
-          binding.sandbox ?? runtime.sandbox,
+          permissions.sandbox,
           binding.cwd || params.data.workspaceDir,
         ),
         ...(binding.model ? { model: binding.model } : {}),
@@ -438,6 +459,7 @@ async function runBoundTurnWithMissingThreadRecovery(params: {
       throw error;
     }
     const binding = await readCodexAppServerBinding(params.data.sessionFile);
+    const preserveBindingPermissions = binding ? !isLegacyDefaultYoloBinding(binding) : false;
     await startCodexConversationThread({
       pluginConfig: params.pluginConfig,
       sessionFile: params.data.sessionFile,
@@ -445,8 +467,8 @@ async function runBoundTurnWithMissingThreadRecovery(params: {
       model: binding?.model,
       modelProvider: binding?.modelProvider,
       authProfileId: binding?.authProfileId,
-      approvalPolicy: binding?.approvalPolicy,
-      sandbox: binding?.sandbox,
+      approvalPolicy: preserveBindingPermissions ? binding?.approvalPolicy : undefined,
+      sandbox: preserveBindingPermissions ? binding?.sandbox : undefined,
       serviceTier: binding?.serviceTier,
     });
     return await runBoundTurn(params);
@@ -455,6 +477,112 @@ async function runBoundTurnWithMissingThreadRecovery(params: {
 
 function isCodexThreadNotFoundError(error: unknown): boolean {
   return /\bthread not found:/iu.test(formatErrorMessage(error));
+}
+
+function formatCodexPolicyAwareErrorMessage(error: unknown): string {
+  return classifyCodexRequirementsPolicyError(error)?.message ?? formatErrorMessage(error);
+}
+
+function resolveRequestedThreadPermissions(params: {
+  runtime: CodexAppServerRuntimeOptions;
+  approvalPolicy?: CodexAppServerApprovalPolicy;
+  sandbox?: CodexAppServerSandboxMode;
+}): {
+  approvalPolicy: CodexAppServerApprovalPolicy;
+  sandbox: CodexAppServerSandboxMode;
+  permissionSources: CodexAppServerPermissionSources;
+} {
+  const approvalPolicy = params.approvalPolicy ?? params.runtime.approvalPolicy;
+  const sandbox = params.sandbox ?? params.runtime.sandbox;
+  const permissionSources: CodexAppServerPermissionSources = {
+    ...params.runtime.permissionSources,
+    ...(params.approvalPolicy ? { approvalPolicy: "command" } : {}),
+    ...(params.sandbox ? { sandbox: "command" } : {}),
+  };
+  assertSandboxAllowedByRuntimePolicy({
+    runtime: params.runtime,
+    sandbox,
+    reason:
+      "the requested app-server thread permission override conflicts with the workspace policy",
+  });
+  return { approvalPolicy, sandbox, permissionSources };
+}
+
+async function resolveBoundTurnPermissions(params: {
+  sessionFile: string;
+  binding: NonNullable<Awaited<ReturnType<typeof readCodexAppServerBinding>>>;
+  runtime: CodexAppServerRuntimeOptions;
+}): Promise<{
+  approvalPolicy: CodexAppServerApprovalPolicy;
+  sandbox: CodexAppServerSandboxMode;
+}> {
+  const approvalPolicy = params.binding.approvalPolicy ?? params.runtime.approvalPolicy;
+  const sandbox = params.binding.sandbox ?? params.runtime.sandbox;
+  if (isCodexSandboxAllowedByPolicy(requirementsPolicyFromRuntime(params.runtime), sandbox)) {
+    return { approvalPolicy, sandbox };
+  }
+  if (isLegacyDefaultYoloBinding(params.binding)) {
+    await writeCodexAppServerBinding(params.sessionFile, {
+      ...params.binding,
+      approvalPolicy: params.runtime.approvalPolicy,
+      sandbox: params.runtime.sandbox,
+      permissionSources: params.runtime.permissionSources,
+    });
+    return {
+      approvalPolicy: params.runtime.approvalPolicy,
+      sandbox: params.runtime.sandbox,
+    };
+  }
+  assertSandboxAllowedByRuntimePolicy({
+    runtime: params.runtime,
+    sandbox,
+    reason:
+      "the persisted Codex app-server thread binding requests a sandbox forbidden by the workspace policy",
+  });
+  return { approvalPolicy, sandbox };
+}
+
+function isLegacyDefaultYoloBinding(binding: {
+  approvalPolicy?: CodexAppServerApprovalPolicy;
+  sandbox?: CodexAppServerSandboxMode;
+  permissionSources?: CodexAppServerPermissionSources;
+}): boolean {
+  return (
+    !binding.permissionSources &&
+    binding.approvalPolicy === "never" &&
+    binding.sandbox === "danger-full-access"
+  );
+}
+
+function assertSandboxAllowedByRuntimePolicy(params: {
+  runtime: CodexAppServerRuntimeOptions;
+  sandbox: CodexAppServerSandboxMode;
+  reason: string;
+}): void {
+  const requirementsPolicy = requirementsPolicyFromRuntime(params.runtime);
+  if (isCodexSandboxAllowedByPolicy(requirementsPolicy, params.sandbox)) {
+    return;
+  }
+  throw new CodexRequirementsPolicyConflictError({
+    sourcePath: requirementsPolicy?.sourcePath ?? "/etc/codex/requirements.toml",
+    allowedSandboxModes: requirementsPolicy?.allowedSandboxModes ?? [],
+    requestedSandboxMode: params.sandbox,
+    reason: params.reason,
+  });
+}
+
+function requirementsPolicyFromRuntime(
+  runtime: CodexAppServerRuntimeOptions,
+): CodexRequirementsPolicy | undefined {
+  if (!runtime.permissionSources.requirementsPolicyPath) {
+    return undefined;
+  }
+  return {
+    sourcePath: runtime.permissionSources.requirementsPolicyPath,
+    ...(runtime.permissionSources.allowedSandboxModes
+      ? { allowedSandboxModes: runtime.permissionSources.allowedSandboxModes }
+      : {}),
+  };
 }
 
 function enqueueBoundTurn<T>(key: string, run: () => Promise<T>): Promise<T> {

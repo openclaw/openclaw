@@ -9,6 +9,7 @@ import {
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   type CodexAppServerApprovalPolicy,
+  type CodexAppServerPermissionSources,
   type CodexAppServerSandboxMode,
 } from "./config.js";
 import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
@@ -37,6 +38,7 @@ export type CodexAppServerThreadBinding = {
   modelProvider?: string;
   approvalPolicy?: CodexAppServerApprovalPolicy;
   sandbox?: CodexAppServerSandboxMode;
+  permissionSources?: CodexAppServerPermissionSources;
   serviceTier?: CodexServiceTier;
   dynamicToolsFingerprint?: string;
   pluginAppsFingerprint?: string;
@@ -86,6 +88,7 @@ export async function readCodexAppServerBinding(
       }),
       approvalPolicy: readApprovalPolicy(parsed.approvalPolicy),
       sandbox: readSandboxMode(parsed.sandbox),
+      permissionSources: readPermissionSources(parsed.permissionSources),
       serviceTier: readServiceTier(parsed.serviceTier),
       dynamicToolsFingerprint:
         typeof parsed.dynamicToolsFingerprint === "string"
@@ -132,6 +135,7 @@ export async function writeCodexAppServerBinding(
     }),
     approvalPolicy: binding.approvalPolicy,
     sandbox: binding.sandbox,
+    permissionSources: binding.permissionSources,
     serviceTier: binding.serviceTier,
     dynamicToolsFingerprint: binding.dynamicToolsFingerprint,
     pluginAppsFingerprint: binding.pluginAppsFingerprint,
@@ -306,6 +310,47 @@ function readApprovalPolicy(value: unknown): CodexAppServerApprovalPolicy | unde
 
 function readSandboxMode(value: unknown): CodexAppServerSandboxMode | undefined {
   return value === "read-only" || value === "workspace-write" || value === "danger-full-access"
+    ? value
+    : undefined;
+}
+
+function readPermissionSources(value: unknown): CodexAppServerPermissionSources | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Partial<Record<keyof CodexAppServerPermissionSources, unknown>>;
+  const approvalPolicy = readPermissionSource(record.approvalPolicy);
+  const sandbox = readPermissionSource(record.sandbox);
+  const approvalsReviewer = readPermissionSource(record.approvalsReviewer);
+  if (!approvalPolicy || !sandbox || !approvalsReviewer) {
+    return undefined;
+  }
+  const allowedSandboxModes = Array.isArray(record.allowedSandboxModes)
+    ? record.allowedSandboxModes
+        .map(readSandboxMode)
+        .filter((sandboxMode): sandboxMode is CodexAppServerSandboxMode => Boolean(sandboxMode))
+    : undefined;
+  return {
+    approvalPolicy,
+    sandbox,
+    approvalsReviewer,
+    ...(typeof record.requirementsPolicyPath === "string"
+      ? { requirementsPolicyPath: record.requirementsPolicyPath }
+      : {}),
+    ...(allowedSandboxModes && allowedSandboxModes.length > 0 ? { allowedSandboxModes } : {}),
+  };
+}
+
+function readPermissionSource(
+  value: unknown,
+): CodexAppServerPermissionSources["approvalPolicy"] | undefined {
+  return value === "config" ||
+    value === "env" ||
+    value === "mode" ||
+    value === "default" ||
+    value === "workspace-policy" ||
+    value === "command" ||
+    value === "legacy"
     ? value
     : undefined;
 }

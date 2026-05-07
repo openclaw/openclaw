@@ -7,10 +7,16 @@ import {
   CODEX_PLUGINS_CONFIG_KEYS,
   codexAppServerStartOptionsKey,
   readCodexPluginConfig,
-  resolveCodexAppServerRuntimeOptions,
+  resolveCodexAppServerRuntimeOptions as resolveCodexAppServerRuntimeOptionsBase,
   resolveCodexComputerUseConfig,
   resolveCodexPluginsPolicy,
 } from "./config.js";
+
+function resolveCodexAppServerRuntimeOptions(
+  params: Parameters<typeof resolveCodexAppServerRuntimeOptionsBase>[0] = {},
+) {
+  return resolveCodexAppServerRuntimeOptionsBase({ requirementsPolicy: false, ...params });
+}
 
 describe("Codex app-server config", () => {
   it("parses typed plugin config before falling back to environment knobs", () => {
@@ -139,6 +145,101 @@ describe("Codex app-server config", () => {
           command: "codex",
           commandSource: "managed",
         }),
+      }),
+    );
+  });
+
+  it("falls back from implicit yolo to guardian permissions when requirements forbid full access", () => {
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {},
+      env: {},
+      requirementsPolicy: {
+        sourcePath: "/test/requirements.toml",
+        allowedSandboxModes: ["read-only", "workspace-write"],
+      },
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        approvalsReviewer: "auto_review",
+        permissionSources: expect.objectContaining({
+          approvalPolicy: "workspace-policy",
+          sandbox: "workspace-policy",
+          approvalsReviewer: "workspace-policy",
+          requirementsPolicyPath: "/test/requirements.toml",
+          allowedSandboxModes: ["read-only", "workspace-write"],
+        }),
+      }),
+    );
+  });
+
+  it("uses read-only fallback when it is the only allowed sandbox", () => {
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {},
+      env: {},
+      requirementsPolicy: {
+        sourcePath: "/test/requirements.toml",
+        allowedSandboxModes: ["read-only"],
+      },
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        sandbox: "read-only",
+        approvalsReviewer: "auto_review",
+      }),
+    );
+  });
+
+  it("rejects explicit yolo mode when requirements forbid full access", () => {
+    expect(() =>
+      resolveCodexAppServerRuntimeOptions({
+        pluginConfig: { appServer: { mode: "yolo" } },
+        env: {},
+        requirementsPolicy: {
+          sourcePath: "/test/requirements.toml",
+          allowedSandboxModes: ["read-only", "workspace-write"],
+        },
+      }),
+    ).toThrow("appServer.mode=yolo requests danger-full-access");
+  });
+
+  it("rejects explicit full-access sandbox when requirements forbid it", () => {
+    expect(() =>
+      resolveCodexAppServerRuntimeOptions({
+        pluginConfig: { appServer: { sandbox: "danger-full-access" } },
+        env: {},
+        requirementsPolicy: {
+          sourcePath: "/test/requirements.toml",
+          allowedSandboxModes: ["workspace-write"],
+        },
+      }),
+    ).toThrow("requested sandbox danger-full-access is not allowed");
+  });
+
+  it("does not apply local requirements policy to websocket app-server transports", () => {
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {
+        appServer: {
+          transport: "websocket",
+          url: "ws://127.0.0.1:39175",
+        },
+      },
+      env: {},
+      requirementsPolicy: {
+        sourcePath: "/test/requirements.toml",
+        allowedSandboxModes: ["workspace-write"],
+      },
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        approvalsReviewer: "user",
       }),
     );
   });

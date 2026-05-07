@@ -43,6 +43,15 @@ describe("codex app-server session binding", () => {
       cwd: tempDir,
       model: "gpt-5.4-codex",
       modelProvider: "openai",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+      permissionSources: {
+        approvalPolicy: "workspace-policy",
+        sandbox: "workspace-policy",
+        approvalsReviewer: "workspace-policy",
+        requirementsPolicyPath: "/test/requirements.toml",
+        allowedSandboxModes: ["read-only", "workspace-write"],
+      },
       dynamicToolsFingerprint: "tools-v1",
     });
 
@@ -55,6 +64,15 @@ describe("codex app-server session binding", () => {
       cwd: tempDir,
       model: "gpt-5.4-codex",
       modelProvider: "openai",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+      permissionSources: {
+        approvalPolicy: "workspace-policy",
+        sandbox: "workspace-policy",
+        approvalsReviewer: "workspace-policy",
+        requirementsPolicyPath: "/test/requirements.toml",
+        allowedSandboxModes: ["read-only", "workspace-write"],
+      },
       dynamicToolsFingerprint: "tools-v1",
     });
     await expect(fs.stat(resolveCodexAppServerBindingPath(sessionFile))).resolves.toBeTruthy();

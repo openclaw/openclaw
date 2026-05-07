@@ -21,6 +21,7 @@ const agentRuntimeMocks = vi.hoisted(() => ({
 vi.mock("./app-server/shared-client.js", () => sharedClientMocks);
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => agentRuntimeMocks);
 
+import { readCodexAppServerBinding } from "./app-server/session-binding.js";
 import {
   handleCodexConversationBindingResolved,
   handleCodexConversationInboundClaim,
@@ -35,6 +36,7 @@ describe("codex conversation binding", () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     sharedClientMocks.getSharedCodexAppServerClient.mockReset();
     agentRuntimeMocks.ensureAuthProfileStore.mockReset();
     agentRuntimeMocks.loadAuthProfileStoreForSecretsRuntime.mockReset();
@@ -435,6 +437,95 @@ describe("codex conversation binding", () => {
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
     }
+  });
+
+  it("repairs a legacy default-yolo binding when workspace policy forbids full access", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const requirementsPath = path.join(tempDir, "requirements.toml");
+    vi.stubEnv("OPENCLAW_CODEX_APP_SERVER_REQUIREMENTS_POLICY_PATH", requirementsPath);
+    await fs.writeFile(requirementsPath, 'allowed_sandbox_modes = ["WorkspaceWrite"]\n');
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-1",
+        cwd: tempDir,
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+      }),
+    );
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    const turnStartParams: Record<string, unknown>[] = [];
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        if (method === "turn/start") {
+          turnStartParams.push(requestParams);
+          setImmediate(() =>
+            notificationHandler?.({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turn: {
+                  id: "turn-1",
+                  status: "completed",
+                  items: [{ type: "agentMessage", id: "item-1", text: "policy repaired" }],
+                },
+              },
+            }),
+          );
+          return { turn: { id: "turn-1" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "hi",
+        bodyForAgent: "hi",
+        channel: "telegram",
+        isGroup: false,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "telegram",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "5185575566",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      { timeoutMs: 50 },
+    );
+
+    expect(result).toEqual({ handled: true, reply: { text: "policy repaired" } });
+    expect(turnStartParams[0]).toMatchObject({
+      approvalPolicy: "on-request",
+      sandboxPolicy: { type: "workspaceWrite" },
+    });
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+      permissionSources: expect.objectContaining({
+        sandbox: "workspace-policy",
+        requirementsPolicyPath: requirementsPath,
+      }),
+    });
   });
 
   it("falls back to content when the channel body for agent is blank", async () => {

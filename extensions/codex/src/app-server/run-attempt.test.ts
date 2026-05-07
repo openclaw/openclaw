@@ -330,6 +330,11 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
+    permissionSources: {
+      approvalPolicy: "default",
+      sandbox: "default",
+      approvalsReviewer: "default",
+    },
   };
 }
 
@@ -530,6 +535,10 @@ describe("runCodexAppServerAttempt", () => {
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-run-"));
+    vi.stubEnv(
+      "OPENCLAW_CODEX_APP_SERVER_REQUIREMENTS_POLICY_PATH",
+      path.join(tempDir, "missing-requirements.toml"),
+    );
   });
 
   afterEach(async () => {
@@ -4107,6 +4116,11 @@ describe("runCodexAppServerAttempt", () => {
       approvalPolicy: "on-request" as const,
       approvalsReviewer: "guardian_subagent" as const,
       sandbox: "danger-full-access" as const,
+      permissionSources: {
+        approvalPolicy: "config" as const,
+        sandbox: "config" as const,
+        approvalsReviewer: "config" as const,
+      },
       serviceTier: "flex" as const,
     };
 
@@ -4202,6 +4216,11 @@ describe("runCodexAppServerAttempt", () => {
         approvalPolicy: "never",
         approvalsReviewer: "user",
         sandbox: "workspace-write",
+        permissionSources: {
+          approvalPolicy: "default",
+          sandbox: "default",
+          approvalsReviewer: "default",
+        },
       },
     });
 
