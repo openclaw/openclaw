@@ -99,6 +99,14 @@ function encodeAuthProfileCredential(credential: AuthProfileCredential): string 
         credential.displayName ?? null,
         encodeUnknown(credential.metadata),
       ]);
+    case "aws-sdk":
+      return JSON.stringify([
+        "aws-sdk",
+        credential.provider,
+        credential.email ?? null,
+        credential.displayName ?? null,
+        encodeUnknown(credential.metadata),
+      ]);
     case "token":
       return JSON.stringify([
         "token",

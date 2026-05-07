@@ -128,13 +128,18 @@ export function resolveProviderAuthAliasMap(
       env,
       allowWorkspaceScopedSnapshot: true,
     }) ??
-    (normalizePluginsConfig(config.plugins).loadPaths.length === 0
-      ? getCurrentPluginMetadataSnapshot({
-          ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-          env,
-          allowWorkspaceScopedSnapshot: true,
-        })
-      : undefined) ??
+    (() => {
+      if (normalizePluginsConfig(config.plugins).loadPaths.length !== 0) {
+        return undefined;
+      }
+      const currentSnapshot = getCurrentPluginMetadataSnapshot({
+        ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+        env,
+        allowWorkspaceScopedSnapshot: true,
+        requireDefaultDiscoveryContext: true,
+      });
+      return currentSnapshot;
+    })() ??
     loadPluginMetadataSnapshot({
       config,
       ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
