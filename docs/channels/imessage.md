@@ -8,6 +8,8 @@ title: "iMessage"
 
 <Note>
 For OpenClaw iMessage deployments, use `imsg` on a signed-in macOS Messages host. If your Gateway runs on Linux or Windows, point `channels.imessage.cliPath` at an SSH wrapper that runs `imsg` on the Mac.
+
+**Known gap: no gateway-downtime catchup.** Messages that arrive while the gateway is down (crash, restart, Mac sleep, machine off) are not delivered to the agent once the gateway comes back up — `imsg watch` resumes from the current state and ignores anything that landed in `chat.db` during the gap. Tracked at [openclaw#78649](https://github.com/openclaw/openclaw/issues/78649).
 </Note>
 
 <Warning>
@@ -124,6 +126,7 @@ exec ssh -T gateway-host imsg "$@"
 - Messages must be signed in on the Mac running `imsg`.
 - Full Disk Access is required for the process context running OpenClaw/`imsg` (Messages DB access).
 - Automation permission is required to send messages through Messages.app.
+- For advanced actions (react / edit / unsend / threaded reply / effects / group ops), System Integrity Protection must be disabled — see [Enabling the imsg private API](#enabling-the-imsg-private-api) below. Basic text and media send/receive work without it.
 
 <Tip>
 Permissions are granted per process context. If gateway runs headless (LaunchAgent/SSH), run a one-time interactive command in that same context to trigger prompts:
@@ -135,6 +138,71 @@ imsg send <handle> "test"
 ```
 
 </Tip>
+
+## Enabling the imsg private API
+
+`imsg` ships in two operational modes:
+
+- **Basic mode** (default, no SIP changes needed): outbound text and media via `send`, inbound watch/history, chat list. This is what you get out of the box from a fresh `brew install steipete/tap/imsg` plus the standard macOS permissions above.
+- **Private API mode**: `imsg` injects a helper dylib into `Messages.app` to call internal `IMCore` functions. This is what unlocks `react`, `edit`, `unsend`, `reply` (threaded), `sendWithEffect`, `renameGroup`, `setGroupIcon`, `addParticipant`, `removeParticipant`, `leaveGroup`, plus typing indicators and read receipts.
+
+To reach the advanced action surface that this channel page documents, you need Private API mode. The `imsg` README is explicit about the requirement:
+
+> Advanced features such as `read`, `typing`, `launch`, bridge-backed rich send, message mutation, and chat management are opt-in. They require SIP to be disabled and a helper dylib to be injected into `Messages.app`. `imsg launch` refuses to inject when SIP is enabled.
+
+The helper-injection technique is a manual port of the BlueBubbles private-API surface (Apache-2.0 inspired) into `imsg`'s own dylib — no third-party binary, but the same SIP-disabled requirement that BlueBubbles' Private API mode has. There is no SIP-asymmetry between the two channels.
+
+<Warning>
+**Disabling SIP is a real security tradeoff.** SIP is one of macOS's core protections against running modified system code; turning it off system-wide opens up additional attack surface and side effects. Notably, **disabling SIP on Apple Silicon Macs also disables the ability to install and run iOS apps on your Mac**.
+
+Treat this as a deliberate operational choice, not a default. If your threat model can't tolerate SIP being off, both bundled iMessage and BlueBubbles will be limited to their basic modes — text and media send/receive only, no reactions / edit / unsend / effects / group ops on either channel.
+</Warning>
+
+### Setup
+
+1. **Install (or upgrade) `imsg`** on the Mac that runs Messages.app:
+
+   ```bash
+   brew install steipete/tap/imsg
+   imsg --version
+   imsg status --json
+   ```
+
+   The `imsg status --json` output reports `bridge_version`, `rpc_methods`, and per-method `selectors` so you can see what the current build supports before you start.
+
+2. **Disable System Integrity Protection.** This is macOS-version-specific, identical to the BlueBubbles flow because the underlying Apple requirement is the same:
+   - **macOS 10.13–10.15 (Sierra–Catalina):** disable Library Validation via Terminal, reboot to Recovery Mode, run `csrutil disable`, restart.
+   - **macOS 11+ (Big Sur and later), Intel:** Recovery Mode (or Internet Recovery), `csrutil disable`, restart.
+   - **macOS 11+, Apple Silicon:** power-button startup sequence to enter Recovery; on recent macOS versions hold the **Left Shift** key when you click Continue, then `csrutil disable`. Virtual-machine setups follow a separate flow — take a VM snapshot first.
+   - **macOS 26 / Tahoe:** library-validation policies and `imagent` private-entitlement checks have tightened further; `imsg` may need an updated build to keep up. If `imsg launch` injection or specific `selectors` start returning false after a macOS major upgrade, check `imsg`'s release notes before assuming the SIP step succeeded.
+
+   The [BlueBubbles Private API installation guide](https://docs.bluebubbles.app/private-api/installation) is the canonical step-by-step for the SIP-disable flow itself; the macOS-side steps are not specific to BB, only the helper that gets injected differs.
+
+3. **Inject the helper.** With SIP disabled and Messages.app signed in:
+
+   ```bash
+   imsg launch
+   ```
+
+   `imsg launch` refuses to inject when SIP is still enabled, so this also doubles as a confirmation that step 2 took.
+
+4. **Verify the bridge from OpenClaw:**
+
+   ```bash
+   openclaw channels status --probe
+   ```
+
+   The iMessage entry should report `works`, and `imsg status --json | jq '.selectors'` should show `retractMessagePart: true` plus whichever edit / typing / read selectors your macOS build exposes. The OpenClaw plugin per-method gating in `actions.ts` only advertises actions whose underlying selector is `true`, so the action surface you see in the agent's tool list reflects what the bridge can actually do on this host.
+
+If `openclaw channels status --probe` reports the channel as `works` but specific actions throw "iMessage `<action>` requires the imsg private API bridge" at dispatch time, run `imsg launch` again — the helper can fall out (Messages.app restart, OS update, etc.) and the cached `available: true` status will keep advertising actions until the next probe refreshes.
+
+### When you can't disable SIP
+
+If SIP-disabled isn't acceptable for your threat model:
+
+- Both `imsg` and BlueBubbles fall back to basic mode — text + media + receive only.
+- The OpenClaw plugin still advertises text/media send and inbound monitoring; it just hides `react`, `edit`, `unsend`, `reply`, `sendWithEffect`, and group ops from the action surface (per the per-method capability gate).
+- You can run a separate non-Apple-Silicon Mac (or a dedicated bot Mac) with SIP off for the iMessage workload, while keeping SIP enabled on your primary devices. See [Dedicated bot macOS user (separate iMessage identity)](#deployment-patterns) below.
 
 ## Access control and routing
 

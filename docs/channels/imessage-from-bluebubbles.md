@@ -14,7 +14,7 @@ This guide is opt-in. BlueBubbles still works and remains the right choice if yo
 ## When this migration makes sense
 
 - You already run `imsg` on the same Mac (or one reachable over SSH) where Messages.app is signed in.
-- You want one fewer moving part — no separate BlueBubbles server, no REST endpoint to authenticate, no webhook plumbing.
+- You want one fewer moving part — no separate BlueBubbles server, no REST endpoint to authenticate, no webhook plumbing. Single CLI binary instead of a server + client app + helper.
 - You are on a [supported macOS / `imsg` build](/channels/imessage#requirements-and-permissions-macos) where the private API probe reports `available: true`.
 
 ## When to stay on BlueBubbles
@@ -182,19 +182,22 @@ Tracker for raising the drop's log severity so this is no longer silent at `info
 
 ## Action parity at a glance
 
-| Action                                              | BlueBubbles | bundled iMessage                                                              |
-| --------------------------------------------------- | ----------- | ----------------------------------------------------------------------------- |
-| Send text / SMS fallback                            | ✅          | ✅                                                                            |
-| Send media (photo, video, file, voice)              | ✅          | ✅                                                                            |
-| Threaded reply (`reply_to_guid`)                    | ✅          | ✅ (closes [#51892](https://github.com/openclaw/openclaw/issues/51892))       |
-| Tapback (`react`)                                   | ✅          | ✅                                                                            |
-| Edit / unsend (macOS 13+ recipients)                | ✅          | ✅                                                                            |
-| Send with screen effect                             | ✅          | ✅ (closes part of [#9394](https://github.com/openclaw/openclaw/issues/9394)) |
-| Rich text bold / italic / underline / strikethrough | ✅          | ✅ (typed-run formatting via attributedBody)                                  |
-| Rename group / set group icon                       | ✅          | ✅                                                                            |
-| Add / remove participant, leave group               | ✅          | ✅                                                                            |
-| Read receipts and typing indicator                  | ✅          | ✅ (gated on private API probe)                                               |
-| Same-sender DM coalescing                           | ✅          | _(not yet)_                                                                   |
+| Action                                                     | BlueBubbles                         | bundled iMessage                                                                     |
+| ---------------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------ |
+| Send text / SMS fallback                                   | ✅                                  | ✅                                                                                   |
+| Send media (photo, video, file, voice)                     | ✅                                  | ✅                                                                                   |
+| Threaded reply (`reply_to_guid`)                           | ✅                                  | ✅ (closes [#51892](https://github.com/openclaw/openclaw/issues/51892))              |
+| Tapback (`react`)                                          | ✅                                  | ✅                                                                                   |
+| Edit / unsend (macOS 13+ recipients)                       | ✅                                  | ✅                                                                                   |
+| Send with screen effect                                    | ✅                                  | ✅ (closes part of [#9394](https://github.com/openclaw/openclaw/issues/9394))        |
+| Rich text bold / italic / underline / strikethrough        | ✅                                  | ✅ (typed-run formatting via attributedBody)                                         |
+| Rename group / set group icon                              | ✅                                  | ✅                                                                                   |
+| Add / remove participant, leave group                      | ✅                                  | ✅                                                                                   |
+| Read receipts and typing indicator                         | ✅                                  | ✅ (gated on private API probe)                                                      |
+| Same-sender DM coalescing                                  | ✅                                  | _(not yet)_                                                                          |
+| Catchup of inbound messages received while gateway is down | ✅ (webhook replay + history fetch) | _(not yet — tracked at [#78649](https://github.com/openclaw/openclaw/issues/78649))_ |
+
+The catchup gap is the most operationally significant one for production deployments: planned restarts, mac sleep, or an unexpected gateway crash that takes more than a few seconds will silently drop any inbound iMessage traffic that arrives during the gap when running on bundled iMessage. BlueBubbles' webhook + history-fetch flow recovers those messages on reconnect. If your deployment is sensitive to that, stay on BlueBubbles until [#78649](https://github.com/openclaw/openclaw/issues/78649) lands.
 
 ## Pairing, sessions, and ACP bindings
 
