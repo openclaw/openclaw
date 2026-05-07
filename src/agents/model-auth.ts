@@ -840,11 +840,13 @@ export function resolveModelAuthMode(
     });
   const profiles = listProfilesForProvider(authStore, resolved);
   if (profiles.length > 0) {
-    const modes = new Set(
-      profiles
-        .map((id) => authStore.profiles[id]?.type)
-        .filter((mode): mode is "api_key" | "aws-sdk" | "oauth" | "token" => Boolean(mode)),
-    );
+    const modes = new Set<"api_key" | "aws-sdk" | "oauth" | "token">();
+    for (const id of profiles) {
+      const mode = authStore.profiles[id]?.type;
+      if (mode === "api_key" || mode === "aws-sdk" || mode === "oauth" || mode === "token") {
+        modes.add(mode);
+      }
+    }
     const distinct = ["oauth", "token", "api_key", "aws-sdk"].filter((k) =>
       modes.has(k as "oauth" | "token" | "api_key" | "aws-sdk"),
     );

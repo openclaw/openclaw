@@ -480,20 +480,30 @@ async function executeMusicGenerationJob(params: {
       : undefined;
   const lines = [
     `Generated ${savedTracks.length} track${savedTracks.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
-    ...(warning ? [`Warning: ${warning}`] : []),
-    ...(params.timeoutNormalization
-      ? [
-          `Timeout normalized: requested ${params.timeoutNormalization.requested}ms; used ${params.timeoutNormalization.applied}ms.`,
-        ]
-      : []),
+  ];
+  if (warning) {
+    lines.push(`Warning: ${warning}`);
+  }
+  if (params.timeoutNormalization) {
+    lines.push(
+      `Timeout normalized: requested ${params.timeoutNormalization.requested}ms; used ${params.timeoutNormalization.applied}ms.`,
+    );
+  }
+  if (
     typeof requestedDurationSeconds === "number" &&
     typeof appliedDurationSeconds === "number" &&
     requestedDurationSeconds !== appliedDurationSeconds
-      ? `Duration normalized: requested ${requestedDurationSeconds}s; used ${appliedDurationSeconds}s.`
-      : null,
-    ...(result.lyrics?.length ? ["Lyrics returned.", ...result.lyrics] : []),
-    ...savedTracks.map((track) => `MEDIA:${track.path}`),
-  ].filter((entry): entry is string => Boolean(entry));
+  ) {
+    lines.push(
+      `Duration normalized: requested ${requestedDurationSeconds}s; used ${appliedDurationSeconds}s.`,
+    );
+  }
+  if (result.lyrics?.length) {
+    lines.push("Lyrics returned.", ...result.lyrics);
+  }
+  for (const track of savedTracks) {
+    lines.push(`MEDIA:${track.path}`);
+  }
   return {
     provider: result.provider,
     model: result.model,
@@ -738,12 +748,9 @@ export function createMusicGenerateTool(options?: {
           content: [
             {
               type: "text",
-              text: [
-                `Background task started for music generation (${taskHandle?.taskId ?? "unknown"}). Do not call music_generate again for this request. Wait for the completion event; I'll post the finished music here when it's ready.`,
-                timeout.message,
-              ]
-                .filter((entry): entry is string => Boolean(entry))
-                .join("\n"),
+              text: timeout.message
+                ? `Background task started for music generation (${taskHandle?.taskId ?? "unknown"}). Do not call music_generate again for this request. Wait for the completion event; I'll post the finished music here when it's ready.\n${timeout.message}`
+                : `Background task started for music generation (${taskHandle?.taskId ?? "unknown"}). Do not call music_generate again for this request. Wait for the completion event; I'll post the finished music here when it's ready.`,
             },
           ],
           details: {

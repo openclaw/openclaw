@@ -973,7 +973,9 @@ export const registerTelegramHandlers = ({
 
       // Build sender label.
       const senderName = user
-        ? [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || user.username
+        ? user.first_name && user.last_name
+          ? `${user.first_name} ${user.last_name}`.trim()
+          : user.first_name || user.last_name || user.username
         : undefined;
       const senderUsernameLabel = user?.username ? `@${user.username}` : undefined;
       let senderLabel = senderName;

@@ -51,16 +51,18 @@ function buildAgentSessionLines(params: {
   targetSessionKey: string;
   targetChannel?: string;
 }): string[] {
-  return [
-    params.requesterSessionKey
-      ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
-      : undefined,
-    params.requesterChannel
-      ? `Agent 1 (requester) channel: ${params.requesterChannel}.`
-      : undefined,
-    `Agent 2 (target) session: ${params.targetSessionKey}.`,
-    params.targetChannel ? `Agent 2 (target) channel: ${params.targetChannel}.` : undefined,
-  ].filter((line): line is string => Boolean(line));
+  const lines: string[] = [];
+  if (params.requesterSessionKey) {
+    lines.push(`Agent 1 (requester) session: ${params.requesterSessionKey}.`);
+  }
+  if (params.requesterChannel) {
+    lines.push(`Agent 1 (requester) channel: ${params.requesterChannel}.`);
+  }
+  lines.push(`Agent 2 (target) session: ${params.targetSessionKey}.`);
+  if (params.targetChannel) {
+    lines.push(`Agent 2 (target) channel: ${params.targetChannel}.`);
+  }
+  return lines;
 }
 
 export function buildAgentToAgentMessageContext(params: {
@@ -68,9 +70,7 @@ export function buildAgentToAgentMessageContext(params: {
   requesterChannel?: string;
   targetSessionKey: string;
 }) {
-  const lines = ["Agent-to-agent message context:", ...buildAgentSessionLines(params)].filter(
-    Boolean,
-  );
+  const lines = ["Agent-to-agent message context:", ...buildAgentSessionLines(params)];
   return lines.join("\n");
 }
 

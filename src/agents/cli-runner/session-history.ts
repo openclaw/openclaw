@@ -35,16 +35,21 @@ function coerceHistoryText(content: unknown): string {
   if (!Array.isArray(content)) {
     return "";
   }
-  return content
-    .flatMap((block) => {
-      if (!block || typeof block !== "object") {
-        return [];
-      }
-      const text = (block as { text?: unknown }).text;
-      return typeof text === "string" && text.trim().length > 0 ? [text.trim()] : [];
-    })
-    .join("\n")
-    .trim();
+  const lines: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const text = (block as { text?: unknown }).text;
+    if (typeof text !== "string") {
+      continue;
+    }
+    const trimmed = text.trim();
+    if (trimmed) {
+      lines.push(trimmed);
+    }
+  }
+  return lines.join("\n").trim();
 }
 
 export function buildCliSessionHistoryPrompt(params: {
@@ -53,31 +58,32 @@ export function buildCliSessionHistoryPrompt(params: {
   maxHistoryChars?: number;
 }): string | undefined {
   const maxHistoryChars = params.maxHistoryChars ?? MAX_CLI_SESSION_RESEED_HISTORY_CHARS;
-  const renderedHistoryRaw = params.messages
-    .flatMap((message) => {
-      if (!message || typeof message !== "object") {
-        return [];
-      }
-      const entry = message as HistoryMessage;
-      const role =
-        entry.role === "assistant"
-          ? "Assistant"
-          : entry.role === "user"
-            ? "User"
-            : entry.role === "compactionSummary"
-              ? "Compaction summary"
-              : undefined;
-      if (!role) {
-        return [];
-      }
-      const text =
-        entry.role === "compactionSummary" && typeof entry.summary === "string"
-          ? entry.summary.trim()
-          : coerceHistoryText(entry.content);
-      return text ? [`${role}: ${text}`] : [];
-    })
-    .join("\n\n")
-    .trim();
+  const renderedEntries: string[] = [];
+  for (const message of params.messages) {
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const entry = message as HistoryMessage;
+    const role =
+      entry.role === "assistant"
+        ? "Assistant"
+        : entry.role === "user"
+          ? "User"
+          : entry.role === "compactionSummary"
+            ? "Compaction summary"
+            : undefined;
+    if (!role) {
+      continue;
+    }
+    const text =
+      entry.role === "compactionSummary" && typeof entry.summary === "string"
+        ? entry.summary.trim()
+        : coerceHistoryText(entry.content);
+    if (text) {
+      renderedEntries.push(`${role}: ${text}`);
+    }
+  }
+  const renderedHistoryRaw = renderedEntries.join("\n\n").trim();
   const renderedHistory =
     renderedHistoryRaw.length > maxHistoryChars
       ? `${renderedHistoryRaw.slice(0, maxHistoryChars).trimEnd()}\n[OpenClaw reseed history truncated]`
@@ -177,10 +183,13 @@ export async function loadCliSessionHistoryMessages(params: {
   agentId?: string;
   config?: OpenClawConfig;
 }): Promise<unknown[]> {
-  const history = (await loadCliSessionEntries(params)).flatMap((entry) => {
+  const history: unknown[] = [];
+  for (const entry of await loadCliSessionEntries(params)) {
     const candidate = entry as HistoryEntry;
-    return candidate.type === "message" ? [candidate.message] : [];
-  });
+    if (candidate.type === "message") {
+      history.push(candidate.message);
+    }
+  }
   return limitAgentHookHistoryMessages(history, MAX_CLI_SESSION_HISTORY_MESSAGES);
 }
 
@@ -206,10 +215,14 @@ export async function loadCliSessionReseedMessages(params: {
     return [];
   }
 
-  const tailMessages = entries.slice(latestCompactionIndex + 1).flatMap((entry) => {
+  const tailMessages: unknown[] = [];
+  for (let index = latestCompactionIndex + 1; index < entries.length; index += 1) {
+    const entry = entries[index];
     const candidate = entry as HistoryEntry;
-    return candidate.type === "message" ? [candidate.message] : [];
-  });
+    if (candidate.type === "message") {
+      tailMessages.push(candidate.message);
+    }
+  }
   return [
     {
       role: "compactionSummary",

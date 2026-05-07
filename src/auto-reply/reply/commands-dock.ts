@@ -43,7 +43,8 @@ function isDirectDockSource(params: HandleCommandsParams): boolean {
 }
 
 function collectSourcePeerCandidates(params: HandleCommandsParams): string[] {
-  return [
+  const candidates: string[] = [];
+  for (const value of [
     params.ctx.NativeDirectUserId,
     params.ctx.SenderId,
     params.command.senderId,
@@ -53,9 +54,13 @@ function collectSourcePeerCandidates(params: HandleCommandsParams): string[] {
     params.command.from,
     params.ctx.OriginatingTo,
     params.ctx.To,
-  ]
-    .map((value) => normalizeOptionalString(value))
-    .filter((value): value is string => Boolean(value));
+  ]) {
+    const normalized = normalizeOptionalString(value);
+    if (normalized) {
+      candidates.push(normalized);
+    }
+  }
+  return candidates;
 }
 
 function buildSourceIdentityCandidates(

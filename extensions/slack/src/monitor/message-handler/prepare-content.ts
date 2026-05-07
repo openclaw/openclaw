@@ -312,18 +312,23 @@ export async function resolveSlackMessageContent(params: {
 
   const mergedMedia = [...(media ?? []), ...(attachmentContent?.media ?? [])];
   const effectiveDirectMedia = mergedMedia.length > 0 ? mergedMedia : null;
-  const mediaPlaceholder = effectiveDirectMedia
-    ? effectiveDirectMedia.map((item) => item.placeholder).join(" ")
-    : undefined;
+  let mediaPlaceholder: string | undefined;
+  if (effectiveDirectMedia) {
+    for (const item of effectiveDirectMedia) {
+      mediaPlaceholder = mediaPlaceholder
+        ? `${mediaPlaceholder} ${item.placeholder}`
+        : item.placeholder;
+    }
+  }
 
   const fallbackFiles = ownFiles ?? [];
-  const fileOnlyFallback =
-    !mediaPlaceholder && fallbackFiles.length > 0
-      ? fallbackFiles
-          .slice(0, MAX_SLACK_MEDIA_FILES)
-          .map((file) => formatSlackFileReference(file))
-          .join(", ")
-      : undefined;
+  let fileOnlyFallback: string | undefined;
+  if (!mediaPlaceholder && fallbackFiles.length > 0) {
+    for (let index = 0; index < fallbackFiles.length && index < MAX_SLACK_MEDIA_FILES; index += 1) {
+      const reference = formatSlackFileReference(fallbackFiles[index]);
+      fileOnlyFallback = fileOnlyFallback ? `${fileOnlyFallback}, ${reference}` : reference;
+    }
+  }
   const fileOnlyPlaceholder = fileOnlyFallback ? `[Slack file: ${fileOnlyFallback}]` : undefined;
 
   let botAttachmentText: string | undefined;

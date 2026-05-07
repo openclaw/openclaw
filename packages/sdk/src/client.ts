@@ -142,12 +142,19 @@ function splitModelRef(model: string | undefined): { provider?: string; model?: 
 }
 
 function assertNoUnsupportedRunOptions(params: AgentRunParams): void {
-  const unsupported = [
-    params.workspace ? "workspace" : undefined,
-    params.runtime ? "runtime" : undefined,
-    params.environment ? "environment" : undefined,
-    params.approvals ? "approvals" : undefined,
-  ].filter((value): value is string => Boolean(value));
+  const unsupported: string[] = [];
+  if (params.workspace) {
+    unsupported.push("workspace");
+  }
+  if (params.runtime) {
+    unsupported.push("runtime");
+  }
+  if (params.environment) {
+    unsupported.push("environment");
+  }
+  if (params.approvals) {
+    unsupported.push("approvals");
+  }
   if (unsupported.length === 0) {
     return;
   }

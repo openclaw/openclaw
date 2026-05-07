@@ -212,7 +212,13 @@ export async function resolveTelegramInboundBody(params: {
   if (stickerCacheHit) {
     const emoji = allMedia[0]?.stickerMetadata?.emoji;
     const setName = allMedia[0]?.stickerMetadata?.setName;
-    const stickerContext = [emoji, setName ? `from "${setName}"` : null].filter(Boolean).join(" ");
+    const stickerContext = emoji
+      ? setName
+        ? `${emoji} from "${setName}"`
+        : emoji
+      : setName
+        ? `from "${setName}"`
+        : "";
     placeholder = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}] ${cachedStickerDescription}`;
   }
 
@@ -220,7 +226,8 @@ export async function resolveTelegramInboundBody(params: {
   const locationText = locationData ? formatLocationText(locationData) : undefined;
   const rawText = expandTextLinks(messageTextParts.text, messageTextParts.entities).trim();
   const hasUserText = Boolean(rawText || locationText);
-  let rawBody = [rawText, locationText].filter(Boolean).join("\n").trim();
+  let rawBody =
+    rawText && locationText ? `${rawText}\n${locationText}` : rawText || locationText || "";
   if (!rawBody) {
     rawBody = placeholder;
   }

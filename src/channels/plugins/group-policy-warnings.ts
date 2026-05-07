@@ -19,7 +19,16 @@ type WarningCollector<Params> = (params: Params) => string[];
 export function composeWarningCollectors<Params>(
   ...collectors: Array<WarningCollector<Params> | null | undefined>
 ): WarningCollector<Params> {
-  return (params) => collectors.flatMap((collector) => collector?.(params) ?? []);
+  return (params) => {
+    const warnings: string[] = [];
+    for (const collector of collectors) {
+      const next = collector?.(params);
+      if (next?.length) {
+        warnings.push(...next);
+      }
+    }
+    return warnings;
+  };
 }
 
 export function projectWarningCollector<Params, Projected>(
@@ -70,14 +79,21 @@ export function projectAccountConfigWarningCollector<
 export function createConditionalWarningCollector<Params>(
   ...collectors: Array<(params: Params) => string | string[] | null | undefined | false>
 ): WarningCollector<Params> {
-  return (params) =>
-    collectors.flatMap((collector) => {
+  return (params) => {
+    const warnings: string[] = [];
+    for (const collector of collectors) {
       const next = collector(params);
       if (!next) {
-        return [];
+        continue;
       }
-      return Array.isArray(next) ? next : [next];
-    });
+      if (Array.isArray(next)) {
+        warnings.push(...next);
+      } else {
+        warnings.push(next);
+      }
+    }
+    return warnings;
+  };
 }
 
 export function composeAccountWarningCollectors<

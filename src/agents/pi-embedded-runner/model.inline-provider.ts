@@ -126,16 +126,17 @@ function resolveInlineProviderTransport(params: { api?: Api | null; baseUrl?: st
 export function buildInlineProviderModels(
   providers: Record<string, InlineProviderConfig>,
 ): InlineModelEntry[] {
-  return Object.entries(providers).flatMap(([providerId, entry]) => {
+  const models: InlineModelEntry[] = [];
+  for (const [providerId, entry] of Object.entries(providers)) {
     const trimmed = providerId.trim();
     if (!trimmed) {
-      return [];
+      continue;
     }
     const providerHeaders = sanitizeModelHeaders(entry?.headers, {
       stripSecretRefMarkers: true,
     });
     const providerRequest = sanitizeConfiguredModelProviderRequest(entry?.request);
-    return (entry?.models ?? []).map((model) => {
+    for (const model of entry?.models ?? []) {
       const transport = resolveInlineProviderTransport({
         api: model.api ?? entry?.api,
         baseUrl: entry?.baseUrl,
@@ -154,25 +155,28 @@ export function buildInlineProviderModels(
         capability: "llm",
         transport: "stream",
       });
-      return attachModelProviderRequestTransport(
-        {
-          ...model,
-          contextWindow: model.contextWindow ?? entry?.contextWindow,
-          contextTokens: model.contextTokens ?? entry?.contextTokens,
-          maxTokens: model.maxTokens ?? entry?.maxTokens,
-          input: resolveProviderModelInput({
+      models.push(
+        attachModelProviderRequestTransport(
+          {
+            ...model,
+            contextWindow: model.contextWindow ?? entry?.contextWindow,
+            contextTokens: model.contextTokens ?? entry?.contextTokens,
+            maxTokens: model.maxTokens ?? entry?.maxTokens,
+            input: resolveProviderModelInput({
+              provider: trimmed,
+              modelId: model.id,
+              modelName: model.name,
+              input: model.input,
+            }),
             provider: trimmed,
-            modelId: model.id,
-            modelName: model.name,
-            input: model.input,
-          }),
-          provider: trimmed,
-          baseUrl: requestConfig.baseUrl ?? transport.baseUrl,
-          api: requestConfig.api ?? model.api,
-          headers: requestConfig.headers,
-        },
-        providerRequest,
+            baseUrl: requestConfig.baseUrl ?? transport.baseUrl,
+            api: requestConfig.api ?? model.api,
+            headers: requestConfig.headers,
+          },
+          providerRequest,
+        ),
       );
-    });
-  });
+    }
+  }
+  return models;
 }

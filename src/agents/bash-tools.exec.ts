@@ -1141,16 +1141,25 @@ function parseOpenClawChannelsLoginShellCommand(raw: string): boolean {
 function rejectUnsafeControlShellCommand(command: string): void {
   const rawCommand = command.trim();
   const analysis = analyzeShellCommand({ command: rawCommand });
-  const candidates = analysis.ok
-    ? analysis.segments.flatMap((segment) => buildCommandPayloadCandidates(segment.argv))
-    : rawCommand
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .flatMap((line) => {
-          const argv = splitShellArgs(line);
-          return argv ? buildCommandPayloadCandidates(argv) : [line];
-        });
+  const candidates: string[] = [];
+  if (analysis.ok) {
+    for (const segment of analysis.segments) {
+      candidates.push(...buildCommandPayloadCandidates(segment.argv));
+    }
+  } else {
+    for (const rawLine of rawCommand.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line) {
+        continue;
+      }
+      const argv = splitShellArgs(line);
+      if (argv) {
+        candidates.push(...buildCommandPayloadCandidates(argv));
+      } else {
+        candidates.push(line);
+      }
+    }
+  }
   for (const candidate of candidates) {
     if (parseExecApprovalShellCommand(candidate)) {
       throw new Error(

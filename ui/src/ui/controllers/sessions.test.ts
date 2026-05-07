@@ -86,6 +86,7 @@ describe("createSessionAndRefresh", () => {
       parentSessionKey: "agent:main:main",
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -149,6 +150,7 @@ describe("deleteSessionsAndRefresh", () => {
       deleteTranscript: true,
     });
     expect(request).toHaveBeenNthCalledWith(3, "sessions.list", {
+      configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -244,6 +246,7 @@ describe("deleteSessionsAndRefresh", () => {
     expect(deleted).toEqual(["key-a"]);
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -372,6 +375,7 @@ describe("loadSessions", () => {
     await loadSessions(state);
 
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      configuredAgentsOnly: true,
       limit: 50,
       includeGlobal: true,
       includeUnknown: true,
@@ -402,6 +406,7 @@ describe("loadSessions", () => {
 
     expect(request).toHaveBeenCalledWith("sessions.list", {
       activeMinutes: 120,
+      configuredAgentsOnly: true,
       limit: 50,
       includeGlobal: true,
       includeUnknown: true,
@@ -451,12 +456,14 @@ describe("loadSessions", () => {
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
       activeMinutes: 30,
+      configuredAgentsOnly: true,
       limit: 10,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -540,6 +547,7 @@ describe("loadSessions", () => {
     await loadSessions(state);
 
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
+      configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,

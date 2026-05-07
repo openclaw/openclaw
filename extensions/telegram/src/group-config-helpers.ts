@@ -13,11 +13,11 @@ export function resolveTelegramGroupPromptSettings(params: {
   groupSystemPrompt: string | undefined;
 } {
   const skillFilter = firstDefined(params.topicConfig?.skills, params.groupConfig?.skills);
-  const systemPromptParts = [
-    params.groupConfig?.systemPrompt?.trim() || null,
-    params.topicConfig?.systemPrompt?.trim() || null,
-  ].filter((entry): entry is string => Boolean(entry));
+  const groupPrompt = params.groupConfig?.systemPrompt?.trim() || "";
+  const topicPrompt = params.topicConfig?.systemPrompt?.trim() || "";
   const groupSystemPrompt =
-    systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
+    groupPrompt && topicPrompt
+      ? `${groupPrompt}\n\n${topicPrompt}`
+      : groupPrompt || topicPrompt || undefined;
   return { skillFilter, groupSystemPrompt };
 }

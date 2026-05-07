@@ -221,11 +221,15 @@ function buildEmbeddedContextFromTemplate(params: {
 }
 
 function normalizeMemberRoleIds(value: TemplateContext["MemberRoleIds"]): string[] | undefined {
-  const roles = Array.isArray(value)
-    ? value
-        .map((roleId) => normalizeOptionalString(roleId))
-        .filter((roleId): roleId is string => Boolean(roleId))
-    : [];
+  const roles: string[] = [];
+  if (Array.isArray(value)) {
+    for (const roleId of value) {
+      const normalized = normalizeOptionalString(roleId);
+      if (normalized) {
+        roles.push(normalized);
+      }
+    }
+  }
   return roles.length > 0 ? roles : undefined;
 }
 

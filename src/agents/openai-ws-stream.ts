@@ -141,7 +141,9 @@ type AssistantMessageEventStreamLike = {
 
 class LocalAssistantMessageEventStream implements AssistantMessageEventStreamLike {
   private readonly queue: AssistantMessageEvent[] = [];
+  private queueIndex = 0;
   private readonly waiting: Array<(value: IteratorResult<AssistantMessageEvent>) => void> = [];
+  private waitingIndex = 0;
   private done = false;
   private readonly finalResultPromise: Promise<AssistantMessage>;
   private resolveFinalResult!: (result: AssistantMessage) => void;
@@ -163,7 +165,7 @@ class LocalAssistantMessageEventStream implements AssistantMessageEventStreamLik
       this.done = true;
       this.resolveFinalResult(event.error);
     }
-    const waiter = this.waiting.shift();
+    const waiter = this.nextWaiter();
     if (waiter) {
       waiter({ value: event, done: false });
       return;
@@ -176,16 +178,19 @@ class LocalAssistantMessageEventStream implements AssistantMessageEventStreamLik
     if (result) {
       this.resolveFinalResult(result);
     }
-    while (this.waiting.length > 0) {
-      const waiter = this.waiting.shift();
-      waiter?.({ value: undefined as unknown as AssistantMessageEvent, done: true });
+    let waiter = this.nextWaiter();
+    while (waiter) {
+      waiter({ value: undefined as unknown as AssistantMessageEvent, done: true });
+      waiter = this.nextWaiter();
     }
   }
 
   async *[Symbol.asyncIterator](): AsyncIterator<AssistantMessageEvent> {
     while (true) {
-      if (this.queue.length > 0) {
-        yield this.queue.shift()!;
+      if (this.queueIndex < this.queue.length) {
+        const event = this.queue[this.queueIndex++];
+        this.compactQueueIfNeeded();
+        yield event;
         continue;
       }
       if (this.done) {
@@ -203,6 +208,31 @@ class LocalAssistantMessageEventStream implements AssistantMessageEventStreamLik
 
   result(): Promise<AssistantMessage> {
     return this.finalResultPromise;
+  }
+
+  private nextWaiter(): ((value: IteratorResult<AssistantMessageEvent>) => void) | undefined {
+    if (this.waitingIndex >= this.waiting.length) {
+      return undefined;
+    }
+    const waiter = this.waiting[this.waitingIndex++];
+    if (this.waitingIndex === this.waiting.length) {
+      this.waiting.length = 0;
+      this.waitingIndex = 0;
+    } else if (this.waitingIndex > 16 && this.waitingIndex * 2 > this.waiting.length) {
+      this.waiting.splice(0, this.waitingIndex);
+      this.waitingIndex = 0;
+    }
+    return waiter;
+  }
+
+  private compactQueueIfNeeded(): void {
+    if (this.queueIndex === this.queue.length) {
+      this.queue.length = 0;
+      this.queueIndex = 0;
+    } else if (this.queueIndex > 64 && this.queueIndex * 2 > this.queue.length) {
+      this.queue.splice(0, this.queueIndex);
+      this.queueIndex = 0;
+    }
   }
 }
 

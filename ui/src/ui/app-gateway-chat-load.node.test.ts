@@ -1,6 +1,5 @@
 // @vitest-environment node
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { connectGateway } from "./app-gateway.ts";
 import type { GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 
@@ -14,6 +13,8 @@ const loadHealthStateMock = vi.hoisted(() => vi.fn(async () => undefined));
 const loadNodesMock = vi.hoisted(() => vi.fn(async () => undefined));
 const subscribeSessionsMock = vi.hoisted(() => vi.fn(async () => undefined));
 const verifyPushMock = vi.hoisted(() => vi.fn(async () => undefined));
+
+let connectGateway: typeof import("./app-gateway.ts").connectGateway;
 
 type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
@@ -183,7 +184,9 @@ function connectHost(tab: Tab) {
   return { host, client };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.resetModules();
+  ({ connectGateway } = await import("./app-gateway.ts"));
   gatewayClients.length = 0;
   refreshActiveTabMock.mockClear();
   refreshChatAvatarMock.mockClear();
@@ -198,21 +201,25 @@ beforeEach(() => {
 });
 
 describe("connectGateway chat load startup work", () => {
-  it("lets the active chat refresh own avatar loading on initial chat hello", () => {
+  it("lets the active chat refresh own avatar loading on initial chat hello", async () => {
     const { host, client } = connectHost("chat");
 
     client.emitHello();
 
-    expect(refreshActiveTabMock).toHaveBeenCalledWith(host);
+    await vi.waitFor(() => {
+      expect(refreshActiveTabMock).toHaveBeenCalledWith(host);
+    });
     expect(refreshChatAvatarMock).not.toHaveBeenCalled();
   });
 
-  it("still preloads the chat avatar when connecting outside the chat tab", () => {
+  it("still preloads the chat avatar when connecting outside the chat tab", async () => {
     const { host, client } = connectHost("overview");
 
     client.emitHello();
 
-    expect(refreshActiveTabMock).toHaveBeenCalledWith(host);
+    await vi.waitFor(() => {
+      expect(refreshActiveTabMock).toHaveBeenCalledWith(host);
+    });
     expect(refreshChatAvatarMock).toHaveBeenCalledWith(host);
   });
 });

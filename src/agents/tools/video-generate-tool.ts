@@ -699,15 +699,25 @@ async function executeVideoGenerationJob(params: {
   ];
   const lines = [
     `Generated ${totalCount} video${totalCount === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
-    ...(warning ? [`Warning: ${warning}`] : []),
+  ];
+  if (warning) {
+    lines.push(`Warning: ${warning}`);
+  }
+  if (
     typeof requestedDurationSeconds === "number" &&
     typeof normalizedDurationSeconds === "number" &&
     requestedDurationSeconds !== normalizedDurationSeconds
-      ? `Duration normalized: requested ${requestedDurationSeconds}s; used ${normalizedDurationSeconds}s.`
-      : null,
-    ...savedVideos.map((video) => `MEDIA:${video.path}`),
-    ...urlOnlyVideos.map((video) => `MEDIA:${video.url}`),
-  ].filter((entry): entry is string => Boolean(entry));
+  ) {
+    lines.push(
+      `Duration normalized: requested ${requestedDurationSeconds}s; used ${normalizedDurationSeconds}s.`,
+    );
+  }
+  for (const video of savedVideos) {
+    lines.push(`MEDIA:${video.path}`);
+  }
+  for (const video of urlOnlyVideos) {
+    lines.push(`MEDIA:${video.url}`);
+  }
 
   return {
     provider: result.provider,

@@ -60,11 +60,17 @@ function parseChoices(
   maxItems: number,
   options?: { allowStyle?: boolean },
 ): SlackChoice[] {
-  return raw
-    .split(",")
-    .map((entry) => parseChoice(entry, options))
-    .filter((entry): entry is SlackChoice => Boolean(entry))
-    .slice(0, maxItems);
+  const choices: SlackChoice[] = [];
+  for (const entry of raw.split(",")) {
+    const choice = parseChoice(entry, options);
+    if (choice) {
+      choices.push(choice);
+      if (choices.length >= maxItems) {
+        break;
+      }
+    }
+  }
+  return choices;
 }
 
 function buildTextBlock(

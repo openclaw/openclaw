@@ -1492,7 +1492,13 @@ export async function promptResolvedAllowFrom(params: {
     });
     const parts = params.parseInputs(entry);
     if (!params.token) {
-      const ids = parts.map(params.parseId).filter(Boolean) as string[];
+      const ids: string[] = [];
+      for (const part of parts) {
+        const id = params.parseId(part);
+        if (id) {
+          ids.push(id);
+        }
+      }
       if (ids.length !== parts.length) {
         await params.prompter.note(params.invalidWithoutTokenNote, params.label);
         continue;

@@ -52,16 +52,18 @@ function listKnownEnvApiKeyMarkers(): Set<string> {
 }
 
 export function listKnownNonSecretApiKeyMarkers(): string[] {
-  knownNonSecretApiKeyMarkersCache ??= [
-    ...new Set([
-      ...CORE_NON_SECRET_API_KEY_MARKERS,
-      ...listOpenClawPluginManifestMetadata().flatMap((plugin) =>
-        plugin.origin === "bundled"
-          ? normalizeStringList(plugin.manifest.nonSecretAuthMarkers)
-          : [],
-      ),
-    ]),
-  ];
+  if (!knownNonSecretApiKeyMarkersCache) {
+    const markers = new Set<string>(CORE_NON_SECRET_API_KEY_MARKERS);
+    for (const plugin of listOpenClawPluginManifestMetadata()) {
+      if (plugin.origin !== "bundled") {
+        continue;
+      }
+      for (const marker of normalizeStringList(plugin.manifest.nonSecretAuthMarkers)) {
+        markers.add(marker);
+      }
+    }
+    knownNonSecretApiKeyMarkersCache = [...markers];
+  }
   return [...knownNonSecretApiKeyMarkersCache];
 }
 
