@@ -1,8 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
 
+type InboundBodyMock = (arg: unknown) => Promise<{
+  bodyText: string;
+  rawBody: string;
+  historyKey: undefined;
+  commandAuthorized: boolean;
+  effectiveWasMentioned: boolean;
+  canDetectMention: boolean;
+  shouldBypassMention: boolean;
+  stickerCacheHit: boolean;
+  locationData: undefined;
+}>;
+
 const inboundBodyMock = vi.hoisted(() =>
-  vi.fn(async () => ({
+  vi.fn<InboundBodyMock>(async () => ({
     bodyText: "hello",
     rawBody: "hello",
     historyKey: undefined,
