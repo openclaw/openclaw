@@ -539,6 +539,8 @@ export type {
  * plugin-owned transport family.
  */
 export type ProviderNormalizeTransportContext = {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
   provider: string;
   api?: string | null;
   baseUrl?: string;
