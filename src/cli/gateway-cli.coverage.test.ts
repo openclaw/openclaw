@@ -44,6 +44,22 @@ vi.mock(
   new URL("../../gateway/call.ts", new URL("./gateway-cli/call.ts", import.meta.url)).href,
   () => ({
     callGateway: (opts: unknown) => callGateway(opts),
+    isGatewayTransportError: (value: unknown) =>
+      value instanceof Error && value.name === "GatewayTransportError",
+    buildGatewayTransportErrorJson: (error: Error, context: Record<string, unknown>) => ({
+      ok: false,
+      error: {
+        type: "gateway_transport",
+        code: "gateway_closed",
+        message: error.message,
+        kind: "closed",
+        ...context,
+        gateway: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+        },
+      },
+    }),
     randomIdempotencyKey: () => "rk_test",
   }),
 );
@@ -151,6 +167,28 @@ describe("gateway-cli coverage", () => {
     await runGatewayCommand(["gateway", "probe", "--json"]);
 
     expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("prints JSON for gateway health transport failures in JSON mode", async () => {
+    callGateway.mockRejectedValueOnce(
+      Object.assign(new Error("gateway closed (1006): no close reason"), {
+        name: "GatewayTransportError",
+        kind: "closed",
+      }),
+    );
+
+    await expectGatewayExit(["gateway", "health", "--json"]);
+
+    expect(runtimeErrors).toEqual([]);
+    expect(JSON.parse(runtimeLogs.join("\n"))).toMatchObject({
+      ok: false,
+      error: {
+        type: "gateway_transport",
+        code: "gateway_closed",
+        command: "gateway health",
+        method: "health",
+      },
+    });
   });
 
   it("registers gateway stability and routes to diagnostics RPC", async () => {

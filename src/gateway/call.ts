@@ -131,6 +131,60 @@ export function isGatewayTransportError(value: unknown): value is GatewayTranspo
   );
 }
 
+export type GatewayTransportErrorJson = {
+  ok: false;
+  error: {
+    type: "gateway_transport";
+    code: "gateway_closed" | "gateway_timeout";
+    message: string;
+    kind: GatewayTransportErrorKind;
+    command?: string;
+    method?: string;
+    closeCode?: number;
+    reason?: string;
+    timeoutMs?: number;
+    gateway: {
+      url: string;
+      urlSource: string;
+      message?: string;
+    };
+  };
+};
+
+function gatewayTransportErrorCode(
+  error: GatewayTransportError,
+): GatewayTransportErrorJson["error"]["code"] {
+  return error.kind === "timeout" ? "gateway_timeout" : "gateway_closed";
+}
+
+export function buildGatewayTransportErrorJson(
+  error: GatewayTransportError,
+  context: {
+    command?: string;
+    method?: string;
+  } = {},
+): GatewayTransportErrorJson {
+  return {
+    ok: false,
+    error: {
+      type: "gateway_transport",
+      code: gatewayTransportErrorCode(error),
+      message: error.message,
+      kind: error.kind,
+      ...(context.command ? { command: context.command } : {}),
+      ...(context.method ? { method: context.method } : {}),
+      ...(typeof error.code === "number" ? { closeCode: error.code } : {}),
+      ...(typeof error.reason === "string" ? { reason: error.reason } : {}),
+      ...(typeof error.timeoutMs === "number" ? { timeoutMs: error.timeoutMs } : {}),
+      gateway: {
+        url: error.connectionDetails.url,
+        urlSource: error.connectionDetails.urlSource,
+        ...(error.connectionDetails.message ? { message: error.connectionDetails.message } : {}),
+      },
+    },
+  };
+}
+
 const defaultCreateGatewayClient = (opts: GatewayClientOptions) => new GatewayClient(opts);
 const defaultGatewayCallDeps = {
   createGatewayClient: defaultCreateGatewayClient,

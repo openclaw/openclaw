@@ -21,6 +21,22 @@ vi.mock("../gateway/call.js", () => ({
     Reflect.apply(callGatewayMock, undefined, args),
   buildGatewayConnectionDetails: (...args: [unknown, ...unknown[]]) =>
     Reflect.apply(buildGatewayConnectionDetailsMock, undefined, args),
+  isGatewayTransportError: (value: unknown) =>
+    value instanceof Error && value.name === "GatewayTransportError",
+  buildGatewayTransportErrorJson: (error: Error, context: Record<string, unknown>) => ({
+    ok: false,
+    error: {
+      type: "gateway_transport",
+      code: "gateway_closed",
+      message: error.message,
+      kind: "closed",
+      ...context,
+      gateway: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+      },
+    },
+  }),
 }));
 
 vi.mock("../config/config.js", () => ({

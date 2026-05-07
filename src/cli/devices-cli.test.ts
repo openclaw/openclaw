@@ -33,6 +33,22 @@ const {
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
   buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
+  isGatewayTransportError: (value: unknown) =>
+    value instanceof Error && value.name === "GatewayTransportError",
+  buildGatewayTransportErrorJson: (error: Error, context: Record<string, unknown>) => ({
+    ok: false,
+    error: {
+      type: "gateway_transport",
+      code: "gateway_closed",
+      message: error.message,
+      kind: "closed",
+      ...context,
+      gateway: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+      },
+    },
+  }),
 }));
 
 vi.mock("./progress.js", () => ({
@@ -633,6 +649,31 @@ describe("devices cli local fallback", () => {
       runDevicesCommand(["list", "--json", "--url", "ws://127.0.0.1:18789"]),
     ).rejects.toThrow("pairing required");
     expect(listDevicePairing).not.toHaveBeenCalled();
+  });
+
+  it("prints JSON for transport failures in list JSON mode", async () => {
+    callGateway.mockRejectedValueOnce(
+      Object.assign(new Error("gateway closed (1006): no close reason"), {
+        name: "GatewayTransportError",
+        kind: "closed",
+      }),
+    );
+
+    await runDevicesCommand(["list", "--json"]);
+
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ok: false,
+        error: expect.objectContaining({
+          type: "gateway_transport",
+          code: "gateway_closed",
+          command: "devices list",
+          method: "device.pair.list",
+        }),
+      }),
+    );
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 });
 

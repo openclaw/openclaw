@@ -54,6 +54,22 @@ const createHealthSummary = (params: {
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
+  isGatewayTransportError: (value: unknown) =>
+    value instanceof Error && value.name === "GatewayTransportError",
+  buildGatewayTransportErrorJson: (error: Error, context: Record<string, unknown>) => ({
+    ok: false,
+    error: {
+      type: "gateway_transport",
+      code: "gateway_closed",
+      message: error.message,
+      kind: "closed",
+      ...context,
+      gateway: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+      },
+    },
+  }),
 }));
 
 describe("healthCommand", () => {
@@ -95,6 +111,29 @@ describe("healthCommand", () => {
     expect(parsed.channels.whatsapp?.linked).toBe(true);
     expect(parsed.channels.telegram?.configured).toBe(true);
     expect(parsed.sessions.count).toBe(1);
+  });
+
+  it("outputs JSON transport failures when JSON mode is requested", async () => {
+    const error = Object.assign(new Error("gateway closed (1006): no close reason"), {
+      name: "GatewayTransportError",
+      kind: "closed",
+    });
+    callGatewayMock.mockRejectedValueOnce(error);
+
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
+
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    const logged = runtime.log.mock.calls[0]?.[0] as string;
+    expect(JSON.parse(logged)).toMatchObject({
+      ok: false,
+      error: {
+        type: "gateway_transport",
+        code: "gateway_closed",
+        command: "health",
+        method: "health",
+      },
+    });
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("passes explicit gateway credentials through to the gateway call", async () => {

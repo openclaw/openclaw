@@ -134,6 +134,7 @@ vi.mock("./event-loop-ready.js", () => ({
 const {
   __testing,
   buildGatewayConnectionDetails,
+  buildGatewayTransportErrorJson,
   callGateway,
   callGatewayCli,
   callGatewayScoped,
@@ -873,6 +874,46 @@ describe("callGateway error details", () => {
     });
   });
 
+  it("builds a structured JSON payload for gateway close failures", async () => {
+    startMode = "close";
+    closeCode = 1006;
+    closeReason = "";
+    setLocalLoopbackGatewayConfig();
+
+    let err: unknown;
+    try {
+      await callGateway({ method: "health" });
+    } catch (caught) {
+      err = caught;
+    }
+
+    expect(isGatewayTransportError(err)).toBe(true);
+    if (!isGatewayTransportError(err)) {
+      throw new Error("expected GatewayTransportError");
+    }
+    expect(
+      buildGatewayTransportErrorJson(err, {
+        command: "health",
+        method: "health",
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: {
+        type: "gateway_transport",
+        code: "gateway_closed",
+        kind: "closed",
+        command: "health",
+        method: "health",
+        closeCode: 1006,
+        reason: "no close reason",
+        gateway: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+        },
+      },
+    });
+  });
+
   it("keeps the request alive through internally retried startup-unavailable handshakes", async () => {
     startMode = "startup-retry-then-hello";
     setLocalLoopbackGatewayConfig();
@@ -919,6 +960,38 @@ describe("callGateway error details", () => {
       name: "GatewayTransportError",
       kind: "timeout",
       timeoutMs: 5,
+    });
+  });
+
+  it("builds a structured JSON payload for gateway timeout failures", async () => {
+    startMode = "silent";
+    setLocalLoopbackGatewayConfig();
+
+    vi.useFakeTimers();
+    let err: unknown;
+    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+      err = caught;
+    });
+
+    await vi.advanceTimersByTimeAsync(5);
+    await promise;
+
+    expect(isGatewayTransportError(err)).toBe(true);
+    if (!isGatewayTransportError(err)) {
+      throw new Error("expected GatewayTransportError");
+    }
+    expect(buildGatewayTransportErrorJson(err)).toMatchObject({
+      ok: false,
+      error: {
+        type: "gateway_transport",
+        code: "gateway_timeout",
+        kind: "timeout",
+        timeoutMs: 5,
+        gateway: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+        },
+      },
     });
   });
 
