@@ -16,7 +16,7 @@ const inboundBodyMock = vi.hoisted(() =>
 );
 
 vi.mock("./bot-message-context.body.js", () => ({
-  resolveTelegramInboundBody: (...args: unknown[]) => inboundBodyMock(...args),
+  resolveTelegramInboundBody: (arg: unknown) => inboundBodyMock(arg),
 }));
 
 const { buildTelegramMessageContextForTest } =
