@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Doctor/gateway: collapse the redundant triple "Gateway runtime" note panel into a single note — the "System Node … not found" hard-coded note no longer fires when `renderSystemNodeWarning` already produced a version-mismatch message, eliminating the contradictory "not found" panel on systems using an nvm/version-manager Node. Fixes #78676. Thanks @hclsys.
+
 - Docs/iMessage: deprecate BlueBubbles for new OpenClaw setups, document the upstream server-release rationale, and point new iMessage deployments toward the native `imsg` path while keeping BlueBubbles as a supported legacy fallback.
 - Discord/streaming: default Discord replies to progress draft previews so tool/work activity appears in one edited Discord message unless `channels.discord.streaming.mode` is set to `off`.
 - Plugins/install: add `npm-pack:<path.tgz>` installs so local npm pack artifacts run through the same managed npm-root install, lockfile verification, dependency scan, and install-record path as registry npm plugins.

@@ -942,6 +942,67 @@ describe("maybeRepairGatewayServiceConfig", () => {
   });
 });
 
+describe("maybeRepairGatewayServiceConfig — Gateway runtime note deduplication", () => {
+  const gatewayCmd = {
+    programArguments: ["/usr/bin/node", "/usr/lib/openclaw/dist/index.js", "gateway"],
+    environment: {},
+    environmentValueSources: {},
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.readCommand.mockResolvedValue(gatewayCmd);
+    mocks.auditGatewayServiceConfig.mockResolvedValue({ ok: true, issues: [] });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: ["/usr/bin/node", "/usr/lib/openclaw/dist/index.js", "gateway"],
+      environment: {},
+      environmentValueSources: {},
+    });
+    fsMocks.realpath.mockImplementation((p: string) => Promise.resolve(p));
+  });
+
+  it("emits exactly one Gateway runtime note when system Node is below minimum and nvm Node is used", async () => {
+    const { needsNodeRuntimeMigration } = await import("../daemon/service-audit.js");
+    const { renderSystemNodeWarning, resolveSystemNodeInfo } =
+      await import("../daemon/runtime-paths.js");
+    vi.mocked(needsNodeRuntimeMigration).mockReturnValue(true);
+    vi.mocked(resolveSystemNodeInfo).mockResolvedValue({
+      supported: false,
+      path: "/usr/bin/node",
+      version: "20.20.2",
+    } as Parameters<typeof renderSystemNodeWarning>[0] & { supported: false });
+    vi.mocked(renderSystemNodeWarning).mockReturnValue(
+      "System Node 20.20.2 at /usr/bin/node is below the required Node 22.14+. Install Node 24 (recommended) or Node 22 LTS from nodejs.org or Homebrew.",
+    );
+
+    await runRepair({ gateway: {} });
+
+    const gatewayRuntimeCalls = vi
+      .mocked(mocks.note)
+      .mock.calls.filter(([, title]) => title === "Gateway runtime");
+    expect(gatewayRuntimeCalls).toHaveLength(1);
+    expect(gatewayRuntimeCalls[0]![0]).toContain("below the required Node 22.14+");
+    expect(gatewayRuntimeCalls[0]![0]).not.toContain("not found");
+  });
+
+  it("emits the not-found note when resolveSystemNodeInfo returns null", async () => {
+    const { needsNodeRuntimeMigration } = await import("../daemon/service-audit.js");
+    const { renderSystemNodeWarning, resolveSystemNodeInfo } =
+      await import("../daemon/runtime-paths.js");
+    vi.mocked(needsNodeRuntimeMigration).mockReturnValue(true);
+    vi.mocked(resolveSystemNodeInfo).mockResolvedValue(null);
+    vi.mocked(renderSystemNodeWarning).mockReturnValue(null);
+
+    await runRepair({ gateway: {} });
+
+    const gatewayRuntimeCalls = vi
+      .mocked(mocks.note)
+      .mock.calls.filter(([, title]) => title === "Gateway runtime");
+    expect(gatewayRuntimeCalls).toHaveLength(1);
+    expect(gatewayRuntimeCalls[0]![0]).toContain("not found");
+  });
+});
+
 describe("maybeScanExtraGatewayServices", () => {
   beforeEach(() => {
     vi.clearAllMocks();
