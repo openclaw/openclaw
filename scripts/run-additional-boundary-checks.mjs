@@ -57,6 +57,8 @@ export const BOUNDARY_CHECKS = [
   ["lint:ui:no-raw-window-open", "pnpm", ["lint:ui:no-raw-window-open"]],
 ].map(([label, command, args]) => ({ label, command, args }));
 
+export const PROMPT_SNAPSHOT_CHECK_LABEL = "prompt:snapshots:check";
+
 export function resolveConcurrency(value, fallback = 4) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   if (!Number.isFinite(parsed) || parsed < 1) {
@@ -93,6 +95,21 @@ export function selectChecksForShard(checks, shardSpec) {
     return checks;
   }
   return checks.filter((_check, index) => index % shard.count === shard.index);
+}
+
+export function shouldRunPromptSnapshots(value) {
+  return (
+    String(value ?? "true")
+      .trim()
+      .toLowerCase() !== "false"
+  );
+}
+
+export function filterChecksForEnvironment(checks, env = process.env) {
+  if (shouldRunPromptSnapshots(env.OPENCLAW_RUN_PROMPT_SNAPSHOTS)) {
+    return checks;
+  }
+  return checks.filter((check) => check.label !== PROMPT_SNAPSHOT_CHECK_LABEL);
 }
 
 export function formatCommand({ command, args }) {
@@ -235,7 +252,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       process.env.OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY,
   );
   const shard = parseShardSpec(resolveCliShardSpec(process.argv.slice(2), process.env));
-  const checks = selectChecksForShard(BOUNDARY_CHECKS, shard);
+  const checks = filterChecksForEnvironment(selectChecksForShard(BOUNDARY_CHECKS, shard));
   if (shard) {
     process.stdout.write(
       `Running ${checks.length}/${BOUNDARY_CHECKS.length} additional boundary checks (shard ${shard.label})\n`,

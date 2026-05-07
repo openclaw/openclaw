@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BOUNDARY_CHECKS,
+  filterChecksForEnvironment,
   formatCommand,
   parseShardSpec,
   resolveConcurrency,
@@ -24,6 +25,16 @@ function createOutputBuffer() {
 describe("run-additional-boundary-checks", () => {
   it("runs prompt snapshot drift checks in CI", () => {
     expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "prompt:snapshots:check",
+      command: "pnpm",
+      args: ["prompt:snapshots:check"],
+    });
+  });
+
+  it("skips prompt snapshot drift checks when preflight says they are unrelated", () => {
+    expect(
+      filterChecksForEnvironment(BOUNDARY_CHECKS, { OPENCLAW_RUN_PROMPT_SNAPSHOTS: "false" }),
+    ).not.toContainEqual({
       label: "prompt:snapshots:check",
       command: "pnpm",
       args: ["prompt:snapshots:check"],

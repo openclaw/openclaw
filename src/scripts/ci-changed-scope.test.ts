@@ -5,28 +5,34 @@ import path from "node:path";
 import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 
-const { detectChangedScope, detectInstallSmokeScope, detectNodeFastScope, listChangedPaths } =
-  (await import("../../scripts/ci-changed-scope.mjs")) as unknown as {
-    detectChangedScope: (paths: string[]) => {
-      runNode: boolean;
-      runMacos: boolean;
-      runAndroid: boolean;
-      runWindows: boolean;
-      runSkillsPython: boolean;
-      runChangedSmoke: boolean;
-      runControlUiI18n: boolean;
-    };
-    detectInstallSmokeScope: (paths: string[]) => {
-      runFastInstallSmoke: boolean;
-      runFullInstallSmoke: boolean;
-    };
-    detectNodeFastScope: (paths: string[]) => {
-      runFastOnly: boolean;
-      runPluginContracts: boolean;
-      runCiRouting: boolean;
-    };
-    listChangedPaths: (base: string, head?: string) => string[];
+const {
+  detectChangedScope,
+  detectInstallSmokeScope,
+  detectNodeFastScope,
+  detectPromptSnapshotScope,
+  listChangedPaths,
+} = (await import("../../scripts/ci-changed-scope.mjs")) as unknown as {
+  detectChangedScope: (paths: string[]) => {
+    runNode: boolean;
+    runMacos: boolean;
+    runAndroid: boolean;
+    runWindows: boolean;
+    runSkillsPython: boolean;
+    runChangedSmoke: boolean;
+    runControlUiI18n: boolean;
   };
+  detectInstallSmokeScope: (paths: string[]) => {
+    runFastInstallSmoke: boolean;
+    runFullInstallSmoke: boolean;
+  };
+  detectNodeFastScope: (paths: string[]) => {
+    runFastOnly: boolean;
+    runPluginContracts: boolean;
+    runCiRouting: boolean;
+  };
+  detectPromptSnapshotScope: (paths: string[]) => boolean;
+  listChangedPaths: (base: string, head?: string) => string[];
+};
 
 const markerPaths: string[] = [];
 const tempDirs: string[] = [];
@@ -614,6 +620,23 @@ describe("detectChangedScope", () => {
       run_fast_install_smoke: "false",
       run_full_install_smoke: "false",
       run_control_ui_i18n: "false",
+      run_prompt_snapshots: "false",
     });
+  });
+
+  it("runs prompt snapshots only for prompt-affecting paths", () => {
+    expect(detectPromptSnapshotScope([])).toBe(true);
+    expect(
+      detectPromptSnapshotScope(["src/agents/failover-error.ts", "src/agents/model-fallback.ts"]),
+    ).toBe(false);
+    expect(detectPromptSnapshotScope(["extensions/codex/src/app-server/thread-lifecycle.ts"])).toBe(
+      true,
+    );
+    expect(
+      detectPromptSnapshotScope([
+        "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/README.md",
+      ]),
+    ).toBe(true);
+    expect(detectPromptSnapshotScope(["src/agents/pi-tools.schema.ts"])).toBe(true);
   });
 });

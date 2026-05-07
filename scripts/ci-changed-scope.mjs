@@ -57,6 +57,8 @@ const NODE_FAST_CI_ROUTING_SCOPE_RE =
 const NODE_FAST_SCOPE_RE = new RegExp(
   `${NODE_FAST_PLUGIN_CONTRACT_SCOPE_RE.source}|${NODE_FAST_CI_ROUTING_SCOPE_RE.source}`,
 );
+const PROMPT_SNAPSHOT_SCOPE_RE =
+  /^(test\/helpers\/agents\/happy-path-prompt-snapshots\.ts$|test\/fixtures\/agents\/prompt-snapshots\/|test\/scripts\/prompt-snapshots\.test\.ts$|scripts\/generate-prompt-snapshots\.ts$|scripts\/sync-codex-model-prompt-fixture\.ts$|extensions\/codex\/(?:test-api\.ts$|src\/app-server\/)|src\/auto-reply\/|src\/plugin-sdk\/agent-harness(?:-runtime)?\.ts$|src\/agents\/(?:apply-patch|bash-tools|channel-tools|codex-native-web-search|openclaw-plugin-tools|openclaw-tools|pi-tools|session-tools|subagent|tool-|workspace-dir)\b|src\/utils\/message-channel\.ts$|src\/config\/types\.(?:models|openclaw)\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$)/;
 
 /**
  * @param {string[]} changedPaths
@@ -150,6 +152,17 @@ export function detectChangedScope(changedPaths) {
     runChangedSmoke,
     runControlUiI18n,
   };
+}
+
+/**
+ * @param {string[]} changedPaths
+ * @returns {boolean}
+ */
+export function detectPromptSnapshotScope(changedPaths) {
+  if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
+    return true;
+  }
+  return changedPaths.some((rawPath) => PROMPT_SNAPSHOT_SCOPE_RE.test(rawPath.trim()));
 }
 
 /**
@@ -256,6 +269,7 @@ export function writeGitHubOutput(
     runFullInstallSmoke: scope.runChangedSmoke,
   },
   nodeFastScope = { runFastOnly: false, runPluginContracts: false, runCiRouting: false },
+  runPromptSnapshots = scope.runNode,
 ) {
   if (!outputPath) {
     throw new Error("GITHUB_OUTPUT is required");
@@ -284,6 +298,7 @@ export function writeGitHubOutput(
     "utf8",
   );
   appendFileSync(outputPath, `run_control_ui_i18n=${scope.runControlUiI18n}\n`, "utf8");
+  appendFileSync(outputPath, `run_prompt_snapshots=${runPromptSnapshots}\n`, "utf8");
 }
 
 function isDirectRun() {
@@ -321,6 +336,7 @@ if (isDirectRun()) {
       process.env.GITHUB_OUTPUT,
       detectInstallSmokeScope(changedPaths),
       detectNodeFastScope(changedPaths),
+      detectPromptSnapshotScope(changedPaths),
     );
   } catch {
     writeGitHubOutput(FULL_SCOPE);
