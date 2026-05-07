@@ -126,6 +126,60 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBe("ollama:default");
   });
 
+  it("resolves Claude CLI compaction aliases to canonical Anthropic models", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      config: {} as OpenClawConfig,
+      provider: "claude-cli",
+      modelId: "opus",
+      authProfileId: "claude-cli:default",
+    });
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-opus-4-7");
+    expect(result.authProfileId).toBeUndefined();
+  });
+
+  it("resolves Claude CLI compaction.model overrides to canonical Anthropic models", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      config: {
+        agents: { defaults: { compaction: { model: "claude-cli/opus" } } },
+      } as OpenClawConfig,
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      authProfileId: "openai:p1",
+    });
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-opus-4-7");
+    expect(result.authProfileId).toBeUndefined();
+  });
+
+  it.each([
+    ["claude-cli/sonnet", "claude-sonnet-4-6"],
+    ["claude-cli/fast", "claude-sonnet-4-6"],
+    ["claude-cli/sonnet-fast", "claude-sonnet-4-6"],
+    ["claude-cli/haiku", "claude-haiku-4-5"],
+    ["claude-cli/haiku-fast", "claude-haiku-4-5"],
+  ])("resolves %s compaction override", (modelRef, expectedModel) => {
+    const result = resolveEmbeddedCompactionTarget({
+      config: {
+        agents: { defaults: { compaction: { model: modelRef } } },
+      } as OpenClawConfig,
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      authProfileId: "openai:p1",
+      defaultProvider: "openai-codex",
+      defaultModel: "gpt-5.4",
+    });
+    expect(result).toEqual({
+      provider: "anthropic",
+      model: expectedModel,
+      authProfileId: undefined,
+    });
+  });
+
   it("applies runtime defaults when resolving the effective compaction target", () => {
     expect(
       resolveEmbeddedCompactionTarget({

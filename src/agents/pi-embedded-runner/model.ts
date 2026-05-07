@@ -21,6 +21,7 @@ import { resolveDefaultAgentDir } from "../agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { modelKey, normalizeStaticProviderModelId } from "../model-ref-shared.js";
+import { buildLegacyRuntimeModelAliasHint } from "../model-runtime-aliases.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import {
   buildSuppressedBuiltInModelError,
@@ -1206,19 +1207,23 @@ function buildUnknownModelError(params: {
   }
   const base = `Unknown model: ${params.provider}/${params.modelId}`;
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
-  const hint = runtimeHooks.buildProviderUnknownModelHintWithPlugin({
-    provider: params.provider,
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    env: process.env,
-    context: {
+  const hints = [buildLegacyRuntimeModelAliasHint(params.provider)];
+  hints.push(
+    runtimeHooks.buildProviderUnknownModelHintWithPlugin({
+      provider: params.provider,
       config: params.cfg,
-      agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
       env: process.env,
-      provider: params.provider,
-      modelId: params.modelId,
-    },
-  });
+      context: {
+        config: params.cfg,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        env: process.env,
+        provider: params.provider,
+        modelId: params.modelId,
+      },
+    }),
+  );
+  const hint = hints.filter(Boolean).join(" ");
   return hint ? `${base}. ${hint}` : base;
 }

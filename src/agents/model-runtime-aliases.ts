@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentRuntimePolicy } from "./agent-runtime-policy.js";
+import {
+  listDefaultModelAliasesForProvider,
+  resolveDefaultModelAliasRef,
+} from "./default-model-aliases.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 type LegacyRuntimeModelProviderAlias = {
@@ -56,14 +60,28 @@ function resolveLegacyRuntimeModelProviderAlias(
   return LEGACY_ALIAS_BY_PROVIDER.get(normalizeProviderId(provider));
 }
 
-export function migrateLegacyRuntimeModelRef(raw: string): {
+type MigratedLegacyRuntimeModelRef = {
   ref: string;
   legacyProvider: string;
   provider: string;
   model: string;
   runtime: string;
   cli: boolean;
-} | null {
+  sourceModelAlias?: string;
+};
+
+function parseProviderModelRef(raw: string): { provider: string; model: string } | null {
+  const trimmed = raw.trim();
+  const slash = trimmed.indexOf("/");
+  if (slash <= 0 || slash >= trimmed.length - 1) {
+    return null;
+  }
+  const provider = normalizeProviderId(trimmed.slice(0, slash));
+  const model = trimmed.slice(slash + 1).trim();
+  return provider && model ? { provider, model } : null;
+}
+
+export function migrateLegacyRuntimeModelRef(raw: string): MigratedLegacyRuntimeModelRef | null {
   const trimmed = raw.trim();
   const slash = trimmed.indexOf("/");
   if (slash <= 0 || slash >= trimmed.length - 1) {
@@ -85,6 +103,70 @@ export function migrateLegacyRuntimeModelRef(raw: string): {
     runtime: alias.runtime,
     cli: alias.cli,
   };
+}
+
+export function resolveLegacyRuntimeCanonicalModelRef(
+  raw: string,
+): MigratedLegacyRuntimeModelRef | null {
+  const migrated = migrateLegacyRuntimeModelRef(raw);
+  if (!migrated) {
+    return null;
+  }
+  const aliasRef = resolveDefaultModelAliasRef(migrated.model);
+  const parsedAlias = aliasRef ? parseProviderModelRef(aliasRef) : null;
+  if (!parsedAlias || parsedAlias.provider !== migrated.provider) {
+    return migrated;
+  }
+  return {
+    ...migrated,
+    ref: `${parsedAlias.provider}/${parsedAlias.model}`,
+    provider: parsedAlias.provider,
+    model: parsedAlias.model,
+    sourceModelAlias: migrated.model,
+  };
+}
+
+export function resolveCanonicalModelAliasForProvider(params: {
+  provider: string;
+  model: string;
+}): { provider: string; model: string; sourceModelAlias?: string } | null {
+  const provider = normalizeProviderId(params.provider);
+  const model = params.model.trim();
+  if (!provider || !model) {
+    return null;
+  }
+  const legacy = resolveLegacyRuntimeCanonicalModelRef(`${provider}/${model}`);
+  if (legacy?.sourceModelAlias) {
+    return {
+      provider: legacy.provider,
+      model: legacy.model,
+      sourceModelAlias: legacy.sourceModelAlias,
+    };
+  }
+  const aliasRef = resolveDefaultModelAliasRef(model);
+  const parsedAlias = aliasRef ? parseProviderModelRef(aliasRef) : null;
+  if (!parsedAlias || parsedAlias.provider !== provider) {
+    return null;
+  }
+  return {
+    provider: parsedAlias.provider,
+    model: parsedAlias.model,
+    sourceModelAlias: model,
+  };
+}
+
+export function buildLegacyRuntimeModelAliasHint(provider: string): string | undefined {
+  const alias = resolveLegacyRuntimeModelProviderAlias(provider);
+  if (!alias) {
+    return undefined;
+  }
+  const aliases = listDefaultModelAliasesForProvider(alias.provider).map(
+    (modelAlias) => `${alias.legacyProvider}/${modelAlias}`,
+  );
+  if (aliases.length === 0) {
+    return undefined;
+  }
+  return `Known ${alias.legacyProvider} aliases resolve through ${alias.provider}: ${aliases.join(", ")}.`;
 }
 
 export function isLegacyRuntimeModelProvider(provider: string): boolean {
