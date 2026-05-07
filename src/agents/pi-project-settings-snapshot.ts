@@ -9,6 +9,7 @@ import {
   normalizePluginsConfigWithResolver,
   resolveEffectivePluginActivationState,
 } from "../plugins/config-policy.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
   isPluginMetadataSnapshotCompatible,
   loadPluginMetadataSnapshot,
@@ -84,11 +85,21 @@ export function loadEnabledBundlePiSettingsSnapshot(params: {
       workspaceDir,
     })
       ? providedSnapshot
-      : loadPluginMetadataSnapshot({
+      : (getCurrentPluginMetadataSnapshot({
+          config,
+          env,
+          workspaceDir,
+        }) ??
+        getCurrentPluginMetadataSnapshot({
+          env,
+          workspaceDir,
+          allowWorkspaceScopedSnapshot: true,
+        }) ??
+        loadPluginMetadataSnapshot({
           workspaceDir,
           config,
           env,
-        });
+        }));
   const registry = metadataSnapshot.manifestRegistry;
   if (registry.plugins.length === 0) {
     return {};

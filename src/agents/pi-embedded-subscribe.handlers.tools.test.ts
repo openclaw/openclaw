@@ -802,6 +802,268 @@ describe("handleToolExecutionEnd derived tool events", () => {
     }
   });
 
+  it("drops throttled exec output before emitting live events or callbacks", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    resetAgentEventsForTest();
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+    try {
+      const { ctx, onAgentEvent } = createTestContext();
+
+      await handleToolExecutionStart(
+        ctx as never,
+        {
+          type: "tool_execution_start",
+          toolName: "exec",
+          toolCallId: "tool-exec-drop-suppressed-output",
+          args: { command: "yes" },
+        } as never,
+      );
+
+      handleToolExecutionUpdate(
+        ctx as never,
+        {
+          type: "tool_execution_update",
+          toolName: "exec",
+          toolCallId: "tool-exec-drop-suppressed-output",
+          partialResult: { details: { aggregated: "first" } },
+        } as never,
+      );
+      const emittedEventCount = events.length;
+      const callbackCount = onAgentEvent.mock.calls.length;
+      const itemStartedCount = ctx.state.itemStartedCount;
+
+      handleToolExecutionUpdate(
+        ctx as never,
+        {
+          type: "tool_execution_update",
+          toolName: "exec",
+          toolCallId: "tool-exec-drop-suppressed-output",
+          partialResult: { details: { aggregated: "x".repeat(1024 * 1024) } },
+        } as never,
+      );
+
+      expect(events).toHaveLength(emittedEventCount);
+      expect(onAgentEvent).toHaveBeenCalledTimes(callbackCount);
+      expect(ctx.state.itemStartedCount).toBe(itemStartedCount);
+    } finally {
+      resetAgentEventsForTest();
+      vi.useRealTimers();
+    }
+  });
+
+  it("throttles exec output independently per tool call", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    try {
+      const { ctx, onAgentEvent } = createTestContext();
+
+      for (const toolCallId of ["tool-exec-per-tool-a", "tool-exec-per-tool-b"]) {
+        await handleToolExecutionStart(
+          ctx as never,
+          {
+            type: "tool_execution_start",
+            toolName: "exec",
+            toolCallId,
+            args: { command: "yes" },
+          } as never,
+        );
+      }
+
+      for (const toolCallId of ["tool-exec-per-tool-a", "tool-exec-per-tool-b"]) {
+        handleToolExecutionUpdate(
+          ctx as never,
+          {
+            type: "tool_execution_update",
+            toolName: "exec",
+            toolCallId,
+            partialResult: { details: { aggregated: `first-${toolCallId}` } },
+          } as never,
+        );
+      }
+
+      const commandOutputCalls = onAgentEvent.mock.calls
+        .map((call) => call[0] as { stream?: string; data?: { output?: string } })
+        .filter((event) => event.stream === "command_output");
+
+      expect(commandOutputCalls.map((event) => event.data?.output)).toEqual([
+        "first-tool-exec-per-tool-a",
+        "first-tool-exec-per-tool-b",
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears exec output throttle state when the tool ends", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    try {
+      const { ctx, onAgentEvent } = createTestContext();
+      const toolCallId = "tool-exec-throttle-cleared";
+
+      await handleToolExecutionStart(
+        ctx as never,
+        {
+          type: "tool_execution_start",
+          toolName: "exec",
+          toolCallId,
+          args: { command: "yes" },
+        } as never,
+      );
+      handleToolExecutionUpdate(
+        ctx as never,
+        {
+          type: "tool_execution_update",
+          toolName: "exec",
+          toolCallId,
+          partialResult: { details: { aggregated: "first run output" } },
+        } as never,
+      );
+      await handleToolExecutionEnd(
+        ctx as never,
+        {
+          type: "tool_execution_end",
+          toolName: "exec",
+          toolCallId,
+          isError: false,
+          result: { details: { status: "completed", aggregated: "done" } },
+        } as never,
+      );
+      await handleToolExecutionStart(
+        ctx as never,
+        {
+          type: "tool_execution_start",
+          toolName: "exec",
+          toolCallId,
+          args: { command: "yes" },
+        } as never,
+      );
+      handleToolExecutionUpdate(
+        ctx as never,
+        {
+          type: "tool_execution_update",
+          toolName: "exec",
+          toolCallId,
+          partialResult: { details: { aggregated: "second run output" } },
+        } as never,
+      );
+
+      const commandOutputCalls = onAgentEvent.mock.calls
+        .map((call) => call[0] as { stream?: string; data?: { output?: string } })
+        .filter((event) => event.stream === "command_output");
+
+      expect(commandOutputCalls.map((event) => event.data?.output)).toContain("second run output");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not throttle exec update events that carry no output", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    try {
+      const { ctx, onAgentEvent } = createTestContext();
+
+      await handleToolExecutionStart(
+        ctx as never,
+        {
+          type: "tool_execution_start",
+          toolName: "exec",
+          toolCallId: "tool-exec-no-output-updates",
+          args: { command: "sleep 1" },
+        } as never,
+      );
+
+      for (let i = 0; i < 2; i += 1) {
+        handleToolExecutionUpdate(
+          ctx as never,
+          {
+            type: "tool_execution_update",
+            toolName: "exec",
+            toolCallId: "tool-exec-no-output-updates",
+            partialResult: { details: { status: "running", pid: 1234 + i } },
+          } as never,
+        );
+      }
+
+      const updateCallbacks = onAgentEvent.mock.calls
+        .map((call) => call[0] as { stream?: string; data?: { phase?: string } })
+        .filter((event) => event.stream === "tool" && event.data?.phase === "update");
+
+      expect(updateCallbacks).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caps oversized exec update payloads that pass the throttle window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    resetAgentEventsForTest();
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+    try {
+      const { ctx, onAgentEvent } = createTestContext();
+      const aggregated = `head-${"x".repeat(90 * 1024)}-tail`;
+
+      await handleToolExecutionStart(
+        ctx as never,
+        {
+          type: "tool_execution_start",
+          toolName: "exec",
+          toolCallId: "tool-exec-update-long-output",
+          args: { command: "yes" },
+        } as never,
+      );
+
+      handleToolExecutionUpdate(
+        ctx as never,
+        {
+          type: "tool_execution_update",
+          toolName: "exec",
+          toolCallId: "tool-exec-update-long-output",
+          partialResult: { details: { aggregated: "first" } },
+        } as never,
+      );
+      vi.setSystemTime(1_300);
+      handleToolExecutionUpdate(
+        ctx as never,
+        {
+          type: "tool_execution_update",
+          toolName: "exec",
+          toolCallId: "tool-exec-update-long-output",
+          partialResult: { details: { aggregated } },
+        } as never,
+      );
+
+      const lastCommandOutput = onAgentEvent.mock.calls
+        .map((call) => call[0] as { stream?: string; data?: { output?: string } })
+        .findLast((event) => event.stream === "command_output");
+      expect(lastCommandOutput?.data?.output).toContain("live command output truncated");
+      expect(lastCommandOutput?.data?.output).toContain("-tail");
+      expect(lastCommandOutput?.data?.output).not.toContain("head-");
+
+      const updateEvent = events.findLast(
+        (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "update",
+      );
+      const partialResult = updateEvent?.data?.partialResult as
+        | { details?: { aggregated?: string } }
+        | undefined;
+      expect(partialResult?.details?.aggregated).toContain("live command output truncated");
+      expect(partialResult?.details?.aggregated).toContain("-tail");
+      expect(partialResult?.details?.aggregated).not.toContain("head-");
+    } finally {
+      resetAgentEventsForTest();
+      vi.useRealTimers();
+    }
+  });
+
   it("emits command output events for exec results", async () => {
     const { ctx, onAgentEvent } = createTestContext();
 
@@ -1276,6 +1538,57 @@ describe("control UI credential redaction (issue #72283)", () => {
     const result = resultEvent?.data?.result as { details?: { aggregated?: string } } | undefined;
     expect(result?.details?.aggregated).toContain("live command output truncated");
     expect(result?.details?.aggregated).toContain("-tail");
+  });
+
+  it("parses exec approval resolution from raw output even when live output is capped", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+    const aggregated = `exec denied (user-denied): blocked by reviewer\n${"x".repeat(
+      90 * 1024,
+    )}-tail`;
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-denied-long-output",
+        args: { command: "rm -rf /tmp/example" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-denied-long-output",
+        isError: true,
+        result: {
+          details: {
+            status: "failed",
+            aggregated,
+            exitCode: 1,
+          },
+        },
+      } as never,
+    );
+
+    const commandOutput = onAgentEvent.mock.calls
+      .map((call) => call[0] as { stream?: string; data?: { output?: string } })
+      .findLast((event) => event.stream === "command_output");
+    expect(commandOutput?.data?.output).toContain("live command output truncated");
+    expect(commandOutput?.data?.output).not.toContain("exec denied");
+
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "approval",
+        data: expect.objectContaining({
+          phase: "resolved",
+          status: "denied",
+          message: expect.stringContaining("blocked by reviewer"),
+        }),
+      }),
+    );
   });
 
   it("redacts details-only results before emitting the tool result event", async () => {

@@ -393,6 +393,29 @@ describe("DiscordVoiceManager", () => {
     expect(player.off).toHaveBeenCalledWith("error", expect.any(Function));
   });
 
+  it("ignores new capture while playback is running", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    const player = createAudioPlayerMock.mock.results.at(-1)?.value;
+    const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get("g1");
+    expect(entry).toBeDefined();
+    expect(player).toBeDefined();
+    player.state.status = "playing";
+
+    await (
+      manager as unknown as {
+        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
+      }
+    ).handleSpeakingStart(entry, "u1");
+
+    expect(player.stop).not.toHaveBeenCalled();
+    expect(connection.receiver.subscribe).not.toHaveBeenCalled();
+  });
+
   it("passes DAVE options to joinVoiceChannel", async () => {
     const manager = createManager({
       voice: {

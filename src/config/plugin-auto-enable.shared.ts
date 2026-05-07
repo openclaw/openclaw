@@ -10,6 +10,7 @@ import {
 } from "../channels/plugins/configured-state.js";
 import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import {
   type PluginManifestRecord,
   type PluginManifestRegistry,
@@ -951,8 +952,19 @@ export function resolvePluginAutoEnableManifestRegistry(params: {
     env: params.env,
     allowWorkspaceScopedSnapshot: true,
   });
+  const policyCompatibleCurrentSnapshot =
+    currentSnapshot ??
+    (() => {
+      const snapshot = getCurrentPluginMetadataSnapshot({
+        env: params.env,
+        allowWorkspaceScopedSnapshot: true,
+      });
+      return snapshot?.policyHash === resolveInstalledPluginIndexPolicyHash(params.config)
+        ? snapshot
+        : undefined;
+    })();
   return (
-    currentSnapshot?.manifestRegistry ??
+    policyCompatibleCurrentSnapshot?.manifestRegistry ??
     loadPluginMetadataSnapshot({
       config: params.config,
       env: params.env,

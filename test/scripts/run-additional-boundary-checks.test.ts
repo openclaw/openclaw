@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   BOUNDARY_CHECKS,
+  PROMPT_SNAPSHOT_CHECK,
+  filterChecksForEnvironment,
   formatCommand,
   parseShardSpec,
   resolveConcurrency,
@@ -22,12 +24,19 @@ function createOutputBuffer() {
 }
 
 describe("run-additional-boundary-checks", () => {
-  it("runs prompt snapshot drift checks in CI", () => {
-    expect(BOUNDARY_CHECKS).toContainEqual({
+  it("keeps prompt snapshot drift checks as a dedicated CI check", () => {
+    expect(PROMPT_SNAPSHOT_CHECK).toEqual({
       label: "prompt:snapshots:check",
       command: "pnpm",
       args: ["prompt:snapshots:check"],
     });
+    expect(BOUNDARY_CHECKS.map((check) => check.label)).not.toContain("prompt:snapshots:check");
+  });
+
+  it("leaves boundary checks unchanged when prompt snapshots are unrelated", () => {
+    expect(
+      filterChecksForEnvironment(BOUNDARY_CHECKS, { OPENCLAW_RUN_PROMPT_SNAPSHOTS: "false" }),
+    ).toEqual(BOUNDARY_CHECKS);
   });
 
   it("normalizes concurrency input", () => {

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 
 const pluginMetadataSnapshotMocks = vi.hoisted(() => ({
+  getCurrentPluginMetadataSnapshot: vi.fn(),
   isPluginMetadataSnapshotCompatible: vi.fn(),
   loadPluginMetadataSnapshot: vi.fn(),
 }));
@@ -83,6 +84,10 @@ vi.mock("../plugins/plugin-registry.js", async () => {
     loadPluginRegistrySnapshot: () => ({ plugins: [] }),
   };
 });
+
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot,
+}));
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", async () => {
   const fs = await import("node:fs");
@@ -172,6 +177,8 @@ const tempDirs = createTrackedTempDirs();
 
 afterEach(async () => {
   await tempDirs.cleanup();
+  pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot.mockReset();
+  pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(undefined);
   pluginMetadataSnapshotMocks.isPluginMetadataSnapshotCompatible.mockClear();
   pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot.mockClear();
 });
@@ -273,6 +280,49 @@ describe("loadEnabledBundlePiSettingsSnapshot", () => {
     expect(snapshot.hideThinkingBlock).toBe(true);
     expect(pluginMetadataSnapshotMocks.isPluginMetadataSnapshotCompatible).toHaveBeenCalledOnce();
     expect(pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it("reuses the current plugin metadata snapshot for bundle settings", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-workspace-");
+    const pluginRoot = await createWorkspaceBundle({ workspaceDir });
+    const resolvedPluginRoot = await fs.realpath(pluginRoot);
+    await fs.writeFile(
+      path.join(pluginRoot, "settings.json"),
+      JSON.stringify({ hideThinkingBlock: true }),
+      "utf-8",
+    );
+
+    pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot.mockReturnValueOnce({
+      manifestRegistry: {
+        diagnostics: [],
+        plugins: [
+          {
+            id: "claude-bundle",
+            origin: "workspace",
+            format: "bundle",
+            bundleFormat: "claude",
+            settingsFiles: ["settings.json"],
+            rootDir: resolvedPluginRoot,
+          },
+        ],
+      },
+      normalizePluginId: (id: string) => id.trim(),
+    });
+    pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot.mockClear();
+
+    const snapshot = loadEnabledBundlePiSettingsSnapshot({
+      cwd: workspaceDir,
+      cfg: {
+        plugins: {
+          entries: {
+            "claude-bundle": { enabled: true },
+          },
+        },
+      },
+    });
+
+    expect(snapshot.hideThinkingBlock).toBe(true);
+    expect(pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
   it("loads sanitized settings and MCP defaults from enabled bundle plugins", async () => {
