@@ -163,19 +163,6 @@ function resolveAutoCapabilityFallbackRefs(params: {
   });
 }
 
-function providerMatchesId(provider: CapabilityProviderCandidate, providerId: string): boolean {
-  const normalizedProviderId = normalizeOptionalString(providerId);
-  if (!normalizedProviderId) {
-    return false;
-  }
-  return (
-    normalizeOptionalString(provider.id) === normalizedProviderId ||
-    (provider.aliases ?? []).some(
-      (alias) => normalizeOptionalString(alias) === normalizedProviderId,
-    )
-  );
-}
-
 function resolveProviderModelOnlyRef(params: {
   raw: string;
   providers: CapabilityProviderCandidate[];
@@ -214,9 +201,7 @@ export function resolveCapabilityModelCandidates(params: {
     }
     const parsed = params.parseModelRef(raw);
     const candidate =
-      parsed && getProviders().some((provider) => providerMatchesId(provider, parsed.provider))
-        ? parsed
-        : (resolveProviderModelOnlyRef({ raw: trimmed, providers: getProviders() }) ?? parsed);
+      parsed ?? resolveProviderModelOnlyRef({ raw: trimmed, providers: getProviders() });
     if (!candidate) {
       return;
     }
@@ -234,9 +219,7 @@ export function resolveCapabilityModelCandidates(params: {
       return null;
     }
     const parsed = params.parseModelRef(raw);
-    return parsed && getProviders().some((provider) => providerMatchesId(provider, parsed.provider))
-      ? parsed
-      : (resolveProviderModelOnlyRef({ raw, providers: getProviders() }) ?? parsed);
+    return parsed ?? resolveProviderModelOnlyRef({ raw, providers: getProviders() });
   })();
   if (override) {
     return [override];
