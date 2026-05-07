@@ -46,6 +46,7 @@ describeWhenUiI18nPresent("ui i18n locale registry", () => {
     const localeRegistry = getRegistry();
 
     expect(localeRegistry.SUPPORTED_LOCALES).toEqual([
+      "vi",
       "en",
       "zh-CN",
       "zh-TW",
@@ -62,7 +63,6 @@ describeWhenUiI18nPresent("ui i18n locale registry", () => {
       "id",
       "pl",
       "th",
-      "vi",
       "nl",
       "fa",
     ]);
@@ -91,6 +91,7 @@ describeWhenUiI18nPresent("ui i18n locale registry", () => {
     expect(localeRegistry.resolveNavigatorLocale("vi-VN")).toBe("vi");
     expect(localeRegistry.resolveNavigatorLocale("nl-NL")).toBe("nl");
     expect(localeRegistry.resolveNavigatorLocale("fa-IR")).toBe("fa");
+    expect(localeRegistry.resolveNavigatorLocale("")).toBe("vi");
   });
 
   it("loads lazy locale translations from the registry", async () => {
