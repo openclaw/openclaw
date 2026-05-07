@@ -1,3 +1,4 @@
+import type { Readable } from "node:stream";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import { createVoiceCaptureState } from "./capture-state.js";
@@ -617,7 +618,10 @@ describe("DiscordVoiceManager", () => {
       };
       entry.capture.activeSpeakers.add("u1");
       entry.capture.captureGenerations.set("u1", 1);
-      entry.capture.activeCaptureStreams.set("u1", { generation: 1, stream });
+      entry.capture.activeCaptureStreams.set("u1", {
+        generation: 1,
+        stream: stream as unknown as Readable,
+      });
 
       (
         manager as unknown as {
