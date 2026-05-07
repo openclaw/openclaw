@@ -221,9 +221,6 @@ function readAppliedPluginConfigEntry(
   ) {
     return readCodexPluginMigrationConfigEntry(item, false);
   }
-  if (item.status === "error") {
-    return readCodexPluginMigrationConfigEntry(item, false);
-  }
   return undefined;
 }
 

@@ -573,6 +573,56 @@ describe("buildCodexMigrationProvider", () => {
     });
   });
 
+  it("does not write config entries for failed plugin installs", async () => {
+    const fixture = await createCodexFixture();
+    const configState: MigrationProviderContext["config"] = {
+      agents: { defaults: { workspace: fixture.workspaceDir } },
+    } as MigrationProviderContext["config"];
+    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
+      if (method === "plugin/list") {
+        return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+      }
+      if (method === "plugin/install") {
+        throw new Error("install failed");
+      }
+      if (method === "skills/list") {
+        return { data: [] } satisfies v2.SkillsListResponse;
+      }
+      if (method === "hooks/list") {
+        return { data: [] } satisfies v2.HooksListResponse;
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+    const provider = buildCodexMigrationProvider({
+      runtime: createConfigRuntime(configState),
+    });
+
+    const result = await provider.apply(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+        config: configState,
+      }),
+    );
+
+    expect(result.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "plugin:google-calendar",
+          status: "error",
+          reason: "install failed",
+        }),
+        expect.objectContaining({
+          id: "config:codex-plugins",
+          status: "skipped",
+          reason: "no selected Codex plugins",
+        }),
+      ]),
+    );
+    expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toBeUndefined();
+  });
+
   it("reports existing skill targets as conflicts unless overwrite is set", async () => {
     const fixture = await createCodexFixture();
     await writeFile(path.join(fixture.workspaceDir, "skills", "tweet-helper", "SKILL.md"));
