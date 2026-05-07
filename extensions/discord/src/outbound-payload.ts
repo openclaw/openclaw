@@ -17,6 +17,24 @@ import { createDiscordPayloadSendContext } from "./outbound-send-context.js";
 import { createDiscordSendReceipt } from "./send.receipt.js";
 import type { DiscordSendComponents, DiscordSendEmbeds } from "./send.shared.js";
 
+type OutboundPayload = Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0]["payload"];
+
+/**
+ * Extract raw Discord API components stored in channelData by the gateway send
+ * handler. These are passed through to the Discord API as-is (e.g. action rows
+ * with buttons for HITL approval flows).
+ */
+function resolveDiscordRawComponents(payload: OutboundPayload): DiscordSendComponents | undefined {
+  const discordData = payload.channelData?.discord as
+    | { rawComponents?: unknown }
+    | undefined;
+  const raw = discordData?.rawComponents;
+  if (Array.isArray(raw) && raw.length > 0) {
+    return raw as DiscordSendComponents;
+  }
+  return undefined;
+}
+
 export async function sendDiscordOutboundPayload(params: {
   ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0];
   fallbackAdapter: ChannelOutboundAdapter;
@@ -80,9 +98,10 @@ export async function sendDiscordOutboundPayload(params: {
       !Array.isArray(payload.channelData.discord)
         ? (payload.channelData.discord as Record<string, unknown>)
         : {};
-    const nativeComponents = Array.isArray(discordData.components)
-      ? (discordData.components as DiscordSendComponents)
-      : undefined;
+    const nativeComponents =
+      (Array.isArray(discordData.components)
+        ? (discordData.components as DiscordSendComponents)
+        : undefined) ?? resolveDiscordRawComponents(payload);
     const embeds = Array.isArray(discordData.embeds)
       ? (discordData.embeds as DiscordSendEmbeds)
       : undefined;

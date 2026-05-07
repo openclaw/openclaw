@@ -398,6 +398,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       replyToId?: string;
       threadId?: string;
       sessionKey?: string;
+      components?: unknown[];
       idempotencyKey: string;
     };
     const idem = request.idempotencyKey;
@@ -470,12 +471,16 @@ export const sendHandlers: GatewayRequestHandlers = {
         });
         const deliveryTarget = idLikeTarget?.to ?? resolvedTarget.to;
         const outboundDeps = context.deps ? createOutboundSendDeps(context.deps) : undefined;
+        const components = Array.isArray(request.components) ? request.components : undefined;
         const outboundPayloads = [
           {
             text: message,
             mediaUrl,
             mediaUrls,
             ...(request.asVoice === true ? { audioAsVoice: true } : {}),
+            ...(components && components.length > 0
+              ? { channelData: { discord: { rawComponents: components } } }
+              : {}),
           },
         ];
         const outboundPayloadPlan = createOutboundPayloadPlan(outboundPayloads);
