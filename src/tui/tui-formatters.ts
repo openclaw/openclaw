@@ -16,6 +16,7 @@ const EDGE_PUNCTUATION_RE = /^[`"'([{<]+|[`"')\]}>.,:;!?]+$/g;
 const ALPHANUMERIC_RE = /[A-Za-z0-9]/;
 const TOKENISH_MIN_LENGTH = 24;
 const RTL_SCRIPT_RE = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufefc]/;
+const CJK_SCRIPT_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 const BIDI_CONTROL_RE = /[\u202a-\u202e\u2066-\u2069]/;
 const RTL_ISOLATE_START = "\u2067";
 const RTL_ISOLATE_END = "\u2069";
@@ -105,6 +106,12 @@ function isCopySensitiveToken(token: string): boolean {
 function normalizeLongTokenForDisplay(token: string): string {
   // Preserve copy-sensitive tokens exactly (paths/urls/file-like names).
   if (isCopySensitiveToken(token)) {
+    return token;
+  }
+  // CJK text naturally appears without spaces between words. Inserting spaces
+  // into long CJK runs makes assistant prose render with visible artifacts such
+  // as "苦难 者". Let the TUI renderer wrap these runs at grapheme boundaries.
+  if (CJK_SCRIPT_RE.test(token)) {
     return token;
   }
   // Pure symbol/punctuation runs (table borders made of `─`, `=`, `-`) carry
