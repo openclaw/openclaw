@@ -1,15 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("typebox", () => ({
-  Type: {
-    Object: (schema: unknown) => schema,
-    String: (schema?: unknown) => schema,
-    Optional: (schema: unknown) => schema,
-    Unknown: (schema?: unknown) => schema,
-    Number: (schema?: unknown) => schema,
-  },
-}));
-
 vi.mock("ajv", () => ({
   default: class MockAjv {
     compile(schema: unknown) {
@@ -45,7 +35,6 @@ vi.mock("../api.js", async () => {
 });
 
 afterAll(() => {
-  vi.doUnmock("typebox");
   vi.doUnmock("ajv");
   vi.doUnmock("../api.js");
   vi.resetModules();
