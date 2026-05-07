@@ -109,6 +109,17 @@ describe("parseExecApprovalRequested command spans", () => {
     expect(parsed?.request.command).toBe("  python -c 'print(1)'");
   });
 
+  it("rejects whitespace-only command text", () => {
+    expect(
+      parseExecApprovalRequested({
+        id: "approval-blank-1",
+        request: { command: "   " },
+        createdAtMs: 1,
+        expiresAtMs: 2,
+      }),
+    ).toBeNull();
+  });
+
   it("preserves valid command spans from exec approval events", () => {
     const parsed = parseExecApprovalRequested({
       id: "approval-explain-1",

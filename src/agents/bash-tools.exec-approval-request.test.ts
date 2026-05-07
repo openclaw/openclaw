@@ -4,6 +4,30 @@ import {
   DEFAULT_APPROVAL_TIMEOUT_MS,
 } from "./bash-tools.exec-runtime.js";
 
+const commandExplainerMock = vi.hoisted(() => ({
+  importCount: 0,
+  explainShellCommand: vi.fn(async (command: string): Promise<string> => command),
+  formatCommandSpans: vi.fn((command: string) => {
+    if (command.startsWith("node ")) {
+      return [{ startIndex: 0, endIndex: 4 }];
+    }
+    return [
+      { startIndex: 0, endIndex: 2 },
+      { startIndex: 0, endIndex: 4 },
+      { startIndex: 5, endIndex: 9 },
+      { startIndex: 20, endIndex: 26 },
+    ];
+  }),
+}));
+
+vi.mock("../infra/command-explainer/index.js", () => {
+  commandExplainerMock.importCount += 1;
+  return {
+    explainShellCommand: commandExplainerMock.explainShellCommand,
+    formatCommandSpans: commandExplainerMock.formatCommandSpans,
+  };
+});
+
 vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
 }));
@@ -21,6 +45,12 @@ describe("requestExecApprovalDecision", () => {
 
   beforeEach(() => {
     vi.mocked(callGatewayTool).mockClear();
+    commandExplainerMock.explainShellCommand.mockClear();
+    commandExplainerMock.formatCommandSpans.mockClear();
+  });
+
+  it("does not load the command explainer when importing approval requests", () => {
+    expect(commandExplainerMock.importCount).toBe(0);
   });
 
   it("returns string decisions", async () => {

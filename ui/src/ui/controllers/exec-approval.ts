@@ -80,7 +80,7 @@ export function parseExecApprovalRequested(payload: unknown): ExecApprovalReques
     return null;
   }
   const command = typeof request.command === "string" ? request.command : "";
-  if (!command) {
+  if (command.trim().length === 0) {
     return null;
   }
   const createdAtMs = typeof payload.createdAtMs === "number" ? payload.createdAtMs : 0;

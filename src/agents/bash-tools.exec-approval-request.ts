@@ -1,4 +1,3 @@
-import { explainShellCommand, formatCommandSpans } from "../infra/command-explainer/index.js";
 import type {
   ExecApprovalCommandSpan,
   ExecAsk,
@@ -11,6 +10,17 @@ import {
   DEFAULT_APPROVAL_TIMEOUT_MS,
 } from "./bash-tools.exec-runtime.js";
 import { callGatewayTool } from "./tools/gateway.js";
+
+type ExecApprovalCommandSpansRuntime =
+  typeof import("./bash-tools.exec-approval-request.runtime.js");
+
+let execApprovalCommandSpansRuntimePromise: Promise<ExecApprovalCommandSpansRuntime> | null = null;
+
+function loadExecApprovalCommandSpansRuntime(): Promise<ExecApprovalCommandSpansRuntime> {
+  execApprovalCommandSpansRuntimePromise ??=
+    import("./bash-tools.exec-approval-request.runtime.js");
+  return execApprovalCommandSpansRuntimePromise;
+}
 
 export type RequestExecApprovalDecisionParams = {
   id: string;
@@ -217,9 +227,8 @@ async function resolveCommandSpans(
     return undefined;
   }
   try {
-    const explanation = await explainShellCommand(command);
-    const commandSpans = formatCommandSpans(explanation);
-    return commandSpans.length > 0 ? commandSpans : undefined;
+    const { resolveExecApprovalCommandSpans } = await loadExecApprovalCommandSpansRuntime();
+    return await resolveExecApprovalCommandSpans(command);
   } catch {
     return undefined;
   }
