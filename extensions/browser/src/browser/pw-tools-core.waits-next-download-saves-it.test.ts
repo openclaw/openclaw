@@ -78,7 +78,9 @@ describe("pw-tools-core", () => {
     suggestedFilename: string;
   }) {
     const harness = createDownloadEventHarness();
-    const saveAs = vi.fn(async () => {});
+    const saveAs = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "download-content", "utf8");
+    });
 
     const p = mod.waitForDownloadViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -135,8 +137,7 @@ describe("pw-tools-core", () => {
     const savedPath = params.saveAs.mock.calls[0]?.[0];
     expect(typeof savedPath).toBe("string");
     expect(savedPath).not.toBe(params.targetPath);
-    expect(path.basename(String(savedPath))).toContain(".openclaw-output-");
-    expect(path.basename(String(savedPath))).toContain(".part");
+    expect(path.basename(String(savedPath))).toBe(path.basename(params.targetPath));
     expect(await fs.readFile(params.targetPath, "utf8")).toBe(params.content);
     await expect(fs.access(String(savedPath))).rejects.toThrow();
   }
@@ -189,7 +190,9 @@ describe("pw-tools-core", () => {
     harness.trigger({
       url: () => "https://example.com/file.bin",
       suggestedFilename: () => "file.bin",
-      saveAs: vi.fn(async () => {}),
+      saveAs: vi.fn(async (outPath: string) => {
+        await fs.writeFile(outPath, "file-content", "utf8");
+      }),
     });
 
     await p;
@@ -279,8 +282,9 @@ describe("pw-tools-core", () => {
       path.join(path.sep, "tmp", "openclaw-preferred", "downloads"),
     );
     const expectedDownloadsTail = `${path.join("tmp", "openclaw-preferred", "downloads")}${path.sep}`;
-    expect(path.dirname(outPath)).toBe(expectedRootedDownloadsDir);
-    expect(path.basename(outPath)).toMatch(/-file\.bin$/);
+    expect(path.dirname(res.path)).toBe(expectedRootedDownloadsDir);
+    expect(path.basename(outPath)).toBe(path.basename(res.path));
+    await expect(fs.readFile(res.path, "utf8")).resolves.toBe("download-content");
     expect(path.normalize(res.path)).toContain(path.normalize(expectedDownloadsTail));
     expect(tmpDirMocks.resolvePreferredOpenClawTmpDir).toHaveBeenCalled();
   });
@@ -292,10 +296,11 @@ describe("pw-tools-core", () => {
       suggestedFilename: "../../../../etc/passwd",
     });
     expect(typeof outPath).toBe("string");
-    expect(path.dirname(outPath)).toBe(
+    expect(path.dirname(res.path)).toBe(
       path.resolve(path.join(path.sep, "tmp", "openclaw-preferred", "downloads")),
     );
-    expect(path.basename(outPath)).toMatch(/-passwd$/);
+    expect(path.basename(outPath)).toBe(path.basename(res.path));
+    await expect(fs.readFile(res.path, "utf8")).resolves.toBe("download-content");
     expect(path.normalize(res.path)).toContain(
       path.normalize(`${path.join("tmp", "openclaw-preferred", "downloads")}${path.sep}`),
     );
