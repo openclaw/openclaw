@@ -766,9 +766,11 @@ export async function handleFeishuMessage(params: {
       senderName: ctx.senderName,
     }).allowed;
 
-    // In group chats, the session is scoped to the group, but the *speaker* is the sender.
-    // Using a group-scoped From causes the agent to treat different users as the same person.
-    const feishuFrom = `feishu:${ctx.senderOpenId}`;
+    // In group chats, From encodes the group chat id so resolveGroupSessionKey extracts the
+    // correct group id for tool-policy checks and session metadata. The actual sender identity
+    // is carried separately in SenderId / SenderName, matching the pattern used by Telegram
+    // and Matrix group channels. (#78826)
+    const feishuFrom = isGroup ? `feishu:group:${ctx.chatId}` : `feishu:${ctx.senderOpenId}`;
     const feishuTo = isGroup ? `chat:${ctx.chatId}` : `user:${ctx.senderOpenId}`;
     const peerId = isGroup ? (groupSession?.peerId ?? ctx.chatId) : ctx.senderOpenId;
     const parentPeer = isGroup ? (groupSession?.parentPeer ?? null) : null;
