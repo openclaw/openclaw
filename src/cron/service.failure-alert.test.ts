@@ -370,10 +370,17 @@ describe("CronService failure alerts", () => {
     await cron.run(job.id, "force");
     expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
 
-    const alertText = sendCronFailureAlert.mock.calls[0][0].text;
     // Verify the alert text includes the ISO timestamp from the run time
-    expect(alertText).toContain("Event time:");
-    expect(alertText).toContain(new Date(eventTime).toISOString());
+    expect(sendCronFailureAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("Event time:"),
+      }),
+    );
+    expect(sendCronFailureAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining(new Date(eventTime).toISOString()),
+      }),
+    );
 
     cron.stop();
     await store.cleanup();
