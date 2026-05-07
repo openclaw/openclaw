@@ -308,8 +308,7 @@
     "target": "fs-safe Cleanup Plan"
   },
   {
-    "source": "Gateway",
-    "target": "网关"
+    "source": "Gateway", "target": "Gateway 网关"
   },
   {
     "source": "Gateway RPC reference",
