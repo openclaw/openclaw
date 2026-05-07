@@ -85,7 +85,7 @@ describe("resolveChannelSetupSelectionContributions", () => {
     vi.clearAllMocks();
     listChatChannels.mockReturnValue([
       makeMeta("discord", "Discord"),
-      makeMeta("bluebubbles", "BlueBubbles"),
+      makeMeta("imessage", "iMessage"),
     ]);
     resolveChannelSetupEntries.mockReturnValue(makeChannelSetupEntries());
     formatChannelPrimerLine.mockImplementation(
@@ -121,11 +121,11 @@ describe("resolveChannelSetupSelectionContributions", () => {
           },
         },
         {
-          id: "bluebubbles",
+          id: "imessage",
           meta: {
-            id: "bluebubbles",
-            label: "BlueBubbles",
-            selectionLabel: "BlueBubbles (macOS app)",
+            id: "imessage",
+            label: "iMessage",
+            selectionLabel: "iMessage (macOS app)",
           },
         },
       ],
@@ -134,7 +134,7 @@ describe("resolveChannelSetupSelectionContributions", () => {
     });
 
     expect(contributions.map((contribution) => contribution.option.label)).toEqual([
-      "BlueBubbles (macOS app)",
+      "iMessage (macOS app)",
       "Discord (Bot API)",
       "Zalo (Bot API)",
     ]);

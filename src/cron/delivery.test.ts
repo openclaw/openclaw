@@ -173,8 +173,8 @@ describe("resolveCronDeliveryPlan", () => {
   it("does not treat channel-owned service prefixes as provider selection", () => {
     setCronDeliveryTestRegistry([
       {
-        pluginId: "bluebubbles",
-        plugin: createPrefixOnlyChannelPlugin("bluebubbles", ["bluebubbles"]),
+        pluginId: "imessage",
+        plugin: createPrefixOnlyChannelPlugin("imessage", ["imessage"]),
       },
       { pluginId: "imessage", plugin: createPrefixOnlyChannelPlugin("imessage") },
     ]);
