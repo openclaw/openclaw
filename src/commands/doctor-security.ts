@@ -238,7 +238,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   ];
 
   if (isExposed) {
-    if (!hasSharedSecret) {
+    if (!hasSharedSecret && cfg.gateway?.auth?.mode !== "trusted-proxy") {
       const authFixLines =
         resolvedAuth.mode === "password"
           ? [
