@@ -12,6 +12,7 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
 import {
@@ -19,6 +20,7 @@ import {
   resolveCliRuntimeExecutionProvider,
 } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider, resolveModelRefFromString } from "../../agents/model-selection.js";
+import { resolveOpenAIRuntimeProviderForPi } from "../../agents/openai-codex-routing.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatRateLimitOrOverloadedErrorCopy,
@@ -909,8 +911,9 @@ function resolveRestartLifecycleError(
   const pending = [err];
   const seen = new Set<unknown>();
 
-  while (pending.length > 0) {
-    const candidate = pending.shift();
+  let pendingIndex = 0;
+  while (pendingIndex < pending.length) {
+    const candidate = pending[pendingIndex++];
     if (!candidate || seen.has(candidate)) {
       continue;
     }
@@ -1562,6 +1565,29 @@ export async function runAgentTurnWithFallback(params: {
               model,
             },
           );
+          const requestedAgentHarnessId =
+            agentRuntimeOverride &&
+            agentRuntimeOverride !== "auto" &&
+            agentRuntimeOverride !== "default" &&
+            !isCliRuntimeAlias(agentRuntimeOverride)
+              ? agentRuntimeOverride
+              : undefined;
+          const agentHarnessPolicy = resolveAgentHarnessPolicy({
+            provider,
+            modelId: model,
+            config: runtimeConfig,
+            agentId: params.followupRun.run.agentId,
+            sessionKey: params.followupRun.run.runtimePolicySessionKey ?? params.sessionKey,
+          });
+          const embeddedRunProvider = resolveOpenAIRuntimeProviderForPi({
+            provider,
+            harnessRuntime: requestedAgentHarnessId ?? agentHarnessPolicy.runtime,
+            agentHarnessId: requestedAgentHarnessId,
+            authProfileProvider: runBaseParams.authProfileId?.split(":", 1)[0],
+            authProfileId: runBaseParams.authProfileId,
+            config: runtimeConfig,
+            workspaceDir: params.followupRun.run.workspaceDir,
+          });
           return (async () => {
             let attemptCompactionCount = 0;
             const lifecycleBackstop = createEmbeddedLifecycleTerminalBackstop({
@@ -1580,12 +1606,8 @@ export async function runAgentTurnWithFallback(params: {
                 groupSpace: normalizeOptionalString(params.sessionCtx.GroupSpace),
                 ...senderContext,
                 ...runBaseParams,
-                ...(agentRuntimeOverride &&
-                agentRuntimeOverride !== "auto" &&
-                agentRuntimeOverride !== "default" &&
-                !isCliRuntimeAlias(agentRuntimeOverride)
-                  ? { agentHarnessId: agentRuntimeOverride }
-                  : {}),
+                provider: embeddedRunProvider,
+                ...(requestedAgentHarnessId ? { agentHarnessId: requestedAgentHarnessId } : {}),
                 sandboxSessionKey: params.runtimePolicySessionKey,
                 prompt: params.commandBody,
                 transcriptPrompt: params.transcriptCommandBody,

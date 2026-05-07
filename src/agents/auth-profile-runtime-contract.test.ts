@@ -348,22 +348,31 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
     );
   });
 
-  it("forwards an OpenAI auth profile through the embedded OpenAI path", async () => {
+  it("forwards an OpenAI auth profile through the explicit embedded OpenAI PI path", async () => {
     await runAuthContractAttempt({
       tmpDir,
       storePath,
       providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
       authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
       authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId,
+      cfg: {
+        agents: {
+          defaults: {
+            agentRuntime: { id: "pi" },
+          },
+        },
+      } as OpenClawConfig,
     });
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.authProfileId).toBe(
-      AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId,
-    );
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+      agentHarnessId: "pi",
+      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId,
+    });
   });
 
-  it("does not leak an OpenAI Codex auth profile into an unrelated embedded provider", async () => {
+  it("forwards an OpenAI Codex auth profile through the default OpenAI Codex harness path", async () => {
     await runAuthContractAttempt({
       tmpDir,
       storePath,
@@ -373,7 +382,34 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
     });
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.authProfileId).toBeUndefined();
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      agentHarnessId: "codex",
+      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+    });
+  });
+
+  it("routes explicit OpenAI PI runs with Codex OAuth through OpenAI Codex transport", async () => {
+    await runAuthContractAttempt({
+      tmpDir,
+      storePath,
+      providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+      authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
+      authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+      cfg: {
+        agents: {
+          defaults: {
+            agentRuntime: { id: "pi" },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
+      agentHarnessId: "pi",
+      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+    });
   });
 
   it("preserves OpenAI Codex auth profiles through the real codex/* harness startup path", async () => {
