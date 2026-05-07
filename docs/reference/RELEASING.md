@@ -81,6 +81,11 @@ the maintainer-only release runbook.
    dispatches all publishable plugin packages to npm and the same set to
    ClawHub in parallel, and then promotes the prepared OpenClaw npm preflight
    artifact with the matching dist-tag as soon as plugin npm publish succeeds.
+   After the OpenClaw npm publish child succeeds, it creates or updates the
+   matching GitHub release/prerelease page from the complete matching
+   `CHANGELOG.md` section. Stable releases published to npm `latest` become the
+   GitHub latest release; stable maintenance releases kept on npm `beta` are
+   created with GitHub `latest=false`.
    ClawHub publishing may still be running while OpenClaw npm publishes, but the
    release publish workflow prints the child run IDs immediately. By default it
    does not wait for ClawHub after dispatching it, so OpenClaw npm availability
@@ -102,9 +107,8 @@ the maintainer-only release runbook.
     packaged `.zip`, `.dmg`, `.dSYM.zip`, and updated `appcast.xml` on `main`.
 11. After publish, run the npm post-publish verifier, optional standalone
     published-npm Telegram E2E when you need post-publish channel proof,
-    dist-tag promotion when needed, GitHub release/prerelease notes from the
-    complete matching `CHANGELOG.md` section, and the release announcement
-    steps.
+    dist-tag promotion when needed, verify the generated GitHub release page,
+    and run the release announcement steps.
 
 ## Release preflight
 
