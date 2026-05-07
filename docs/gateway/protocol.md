@@ -580,11 +580,10 @@ terminal summary, and sanitized error text.
 - Operators may call `skills.install` (`operator.admin`) in three modes:
   - ClawHub mode: `{ source: "clawhub", slug, version?, force? }` installs a
     skill folder into the default agent workspace `skills/` directory.
-  - Gateway installer mode: `{ name, installId, timeoutMs?, dangerouslyForceUnsafeInstall?: false }`
+  - Gateway installer mode: `{ name, installId, timeoutMs? }`
     runs a declared `metadata.openclaw.install` action on the gateway host.
-    Legacy `dangerouslyForceUnsafeInstall: false` is tolerated for compatibility;
-    `true` is rejected and gateway installs always enforce plugin security scans.
-    Plugin security scans are always enforced for remote gateway installs.
+    Gateway installs always enforce plugin security scans; the legacy
+    `dangerouslyForceUnsafeInstall` gateway override is no longer supported.
 - Operators may call `skills.update` (`operator.admin`) in two modes:
   - ClawHub mode updates one tracked slug or all tracked ClawHub installs in
     the default agent workspace.

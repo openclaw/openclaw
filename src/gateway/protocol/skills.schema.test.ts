@@ -12,8 +12,8 @@ describe("skills.install schema", () => {
     expect(validateSkillsInstallParams(params)).toBe(true);
   });
 
-  it("accepts dangerouslyForceUnsafeInstall=true at the schema layer for legacy compatibility", () => {
+  it("rejects dangerouslyForceUnsafeInstall=true at the schema layer", () => {
     const params = { name: "calendar", installId: "deps", dangerouslyForceUnsafeInstall: true };
-    expect(validateSkillsInstallParams(params)).toBe(true);
+    expect(validateSkillsInstallParams(params)).toBe(false);
   });
 });

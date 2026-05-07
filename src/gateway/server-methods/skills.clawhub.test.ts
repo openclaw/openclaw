@@ -151,7 +151,7 @@ describe("skills gateway handlers (clawhub)", () => {
 
     expect(trueOk).toBe(false);
     expect(installSkillMock).not.toHaveBeenCalled();
-    expect(trueError?.message).toContain("dangerouslyForceUnsafeInstall=true is not supported");
+    expect(trueError?.message).toContain("must be equal to constant");
   });
 
   it("updates ClawHub skills through skills.update", async () => {
