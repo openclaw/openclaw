@@ -182,15 +182,17 @@ function applyPluginAutoEnableForActivation(params: {
     workspaceDir: params.workspaceDir,
     allowWorkspaceScopedSnapshot: true,
   });
-  const currentManifestRegistry =
-    currentSnapshot?.manifestRegistry ??
-    (normalizePluginsConfig(params.config.plugins).loadPaths.length === 0
+  const defaultDiscoverySnapshot =
+    normalizePluginsConfig(params.config.plugins).loadPaths.length === 0
       ? getCurrentPluginMetadataSnapshot({
           env: params.env,
           workspaceDir: params.workspaceDir,
           allowWorkspaceScopedSnapshot: true,
-        })?.manifestRegistry
-      : undefined);
+          requireDefaultDiscoveryContext: true,
+        })
+      : undefined;
+  const currentManifestRegistry =
+    currentSnapshot?.manifestRegistry ?? defaultDiscoverySnapshot?.manifestRegistry;
   return applyPluginAutoEnable({
     config: params.config,
     env: params.env,
