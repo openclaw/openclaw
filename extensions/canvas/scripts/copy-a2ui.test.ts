@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { copyA2uiAssets } from "./copy-a2ui.mjs";
 
@@ -28,12 +28,10 @@ describe("canvas a2ui copy", () => {
   });
 
   async function withA2uiFixture(run: (dir: string) => Promise<void>) {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-a2ui-"));
-    try {
-      await run(dir);
-    } finally {
-      await fs.rm(dir, { force: true, recursive: true });
-    }
+    await withTempWorkspace(
+      { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-a2ui-" },
+      async ({ dir }) => await run(dir),
+    );
   }
 
   it("throws a helpful error when assets are missing", async () => {

@@ -95,7 +95,8 @@
     "subagents",
     "session_status",
     "web_search",
-    "web_fetch"
+    "web_fetch",
+    "canvas"
   ],
   "experimentalRawEvents": true,
   "model": "gpt-5.5",
@@ -213,8 +214,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 158
   },
   "dynamicToolsJson": {
-    "chars": 49243,
-    "roughTokens": 12311
+    "chars": 50870,
+    "roughTokens": 12718
   },
   "openClawDeveloperInstructions": {
     "chars": 6023,
@@ -225,8 +226,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 7294
   },
   "totalWithDynamicToolsJson": {
-    "chars": 78420,
-    "roughTokens": 19605
+    "chars": 80047,
+    "roughTokens": 20012
   },
   "userInputText": {
     "chars": 870,
@@ -588,7 +589,8 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
   "subagents",
   "session_status",
   "web_search",
-  "web_fetch"
+  "web_fetch",
+  "canvas"
 ]
 ```
 

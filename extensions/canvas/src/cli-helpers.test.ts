@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseCanvasSnapshotPayload } from "./cli-helpers.js";
 
-describe("canvas cli helpers", () => {
+describe("canvas CLI helpers", () => {
   it("parses canvas.snapshot payload", () => {
     expect(parseCanvasSnapshotPayload({ format: "png", base64: "aGk=" })).toEqual({
       format: "png",

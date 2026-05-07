@@ -1413,5 +1413,71 @@
       "type": "object"
     },
     "name": "web_fetch"
+  },
+  {
+    "description": "Control node canvases (present/hide/navigate/eval/snapshot/A2UI). Use snapshot to capture the rendered UI.",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "enum": ["present", "hide", "navigate", "eval", "snapshot", "a2ui_push", "a2ui_reset"],
+          "type": "string"
+        },
+        "delayMs": {
+          "type": "number"
+        },
+        "gatewayToken": {
+          "type": "string"
+        },
+        "gatewayUrl": {
+          "type": "string"
+        },
+        "height": {
+          "type": "number"
+        },
+        "javaScript": {
+          "type": "string"
+        },
+        "jsonl": {
+          "type": "string"
+        },
+        "jsonlPath": {
+          "type": "string"
+        },
+        "maxWidth": {
+          "type": "number"
+        },
+        "node": {
+          "type": "string"
+        },
+        "outputFormat": {
+          "enum": ["png", "jpg", "jpeg"],
+          "type": "string"
+        },
+        "quality": {
+          "type": "number"
+        },
+        "target": {
+          "type": "string"
+        },
+        "timeoutMs": {
+          "type": "number"
+        },
+        "url": {
+          "type": "string"
+        },
+        "width": {
+          "type": "number"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        }
+      },
+      "required": ["action"],
+      "type": "object"
+    },
+    "name": "canvas"
   }
 ]
