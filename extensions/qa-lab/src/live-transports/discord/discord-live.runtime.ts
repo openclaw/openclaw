@@ -6,6 +6,7 @@ import { handleDiscordMessageAction, requestDiscord } from "@openclaw/discord/ap
 import { DEFAULT_EMOJIS } from "openclaw/plugin-sdk/channel-feedback";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { chromium } from "playwright-core";
 import { z } from "zod";
 import { startQaGatewayChild } from "../../gateway-child.js";
@@ -710,7 +711,14 @@ async function writeHtmlScreenshot(params: { htmlPath: string; screenshotPath: s
         waitUntil: "domcontentloaded",
         timeout: 15_000,
       });
-      await page.screenshot({ path: params.screenshotPath, fullPage: true });
+      await fs.mkdir(path.dirname(params.screenshotPath), { recursive: true });
+      await writeExternalFileWithinRoot({
+        rootDir: path.dirname(params.screenshotPath),
+        path: path.basename(params.screenshotPath),
+        write: async (tempPath) => {
+          await page.screenshot({ path: tempPath, fullPage: true });
+        },
+      });
       return { screenshotPath: params.screenshotPath };
     } finally {
       await browser.close();

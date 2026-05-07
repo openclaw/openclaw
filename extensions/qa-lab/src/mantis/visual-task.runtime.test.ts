@@ -79,12 +79,17 @@ describe("mantis visual task runtime", () => {
       ["/tmp/crabbox", "stop"],
     ]);
     const recordArgs = commands.find((entry) => entry.args[0] === "record")?.args ?? [];
+    const finalVideoPath = path.join(
+      repoRoot,
+      ".artifacts/qa-e2e/mantis/visual-task-test/visual-task.mp4",
+    );
+    const stagedVideoPath = recordArgs[recordArgs.indexOf("--output") + 1];
     expect(recordArgs).toEqual(
       expect.arrayContaining([
         "--duration",
         "12s",
         "--output",
-        path.join(repoRoot, ".artifacts/qa-e2e/mantis/visual-task-test/visual-task.mp4"),
+        stagedVideoPath,
         "--while",
         "--",
         "pnpm",
@@ -96,6 +101,9 @@ describe("mantis visual task runtime", () => {
         "visual-driver",
       ]),
     );
+    expect(stagedVideoPath).not.toBe(finalVideoPath);
+    expect(path.basename(stagedVideoPath ?? "")).toBe(path.basename(finalVideoPath));
+    await expect(fs.stat(stagedVideoPath ?? "")).rejects.toThrow();
     await expect(fs.readFile(result.screenshotPath ?? "", "utf8")).resolves.toBe("png");
     await expect(fs.readFile(result.videoPath ?? "", "utf8")).resolves.toBe("mp4");
     const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
