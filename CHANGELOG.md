@@ -9,6 +9,7 @@ Docs: https://docs.openclaw.ai
 - Wizard/i18n: add CLI setup wizard i18n with zh-CN and zh-TW locale support, auto-detected via system locale. (#79016) Thanks @LifetimeVip.
 - Telegram: preserve the channel-specific 10-option poll cap in the unified outbound adapter so over-limit polls are rejected before send. (#78762) Thanks @obviyus.
 - Runtime/install: raise the supported Node 22 floor to `22.16+` so native SQLite query handling can rely on the `node:sqlite` statement metadata API while continuing to recommend Node 24. (#78921)
+- Discord/voice: include a bounded one-line STT transcript preview in verbose voice logs so live voice debugging shows what speakers said before the agent reply.
 - Discord/voice: stream ElevenLabs TTS directly into Discord playback and send ElevenLabs latency optimization as the documented query parameter so spoken replies can start sooner.
 - Discord/voice: keep TTS playback running when another user starts speaking, ignore new capture during playback to avoid feedback loops, and downgrade expected receive-stream aborts to verbose diagnostics.
 - Telegram: treat successful same-chat `message` tool outbound sends during an inbound telegram turn as delivered when deciding whether to emit the rewritten silent reply fallback (#78685). Thanks @neeravmakwana.
@@ -61,6 +62,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/chat: add an agent-first filter to the chat session picker, keep chat controls/composer responsive across phone/tablet/desktop widths, keep desktop chat controls on one row, avoid duplicate avatar refreshes during initial chat load, and hide that row while scrolling down the transcript. Thanks @BunsDev.
 - Control UI/chat: collapse consecutive duplicate text messages into one bubble with a count so repeated text-only messages stay compact without hiding nearby context.
 - Control UI/chat and Sessions: label inherited thinking defaults separately from explicit overrides while preserving provider-supplied option labels. Fixes #77581. Thanks @BunsDev and @Beandon13.
+- Agents/runtime: add prepared runtime foundation contracts for carrying provider, model, tool, TTS, and outbound runtime facts through later reply-path migrations. Thanks @mcaxtr.
 - Agents/subagents: preserve every grouped child result when direct completion fallback has to bypass the requester-agent announce turn. Thanks @vincentkoc.
 - TTS/telephony: honor provider voice/model overrides in telephony synthesis providers so Google Meet agent speech logs match the backend that actually produced the audio. Thanks @vincentkoc.
 - Voice Call/realtime: bound the paced Twilio audio queue and close overloaded realtime streams before provider audio can pile up behind the websocket backpressure guard. Thanks @vincentkoc.
@@ -154,6 +156,11 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Providers: preserve non-OK `text/event-stream` response bodies so provider HTTP errors keep their JSON detail instead of collapsing to generic streaming failures. Fixes #78180.
+- Chat commands: make `/model default` reset the session model override instead of treating it as a literal model name. Fixes #78182.
+- Cron: make rejected `payload.model` errors show the configured `agents.defaults.models` allowlist instead of echoing the rejected model twice. Fixes #79058.
+- Agents/subagents: retry parent wake announces when the announce-summary model run fails with fallback cooldown exhaustion instead of dropping the wake on the first transient provider overload. Refs #78581.
+- Providers/network: honor IPv4 CIDR and octet-wildcard `NO_PROXY` entries such as `100.64.0.0/10` and `100.64.*` before enabling trusted env-proxy mode for model-provider requests. Fixes #79030.
 - Docs/Docker: document a local Compose override for Docker Desktop DNS failures in the shared-network `openclaw-cli` sidecar, keeping the default compose setup hardened while unblocking `openclaw plugins install` when users opt in. Fixes #79018. Thanks @Jason-Vaughan.
 - Installer: when npm installs `openclaw` outside the parent shell PATH, print follow-up commands with the resolved binary path instead of telling users to run `openclaw` from a shell that will report `command not found`. Fixes #72382. Thanks @jbob762.
 - Compute plugin callback authorization dynamically [AI]. (#78866) Thanks @pgondhi987.
@@ -165,7 +172,10 @@ Docs: https://docs.openclaw.ai
 - Canvas plugin: keep legacy root `canvasHost` configs valid until `openclaw doctor --fix` migrates them into `plugins.entries.canvas.config.host`, move Canvas/A2UI clients to gateway protocol v4 plugin surfaces, and refresh the generated A2UI bundle hash so normal builds stay clean.
 - feishu: honor config write policy for dynamic agents [AI]. (#78520) Thanks @pgondhi987.
 - fix(skill-workshop): honor pending approval for tool suggestions [AI]. (#78516) Thanks @pgondhi987.
+- BytePlus: mark Kimi K2.5 and Kimi K2 Thinking catalog entries as reasoning-capable, raise their output cap to 32k tokens, and fill Kimi cache-read pricing. Fixes #54149.
+- Control UI/chat: wait for an in-flight model dropdown patch before sending the next chat message, so immediate sends use the selected session model instead of racing the previous override. Fixes #54240.
 - Native chat: decode gateway-provided thinking metadata for the iOS/macOS picker so provider-specific levels such as `adaptive`, `xhigh`, and `max` appear without leaking unsupported default-model options. Thanks @BunsDev.
+- Agents/compaction: cap summarization output reserve tokens to the selected model's `maxTokens` so 1M-context Anthropic compactions do not request more output than the API permits. Fixes #54383.
 - Agents/tools: fail `exec host=node` before `system.run` when the selected node is known to be disconnected, with an actionable reconnect message instead of a raw node invoke failure. Thanks @BunsDev.
 - Agents/models: accept legacy `anthropic-cli/*` model refs as Claude CLI runtime refs instead of failing model resolution with `Unknown model`. Thanks @BunsDev.
 - Agents/tools: keep restrictive-profile tool-section warnings scoped to the configured sections whose tools are still missing from `alsoAllow`, so already re-allowed filesystem tools do not make exec-only fixes look broader than they are. Thanks @BunsDev.
