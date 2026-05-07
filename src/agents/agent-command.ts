@@ -1022,6 +1022,7 @@ async function agentCommandInternal(
               sessionFile,
               workspaceDir,
               body,
+              transcriptBody,
               isFallbackRetry,
               resolvedThinkLevel,
               fastMode: resolveFastModeState({

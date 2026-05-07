@@ -6,6 +6,10 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { FailoverError } from "../failover-error.js";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "../internal-events.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
 import { persistCliTurnTranscript, runAgentAttempt } from "./attempt-execution.js";
 
@@ -876,6 +880,96 @@ describe("CLI attempt execution", () => {
     expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt).not.toContain(
       "[Inter-session message]",
     );
+  });
+
+  it("passes a clean transcript prompt for embedded internal-event turns", async () => {
+    const sessionKey = "agent:main:subagent:embedded-transcript-clean";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-embedded-transcript-clean",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedPiRunResult);
+
+    const body = [
+      INTERNAL_RUNTIME_CONTEXT_BEGIN,
+      "OpenClaw runtime context (internal):",
+      "hidden subagent completion event",
+      INTERNAL_RUNTIME_CONTEXT_END,
+    ].join("\n");
+    const transcriptBody = [
+      "A background task completed. Use this result to reply to the user in your normal assistant voice.",
+      "",
+      "task: inspect announce delivery",
+    ].join("\n");
+
+    await runAgentAttempt({
+      providerOverride: "openai",
+      originalProvider: "openai",
+      modelOverride: "gpt-5.4",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body,
+      transcriptBody,
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-embedded-transcript-clean",
+      opts: {
+        senderIsOwner: false,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:subagent:child",
+          sourceTool: "subagent-announce-delivery",
+        },
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "subagent",
+            childSessionKey: "agent:main:subagent:child",
+            childSessionId: "child-session-id",
+            announceType: "subagent task",
+            taskLabel: "inspect announce delivery",
+            status: "ok",
+            statusLabel: "completed successfully",
+            result: "child result",
+            replyInstruction: "Summarize the result for the requester.",
+          },
+        ],
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: "telegram",
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "openai",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inputProvenance: expect.objectContaining({ kind: "inter_session" }),
+        internalEvents: expect.any(Array),
+        prompt: expect.stringContaining(INTERNAL_RUNTIME_CONTEXT_BEGIN),
+        transcriptPrompt: expect.stringContaining("A background task completed."),
+      }),
+    );
+    const embeddedParams = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
+    expect(embeddedParams?.prompt).toContain("[Inter-session message]");
+    expect(embeddedParams?.transcriptPrompt).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
+    expect(embeddedParams?.transcriptPrompt).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
   });
 
   it("forwards one-shot CLI cleanup to CLI providers", async () => {
