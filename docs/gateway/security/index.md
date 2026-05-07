@@ -71,6 +71,8 @@ OpenClaw uses `@openclaw/fs-safe` for root-bounded file access, atomic writes, a
 
 Details: [Secure file operations](/gateway/security/secure-file-operations).
 
+For the design model that separates tool runtime boundaries, agent scratch storage, and real-host path capabilities, see [Filesystem capability model](/gateway/security/filesystem-capability-model).
+
 ### Shared Slack workspace: real risk
 
 If "everyone in Slack can message the bot," the core risk is delegated tool authority:

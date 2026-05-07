@@ -36,6 +36,8 @@ Not sandboxed:
   - **Elevated exec bypasses sandboxing and uses the configured escape path (`gateway` by default, or `node` when the exec target is `node`).**
   - If sandboxing is off, `tools.elevated` does not change execution (already on host). See [Elevated Mode](/tools/elevated).
 
+Sandboxing is one layer of the filesystem safety model. It controls where tools run, while rooted host file mutation still goes through `@openclaw/fs-safe` and future scratch-only storage may use a separate virtual filesystem. See [Filesystem capability model](/gateway/security/filesystem-capability-model).
+
 ## Modes
 
 `agents.defaults.sandbox.mode` controls **when** sandboxing is used:

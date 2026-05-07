@@ -9,6 +9,8 @@ OpenClaw uses [`@openclaw/fs-safe`](https://github.com/openclaw/fs-safe) for sec
 
 The goal is a consistent **library guardrail** for trusted OpenClaw code that receives untrusted path names. It is not a sandbox. Host filesystem permissions, OS users, containers, and the agent/tool policy still define the real blast radius.
 
+For the broader layered model that separates runtime isolation, agent scratch storage, and real-host filesystem capabilities, see [Filesystem capability model](/gateway/security/filesystem-capability-model).
+
 ## Default: no Python helper
 
 OpenClaw defaults the fs-safe POSIX Python helper to **off**.
@@ -73,4 +75,4 @@ Use `require` rather than `auto` when the helper is part of your security postur
 - Secrets should use OpenClaw secret helpers or fs-safe secret/private-state helpers; do not hand-roll mode checks around `fs.writeFile`.
 - If you need hostile local-user isolation, do not rely on fs-safe alone. Run separate gateways under separate OS users/hosts or use sandboxing.
 
-Related: [Security](/gateway/security), [Sandboxing](/gateway/sandboxing), [Exec approvals](/tools/exec-approvals), [Secrets](/gateway/secrets).
+Related: [Security](/gateway/security), [Filesystem capability model](/gateway/security/filesystem-capability-model), [Sandboxing](/gateway/sandboxing), [Exec approvals](/tools/exec-approvals), [Secrets](/gateway/secrets).

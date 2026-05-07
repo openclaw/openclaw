@@ -1502,6 +1502,7 @@
                     "pages": [
                       "gateway/security/index",
                       "gateway/security/secure-file-operations",
+                      "gateway/security/filesystem-capability-model",
                       "gateway/security/audit-checks",
                       "gateway/operator-scopes",
                       "gateway/sandboxing",
