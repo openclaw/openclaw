@@ -112,11 +112,18 @@ export function listOpenAIAuthProfileProvidersForAgentRuntime(params: {
   provider: string;
   harnessRuntime?: string;
   agentHarnessId?: string;
+  sessionAgentHarnessId?: string;
+  sessionAgentRuntimeOverride?: string;
 }): string[] {
   if (!isOpenAIProvider(params.provider)) {
     return [params.provider];
   }
-  const runtime = normalizeEmbeddedAgentRuntime(params.agentHarnessId ?? params.harnessRuntime);
+  const runtime = normalizeEmbeddedAgentRuntime(
+    normalizeExplicitRuntimePin(params.sessionAgentRuntimeOverride) ??
+      normalizeExplicitRuntimePin(params.sessionAgentHarnessId) ??
+      normalizeExplicitRuntimePin(params.agentHarnessId) ??
+      params.harnessRuntime,
+  );
   if (runtime === "codex") {
     return [OPENAI_CODEX_PROVIDER_ID];
   }
@@ -124,6 +131,14 @@ export function listOpenAIAuthProfileProvidersForAgentRuntime(params: {
     return [OPENAI_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID];
   }
   return [params.provider];
+}
+
+function normalizeExplicitRuntimePin(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  const runtime = normalizeEmbeddedAgentRuntime(value);
+  return runtime === "auto" || runtime === "default" ? undefined : runtime;
 }
 
 export function resolveOpenAIRuntimeProviderForPi(params: {

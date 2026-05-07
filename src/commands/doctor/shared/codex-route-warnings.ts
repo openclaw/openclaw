@@ -42,10 +42,6 @@ function isOpenAICodexModelRef(model: string | undefined): model is string {
   return normalizeString(model)?.startsWith("openai-codex/") === true;
 }
 
-function isOpenAIModelRef(model: string | undefined): model is string {
-  return normalizeString(model)?.startsWith("openai/") === true;
-}
-
 function toCanonicalOpenAIModelRef(model: string): string | undefined {
   if (!isOpenAICodexModelRef(model)) {
     return undefined;
@@ -681,23 +677,6 @@ function clearStaleCodexAuthOverride(entry: SessionEntry, runtime: CodexRepairRu
   return true;
 }
 
-function hasOpenAIAgentRoute(entry: SessionEntry): boolean {
-  return (
-    normalizeString(entry.modelProvider) === "openai" ||
-    normalizeString(entry.providerOverride) === "openai" ||
-    isOpenAIModelRef(entry.model) ||
-    isOpenAIModelRef(entry.modelOverride)
-  );
-}
-
-function hasOpenAIPiRuntimePin(entry: SessionEntry): boolean {
-  return (
-    hasOpenAIAgentRoute(entry) &&
-    (normalizeString(entry.agentHarnessId) === "pi" ||
-      normalizeString(entry.agentRuntimeOverride) === "pi")
-  );
-}
-
 export function repairCodexSessionStoreRoutes(params: {
   store: Record<string, SessionEntry>;
   runtime: CodexRepairRuntime;
@@ -722,16 +701,10 @@ export function repairCodexSessionStoreRoutes(params: {
     const changedModelRoute = changedRuntimeModelRoute || changedOverrideModelRoute;
     const changedFallbackNotice = clearStaleCodexFallbackNotice(entry);
     const changedAuthOverride = clearStaleCodexAuthOverride(entry, params.runtime);
-    const shouldRepairOpenAIPiPin = hasOpenAIPiRuntimePin(entry);
-    if (
-      !changedModelRoute &&
-      !changedFallbackNotice &&
-      !changedAuthOverride &&
-      !shouldRepairOpenAIPiPin
-    ) {
+    if (!changedModelRoute && !changedFallbackNotice && !changedAuthOverride) {
       continue;
     }
-    if (changedModelRoute || shouldRepairOpenAIPiPin) {
+    if (changedModelRoute) {
       entry.agentHarnessId = params.runtime;
       entry.agentRuntimeOverride = params.runtime;
     }
@@ -759,8 +732,7 @@ function scanCodexSessionStoreRoutes(
       isOpenAICodexModelRef(entry.model) ||
       isOpenAICodexModelRef(entry.modelOverride) ||
       isOpenAICodexModelRef(entry.fallbackNoticeSelectedModel) ||
-      isOpenAICodexModelRef(entry.fallbackNoticeActiveModel) ||
-      hasOpenAIPiRuntimePin(entry);
+      isOpenAICodexModelRef(entry.fallbackNoticeActiveModel);
     return hasLegacyRoute ? [sessionKey] : [];
   });
 }

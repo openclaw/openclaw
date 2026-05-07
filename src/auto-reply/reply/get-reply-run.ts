@@ -885,19 +885,24 @@ export async function runPreparedReply(
         agentId,
         sessionKey: runtimePolicySessionKey,
       });
-  const acceptedAuthProfileProviders = agentHarnessPolicy
-    ? listOpenAIAuthProfileProvidersForAgentRuntime({
-        provider,
-        harnessRuntime: agentHarnessPolicy.runtime,
-      })
-    : [provider];
+  const resolveAcceptedAuthProfileProviders = (entry: SessionEntry | undefined) =>
+    agentHarnessPolicy
+      ? listOpenAIAuthProfileProvidersForAgentRuntime({
+          provider,
+          harnessRuntime: agentHarnessPolicy.runtime,
+          sessionAgentHarnessId: entry?.agentHarnessId,
+          sessionAgentRuntimeOverride: entry?.agentRuntimeOverride,
+        })
+      : [provider];
   let authProfileId = useFastReplyRuntime
     ? preparedSessionState.sessionEntry?.authProfileOverride
     : await traceRunPhase("reply.resolve_auth_profile", () =>
         resolveSessionAuthProfileOverride({
           cfg,
           provider,
-          acceptedProviderIds: acceptedAuthProfileProviders,
+          acceptedProviderIds: resolveAcceptedAuthProfileProviders(
+            preparedSessionState.sessionEntry,
+          ),
           agentDir,
           sessionEntry: preparedSessionState.sessionEntry,
           sessionStore,
@@ -956,7 +961,9 @@ export async function runPreparedReply(
           : await resolveSessionAuthProfileOverride({
               cfg,
               provider,
-              acceptedProviderIds: acceptedAuthProfileProviders,
+              acceptedProviderIds: resolveAcceptedAuthProfileProviders(
+                preparedSessionState.sessionEntry,
+              ),
               agentDir,
               sessionEntry: preparedSessionState.sessionEntry,
               sessionStore,

@@ -326,7 +326,7 @@ describe("collectCodexRouteWarnings", () => {
     });
   });
 
-  it("repairs canonical OpenAI sessions that are still pinned to PI", () => {
+  it("preserves canonical OpenAI sessions that are explicitly pinned to PI", () => {
     const store: Record<string, SessionEntry> = {
       main: {
         sessionId: "s1",
@@ -337,7 +337,7 @@ describe("collectCodexRouteWarnings", () => {
         modelOverride: "gpt-5.4",
         agentHarnessId: "pi",
         agentRuntimeOverride: "pi",
-        authProfileOverride: "openai-codex:default",
+        authProfileOverride: "openai:work",
       },
     };
 
@@ -347,12 +347,12 @@ describe("collectCodexRouteWarnings", () => {
       now: 123,
     });
 
-    expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
+    expect(result).toEqual({ changed: false, sessionKeys: [] });
     expect(store.main).toMatchObject({
-      updatedAt: 123,
-      agentHarnessId: "codex",
-      agentRuntimeOverride: "codex",
-      authProfileOverride: "openai-codex:default",
+      updatedAt: 1,
+      agentHarnessId: "pi",
+      agentRuntimeOverride: "pi",
+      authProfileOverride: "openai:work",
     });
   });
 
