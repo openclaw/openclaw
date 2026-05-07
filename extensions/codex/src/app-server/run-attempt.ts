@@ -40,6 +40,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { resolveAgentMaxConcurrent } from "openclaw/plugin-sdk/model-session-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import {
@@ -49,6 +50,7 @@ import {
 } from "./auth-bridge.js";
 import {
   defaultCodexAppServerClientFactory,
+  defaultIsolatedCodexAppServerClientFactory,
   type CodexAppServerClientFactory,
 } from "./client-factory.js";
 import {
@@ -144,11 +146,31 @@ type OpenClawCodingToolsFactory =
   (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
 
 const testClientFactoryStorage = new AsyncLocalStorage<CodexAppServerClientFactory | undefined>();
-const clientFactory = defaultCodexAppServerClientFactory;
 let openClawCodingToolsFactoryForTests: OpenClawCodingToolsFactory | undefined;
 
-function resolveCodexAppServerClientFactory(): CodexAppServerClientFactory {
-  return testClientFactoryStorage.getStore() ?? clientFactory;
+function resolveCodexAppServerClientFactory(useIsolated: boolean): CodexAppServerClientFactory {
+  return (
+    testClientFactoryStorage.getStore() ??
+    (useIsolated ? defaultIsolatedCodexAppServerClientFactory : defaultCodexAppServerClientFactory)
+  );
+}
+
+/**
+ * Returns true when the current run should use an isolated Codex app-server
+ * client (its own subprocess, not shared with any other agent run).
+ *
+ * Tied to `agents.defaults.maxConcurrent`: with `maxConcurrent === 1`, runs are
+ * serialised by the main lane and the shared client is safe. With
+ * `maxConcurrent > 1`, two runs that target different agent directories race on
+ * `getSharedCodexAppServerClient`; the second run forces
+ * `clearSharedCodexAppServerClient()`, SIGTERMs the running subprocess, and
+ * silently kills the first run's in-flight turn. Isolated mode gives every run
+ * its own subprocess so concurrent runs don't tear each other down.
+ */
+function shouldUseIsolatedCodexAppServerClient(
+  config: EmbeddedRunAttemptParams["config"],
+): boolean {
+  return resolveAgentMaxConcurrent(config) > 1;
 }
 
 function emitCodexAppServerEvent(
@@ -373,7 +395,8 @@ export async function runCodexAppServerAttempt(
   } = {},
 ): Promise<EmbeddedRunAttemptResult> {
   const attemptStartedAt = Date.now();
-  const attemptClientFactory = resolveCodexAppServerClientFactory();
+  const useIsolatedAppServerClient = shouldUseIsolatedCodexAppServerClient(params.config);
+  const attemptClientFactory = resolveCodexAppServerClientFactory(useIsolatedAppServerClient);
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
   const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
@@ -577,6 +600,19 @@ export async function runCodexAppServerAttempt(
   let trajectoryEndRecorded = false;
   let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
   let startupClientForCleanup: CodexAppServerClient | undefined;
+  let isolatedAppServerClient: CodexAppServerClient | undefined;
+  const closeIsolatedAppServerClient = (): void => {
+    const isolated = isolatedAppServerClient;
+    isolatedAppServerClient = undefined;
+    if (!isolated) {
+      return;
+    }
+    try {
+      isolated.close();
+    } catch (error) {
+      embeddedAgentLog.debug("isolated codex app-server client close failed", { error });
+    }
+  };
   try {
     emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
@@ -616,7 +652,11 @@ export async function runCodexAppServerAttempt(
             params.config,
           );
           attemptedClient = startupClient;
-          startupClientForCleanup = startupClient;
+          if (useIsolatedAppServerClient) {
+            isolatedAppServerClient = startupClient;
+          } else {
+            startupClientForCleanup = startupClient;
+          }
           await ensureCodexComputerUse({
             client: startupClient,
             pluginConfig: options.pluginConfig,
@@ -649,9 +689,26 @@ export async function runCodexAppServerAttempt(
               throw error;
             }
             const failedClient = attemptedClient;
-            const clearedSharedClient = clearSharedCodexAppServerClientIfCurrent(failedClient);
-            if (startupClientForCleanup === failedClient) {
-              startupClientForCleanup = undefined;
+            let clearedSharedClient = false;
+            if (useIsolatedAppServerClient) {
+              if (failedClient) {
+                try {
+                  failedClient.close();
+                } catch (closeError) {
+                  embeddedAgentLog.debug(
+                    "isolated codex app-server client close failed during startup retry",
+                    { error: closeError },
+                  );
+                }
+              }
+              if (isolatedAppServerClient === failedClient) {
+                isolatedAppServerClient = undefined;
+              }
+            } else {
+              clearedSharedClient = clearSharedCodexAppServerClientIfCurrent(failedClient);
+              if (startupClientForCleanup === failedClient) {
+                startupClientForCleanup = undefined;
+              }
             }
             attemptedClient = undefined;
             if (attempt >= CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS) {
@@ -688,7 +745,11 @@ export async function runCodexAppServerAttempt(
     });
   } catch (error) {
     nativeHookRelay?.unregister();
-    clearSharedCodexAppServerClientIfCurrent(startupClientForCleanup);
+    if (useIsolatedAppServerClient) {
+      closeIsolatedAppServerClient();
+    } else {
+      clearSharedCodexAppServerClientIfCurrent(startupClientForCleanup);
+    }
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     throw error;
   }
@@ -1179,6 +1240,9 @@ export async function runCodexAppServerAttempt(
     notificationCleanup();
     requestCleanup();
     nativeHookRelay?.unregister();
+    if (useIsolatedAppServerClient) {
+      closeIsolatedAppServerClient();
+    }
     await runAgentCleanupStep({
       runId: params.runId,
       sessionId: params.sessionId,
@@ -1416,6 +1480,9 @@ export async function runCodexAppServerAttempt(
     notificationCleanup();
     requestCleanup();
     nativeHookRelay?.unregister();
+    if (useIsolatedAppServerClient) {
+      closeIsolatedAppServerClient();
+    }
     runAbortController.signal.removeEventListener("abort", abortListener);
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     steeringQueue?.cancel();
