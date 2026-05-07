@@ -266,6 +266,24 @@ describe("active-memory plugin", () => {
     );
   });
 
+  it("passes lane:active-memory to runEmbeddedPiAgent to avoid before_prompt_build self-deadlock (#79026)", async () => {
+    await hooks.before_prompt_build(
+      { prompt: "recall test", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lane: "active-memory",
+      }),
+    );
+  });
+
   it("registers a session-scoped active-memory toggle command", async () => {
     const command = registeredCommands["active-memory"];
     const sessionKey = "agent:main:active-memory-toggle";

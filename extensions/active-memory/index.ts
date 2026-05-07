@@ -2449,6 +2449,7 @@ async function runRecallSubagent(params: {
       silentExpected: true,
       authProfileFailurePolicy: "local",
       cleanupBundleMcpOnRunEnd: true,
+      lane: "active-memory",
       abortSignal: params.abortSignal,
     });
     if (params.abortSignal?.aborted) {
