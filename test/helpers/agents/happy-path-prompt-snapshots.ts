@@ -183,6 +183,16 @@ const baseConfig: OpenClawConfig = {
   },
 };
 
+const dynamicToolsConfig: OpenClawConfig = {
+  ...baseConfig,
+  plugins: {
+    enabled: true,
+    slots: {
+      memory: "none",
+    },
+  },
+};
+
 const happyPathModel = {
   id: MODEL_ID,
   provider: "openai",
@@ -335,12 +345,13 @@ function createDynamicTools(params: {
     enableHeartbeatTool: params.trigger === "heartbeat",
     forceHeartbeatTool: params.trigger === "heartbeat",
     trigger: params.trigger,
+    config: dynamicToolsConfig,
   });
   const normalized = normalizeAgentRuntimeTools({
     tools,
     runtimePlan: undefined,
     provider: "codex",
-    config: baseConfig,
+    config: dynamicToolsConfig,
     workspaceDir: WORKSPACE_DIR,
     env: {},
     modelId: MODEL_ID,
