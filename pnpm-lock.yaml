@@ -504,9 +504,6 @@ importers:
       ws:
         specifier: ^8.20.0
         version: 8.20.0
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -774,9 +771,6 @@ importers:
       google-auth-library:
         specifier: 10.6.2
         version: 10.6.2
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -864,9 +858,6 @@ importers:
 
   extensions/llm-task:
     dependencies:
-      ajv:
-        specifier: ^8.20.0
-        version: 8.20.0
       typebox:
         specifier: 1.1.37
         version: 1.1.37
@@ -1096,10 +1087,6 @@ importers:
         version: link:../..
 
   extensions/nextcloud-talk:
-    dependencies:
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1113,9 +1100,6 @@ importers:
       nostr-tools:
         specifier: ^2.23.3
         version: 2.23.3(typescript@6.0.3)
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1223,9 +1207,6 @@ importers:
       yaml:
         specifier: ^2.8.4
         version: 2.8.4
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
     devDependencies:
       '@openclaw/discord':
         specifier: workspace:*
@@ -1279,9 +1260,6 @@ importers:
       ws:
         specifier: ^8.20.0
         version: 8.20.0
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1371,10 +1349,6 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/synology-chat:
-    dependencies:
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1559,10 +1533,6 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/webhooks:
-    dependencies:
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1622,10 +1592,6 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/zalo:
-    dependencies:
-      undici:
-        specifier: 8.2.0
-        version: 8.2.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

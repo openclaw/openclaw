@@ -7,6 +7,7 @@
 
 import * as fs from "node:fs";
 import path from "node:path";
+import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import {
   normalizeOptionalString,
   asOptionalObjectRecord as asRecord,
@@ -72,13 +73,7 @@ export async function transcribeAudio(
 
   const fileBuffer = fs.readFileSync(audioPath);
   const fileName = sanitizeFileName(path.basename(audioPath));
-  const mime = fileName.endsWith(".wav")
-    ? "audio/wav"
-    : fileName.endsWith(".mp3")
-      ? "audio/mpeg"
-      : fileName.endsWith(".ogg")
-        ? "audio/ogg"
-        : "application/octet-stream";
+  const mime = mimeTypeFromFilePath(fileName) ?? "application/octet-stream";
 
   const form = new FormData();
   form.append("file", new Blob([fileBuffer], { type: mime }), fileName);
