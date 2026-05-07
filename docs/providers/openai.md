@@ -330,7 +330,7 @@ Choose your preferred auth method and follow the setup steps.
 
     OpenClaw treats model metadata and the runtime context cap as separate values.
 
-    For `openai-codex/gpt-5.5` through Codex OAuth:
+    For `openai/gpt-5.5` through the Codex OAuth catalog:
 
     - Native `contextWindow`: `1000000`
     - Default runtime `contextTokens` cap: `272000`
@@ -356,7 +356,7 @@ Choose your preferred auth method and follow the setup steps.
     ### Catalog recovery
 
     OpenClaw uses upstream Codex catalog metadata for `gpt-5.5` when it is
-    present. If live Codex discovery omits the `openai-codex/gpt-5.5` row while
+    present. If live Codex discovery omits the `gpt-5.5` row while
     the account is authenticated, OpenClaw synthesizes that OAuth model row so
     cron, sub-agent, and configured default-model runs do not fail with
     `Unknown model`.
@@ -502,7 +502,7 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
 
 ## GPT-5 prompt contribution
 
-OpenClaw adds a shared GPT-5 prompt contribution for GPT-5-family runs across providers. It applies by model id, so `openai-codex/gpt-5.5`, `openai/gpt-5.5`, `openrouter/openai/gpt-5.5`, `opencode/gpt-5.5`, and other compatible GPT-5 refs receive the same overlay. Older GPT-4.x models do not.
+OpenClaw adds a shared GPT-5 prompt contribution for GPT-5-family runs across providers. It applies by model id, so `openai/gpt-5.5`, legacy pre-repair refs such as `openai-codex/gpt-5.5`, `openrouter/openai/gpt-5.5`, `opencode/gpt-5.5`, and other compatible GPT-5 refs receive the same overlay. Older GPT-4.x models do not.
 
 The bundled native Codex harness uses the same GPT-5 behavior and heartbeat overlay through Codex app-server developer instructions, so `openai/gpt-5.x` sessions forced through `agentRuntime.id: "codex"` keep the same follow-through and proactive heartbeat guidance even though Codex owns the rest of the harness prompt.
 
@@ -790,7 +790,7 @@ the Server-side compaction accordion below.
 
 <AccordionGroup>
   <Accordion title="Transport (WebSocket vs SSE)">
-    OpenClaw uses WebSocket-first with SSE fallback (`"auto"`) for both `openai/*` and `openai-codex/*`.
+    OpenClaw uses WebSocket-first with SSE fallback (`"auto"`) for `openai/*`.
 
     In `"auto"` mode, OpenClaw:
     - Retries one early WebSocket failure before falling back to SSE
@@ -812,9 +812,6 @@ the Server-side compaction accordion below.
             "openai/gpt-5.5": {
               params: { transport: "auto" },
             },
-            "openai-codex/gpt-5.5": {
-              params: { transport: "auto" },
-            },
           },
         },
       },
@@ -828,7 +825,7 @@ the Server-side compaction accordion below.
   </Accordion>
 
   <Accordion title="WebSocket warm-up">
-    OpenClaw enables WebSocket warm-up by default for `openai/*` and `openai-codex/*` to reduce first-turn latency.
+    OpenClaw enables WebSocket warm-up by default for `openai/*` to reduce first-turn latency.
 
     ```json5
     // Disable warm-up
@@ -848,7 +845,7 @@ the Server-side compaction accordion below.
   </Accordion>
 
   <Accordion title="Fast mode">
-    OpenClaw exposes a shared fast-mode toggle for `openai/*` and `openai-codex/*`:
+    OpenClaw exposes a shared fast-mode toggle for `openai/*`:
 
     - **Chat/UI:** `/fast status|on|off`
     - **Config:** `agents.defaults.models["<provider>/<model>"].params.fastMode`
