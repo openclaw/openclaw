@@ -66,11 +66,23 @@ Runtime: **Node ≥22**.
 
 Full beginner guide (auth, pairing, channels): [Getting started](https://docs.openclaw.ai/start/getting-started)
 
+Recommended daemon mode:
+
 ```bash
 openclaw onboard --install-daemon
+openclaw gateway status
+```
 
+Foreground/debug mode:
+
+```bash
+openclaw gateway stop
 openclaw gateway --port 18789 --verbose
+```
 
+Send a test message or ask the assistant after either startup mode is running:
+
+```bash
 # Send a message
 openclaw message send --to +1234567890 --message "Hello from OpenClaw"
 
@@ -147,6 +159,8 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 - [Pi agent runtime](https://docs.openclaw.ai/concepts/agent) in RPC mode with tool streaming and block streaming.
 - [Session model](https://docs.openclaw.ai/concepts/session): `main` for direct chats, group isolation, activation modes, queue modes, reply-back. Group rules: [Groups](https://docs.openclaw.ai/channels/groups).
 - [Media pipeline](https://docs.openclaw.ai/nodes/images): images/audio/video, transcription hooks, size caps, temp file lifecycle. Audio details: [Audio](https://docs.openclaw.ai/nodes/audio).
+
+<<<<<<< HEAD
 
 ### Channels
 
