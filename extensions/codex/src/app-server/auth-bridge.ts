@@ -95,12 +95,12 @@ export function resolveCodexAppServerAuthProfileIdForAgent(params: {
   });
 }
 
-export function resolveCodexAppServerAuthAccountCacheKey(params: {
+export async function resolveCodexAppServerAuthAccountCacheKey(params: {
   authProfileId?: string;
   authProfileStore?: AuthProfileStore;
   agentDir?: string;
   config?: AuthProfileOrderConfig;
-}): string | undefined {
+}): Promise<string | undefined> {
   const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
   const store =
     params.authProfileStore ?? ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
@@ -115,6 +115,17 @@ export function resolveCodexAppServerAuthAccountCacheKey(params: {
   const credential = store.profiles[profileId];
   if (!credential || !isCodexAppServerAuthProvider(credential.provider, params.config)) {
     return undefined;
+  }
+  if (credential.type === "api_key") {
+    const resolved = await resolveApiKeyForProfile({
+      store,
+      profileId,
+      agentDir,
+    });
+    const apiKey = resolved?.apiKey?.trim();
+    return apiKey
+      ? `${resolveChatgptAccountId(profileId, credential)}:${fingerprintApiKeyAuthProfileCacheKey(apiKey)}`
+      : resolveChatgptAccountId(profileId, credential);
   }
   return resolveChatgptAccountId(profileId, credential);
 }
@@ -143,6 +154,14 @@ export function resolveCodexAppServerEnvApiKeyCacheKey(params: {
   hash.update("\0");
   hash.update(apiKey.value);
   return `${apiKey.key}:sha256:${hash.digest("hex")}`;
+}
+
+function fingerprintApiKeyAuthProfileCacheKey(apiKey: string): string {
+  const hash = createHash("sha256");
+  hash.update("openclaw:codex:app-server-auth-profile-api-key:v1");
+  hash.update("\0");
+  hash.update(apiKey);
+  return `api_key:sha256:${hash.digest("hex")}`;
 }
 
 export function resolveCodexAppServerHomeDir(agentDir: string): string {
