@@ -494,6 +494,11 @@ describe("buildInboundUserContextPrefix", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",
       WasMentioned: true,
+      ExplicitlyMentionedBot: false,
+      MentionedUserIds: [" U_OTHER ", "", "U_HELPER"],
+      MentionedSubteamIds: [" S_ONCALL "],
+      ImplicitMentionKinds: ["bot_thread_participant"],
+      MentionSource: "implicit_thread",
       ReplyToBody: "quoted",
       ForwardedFrom: "sender",
       ThreadStarterBody: "starter",
@@ -503,10 +508,42 @@ describe("buildInboundUserContextPrefix", () => {
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["is_group_chat"]).toBe(true);
     expect(conversationInfo["was_mentioned"]).toBe(true);
+    expect(conversationInfo["explicitly_mentioned_bot"]).toBe(false);
+    expect(conversationInfo["mentioned_user_ids"]).toEqual(["U_OTHER", "U_HELPER"]);
+    expect(conversationInfo["mentioned_subteam_ids"]).toEqual(["S_ONCALL"]);
+    expect(conversationInfo["implicit_mention_kinds"]).toEqual(["bot_thread_participant"]);
+    expect(conversationInfo["mention_source"]).toBe("implicit_thread");
     expect(conversationInfo["has_reply_context"]).toBe(true);
     expect(conversationInfo["has_forwarded_context"]).toBe(true);
     expect(conversationInfo["has_thread_starter"]).toBe(true);
     expect(conversationInfo["history_count"]).toBe(1);
+  });
+
+  it("nudges implicit thread wakes without explicit bot mentions to stay selective", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      WasMentioned: true,
+      ExplicitlyMentionedBot: false,
+      MentionedUserIds: ["UOTHER"],
+      ImplicitMentionKinds: ["reply_to_bot"],
+      MentionSource: "implicit_thread",
+    } as TemplateContext);
+
+    expect(text).toContain("This turn woke from implicit thread participation");
+    expect(text).toContain("reply only when you have a specific useful addition");
+    expect(text).toContain("otherwise use the current chat's no-response behavior");
+  });
+
+  it("does not add selective reply guidance for explicit bot mentions", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      WasMentioned: true,
+      ExplicitlyMentionedBot: true,
+      MentionedUserIds: ["B1"],
+      MentionSource: "explicit_bot",
+    } as TemplateContext);
+
+    expect(text).not.toContain("This turn woke from implicit thread participation");
   });
 
   it("trims sender_id in conversation info", () => {

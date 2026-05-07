@@ -25,6 +25,16 @@ function normalizePromptMetadataString(value: unknown): string | undefined {
   return sanitized || undefined;
 }
 
+function normalizePromptMetadataStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized = value
+    .map((entry) => normalizePromptMetadataString(entry))
+    .filter((entry): entry is string => Boolean(entry));
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 function sanitizePromptBody(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -73,6 +83,21 @@ function formatUntrustedJsonBlock(label: string, payload: unknown): string {
     JSON.stringify(sanitizeUntrustedJsonValue(payload), null, 2),
     "```",
   ].join("\n");
+}
+
+function buildMentionReplyGuidance(ctx: TemplateContext, isDirect: boolean): string | undefined {
+  if (
+    isDirect ||
+    normalizePromptMetadataString(ctx.MentionSource) !== "implicit_thread" ||
+    ctx.ExplicitlyMentionedBot !== false
+  ) {
+    return undefined;
+  }
+  return [
+    "OpenClaw reply guidance:",
+    "This turn woke from implicit thread participation, not a direct bot mention.",
+    "If the message is addressed to someone else, reply only when you have a specific useful addition, such as correcting an important mistake or adding requested context; otherwise use the current chat's no-response behavior.",
+  ].join(" ");
 }
 
 function buildLocationContextPayload(ctx: TemplateContext): Record<string, unknown> | undefined {
@@ -227,6 +252,12 @@ export function buildInboundUserContextPrefix(
     is_forum: ctx.IsForum === true ? true : undefined,
     is_group_chat: !isDirect ? true : undefined,
     was_mentioned: ctx.WasMentioned === true ? true : undefined,
+    explicitly_mentioned_bot:
+      typeof ctx.ExplicitlyMentionedBot === "boolean" ? ctx.ExplicitlyMentionedBot : undefined,
+    mentioned_user_ids: normalizePromptMetadataStringArray(ctx.MentionedUserIds),
+    mentioned_subteam_ids: normalizePromptMetadataStringArray(ctx.MentionedSubteamIds),
+    implicit_mention_kinds: normalizePromptMetadataStringArray(ctx.ImplicitMentionKinds),
+    mention_source: normalizePromptMetadataString(ctx.MentionSource),
     has_reply_context: sanitizePromptBody(ctx.ReplyToBody) ? true : undefined,
     has_forwarded_context: normalizePromptMetadataString(ctx.ForwardedFrom) ? true : undefined,
     has_thread_starter: sanitizePromptBody(ctx.ThreadStarterBody) ? true : undefined,
@@ -237,6 +268,10 @@ export function buildInboundUserContextPrefix(
     blocks.push(
       formatUntrustedJsonBlock("Conversation info (untrusted metadata):", conversationInfo),
     );
+  }
+  const mentionReplyGuidance = buildMentionReplyGuidance(ctx, isDirect);
+  if (mentionReplyGuidance) {
+    blocks.push(mentionReplyGuidance);
   }
 
   const senderInfo = {

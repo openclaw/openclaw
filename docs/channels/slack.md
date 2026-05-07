@@ -907,6 +907,8 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     - mention regex patterns (`agents.list[].groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
     - implicit reply-to-bot thread behavior (disabled when `thread.requireExplicitMention` is `true`)
 
+    Slack prompt metadata preserves the collapsed wake decision (`was_mentioned`) and the provider-native mention detail for that turn, including `explicitly_mentioned_bot`, `mentioned_user_ids`, `mentioned_subteam_ids`, `implicit_mention_kinds`, and `mention_source`. This lets agents distinguish an explicit mention of another Slack user inside an implicitly waking thread from a direct bot mention. When a turn wakes from implicit thread participation without an explicit bot mention, OpenClaw also nudges the agent to reply only when it has specific additive value, such as correcting an important mistake or adding requested context.
+
     Per-channel controls (`channels.slack.channels.<id>`; names only via startup resolution or `dangerouslyAllowNameMatching`):
 
     - `requireMention`
