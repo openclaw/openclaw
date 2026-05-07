@@ -197,25 +197,49 @@ describe("scopedHeartbeatWakeOptions", () => {
     expect(result).toEqual({ reason: "hook:wake" });
     expect("sessionKey" in result).toBe(false);
   });
+
+  it("drops sessionKey but preserves agentId for cron-run keys when scope is global", () => {
+    // Global-scope agents drain the "global" queue automatically; a targeted
+    // wake on agent:<id>:main would be unresolvable. Carry the agent target
+    // so multi-agent global-scope setups still wake the originating agent.
+    const result = scopedHeartbeatWakeOptions(
+      "agent:ops:cron:job-1:run:xyz",
+      { reason: "exec-event" },
+      undefined,
+      "global",
+    );
+    expect(result).toEqual({ reason: "exec-event", agentId: "ops" });
+    expect("sessionKey" in result).toBe(false);
+  });
+
+  it("threads custom mainKey for cron-run keys under per-sender scope", () => {
+    const result = scopedHeartbeatWakeOptions(
+      "agent:main:cron:backup:run:abc",
+      { reason: "exec-event" },
+      "primary",
+      "per-sender",
+    );
+    expect(result).toEqual({ reason: "exec-event", sessionKey: "agent:main:primary" });
+  });
 });
 
 describe("resolveEventSessionKey", () => {
   it("remaps ephemeral cron run session keys to agent main session key", () => {
     expect(resolveEventSessionKey("agent:main:cron:backup:run:abc123")).toBe("agent:main:main");
-    expect(resolveEventSessionKey("agent:einstein:cron:job-1:run:xyz")).toBe("agent:einstein:main");
+    expect(resolveEventSessionKey("agent:ops:cron:job-1:run:xyz")).toBe("agent:ops:main");
   });
 
   it("preserves durable cron base session keys", () => {
-    expect(resolveEventSessionKey("agent:einstein:cron:job-1")).toBe("agent:einstein:cron:job-1");
+    expect(resolveEventSessionKey("agent:ops:cron:job-1")).toBe("agent:ops:cron:job-1");
     expect(resolveEventSessionKey("agent:main:cron:backup")).toBe("agent:main:cron:backup");
   });
 
   it("respects custom mainKey for ephemeral cron session remapping", () => {
-    expect(resolveEventSessionKey("agent:main:cron:backup:run:abc123", "captain")).toBe(
-      "agent:main:captain",
+    expect(resolveEventSessionKey("agent:main:cron:backup:run:abc123", "primary")).toBe(
+      "agent:main:primary",
     );
-    expect(resolveEventSessionKey("agent:einstein:cron:job-1:run:xyz", "captain")).toBe(
-      "agent:einstein:captain",
+    expect(resolveEventSessionKey("agent:ops:cron:job-1:run:xyz", "primary")).toBe(
+      "agent:ops:primary",
     );
   });
 
@@ -229,6 +253,26 @@ describe("resolveEventSessionKey", () => {
   it("passes through non-agent keys unchanged", () => {
     expect(resolveEventSessionKey("main")).toBe("main");
     expect(resolveEventSessionKey("global")).toBe("global");
+  });
+
+  it("routes cron-run keys to the global queue when scope is global", () => {
+    // resolveHeartbeatSession drains the literal "global" queue for global-scope
+    // sessions; remapping to agent:<id>:main would strand the event.
+    expect(resolveEventSessionKey("agent:ops:cron:job-1:run:xyz", undefined, "global")).toBe(
+      "global",
+    );
+    expect(resolveEventSessionKey("agent:main:cron:backup:run:abc", "primary", "global")).toBe(
+      "global",
+    );
+  });
+
+  it("treats explicit per-sender scope identically to omitted scope", () => {
+    expect(
+      resolveEventSessionKey("agent:main:cron:backup:run:abc123", undefined, "per-sender"),
+    ).toBe("agent:main:main");
+    expect(
+      resolveEventSessionKey("agent:main:cron:backup:run:abc123", "primary", "per-sender"),
+    ).toBe("agent:main:primary");
   });
 });
 

@@ -1,7 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
-import { loadConfig } from "../config/config.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
@@ -76,6 +75,18 @@ export function startAcpSpawnParentStreamRelay(params: {
   parentSessionKey: string;
   childSessionKey: string;
   agentId: string;
+  /**
+   * Optional `session.mainKey` from the runtime config. Used to remap
+   * cron-run parent session keys to the agent's main queue when relaying
+   * events. Caller passes `cfg.session?.mainKey`; pass-through of
+   * `undefined` falls back to the literal "main" default.
+   */
+  mainKey?: string;
+  /**
+   * Optional `session.scope` from the runtime config. Required so global-scope
+   * agents route cron-run events to the "global" queue instead of agent-main.
+   */
+  sessionScope?: "per-sender" | "global";
   logPath?: string;
   deliveryContext?: DeliveryContext;
   surfaceUpdates?: boolean;
@@ -181,11 +192,16 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
     requestHeartbeat(
-      scopedHeartbeatWakeOptions(parentSessionKey, {
-        source: "acp-spawn",
-        intent: "event",
-        reason: "acp:spawn:stream",
-      }),
+      scopedHeartbeatWakeOptions(
+        parentSessionKey,
+        {
+          source: "acp-spawn",
+          intent: "event",
+          reason: "acp:spawn:stream",
+        },
+        params.mainKey,
+        params.sessionScope,
+      ),
     );
   };
   const emit = (text: string, contextKey: string) => {
@@ -198,7 +214,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
     enqueueSystemEvent(cleaned, {
-      sessionKey: resolveEventSessionKey(parentSessionKey, loadConfig().session?.mainKey),
+      sessionKey: resolveEventSessionKey(parentSessionKey, params.mainKey, params.sessionScope),
       contextKey,
       deliveryContext: params.deliveryContext,
       trusted: false,

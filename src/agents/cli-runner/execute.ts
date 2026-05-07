@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { loadConfig } from "../../config/config.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
@@ -629,15 +628,14 @@ export async function executePreparedCliRun(
                 "It may have been waiting for interactive input or an approval prompt.",
                 "For Claude Code, prefer --permission-mode bypassPermissions --print.",
               ].join(" ");
-              // Fall back to the runtime config snapshot when the caller omits
-              // params.config so a custom session.mainKey still routes the
-              // watchdog notice to the queue the heartbeat actually drains
-              // (otherwise the remap defaults to "main" and the configured
-              // main-key queue never sees this event).
-              const watchdogMainKey =
-                params.config?.session?.mainKey ?? loadConfig().session?.mainKey;
+              const watchdogMainKey = params.config?.session?.mainKey;
+              const watchdogScope = params.config?.session?.scope;
               executeDeps.enqueueSystemEvent(stallNotice, {
-                sessionKey: resolveEventSessionKey(params.sessionKey, watchdogMainKey),
+                sessionKey: resolveEventSessionKey(
+                  params.sessionKey,
+                  watchdogMainKey,
+                  watchdogScope,
+                ),
               });
               executeDeps.requestHeartbeat(
                 scopedHeartbeatWakeOptions(
@@ -648,6 +646,7 @@ export async function executePreparedCliRun(
                     reason: "cli:watchdog:stall",
                   },
                   watchdogMainKey,
+                  watchdogScope,
                 ),
               );
             }

@@ -1,6 +1,5 @@
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { loadConfig } from "../config/config.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
@@ -340,9 +339,8 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   const summary = output
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
-  const mainKey = loadConfig().session?.mainKey;
   enqueueSystemEvent(summary, {
-    sessionKey: resolveEventSessionKey(sessionKey, mainKey),
+    sessionKey: resolveEventSessionKey(sessionKey, session.mainKey, session.sessionScope),
     deliveryContext: session.notifyDeliveryContext,
     trusted: false,
   });
@@ -355,7 +353,8 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
         reason: "exec-event",
         coalesceMs: 0,
       },
-      mainKey,
+      session.mainKey,
+      session.sessionScope,
     ),
   );
 }
@@ -422,15 +421,24 @@ export function resolveApprovalRunningNoticeMs(value?: number) {
 
 export function emitExecSystemEvent(
   text: string,
-  opts: { sessionKey?: string; contextKey?: string; deliveryContext?: DeliveryContext },
+  opts: {
+    sessionKey?: string;
+    contextKey?: string;
+    deliveryContext?: DeliveryContext;
+    /** `session.mainKey` from the runtime config; pass-through of `undefined`
+     *  falls back to the literal "main" default in `resolveEventSessionKey`. */
+    mainKey?: string;
+    /** `session.scope` from the runtime config; needed so global-scope
+     *  agents route cron-run events to the "global" queue. */
+    sessionScope?: "per-sender" | "global";
+  },
 ) {
   const sessionKey = opts.sessionKey?.trim();
   if (!sessionKey) {
     return;
   }
-  const mainKey = loadConfig().session?.mainKey;
   enqueueSystemEvent(text, {
-    sessionKey: resolveEventSessionKey(sessionKey, mainKey),
+    sessionKey: resolveEventSessionKey(sessionKey, opts.mainKey, opts.sessionScope),
     contextKey: opts.contextKey,
     deliveryContext: opts.deliveryContext,
     trusted: false,
@@ -444,7 +452,8 @@ export function emitExecSystemEvent(
         reason: "exec-event",
         coalesceMs: 0,
       },
-      mainKey,
+      opts.mainKey,
+      opts.sessionScope,
     ),
   );
 }
@@ -579,6 +588,14 @@ export async function runExecProcess(opts: {
   notifyOnExitEmptySuccess?: boolean;
   scopeKey?: string;
   sessionKey?: string;
+  /** `session.mainKey` from the runtime config; snapshotted onto the
+   *  ProcessSession so background-exit notifications can remap cron-run
+   *  keys without an ambient config load. */
+  mainKey?: string;
+  /** `session.scope` from the runtime config; snapshotted alongside
+   *  `mainKey` so the cron-run remap can route global-scope agents to
+   *  the "global" queue instead of agent-main. */
+  sessionScope?: "per-sender" | "global";
   notifyDeliveryContext?: DeliveryContext;
   timeoutSec: number | null;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
@@ -598,6 +615,8 @@ export async function runExecProcess(opts: {
     command: opts.command,
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
+    mainKey: opts.mainKey,
+    sessionScope: opts.sessionScope,
     notifyDeliveryContext: normalizeDeliveryContext(opts.notifyDeliveryContext),
     notifyOnExit: opts.notifyOnExit,
     notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,

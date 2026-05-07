@@ -751,7 +751,7 @@ export const handleNodeEvent = async (
       }
 
       const queued = enqueueSystemEvent(text, {
-        sessionKey: resolveEventSessionKey(sessionKey, cfg.session?.mainKey),
+        sessionKey: resolveEventSessionKey(sessionKey, cfg.session?.mainKey, cfg.session?.scope),
         contextKey: runId ? `exec:${runId}` : "exec",
         trusted: false,
       });
@@ -760,12 +760,17 @@ export const handleNodeEvent = async (
         // keys should keep legacy unscoped behavior so enabled non-main heartbeat
         // agents still run when no explicit agent session is provided.
         requestHeartbeat(
-          scopedHeartbeatWakeOptions(sessionKey, {
-            source: "exec-event",
-            intent: "event",
-            reason: "exec-event",
-            coalesceMs: 0,
-          }),
+          scopedHeartbeatWakeOptions(
+            sessionKey,
+            {
+              source: "exec-event",
+              intent: "event",
+              reason: "exec-event",
+              coalesceMs: 0,
+            },
+            cfg.session?.mainKey,
+            cfg.session?.scope,
+          ),
         );
       }
       return undefined;

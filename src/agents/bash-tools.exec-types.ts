@@ -29,6 +29,14 @@ export type ExecToolDefaults = {
   allowBackground?: boolean;
   scopeKey?: string;
   sessionKey?: string;
+  /** `session.mainKey` from the runtime config; passed through into
+   *  runExecProcess so background-exit notifications can remap cron-run
+   *  session keys to the agent's main queue without an ambient config load. */
+  mainKey?: string;
+  /** `session.scope` from the runtime config; passed alongside `mainKey`
+   *  so the cron-run remap can route global-scope agents to the "global"
+   *  queue instead of agent-main. */
+  sessionScope?: "per-sender" | "global";
   messageProvider?: string;
   currentChannelId?: string;
   currentThreadTs?: string;

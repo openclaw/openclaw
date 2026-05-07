@@ -32,6 +32,14 @@ export interface ProcessSession {
   command: string;
   scopeKey?: string;
   sessionKey?: string;
+  /** `session.mainKey` from the runtime config, snapshotted at exec start.
+   *  Used by background-exit notifications to remap cron-run keys to the
+   *  agent's main queue without an ambient config load. */
+  mainKey?: string;
+  /** `session.scope` from the runtime config; required so the cron-run remap
+   *  can route global-scope agents to the literal "global" queue instead
+   *  of an agent-main queue the heartbeat never drains. */
+  sessionScope?: "per-sender" | "global";
   notifyDeliveryContext?: DeliveryContext;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
