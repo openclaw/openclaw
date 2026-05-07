@@ -1336,14 +1336,31 @@ export function buildOpenAIResponsesParams(
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "disable",
   });
+  // Convert tools up-front so they can be inserted into the params literal
+  // before `input`. Object property insertion order determines JSON key order
+  // on the wire, which determines the byte prefix the upstream prompt cache
+  // matches against. The tools block is large (~tens of KB once converted)
+  // and stable across turns within a session, while `input` mutates each
+  // turn — keeping tools in front of input puts the tools schema inside the
+  // cacheable prefix instead of trailing per-turn-divergent input.
+  const tools = context.tools
+    ? convertResponsesTools(context.tools, model as OpenAIModeModel, {
+        strict: resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
+          transport: "stream",
+        }),
+      })
+    : undefined;
   const params: OpenAIResponsesRequestParams = {
     model: model.id,
-    input: messages,
     stream: true,
+    ...(tools !== undefined ? { tools } : {}),
+    ...(isCodexResponses ? { instructions: buildOpenAICodexResponsesInstructions(context) } : {}),
     prompt_cache_key: cacheRetention === "none" ? undefined : options?.sessionId,
     prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
-    ...(isCodexResponses ? { instructions: buildOpenAICodexResponsesInstructions(context) } : {}),
     ...(metadata ? { metadata } : {}),
+    // `input` is placed last so per-turn mutations (the new user/assistant
+    // turn appended each call) sit downstream of the cache-stable prefix.
+    input: messages,
   };
   const effectiveMaxTokens = options?.maxTokens || model.maxTokens;
   if (effectiveMaxTokens) {
@@ -1357,13 +1374,6 @@ export function buildOpenAIResponsesParams(
   }
   if (options?.serviceTier !== undefined && payloadPolicy.allowsServiceTier) {
     params.service_tier = options.serviceTier;
-  }
-  if (context.tools) {
-    params.tools = convertResponsesTools(context.tools, model as OpenAIModeModel, {
-      strict: resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
-        transport: "stream",
-      }),
-    });
   }
   if (model.reasoning) {
     if (options?.reasoningEffort || options?.reasoning || options?.reasoningSummary) {

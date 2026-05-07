@@ -5294,4 +5294,51 @@ describe("openai transport stream", () => {
       __testing.processOpenAICompletionsStream(mockStream(), output, model, stream),
     ).rejects.toThrow("Exceeded tool-call argument buffer limit");
   });
+
+  it("emits `tools` before `input` so the tools schema lives in the cacheable prefix", () => {
+    // Object property insertion order determines JSON key order on the wire,
+    // which determines the byte prefix that the upstream prompt cache matches
+    // against. The tools block is large and stable across turns within a
+    // session; `input` mutates each turn. If `input` is enumerated before
+    // `tools`, the entire (stable) tools schema sits past the per-turn
+    // divergence point and is excluded from the cached prefix on every turn.
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "codex-mini-latest",
+        name: "Codex Mini Latest",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "system",
+        messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+        tools: [
+          {
+            name: "demo",
+            description: "demo",
+            parameters: { type: "object", properties: {}, additionalProperties: false },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as Record<string, unknown>;
+
+    const keys = Object.keys(params);
+    const toolsIndex = keys.indexOf("tools");
+    const inputIndex = keys.indexOf("input");
+    expect(toolsIndex).toBeGreaterThanOrEqual(0);
+    expect(inputIndex).toBeGreaterThanOrEqual(0);
+    expect(toolsIndex).toBeLessThan(inputIndex);
+
+    // Belt-and-suspenders: confirm JSON.stringify (which uses insertion order)
+    // also serializes `"tools"` before `"input"`.
+    const serialized = JSON.stringify(params);
+    expect(serialized.indexOf('"tools"')).toBeLessThan(serialized.indexOf('"input"'));
+  });
 });

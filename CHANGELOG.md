@@ -163,6 +163,7 @@ Docs: https://docs.openclaw.ai
 - Codex app-server: mirror native Codex subagent spawn lifecycle events into Task Registry so app-server child agents appear in task/status surfaces without relying on transcript text. (#79512) Thanks @mbelinky.
 - Gateway: expose optional `isHeartbeat` metadata on agent event payloads so clients can distinguish scheduled heartbeat runs from ordinary chat runs. (#80610) Thanks @medns.
 - Agents: add `agents.defaults.runRetries` and `agents.list[].runRetries` config for embedded Pi runner retry loop limits. (#80661) Thanks @medns.
+- Agents/openai-responses: emit `tools` before `input` in the request body for `openai-responses`, `azure-openai-responses`, and `openai-codex-responses` calls so the (large, per-session-stable) tools schema lives inside the cacheable byte prefix instead of trailing the per-turn-mutating `input` array. On a real Codex Responses session this raised the byte-stable prefix between consecutive turns from 15% (~12k tokens) to 99% (~73k tokens) and dropped per-turn end-to-end latency by ~3.5s on 5/5 paired trials.
 
 ### Fixes
 
