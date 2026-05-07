@@ -430,7 +430,7 @@ describe("modelsStatusCommand auth overview", () => {
       env: { shellEnv: { enabled: true } },
     });
     mocks.store.profiles = {
-      "openai-codex:default": originalProfiles["openai-codex:default"]!,
+      "openai-codex:default": originalProfiles["openai-codex:default"],
     };
     mocks.resolveEnvApiKey.mockImplementation((provider: string) =>
       provider === "openai-codex"

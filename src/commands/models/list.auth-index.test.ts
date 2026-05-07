@@ -235,7 +235,7 @@ describe("createModelListAuthIndex", () => {
         models: {
           providers: {
             openai: {
-              api: "openai-chat-completions",
+              api: "openai-completions",
               baseUrl: "https://custom.example/v1",
               models: [modelConfig("custom-model")],
             },
