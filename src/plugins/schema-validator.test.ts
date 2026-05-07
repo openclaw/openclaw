@@ -146,6 +146,36 @@ describe("schema validator", () => {
     expectValidationIssue(result, "<root>");
   });
 
+  it("can isolate caller schemas that reuse the same $id with different shapes", () => {
+    const first = validateJsonSchemaValue({
+      cacheKey: "schema-validator.test.same-id.uncached",
+      schema: {
+        $id: "https://example.test/shared-schema",
+        type: "object",
+        properties: { foo: { type: "string" } },
+        required: ["foo"],
+        additionalProperties: false,
+      },
+      value: { foo: "ok" },
+      cache: false,
+    });
+    expect(first.ok).toBe(true);
+
+    const second = validateJsonSchemaValue({
+      cacheKey: "schema-validator.test.same-id.uncached",
+      schema: {
+        $id: "https://example.test/shared-schema",
+        type: "object",
+        properties: { bar: { type: "number" } },
+        required: ["bar"],
+        additionalProperties: false,
+      },
+      value: { bar: 1 },
+      cache: false,
+    });
+    expect(second.ok).toBe(true);
+  });
+
   it.each([
     {
       title: "includes allowed values in enum validation errors",

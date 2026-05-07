@@ -23,7 +23,7 @@ describe("talk handoff store", () => {
       channel: "discord",
       target: "dm:123",
       provider: "openai",
-      model: "gpt-realtime-1.5",
+      model: "gpt-realtime-2",
       voice: "alloy",
       ttlMs: 5000,
     });
@@ -37,7 +37,7 @@ describe("talk handoff store", () => {
       channel: "discord",
       target: "dm:123",
       provider: "openai",
-      model: "gpt-realtime-1.5",
+      model: "gpt-realtime-2",
       voice: "alloy",
       mode: "stt-tts",
       transport: "managed-room",

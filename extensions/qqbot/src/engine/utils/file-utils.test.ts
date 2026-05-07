@@ -18,8 +18,26 @@ import {
   checkFileSize,
   downloadFile,
   fileExistsAsync,
+  getImageMimeType,
+  getMimeType,
   readFileAsync,
 } from "./file-utils.js";
+
+describe("qqbot file-utils MIME helpers", () => {
+  it("uses the shared media MIME table for extension inference", () => {
+    expect(getMimeType("voice.mp3")).toBe("audio/mpeg");
+    expect(getMimeType("clip.webm")).toBe("video/webm");
+    expect(getMimeType("clip.avi")).toBe("video/x-msvideo");
+    expect(getMimeType("clip.mkv")).toBe("video/x-matroska");
+    expect(getMimeType("archive.unknown")).toBe("application/octet-stream");
+  });
+
+  it("keeps the image-only gate for image MIME inference", () => {
+    expect(getImageMimeType("photo.PNG")).toBe("image/png");
+    expect(getImageMimeType("clip.webm")).toBeNull();
+    expect(getImageMimeType("archive.unknown")).toBeNull();
+  });
+});
 
 describe("qqbot file-utils downloadFile", () => {
   let tempDir: string;

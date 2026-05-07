@@ -81,7 +81,7 @@ Supported keys:
       providers: {
         openai: {
           apiKey: "openai_api_key",
-          model: "gpt-realtime",
+          model: "gpt-realtime-2",
           voice: "alloy",
         },
       },

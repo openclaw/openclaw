@@ -1672,6 +1672,13 @@ describe("runWithModelFallback", () => {
       return { dir: tmpDir };
     }
 
+    it("maps non-quota cooldown suspensions to circuit-open session state", () => {
+      expect(__testing.resolveSessionSuspensionReason("rate_limit")).toBe("quota_exhausted");
+      expect(__testing.resolveSessionSuspensionReason("overloaded")).toBe("circuit_open");
+      expect(__testing.resolveSessionSuspensionReason("timeout")).toBe("circuit_open");
+      expect(__testing.resolveSessionSuspensionReason("billing")).toBe("manual");
+    });
+
     it("attempts same-provider fallbacks during transient cooldowns", async () => {
       const { dir } = await makeAuthStoreWithCooldown("anthropic", "timeout");
       const cfg = makeCfg({
