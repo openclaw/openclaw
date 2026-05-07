@@ -3,7 +3,6 @@ import net from "node:net";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
-import { readRestartSentinel } from "../../infra/restart-sentinel.js";
 import { appendGatewayRestartAuditLine } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -562,13 +561,15 @@ export async function runGatewayLoop(params: {
       // common path X for /restart: a brand-new Node process is launched
       // by the supervisor, so isFirstStart is true on iteration 1 — which
       // is exactly when the predecessor's sentinel exists and must be read
-      // to attribute the post-boot `restart-completed` audit line. The
-      // earlier `isFirstStart ? null : ...` guard incorrectly skipped this
-      // case (G2 review Blocker 1). Cold boot with no predecessor is
-      // handled naturally: readRestartSentinel returns null when the file
-      // is absent, and the .catch falls null on read errors.
-      // loadRestartSentinelStartupTask reads + removes the sentinel inside
-      // params.start(), so this read is strictly before the cleanup.
+      // to attribute the post-boot `restart-completed` audit line. Cold
+      // boot with no predecessor is handled naturally: readRestartSentinel
+      // returns null when the file is absent, and the .catch falls null
+      // on read errors. loadRestartSentinelStartupTask reads + removes the
+      // sentinel inside params.start(), so this read is strictly before
+      // the cleanup. readRestartSentinel is lazy-loaded through the
+      // existing gateway lifecycle runtime boundary so the gateway run
+      // chunk doesn't statically pull restart-sentinel into the cold path.
+      const { readRestartSentinel } = await loadGatewayLifecycleRuntimeModule();
       const preStartSentinelAudit = await readRestartSentinel()
         .catch(() => null)
         .then((s) => s?.payload.audit ?? null);
