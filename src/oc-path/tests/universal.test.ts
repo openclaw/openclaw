@@ -192,7 +192,7 @@ describe('setOcPath — md leaf', () => {
     const md = parseMd('---\nname: old\n---\n').ast;
     const r = setOcPath(md, parseOcPath('oc://X.md/[frontmatter]/name'), 'new');
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.ast.kind === 'md' && r.ast.frontmatter[0]?.value).toBe('new');
+    if (r.ok) {expect(r.ast.kind === 'md' && r.ast.frontmatter[0]?.value).toBe('new');}
   });
 
   it('replaces item kv value', () => {
@@ -209,7 +209,7 @@ describe('setOcPath — md leaf', () => {
     const md = parseMd('').ast;
     const r = setOcPath(md, parseOcPath('oc://X.md/missing/x/x'), 'v');
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('unresolved');
+    if (!r.ok) {expect(r.reason).toBe('unresolved');}
   });
 });
 
@@ -248,14 +248,14 @@ describe('setOcPath — jsonc leaf with coercion', () => {
     const ast = parseJsonc('{ "k": 1 }').ast;
     const r = setOcPath(ast, parseOcPath('oc://config/k'), 'not-a-number');
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('parse-error');
+    if (!r.ok) {expect(r.reason).toBe('parse-error');}
   });
 
   it('rejects non-bool string for boolean leaf', () => {
     const ast = parseJsonc('{ "k": true }').ast;
     const r = setOcPath(ast, parseOcPath('oc://config/k'), 'maybe');
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('parse-error');
+    if (!r.ok) {expect(r.reason).toBe('parse-error');}
   });
 });
 
@@ -284,7 +284,7 @@ describe('setOcPath — jsonl leaf', () => {
     const ast = parseJsonl('{"event":"start"}\n').ast;
     const r = setOcPath(ast, parseOcPath('oc://log/L1'), 'not json');
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('parse-error');
+    if (!r.ok) {expect(r.reason).toBe('parse-error');}
   });
 });
 
@@ -331,7 +331,7 @@ describe('setOcPath — md insertion', () => {
     const md = parseMd('---\nname: x\n---\n').ast;
     const r = setOcPath(md, parseOcPath('oc://X.md/[frontmatter]/+name'), 'y');
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('type-mismatch');
+    if (!r.ok) {expect(r.reason).toBe('type-mismatch');}
   });
 });
 
@@ -376,14 +376,14 @@ describe('setOcPath — jsonc insertion', () => {
     const ast = parseJsonc('{ "plugins": { "github": "x" } }').ast;
     const r = setOcPath(ast, parseOcPath('oc://config/plugins/+github'), '"y"');
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('unresolved');
+    if (!r.ok) {expect(r.reason).toBe('unresolved');}
   });
 
   it('rejects +key on array', () => {
     const ast = parseJsonc('{ "items": [1, 2] }').ast;
     const r = setOcPath(ast, parseOcPath('oc://config/items/+abc'), '3');
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('type-mismatch');
+    if (!r.ok) {expect(r.reason).toBe('type-mismatch');}
   });
 
   it('inserts complex object via JSON value', () => {
@@ -424,7 +424,7 @@ describe('setOcPath — jsonl insertion (session append)', () => {
     const ast = parseJsonl('').ast;
     const r = setOcPath(ast, parseOcPath('oc://log/+'), 'not json');
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('parse-error');
+    if (!r.ok) {expect(r.reason).toBe('parse-error');}
   });
 
   it('rejects non-root insertion target', () => {

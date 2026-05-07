@@ -39,7 +39,7 @@ Body.
     const { ast } = parseMd('---\nx: a\n---\n');
     const r = setOcPath(ast, parseOcPath('oc://AGENTS.md/[frontmatter]/x'), 'has: colon');
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.ast.raw).toContain('x: "has: colon"');
+    if (r.ok) {expect(r.ast.raw).toContain('x: "has: colon"');}
   });
 });
 

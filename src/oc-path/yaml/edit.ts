@@ -13,6 +13,7 @@
 
 import { Document, LineCounter, parseDocument } from 'yaml';
 import type { OcPath } from '../oc-path.js';
+import { isQuotedSeg, splitRespectingBrackets, unquoteSeg } from '../oc-path.js';
 import type { YamlAst } from './ast.js';
 
 export type YamlEditResult =
@@ -27,7 +28,7 @@ export function setYamlOcPath(
   path: OcPath,
   newValue: unknown,
 ): YamlEditResult {
-  if (ast.doc.contents === null) return { ok: false, reason: 'no-root' };
+  if (ast.doc.contents === null) {return { ok: false, reason: 'no-root' };}
 
   const segments = pathSegments(path);
   if (segments.length === 0) {
@@ -57,19 +58,21 @@ export function insertYamlOcPath(
   marker: '+' | { kind: 'keyed'; key: string } | { kind: 'indexed'; index: number },
   newValue: unknown,
 ): YamlEditResult {
-  if (ast.doc.contents === null) return { ok: false, reason: 'no-root' };
+  if (ast.doc.contents === null) {return { ok: false, reason: 'no-root' };}
 
   const segments = pathSegments(parentPath);
   const { doc: cloned, lineCounter } = cloneDoc(ast.doc);
 
   // Find the parent node.
   const parent = segments.length === 0 ? cloned.contents : cloned.getIn(segments, false);
-  if (parent === undefined || parent === null) return { ok: false, reason: 'unresolved' };
+  if (parent === undefined || parent === null) {return { ok: false, reason: 'unresolved' };}
 
   // Map insertion → keyed
   if (typeof parent === 'object' && 'items' in parent && Array.isArray((parent as { items: unknown[] }).items)) {
     const items = (parent as { items: { key?: unknown }[] }).items;
-    const isMapLike = items.length === 0 || items.every((p) => 'key' in p);
+    // Array#every() already returns true on an empty array — no need
+    // for the explicit length === 0 short-circuit.
+    const isMapLike = items.every((p) => 'key' in p);
 
     if (isMapLike) {
       if (typeof marker !== 'object' || marker.kind !== 'keyed') {
@@ -93,7 +96,7 @@ export function insertYamlOcPath(
     } else if (typeof marker === 'object' && marker.kind === 'indexed') {
       const idx = Math.min(marker.index, seqItems.length);
       const current = cloned.getIn(segments) as unknown[] | undefined;
-      if (!Array.isArray(current)) return { ok: false, reason: 'unresolved' };
+      if (!Array.isArray(current)) {return { ok: false, reason: 'unresolved' };}
       const newArr = [...current];
       newArr.splice(idx, 0, newValue);
       cloned.setIn(segments, newArr);
@@ -105,10 +108,22 @@ export function insertYamlOcPath(
 }
 
 function pathSegments(path: OcPath): string[] {
+  // Quote-aware split + unquote so YAML edit matches `resolveYamlOcPath`'s
+  // lookup behavior. A quoted segment carrying `/` or `.` (e.g.
+  // `"a/b"`) survives as a single segment, then gets stripped of
+  // its surrounding quotes for the actual `getIn` / `setIn` key
+  // comparison. Plain `.split('.')` would shred quoted keys and
+  // produce silent resolve↔write asymmetry.
   const segs: string[] = [];
-  if (path.section !== undefined) segs.push(...path.section.split('.'));
-  if (path.item !== undefined) segs.push(...path.item.split('.'));
-  if (path.field !== undefined) segs.push(...path.field.split('.'));
+  const collect = (slot: string | undefined) => {
+    if (slot === undefined) {return;}
+    for (const sub of splitRespectingBrackets(slot, '.')) {
+      segs.push(isQuotedSeg(sub) ? unquoteSeg(sub) : sub);
+    }
+  };
+  collect(path.section);
+  collect(path.item);
+  collect(path.field);
   return segs;
 }
 

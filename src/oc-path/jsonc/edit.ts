@@ -46,7 +46,7 @@ export function setJsoncOcPath(
   path: OcPath,
   newValue: JsoncValue,
 ): JsoncEditResult {
-  if (ast.root === null) return { ok: false, reason: 'no-root' };
+  if (ast.root === null) {return { ok: false, reason: 'no-root' };}
 
   // Use bracket/brace/quote-aware split so that quoted segments
   // (e.g. `"anthropic/claude-opus-4-7"`) — which can contain dots,
@@ -55,9 +55,9 @@ export function setJsoncOcPath(
   // `resolveJsoncOcPath`, which already respects quoting. Closes the
   // resolve-vs-edit asymmetry flagged on PR #78678.
   const segments: string[] = [];
-  if (path.section !== undefined) segments.push(...splitRespectingBrackets(path.section, '.'));
-  if (path.item !== undefined) segments.push(...splitRespectingBrackets(path.item, '.'));
-  if (path.field !== undefined) segments.push(...splitRespectingBrackets(path.field, '.'));
+  if (path.section !== undefined) {segments.push(...splitRespectingBrackets(path.section, '.'));}
+  if (path.item !== undefined) {segments.push(...splitRespectingBrackets(path.item, '.'));}
+  if (path.field !== undefined) {segments.push(...splitRespectingBrackets(path.field, '.'));}
 
   // Empty path — replace the root.
   if (segments.length === 0) {
@@ -66,7 +66,7 @@ export function setJsoncOcPath(
   }
 
   const replaced = replaceAt(ast.root, segments, 0, newValue);
-  if (replaced === null) return { ok: false, reason: 'unresolved' };
+  if (replaced === null) {return { ok: false, reason: 'unresolved' };}
   const next = { ...ast, root: replaced };
   return { ok: true, ast: rebuildRaw(next) };
 }
@@ -78,8 +78,8 @@ function replaceAt(
   newValue: JsoncValue,
 ): JsoncValue | null {
   const seg = segments[i];
-  if (seg === undefined) return newValue;
-  if (seg.length === 0) return null;
+  if (seg === undefined) {return newValue;}
+  if (seg.length === 0) {return null;}
 
   if (current.kind === 'object') {
     // Quoted segments (e.g. `"anthropic/claude-opus-4-7"`) carry the
@@ -88,11 +88,11 @@ function replaceAt(
     // pass through unchanged.
     const lookupKey = isQuotedSeg(seg) ? unquoteSeg(seg) : seg;
     const idx = current.entries.findIndex((e) => e.key === lookupKey);
-    if (idx === -1) return null;
+    if (idx === -1) {return null;}
     const child = current.entries[idx];
-    if (child === undefined) return null;
+    if (child === undefined) {return null;}
     const replacedChild = replaceAt(child.value, segments, i + 1, newValue);
-    if (replacedChild === null) return null;
+    if (replacedChild === null) {return null;}
     const newEntry: JsoncEntry = { ...child, value: replacedChild };
     const newEntries = current.entries.slice();
     newEntries[idx] = newEntry;
@@ -105,11 +105,11 @@ function replaceAt(
 
   if (current.kind === 'array') {
     const idx = Number(seg);
-    if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) return null;
+    if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) {return null;}
     const child = current.items[idx];
-    if (child === undefined) return null;
+    if (child === undefined) {return null;}
     const replacedChild = replaceAt(child, segments, i + 1, newValue);
-    if (replacedChild === null) return null;
+    if (replacedChild === null) {return null;}
     const newItems = current.items.slice();
     newItems[idx] = replacedChild;
     return {

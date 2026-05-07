@@ -31,12 +31,12 @@ import type { MdAst } from './ast.js';
 import type { JsoncAst, JsoncEntry, JsoncValue } from './jsonc/ast.js';
 import { setJsoncOcPath } from './jsonc/edit.js';
 import { resolveJsoncOcPath } from './jsonc/resolve.js';
-import type { JsonlAst, JsonlLine } from './jsonl/ast.js';
+import type { JsonlAst } from './jsonl/ast.js';
 import { appendJsonlOcPath as appendJsonlLine, setJsonlOcPath } from './jsonl/edit.js';
 import { resolveJsonlOcPath } from './jsonl/resolve.js';
 import { setMdOcPath } from './edit.js';
 import type { OcPath } from './oc-path.js';
-import { hasWildcard } from './oc-path.js';
+import { hasWildcard, isQuotedSeg, splitRespectingBrackets, unquoteSeg } from './oc-path.js';
 import { resolveMdOcPath } from './resolve.js';
 import { emitJsonc } from './jsonc/emit.js';
 import { emitJsonl } from './jsonl/emit.js';
@@ -130,19 +130,19 @@ export interface InsertionInfo {
 export function detectInsertion(path: OcPath): InsertionInfo | null {
   // Find the deepest defined segment.
   const segments: Array<{ slot: 'section' | 'item' | 'field'; value: string }> = [];
-  if (path.section !== undefined) segments.push({ slot: 'section', value: path.section });
-  if (path.item !== undefined) segments.push({ slot: 'item', value: path.item });
-  if (path.field !== undefined) segments.push({ slot: 'field', value: path.field });
-  if (segments.length === 0) return null;
+  if (path.section !== undefined) {segments.push({ slot: 'section', value: path.section });}
+  if (path.item !== undefined) {segments.push({ slot: 'item', value: path.item });}
+  if (path.field !== undefined) {segments.push({ slot: 'field', value: path.field });}
+  if (segments.length === 0) {return null;}
 
   const last = segments[segments.length - 1]!;
-  if (!last.value.startsWith('+')) return null;
+  if (!last.value.startsWith('+')) {return null;}
 
   const rest = last.value.slice(1);
   let marker: InsertionInfo['marker'];
-  if (rest.length === 0) marker = '+';
-  else if (/^\d+$/.test(rest)) marker = { kind: 'indexed', index: Number(rest) };
-  else marker = { kind: 'keyed', key: rest };
+  if (rest.length === 0) {marker = '+';}
+  else if (/^\d+$/.test(rest)) {marker = { kind: 'indexed', index: Number(rest) };}
+  else {marker = { kind: 'keyed', key: rest };}
 
   // Strip the deepest segment from the path.
   const parentPath: OcPath = {
@@ -168,7 +168,7 @@ export function resolveOcPath(ast: OcAst, path: OcPath): OcMatch | null {
   // Wildcard guard: `resolveOcPath` is the single-match verb. Wildcards
   // belong to `findOcPaths` (multi-match). Reject early so consumers
   // see the right verb in the error rather than a silent unresolved.
-  if (hasWildcard(path)) return null;
+  if (hasWildcard(path)) {return null;}
   const insertion = detectInsertion(path);
   if (insertion !== null) {
     return resolveInsertion(ast, insertion);
@@ -188,20 +188,20 @@ export function resolveOcPath(ast: OcAst, path: OcPath): OcMatch | null {
 
 function resolveYamlToUniversal(ast: YamlAst, path: OcPath): OcMatch | null {
   const m = resolveYamlOcPath(ast, path);
-  if (m === null) return null;
-  if (m.kind === 'root') return { kind: 'root', ast, line: 1 };
+  if (m === null) {return null;}
+  if (m.kind === 'root') {return { kind: 'root', ast, line: 1 };}
   // Walk the AST one more time to extract the matched node's range
   // — the per-kind YamlOcPathMatch shape doesn't surface it directly.
   // Cheap relative to the resolve cost; trades CPU for type cleanliness.
   const line = locateYamlLine(ast, path);
-  if (m.kind === 'map') return { kind: 'node', descriptor: 'yaml-map', line };
-  if (m.kind === 'seq') return { kind: 'node', descriptor: 'yaml-seq', line };
+  if (m.kind === 'map') {return { kind: 'node', descriptor: 'yaml-map', line };}
+  if (m.kind === 'seq') {return { kind: 'node', descriptor: 'yaml-seq', line };}
   if (m.kind === 'scalar' || m.kind === 'pair') {
     const v = m.value;
-    if (v === null) return { kind: 'leaf', valueText: 'null', leafType: 'null', line };
-    if (typeof v === 'string') return { kind: 'leaf', valueText: v, leafType: 'string', line };
-    if (typeof v === 'number') return { kind: 'leaf', valueText: String(v), leafType: 'number', line };
-    if (typeof v === 'boolean') return { kind: 'leaf', valueText: String(v), leafType: 'boolean', line };
+    if (v === null) {return { kind: 'leaf', valueText: 'null', leafType: 'null', line };}
+    if (typeof v === 'string') {return { kind: 'leaf', valueText: v, leafType: 'string', line };}
+    if (typeof v === 'number') {return { kind: 'leaf', valueText: String(v), leafType: 'number', line };}
+    if (typeof v === 'boolean') {return { kind: 'leaf', valueText: String(v), leafType: 'boolean', line };}
     return { kind: 'leaf', valueText: String(v), leafType: 'string', line };
   }
   return null;
@@ -211,13 +211,13 @@ function locateYamlLine(ast: YamlAst, path: OcPath): number {
   // Re-walk the yaml CST to find the matched node's byte range, then
   // convert via the AST's `lineCounter`.
   const segments: string[] = [];
-  if (path.section !== undefined) segments.push(...path.section.split('.'));
-  if (path.item !== undefined) segments.push(...path.item.split('.'));
-  if (path.field !== undefined) segments.push(...path.field.split('.'));
-  if (segments.length === 0) return 1;
+  if (path.section !== undefined) {segments.push(...path.section.split('.'));}
+  if (path.item !== undefined) {segments.push(...path.item.split('.'));}
+  if (path.field !== undefined) {segments.push(...path.field.split('.'));}
+  if (segments.length === 0) {return 1;}
   let node: unknown = ast.doc.contents;
   for (const seg of segments) {
-    if (node === null || node === undefined) return 1;
+    if (node === null || node === undefined) {return 1;}
     const n = node as { items?: unknown[] };
     if (Array.isArray(n.items)) {
       // Map or seq.
@@ -228,26 +228,26 @@ function locateYamlLine(ast: YamlAst, path: OcPath): number {
           const k = p.key !== null && typeof p.key === 'object' && 'value' in p.key ? p.key.value : p.key;
           return String(k) === seg;
         });
-        if (pair === undefined) return 1;
+        if (pair === undefined) {return 1;}
         node = pair.value;
       } else {
         const idx = Number(seg);
-        if (!Number.isInteger(idx) || idx < 0 || idx >= items.length) return 1;
+        if (!Number.isInteger(idx) || idx < 0 || idx >= items.length) {return 1;}
         node = items[idx];
       }
     } else {
       return 1;
     }
   }
-  if (node === null || typeof node !== 'object') return 1;
+  if (node === null || typeof node !== 'object') {return 1;}
   const range = (node as { range?: readonly [number, number, number] }).range;
-  if (range === undefined) return 1;
+  if (range === undefined) {return 1;}
   return ast.lineCounter.linePos(range[0]).line;
 }
 
 function resolveMdToUniversal(ast: MdAst, path: OcPath): OcMatch | null {
   const m = resolveMdOcPath(ast, path);
-  if (m === null) return null;
+  if (m === null) {return null;}
   switch (m.kind) {
     case 'root':
       return { kind: 'root', ast, line: 1 };
@@ -264,8 +264,8 @@ function resolveMdToUniversal(ast: MdAst, path: OcPath): OcMatch | null {
 
 function resolveJsoncToUniversal(ast: JsoncAst, path: OcPath): OcMatch | null {
   const m = resolveJsoncOcPath(ast, path);
-  if (m === null) return null;
-  if (m.kind === 'root') return { kind: 'root', ast, line: 1 };
+  if (m === null) {return null;}
+  if (m.kind === 'root') {return { kind: 'root', ast, line: 1 };}
   if (m.kind === 'object-entry') {
     return jsoncValueToMatch(m.node.value, m.node.line);
   }
@@ -292,14 +292,14 @@ function jsoncValueToMatch(value: JsoncValue, line: number): OcMatch {
 
 function resolveJsonlToUniversal(ast: JsonlAst, path: OcPath): OcMatch | null {
   const m = resolveJsonlOcPath(ast, path);
-  if (m === null) return null;
-  if (m.kind === 'root') return { kind: 'root', ast, line: 1 };
-  if (m.kind === 'line') return { kind: 'node', descriptor: 'jsonl-line', line: m.node.line };
+  if (m === null) {return null;}
+  if (m.kind === 'root') {return { kind: 'root', ast, line: 1 };}
+  if (m.kind === 'line') {return { kind: 'node', descriptor: 'jsonl-line', line: m.node.line };}
   // Inside-line jsonc parser starts numbering at 1 for each jsonl
   // line, so `m.node.line` would always be 1 for any jsonl-resolved
   // match. Use `m.line` (the JsonlLine's file-level line) — by
   // construction every inside-line node sits on the same file line.
-  if (m.kind === 'object-entry') return jsoncValueToMatch(m.node.value, m.line);
+  if (m.kind === 'object-entry') {return jsoncValueToMatch(m.node.value, m.line);}
   return jsoncValueToMatch(m.node, m.line);
 }
 
@@ -320,14 +320,14 @@ function resolveInsertion(ast: OcAst, info: InsertionInfo): OcMatch | null {
 
 function resolveYamlInsertion(ast: YamlAst, info: InsertionInfo): OcMatch | null {
   const m = resolveYamlOcPath(ast, info.parentPath);
-  if (m === null) return null;
+  if (m === null) {return null;}
   const line = locateYamlLine(ast, info.parentPath);
-  if (m.kind === 'map') return { kind: 'insertion-point', container: 'yaml-map', line };
-  if (m.kind === 'seq') return { kind: 'insertion-point', container: 'yaml-seq', line };
+  if (m.kind === 'map') {return { kind: 'insertion-point', container: 'yaml-map', line };}
+  if (m.kind === 'seq') {return { kind: 'insertion-point', container: 'yaml-seq', line };}
   if (m.kind === 'root') {
     // Top-level: inspect the document root.
     const root = ast.doc.contents;
-    if (root === null) return null;
+    if (root === null) {return null;}
     if ('items' in (root as object)) {
       const isMapLike = (root as { items: { key?: unknown }[] }).items.every((p) => 'key' in p);
       return { kind: 'insertion-point', container: isMapLike ? 'yaml-map' : 'yaml-seq', line: 1 };
@@ -350,7 +350,7 @@ function resolveMdInsertion(ast: MdAst, info: InsertionInfo): OcMatch | null {
   // oc://FILE/section/+ → append item to section
   if (p.item === undefined && p.field === undefined) {
     const m = resolveMdOcPath(ast, p);
-    if (m === null || m.kind !== 'block') return null;
+    if (m === null || m.kind !== 'block') {return null;}
     return { kind: 'insertion-point', container: 'md-section', line: m.node.line };
   }
   return null;
@@ -358,10 +358,10 @@ function resolveMdInsertion(ast: MdAst, info: InsertionInfo): OcMatch | null {
 
 function resolveJsoncInsertion(ast: JsoncAst, info: InsertionInfo): OcMatch | null {
   const m = resolveJsoncOcPath(ast, info.parentPath);
-  if (m === null) return null;
+  if (m === null) {return null;}
   let containerNode: JsoncValue;
   if (m.kind === 'root') {
-    if (ast.root === null) return null;
+    if (ast.root === null) {return null;}
     containerNode = ast.root;
   } else if (m.kind === 'object-entry') {
     containerNode = m.node.value;
@@ -380,7 +380,7 @@ function resolveJsoncInsertion(ast: JsoncAst, info: InsertionInfo): OcMatch | nu
 
 function resolveJsonlInsertion(ast: JsonlAst, info: InsertionInfo): OcMatch | null {
   // jsonl insertion only makes sense at the file level: `oc://FILE/+`.
-  if (info.parentPath.section !== undefined) return null;
+  if (info.parentPath.section !== undefined) {return null;}
   // The only insertion point for jsonl is "after the last line" — the
   // line surfaced is `lastLine + 1` so consumers can render correctly.
   const lastLine = ast.lines.length > 0 ? ast.lines[ast.lines.length - 1]!.line : 0;
@@ -432,7 +432,7 @@ export function setOcPath(ast: OcAst, path: OcPath, value: string): SetResult {
 
 function setYamlLeaf(ast: YamlAst, path: OcPath, value: string): SetResult {
   const existing = resolveYamlOcPath(ast, path);
-  if (existing === null) return { ok: false, reason: 'unresolved' };
+  if (existing === null) {return { ok: false, reason: 'unresolved' };}
   if (existing.kind === 'root') {
     return { ok: false, reason: 'not-writable', detail: 'root replacement not supported via setOcPath' };
   }
@@ -442,12 +442,12 @@ function setYamlLeaf(ast: YamlAst, path: OcPath, value: string): SetResult {
     const cur = existing.value;
     if (typeof cur === 'number') {
       const n = Number(value);
-      if (!Number.isFinite(n)) return { ok: false, reason: 'parse-error' };
+      if (!Number.isFinite(n)) {return { ok: false, reason: 'parse-error' };}
       coerced = n;
     } else if (typeof cur === 'boolean') {
-      if (value === 'true') coerced = true;
-      else if (value === 'false') coerced = false;
-      else return { ok: false, reason: 'parse-error' };
+      if (value === 'true') {coerced = true;}
+      else if (value === 'false') {coerced = false;}
+      else {return { ok: false, reason: 'parse-error' };}
     } else if (cur === null && value !== 'null') {
       return { ok: false, reason: 'parse-error' };
     } else if (cur === null && value === 'null') {
@@ -455,20 +455,20 @@ function setYamlLeaf(ast: YamlAst, path: OcPath, value: string): SetResult {
     }
   }
   const r = setYamlOcPath(ast, path, coerced);
-  if (r.ok) return { ok: true, ast: r.ast };
+  if (r.ok) {return { ok: true, ast: r.ast };}
   return { ok: false, reason: r.reason };
 }
 
 function setMdLeaf(ast: MdAst, path: OcPath, value: string): SetResult {
   const r = setMdOcPath(ast, path, value);
-  if (r.ok) return { ok: true, ast: r.ast };
+  if (r.ok) {return { ok: true, ast: r.ast };}
   return { ok: false, reason: r.reason };
 }
 
 function setJsoncLeaf(ast: JsoncAst, path: OcPath, value: string): SetResult {
   // Inspect the existing leaf to determine target type for coercion.
   const existing = resolveJsoncOcPath(ast, path);
-  if (existing === null) return { ok: false, reason: 'unresolved' };
+  if (existing === null) {return { ok: false, reason: 'unresolved' };}
   if (existing.kind === 'root') {
     return { ok: false, reason: 'not-writable', detail: 'root replacement is not supported via setOcPath' };
   }
@@ -478,13 +478,13 @@ function setJsoncLeaf(ast: JsoncAst, path: OcPath, value: string): SetResult {
     return { ok: false, reason: 'parse-error', detail: `cannot coerce "${value}" to ${leafValue.kind}` };
   }
   const r = setJsoncOcPath(ast, path, coerced);
-  if (r.ok) return { ok: true, ast: r.ast };
+  if (r.ok) {return { ok: true, ast: r.ast };}
   return { ok: false, reason: r.reason };
 }
 
 function setJsonlLeaf(ast: JsonlAst, path: OcPath, value: string): SetResult {
   const existing = resolveJsonlOcPath(ast, path);
-  if (existing === null) return { ok: false, reason: 'unresolved' };
+  if (existing === null) {return { ok: false, reason: 'unresolved' };}
   if (existing.kind === 'root') {
     return { ok: false, reason: 'not-writable', detail: 'root replacement is not supported via setOcPath' };
   }
@@ -495,7 +495,7 @@ function setJsonlLeaf(ast: JsonlAst, path: OcPath, value: string): SetResult {
       return { ok: false, reason: 'parse-error', detail: `line replacement requires JSON value` };
     }
     const r = setJsonlOcPath(ast, path, jsonToJsoncValue(parsed));
-    if (r.ok) return { ok: true, ast: r.ast };
+    if (r.ok) {return { ok: true, ast: r.ast };}
     return { ok: false, reason: r.reason };
   }
   // Field on a line — leaf coercion.
@@ -505,7 +505,7 @@ function setJsonlLeaf(ast: JsonlAst, path: OcPath, value: string): SetResult {
     return { ok: false, reason: 'parse-error', detail: `cannot coerce "${value}" to ${leafValue.kind}` };
   }
   const r = setJsonlOcPath(ast, path, coerced);
-  if (r.ok) return { ok: true, ast: r.ast };
+  if (r.ok) {return { ok: true, ast: r.ast };}
   return { ok: false, reason: r.reason };
 }
 
@@ -531,7 +531,7 @@ function setYamlInsertion(ast: YamlAst, info: InsertionInfo, value: string): Set
     return { ok: false, reason: 'parse-error', detail: 'yaml insertion requires JSON value' };
   }
   const r = insertYamlOcPath(ast, info.parentPath, info.marker, parsed);
-  if (r.ok) return { ok: true, ast: r.ast };
+  if (r.ok) {return { ok: true, ast: r.ast };}
   return { ok: false, reason: r.reason };
 }
 
@@ -582,7 +582,7 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): SetResu
       return { ok: false, reason: 'not-writable', detail: 'md section insertion uses bare `+`' };
     }
     const blockIdx = ast.blocks.findIndex((b) => b.slug === p.section!.toLowerCase());
-    if (blockIdx === -1) return { ok: false, reason: 'unresolved' };
+    if (blockIdx === -1) {return { ok: false, reason: 'unresolved' };}
     const block = ast.blocks[blockIdx]!;
     const kvMatch = /^([^:]+?)\s*:\s*(.+)$/.exec(value);
     const itemLine = `- ${value}`;
@@ -611,7 +611,7 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): SetResu
 
 function setJsoncInsertion(ast: JsoncAst, info: InsertionInfo, value: string): SetResult {
   const containerMatch = resolveJsoncInsertion(ast, info);
-  if (containerMatch === null) return { ok: false, reason: 'unresolved' };
+  if (containerMatch === null) {return { ok: false, reason: 'unresolved' };}
 
   const parsed = tryParseJson(value);
   if (parsed === undefined) {
@@ -619,7 +619,7 @@ function setJsoncInsertion(ast: JsoncAst, info: InsertionInfo, value: string): S
   }
   const newJsoncValue = jsonToJsoncValue(parsed);
 
-  if (containerMatch.kind !== 'insertion-point') return { ok: false, reason: 'unresolved' };
+  if (containerMatch.kind !== 'insertion-point') {return { ok: false, reason: 'unresolved' };}
 
   if (containerMatch.container === 'jsonc-array') {
     // index `+0` valid; bare `+` appends; `+key` rejected.
@@ -627,7 +627,7 @@ function setJsoncInsertion(ast: JsoncAst, info: InsertionInfo, value: string): S
       return { ok: false, reason: 'type-mismatch', detail: 'cannot insert by key into array' };
     }
     return mutateJsoncContainer(ast, info.parentPath, (container) => {
-      if (container.kind !== 'array') return null;
+      if (container.kind !== 'array') {return null;}
       const items = container.items.slice();
       if (info.marker === '+') {
         items.push(newJsoncValue);
@@ -649,8 +649,8 @@ function setJsoncInsertion(ast: JsoncAst, info: InsertionInfo, value: string): S
   }
   const key = info.marker.key;
   return mutateJsoncContainer(ast, info.parentPath, (container) => {
-    if (container.kind !== 'object') return null;
-    if (container.entries.some((e) => e.key === key)) return null; // duplicate
+    if (container.kind !== 'object') {return null;}
+    if (container.entries.some((e) => e.key === key)) {return null;} // duplicate
     const newEntry: JsoncEntry = { key, value: newJsoncValue, line: 0 };
     return {
       kind: 'object',
@@ -677,14 +677,14 @@ function coerceJsoncLeaf(valueText: string, existing: JsoncValue): JsoncValue | 
   // Preserve the existing source line on coerced replacements — the
   // semantic node is the same; only its bytes change.
   const lineExt = existing.line !== undefined ? { line: existing.line } : {};
-  if (existing.kind === 'string') return { kind: 'string', value: valueText, ...lineExt };
+  if (existing.kind === 'string') {return { kind: 'string', value: valueText, ...lineExt };}
   if (existing.kind === 'number') {
     const n = Number(valueText);
     return Number.isFinite(n) ? { kind: 'number', value: n, ...lineExt } : null;
   }
   if (existing.kind === 'boolean') {
-    if (valueText === 'true') return { kind: 'boolean', value: true, ...lineExt };
-    if (valueText === 'false') return { kind: 'boolean', value: false, ...lineExt };
+    if (valueText === 'true') {return { kind: 'boolean', value: true, ...lineExt };}
+    if (valueText === 'false') {return { kind: 'boolean', value: false, ...lineExt };}
     return null;
   }
   if (existing.kind === 'null') {
@@ -706,11 +706,11 @@ function jsonToJsoncValue(v: unknown): JsoncValue {
   // Synthetic values omit `line` (optional in the type) — the parser
   // alone is the source of truth for line metadata. Insertions /
   // mutations get the parent's line for surfacing in lint findings.
-  if (v === null) return { kind: 'null' };
-  if (typeof v === 'string') return { kind: 'string', value: v };
-  if (typeof v === 'number') return { kind: 'number', value: v };
-  if (typeof v === 'boolean') return { kind: 'boolean', value: v };
-  if (Array.isArray(v)) return { kind: 'array', items: v.map(jsonToJsoncValue) };
+  if (v === null) {return { kind: 'null' };}
+  if (typeof v === 'string') {return { kind: 'string', value: v };}
+  if (typeof v === 'number') {return { kind: 'number', value: v };}
+  if (typeof v === 'boolean') {return { kind: 'boolean', value: v };}
+  if (Array.isArray(v)) {return { kind: 'array', items: v.map(jsonToJsoncValue) };}
   if (typeof v === 'object') {
     const obj = v as Record<string, unknown>;
     return {
@@ -731,17 +731,22 @@ function mutateJsoncContainer(
   parentPath: OcPath,
   mutate: (container: JsoncValue) => JsoncValue | null,
 ): SetResult {
-  if (ast.root === null) return { ok: false, reason: 'no-root' };
+  if (ast.root === null) {return { ok: false, reason: 'no-root' };}
 
+  // Quote-aware split so JSONC insertion under a key containing
+  // `/`, `.`, or other special chars works through the parent path.
+  // `resolveJsoncOcPath` validates with quote-aware splitting; the
+  // mutation walker MUST use the same predicate or insertion validity
+  // can be reported and then fail as unresolved.
   const segments: string[] = [];
-  if (parentPath.section !== undefined) segments.push(...parentPath.section.split('.'));
-  if (parentPath.item !== undefined) segments.push(...parentPath.item.split('.'));
-  if (parentPath.field !== undefined) segments.push(...parentPath.field.split('.'));
+  if (parentPath.section !== undefined) {segments.push(...splitRespectingBrackets(parentPath.section, '.'));}
+  if (parentPath.item !== undefined) {segments.push(...splitRespectingBrackets(parentPath.item, '.'));}
+  if (parentPath.field !== undefined) {segments.push(...splitRespectingBrackets(parentPath.field, '.'));}
 
   const newRoot = segments.length === 0
     ? mutate(ast.root)
     : mutateAt(ast.root, segments, 0, mutate);
-  if (newRoot === null) return { ok: false, reason: 'unresolved' };
+  if (newRoot === null) {return { ok: false, reason: 'unresolved' };}
 
   const next: JsoncAst = { kind: 'jsonc', raw: '', root: newRoot };
   return { ok: true, ast: { ...next, raw: emitJsonc(next, { mode: 'render' }) } };
@@ -754,15 +759,18 @@ function mutateAt(
   mutate: (container: JsoncValue) => JsoncValue | null,
 ): JsoncValue | null {
   const seg = segments[i];
-  if (seg === undefined) return mutate(current);
-  if (seg.length === 0) return null;
+  if (seg === undefined) {return mutate(current);}
+  if (seg.length === 0) {return null;}
 
   if (current.kind === 'object') {
-    const idx = current.entries.findIndex((e) => e.key === seg);
-    if (idx === -1) return null;
+    // Match `setJsoncOcPath`'s lookup: AST entry keys are unquoted,
+    // so strip quoting from the path segment before comparing.
+    const lookupKey = isQuotedSeg(seg) ? unquoteSeg(seg) : seg;
+    const idx = current.entries.findIndex((e) => e.key === lookupKey);
+    if (idx === -1) {return null;}
     const child = current.entries[idx]!;
     const replaced = mutateAt(child.value, segments, i + 1, mutate);
-    if (replaced === null) return null;
+    if (replaced === null) {return null;}
     const newEntries = current.entries.slice();
     newEntries[idx] = { ...child, value: replaced };
     return {
@@ -773,10 +781,10 @@ function mutateAt(
   }
   if (current.kind === 'array') {
     const idx = Number(seg);
-    if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) return null;
+    if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) {return null;}
     const child = current.items[idx]!;
     const replaced = mutateAt(child, segments, i + 1, mutate);
-    if (replaced === null) return null;
+    if (replaced === null) {return null;}
     const newItems = current.items.slice();
     newItems[idx] = replaced;
     return {
@@ -798,13 +806,13 @@ function rebuildMdRaw(ast: MdAst): MdAst {
     parts.push('---');
   }
   if (ast.preamble.length > 0) {
-    if (parts.length > 0) parts.push('');
+    if (parts.length > 0) {parts.push('');}
     parts.push(ast.preamble);
   }
   for (const block of ast.blocks) {
-    if (parts.length > 0) parts.push('');
+    if (parts.length > 0) {parts.push('');}
     parts.push(`## ${block.heading}`);
-    if (block.bodyText.length > 0) parts.push(block.bodyText);
+    if (block.bodyText.length > 0) {parts.push(block.bodyText);}
   }
   // Suppress unused — emitJsonl is imported for symmetry but only emitJsonc
   // is used in the jsonc mutation helper.
@@ -813,8 +821,8 @@ function rebuildMdRaw(ast: MdAst): MdAst {
 }
 
 function formatFrontmatterValue(value: string): string {
-  if (value.length === 0) return '""';
-  if (/[:#&*?|<>=!%@`,\[\]{}\r\n]/.test(value)) {
+  if (value.length === 0) {return '""';}
+  if (/[:#&*?|<>=!%@`,[\]{}\r\n]/.test(value)) {
     return JSON.stringify(value);
   }
   return value;

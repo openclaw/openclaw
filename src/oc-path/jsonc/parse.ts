@@ -31,7 +31,7 @@ class ParseState {
   advance(): string | undefined {
     const c = this.src[this.pos];
     this.pos++;
-    if (c === '\n') this.line++;
+    if (c === '\n') {this.line++;}
     return c;
   }
 
@@ -93,7 +93,7 @@ function skipWs(st: ParseState): void {
       const next = st.src[st.pos + 1];
       if (next === '/') {
         // Line comment — skip until newline.
-        while (!st.eof() && st.peek() !== '\n') st.advance();
+        while (!st.eof() && st.peek() !== '\n') {st.advance();}
         continue;
       }
       if (next === '*') {
@@ -119,19 +119,19 @@ function parseValue(st: ParseState, diags: Diagnostic[]): JsoncValue {
   skipWs(st);
   const startLine = st.line;
   const c = st.peek();
-  if (c === '{') return parseObject(st, diags, startLine);
-  if (c === '[') return parseArray(st, diags, startLine);
-  if (c === '"') return { kind: 'string', value: parseString(st), line: startLine };
-  if (c === 't' || c === 'f') return parseBoolean(st, startLine);
-  if (c === 'n') return parseNull(st, startLine);
-  if (c === '-' || (c !== undefined && c >= '0' && c <= '9')) return parseNumber(st, startLine);
+  if (c === '{') {return parseObject(st, diags, startLine);}
+  if (c === '[') {return parseArray(st, diags, startLine);}
+  if (c === '"') {return { kind: 'string', value: parseString(st), line: startLine };}
+  if (c === 't' || c === 'f') {return parseBoolean(st, startLine);}
+  if (c === 'n') {return parseNull(st, startLine);}
+  if (c === '-' || (c !== undefined && c >= '0' && c <= '9')) {return parseNumber(st, startLine);}
   throw new Error(
     `unexpected character ${JSON.stringify(c)} at line ${st.line} (offset ${st.pos})`,
   );
 }
 
 function parseObject(st: ParseState, diags: Diagnostic[], startLine: number): JsoncValue {
-  if (st.advance() !== '{') throw new Error('expected `{`');
+  if (st.advance() !== '{') {throw new Error('expected `{`');}
   const entries: JsoncEntry[] = [];
   skipWs(st);
   if (st.peek() === '}') {
@@ -175,7 +175,7 @@ function parseObject(st: ParseState, diags: Diagnostic[], startLine: number): Js
 }
 
 function parseArray(st: ParseState, diags: Diagnostic[], startLine: number): JsoncValue {
-  if (st.advance() !== '[') throw new Error('expected `[`');
+  if (st.advance() !== '[') {throw new Error('expected `[`');}
   const items: JsoncValue[] = [];
   skipWs(st);
   if (st.peek() === ']') {
@@ -207,11 +207,11 @@ function parseArray(st: ParseState, diags: Diagnostic[], startLine: number): Jso
 }
 
 function parseString(st: ParseState): string {
-  if (st.advance() !== '"') throw new Error('expected `"`');
+  if (st.advance() !== '"') {throw new Error('expected `"`');}
   let out = '';
   while (!st.eof()) {
     const c = st.advance();
-    if (c === '"') return out;
+    if (c === '"') {return out;}
     if (c === '\\') {
       const esc = st.advance();
       switch (esc) {
@@ -228,7 +228,7 @@ function parseString(st: ParseState): string {
           if (!/^[0-9a-fA-F]{4}$/.test(hex)) {
             throw new Error(`invalid unicode escape at line ${st.line}`);
           }
-          out += String.fromCharCode(parseInt(hex, 16));
+          out += String.fromCharCode(Number.parseInt(hex, 16));
           st.pos += 4;
           break;
         }
@@ -264,16 +264,16 @@ function parseNull(st: ParseState, line: number): JsoncValue {
 
 function parseNumber(st: ParseState, line: number): JsoncValue {
   const start = st.pos;
-  if (st.peek() === '-') st.advance();
-  while (!st.eof() && /[0-9]/.test(st.peek() ?? '')) st.advance();
+  if (st.peek() === '-') {st.advance();}
+  while (!st.eof() && /[0-9]/.test(st.peek() ?? '')) {st.advance();}
   if (st.peek() === '.') {
     st.advance();
-    while (!st.eof() && /[0-9]/.test(st.peek() ?? '')) st.advance();
+    while (!st.eof() && /[0-9]/.test(st.peek() ?? '')) {st.advance();}
   }
   if (st.peek() === 'e' || st.peek() === 'E') {
     st.advance();
-    if (st.peek() === '+' || st.peek() === '-') st.advance();
-    while (!st.eof() && /[0-9]/.test(st.peek() ?? '')) st.advance();
+    if (st.peek() === '+' || st.peek() === '-') {st.advance();}
+    while (!st.eof() && /[0-9]/.test(st.peek() ?? '')) {st.advance();}
   }
   const text = st.src.slice(start, st.pos);
   const value = Number(text);

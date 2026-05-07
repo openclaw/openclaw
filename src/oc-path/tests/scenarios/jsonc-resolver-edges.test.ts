@@ -74,7 +74,7 @@ describe('wave-17 jsonc resolver edges', () => {
   it('JR-13 string value at leaf surfaces via object-entry shape', () => {
     const m = rs('{"k":"v"}', 'oc://config/k');
     expect(m?.kind).toBe('object-entry');
-    if (m?.kind === 'object-entry') expect(m.node.key).toBe('k');
+    if (m?.kind === 'object-entry') {expect(m.node.key).toBe('k');}
   });
 
   it('JR-14 boolean and null values resolve', () => {

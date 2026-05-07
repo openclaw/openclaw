@@ -63,7 +63,7 @@ describe('wave-13 cross-cutting', () => {
     const { ast } = parseMd(SAMPLE);
     for (const block of ast.blocks) {
       for (const item of block.items) {
-        if (!item.kv) continue;
+        if (!item.kv) {continue;}
         const path = parseOcPath(
           `oc://AGENTS.md/${block.slug}/${item.slug}/${item.kv.key}`,
         );

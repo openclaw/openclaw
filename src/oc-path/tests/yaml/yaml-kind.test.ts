@@ -57,14 +57,14 @@ describe('resolveYamlOcPath — direct', () => {
     const { ast } = parseYaml(LOBSTER);
     const m = resolveYamlOcPath(ast, parseOcPath('oc://workflow.lobster/name'));
     expect(m?.kind).toBe('pair');
-    if (m?.kind === 'pair') expect(m.value).toBe('inbox-triage');
+    if (m?.kind === 'pair') {expect(m.value).toBe('inbox-triage');}
   });
 
   it('resolves into a sequence by index', () => {
     const { ast } = parseYaml(LOBSTER);
     const m = resolveYamlOcPath(ast, parseOcPath('oc://workflow.lobster/steps.0.id'));
     expect(m?.kind).toBe('pair');
-    if (m?.kind === 'pair') expect(m.value).toBe('fetch');
+    if (m?.kind === 'pair') {expect(m.value).toBe('fetch');}
   });
 
   it('returns root when no segments', () => {
@@ -86,7 +86,7 @@ describe('setYamlOcPath — direct', () => {
     const { ast } = parseYaml(LOBSTER);
     const r = setYamlOcPath(ast, parseOcPath('oc://workflow.lobster/name'), 'new-name');
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.ast.raw).toContain('name: new-name');
+    if (r.ok) {expect(r.ast.raw).toContain('name: new-name');}
   });
 
   it('replaces a nested scalar', () => {
@@ -97,14 +97,14 @@ describe('setYamlOcPath — direct', () => {
       'fetch-renamed',
     );
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.ast.raw).toContain('id: fetch-renamed');
+    if (r.ok) {expect(r.ast.raw).toContain('id: fetch-renamed');}
   });
 
   it('returns unresolved for missing path', () => {
     const { ast } = parseYaml(LOBSTER);
     const r = setYamlOcPath(ast, parseOcPath('oc://workflow.lobster/missing'), 'x');
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('unresolved');
+    if (!r.ok) {expect(r.reason).toBe('unresolved');}
   });
 });
 
@@ -157,7 +157,7 @@ describe('universal verbs — yaml dispatch', () => {
     const { ast } = parseYaml('count: 5\n');
     const r = setOcPath(ast, parseOcPath('oc://x.yaml/count'), 'abc');
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('parse-error');
+    if (!r.ok) {expect(r.reason).toBe('parse-error');}
   });
 });
 

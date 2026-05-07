@@ -31,17 +31,17 @@ export function setJsonlOcPath(
   newValue: JsoncValue,
 ): JsonlEditResult {
   const head = path.section;
-  if (head === undefined) return { ok: false, reason: 'unresolved' };
+  if (head === undefined) {return { ok: false, reason: 'unresolved' };}
 
   const lineIdx = pickLineIndex(ast, head);
-  if (lineIdx === -1) return { ok: false, reason: 'unresolved' };
+  if (lineIdx === -1) {return { ok: false, reason: 'unresolved' };}
   const target = ast.lines[lineIdx];
-  if (target === undefined) return { ok: false, reason: 'unresolved' };
+  if (target === undefined) {return { ok: false, reason: 'unresolved' };}
 
   // No item/field — replace the whole line value. Requires the line to
   // already be a value line (we don't synthesize lines from blanks).
   if (path.item === undefined && path.field === undefined) {
-    if (target.kind !== 'value') return { ok: false, reason: 'not-a-value-line' };
+    if (target.kind !== 'value') {return { ok: false, reason: 'not-a-value-line' };}
     const newLine: JsonlLine = {
       kind: 'value',
       line: target.line,
@@ -51,18 +51,18 @@ export function setJsonlOcPath(
     return finalize(ast, lineIdx, newLine);
   }
 
-  if (target.kind !== 'value') return { ok: false, reason: 'not-a-value-line' };
+  if (target.kind !== 'value') {return { ok: false, reason: 'not-a-value-line' };}
 
   // Bracket/brace/quote-aware split — preserves quoted segments
   // verbatim so the edit path matches `resolveJsonlOcPath`'s
   // unquoting behavior. Plain `.split('.')` would shred a quoted key
   // and silently desync read-vs-write.
   const segments: string[] = [];
-  if (path.item !== undefined) segments.push(...splitRespectingBrackets(path.item, '.'));
-  if (path.field !== undefined) segments.push(...splitRespectingBrackets(path.field, '.'));
+  if (path.item !== undefined) {segments.push(...splitRespectingBrackets(path.item, '.'));}
+  if (path.field !== undefined) {segments.push(...splitRespectingBrackets(path.field, '.'));}
 
   const replaced = replaceAt(target.value, segments, 0, newValue);
-  if (replaced === null) return { ok: false, reason: 'unresolved' };
+  if (replaced === null) {return { ok: false, reason: 'unresolved' };}
   const newLine: JsonlLine = {
     kind: 'value',
     line: target.line,
@@ -79,19 +79,19 @@ function replaceAt(
   newValue: JsoncValue,
 ): JsoncValue | null {
   const seg = segments[i];
-  if (seg === undefined) return newValue;
-  if (seg.length === 0) return null;
+  if (seg === undefined) {return newValue;}
+  if (seg.length === 0) {return null;}
 
   if (current.kind === 'object') {
     // Quoted segments carry the raw bytes verbatim; AST entry keys
     // are unquoted. Strip the surrounding quotes before comparing.
     const lookupKey = isQuotedSeg(seg) ? unquoteSeg(seg) : seg;
     const idx = current.entries.findIndex((e) => e.key === lookupKey);
-    if (idx === -1) return null;
+    if (idx === -1) {return null;}
     const child = current.entries[idx];
-    if (child === undefined) return null;
+    if (child === undefined) {return null;}
     const replacedChild = replaceAt(child.value, segments, i + 1, newValue);
-    if (replacedChild === null) return null;
+    if (replacedChild === null) {return null;}
     const newEntry: JsoncEntry = { ...child, value: replacedChild };
     const newEntries = current.entries.slice();
     newEntries[idx] = newEntry;
@@ -104,11 +104,11 @@ function replaceAt(
 
   if (current.kind === 'array') {
     const idx = Number(seg);
-    if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) return null;
+    if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) {return null;}
     const child = current.items[idx];
-    if (child === undefined) return null;
+    if (child === undefined) {return null;}
     const replacedChild = replaceAt(child, segments, i + 1, newValue);
-    if (replacedChild === null) return null;
+    if (replacedChild === null) {return null;}
     const newItems = current.items.slice();
     newItems[idx] = replacedChild;
     return {
@@ -125,12 +125,12 @@ function pickLineIndex(ast: JsonlAst, addr: string): number {
   if (addr === '$last') {
     for (let i = ast.lines.length - 1; i >= 0; i--) {
       const l = ast.lines[i];
-      if (l !== undefined && l.kind === 'value') return i;
+      if (l !== undefined && l.kind === 'value') {return i;}
     }
     return -1;
   }
   const m = /^L(\d+)$/.exec(addr);
-  if (m === null || m[1] === undefined) return -1;
+  if (m === null || m[1] === undefined) {return -1;}
   const target = Number(m[1]);
   return ast.lines.findIndex((l) => l.line === target);
 }

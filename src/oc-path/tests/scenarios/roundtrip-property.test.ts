@@ -23,7 +23,7 @@ describe('wave-10 roundtrip-property', () => {
       } catch (e) {
         // Surface which input failed for debugging.
         throw new Error(
-          `round-trip failed for input (length ${raw.length}):\n${JSON.stringify(raw.slice(0, 200))}\nError: ${(e as Error).message}`,
+          `round-trip failed for input (length ${raw.length}):\n${JSON.stringify(raw.slice(0, 200))}\nError: ${(e as Error).message}`, { cause: e },
         );
       }
     }

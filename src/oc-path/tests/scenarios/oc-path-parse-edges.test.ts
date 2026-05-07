@@ -148,4 +148,34 @@ describe('wave-07 oc-path-parse-edges', () => {
   it('OP-23 formatOcPath rejects item without section', () => {
     expectErr(() => formatOcPath({ file: 'X.md', item: 'i' }), 'OC_PATH_NESTING');
   });
+
+  it('OP-24 formatOcPath quotes raw slot values containing special chars', () => {
+    // Closes ClawSweeper P2 on PR #78678: `formatOcPath` previously
+    // concatenated raw slot values, so a programmatically-constructed
+    // path with a `/` in the section/item slot would emit extra
+    // segments and fail to parse back to the same address.
+    // Use a slot value with `/` (and no internal `.`) — `.` inside
+    // a slot is the dotted sub-segment delimiter; callers wanting a
+    // literal `.` in a key should pre-quote that single sub-segment.
+    const constructed = formatOcPath({
+      file: 'config.jsonc',
+      section: 'agents.defaults.models',
+      item: 'github-copilot/claude-opus-4-7',
+      field: 'alias',
+    });
+    expect(constructed).toBe(
+      'oc://config.jsonc/agents.defaults.models/"github-copilot/claude-opus-4-7"/alias',
+    );
+    const parsed = parseOcPath(constructed);
+    expect(parsed.item).toBe('"github-copilot/claude-opus-4-7"');
+  });
+
+  it('OP-25 parseOcPath finds query separator outside quoted keys', () => {
+    // Closes ClawSweeper P2 on PR #78678: `parseOcPath` previously
+    // used `indexOf('?')` which split a key like `"foo?bar"` at the
+    // embedded `?`, breaking advertised quoted-segment support.
+    const parsed = parseOcPath('oc://config.jsonc/"foo?bar"?session=daily');
+    expect(parsed.section).toBe('"foo?bar"');
+    expect(parsed.session).toBe('daily');
+  });
 });

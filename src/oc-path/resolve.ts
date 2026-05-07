@@ -58,9 +58,9 @@ export function resolveMdOcPath(ast: MdAst, path: OcPath): OcPathMatch | null {
   // 4-segment paths.
   if (path.section === '[frontmatter]') {
     const key = path.item ?? path.field;
-    if (key === undefined) return null;
+    if (key === undefined) {return null;}
     const entry = ast.frontmatter.find((e) => e.key === key);
-    if (entry === undefined) return null;
+    if (entry === undefined) {return null;}
     return { kind: 'frontmatter', node: entry };
   }
 
@@ -71,7 +71,7 @@ export function resolveMdOcPath(ast: MdAst, path: OcPath): OcPathMatch | null {
 
   const sectionSlug = path.section.toLowerCase();
   const block = ast.blocks.find((b) => b.slug === sectionSlug);
-  if (block === undefined) return null;
+  if (block === undefined) {return null;}
 
   // Section-only address.
   if (path.item === undefined) {
@@ -84,20 +84,20 @@ export function resolveMdOcPath(ast: MdAst, path: OcPath): OcPathMatch | null {
   let item: AstItem | undefined;
   if (isOrdinalSeg(path.item)) {
     const n = parseOrdinalSeg(path.item);
-    if (n === null || n < 0 || n >= block.items.length) return null;
+    if (n === null || n < 0 || n >= block.items.length) {return null;}
     item = block.items[n];
   } else if (isPositionalSeg(path.item)) {
     const concrete = resolvePositionalSeg(path.item, {
       indexable: true,
       size: block.items.length,
     });
-    if (concrete === null) return null;
+    if (concrete === null) {return null;}
     item = block.items[Number(concrete)];
   } else {
     const itemSlug = path.item.toLowerCase();
     item = block.items.find((i) => i.slug === itemSlug);
   }
-  if (item === undefined) return null;
+  if (item === undefined) {return null;}
 
   // Item-only address.
   if (path.field === undefined) {
@@ -107,7 +107,7 @@ export function resolveMdOcPath(ast: MdAst, path: OcPath): OcPathMatch | null {
   // Item-field address. Requires the item to have a `kv` and the field
   // to match the kv key (case-insensitive). A field on an item without
   // kv shape is unresolvable — return null rather than guessing.
-  if (item.kv === undefined) return null;
-  if (item.kv.key.toLowerCase() !== path.field.toLowerCase()) return null;
+  if (item.kv === undefined) {return null;}
+  if (item.kv.key.toLowerCase() !== path.field.toLowerCase()) {return null;}
   return { kind: 'item-field', node: item, block, value: item.kv.value };
 }

@@ -25,7 +25,6 @@ import {
   setOcPath,
 } from '../../index.js';
 import { parseJsonc } from '../../jsonc/parse.js';
-import { parseJsonl } from '../../jsonl/parse.js';
 import { parseYaml } from '../../yaml/parse.js';
 
 // ---------- Encoding pitfalls --------------------------------------------
@@ -126,7 +125,7 @@ describe('wave-23 pitfalls — predicate content', () => {
     ).ast;
     const out = findOcPaths(ast, parseOcPath('oc://wf/steps/[id=foo/bar]/cmd'));
     expect(out).toHaveLength(1);
-    if (out[0]!.match.kind === 'leaf') expect(out[0]!.match.valueText).toBe('x');
+    if (out[0]!.match.kind === 'leaf') {expect(out[0]!.match.valueText).toBe('x');}
   });
 
   it('P-013 predicate value containing `.` round-trips', () => {
@@ -140,7 +139,7 @@ describe('wave-23 pitfalls — predicate content', () => {
     ).ast;
     const out = findOcPaths(ast, parseOcPath('oc://wf/steps/[id=1.0]/cmd'));
     expect(out).toHaveLength(1);
-    if (out[0]!.match.kind === 'leaf') expect(out[0]!.match.valueText).toBe('x');
+    if (out[0]!.match.kind === 'leaf') {expect(out[0]!.match.valueText).toBe('x');}
   });
 });
 
@@ -171,7 +170,7 @@ describe('wave-23 pitfalls — sentinels & collisions', () => {
     const ast = parseJsonc('{"items":[10,20,30]}').ast;
     const m = resolveOcPath(ast, parseOcPath('oc://X/items/-1'));
     expect(m?.kind).toBe('leaf');
-    if (m?.kind === 'leaf') expect(m.valueText).toBe('30');
+    if (m?.kind === 'leaf') {expect(m.valueText).toBe('30');}
   });
 
   it('P-020 numeric segment dispatches by node kind (array index vs map key)', () => {
@@ -182,8 +181,8 @@ describe('wave-23 pitfalls — sentinels & collisions', () => {
     const mapM = resolveOcPath(map, parseOcPath('oc://config/x/0'));
     expect(arrM?.kind).toBe('leaf');
     expect(mapM?.kind).toBe('leaf');
-    if (arrM?.kind === 'leaf') expect(arrM.valueText).toBe('a');
-    if (mapM?.kind === 'leaf') expect(mapM.valueText).toBe('a');
+    if (arrM?.kind === 'leaf') {expect(arrM.valueText).toBe('a');}
+    if (mapM?.kind === 'leaf') {expect(mapM.valueText).toBe('a');}
   });
 
   it('P-021 `$last` literal in a yaml key is shadowed by positional sentinel', () => {
@@ -193,7 +192,7 @@ describe('wave-23 pitfalls — sentinels & collisions', () => {
     const m = resolveOcPath(ast, parseOcPath('oc://X/$last'));
     // `$last` resolves to the LAST key (`foo` → `bar`), not the literal `$last` key.
     expect(m?.kind).toBe('leaf');
-    if (m?.kind === 'leaf') expect(m.valueText).toBe('bar');
+    if (m?.kind === 'leaf') {expect(m.valueText).toBe('bar');}
   });
 });
 
@@ -264,7 +263,7 @@ describe('wave-23 pitfalls — coercion', () => {
     expect(r1.ok).toBe(true);
     const r2 = setOcPath(ast, parseOcPath('oc://X/x'), '1,5');
     expect(r2.ok).toBe(false);
-    if (!r2.ok) expect(r2.reason).toBe('parse-error');
+    if (!r2.ok) {expect(r2.reason).toBe('parse-error');}
   });
 
   it('P-030 boolean coercion is exact-match lowercase', () => {

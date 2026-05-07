@@ -36,7 +36,6 @@ import {
   WILDCARD_RECURSIVE,
   WILDCARD_SINGLE,
   evaluatePredicate,
-  hasWildcard,
   isOrdinalSeg,
   isPositionalSeg,
   isPredicateSeg,
@@ -117,7 +116,7 @@ export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[]
   const out: OcPathMatch[] = [];
   for (const concrete of concretePaths) {
     const m = resolveOcPath(ast, concrete);
-    if (m !== null) out.push({ path: concrete, match: m });
+    if (m !== null) {out.push({ path: concrete, match: m });}
   }
   return out;
 }
@@ -129,13 +128,13 @@ function patternSubs(pattern: OcPath): readonly PatternSub[] {
   // Bracket-aware split so dots inside `[k=1.0]` or `{a.b,c}` aren't
   // treated as sub-segment delimiters (P-012/P-013).
   if (pattern.section !== undefined) {
-    for (const v of splitRespectingBrackets(pattern.section, '.')) out.push({ slot: 'section', value: v });
+    for (const v of splitRespectingBrackets(pattern.section, '.')) {out.push({ slot: 'section', value: v });}
   }
   if (pattern.item !== undefined) {
-    for (const v of splitRespectingBrackets(pattern.item, '.')) out.push({ slot: 'item', value: v });
+    for (const v of splitRespectingBrackets(pattern.item, '.')) {out.push({ slot: 'item', value: v });}
   }
   if (pattern.field !== undefined) {
-    for (const v of splitRespectingBrackets(pattern.field, '.')) out.push({ slot: 'field', value: v });
+    for (const v of splitRespectingBrackets(pattern.field, '.')) {out.push({ slot: 'field', value: v });}
   }
   return out;
 }
@@ -145,9 +144,9 @@ function repackSlotSubs(pattern: OcPath, slotSubs: readonly SlotSub[]): OcPath {
   const itemSubs: string[] = [];
   const fieldSubs: string[] = [];
   for (const s of slotSubs) {
-    if (s.slot === 'section') sectionSubs.push(s.value);
-    else if (s.slot === 'item') itemSubs.push(s.value);
-    else fieldSubs.push(s.value);
+    if (s.slot === 'section') {sectionSubs.push(s.value);}
+    else if (s.slot === 'item') {itemSubs.push(s.value);}
+    else {fieldSubs.push(s.value);}
   }
   return {
     file: pattern.file,
@@ -173,7 +172,7 @@ function expand(ast: OcAst, subs: readonly PatternSub[], pattern: OcPath): reado
       walkYaml(ast.doc.contents as Node | null, subs, 0, [], onMatch);
       break;
     case 'jsonc':
-      if (ast.root !== null) walkJsonc(ast.root, subs, 0, [], onMatch);
+      if (ast.root !== null) {walkJsonc(ast.root, subs, 0, [], onMatch);}
       break;
     case 'jsonl':
       walkJsonl(ast, subs, 0, [], onMatch);
@@ -212,14 +211,14 @@ function walkYaml(
     onMatch(walked);
     return;
   }
-  if (node === null) return;
+  if (node === null) {return;}
   let cur = subs[i]!;
 
   // Union `{a,b,c}` — fan out into one walk per alternative. Each
   // alternative replaces `cur.value` with the chosen literal.
   if (isUnionSeg(cur.value)) {
     const alts = parseUnionSeg(cur.value);
-    if (alts === null) return;
+    if (alts === null) {return;}
     for (const alt of alts) {
       const altSubs = subs.slice();
       altSubs[i] = { slot: cur.slot, value: alt };
@@ -232,7 +231,7 @@ function walkYaml(
   // whose `key` field matches the predicate.
   if (isPredicateSeg(cur.value)) {
     const pred = parsePredicateSeg(cur.value);
-    if (pred === null) return;
+    if (pred === null) {return;}
     if (isMap(node)) {
       for (const pair of (node as { items: Pair[] }).items) {
         const k = isScalar(pair.key) ? String(pair.key.value) : String(pair.key);
@@ -257,7 +256,7 @@ function walkYaml(
   // emitted paths carry the resolved index/key.
   if (isPositionalSeg(cur.value)) {
     const concrete = positionalForYamlNode(node, cur.value);
-    if (concrete === null) return;
+    if (concrete === null) {return;}
     cur = { slot: cur.slot, value: concrete };
   }
 
@@ -302,7 +301,7 @@ function walkYaml(
       const k = isScalar(p.key) ? String(p.key.value) : String(p.key);
       return k === literal;
     });
-    if (pair === undefined) return;
+    if (pair === undefined) {return;}
     walkYaml(
       pair.value as Node,
       subs,
@@ -314,7 +313,7 @@ function walkYaml(
   }
   if (isSeq(node)) {
     const idx = Number(literal);
-    if (!Number.isInteger(idx) || idx < 0 || idx >= (node as { items: Node[] }).items.length) return;
+    if (!Number.isInteger(idx) || idx < 0 || idx >= (node as { items: Node[] }).items.length) {return;}
     walkYaml(
       (node as { items: Node[] }).items[idx]!,
       subs,
@@ -350,7 +349,7 @@ function walkJsonc(
 
   if (isUnionSeg(cur.value)) {
     const alts = parseUnionSeg(cur.value);
-    if (alts === null) return;
+    if (alts === null) {return;}
     for (const alt of alts) {
       const altSubs = subs.slice();
       altSubs[i] = { slot: cur.slot, value: alt };
@@ -361,7 +360,7 @@ function walkJsonc(
 
   if (isPredicateSeg(cur.value)) {
     const pred = parsePredicateSeg(cur.value);
-    if (pred === null) return;
+    if (pred === null) {return;}
     if (node.kind === 'object') {
       for (const e of node.entries) {
         if (jsoncChildMatchesPredicate(e.value, pred)) {
@@ -380,7 +379,7 @@ function walkJsonc(
 
   if (isPositionalSeg(cur.value)) {
     const concrete = positionalForJsoncNode(node, cur.value);
-    if (concrete === null) return;
+    if (concrete === null) {return;}
     cur = { slot: cur.slot, value: concrete };
   }
 
@@ -419,13 +418,13 @@ function walkJsonc(
     // flagged on PR #78678.
     const lookupKey = isQuotedSeg(cur.value) ? unquoteSeg(cur.value) : cur.value;
     const e = node.entries.find((entry) => entry.key === lookupKey);
-    if (e === undefined) return;
+    if (e === undefined) {return;}
     walkJsonc(e.value, subs, i + 1, [...walked, { slot: cur.slot, value: cur.value }], onMatch);
     return;
   }
   if (node.kind === 'array') {
     const idx = Number(cur.value);
-    if (!Number.isInteger(idx) || idx < 0 || idx >= node.items.length) return;
+    if (!Number.isInteger(idx) || idx < 0 || idx >= node.items.length) {return;}
     walkJsonc(node.items[idx]!, subs, i + 1, [...walked, { slot: cur.slot, value: cur.value }], onMatch);
   }
 }
@@ -470,7 +469,7 @@ function walkJsonl(
     // addressing tokens. The emitted concrete address is `Lnnn` (the
     // canonical line-address form) regardless of how it was looked up.
     const line = pickLine(ast, cur.value);
-    if (line === null) return;
+    if (line === null) {return;}
     const concreteAddr = line.kind === 'value' ? `L${line.line}` : cur.value;
     walkJsonlInsideLine(line, subs, i + 1, [{ slot: cur.slot, value: concreteAddr }], onMatch);
     return;
@@ -488,7 +487,7 @@ function walkJsonlInsideLine(
     onMatch(walked);
     return;
   }
-  if (line.kind !== 'value') return;
+  if (line.kind !== 'value') {return;}
   walkJsonc(line.value, subs, i, walked, onMatch);
 }
 
@@ -497,7 +496,7 @@ function forEachValueLine(
   visit: (line: JsonlLine, addr: string) => void,
 ): void {
   for (const l of ast.lines) {
-    if (l.kind === 'value') visit(l, `L${l.line}`);
+    if (l.kind === 'value') {visit(l, `L${l.line}`);}
   }
 }
 
@@ -505,13 +504,13 @@ function pickLine(ast: JsonlAst, addr: string): JsonlLine | null {
   if (addr === '$last') {
     for (let i = ast.lines.length - 1; i >= 0; i--) {
       const l = ast.lines[i];
-      if (l !== undefined && l.kind === 'value') return l;
+      if (l !== undefined && l.kind === 'value') {return l;}
     }
     return null;
   }
   if (addr === '$first') {
     for (const l of ast.lines) {
-      if (l.kind === 'value') return l;
+      if (l.kind === 'value') {return l;}
     }
     return null;
   }
@@ -521,10 +520,10 @@ function pickLine(ast: JsonlAst, addr: string): JsonlLine | null {
     return n >= 0 && n < valueLines.length ? valueLines[n]! : null;
   }
   const m = /^L(\d+)$/.exec(addr);
-  if (m === null || m[1] === undefined) return null;
+  if (m === null || m[1] === undefined) {return null;}
   const target = Number(m[1]);
   for (const l of ast.lines) {
-    if (l.line === target) return l;
+    if (l.line === target) {return l;}
   }
   return null;
 }
@@ -562,15 +561,15 @@ function yamlChildMatchesPredicate(node: Node | null, pred: PredicateSpec): bool
 }
 
 function yamlChildFieldText(node: Node | null, key: string): string | null {
-  if (node === null) return null;
-  if (!isMap(node)) return null;
+  if (node === null) {return null;}
+  if (!isMap(node)) {return null;}
   for (const pair of (node as { items: Pair[] }).items) {
     const k = isScalar(pair.key) ? String(pair.key.value) : String(pair.key);
-    if (k !== key) continue;
+    if (k !== key) {continue;}
     const v = pair.value;
     if (isScalar(v)) {
       const sv = v.value;
-      if (sv === null) return 'null';
+      if (sv === null) {return 'null';}
       return String(sv);
     }
     return null;
@@ -583,14 +582,14 @@ function jsoncChildMatchesPredicate(node: JsoncValue, pred: PredicateSpec): bool
 }
 
 function jsoncChildFieldText(node: JsoncValue, key: string): string | null {
-  if (node.kind !== 'object') return null;
+  if (node.kind !== 'object') {return null;}
   const e = node.entries.find((entry) => entry.key === key);
-  if (e === undefined) return null;
+  if (e === undefined) {return null;}
   const v = e.value;
-  if (v.kind === 'string') return v.value;
-  if (v.kind === 'number') return String(v.value);
-  if (v.kind === 'boolean') return String(v.value);
-  if (v.kind === 'null') return 'null';
+  if (v.kind === 'string') {return v.value;}
+  if (v.kind === 'number') {return String(v.value);}
+  if (v.kind === 'boolean') {return String(v.value);}
+  if (v.kind === 'null') {return 'null';}
   return null;
 }
 
@@ -631,7 +630,7 @@ function walkMd(
     // segment must be unquoted before comparing.
     const fmKey = isQuotedSeg(next.value) ? unquoteSeg(next.value) : next.value;
     const entry = ast.frontmatter.find((e) => e.key === fmKey);
-    if (entry === undefined) return;
+    if (entry === undefined) {return;}
     onMatch([
       { slot: cur.slot, value: cur.value },
       { slot: next.slot, value: next.value },
@@ -660,7 +659,7 @@ function walkMd(
     }
     const targetSlug = cur.value.toLowerCase();
     const block = ast.blocks.find((b) => b.slug === targetSlug);
-    if (block === undefined) return;
+    if (block === undefined) {return;}
     walkMdInsideBlock(
       block,
       ast,
@@ -716,20 +715,20 @@ function walkMdInsideBlock(
   let item: { readonly slug: string; readonly kv?: { readonly key: string; readonly value: string } } | undefined;
   if (isOrdinalSeg(cur.value)) {
     const n = parseOrdinalSeg(cur.value);
-    if (n === null || n < 0 || n >= block.items.length) return;
+    if (n === null || n < 0 || n >= block.items.length) {return;}
     item = block.items[n];
   } else if (isPositionalSeg(cur.value)) {
     const concrete = resolvePositionalSeg(cur.value, {
       indexable: true,
       size: block.items.length,
     });
-    if (concrete === null) return;
+    if (concrete === null) {return;}
     item = block.items[Number(concrete)];
   } else {
     const targetItemSlug = cur.value.toLowerCase();
     item = block.items.find((it) => it.slug === targetItemSlug);
   }
-  if (item === undefined) return;
+  if (item === undefined) {return;}
   walkMdInsideItem(item, ast, subs, i + 1, [...walked, { slot: cur.slot, value: cur.value }], onMatch);
 }
 
@@ -747,12 +746,12 @@ function walkMdInsideItem(
   }
   const cur = subs[i]!;
   // Field slot — addresses kv.key (case-insensitive).
-  if (item.kv === undefined) return;
+  if (item.kv === undefined) {return;}
   if (cur.value === WILDCARD_SINGLE || cur.value === WILDCARD_RECURSIVE) {
     onMatch([...walked, { slot: cur.slot, value: item.kv.key }]);
     return;
   }
-  if (item.kv.key.toLowerCase() !== cur.value.toLowerCase()) return;
+  if (item.kv.key.toLowerCase() !== cur.value.toLowerCase()) {return;}
   onMatch([...walked, { slot: cur.slot, value: cur.value }]);
 }
 

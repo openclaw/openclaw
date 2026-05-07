@@ -21,9 +21,9 @@ export type OcKind = 'md' | 'jsonc' | 'jsonl' | 'yaml';
  */
 export function inferKind(filename: string): OcKind | null {
   const lower = filename.toLowerCase();
-  if (lower.endsWith('.md')) return 'md';
-  if (lower.endsWith('.jsonl') || lower.endsWith('.ndjson')) return 'jsonl';
-  if (lower.endsWith('.jsonc') || lower.endsWith('.json')) return 'jsonc';
+  if (lower.endsWith('.md')) {return 'md';}
+  if (lower.endsWith('.jsonl') || lower.endsWith('.ndjson')) {return 'jsonl';}
+  if (lower.endsWith('.jsonc') || lower.endsWith('.json')) {return 'jsonc';}
   if (lower.endsWith('.yaml') || lower.endsWith('.yml') || lower.endsWith('.lobster')) {
     return 'yaml';
   }

@@ -76,12 +76,12 @@ export function emitMd(ast: MdAst, opts: EmitOptions = {}): string {
 
   if (ast.preamble.length > 0) {
     guardSentinel(ast.preamble, `${guardPath}/[preamble]`);
-    if (parts.length > 0) parts.push('');
+    if (parts.length > 0) {parts.push('');}
     parts.push(ast.preamble);
   }
 
   for (const block of ast.blocks) {
-    if (parts.length > 0) parts.push('');
+    if (parts.length > 0) {parts.push('');}
     parts.push(`## ${block.heading}`);
     if (block.bodyText.length > 0) {
       // Walk items + frontmatter-key value strings for sentinels;
@@ -103,8 +103,8 @@ export function emitMd(ast: MdAst, opts: EmitOptions = {}): string {
 function formatFrontmatterValue(value: string): string {
   // Quote values containing characters that would confuse a YAML
   // parser; otherwise emit bare.
-  if (value.length === 0) return '""';
-  if (/[:#&*?|<>=!%@`,\[\]{}\r\n]/.test(value)) {
+  if (value.length === 0) {return '""';}
+  if (/[:#&*?|<>=!%@`,[\]{}\r\n]/.test(value)) {
     return JSON.stringify(value);
   }
   return value;

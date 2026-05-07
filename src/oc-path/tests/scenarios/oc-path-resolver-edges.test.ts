@@ -60,7 +60,7 @@ describe('wave-08 oc-path-resolver-edges', () => {
   it('R-05 multi-word section by slug', () => {
     const m = resolveOcPath(ast, { file: 'X.md', section: 'multi-word-section' });
     expect(m?.kind).toBe('block');
-    if (m?.kind === 'block') expect(m.node.heading).toBe('Multi-Word Section');
+    if (m?.kind === 'block') {expect(m.node.heading).toBe('Multi-Word Section');}
   });
 
   it('R-06 multi-word section by exact heading text (case-folded)', () => {
@@ -94,7 +94,7 @@ describe('wave-08 oc-path-resolver-edges', () => {
       item: 'gh',
     });
     expect(m).not.toBeNull();
-    if (m?.kind === 'item') expect(m.node.kv?.value).toBe('GitHub CLI');
+    if (m?.kind === 'item') {expect(m.node.kv?.value).toBe('GitHub CLI');}
   });
 
   it('R-10 item slug for plain bullet uses text', () => {
@@ -122,7 +122,7 @@ describe('wave-08 oc-path-resolver-edges', () => {
       item: 'the-tool',
     });
     expect(m?.kind).toBe('item');
-    if (m?.kind === 'item') expect(m.node.kv?.value).toBe('with caps and spaces');
+    if (m?.kind === 'item') {expect(m.node.kv?.value).toBe('with caps and spaces');}
   });
 
   it('R-13 unknown item returns null', () => {
@@ -171,7 +171,7 @@ describe('wave-08 oc-path-resolver-edges', () => {
       field: 'name',
     });
     expect(m?.kind).toBe('frontmatter');
-    if (m?.kind === 'frontmatter') expect(m.node.value).toBe('github');
+    if (m?.kind === 'frontmatter') {expect(m.node.value).toBe('github');}
   });
 
   it('R-18 frontmatter unknown key returns null', () => {
@@ -209,7 +209,7 @@ describe('wave-08 oc-path-resolver-edges', () => {
       field: 'k',
     });
     expect(m?.kind).toBe('frontmatter');
-    if (m?.kind === 'frontmatter') expect(m.node.value).toBe('first');
+    if (m?.kind === 'frontmatter') {expect(m.node.value).toBe('first');}
   });
 
   it('R-21 empty AST resolves root only', () => {

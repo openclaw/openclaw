@@ -50,17 +50,17 @@ export function resolveJsonlOcPath(
 ): JsonlOcPathMatch | null {
   // The first non-file segment is the line address (Lnnn or $last).
   const head = path.section;
-  if (head === undefined) return { kind: 'root', node: ast };
+  if (head === undefined) {return { kind: 'root', node: ast };}
 
   const lineEntry = pickLine(ast, head);
-  if (lineEntry === null) return null;
+  if (lineEntry === null) {return null;}
 
   // No further descent — return the line entry itself.
   if (path.item === undefined && path.field === undefined) {
     return { kind: 'line', node: lineEntry };
   }
 
-  if (lineEntry.kind !== 'value') return null;
+  if (lineEntry.kind !== 'value') {return null;}
 
   const segments: string[] = [];
   if (path.item !== undefined) {
@@ -79,26 +79,26 @@ export function resolveJsonlOcPath(
   const walked: string[] = [];
 
   for (let seg of segments) {
-    if (seg.length === 0) return null;
+    if (seg.length === 0) {return null;}
     // See openclaw#59934 — positional `-N` falls through on keyed containers.
     if (isPositionalSeg(seg)) {
       const concrete = positionalForJsonc(current, seg);
-      if (concrete !== null) seg = concrete;
+      if (concrete !== null) {seg = concrete;}
     }
     walked.push(seg);
     if (current.kind === 'object') {
       const entry = current.entries.find((e) => e.key === seg);
-      if (entry === undefined) return null;
+      if (entry === undefined) {return null;}
       lastEntry = entry;
       current = entry.value;
       continue;
     }
     if (current.kind === 'array') {
       const idx = Number(seg);
-      if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) return null;
+      if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) {return null;}
       lastEntry = null;
       const item = current.items[idx];
-      if (item === undefined) return null;
+      if (item === undefined) {return null;}
       current = item;
       continue;
     }
@@ -120,13 +120,13 @@ function pickLine(ast: JsonlAst, addr: string): JsonlLine | null {
   if (addr === POS_LAST) {
     for (let i = ast.lines.length - 1; i >= 0; i--) {
       const l = ast.lines[i];
-      if (l !== undefined && l.kind === 'value') return l;
+      if (l !== undefined && l.kind === 'value') {return l;}
     }
     return null;
   }
   if (addr === POS_FIRST) {
     for (const l of ast.lines) {
-      if (l.kind === 'value') return l;
+      if (l.kind === 'value') {return l;}
     }
     return null;
   }
@@ -137,10 +137,10 @@ function pickLine(ast: JsonlAst, addr: string): JsonlLine | null {
     return n >= 0 && n < valueLines.length ? valueLines[n]! : null;
   }
   const m = /^L(\d+)$/.exec(addr);
-  if (m === null || m[1] === undefined) return null;
+  if (m === null || m[1] === undefined) {return null;}
   const target = Number(m[1]);
   for (const l of ast.lines) {
-    if (l.line === target) return l;
+    if (l.line === target) {return l;}
   }
   return null;
 }

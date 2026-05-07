@@ -44,7 +44,7 @@ export function resolveJsoncOcPath(
   ast: JsoncAst,
   path: OcPath,
 ): JsoncOcPathMatch | null {
-  if (ast.root === null) return null;
+  if (ast.root === null) {return null;}
 
   // Bracket-aware split + unquote: `"foo/bar".baz` becomes
   // [`foo/bar`, `baz`] (literal slash preserved in the first sub).
@@ -65,14 +65,14 @@ export function resolveJsoncOcPath(
     }
   }
 
-  if (segments.length === 0) return { kind: 'root', node: ast };
+  if (segments.length === 0) {return { kind: 'root', node: ast };}
 
   let current: JsoncValue = ast.root;
   let lastEntry: JsoncEntry | null = null;
   const walked: string[] = [];
 
   for (let seg of segments) {
-    if (seg.length === 0) return null;
+    if (seg.length === 0) {return null;}
     // Positional resolution: `$first` / `$last` always; `-N` only on
     // indexable (array) containers. On a keyed (object) container, a
     // `-N` segment falls through to literal-key lookup so paths like
@@ -80,23 +80,23 @@ export function resolveJsoncOcPath(
     // openclaw#59934) address the literal key instead of crashing.
     if (isPositionalSeg(seg)) {
       const concrete = positionalForJsonc(current, seg);
-      if (concrete !== null) seg = concrete;
+      if (concrete !== null) {seg = concrete;}
       // null means "not applicable" — fall through to literal lookup.
     }
     walked.push(seg);
     if (current.kind === 'object') {
       const entry = current.entries.find((e) => e.key === seg);
-      if (entry === undefined) return null;
+      if (entry === undefined) {return null;}
       lastEntry = entry;
       current = entry.value;
       continue;
     }
     if (current.kind === 'array') {
       const idx = Number(seg);
-      if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) return null;
+      if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) {return null;}
       lastEntry = null;
       const item = current.items[idx];
-      if (item === undefined) return null;
+      if (item === undefined) {return null;}
       current = item;
       continue;
     }

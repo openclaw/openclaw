@@ -74,8 +74,8 @@ function detectFrontmatter(
   lines: readonly string[],
   diagnostics: Diagnostic[],
 ): FrontmatterRange | null {
-  if (lines.length < 2) return null;
-  if (lines[0] !== FENCE) return null;
+  if (lines.length < 2) {return null;}
+  if (lines[0] !== FENCE) {return null;}
 
   let closeIndex = -1;
   for (let i = 1; i < lines.length; i++) {
@@ -97,7 +97,7 @@ function detectFrontmatter(
   const entries: FrontmatterEntry[] = [];
   for (let i = 1; i < closeIndex; i++) {
     const line = lines[i]!;
-    if (line.trim().length === 0) continue;
+    if (line.trim().length === 0) {continue;}
     const m = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*)$/.exec(line);
     if (m === null) {
       // Could be a list-style continuation (`  - item`) for the previous key;
@@ -146,7 +146,7 @@ function splitH2Blocks(
       inCode = !inCode;
       continue;
     }
-    if (inCode) continue;
+    if (inCode) {continue;}
     const m = /^##\s+(\S.*?)\s*$/.exec(line);
     if (m !== null) {
       headings.push({ line: i, text: m[1]! });
@@ -208,9 +208,9 @@ function extractItems(
       inCode = !inCode;
       continue;
     }
-    if (inCode) continue;
+    if (inCode) {continue;}
     const m = BULLET_RE.exec(line);
-    if (m === null) continue;
+    if (m === null) {continue;}
     const text = m[1]!;
     const kvMatch = KV_RE.exec(text);
     const item: AstItem = {

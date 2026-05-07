@@ -51,7 +51,7 @@ describe('wave-12 real-world-fixtures', () => {
       field: 'scope',
     });
     expect(scope?.kind).toBe('frontmatter');
-    if (scope?.kind === 'frontmatter') expect(scope.node.value).toBe('project');
+    if (scope?.kind === 'frontmatter') {expect(scope.node.value).toBe('project');}
   });
 
   it('F-04 TOOLS.md table extracted from Tool Guidance section', () => {

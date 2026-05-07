@@ -93,12 +93,12 @@ describe('wave-19 edit-then-emit round-trip', () => {
       kind: 'number',
       value: 10,
     });
-    if (r.ok) ast = r.ast;
+    if (r.ok) {ast = r.ast;}
     r = setJsoncOcPath(ast, parseOcPath('oc://config/b'), {
       kind: 'number',
       value: 20,
     });
-    if (r.ok) ast = r.ast;
+    if (r.ok) {ast = r.ast;}
     expect(JSON.parse(emitJsonc(ast))).toEqual({ a: 10, b: 20 });
   });
 
@@ -109,7 +109,7 @@ describe('wave-19 edit-then-emit round-trip', () => {
       value: 99,
     });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('unresolved');
+    if (!r.ok) {expect(r.reason).toBe('unresolved');}
   });
 
   it('EE-08 each per-kind verb takes its own AST type — no cross-kind leakage', () => {
@@ -156,6 +156,6 @@ describe('wave-19 edit-then-emit round-trip', () => {
       value: 1,
     });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('no-root');
+    if (!r.ok) {expect(r.reason).toBe('no-root');}
   });
 });

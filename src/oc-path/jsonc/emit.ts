@@ -37,7 +37,7 @@ export function emitJsonc(ast: JsoncAst, opts: JsoncEmitOptions = {}): string {
 
   // Render mode — synthesize JSON from the structural tree (loses
   // comments). Walk every leaf string for sentinel detection.
-  if (ast.root === null) return '';
+  if (ast.root === null) {return '';}
   return renderValue(ast.root, guardPath, []);
 }
 

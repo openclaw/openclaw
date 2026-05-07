@@ -62,10 +62,10 @@ export function resolveYamlOcPath(
     }
   }
 
-  if (segments.length === 0) return { kind: 'root', node: ast };
+  if (segments.length === 0) {return { kind: 'root', node: ast };}
 
   const root = ast.doc.contents;
-  if (root === null) return null;
+  if (root === null) {return null;}
 
   return walkNode(root, segments, 0, []);
 }
@@ -76,19 +76,19 @@ function walkNode(
   i: number,
   walked: readonly string[],
 ): YamlOcPathMatch | null {
-  if (node === null) return null;
+  if (node === null) {return null;}
   let seg = segments[i];
 
   if (seg === undefined) {
     // Reached end — describe whatever we landed on.
-    if (isMap(node)) return { kind: 'map', path: walked };
-    if (isSeq(node)) return { kind: 'seq', path: walked };
+    if (isMap(node)) {return { kind: 'map', path: walked };}
+    if (isSeq(node)) {return { kind: 'seq', path: walked };}
     if (isScalar(node)) {
       return { kind: 'scalar', value: node.value, path: walked };
     }
     return null;
   }
-  if (seg.length === 0) return null;
+  if (seg.length === 0) {return null;}
 
   // Positional tokens (`$first` / `$last` / `-N`) resolve to a concrete
   // segment based on container shape. `-N` on a keyed container falls
@@ -96,7 +96,7 @@ function walkNode(
   // IDs are negative numbers used as map keys).
   if (isPositionalSeg(seg)) {
     const concrete = positionalForYaml(node, seg);
-    if (concrete !== null) seg = concrete;
+    if (concrete !== null) {seg = concrete;}
   }
 
   if (isMap(node)) {
@@ -104,7 +104,7 @@ function walkNode(
       const k = isScalar(p.key) ? p.key.value : p.key;
       return String(k) === seg;
     });
-    if (pair === undefined) return null;
+    if (pair === undefined) {return null;}
     const childWalked = [...walked, seg];
     if (i === segments.length - 1) {
       const child = pair.value;
@@ -124,7 +124,7 @@ function walkNode(
 
   if (isSeq(node)) {
     const idx = Number(seg);
-    if (!Number.isInteger(idx) || idx < 0 || idx >= node.items.length) return null;
+    if (!Number.isInteger(idx) || idx < 0 || idx >= node.items.length) {return null;}
     const child = node.items[idx];
     return walkNode(child as Node, segments, i + 1, [...walked, seg]);
   }

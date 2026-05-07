@@ -54,7 +54,7 @@ describe('setJsoncOcPath — value replacement', () => {
       value: 99,
     });
     expect(r.ok).toBe(true);
-    if (r.ok) expect(JSON.parse(emitJsonc(r.ast))).toEqual({ limits: [10, 99, 30] });
+    if (r.ok) {expect(JSON.parse(emitJsonc(r.ast))).toEqual({ limits: [10, 99, 30] });}
   });
 
   it('reports unresolved when a key is missing', () => {

@@ -65,13 +65,13 @@ describe('wildcard guard', () => {
   it('setOcPath returns wildcard-not-allowed for wildcard pattern', () => {
     const r = setOcPath(yaml, parseOcPath('oc://wf/steps/*/command'), 'bar');
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('wildcard-not-allowed');
+    if (!r.ok) {expect(r.reason).toBe('wildcard-not-allowed');}
   });
 
   it('setOcPath wildcard guard reason carries actionable detail', () => {
     const r = setOcPath(yaml, parseOcPath('oc://wf/**'), 'bar');
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.detail).toContain('findOcPaths');
+    if (!r.ok) {expect(r.detail).toContain('findOcPaths');}
   });
 });
 
@@ -139,7 +139,7 @@ describe('findOcPaths — YAML kind', () => {
     const out = findOcPaths(yaml2, parseOcPath('oc://wf/**'));
     // ** matches root + a + a.b + a.b.c + a.d
     const leaves = out.filter((m) => m.match.kind === 'leaf').map((m) => m.match.kind === 'leaf' ? m.match.valueText : '');
-    expect(leaves.sort()).toEqual(['deep', 'shallow']);
+    expect(leaves.toSorted()).toEqual(['deep', 'shallow']);
   });
 
   it('returns empty for path that does not match', () => {
@@ -174,7 +174,7 @@ describe('findOcPaths — JSONC kind', () => {
     const out = findOcPaths(jsonc, parseOcPath('oc://config/plugins/*/enabled'));
     expect(out).toHaveLength(3);
     const keys = out.map((m) => m.path.item);
-    expect(keys.sort()).toEqual(['github', 'gitlab', 'slack']);
+    expect(keys.toSorted()).toEqual(['github', 'gitlab', 'slack']);
   });
 
   it('returns boolean leaves with leafType', () => {
@@ -222,19 +222,19 @@ describe('positional primitives — yaml', () => {
   it('resolveOcPath accepts $first', () => {
     const m = resolveOcPath(yaml, parseOcPath('oc://wf/steps/$first/id'));
     expect(m?.kind).toBe('leaf');
-    if (m?.kind === 'leaf') expect(m.valueText).toBe('a');
+    if (m?.kind === 'leaf') {expect(m.valueText).toBe('a');}
   });
 
   it('resolveOcPath accepts $last', () => {
     const m = resolveOcPath(yaml, parseOcPath('oc://wf/steps/$last/id'));
     expect(m?.kind).toBe('leaf');
-    if (m?.kind === 'leaf') expect(m.valueText).toBe('c');
+    if (m?.kind === 'leaf') {expect(m.valueText).toBe('c');}
   });
 
   it('resolveOcPath accepts negative index', () => {
     const m = resolveOcPath(yaml, parseOcPath('oc://wf/steps/-2/id'));
     expect(m?.kind).toBe('leaf');
-    if (m?.kind === 'leaf') expect(m.valueText).toBe('b');
+    if (m?.kind === 'leaf') {expect(m.valueText).toBe('b');}
   });
 
   it('out-of-range positional returns null', () => {
@@ -265,20 +265,20 @@ describe('positional primitives — jsonc', () => {
   it('$first picks first array element', () => {
     const m = resolveOcPath(jsonc, parseOcPath('oc://config/items/$first'));
     expect(m?.kind).toBe('leaf');
-    if (m?.kind === 'leaf') expect(m.valueText).toBe('10');
+    if (m?.kind === 'leaf') {expect(m.valueText).toBe('10');}
   });
 
   it('$last picks last array element', () => {
     const m = resolveOcPath(jsonc, parseOcPath('oc://config/items/$last'));
     expect(m?.kind).toBe('leaf');
-    if (m?.kind === 'leaf') expect(m.valueText).toBe('30');
+    if (m?.kind === 'leaf') {expect(m.valueText).toBe('30');}
   });
 
   it('$first on object picks first-declared key', () => {
     const obj = parseJsonc('{"a":1,"b":2,"c":3}').ast;
     const m = resolveOcPath(obj, parseOcPath('oc://config/$first'));
     expect(m?.kind).toBe('leaf');
-    if (m?.kind === 'leaf') expect(m.valueText).toBe('1');
+    if (m?.kind === 'leaf') {expect(m.valueText).toBe('1');}
   });
 });
 
@@ -289,17 +289,17 @@ describe('positional primitives — jsonl', () => {
 
   it('$first picks first value line', () => {
     const m = resolveOcPath(jsonl, parseOcPath('oc://session/$first/event'));
-    if (m?.kind === 'leaf') expect(m.valueText).toBe('start');
+    if (m?.kind === 'leaf') {expect(m.valueText).toBe('start');}
   });
 
   it('$last picks last value line (existing behavior)', () => {
     const m = resolveOcPath(jsonl, parseOcPath('oc://session/$last/event'));
-    if (m?.kind === 'leaf') expect(m.valueText).toBe('end');
+    if (m?.kind === 'leaf') {expect(m.valueText).toBe('end');}
   });
 
   it('-1 is alias for $last', () => {
     const m = resolveOcPath(jsonl, parseOcPath('oc://session/-1/event'));
-    if (m?.kind === 'leaf') expect(m.valueText).toBe('end');
+    if (m?.kind === 'leaf') {expect(m.valueText).toBe('end');}
   });
 });
 
@@ -317,7 +317,7 @@ describe('union segments — yaml', () => {
     const out = findOcPaths(yaml, parseOcPath('oc://wf/steps/*/{command,run}'));
     expect(out).toHaveLength(2);
     const fields = out.map((m) => m.path.field);
-    expect(fields.sort()).toEqual(['command', 'run']);
+    expect(fields.toSorted()).toEqual(['command', 'run']);
   });
 
   it('preserves the chosen alternative in concrete paths', () => {
@@ -333,7 +333,7 @@ describe('union segments — yaml', () => {
     const out = findOcPaths(yaml2, parseOcPath('oc://X/{a,c}'));
     expect(out).toHaveLength(2);
     const values = out.map((m) => m.match.kind === 'leaf' ? m.match.valueText : '');
-    expect(values.sort()).toEqual(['1', '3']);
+    expect(values.toSorted()).toEqual(['1', '3']);
   });
 
   it('hasWildcard detects unions (single-match guard rejects them)', () => {
@@ -395,7 +395,7 @@ describe('quoted segments (v1.0)', () => {
       parseOcPath('oc://config/agents.defaults.models/"anthropic/claude-opus-4-7"/alias'),
     );
     expect(m?.kind).toBe('leaf');
-    if (m?.kind === 'leaf') expect(m.valueText).toBe('opus47');
+    if (m?.kind === 'leaf') {expect(m.valueText).toBe('opus47');}
   });
 
   it('resolveOcPath — quoted segment with literal slash AND dot', () => {
@@ -404,14 +404,14 @@ describe('quoted segments (v1.0)', () => {
       parseOcPath('oc://config/agents.defaults.models/"github-copilot/claude-opus-4.7-1m-internal"/alias'),
     );
     expect(m?.kind).toBe('leaf');
-    if (m?.kind === 'leaf') expect(m.valueText).toBe('copilot-opus-1m');
+    if (m?.kind === 'leaf') {expect(m.valueText).toBe('copilot-opus-1m');}
   });
 
   it('quoted segment with whitespace', () => {
     const ast = parseJsonc('{"prompts":{"hello world":"value"}}').ast;
     const m = resolveOcPath(ast, parseOcPath('oc://X/prompts/"hello world"'));
     expect(m?.kind).toBe('leaf');
-    if (m?.kind === 'leaf') expect(m.valueText).toBe('value');
+    if (m?.kind === 'leaf') {expect(m.valueText).toBe('value');}
   });
 
   it('quoted segment with embedded escape sequences', () => {
@@ -419,7 +419,7 @@ describe('quoted segments (v1.0)', () => {
     const ast = parseJsonc('{"keys":{"a\\\\b":"v1","c\\"d":"v2"}}').ast;
     const m1 = resolveOcPath(ast, parseOcPath('oc://X/keys/"a\\\\b"'));
     expect(m1?.kind).toBe('leaf');
-    if (m1?.kind === 'leaf') expect(m1.valueText).toBe('v1');
+    if (m1?.kind === 'leaf') {expect(m1.valueText).toBe('v1');}
   });
 
   it('findOcPaths — wildcard returns paths with quoted keys when needed', () => {
@@ -466,19 +466,19 @@ describe('value predicates — numeric operators (v1.1)', () => {
   it('> finds models exceeding the per-request output cap', () => {
     const out = findOcPaths(jsonc, parseOcPath(`${PREFIX}/[maxTokens>128000]/id`));
     expect(out).toHaveLength(1);
-    if (out[0]!.match.kind === 'leaf') expect(out[0]!.match.valueText).toBe('claude-opus-4-7');
+    if (out[0]!.match.kind === 'leaf') {expect(out[0]!.match.valueText).toBe('claude-opus-4-7');}
   });
 
   it('>= matches the boundary', () => {
     const out = findOcPaths(jsonc, parseOcPath(`${PREFIX}/[maxTokens>=128000]/id`));
     const ids = out.map((m) => m.match.kind === 'leaf' ? m.match.valueText : '');
-    expect(ids.sort()).toEqual(['claude-opus-4-7', 'claude-sonnet-4-6']);
+    expect(ids.toSorted()).toEqual(['claude-opus-4-7', 'claude-sonnet-4-6']);
   });
 
   it('< filters small context windows', () => {
     const out = findOcPaths(jsonc, parseOcPath(`${PREFIX}/[contextWindow<500000]/id`));
     expect(out).toHaveLength(1);
-    if (out[0]!.match.kind === 'leaf') expect(out[0]!.match.valueText).toBe('claude-sonnet-4-7');
+    if (out[0]!.match.kind === 'leaf') {expect(out[0]!.match.valueText).toBe('claude-sonnet-4-7');}
   });
 
   it('<= matches the boundary', () => {
@@ -508,7 +508,7 @@ describe('value predicates — jsonc', () => {
     const out = findOcPaths(jsonc, parseOcPath('oc://config/plugins/[enabled=true]/role'));
     expect(out).toHaveLength(2);
     const roles = out.map((m) => m.match.kind === 'leaf' ? m.match.valueText : '');
-    expect(roles.sort()).toEqual(['tracker', 'vcs']);
+    expect(roles.toSorted()).toEqual(['tracker', 'vcs']);
   });
 });
 
@@ -523,13 +523,13 @@ describe('ordinal addressing — md', () => {
   it('#0 picks the first item by document order', () => {
     const m = resolveOcPath(md, parseOcPath('oc://AGENTS.md/tools/#0/foo'));
     expect(m?.kind).toBe('leaf');
-    if (m?.kind === 'leaf') expect(m.valueText).toBe('a');
+    if (m?.kind === 'leaf') {expect(m.valueText).toBe('a');}
   });
 
   it('#1 picks the second item — distinct from #0 even though slug collides', () => {
     const m = resolveOcPath(md, parseOcPath('oc://AGENTS.md/tools/#1/foo'));
     expect(m?.kind).toBe('leaf');
-    if (m?.kind === 'leaf') expect(m.valueText).toBe('b');
+    if (m?.kind === 'leaf') {expect(m.valueText).toBe('b');}
   });
 
   it('out-of-range #N returns null', () => {
@@ -543,7 +543,7 @@ describe('ordinal addressing — md', () => {
     const items = out.map((m) => m.path.item);
     expect(items).toEqual(['#0', '#1']);
     const values = out.map((m) => m.match.kind === 'leaf' ? m.match.valueText : '');
-    expect(values.sort()).toEqual(['a', 'b']);
+    expect(values.toSorted()).toEqual(['a', 'b']);
   });
 
   it('non-duplicate slug keeps slug form (back-compat)', () => {
@@ -551,7 +551,7 @@ describe('ordinal addressing — md', () => {
     const out = findOcPaths(md2, parseOcPath('oc://AGENTS.md/tools/*'));
     const items = out.map((m) => m.path.item);
     // Both unique → both stay as slugs.
-    expect(items.sort()).toEqual(['bar', 'foo']);
+    expect(items.toSorted()).toEqual(['bar', 'foo']);
   });
 });
 
@@ -570,7 +570,7 @@ describe('findOcPaths — Markdown kind', () => {
     const out = findOcPaths(md, parseOcPath('oc://SOUL.md/[frontmatter]/*'));
     expect(out).toHaveLength(2);
     const keys = out.map((m) => m.path.item ?? m.path.field);
-    expect(keys.sort()).toEqual(['name', 'role']);
+    expect(keys.toSorted()).toEqual(['name', 'role']);
   });
 
   it('* in field slot enumerates each item kv key', () => {
@@ -623,7 +623,7 @@ describe('findOcPaths — quoted segments survive expansion (regression: resolve
     );
     // Both alternatives in the union should match.
     expect(out.length).toBe(2);
-    const fields = out.map((m) => m.path.field).sort();
+    const fields = out.map((m) => m.path.field).toSorted();
     expect(fields).toEqual(['alias', 'contextWindow']);
   });
 });
