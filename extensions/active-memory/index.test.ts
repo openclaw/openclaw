@@ -346,17 +346,19 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
   });
 
-  it("reports session status off when the current agent is outside the active-memory allowlist (#78986)", async () => {
-    api.pluginConfig = {
-      agents: ["sandbox"],
-      logging: true,
+  it("reports off for agents not in config.agents when /active-memory status is run (#78986)", async () => {
+    const command = registeredCommands["active-memory"];
+    // "support" agent is not in the default test config agents list (only "main" is)
+    const sessionKey = "agent:support:active-memory-scope-check";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-scope-check",
+      updatedAt: 0,
     };
-    plugin.register(api as unknown as OpenClawPluginApi);
 
-    const statusResult = await registeredCommands["active-memory"].handler({
+    const statusResult = await command.handler({
       channel: "webchat",
       isAuthorizedSender: true,
-      sessionKey: "agent:main:main",
+      sessionKey,
       args: "status",
       commandBody: "/active-memory status",
       config: {},
@@ -365,6 +367,7 @@ describe("active-memory plugin", () => {
       getCurrentConversationBinding: async () => null,
     });
 
+    // Agent not in config.agents — must report "off", not "on"
     expect(statusResult.text).toBe("Active Memory: off for this session.");
   });
 

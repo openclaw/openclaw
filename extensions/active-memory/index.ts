@@ -2869,8 +2869,10 @@ export default definePluginEntry({
         }
         if (action === "status") {
           const disabled = await isSessionActiveMemoryDisabled({ api, sessionKey });
+          const agentId = resolveStatusUpdateAgentId({ sessionKey });
+          const agentEligible = isEnabledForAgent(config, agentId);
           return {
-            text: `Active Memory: ${disabled ? "off" : "on"} for this session.`,
+            text: `Active Memory: ${disabled || !agentEligible ? "off" : "on"} for this session.`,
           };
         }
         if (action === "on" || action === "enable" || action === "enabled") {
