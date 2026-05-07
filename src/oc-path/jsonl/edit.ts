@@ -16,6 +16,7 @@
  */
 
 import type { OcPath } from '../oc-path.js';
+import { isQuotedSeg, splitRespectingBrackets, unquoteSeg } from '../oc-path.js';
 import type { JsoncEntry, JsoncValue } from '../jsonc/ast.js';
 import type { JsonlAst, JsonlLine } from './ast.js';
 import { emitJsonl } from './emit.js';
@@ -52,9 +53,13 @@ export function setJsonlOcPath(
 
   if (target.kind !== 'value') return { ok: false, reason: 'not-a-value-line' };
 
+  // Bracket/brace/quote-aware split — preserves quoted segments
+  // verbatim so the edit path matches `resolveJsonlOcPath`'s
+  // unquoting behavior. Plain `.split('.')` would shred a quoted key
+  // and silently desync read-vs-write.
   const segments: string[] = [];
-  if (path.item !== undefined) segments.push(...path.item.split('.'));
-  if (path.field !== undefined) segments.push(...path.field.split('.'));
+  if (path.item !== undefined) segments.push(...splitRespectingBrackets(path.item, '.'));
+  if (path.field !== undefined) segments.push(...splitRespectingBrackets(path.field, '.'));
 
   const replaced = replaceAt(target.value, segments, 0, newValue);
   if (replaced === null) return { ok: false, reason: 'unresolved' };
@@ -78,7 +83,10 @@ function replaceAt(
   if (seg.length === 0) return null;
 
   if (current.kind === 'object') {
-    const idx = current.entries.findIndex((e) => e.key === seg);
+    // Quoted segments carry the raw bytes verbatim; AST entry keys
+    // are unquoted. Strip the surrounding quotes before comparing.
+    const lookupKey = isQuotedSeg(seg) ? unquoteSeg(seg) : seg;
+    const idx = current.entries.findIndex((e) => e.key === lookupKey);
     if (idx === -1) return null;
     const child = current.entries[idx];
     if (child === undefined) return null;

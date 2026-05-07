@@ -592,3 +592,38 @@ describe('findOcPaths — Markdown kind', () => {
     expect(out[0]!.path.item).toBe('send-email');
   });
 });
+
+describe('findOcPaths — quoted segments survive expansion (regression: resolve↔find symmetry)', () => {
+  it('finds keys with slashes when the path quotes them and a sibling wildcards', () => {
+    // Closes ClawSweeper P2 on PR #78678: when a pattern needs
+    // expansion (e.g. trailing union or wildcard), the JSONC walker
+    // bypassed `resolveJsoncOcPath` and compared object keys to the
+    // raw `cur.value` directly. Patterns with quoted literals
+    // returned no matches even though resolve worked. This test
+    // exercises a quoted middle segment + a trailing union.
+    const raw = `{
+  "agents": {
+    "defaults": {
+      "models": {
+        "github-copilot/claude-opus-4-7": {
+          "alias": "opus-internal",
+          "contextWindow": 200000
+        }
+      }
+    }
+  }
+}
+`;
+    const { ast } = parseJsonc(raw);
+    const out = findOcPaths(
+      ast,
+      parseOcPath(
+        'oc://config.jsonc/agents.defaults.models/"github-copilot/claude-opus-4-7"/{alias,contextWindow}',
+      ),
+    );
+    // Both alternatives in the union should match.
+    expect(out.length).toBe(2);
+    const fields = out.map((m) => m.path.field).sort();
+    expect(fields).toEqual(['alias', 'contextWindow']);
+  });
+});

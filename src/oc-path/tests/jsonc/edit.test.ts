@@ -86,3 +86,40 @@ describe('setJsoncOcPath — value replacement', () => {
     expect(JSON.stringify(ast)).toBe(before);
   });
 });
+
+describe('setJsoncOcPath — quoted segments (regression: resolve↔edit symmetry)', () => {
+  it('edits a key containing slashes via quoted segment', () => {
+    // The provider/model alias key contains a `/`; without quoting
+    // it would be split as two segments. `resolveJsoncOcPath` handles
+    // this; `setJsoncOcPath` MUST handle it the same way or the path
+    // becomes resolve-only. Closes ClawSweeper P2 on PR #78678.
+    const raw = `{
+  "agents": {
+    "defaults": {
+      "models": {
+        "anthropic/claude-opus-4-7": { "alias": "opus" }
+      }
+    }
+  }
+}
+`;
+    const { ast } = parseJsonc(raw);
+    const r = setJsoncOcPath(
+      ast,
+      parseOcPath('oc://config.jsonc/agents.defaults.models/"anthropic/claude-opus-4-7"/alias'),
+      { kind: 'string', value: 'big-opus' },
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(JSON.parse(emitJsonc(r.ast))).toEqual({
+        agents: {
+          defaults: {
+            models: {
+              'anthropic/claude-opus-4-7': { alias: 'big-opus' },
+            },
+          },
+        },
+      });
+    }
+  });
+});

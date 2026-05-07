@@ -91,3 +91,28 @@ describe('appendJsonlOcPath — session checkpointing primitive', () => {
     expect(JSON.parse(out[1] ?? '')).toEqual({ b: 2 });
   });
 });
+
+describe('setJsonlOcPath — quoted field segments (regression: resolve↔edit symmetry)', () => {
+  it('edits a field key containing a slash via quoted segment', () => {
+    // Closes ClawSweeper P2 on PR #78678: JSONL resolve unquotes
+    // bracket-aware segments but the edit path used plain
+    // `.split('.')`. A path that resolves under `Lnnn` MUST be
+    // editable through the same address.
+    const raw = `{"event":"start","detail":{"github/repo":"old"}}\n`;
+    const { ast } = parseJsonl(raw);
+    const r = setJsonlOcPath(
+      ast,
+      parseOcPath('oc://x.jsonl/L1/detail/"github/repo"'),
+      { kind: 'string', value: 'new' },
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const lines = emitJsonl(r.ast).split('\n').filter((l) => l.length > 0);
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0] ?? '')).toEqual({
+        event: 'start',
+        detail: { 'github/repo': 'new' },
+      });
+    }
+  });
+});

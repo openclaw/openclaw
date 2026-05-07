@@ -29,6 +29,7 @@
  */
 
 import type { OcPath } from '../oc-path.js';
+import { isQuotedSeg, splitRespectingBrackets, unquoteSeg } from '../oc-path.js';
 import type { JsoncAst, JsoncEntry, JsoncValue } from './ast.js';
 import { emitJsonc } from './emit.js';
 
@@ -47,10 +48,16 @@ export function setJsoncOcPath(
 ): JsoncEditResult {
   if (ast.root === null) return { ok: false, reason: 'no-root' };
 
+  // Use bracket/brace/quote-aware split so that quoted segments
+  // (e.g. `"anthropic/claude-opus-4-7"`) — which can contain dots,
+  // slashes, and other punctuation verbatim — survive as one segment.
+  // Plain `.split('.')` would shred them and break the round-trip with
+  // `resolveJsoncOcPath`, which already respects quoting. Closes the
+  // resolve-vs-edit asymmetry flagged on PR #78678.
   const segments: string[] = [];
-  if (path.section !== undefined) segments.push(...path.section.split('.'));
-  if (path.item !== undefined) segments.push(...path.item.split('.'));
-  if (path.field !== undefined) segments.push(...path.field.split('.'));
+  if (path.section !== undefined) segments.push(...splitRespectingBrackets(path.section, '.'));
+  if (path.item !== undefined) segments.push(...splitRespectingBrackets(path.item, '.'));
+  if (path.field !== undefined) segments.push(...splitRespectingBrackets(path.field, '.'));
 
   // Empty path — replace the root.
   if (segments.length === 0) {
@@ -75,7 +82,12 @@ function replaceAt(
   if (seg.length === 0) return null;
 
   if (current.kind === 'object') {
-    const idx = current.entries.findIndex((e) => e.key === seg);
+    // Quoted segments (e.g. `"anthropic/claude-opus-4-7"`) carry the
+    // raw bytes verbatim; the entry key in the AST is unquoted, so
+    // strip the surrounding quotes before comparing. Bare segments
+    // pass through unchanged.
+    const lookupKey = isQuotedSeg(seg) ? unquoteSeg(seg) : seg;
+    const idx = current.entries.findIndex((e) => e.key === lookupKey);
     if (idx === -1) return null;
     const child = current.entries[idx];
     if (child === undefined) return null;

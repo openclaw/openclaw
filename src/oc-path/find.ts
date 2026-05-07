@@ -412,7 +412,13 @@ function walkJsonc(
   }
 
   if (node.kind === 'object') {
-    const e = node.entries.find((entry) => entry.key === cur.value);
+    // `cur.value` may be a quoted segment (e.g. `"a/b"`); AST entry
+    // keys are already unquoted. Strip the quotes before comparing
+    // so the find-expansion walker matches `resolveJsoncOcPath`'s
+    // unquoting behavior — closes the resolve-vs-find asymmetry
+    // flagged on PR #78678.
+    const lookupKey = isQuotedSeg(cur.value) ? unquoteSeg(cur.value) : cur.value;
+    const e = node.entries.find((entry) => entry.key === lookupKey);
     if (e === undefined) return;
     walkJsonc(e.value, subs, i + 1, [...walked, { slot: cur.slot, value: cur.value }], onMatch);
     return;
@@ -620,7 +626,11 @@ function walkMd(
       }
       return;
     }
-    const entry = ast.frontmatter.find((e) => e.key === next.value);
+    // Same quote-aware lookup as the JSONC walker — frontmatter
+    // entry keys are unquoted in the AST, so a quoted-segment path
+    // segment must be unquoted before comparing.
+    const fmKey = isQuotedSeg(next.value) ? unquoteSeg(next.value) : next.value;
+    const entry = ast.frontmatter.find((e) => e.key === fmKey);
     if (entry === undefined) return;
     onMatch([
       { slot: cur.slot, value: cur.value },
