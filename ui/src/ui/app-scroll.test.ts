@@ -400,4 +400,76 @@ describe("programmatic scroll guard", () => {
 
     expect(host.chatUserNearBottom).toBe(false);
   });
+
+  it("guard boundary: scrollTop exactly one pixel below threshold is NOT suppressed (user scroll-up passes through)", () => {
+    const { host } = createScrollHost({});
+    host.chatUserNearBottom = true;
+    host.chatIsProgrammaticScroll = true;
+    // Programmatic target = 1000, clientHeight = 400 → threshold = 600.
+    // scrollTop = 599 → 599 >= 600 is false → guard does NOT suppress the event.
+    host.chatProgrammaticScrollTarget = 1000;
+
+    const event = createScrollEvent(1000, 599, 400); // distanceFromBottom = 1
+    handleChatScroll(host, event);
+
+    // Event was processed: user is near bottom (dist=1 < 450) but the guard did not block it.
+    expect(host.chatUserNearBottom).toBe(true);
+    // chatLastScrollTop must have been updated — confirms the event was not short-circuited.
+    expect(host.chatLastScrollTop).toBe(599);
+  });
+
+  it("guard boundary: scrollTop exactly at threshold is suppressed", () => {
+    const { host } = createScrollHost({});
+    host.chatUserNearBottom = true;
+    host.chatIsProgrammaticScroll = true;
+    host.chatProgrammaticScrollTarget = 1000;
+    host.chatLastScrollTop = 0;
+
+    // scrollTop = 600 → 600 >= 600 is true → guard suppresses the event.
+    const event = createScrollEvent(1000, 600, 400);
+    handleChatScroll(host, event);
+
+    // chatLastScrollTop must NOT have changed — confirms the event was short-circuited.
+    expect(host.chatLastScrollTop).toBe(0);
+  });
+
+  it("suppressed programmatic scroll event does not mutate chatNewMessagesBelow", () => {
+    const { host } = createScrollHost({});
+    host.chatUserNearBottom = true;
+    host.chatNewMessagesBelow = false;
+    host.chatIsProgrammaticScroll = true;
+    host.chatProgrammaticScrollTarget = 2000;
+
+    // Our own scroll event at the programmatic target position.
+    const event = createScrollEvent(2000, 1600, 400);
+    handleChatScroll(host, event);
+
+    // Event was suppressed — chatNewMessagesBelow must stay unchanged.
+    expect(host.chatNewMessagesBelow).toBe(false);
+  });
+
+  it("retry timeout sets and clears chatIsProgrammaticScroll", async () => {
+    const { host, container } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1600,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = true;
+    host.chatHasAutoScrolled = true;
+
+    scheduleChatScroll(host);
+    await host.updateComplete;
+
+    // After the initial rAF the flag must already be cleared.
+    expect(host.chatIsProgrammaticScroll).toBe(false);
+
+    // Advance past the retry delay (120ms) — retry scrollTop assignment fires.
+    vi.advanceTimersByTime(150);
+
+    // After the retry's synchronous scrollTop assignment, the flag is set true.
+    // A subsequent rAF clears it — but our mock runs rAF synchronously.
+    expect(host.chatIsProgrammaticScroll).toBe(false);
+    // Retry must have updated the programmatic target and scrolled.
+    expect(host.chatProgrammaticScrollTarget).toBe(container.scrollHeight);
+  });
 });
