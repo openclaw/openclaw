@@ -1406,6 +1406,7 @@ export const IMessageAccountSchemaBase = z
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     sendReadReceipts: z.boolean().optional(),
+    coalesceSameSenderDms: z.boolean().optional(),
     groups: z
       .record(
         z.string(),

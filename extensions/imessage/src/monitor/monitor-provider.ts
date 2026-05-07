@@ -50,6 +50,7 @@ import {
 import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
+import { combineIMessagePayloads } from "./coalesce.js";
 import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import {
@@ -229,48 +230,88 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     }
   }
 
+  // When `coalesceSameSenderDms` is enabled and the user has not set an
+  // explicit inbound debounce for this channel, widen the window to 2500 ms.
+  // Apple's split-send for `<command> <URL>` arrives ~0.8-2.0 s apart on most
+  // setups, so the legacy 0 ms default would flush the command alone before
+  // the URL row reaches the debouncer. Mirrors the BlueBubbles policy.
+  const coalesceSameSenderDms = imessageCfg.coalesceSameSenderDms === true;
+  const inboundCfg = cfg.messages?.inbound;
+  const hasExplicitInboundDebounce =
+    typeof inboundCfg?.debounceMs === "number" ||
+    typeof inboundCfg?.byChannel?.imessage === "number";
+  const debounceMsOverride =
+    coalesceSameSenderDms && !hasExplicitInboundDebounce ? 2500 : undefined;
+
   const { debouncer: inboundDebouncer } = createChannelInboundDebouncer<{
     message: IMessagePayload;
   }>({
     cfg,
     channel: "imessage",
+    debounceMsOverride,
     buildKey: (entry) => {
-      const sender = entry.message.sender?.trim();
+      const msg = entry.message;
+      const sender = msg.sender?.trim();
       if (!sender) {
         return null;
       }
       const conversationId =
-        entry.message.chat_id != null
-          ? `chat:${entry.message.chat_id}`
-          : (entry.message.chat_guid ?? entry.message.chat_identifier ?? "unknown");
+        msg.chat_id != null
+          ? `chat:${msg.chat_id}`
+          : (msg.chat_guid ?? msg.chat_identifier ?? "unknown");
+
+      // With coalesceSameSenderDms enabled, DMs key on chat:sender so two
+      // distinct user sends — `Dump` followed by a pasted URL that Apple
+      // delivers as a separate row — fall into the same bucket and merge
+      // into one agent turn. Group chats fall through to the legacy key so
+      // shouldDebounce can route them to the instant-dispatch path and
+      // preserve multi-user turn structure.
+      if (coalesceSameSenderDms && msg.is_group !== true) {
+        return `imessage:${accountInfo.accountId}:dm:${conversationId}:${sender}`;
+      }
+
       return `imessage:${accountInfo.accountId}:${conversationId}:${sender}`;
     },
     shouldDebounce: (entry) => {
+      const msg = entry.message;
+      // From-me messages are cached, not processed — never debounce.
+      if (msg.is_from_me === true) {
+        return false;
+      }
+
+      // With coalesceSameSenderDms enabled, debounce DM messages aggressively
+      // (text, media, control commands) so split-sends — `Dump <URL>`,
+      // `Save 📎image caption`, and rapid floods — merge into one agent
+      // turn. Group chats keep instant dispatch so the bot stays responsive
+      // when multiple people are typing.
+      if (coalesceSameSenderDms) {
+        return msg.is_group !== true;
+      }
+
+      // Legacy gate: text-only, no control commands, no media.
       return shouldDebounceTextInbound({
-        text: entry.message.text,
+        text: msg.text,
         cfg,
-        hasMedia: Boolean(entry.message.attachments && entry.message.attachments.length > 0),
+        hasMedia: Boolean(msg.attachments && msg.attachments.length > 0),
       });
     },
     onFlush: async (entries) => {
-      const last = entries.at(-1);
-      if (!last) {
+      if (entries.length === 0) {
         return;
       }
       if (entries.length === 1) {
-        await handleMessageNow(last.message);
+        await handleMessageNow(entries[0].message);
         return;
       }
-      const combinedText = entries
-        .map((entry) => entry.message.text ?? "")
-        .filter(Boolean)
-        .join("\n");
-      const syntheticMessage: IMessagePayload = {
-        ...last.message,
-        text: combinedText,
-        attachments: null,
-      };
-      await handleMessageNow(syntheticMessage);
+
+      const combined = combineIMessagePayloads(entries.map((e) => e.message));
+      if (shouldLogVerbose()) {
+        const text = combined.text ?? "";
+        const preview = text.slice(0, 50);
+        const ellipsis = text.length > 50 ? "..." : "";
+        logVerbose(`[imessage] coalesced ${entries.length} messages: "${preview}${ellipsis}"`);
+      }
+      await handleMessageNow(combined);
     },
     onError: (err) => {
       runtime.error?.(`imessage debounce flush failed: ${String(err)}`);

@@ -362,24 +362,24 @@ See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
 
     Example:
 
-```json5
-{
-  channels: {
-    imessage: {
-      enabled: true,
-      cliPath: "~/.openclaw/scripts/imsg-ssh",
-      remoteHost: "bot@mac-mini.tailnet-1234.ts.net",
-      includeAttachments: true,
-      dbPath: "/Users/bot/Library/Messages/chat.db",
-    },
-  },
-}
-```
+    ```json5
+    {
+      channels: {
+        imessage: {
+          enabled: true,
+          cliPath: "~/.openclaw/scripts/imsg-ssh",
+          remoteHost: "bot@mac-mini.tailnet-1234.ts.net",
+          includeAttachments: true,
+          dbPath: "/Users/bot/Library/Messages/chat.db",
+        },
+      },
+    }
+    ```
 
-```bash
-#!/usr/bin/env bash
-exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
-```
+    ```bash
+    #!/usr/bin/env bash
+    exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
+    ```
 
     Use SSH keys so both SSH and SCP are non-interactive.
     Ensure the host key is trusted first (for example `ssh bot@mac-mini.tailnet-1234.ts.net`) so `known_hosts` is populated.
@@ -430,9 +430,9 @@ exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
     - `sms:+1555...`
     - `user@example.com`
 
-```bash
-imsg chats --limit 20
-```
+    ```bash
+    imsg chats --limit 20
+    ```
 
   </Accordion>
 </AccordionGroup>
@@ -488,15 +488,15 @@ When `imsg launch` is running and `openclaw channels status --probe` reports `pr
   <Accordion title="Read receipts and typing">
     When the private API bridge is up, accepted inbound chats are marked read before dispatch and a typing bubble is shown to the sender while the agent generates. Disable read-marking with:
 
-```json5
-{
-  channels: {
-    imessage: {
-      sendReadReceipts: false,
-    },
-  },
-}
-```
+    ```json5
+    {
+      channels: {
+        imessage: {
+          sendReadReceipts: false,
+        },
+      },
+    }
+    ```
 
     Older `imsg` builds that pre-date the per-method capability list will gate off typing/read silently; OpenClaw logs a one-time warning per restart so the missing receipt is attributable.
 
@@ -519,17 +519,96 @@ Disable:
 }
 ```
 
+<a id="coalescing-split-send-dms-command--url-in-one-composition"></a>
+
+## Coalescing split-send DMs (command + URL in one composition)
+
+When a user types a command and a URL together — e.g. `Dump https://example.com/article` — Apple's Messages app splits the send into **two separate `chat.db` rows**:
+
+1. A text message (`"Dump"`).
+2. A URL-preview balloon (`"https://..."`) with OG-preview images as attachments.
+
+The two rows arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalescing, the agent receives the command alone on turn 1, replies (often "send me the URL"), and only sees the URL on turn 2 — at which point the command context is already lost. This is Apple's send pipeline, not anything OpenClaw or `imsg` introduces, so the same fix applies as it does on the BlueBubbles channel.
+
+`channels.imessage.coalesceSameSenderDms` opts a DM into merging consecutive same-sender rows into a single agent turn. Group chats continue to dispatch per-message so multi-user turn structure is preserved.
+
+<Tabs>
+  <Tab title="When to enable">
+    Enable when:
+
+    - You ship skills that expect `command + payload` in one message (dump, paste, save, queue, etc.).
+    - Your users paste URLs, images, or long content alongside commands.
+    - You can accept the added DM turn latency (see below).
+
+    Leave disabled when:
+
+    - You need minimum command latency for single-word DM triggers.
+    - All your flows are one-shot commands without payload follow-ups.
+
+  </Tab>
+  <Tab title="Enabling">
+    ```json5
+    {
+      channels: {
+        imessage: {
+          coalesceSameSenderDms: true, // opt in (default: false)
+        },
+      },
+    }
+    ```
+
+    With the flag on and no explicit `messages.inbound.byChannel.imessage`, the debounce window widens to **2500 ms** (the legacy default is 0 ms — no debouncing). The wider window is required because Apple's split-send cadence of 0.8-2.0 s does not fit in a tighter default.
+
+    To tune the window yourself:
+
+    ```json5
+    {
+      messages: {
+        inbound: {
+          byChannel: {
+            // 2500 ms works for most setups; raise to 4000 ms if your Mac is
+            // slow or under memory pressure (observed gap can stretch past 2 s
+            // then).
+            imessage: 2500,
+          },
+        },
+      },
+    }
+    ```
+
+  </Tab>
+  <Tab title="Trade-offs">
+    - **Added latency for DM messages.** With the flag on, every DM (including standalone control commands and single-text follow-ups) waits up to the debounce window before dispatching, in case a payload row is coming. Group-chat messages keep instant dispatch.
+    - **Merged output is bounded.** Merged text caps at 4000 chars with an explicit `…[truncated]` marker; attachments cap at 20; source entries cap at 10 (first-plus-latest retained beyond that). Every source GUID is tracked in `coalescedMessageGuids` for downstream telemetry.
+    - **DM-only.** Group chats fall through to per-message dispatch so the bot stays responsive when multiple people are typing.
+    - **Opt-in, per-channel.** Other channels (Telegram, WhatsApp, Slack, …) are unaffected. The BlueBubbles channel has the same opt-in under `channels.bluebubbles.coalesceSameSenderDms`.
+
+  </Tab>
+</Tabs>
+
+### Scenarios and what the agent sees
+
+| User composes                                                      | `chat.db` produces    | Flag off (default)                      | Flag on + 2500 ms window                                                |
+| ------------------------------------------------------------------ | --------------------- | --------------------------------------- | ----------------------------------------------------------------------- |
+| `Dump https://example.com` (one send)                              | 2 rows ~1 s apart     | Two agent turns: "Dump" alone, then URL | One turn: merged text `Dump https://example.com`                        |
+| `Save this 📎image.jpg caption` (attachment + text)                | 2 rows                | Two turns (attachment dropped on merge) | One turn: text + image preserved                                        |
+| `/status` (standalone command)                                     | 1 row                 | Instant dispatch                        | **Wait up to window, then dispatch**                                    |
+| URL pasted alone                                                   | 1 row                 | Instant dispatch                        | Instant dispatch (only one entry in bucket)                             |
+| Text + URL sent as two deliberate separate messages, minutes apart | 2 rows outside window | Two turns                               | Two turns (window expires between them)                                 |
+| Rapid flood (>10 small DMs inside window)                          | N rows                | N turns                                 | One turn, bounded output (first + latest, text/attachment caps applied) |
+| Two people typing in a group chat                                  | N rows from M senders | M+ turns (one per sender bucket)        | M+ turns — group chats are not coalesced                                |
+
 ## Troubleshooting
 
 <AccordionGroup>
   <Accordion title="imsg not found or RPC unsupported">
     Validate the binary and RPC support:
 
-```bash
-imsg rpc --help
-imsg status --json
-openclaw channels status --probe
-```
+    ```bash
+    imsg rpc --help
+    imsg status --json
+    openclaw channels status --probe
+    ```
 
     If probe reports RPC unsupported, update `imsg`. If private API actions are unavailable, run `imsg launch` in the logged-in macOS user session and probe again. If the Gateway is not running on macOS, use the Remote Mac over SSH setup above instead of the default local `imsg` path.
 
@@ -584,10 +663,10 @@ openclaw channels status --probe --channel imessage
   <Accordion title="macOS permission prompts were missed">
     Re-run in an interactive GUI terminal in the same user/session context and approve prompts:
 
-```bash
-imsg chats --limit 1
-imsg send <handle> "test"
-```
+    ```bash
+    imsg chats --limit 1
+    imsg send <handle> "test"
+    ```
 
     Confirm Full Disk Access + Automation are granted for the process context that runs OpenClaw/`imsg`.
 
