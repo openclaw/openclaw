@@ -504,6 +504,16 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
+  it("normalizes Codex dynamic toolsAllow entries before filtering", () => {
+    const tools = ["exec", "apply_patch", "read", "message"].map((name) => ({ name }));
+
+    expect(
+      __testing
+        .filterCodexDynamicToolsForAllowlist(tools, [" BASH ", "apply-patch", "READ"])
+        .map((tool) => tool.name),
+    ).toEqual(["exec", "apply_patch", "read"]);
+  });
+
   it("forces the message dynamic tool for message-tool-only source replies", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);

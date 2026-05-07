@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { connectGateway } from "./app-gateway.ts";
 import type { GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
@@ -39,7 +39,7 @@ vi.mock("./gateway.ts", async (importOriginal) => {
           this.opts.onHello?.(
             hello ?? {
               type: "hello-ok",
-              protocol: 3,
+              protocol: 4,
               snapshot: {},
               auth: { role: "operator", scopes: [] },
             },
@@ -108,6 +108,21 @@ vi.mock("./controllers/sessions.ts", () => ({
   loadSessions: vi.fn(async () => undefined),
   subscribeSessions: subscribeSessionsMock,
 }));
+
+afterAll(() => {
+  vi.doUnmock("./gateway.ts");
+  vi.doUnmock("./app-chat.ts");
+  vi.doUnmock("./app-settings.ts");
+  vi.doUnmock("./controllers/agents.ts");
+  vi.doUnmock("./controllers/assistant-identity.ts");
+  vi.doUnmock("./controllers/control-ui-bootstrap.ts");
+  vi.doUnmock("./controllers/devices.ts");
+  vi.doUnmock("./controllers/exec-approval.ts");
+  vi.doUnmock("./controllers/health.ts");
+  vi.doUnmock("./controllers/nodes.ts");
+  vi.doUnmock("./controllers/sessions.ts");
+  vi.resetModules();
+});
 
 function createHost(tab: Tab) {
   return {
@@ -183,21 +198,21 @@ beforeEach(() => {
 });
 
 describe("connectGateway chat load startup work", () => {
-  it("lets the active chat refresh own avatar loading on initial chat hello", () => {
+  it("lets the active chat refresh own avatar loading on initial chat hello", async () => {
     const { host, client } = connectHost("chat");
 
     client.emitHello();
 
-    expect(refreshActiveTabMock).toHaveBeenCalledWith(host);
+    await vi.waitFor(() => expect(refreshActiveTabMock).toHaveBeenCalledWith(host));
     expect(refreshChatAvatarMock).not.toHaveBeenCalled();
   });
 
-  it("still preloads the chat avatar when connecting outside the chat tab", () => {
+  it("still preloads the chat avatar when connecting outside the chat tab", async () => {
     const { host, client } = connectHost("overview");
 
     client.emitHello();
 
-    expect(refreshActiveTabMock).toHaveBeenCalledWith(host);
+    await vi.waitFor(() => expect(refreshActiveTabMock).toHaveBeenCalledWith(host));
     expect(refreshChatAvatarMock).toHaveBeenCalledWith(host);
   });
 });

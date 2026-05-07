@@ -93,6 +93,10 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText("hello world")).toBe("hello world");
   });
 
+  it("preserves bracketed command placeholders", () => {
+    expect(sanitizeForPlainText("Usage: /btw [side question]")).toBe("Usage: /btw [side question]");
+  });
+
   it("does not corrupt angle brackets in prose", () => {
     // `a < b` does not match `<tag>` pattern because there is no closing `>`
     // immediately after a tag-like sequence.

@@ -62,9 +62,7 @@ type ProviderRuntimeHooks = {
   normalizeProviderResolvedModelWithPlugin: (
     params: Parameters<typeof normalizeProviderResolvedModelWithPlugin>[0],
   ) => unknown;
-  normalizeProviderTransportWithPlugin: (
-    params: Parameters<typeof normalizeProviderTransportWithPlugin>[0],
-  ) => unknown;
+  normalizeProviderTransportWithPlugin: typeof normalizeProviderTransportWithPlugin;
 };
 
 const TARGET_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
@@ -714,6 +712,7 @@ function resolveExplicitModelWithRegistry(params: {
         provider,
         cfg,
         agentDir,
+        workspaceDir,
         model: applyConfiguredProviderOverrides({
           provider,
           discoveredModel: model,
@@ -724,7 +723,6 @@ function resolveExplicitModelWithRegistry(params: {
           workspaceDir,
         }),
         runtimeHooks,
-        workspaceDir,
       }),
     };
   }
@@ -965,38 +963,39 @@ export function resolveModelWithRegistry(params: {
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const workspaceDir =
     normalizedParams.workspaceDir ?? normalizedParams.cfg?.agents?.defaults?.workspace;
-  const explicitModel = resolveExplicitModelWithRegistry(normalizedParams);
+  const scopedParams = {
+    ...normalizedParams,
+    ...(workspaceDir !== undefined ? { workspaceDir } : {}),
+  };
+  const explicitModel = resolveExplicitModelWithRegistry(scopedParams);
   if (explicitModel?.kind === "suppressed") {
     return undefined;
   }
   if (explicitModel?.kind === "resolved") {
     if (
       !shouldCompareProviderRuntimeResolvedModel({
-        provider: normalizedParams.provider,
-        modelId: normalizedParams.modelId,
-        cfg: normalizedParams.cfg,
-        agentDir: normalizedParams.agentDir,
+        provider: scopedParams.provider,
+        modelId: scopedParams.modelId,
+        cfg: scopedParams.cfg,
+        agentDir: scopedParams.agentDir,
         workspaceDir,
         runtimeHooks,
       })
     ) {
       return explicitModel.model;
     }
-    const pluginDynamicModel = resolvePluginDynamicModelWithRegistry({
-      ...normalizedParams,
-      workspaceDir,
-    });
+    const pluginDynamicModel = resolvePluginDynamicModelWithRegistry(scopedParams);
     return preferProviderRuntimeResolvedModel({
       explicitModel: explicitModel.model,
       runtimeResolvedModel: pluginDynamicModel,
     });
   }
-  const pluginDynamicModel = resolvePluginDynamicModelWithRegistry(normalizedParams);
+  const pluginDynamicModel = resolvePluginDynamicModelWithRegistry(scopedParams);
   if (pluginDynamicModel) {
     return pluginDynamicModel;
   }
 
-  return resolveConfiguredFallbackModel(normalizedParams);
+  return resolveConfiguredFallbackModel(scopedParams);
 }
 
 export function resolveModel(

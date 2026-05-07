@@ -41,6 +41,26 @@ function sanitizeProjectSettings(settings: PiSettingsSnapshot): PiSettingsSnapsh
   return sanitizePiSettingsSnapshot(settings);
 }
 
+function canReuseUnscopedCurrentPluginMetadataSnapshot(config: OpenClawConfig): boolean {
+  return normalizePluginsConfigWithResolver(config.plugins).loadPaths.length === 0;
+}
+
+function resolveUnscopedCurrentPluginMetadataSnapshot(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  workspaceDir?: string;
+}): PluginMetadataSnapshot | undefined {
+  if (!canReuseUnscopedCurrentPluginMetadataSnapshot(params.config)) {
+    return undefined;
+  }
+  return getCurrentPluginMetadataSnapshot({
+    env: params.env,
+    workspaceDir: params.workspaceDir,
+    allowWorkspaceScopedSnapshot: true,
+    requireDefaultDiscoveryContext: true,
+  });
+}
+
 function loadBundleSettingsFile(params: {
   rootDir: string;
   relativePath: string;
@@ -90,10 +110,10 @@ export function loadEnabledBundlePiSettingsSnapshot(params: {
           env,
           workspaceDir,
         }) ??
-        getCurrentPluginMetadataSnapshot({
+        resolveUnscopedCurrentPluginMetadataSnapshot({
+          config,
           env,
           workspaceDir,
-          allowWorkspaceScopedSnapshot: true,
         }) ??
         loadPluginMetadataSnapshot({
           workspaceDir,

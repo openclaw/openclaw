@@ -450,8 +450,8 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
     (params.preferPersisted === false
       ? undefined
       : getCurrentPluginMetadataSnapshot({
+          config: {},
           env: params.env,
-          allowWorkspaceScopedSnapshot: true,
         })
     )?.plugins ??
     loadPluginMetadataSnapshot({

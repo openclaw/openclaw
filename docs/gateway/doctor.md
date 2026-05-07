@@ -264,7 +264,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     If you previously added legacy OpenAI transport settings under `models.providers.openai-codex`, they can shadow the built-in Codex OAuth provider path that newer releases use automatically. Doctor warns when it sees those old transport settings alongside Codex OAuth so you can remove or rewrite the stale transport override and get the built-in routing/fallback behavior back. Custom proxies and header-only overrides are still supported and do not trigger this warning.
   </Accordion>
   <Accordion title="2f. Codex route repair">
-    Doctor checks for legacy `openai-codex/*` model refs. Native Codex harness routing uses canonical `openai/*` model refs plus `agentRuntime.id: "codex"` so the turn goes through the Codex app-server harness instead of the OpenClaw PI OpenAI path.
+    Doctor checks for legacy `openai-codex/*` model refs. Native Codex harness routing uses canonical `openai/*` model refs; OpenAI agent turns go through the Codex app-server harness instead of the OpenClaw PI OpenAI path.
 
     In `--fix` / `--repair` mode, doctor rewrites affected default-agent and per-agent refs, including primary models, fallbacks, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and stale persisted session route state:
 
@@ -310,7 +310,6 @@ That stages grounded durable candidates into the short-term dreaming store while
     - top-level payload fields (`message`, `model`, `thinking`, ...) → `payload`
     - top-level delivery fields (`deliver`, `channel`, `to`, `provider`, ...) → `delivery`
     - payload `provider` delivery aliases → explicit `delivery.channel`
-    - invalid persisted cron `payload.model` sentinels (`"default"`, `"null"`, blank strings, JSON `null`) → removed model override
     - simple legacy `notify: true` webhook fallback jobs → explicit `delivery.mode="webhook"` with `delivery.to=cron.webhook`
 
     Doctor only auto-migrates `notify: true` jobs when it can do so without changing behavior. If a job combines legacy notify fallback with an existing non-webhook delivery mode, doctor warns and leaves that job for manual review.
