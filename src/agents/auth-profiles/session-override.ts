@@ -19,28 +19,42 @@ function loadSessionStoreRuntime() {
 
 function isProfileForProvider(params: {
   cfg: OpenClawConfig;
-  provider: string;
+  providers: readonly string[];
   profileId: string;
   store: ReturnType<typeof ensureAuthProfileStore>;
 }): boolean {
-  const providerKey = resolveProviderIdForAuth(params.provider, { config: params.cfg });
+  const providerKeys = params.providers.map((provider) =>
+    resolveProviderIdForAuth(provider, { config: params.cfg }),
+  );
   const entry = params.store.profiles[params.profileId];
   if (entry) {
     if (!entry.provider) {
       return false;
     }
-    return resolveProviderIdForAuth(entry.provider, { config: params.cfg }) === providerKey;
+    const profileProviderKey = resolveProviderIdForAuth(entry.provider, { config: params.cfg });
+    return providerKeys.includes(profileProviderKey);
   }
-  if (
-    !isConfiguredAwsSdkAuthProfileForProvider({
+  return params.providers.some((provider) =>
+    isConfiguredAwsSdkAuthProfileForProvider({
       cfg: params.cfg,
-      provider: params.provider,
+      provider,
       profileId: params.profileId,
-    })
-  ) {
-    return false;
-  }
-  return true;
+    }),
+  );
+}
+
+function uniqueProviders(provider: string, acceptedProviderIds?: readonly string[]): string[] {
+  const providers = new Set<string>();
+  const push = (value: string | undefined) => {
+    const normalized = value?.trim();
+    if (normalized) {
+      providers.add(normalized);
+    }
+  };
+  const candidates =
+    acceptedProviderIds && acceptedProviderIds.length > 0 ? acceptedProviderIds : [provider];
+  candidates.forEach(push);
+  return [...providers];
 }
 
 export async function clearSessionAuthProfileOverride(params: {
@@ -73,6 +87,7 @@ export async function resolveSessionAuthProfileOverride(params: {
   sessionKey?: string;
   storePath?: string;
   isNewSession: boolean;
+  acceptedProviderIds?: string[];
 }): Promise<string | undefined> {
   const {
     cfg,
@@ -100,7 +115,14 @@ export async function resolveSessionAuthProfileOverride(params: {
   }
 
   const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
-  const order = resolveAuthProfileOrder({ cfg, store, provider });
+  const providers = uniqueProviders(provider, params.acceptedProviderIds);
+  const order = [
+    ...new Set(
+      providers.flatMap((candidateProvider) =>
+        resolveAuthProfileOrder({ cfg, store, provider: candidateProvider }),
+      ),
+    ),
+  ];
   let current = sessionEntry.authProfileOverride?.trim();
   const source =
     sessionEntry.authProfileOverrideSource ??
@@ -110,16 +132,23 @@ export async function resolveSessionAuthProfileOverride(params: {
         ? "user"
         : undefined);
 
+  const currentProfileId = current;
   if (
-    current &&
-    !store.profiles[current] &&
-    !isConfiguredAwsSdkAuthProfileForProvider({ cfg, provider, profileId: current })
+    currentProfileId &&
+    !store.profiles[currentProfileId] &&
+    !providers.some((candidateProvider) =>
+      isConfiguredAwsSdkAuthProfileForProvider({
+        cfg,
+        provider: candidateProvider,
+        profileId: currentProfileId,
+      }),
+    )
   ) {
     await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
     current = undefined;
   }
 
-  if (current && !isProfileForProvider({ cfg, provider, profileId: current, store })) {
+  if (current && !isProfileForProvider({ cfg, providers, profileId: current, store })) {
     await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
     current = undefined;
   }

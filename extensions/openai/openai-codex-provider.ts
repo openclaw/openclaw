@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   ProviderAuthContext,
+  ProviderAuthResult,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
@@ -301,6 +302,18 @@ function buildCodexCredentialExtra(identity: {
   return Object.keys(extra).length > 0 ? extra : undefined;
 }
 
+function buildOpenAICodexAuthConfigPatch(): NonNullable<ProviderAuthResult["configPatch"]> {
+  return {
+    agents: {
+      defaults: {
+        models: {
+          [OPENAI_CODEX_DEFAULT_MODEL]: {},
+        },
+      },
+    },
+  };
+}
+
 async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
   try {
     const { refreshOpenAICodexToken } = await import("./openai-codex-provider.runtime.js");
@@ -356,6 +369,7 @@ async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
   return buildOauthProviderAuthResult({
     providerId: PROVIDER_ID,
     defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
+    configPatch: buildOpenAICodexAuthConfigPatch(),
     access: creds.access,
     refresh: creds.refresh,
     expires: creds.expires,
@@ -406,6 +420,7 @@ async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
     return buildOauthProviderAuthResult({
       providerId: PROVIDER_ID,
       defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
+      configPatch: buildOpenAICodexAuthConfigPatch(),
       access: creds.access,
       refresh: creds.refresh,
       expires: creds.expires,

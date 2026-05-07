@@ -16,3 +16,4 @@ export {
   resolveBlueBubblesGroupToolPolicy,
 } from "./src/group-policy.js";
 export { isAllowedBlueBubblesSender } from "./src/targets.js";
+export { BlueBubblesChannelConfigSchema, BlueBubblesConfigSchema } from "./src/config-schema.js";

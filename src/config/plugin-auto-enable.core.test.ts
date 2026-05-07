@@ -585,7 +585,7 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toEqual([]);
   });
 
-  it("keeps OpenAI Codex OAuth model refs owned by the OpenAI plugin", () => {
+  it("keeps OpenAI Codex OAuth model refs provider-owned by OpenAI and runtime-owned by Codex", () => {
     const result = applyPluginAutoEnable({
       config: {
         agents: {
@@ -607,9 +607,10 @@ describe("applyPluginAutoEnable core", () => {
     });
 
     expect(result.config.plugins?.entries?.openai?.enabled).toBe(true);
-    expect(result.config.plugins?.entries?.codex).toBeUndefined();
+    expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
     expect(result.changes).toEqual([
       "openai-codex/gpt-5.5 model configured, enabled automatically.",
+      "codex agent runtime configured, enabled automatically.",
     ]);
   });
 
@@ -622,6 +623,35 @@ describe("applyPluginAutoEnable core", () => {
             agentRuntime: {
               id: "codex",
             },
+          },
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        { id: "openai", channels: [], providers: ["openai", "openai-codex"] },
+        {
+          id: "codex",
+          channels: [],
+          providers: ["codex"],
+          activation: { onAgentHarnesses: ["codex"] },
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.openai?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
+    expect(result.changes).toEqual([
+      "openai/gpt-5.5 model configured, enabled automatically.",
+      "codex agent runtime configured, enabled automatically.",
+    ]);
+  });
+
+  it("auto-enables Codex when OpenAI agent models use the implicit runtime default", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
           },
         },
       },

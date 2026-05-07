@@ -247,7 +247,10 @@ async function buildAllOpenAiCodexRows(opts: { supplementCatalog?: boolean } = {
   const context = {
     cfg: mocks.resolvedConfig,
     agentDir: "/tmp/openclaw-agent",
-    authIndex: { hasProviderAuth: (provider: string) => provider === "openai-codex" },
+    authIndex: {
+      hasProviderAuth: (provider: string) => provider === "openai-codex",
+      allowsProviderAuthAvailabilityFallback: () => false,
+    },
     availableKeys: loaded.availableKeys,
     configuredByKey: new Map(),
     discoveredKeys: new Set(
@@ -1180,7 +1183,10 @@ describe("modelsListCommand forward-compat", () => {
         ] as never,
         context: {
           cfg: mocks.resolvedConfig,
-          authIndex: { hasProviderAuth: () => false },
+          authIndex: {
+            hasProviderAuth: () => false,
+            allowsProviderAuthAvailabilityFallback: () => false,
+          },
           availableKeys: new Set(["openai-codex/gpt-5.4"]),
           configuredByKey: new Map(),
           discoveredKeys: new Set(),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BlueBubblesConfigSchema } from "../../extensions/bluebubbles/channel-config-api.js";
+import { BlueBubblesConfigSchema } from "../../extensions/bluebubbles/api.js";
 import {
   DiscordConfigSchema,
   IMessageConfigSchema,
