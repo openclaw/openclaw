@@ -40,6 +40,24 @@ class TestInitSkill(TestCase):
                 result.stderr + result.stdout,
             )
 
+    def test_unknown_args_still_fail_without_tool_args(self):
+        with tempfile.TemporaryDirectory(prefix="test_init_skill_unknown_") as tmp:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_PATH),
+                    "demo-skill",
+                    "--path",
+                    tmp,
+                    "--bogus",
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unrecognized arguments: --bogus", result.stderr)
+
 
 if __name__ == "__main__":
     main()

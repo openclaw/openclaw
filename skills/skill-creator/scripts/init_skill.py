@@ -18,6 +18,33 @@ import subprocess
 import sys
 from pathlib import Path
 
+
+def parse_args_with_tool_args(parser):
+    """Preserve dash-prefixed tool arg values without swallowing unrelated unknown args."""
+    argv = sys.argv[1:]
+    if "--tool-args" not in argv:
+        return parser.parse_args()
+
+    tool_args_index = argv.index("--tool-args")
+    prefix = argv[: tool_args_index + 1]
+    suffix = argv[tool_args_index + 1 :]
+
+    tool_args = []
+    rest = []
+    for index, token in enumerate(suffix):
+        if rest:
+            rest.append(token)
+            continue
+        if token.startswith("--") and token.count(":") >= 1:
+            tool_args.append(token)
+        else:
+            rest = suffix[index:]
+            break
+
+    args = parser.parse_args(prefix + rest)
+    args.tool_args = tool_args
+    return args
+
 MAX_SKILL_NAME_LENGTH = 64
 ALLOWED_RESOURCES = {"scripts", "references", "assets"}
 
@@ -385,11 +412,7 @@ def main():
         help="Tool arguments as flag/type/desc tuples, e.g. '--input:str:Input file' '--output:str:Output file'",
     )
 
-    # Use parse_known_args to capture --tool-args values that start with dashes
-    args, remaining = parser.parse_known_args()
-    if remaining:
-        # Merge remaining into tool_args (they are the flag/type/desc tuples)
-        args.tool_args = (args.tool_args or []) + remaining
+    args = parse_args_with_tool_args(parser)
 
     raw_skill_name = args.skill_name
     skill_name = normalize_skill_name(raw_skill_name)

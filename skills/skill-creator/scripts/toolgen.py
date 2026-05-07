@@ -4,10 +4,15 @@ Tool Template Generator for OpenClaw skills
 """
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
 ALLOWED_TYPES = {"bash", "python", "node"}
+
+
+def py_string_literal(value):
+    return json.dumps(value)
 
 def generate_bash(tool_name, description, arguments):
     options = []
@@ -74,7 +79,6 @@ echo "Running {tool_name}"
 def generate_python(tool_name, description, arguments):
     arg_lines = []
     extract_lines = []
-    validation_lines = []
 
     for arg in arguments:
         flag = arg['flag']
@@ -85,22 +89,20 @@ def generate_python(tool_name, description, arguments):
         if flag.startswith('--'):
             # optional flag
             if arg_type == 'bool':
-                line = f"parser.add_argument('{flag}', action='store_true', help='{help_text}')"
+                line = f"parser.add_argument({py_string_literal(flag)}, action='store_true', help={py_string_literal(help_text)})"
             else:
-                line = f"parser.add_argument('{flag}', type={arg_type}, help='{help_text}')"
+                line = f"parser.add_argument({py_string_literal(flag)}, type={arg_type}, help={py_string_literal(help_text)})"
             arg_lines.append(line)
             extract_lines.append(f"{name} = args.{name}")
         else:
             # positional argument
-            arg_lines.append(f"parser.add_argument('{name}', type={arg_type}, help='{help_text}')")
+            arg_lines.append(
+                f"parser.add_argument({py_string_literal(name)}, type={arg_type}, help={py_string_literal(help_text)})"
+            )
             extract_lines.append(f"{name} = args.{name}")
-
-    arg_code = "\\n    ".join(arg_lines)
-    extract_code = "\\n    ".join(extract_lines)
 
     arg_code = "\n    ".join(arg_lines)
     extract_code = "\n    ".join(extract_lines)
-    # We currently have no automatic validation
 
     content = f'''#!/usr/bin/env python3
 """
@@ -113,7 +115,7 @@ import sys
 
 def main():
     parser = argparse.ArgumentParser(
-        description="{description}",
+        description={py_string_literal(description)},
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -143,15 +145,6 @@ if __name__ == "__main__":
     return content
 
 def generate_node(tool_name, description, arguments):
-    options = []
-    for arg in arguments:
-        if arg['flag'].startswith('-'):
-            name = arg.get('name', arg['flag'].lstrip('-').replace('-', '_'))
-            opt_type = arg.get('type', 'string')
-            options.append(f"    '{name}': {{ type: '{opt_type}' }}")
-
-    # opts_str computed but not used - removed
-
     content = '''#!/usr/bin/env node
 /**
  * Tool: {tool_name}
@@ -164,11 +157,10 @@ const args = {{}};
 for (let i = 2; i < process.argv.length; i++) {{
   const arg = process.argv[i];
   if (arg.startsWith('--')) {{
-    const parts = arg.slice(2).split(':');
-    const key = parts[0];
-    if (parts.length > 1) {{
-      // Has type hint, ignore for now; store raw
-      args[key] = process.argv[i+1] || true;
+    const key = arg.slice(2);
+    const next = process.argv[i + 1];
+    if (next && !next.startsWith('--')) {{
+      args[key] = next;
       i++; // consume value
     }} else {{
       args[key] = true;
