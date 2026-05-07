@@ -64,7 +64,6 @@ describe("Codex plugin thread config", () => {
           enabled: true,
           destructive_enabled: true,
           open_world_enabled: false,
-          default_tools_enabled: true,
           default_tools_approval_mode: "prompt",
         },
       },
@@ -101,6 +100,7 @@ describe("Codex plugin thread config", () => {
       enabled: true,
       destructive_enabled: false,
     });
+    expect(disabledApps?.["google-calendar-app"]).not.toHaveProperty("default_tools_enabled");
     expect(disabledApps?.["google-calendar-app"]).not.toHaveProperty("tools");
     expect(
       pluginOverrideDisabled.policyContext.apps["google-calendar-app"]?.allowDestructiveActions,
@@ -252,7 +252,6 @@ describe("Codex plugin thread config", () => {
           enabled: true,
           destructive_enabled: false,
           open_world_enabled: false,
-          default_tools_enabled: true,
           default_tools_approval_mode: "prompt",
         },
       },
@@ -571,7 +570,6 @@ describe("Codex plugin thread config", () => {
       enabled: true,
       destructive_enabled: false,
       open_world_enabled: false,
-      default_tools_enabled: true,
       default_tools_approval_mode: "prompt",
     });
     expect(apps?.["github-app"]).not.toHaveProperty("tools");
