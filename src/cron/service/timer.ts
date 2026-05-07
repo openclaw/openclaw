@@ -555,6 +555,17 @@ export function applyJobResult(
     result.status === "error" && typeof result.error === "string"
       ? (resolveFailoverReasonFromError(result.error) ?? undefined)
       : undefined;
+  if (result.status === "error") {
+    state.deps.log.warn(
+      {
+        jobId: job.id,
+        jobName: job.name,
+        error: result.error,
+        diagnosticsSummary: job.state.lastDiagnosticSummary,
+      },
+      "cron: job run returned error status",
+    );
+  }
   const deliveryState = resolveDeliveryState({ job, delivered: result.delivered });
   job.state.lastDelivered = deliveryState.delivered;
   job.state.lastDeliveryStatus = deliveryState.status;
