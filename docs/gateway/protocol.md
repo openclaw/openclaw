@@ -580,14 +580,9 @@ terminal summary, and sanitized error text.
 - Operators may call `skills.install` (`operator.admin`) in three modes:
   - ClawHub mode: `{ source: "clawhub", slug, version?, force? }` installs a
     skill folder into the default agent workspace `skills/` directory.
-  - Upload mode: `{ source: "upload", uploadId, slug, force?, sha256?, timeoutMs? }`
-    installs a committed upload into the default agent workspace `skills/<slug>`
-    directory. The slug and force value must match the original
-    `skills.upload.begin` request. This mode is rejected unless
-    `skills.install.allowUploadedArchives` is enabled. The setting does not
-    affect ClawHub installs.
-  - Gateway installer mode: `{ name, installId, dangerouslyForceUnsafeInstall?, timeoutMs? }`
+  - Gateway installer mode: `{ name, installId, timeoutMs? }`
     runs a declared `metadata.openclaw.install` action on the gateway host.
+    Plugin security scans are always enforced for remote gateway installs.
 - Operators may call `skills.update` (`operator.admin`) in two modes:
   - ClawHub mode updates one tracked slug or all tracked ClawHub installs in
     the default agent workspace.
