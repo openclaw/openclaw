@@ -67,6 +67,7 @@ Example config:
 - When heartbeats are disabled with `0m`, normal runs also omit `HEARTBEAT.md` from bootstrap context so the model does not see heartbeat-only instructions.
 - Active hours (`heartbeat.activeHours`) are checked in the configured timezone. Outside the window, heartbeats are skipped until the next tick inside the window.
 - Heartbeats automatically defer while cron work is active or queued. Set `heartbeat.skipWhenBusy: true` to defer on extra busy lanes (subagent or nested command work) as well; this is useful for local Ollama and other constrained single-runtime hosts.
+- `openclaw status` shows the configured/materialized cadence. Use `openclaw status --deep` or `openclaw system heartbeat last` to inspect the last observed heartbeat delivery.
 
 ## What the heartbeat prompt is for
 

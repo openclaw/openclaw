@@ -19,6 +19,7 @@ describe("status-overview-rows", () => {
             "1 files · 2 chunks · plugin memory · ok(vector ready) · warn(fts ready) · muted(cache warm)",
         },
         { Item: "Plugin compatibility", Value: "warn(1 notice · 1 plugin)" },
+        { Item: "Heartbeat config", Value: "1m (main)" },
         { Item: "Sessions", Value: "2 active · default gpt-5.5 (12k ctx) · store.json" },
       ]),
     );
