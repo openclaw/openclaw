@@ -650,52 +650,59 @@ describe("resolveSessionOptionGroups", () => {
 
 describe("handleChatManualRefresh", () => {
   it("waits for chat history before scrolling and clearing refresh state", async () => {
-    let animationFrameCallback: FrameRequestCallback | null = null;
+    const animationFrame = { callback: undefined as FrameRequestCallback | undefined };
     const previousRequestAnimationFrame = globalThis.requestAnimationFrame;
     Object.defineProperty(globalThis, "requestAnimationFrame", {
       configurable: true,
       value: vi.fn((callback: FrameRequestCallback) => {
-        animationFrameCallback = callback;
+        animationFrame.callback = callback;
         return 1;
       }),
     });
-    let resolveRefresh!: () => void;
-    refreshChatMock.mockReturnValueOnce(
-      new Promise<void>((resolve) => {
-        resolveRefresh = resolve;
-      }),
-    );
-    const state = {
-      chatManualRefreshInFlight: false,
-      chatNewMessagesBelow: true,
-      updateComplete: Promise.resolve(),
-      resetToolStream: vi.fn(),
-      scrollToBottom: vi.fn(),
-    } as unknown as Parameters<typeof handleChatManualRefresh>[0];
+    try {
+      let resolveRefresh!: () => void;
+      refreshChatMock.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          resolveRefresh = resolve;
+        }),
+      );
+      const state = {
+        chatManualRefreshInFlight: false,
+        chatNewMessagesBelow: true,
+        updateComplete: Promise.resolve(),
+        resetToolStream: vi.fn(),
+        scrollToBottom: vi.fn(),
+      } as unknown as Parameters<typeof handleChatManualRefresh>[0];
 
-    const run = handleChatManualRefresh(state);
-    await Promise.resolve();
+      const run = handleChatManualRefresh(state);
+      await Promise.resolve();
 
-    expect(state.scrollToBottom).not.toHaveBeenCalled();
-    resolveRefresh();
-    await run;
+      expect(state.scrollToBottom).not.toHaveBeenCalled();
+      resolveRefresh();
+      await run;
 
-    expect(refreshChatMock).toHaveBeenCalledWith(state, {
-      awaitHistory: true,
-      scheduleScroll: false,
-    });
-    expect(state.scrollToBottom).toHaveBeenCalledWith({ smooth: true });
-    expect(state.chatManualRefreshInFlight).toBe(true);
-    expect(animationFrameCallback).toBeTypeOf("function");
+      expect(refreshChatMock).toHaveBeenCalledWith(state, {
+        awaitHistory: true,
+        scheduleScroll: false,
+      });
+      expect(state.scrollToBottom).toHaveBeenCalledWith({ smooth: true });
+      expect(state.chatManualRefreshInFlight).toBe(true);
+      expect(animationFrame.callback).toBeTypeOf("function");
 
-    animationFrameCallback?.(0);
+      const callback = animationFrame.callback;
+      if (!callback) {
+        throw new Error("expected manual refresh to schedule a frame callback");
+      }
+      callback(0);
 
-    expect(state.chatManualRefreshInFlight).toBe(false);
-    expect(state.chatNewMessagesBelow).toBe(false);
-    Object.defineProperty(globalThis, "requestAnimationFrame", {
-      configurable: true,
-      value: previousRequestAnimationFrame,
-    });
+      expect(state.chatManualRefreshInFlight).toBe(false);
+      expect(state.chatNewMessagesBelow).toBe(false);
+    } finally {
+      Object.defineProperty(globalThis, "requestAnimationFrame", {
+        configurable: true,
+        value: previousRequestAnimationFrame,
+      });
+    }
   });
 });
 
