@@ -14,7 +14,9 @@ const mocks = vi.hoisted(() => ({
   listReadOnlyChannelPluginsForConfig: vi.fn<() => ChannelPlugin[]>(() => []),
   buildChannelAccountSnapshot: vi.fn(),
   listTrustedChannelPluginCatalogEntries: vi.fn<() => ChannelPluginCatalogEntry[]>(() => []),
-  isCatalogChannelInstalled: vi.fn<() => boolean>(() => true),
+  isCatalogChannelInstalled: vi.fn<(params: { entry: ChannelPluginCatalogEntry }) => boolean>(
+    () => true,
+  ),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
   resolveDefaultAgentId: vi.fn(() => "main"),
 }));
