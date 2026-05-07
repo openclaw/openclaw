@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Agents/failover: harden state-aware lane suspension by persisting quota resume transitions, restoring configured lane concurrency, preserving non-quota failure reasons, and exporting model failover events through diagnostics OTLP. Thanks @BunsDev.
+- Infra/net: fix `fetchWithSsrFGuard` falling back to `globalThis.fetch` (built-in undici ~7.x on Node 25+) when no explicit `fetchImpl` is supplied, which caused dispatchers from the bundled undici 8.x to be rejected with `TypeError: fetch failed` during private-IP fetches such as `memory_search` Ollama embeddings. Now prefers the bundled undici 8.x `fetch` over the built-in global, while still honoring `globalThis.fetch` when it is replaced by a test mock. (#79132) Thanks @colmbrogan.
 - Telegram: preserve the channel-specific 10-option poll cap in the unified outbound adapter so over-limit polls are rejected before send. (#78762) Thanks @obviyus.
 - Runtime/install: raise the supported Node 22 floor to `22.16+` so native SQLite query handling can rely on the `node:sqlite` statement metadata API while continuing to recommend Node 24. (#78921)
 - Discord/voice: include a bounded one-line STT transcript preview in verbose voice logs so live voice debugging shows what speakers said before the agent reply.

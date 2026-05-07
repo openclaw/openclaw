@@ -27,6 +27,7 @@ import {
   createHttp1Agent,
   createHttp1EnvHttpProxyAgent,
   createHttp1ProxyAgent,
+  loadUndiciRuntimeDeps,
 } from "./undici-runtime.js";
 
 function resolveDispatcherTimeoutMs(fromParams: number | undefined): number | undefined {
@@ -342,7 +343,13 @@ function rewriteRedirectInitForCrossOrigin(params: {
 export { fetchWithRuntimeDispatcher } from "./runtime-fetch.js";
 
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
-  const defaultFetch: FetchLike | undefined = params.fetchImpl ?? globalThis.fetch;
+  // When tests mock globalThis.fetch, honour the mock so test stubs are observed.
+  // Otherwise prefer the bundled undici fetch: on Node 25+ globalThis.fetch resolves
+  // to built-in undici ~7.x which rejects undici 8.x dispatchers (#79132).
+  const bundledOrGlobal: FetchLike | undefined = isMockedFetch(globalThis.fetch)
+    ? (globalThis.fetch as unknown as FetchLike)
+    : ((loadUndiciRuntimeDeps().fetch as unknown as FetchLike) ?? globalThis.fetch);
+  const defaultFetch: FetchLike | undefined = params.fetchImpl ?? bundledOrGlobal;
   if (!defaultFetch) {
     throw new Error("fetch is not available");
   }
