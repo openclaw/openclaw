@@ -148,6 +148,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/hooks: add a `before_agent_run` pass/block gate that can stop a user prompt before model submission while preserving a redacted transcript entry for the user, and clarify that raw conversation hooks require `hooks.allowConversationAccess=true`. (#75035) Thanks @jesse-merhi.
 - Config/Nix: keep startup-derived plugin enablement, gateway auth tokens, control UI origins, and owner-display secrets runtime-only instead of rewriting `openclaw.json`; in Nix mode, config writers, mutating `openclaw update`, plugin lifecycle mutators, and doctor repair/token-generation now refuse with agent-first nix-openclaw guidance. (#78047) Thanks @joshp123.
 - Agents/context engine: invalidate cached assembled context views when source history shrinks or assembly fails, preventing stale pre-reset history from being reused. Fixes #77968. (#78163) Thanks @brokemac79 and @ChrisBot2026.
+- TTS/Inworld: default the bundled Inworld speech provider to `inworld-tts-2` (Realtime TTS-2) for new and unpinned configs, while keeping `inworld-tts-1.5-max`, `inworld-tts-1.5-mini`, `inworld-tts-1-max`, and `inworld-tts-1` accepted as `modelId` values so existing pinned configs continue to work unchanged. (#77921) Thanks @cshape.
 
 ### Breaking
 
