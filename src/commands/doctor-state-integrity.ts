@@ -22,6 +22,11 @@ import {
 } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import { updateSessionStore } from "../config/sessions/store.js";
+import {
+  hasSqliteSessionTranscriptEvents,
+  loadSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScopeForPath,
+} from "../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
@@ -216,6 +221,41 @@ function countJsonlLines(filePath: string): number {
   } catch {
     return 0;
   }
+}
+
+function resolveTranscriptSqliteScope(params: {
+  agentId: string;
+  sessionId: string;
+  transcriptPath: string;
+}): { agentId: string; sessionId: string } {
+  return (
+    resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: params.transcriptPath }) ?? {
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+    }
+  );
+}
+
+function hasSessionTranscript(params: {
+  agentId: string;
+  sessionId: string;
+  transcriptPath: string;
+}): boolean {
+  const scope = resolveTranscriptSqliteScope(params);
+  return hasSqliteSessionTranscriptEvents(scope) || existsFile(params.transcriptPath);
+}
+
+function countSessionTranscriptEvents(params: {
+  agentId: string;
+  sessionId: string;
+  transcriptPath: string;
+}): number {
+  const scope = resolveTranscriptSqliteScope(params);
+  const sqliteEvents = loadSqliteSessionTranscriptEvents(scope);
+  if (sqliteEvents.length > 0) {
+    return sqliteEvents.length;
+  }
+  return countJsonlLines(params.transcriptPath);
 }
 
 function findOtherStateDirs(stateDir: string): string[] {
@@ -858,7 +898,7 @@ export async function noteStateIntegrity(
         return false;
       }
       const transcriptPath = resolveSessionFilePath(sessionId, entry, sessionPathOpts);
-      return !existsFile(transcriptPath);
+      return !hasSessionTranscript({ agentId, sessionId, transcriptPath });
     });
     if (missing.length > 0) {
       warnings.push(
@@ -951,15 +991,19 @@ export async function noteStateIntegrity(
         mainEntry,
         sessionPathOpts,
       );
-      if (!existsFile(transcriptPath)) {
+      if (!hasSessionTranscript({ agentId, sessionId: mainEntry.sessionId, transcriptPath })) {
         warnings.push(
           `- Main session transcript missing (${shortenHomePath(transcriptPath)}). History will appear to reset.`,
         );
       } else {
-        const lineCount = countJsonlLines(transcriptPath);
-        if (lineCount <= 1) {
+        const eventCount = countSessionTranscriptEvents({
+          agentId,
+          sessionId: mainEntry.sessionId,
+          transcriptPath,
+        });
+        if (eventCount <= 1) {
           warnings.push(
-            `- Main session transcript has only ${lineCount} line. Session history may not be appending.`,
+            `- Main session transcript has only ${eventCount} event. Session history may not be appending.`,
           );
         }
       }

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { SessionManager } from "../transcript/session-transcript-contract.js";
 import {
@@ -15,10 +16,13 @@ let tmpDir: string | undefined;
 
 async function createTmpDir(): Promise<string> {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "compaction-successor-test-"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
   return tmpDir;
 }
 
 afterEach(async () => {
+  closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
   if (tmpDir) {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
     tmpDir = undefined;
@@ -101,8 +105,8 @@ describe("rotateTranscriptAfterCompaction", () => {
   it("creates a compacted successor transcript and leaves the archive untouched", async () => {
     const dir = await createTmpDir();
     const { manager, sessionFile, firstKeptId, oldUserId } = createCompactedSession(dir);
-    const originalBytes = await fs.readFile(sessionFile, "utf8");
     const originalEntryCount = manager.getEntries().length;
+    const originalEntries = manager.getEntries();
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
@@ -114,7 +118,7 @@ describe("rotateTranscriptAfterCompaction", () => {
     const successorSessionId = requireString(result.sessionId, "successor session id");
     const successorFile = requireString(result.sessionFile, "successor session file");
     expect(successorFile).not.toBe(sessionFile);
-    expect(await fs.readFile(sessionFile, "utf8")).toBe(originalBytes);
+    expect(SessionManager.open(sessionFile).getEntries()).toEqual(originalEntries);
 
     const successor = SessionManager.open(successorFile);
     expect(successor.getHeader()).toMatchObject({

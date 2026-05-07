@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
-import fsSync from "node:fs";
-import fs from "node:fs/promises";
 import path from "node:path";
-import { appendRegularFile, appendRegularFileSync } from "../../infra/fs-safe.js";
-import { privateFileStore, privateFileStoreSync } from "../../infra/private-file-store.js";
+import {
+  appendSqliteSessionTranscriptEvent,
+  loadSqliteSessionTranscriptEvents,
+  replaceSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScopeForPath,
+} from "../../config/sessions/transcript-store.sqlite.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import type {
   FileEntry,
   SessionContext,
@@ -15,7 +18,6 @@ import {
   buildSessionContext,
   CURRENT_SESSION_VERSION,
   migrateSessionEntries,
-  parseSessionEntries,
 } from "./session-transcript-format.js";
 
 type BranchSummaryEntry = Extract<SessionEntry, { type: "branch_summary" }>;
@@ -46,8 +48,57 @@ function generateEntryId(byId: { has(id: string): boolean }): string {
   return randomUUID();
 }
 
-function serializeTranscriptFileEntries(entries: FileEntry[]): string {
-  return `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
+function resolveAgentIdFromTranscriptPath(sessionFile: string): string {
+  const resolved = path.resolve(sessionFile);
+  const sessionsDir = path.dirname(resolved);
+  const agentDir = path.dirname(sessionsDir);
+  const agentsDir = path.dirname(agentDir);
+  if (path.basename(sessionsDir) === "sessions" && path.basename(agentsDir) === "agents") {
+    return normalizeAgentId(path.basename(agentDir));
+  }
+  return DEFAULT_AGENT_ID;
+}
+
+function transcriptStateFromFileEntries(fileEntries: FileEntry[]): TranscriptFileState {
+  const headerBeforeMigration =
+    fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
+  const migrated = sessionHeaderVersion(headerBeforeMigration) < CURRENT_SESSION_VERSION;
+  migrateSessionEntries(fileEntries);
+  const header =
+    fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
+  const entries = fileEntries.filter(isSessionEntry);
+  return new TranscriptFileState({ header, entries, migrated });
+}
+
+function transcriptStateFromSqlite(sessionFile: string): TranscriptFileState | undefined {
+  const scope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: sessionFile });
+  if (!scope) {
+    return undefined;
+  }
+  const events = loadSqliteSessionTranscriptEvents(scope).map((entry) => entry.event);
+  if (events.length === 0) {
+    return undefined;
+  }
+  return transcriptStateFromFileEntries(
+    events.filter((event): event is FileEntry => Boolean(event && typeof event === "object")),
+  );
+}
+
+function resolveTranscriptWriteScope(
+  sessionFile: string,
+  entries: Array<SessionHeader | SessionEntry>,
+): { agentId: string; sessionId: string; transcriptPath: string } | undefined {
+  const header = entries.find((entry): entry is SessionHeader => entry.type === "session");
+  const existing = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: sessionFile });
+  const sessionId = header?.id ?? existing?.sessionId;
+  if (!sessionId) {
+    return undefined;
+  }
+  return {
+    agentId: existing?.agentId ?? resolveAgentIdFromTranscriptPath(sessionFile),
+    sessionId,
+    transcriptPath: path.resolve(sessionFile),
+  };
 }
 
 export class TranscriptFileState {
@@ -343,49 +394,51 @@ export class TranscriptFileState {
 }
 
 export async function readTranscriptFileState(sessionFile: string): Promise<TranscriptFileState> {
-  const raw = await fs.readFile(sessionFile, "utf-8");
-  const fileEntries = parseSessionEntries(raw);
-  const headerBeforeMigration =
-    fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
-  const migrated = sessionHeaderVersion(headerBeforeMigration) < CURRENT_SESSION_VERSION;
-  migrateSessionEntries(fileEntries);
-  const header =
-    fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
-  const entries = fileEntries.filter(isSessionEntry);
-  return new TranscriptFileState({ header, entries, migrated });
+  const sqliteState = transcriptStateFromSqlite(sessionFile);
+  if (sqliteState) {
+    return sqliteState;
+  }
+  throw new Error(
+    `Transcript is not in SQLite: ${sessionFile}. Run "openclaw doctor --fix" to import legacy JSONL transcripts.`,
+  );
 }
 
 export function readTranscriptFileStateSync(sessionFile: string): TranscriptFileState {
-  const raw = fsSync.readFileSync(sessionFile, "utf-8");
-  const fileEntries = parseSessionEntries(raw);
-  const headerBeforeMigration =
-    fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
-  const migrated = sessionHeaderVersion(headerBeforeMigration) < CURRENT_SESSION_VERSION;
-  migrateSessionEntries(fileEntries);
-  const header =
-    fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
-  const entries = fileEntries.filter(isSessionEntry);
-  return new TranscriptFileState({ header, entries, migrated });
+  const sqliteState = transcriptStateFromSqlite(sessionFile);
+  if (sqliteState) {
+    return sqliteState;
+  }
+  throw new Error(
+    `Transcript is not in SQLite: ${sessionFile}. Run "openclaw doctor --fix" to import legacy JSONL transcripts.`,
+  );
 }
 
 export async function writeTranscriptFileAtomic(
   filePath: string,
   entries: Array<SessionHeader | SessionEntry>,
 ): Promise<void> {
-  await privateFileStore(path.dirname(filePath)).writeText(
-    path.basename(filePath),
-    serializeTranscriptFileEntries(entries),
-  );
+  const scope = resolveTranscriptWriteScope(filePath, entries);
+  if (!scope) {
+    throw new Error(`Cannot write SQLite transcript without a session header: ${filePath}`);
+  }
+  replaceSqliteSessionTranscriptEvents({
+    ...scope,
+    events: entries,
+  });
 }
 
 export function writeTranscriptFileAtomicSync(
   filePath: string,
   entries: Array<SessionHeader | SessionEntry>,
 ): void {
-  privateFileStoreSync(path.dirname(filePath)).writeText(
-    path.basename(filePath),
-    serializeTranscriptFileEntries(entries),
-  );
+  const scope = resolveTranscriptWriteScope(filePath, entries);
+  if (!scope) {
+    throw new Error(`Cannot write SQLite transcript without a session header: ${filePath}`);
+  }
+  replaceSqliteSessionTranscriptEvents({
+    ...scope,
+    events: entries,
+  });
 }
 
 export async function persistTranscriptStateMutation(params: {
@@ -403,11 +456,18 @@ export async function persistTranscriptStateMutation(params: {
     ]);
     return;
   }
-  await appendRegularFile({
-    filePath: params.sessionFile,
-    content: `${params.appendedEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
-    rejectSymlinkParents: true,
-  });
+  const scope = resolveTranscriptWriteScope(params.sessionFile, [
+    ...(params.state.header ? [params.state.header] : []),
+    ...params.state.entries,
+  ]);
+  if (!scope) {
+    throw new Error(
+      `Cannot append SQLite transcript without a session header: ${params.sessionFile}`,
+    );
+  }
+  for (const entry of params.appendedEntries) {
+    appendSqliteSessionTranscriptEvent({ ...scope, event: entry });
+  }
 }
 
 export function persistTranscriptStateMutationSync(params: {
@@ -425,9 +485,16 @@ export function persistTranscriptStateMutationSync(params: {
     ]);
     return;
   }
-  appendRegularFileSync({
-    filePath: params.sessionFile,
-    content: `${params.appendedEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
-    rejectSymlinkParents: true,
-  });
+  const scope = resolveTranscriptWriteScope(params.sessionFile, [
+    ...(params.state.header ? [params.state.header] : []),
+    ...params.state.entries,
+  ]);
+  if (!scope) {
+    throw new Error(
+      `Cannot append SQLite transcript without a session header: ${params.sessionFile}`,
+    );
+  }
+  for (const entry of params.appendedEntries) {
+    appendSqliteSessionTranscriptEvent({ ...scope, event: entry });
+  }
 }

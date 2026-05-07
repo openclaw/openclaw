@@ -7,7 +7,6 @@ import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/ag
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
-import { CURRENT_SESSION_VERSION } from "../../agents/transcript/session-transcript-contract.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
@@ -1325,53 +1324,6 @@ function resolveTranscriptPath(params: {
   }
 }
 
-function ensureTranscriptFile(params: { transcriptPath: string; sessionId: string }): {
-  ok: boolean;
-  error?: string;
-} {
-  if (fs.existsSync(params.transcriptPath)) {
-    return { ok: true };
-  }
-  try {
-    fs.mkdirSync(path.dirname(params.transcriptPath), { recursive: true });
-    const header = {
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: params.sessionId,
-      timestamp: new Date().toISOString(),
-      cwd: process.cwd(),
-    };
-    fs.writeFileSync(params.transcriptPath, `${JSON.stringify(header)}\n`, {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
-}
-
-async function transcriptHasIdempotencyKey(
-  transcriptPath: string,
-  idempotencyKey: string,
-): Promise<boolean> {
-  try {
-    const lines = (await fs.promises.readFile(transcriptPath, "utf-8")).split(/\r?\n/);
-    for (const line of lines) {
-      if (!line.trim()) {
-        continue;
-      }
-      const parsed = JSON.parse(line) as { message?: { idempotencyKey?: unknown } };
-      if (parsed?.message?.idempotencyKey === idempotencyKey) {
-        return true;
-      }
-    }
-    return false;
-  } catch {
-    return false;
-  }
-}
-
 async function appendAssistantTranscriptMessage(params: {
   message: string;
   label?: string;
@@ -1397,26 +1349,6 @@ async function appendAssistantTranscriptMessage(params: {
   });
   if (!transcriptPath) {
     return { ok: false, error: "transcript path not resolved" };
-  }
-
-  if (!fs.existsSync(transcriptPath)) {
-    if (!params.createIfMissing) {
-      return { ok: false, error: "transcript file not found" };
-    }
-    const ensured = ensureTranscriptFile({
-      transcriptPath,
-      sessionId: params.sessionId,
-    });
-    if (!ensured.ok) {
-      return { ok: false, error: ensured.error ?? "failed to create transcript file" };
-    }
-  }
-
-  if (
-    params.idempotencyKey &&
-    (await transcriptHasIdempotencyKey(transcriptPath, params.idempotencyKey))
-  ) {
-    return { ok: true };
   }
 
   return await appendInjectedAssistantMessageToTranscript({

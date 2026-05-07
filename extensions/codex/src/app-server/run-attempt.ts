@@ -2307,6 +2307,7 @@ async function mirrorTranscriptBestEffort(params: {
   try {
     await mirrorCodexAppServerTranscript({
       sessionFile: params.params.sessionFile,
+      sessionId: params.params.sessionId,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       messages: params.result.messagesSnapshot,

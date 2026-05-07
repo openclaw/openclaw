@@ -7,6 +7,10 @@ import {
   type resolveSessionFilePathOptions,
 } from "../config/sessions/paths.js";
 import { updateSessionStore } from "../config/sessions/store.js";
+import {
+  loadSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScopeForPath,
+} from "../config/sessions/transcript-store.sqlite.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
@@ -56,13 +60,8 @@ function sessionEntryHasSyntheticHeartbeatOwnership(entry: SessionEntry): boolea
   );
 }
 
-function parseTranscriptMessageLine(line: string): { role: string; content?: unknown } | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(line);
-  } catch {
-    return null;
-  }
+function parseTranscriptMessageEvent(event: unknown): { role: string; content?: unknown } | null {
+  const parsed = event;
   const record = asNullableObjectRecord(parsed);
   if (!record) {
     return null;
@@ -79,12 +78,11 @@ function parseTranscriptMessageLine(line: string): { role: string; content?: unk
 function summarizeTranscriptHeartbeatMessages(
   transcriptPath: string,
 ): TranscriptHeartbeatSummary | null {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(transcriptPath, "utf8");
-  } catch {
+  const scope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath });
+  if (!scope) {
     return null;
   }
+  const events = loadSqliteSessionTranscriptEvents(scope);
   const summary: TranscriptHeartbeatSummary = {
     inspectedMessages: 0,
     userMessages: 0,
@@ -93,12 +91,8 @@ function summarizeTranscriptHeartbeatMessages(
     assistantMessages: 0,
     heartbeatOkAssistantMessages: 0,
   };
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const message = parseTranscriptMessageLine(trimmed);
+  for (const event of events) {
+    const message = parseTranscriptMessageEvent(event.event);
     if (!message) {
       continue;
     }

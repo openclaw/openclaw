@@ -3,7 +3,6 @@ import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
-import * as jsonFiles from "../../infra/json-files.js";
 import { createSuiteTempRootTracker, withTempDirSync } from "../../test-helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config.js";
 import type { SessionConfig } from "../types.base.js";
@@ -16,7 +15,12 @@ import {
 } from "./paths.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
-import { clearSessionStoreCacheForTest, loadSessionStore, updateSessionStore } from "./store.js";
+import {
+  clearSessionStoreCacheForTest,
+  loadSessionStore,
+  saveSessionStore,
+  updateSessionStore,
+} from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { mergeSessionEntry, mergeSessionEntryWithPolicy, type SessionEntry } from "./types.js";
 
@@ -278,9 +282,9 @@ describe("session store writer queue", () => {
     initial: Record<string, unknown> = {},
   ): Promise<{ dir: string; storePath: string }> {
     const dir = await writerFixtureRootTracker.make("case");
-    const storePath = path.join(dir, "sessions.json");
+    const storePath = path.join(dir, "agents", "main", "sessions", "sessions.json");
     if (Object.keys(initial).length > 0) {
-      await fsPromises.writeFile(storePath, JSON.stringify(initial, null, 2), "utf-8");
+      await saveSessionStore(storePath, initial as Record<string, SessionEntry>);
     }
     return { dir, storePath };
   }
@@ -319,18 +323,16 @@ describe("session store writer queue", () => {
     expect((store[key] as Record<string, unknown>).counter).toBe(N);
   });
 
-  it("writes legacy JSON fallback stores directly even when payload is unchanged", async () => {
+  it("persists SQLite stores even when payload is unchanged", async () => {
     const key = "agent:main:no-op-save";
     const { storePath } = await makeTmpStore({
       [key]: { sessionId: "s-noop", updatedAt: Date.now() },
     });
 
-    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
     await updateSessionStore(storePath, async () => {
       // Intentionally no-op mutation.
     });
-    expect(writeSpy).toHaveBeenCalledTimes(1);
-    writeSpy.mockRestore();
+    expect(loadSessionStore(storePath)[key]?.sessionId).toBe("s-noop");
   });
 
   it("keeps session store writes atomic while skipping durable fsync inside the writer lock", async () => {
@@ -528,7 +530,7 @@ describe("resolveAndPersistSessionFile", () => {
         updatedAt: Date.now(),
       },
     };
-    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+    await saveSessionStore(fixture.storePath(), store);
     const sessionStore = loadSessionStore(fixture.storePath());
     const fallbackSessionFile = resolveSessionTranscriptPathInDir(
       sessionId,
@@ -554,7 +556,7 @@ describe("resolveAndPersistSessionFile", () => {
   it("creates and persists entry when session is not yet present", async () => {
     const sessionId = "new-session-id";
     const sessionKey = "agent:main:telegram:group:123";
-    fs.writeFileSync(fixture.storePath(), JSON.stringify({}), "utf-8");
+    await saveSessionStore(fixture.storePath(), {});
     const sessionStore = loadSessionStore(fixture.storePath());
     const fallbackSessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
 
@@ -591,7 +593,7 @@ describe("resolveAndPersistSessionFile", () => {
         sessionFile: previousSessionFile,
       },
     };
-    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+    await saveSessionStore(fixture.storePath(), store);
     const sessionStore = loadSessionStore(fixture.storePath());
 
     const result = await resolveAndPersistSessionFile({

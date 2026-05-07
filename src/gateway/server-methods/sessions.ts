@@ -27,6 +27,11 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
+import {
+  appendSqliteSessionTranscriptEvent,
+  hasSqliteSessionTranscriptEvents,
+  replaceSqliteSessionTranscriptEvents,
+} from "../../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createInternalHookEvent,
@@ -409,8 +414,9 @@ function ensureSessionTranscriptFile(params: {
         agentId: params.agentId,
       }),
     );
-    if (!fs.existsSync(transcriptPath)) {
-      fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
+    if (
+      !hasSqliteSessionTranscriptEvents({ agentId: params.agentId, sessionId: params.sessionId })
+    ) {
       const header = {
         type: "session",
         version: CURRENT_SESSION_VERSION,
@@ -418,9 +424,11 @@ function ensureSessionTranscriptFile(params: {
         timestamp: new Date().toISOString(),
         cwd: process.cwd(),
       };
-      fs.writeFileSync(transcriptPath, `${JSON.stringify(header)}\n`, {
-        encoding: "utf-8",
-        mode: 0o600,
+      appendSqliteSessionTranscriptEvent({
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        transcriptPath,
+        event: header,
       });
     }
     return { ok: true, transcriptPath };
@@ -2077,8 +2085,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const archived = archiveFileOnDisk(filePath, "bak");
-    fs.writeFileSync(filePath, `${lines.join("\n")}\n`, "utf-8");
+    const archived = fs.existsSync(filePath) ? archiveFileOnDisk(filePath, "bak") : undefined;
+    replaceSqliteSessionTranscriptEvents({
+      agentId: target.agentId,
+      sessionId,
+      transcriptPath: filePath,
+      events: lines.map((line) => JSON.parse(line) as unknown),
+    });
 
     await updateSessionStore(storePath, (store) => {
       const entryKey = compactTarget.primaryKey;

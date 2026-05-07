@@ -10,6 +10,10 @@ import {
   stripLeadingSilentToken,
 } from "../../auto-reply/tokens.js";
 import {
+  loadSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScopeForPath,
+} from "../../config/sessions/transcript-store.sqlite.js";
+import {
   type ClaudeCliFallbackSeed,
   readClaudeCliFallbackSeed,
 } from "../../gateway/cli-session-history.js";
@@ -68,13 +72,23 @@ async function jsonlFileHasAssistantMessage(filePath: string | undefined): Promi
   }
 }
 
-/**
- * Check whether a session transcript file exists and contains at least one
- * assistant message, indicating that the SessionManager has flushed the
- * initial user+assistant exchange to disk.
- */
+function sqliteTranscriptHasAssistantMessage(sessionFile: string | undefined): boolean {
+  if (!sessionFile) {
+    return false;
+  }
+  const scope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: sessionFile });
+  if (!scope) {
+    return false;
+  }
+  return loadSqliteSessionTranscriptEvents(scope).some((entry) => {
+    const record = entry.event as Record<string, unknown> | null;
+    return (record?.message as Record<string, unknown> | undefined)?.role === "assistant";
+  });
+}
+
+/** Check whether the SQLite transcript contains at least one assistant message. */
 export async function sessionFileHasContent(sessionFile: string | undefined): Promise<boolean> {
-  return await jsonlFileHasAssistantMessage(sessionFile);
+  return sqliteTranscriptHasAssistantMessage(sessionFile);
 }
 
 export async function claudeCliSessionTranscriptHasContent(params: {

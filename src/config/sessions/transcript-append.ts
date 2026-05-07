@@ -1,20 +1,10 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
-import { StringDecoder } from "node:string_decoder";
-import {
-  acquireSessionWriteLock,
-  type SessionWriteLockAcquireTimeoutConfig,
-  resolveSessionWriteLockAcquireTimeoutMs,
-} from "../../agents/session-write-lock.js";
+import type { SessionWriteLockAcquireTimeoutConfig } from "../../agents/session-write-lock.js";
 import {
   appendSqliteSessionTranscriptEvent,
-  hasSqliteSessionTranscriptEvents,
-  importJsonlTranscriptToSqlite,
+  loadSqliteSessionTranscriptEvents,
 } from "./transcript-store.sqlite.js";
-
-const TRANSCRIPT_APPEND_SCAN_CHUNK_BYTES = 64 * 1024;
-const SESSION_MANAGER_APPEND_MAX_BYTES = 8 * 1024 * 1024;
 
 const transcriptAppendQueues = new Map<string, Promise<void>>();
 
@@ -23,229 +13,26 @@ async function loadCurrentSessionVersion(): Promise<number> {
     .CURRENT_SESSION_VERSION;
 }
 
-type TranscriptLeafInfo = {
-  leafId?: string;
-  hasParentLinkedEntries: boolean;
-  nonSessionEntryCount: number;
-};
-
-async function yieldTranscriptAppendScan(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
-}
-
-function lineParentLinkedEntryId(line: string): string | undefined {
-  if (!line.trim()) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(line) as { type?: unknown; id?: unknown; parentId?: unknown };
-    return parsed.type !== "session" && typeof parsed.id === "string" && "parentId" in parsed
-      ? parsed.id
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function normalizeEntryId(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-
-function generateEntryId(existingIds: Set<string>): string {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const id = randomUUID().slice(0, 8);
-    if (!existingIds.has(id)) {
-      existingIds.add(id);
-      return id;
-    }
-  }
-  const id = randomUUID();
-  existingIds.add(id);
-  return id;
-}
-
-async function readTranscriptLeafInfo(transcriptPath: string): Promise<TranscriptLeafInfo> {
-  const handle = await fs.open(transcriptPath, "r");
-  try {
-    const decoder = new StringDecoder("utf8");
-    const buffer = Buffer.allocUnsafe(TRANSCRIPT_APPEND_SCAN_CHUNK_BYTES);
-    let carry = "";
-    let leafId: string | undefined;
-    let hasParentLinkedEntries = false;
-    let nonSessionEntryCount = 0;
-    while (true) {
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
-      if (bytesRead <= 0) {
-        break;
-      }
-      const text = carry + decoder.write(buffer.subarray(0, bytesRead));
-      const lines = text.split(/\r?\n/);
-      carry = lines.pop() ?? "";
-      for (const line of lines) {
-        if (lineHasNonSessionEntry(line)) {
-          nonSessionEntryCount += 1;
-        }
-        const id = lineParentLinkedEntryId(line);
-        if (id) {
-          leafId = id;
-          hasParentLinkedEntries = true;
-        }
-      }
-      await yieldTranscriptAppendScan();
-    }
-    const tail = carry + decoder.end();
-    if (lineHasNonSessionEntry(tail)) {
-      nonSessionEntryCount += 1;
-    }
-    const id = lineParentLinkedEntryId(tail);
-    if (id) {
-      leafId = id;
-      hasParentLinkedEntries = true;
-    }
-    return {
-      ...(leafId ? { leafId } : {}),
-      hasParentLinkedEntries,
-      nonSessionEntryCount,
-    };
-  } finally {
-    await handle.close();
-  }
-}
-
-function lineHasNonSessionEntry(line: string): boolean {
-  if (!line.trim()) {
-    return false;
-  }
-  try {
-    const parsed = JSON.parse(line) as { type?: unknown };
-    return parsed.type !== "session";
-  } catch {
-    return false;
-  }
-}
-
-function shouldMirrorTranscriptToSqlite(params: {
+function normalizeRequiredScope(params: {
+  transcriptPath: string;
   agentId?: string;
   sessionId?: string;
-}): params is {
-  agentId: string;
-  sessionId: string;
-} {
-  return Boolean(params.agentId?.trim() && params.sessionId?.trim());
-}
-
-function importJsonlTranscriptToSqliteIfEmpty(params: {
-  transcriptPath: string;
-  agentId: string;
-  sessionId: string;
-  now: number;
-}): void {
-  if (
-    hasSqliteSessionTranscriptEvents({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-    })
-  ) {
-    return;
+}): { agentId: string; sessionId: string; queueKey: string } {
+  const agentId = params.agentId?.trim();
+  const sessionId = params.sessionId?.trim();
+  if (!agentId || !sessionId) {
+    throw new Error(
+      `SQLite transcript appends require agentId and sessionId; path-only transcript writes are retired (${params.transcriptPath})`,
+    );
   }
-  importJsonlTranscriptToSqlite({
-    agentId: params.agentId,
-    sessionId: params.sessionId,
-    transcriptPath: params.transcriptPath,
-    now: () => params.now,
-  });
-}
-
-async function migrateLinearTranscriptToParentLinked(transcriptPath: string): Promise<{
-  leafId?: string;
-}> {
-  const raw = await fs.readFile(transcriptPath, "utf-8");
-  const currentSessionVersion = await loadCurrentSessionVersion();
-  const existingIds = new Set<string>();
-  const output: string[] = [];
-  let previousId: string | null = null;
-  let leafId: string | undefined;
-  for (const line of raw.split(/\r?\n/)) {
-    if (!line.trim()) {
-      continue;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      output.push(line);
-      continue;
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      output.push(line);
-      continue;
-    }
-    const record = parsed as Record<string, unknown>;
-    if (record.type === "session") {
-      output.push(JSON.stringify({ ...record, version: currentSessionVersion }));
-      continue;
-    }
-    const id = normalizeEntryId(record.id) ?? generateEntryId(existingIds);
-    existingIds.add(id);
-    record.id = id;
-    if (!Object.hasOwn(record, "parentId")) {
-      record.parentId = previousId;
-    }
-    previousId = id;
-    leafId = id;
-    output.push(JSON.stringify(record));
-  }
-  await fs.writeFile(transcriptPath, `${output.join("\n")}\n`, {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
-  const result: { leafId?: string } = {};
-  if (leafId) {
-    result.leafId = leafId;
-  }
-  return result;
-}
-
-async function ensureTranscriptHeader(
-  transcriptPath: string,
-  params: { sessionId?: string; cwd?: string } = {},
-): Promise<void> {
-  const stat = await fs.stat(transcriptPath).catch(() => null);
-  if (stat?.isFile() && stat.size > 0) {
-    return;
-  }
-  const currentSessionVersion = await loadCurrentSessionVersion();
-  await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
-  const header = {
-    type: "session",
-    version: currentSessionVersion,
-    id: params.sessionId ?? randomUUID(),
-    timestamp: new Date().toISOString(),
-    cwd: params.cwd ?? process.cwd(),
+  return {
+    agentId,
+    sessionId,
+    queueKey: `${agentId}\0${sessionId}`,
   };
-  await fs.writeFile(transcriptPath, `${JSON.stringify(header)}\n`, {
-    encoding: "utf-8",
-    mode: 0o600,
-    flag: stat?.isFile() ? "w" : "wx",
-  });
 }
 
-async function resolveTranscriptAppendQueueKey(transcriptPath: string): Promise<string> {
-  const resolvedTranscriptPath = path.resolve(transcriptPath);
-  const transcriptDir = path.dirname(resolvedTranscriptPath);
-  await fs.mkdir(transcriptDir, { recursive: true });
-  try {
-    return path.join(await fs.realpath(transcriptDir), path.basename(resolvedTranscriptPath));
-  } catch {
-    return resolvedTranscriptPath;
-  }
-}
-
-async function withTranscriptAppendQueue<T>(
-  transcriptPath: string,
-  fn: () => Promise<T>,
-): Promise<T> {
-  const queueKey = await resolveTranscriptAppendQueueKey(transcriptPath);
+async function withTranscriptAppendQueue<T>(queueKey: string, fn: () => Promise<T>): Promise<T> {
   const previous = transcriptAppendQueues.get(queueKey) ?? Promise.resolve();
   let releaseCurrent!: () => void;
   const current = new Promise<void>((resolve) => {
@@ -264,6 +51,83 @@ async function withTranscriptAppendQueue<T>(
   }
 }
 
+function latestParentLinkedEntryId(events: unknown[]): string | undefined {
+  for (const event of events.toReversed()) {
+    if (!event || typeof event !== "object" || Array.isArray(event)) {
+      continue;
+    }
+    const record = event as { type?: unknown; id?: unknown; parentId?: unknown };
+    if (
+      record.type !== "session" &&
+      typeof record.id === "string" &&
+      Object.hasOwn(record, "parentId")
+    ) {
+      return record.id;
+    }
+  }
+  return undefined;
+}
+
+function readMessageIdempotencyKey(message: unknown): string | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const key = (message as { idempotencyKey?: unknown }).idempotencyKey;
+  return typeof key === "string" && key.trim() ? key : undefined;
+}
+
+function findExistingMessageIdForIdempotencyKey(
+  events: unknown[],
+  idempotencyKey: string | undefined,
+): string | undefined {
+  if (!idempotencyKey) {
+    return undefined;
+  }
+  for (const event of events) {
+    if (!event || typeof event !== "object" || Array.isArray(event)) {
+      continue;
+    }
+    const record = event as { id?: unknown; message?: { idempotencyKey?: unknown } };
+    if (record.message?.idempotencyKey === idempotencyKey && typeof record.id === "string") {
+      return record.id;
+    }
+  }
+  return undefined;
+}
+
+async function appendSessionHeaderIfEmpty(params: {
+  agentId: string;
+  sessionId: string;
+  transcriptPath: string;
+  cwd?: string;
+  now: number;
+}): Promise<unknown[]> {
+  const existing = loadSqliteSessionTranscriptEvents({
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+  }).map((entry) => entry.event);
+  if (existing.length > 0) {
+    return existing;
+  }
+
+  const currentSessionVersion = await loadCurrentSessionVersion();
+  const header = {
+    type: "session",
+    version: currentSessionVersion,
+    id: params.sessionId,
+    timestamp: new Date(params.now).toISOString(),
+    cwd: params.cwd ?? process.cwd(),
+  };
+  appendSqliteSessionTranscriptEvent({
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+    transcriptPath: path.resolve(params.transcriptPath),
+    event: header,
+    now: () => params.now,
+  });
+  return [header];
+}
+
 export async function appendSessionTranscriptMessage(params: {
   transcriptPath: string;
   message: unknown;
@@ -274,81 +138,38 @@ export async function appendSessionTranscriptMessage(params: {
   useRawWhenLinear?: boolean;
   config?: SessionWriteLockAcquireTimeoutConfig;
 }): Promise<{ messageId: string }> {
-  return await withTranscriptAppendQueue(params.transcriptPath, () =>
-    appendSessionTranscriptMessageLocked(params),
-  );
-}
-
-async function appendSessionTranscriptMessageLocked(params: {
-  transcriptPath: string;
-  message: unknown;
-  agentId?: string;
-  now?: number;
-  sessionId?: string;
-  cwd?: string;
-  useRawWhenLinear?: boolean;
-  config?: SessionWriteLockAcquireTimeoutConfig;
-}): Promise<{ messageId: string }> {
-  const lock = await acquireSessionWriteLock({
-    sessionFile: params.transcriptPath,
-    timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
-    allowReentrant: true,
-  });
-  try {
+  const scope = normalizeRequiredScope(params);
+  return await withTranscriptAppendQueue(scope.queueKey, async () => {
     const now = params.now ?? Date.now();
-    const messageId = randomUUID();
-    await ensureTranscriptHeader(params.transcriptPath, {
-      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-      ...(params.cwd ? { cwd: params.cwd } : {}),
+    const events = await appendSessionHeaderIfEmpty({
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+      transcriptPath: params.transcriptPath,
+      cwd: params.cwd,
+      now,
     });
-    const stat = await fs.stat(params.transcriptPath).catch(() => null);
-    let leafInfo: TranscriptLeafInfo = await readTranscriptLeafInfo(params.transcriptPath).catch(
-      () => ({
-        hasParentLinkedEntries: false,
-        nonSessionEntryCount: 0,
-      }),
+    const existingMessageId = findExistingMessageIdForIdempotencyKey(
+      events,
+      readMessageIdempotencyKey(params.message),
     );
-    const hasLinearEntries = !leafInfo.hasParentLinkedEntries && leafInfo.nonSessionEntryCount > 0;
-    const allowRawWhenLinear = params.useRawWhenLinear !== false;
-    const shouldRawAppend =
-      allowRawWhenLinear &&
-      hasLinearEntries &&
-      (stat?.size ?? 0) > SESSION_MANAGER_APPEND_MAX_BYTES;
-    if (hasLinearEntries && !shouldRawAppend) {
-      const migrated = await migrateLinearTranscriptToParentLinked(params.transcriptPath);
-      leafInfo = {
-        ...(migrated.leafId ? { leafId: migrated.leafId } : {}),
-        hasParentLinkedEntries: Boolean(migrated.leafId),
-        nonSessionEntryCount: leafInfo.nonSessionEntryCount,
-      };
+    if (existingMessageId) {
+      return { messageId: existingMessageId };
     }
-    if (shouldMirrorTranscriptToSqlite(params)) {
-      importJsonlTranscriptToSqliteIfEmpty({
-        transcriptPath: params.transcriptPath,
-        agentId: params.agentId,
-        sessionId: params.sessionId,
-        now,
-      });
-    }
+    const messageId = randomUUID();
     const entry = {
       type: "message",
       id: messageId,
-      ...(shouldRawAppend ? {} : { parentId: leafInfo.leafId ?? null }),
+      parentId: latestParentLinkedEntryId(events) ?? null,
       timestamp: new Date(now).toISOString(),
       message: params.message,
     };
-    await fs.appendFile(params.transcriptPath, `${JSON.stringify(entry)}\n`, "utf-8");
-    if (shouldMirrorTranscriptToSqlite(params)) {
-      appendSqliteSessionTranscriptEvent({
-        agentId: params.agentId,
-        sessionId: params.sessionId,
-        transcriptPath: params.transcriptPath,
-        event: entry,
-        now: () => now,
-      });
-    }
+    appendSqliteSessionTranscriptEvent({
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+      transcriptPath: path.resolve(params.transcriptPath),
+      event: entry,
+      now: () => now,
+    });
     return { messageId };
-  } finally {
-    await lock.release();
-  }
+  });
 }

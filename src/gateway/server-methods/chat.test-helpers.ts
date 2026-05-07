@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "../../agents/transcript/session-transcript-contract.js";
 
 export function createTranscriptFixtureSync(params: {
   prefix: string;
@@ -9,17 +8,6 @@ export function createTranscriptFixtureSync(params: {
   fileName?: string;
 }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), params.prefix));
-  const transcriptPath = path.join(dir, params.fileName ?? "sess.jsonl");
-  fs.writeFileSync(
-    transcriptPath,
-    `${JSON.stringify({
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: params.sessionId,
-      timestamp: new Date(0).toISOString(),
-      cwd: "/tmp",
-    })}\n`,
-    "utf-8",
-  );
-  return { dir, transcriptPath };
+  const transcriptPath = path.join(dir, params.fileName ?? `${params.sessionId}.jsonl`);
+  return { dir, transcriptPath, sessionId: params.sessionId };
 }

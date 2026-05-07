@@ -1,7 +1,9 @@
 import type { SessionWriteLockAcquireTimeoutConfig } from "../../agents/session-write-lock.js";
 import type { SessionManager } from "../../agents/transcript/session-transcript-contract.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
+import { resolveSqliteSessionTranscriptScopeForPath } from "../../config/sessions/transcript-store.sqlite.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
@@ -105,10 +107,13 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   };
 
   try {
+    const existingScope = resolveSqliteSessionTranscriptScopeForPath({
+      transcriptPath: params.transcriptPath,
+    });
     const { messageId } = await appendSessionTranscriptMessage({
       transcriptPath: params.transcriptPath,
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+      agentId: params.agentId ?? existingScope?.agentId ?? DEFAULT_AGENT_ID,
+      sessionId: params.sessionId ?? existingScope?.sessionId,
       message: messageBody,
       now,
       useRawWhenLinear: true,

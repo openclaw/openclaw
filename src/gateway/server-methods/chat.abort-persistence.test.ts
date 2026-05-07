@@ -4,6 +4,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CURRENT_SESSION_VERSION } from "../../agents/transcript/session-transcript-contract.js";
 import {
+  loadSqliteSessionTranscriptEvents,
+  replaceSqliteSessionTranscriptEvents,
+} from "../../config/sessions/transcript-store.sqlite.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
   createActiveRun,
   createChatAbortContext,
   invokeChatAbortHandler,
@@ -45,23 +50,23 @@ async function writeTranscriptHeader(transcriptPath: string, sessionId: string) 
     timestamp: new Date(0).toISOString(),
     cwd: "/tmp",
   };
-  await fs.writeFile(transcriptPath, `${JSON.stringify(header)}\n`, "utf-8");
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId,
+    transcriptPath,
+    events: [header],
+  });
 }
 
-async function readTranscriptLines(transcriptPath: string): Promise<TranscriptLine[]> {
-  const raw = await fs.readFile(transcriptPath, "utf-8");
-  const lines: TranscriptLine[] = [];
-  for (const line of raw.split(/\r?\n/)) {
-    if (line.trim().length === 0) {
-      continue;
-    }
-    try {
-      lines.push(JSON.parse(line) as TranscriptLine);
-    } catch {
-      lines.push({});
-    }
+async function readTranscriptLines(_transcriptPath: string): Promise<TranscriptLine[]> {
+  const sessionId = sessionEntryState.sessionId;
+  if (!sessionId) {
+    return [];
   }
-  return lines;
+  return loadSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId,
+  }).map((entry) => entry.event as TranscriptLine);
 }
 
 function collectMessagesWithIdempotencyKey(
@@ -96,6 +101,7 @@ function setMockSessionEntry(transcriptPath: string, sessionId: string) {
 
 async function createTranscriptFixture(prefix: string) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  vi.stubEnv("OPENCLAW_STATE_DIR", dir);
   const sessionId = "sess-main";
   const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
   await writeTranscriptHeader(transcriptPath, sessionId);
@@ -104,7 +110,9 @@ async function createTranscriptFixture(prefix: string) {
 }
 
 afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("chat abort transcript persistence", () => {

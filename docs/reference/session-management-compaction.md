@@ -1,7 +1,7 @@
 ---
 summary: "Deep dive: session store + transcripts, lifecycle, and (auto)compaction internals"
 read_when:
-  - You need to debug session ids, transcript JSONL, SQLite session rows, or legacy sessions.json fields
+  - You need to debug session ids, SQLite session rows/events, or doctor migration of legacy sessions.json/JSONL files
   - You are changing auto-compaction behavior or adding "pre-compaction" housekeeping
   - You want to implement memory flushes or silent system turns
 title: "Session management deep dive"
@@ -11,7 +11,7 @@ OpenClaw manages sessions end-to-end across these areas:
 
 - **Session routing** (how inbound messages map to a `sessionKey`)
 - **Session store** and what it tracks
-- **Transcript persistence** (`*.jsonl`) and its structure
+- **Transcript persistence** (SQLite event streams, doctor-only JSONL import, explicit debug export) and its structure
 - **Transcript hygiene** (provider-specific fixups before runs)
 - **Context limits** (context window vs tracked tokens)
 - **Compaction** (manual and auto-compaction) and where to hook pre-compaction work
@@ -47,17 +47,15 @@ OpenClaw persists sessions in two layers:
    - Tracks session metadata (current session id, last activity, toggles, token counters, etc.)
 
 2. **Transcript (`<sessionId>.jsonl`)**
-   - Append-only transcript with tree structure (entries have `id` + `parentId`)
+   - SQLite-backed transcript event stream with tree structure (entries have `id` + `parentId`)
    - Stores the actual conversation + tool calls + compaction summaries
    - Used to rebuild the model context for future turns
-   - Mirrored into SQLite for scoped Gateway appends; scoped latest/tail
-     assistant-text lookups, session exports, and `before_reset` hook payloads
-     prefer that mirror and fall back to JSONL. Silent session rotations also
-     replay recent user/assistant turns from the scoped SQLite mirror when
-     available. Shared async Gateway transcript readers fall back to the scoped
-     SQLite mirror for chat history, TUI history, recovery, managed media
-     indexing, token estimation, title/preview/usage helpers, and bounded
-     session inspection when the compatibility JSONL is missing.
+   - Stored in SQLite for OpenClaw-owned runtime paths; JSONL is legacy
+     import/export/debug compatibility, not a runtime sidecar
+   - Scoped latest/tail assistant-text lookups, session exports, `before_reset`
+     hook payloads, silent session rotations, chat history, TUI history,
+     recovery, managed media indexing, token estimation, title/preview/usage
+     helpers, and bounded session inspection read the scoped SQLite transcript.
    - Large pre-compaction debug checkpoints are skipped once the active
      transcript exceeds the checkpoint size cap, avoiding a second giant
      `.checkpoint.*.jsonl` copy.
@@ -78,8 +76,11 @@ Per agent, on the Gateway host:
   imports legacy `~/.openclaw/agents/<agentId>/sessions/sessions.json` indexes
   into SQLite and removes the JSON index after import; Gateway startup leaves
   legacy indexes alone.
-- Transcripts: `~/.openclaw/agents/<agentId>/sessions/<sessionId>.jsonl`
-  - Telegram topic sessions: `.../<sessionId>-topic-<threadId>.jsonl`
+- Transcripts: `~/.openclaw/state/openclaw.sqlite` (`transcript_events` and
+  `transcript_files`). Legacy/export paths may still use
+  `~/.openclaw/agents/<agentId>/sessions/<sessionId>.jsonl` names as stable
+  handles.
+  - Telegram topic handles: `.../<sessionId>-topic-<threadId>.jsonl`
 
 OpenClaw resolves these via `src/config/sessions/*`.
 
@@ -105,10 +106,9 @@ configured age, count, or disk budget.
 
 OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups during Gateway writes. The legacy `session.maintenance.rotateBytes` key is ignored and `openclaw doctor --fix` removes it from older configs.
 
-Transcript mutations use a session write lock on the transcript file. Lock acquisition waits up to
-`session.writeLock.acquireTimeoutMs` before surfacing a busy-session error; the default is `60000`
-ms. Raise this only when legitimate prep, cleanup, compaction, or transcript mirror work contends
-longer on slow machines. Stale-lock detection and maximum hold warnings remain separate policies.
+Transcript mutations are serialized through SQLite transactions plus the
+per-session append queue. The legacy `session.writeLock.acquireTimeoutMs`
+setting remains for older import/debug paths that still touch JSONL files.
 
 Enforcement order for disk budget cleanup (`mode: "enforce"`):
 
@@ -209,14 +209,17 @@ The store is safe to edit, but the Gateway is the authority: it may rewrite or r
 
 ---
 
-## Transcript structure (`*.jsonl`)
+## Transcript structure
 
-Transcripts are managed by `@mariozechner/pi-coding-agent`'s `SessionManager`.
+Transcripts are managed by OpenClaw's SQLite-backed `SessionManager`.
 
-The file is JSONL:
+The event stream is stored in `transcript_events`:
 
-- First line: session header (`type: "session"`, includes `id`, `cwd`, `timestamp`, optional `parentSession`)
+- First event: session header (`type: "session"`, includes `id`, `cwd`,
+  `timestamp`, optional `parentSession`)
 - Then: session entries with `id` + `parentId` (tree)
+
+JSONL import/export uses the same event shape, one JSON object per line.
 
 Notable entry types:
 

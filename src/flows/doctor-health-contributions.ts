@@ -688,6 +688,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runPluginRegistryHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:session-transcripts",
+      label: "Session transcripts",
+      run: runSessionTranscriptsHealth,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:state-integrity",
       label: "State integrity",
       run: runStateIntegrityHealth,
@@ -701,11 +706,6 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:session-locks",
       label: "Session locks",
       run: runSessionLocksHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:session-transcripts",
-      label: "Session transcripts",
-      run: runSessionTranscriptsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:legacy-cron",

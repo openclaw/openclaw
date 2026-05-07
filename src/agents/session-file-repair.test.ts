@@ -2,6 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  exportSqliteSessionTranscriptJsonl,
+  replaceSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScopeForPath,
+} from "../config/sessions/transcript-store.sqlite.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { BLANK_USER_FALLBACK_TEXT, repairSessionFileIfNeeded } from "./session-file-repair.js";
 
 function buildSessionHeaderAndMessage() {
@@ -30,35 +36,50 @@ async function createTempSessionPath() {
   return { dir, file: path.join(dir, "session.jsonl") };
 }
 
-function requireBackupPath(result: { backupPath?: string }): string {
-  if (!result.backupPath) {
-    throw new Error("expected session repair backup path");
-  }
-  return result.backupPath;
-}
-
 afterEach(async () => {
+  closeOpenClawStateDatabaseForTest();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
+
+function writeTranscriptEvents(file: string, events: unknown[]) {
+  const sessionId =
+    events.find((event): event is { type: "session"; id: string } =>
+      Boolean(
+        event &&
+        typeof event === "object" &&
+        (event as { type?: unknown }).type === "session" &&
+        typeof (event as { id?: unknown }).id === "string",
+      ),
+    )?.id ?? path.basename(file, ".jsonl");
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId,
+    transcriptPath: file,
+    events,
+  });
+}
+
+async function readTranscriptJsonl(file: string): Promise<string> {
+  const scope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: file });
+  return scope ? exportSqliteSessionTranscriptJsonl(scope) : "";
+}
 
 describe("repairSessionFileIfNeeded", () => {
   it("rewrites session files that contain malformed lines", async () => {
     const { file } = await createTempSessionPath();
     const { header, message } = buildSessionHeaderAndMessage();
 
-    const content = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n{"type":"message"`;
-    await fs.writeFile(file, content, "utf-8");
+    writeTranscriptEvents(file, [
+      header,
+      message,
+      { type: "message", id: "corrupt", message: { role: null, content: "bad" } },
+    ]);
 
     const result = await repairSessionFileIfNeeded({ sessionFile: file });
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(1);
-    const backupPath = requireBackupPath(result);
-
-    const repaired = await fs.readFile(file, "utf-8");
+    const repaired = await readTranscriptJsonl(file);
     expect(repaired.trim().split("\n")).toHaveLength(2);
-
-    const backup = await fs.readFile(backupPath, "utf-8");
-    expect(backup).toBe(content);
   });
 
   it("does not drop CRLF-terminated JSONL lines", async () => {
@@ -80,8 +101,7 @@ describe("repairSessionFileIfNeeded", () => {
       timestamp: new Date().toISOString(),
       message: { role: "user", content: "hello" },
     };
-    const content = `${JSON.stringify(badHeader)}\n{"type":"message"`;
-    await fs.writeFile(file, content, "utf-8");
+    writeTranscriptEvents(file, [badHeader]);
 
     const warn = vi.fn();
     const result = await repairSessionFileIfNeeded({ sessionFile: file, warn });
@@ -99,8 +119,8 @@ describe("repairSessionFileIfNeeded", () => {
     const result = await repairSessionFileIfNeeded({ sessionFile: dir, warn });
 
     expect(result.repaired).toBe(false);
-    expect(result.reason).toContain("failed to read session file");
-    expect(warn).toHaveBeenCalledTimes(1);
+    expect(result.reason).toBe("missing SQLite transcript");
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("rewrites persisted assistant messages with empty content arrays", async () => {
@@ -130,8 +150,7 @@ describe("repairSessionFileIfNeeded", () => {
       timestamp: new Date().toISOString(),
       message: { role: "user", content: "retry" },
     };
-    const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(poisonedAssistantEntry)}\n${JSON.stringify(followUp)}\n`;
-    await fs.writeFile(file, original, "utf-8");
+    writeTranscriptEvents(file, [header, message, poisonedAssistantEntry, followUp]);
 
     const debug = vi.fn();
     const result = await repairSessionFileIfNeeded({ sessionFile: file, debug });
@@ -139,13 +158,12 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(0);
     expect(result.rewrittenAssistantMessages).toBe(1);
-    await expect(fs.readFile(requireBackupPath(result), "utf-8")).resolves.toBe(original);
     expect(debug).toHaveBeenCalledTimes(1);
     const debugMessage = debug.mock.calls[0]?.[0] as string;
     expect(debugMessage).toContain("rewrote 1 assistant message(s)");
     expect(debugMessage).not.toContain("dropped");
 
-    const repaired = await fs.readFile(file, "utf-8");
+    const repaired = await readTranscriptJsonl(file);
     const repairedLines = repaired.trim().split("\n");
     expect(repairedLines).toHaveLength(4);
     const repairedEntry: { message: { content: { type: string; text: string }[] } } = JSON.parse(
@@ -169,8 +187,7 @@ describe("repairSessionFileIfNeeded", () => {
         content: [{ type: "text", text: "" }],
       },
     };
-    const original = `${JSON.stringify(header)}\n${JSON.stringify(blankUserEntry)}\n${JSON.stringify(message)}\n`;
-    await fs.writeFile(file, original, "utf-8");
+    writeTranscriptEvents(file, [header, blankUserEntry, message]);
 
     const debug = vi.fn();
     const result = await repairSessionFileIfNeeded({ sessionFile: file, debug });
@@ -180,7 +197,7 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.droppedBlankUserMessages).toBe(0);
     expect(debug.mock.calls[0]?.[0]).toContain("rewrote 1 user message(s)");
 
-    const repaired = await fs.readFile(file, "utf-8");
+    const repaired = await readTranscriptJsonl(file);
     const repairedLines = repaired.trim().split("\n");
     expect(repairedLines).toHaveLength(3);
     const rewrittenEntry = JSON.parse(repairedLines[1]);
@@ -203,15 +220,14 @@ describe("repairSessionFileIfNeeded", () => {
         content: "   ",
       },
     };
-    const original = `${JSON.stringify(header)}\n${JSON.stringify(blankStringUserEntry)}\n${JSON.stringify(message)}\n`;
-    await fs.writeFile(file, original, "utf-8");
+    writeTranscriptEvents(file, [header, blankStringUserEntry, message]);
 
     const result = await repairSessionFileIfNeeded({ sessionFile: file });
 
     expect(result.repaired).toBe(true);
     expect(result.rewrittenUserMessages).toBe(1);
 
-    const repaired = await fs.readFile(file, "utf-8");
+    const repaired = await readTranscriptJsonl(file);
     const repairedLines = repaired.trim().split("\n");
     expect(repairedLines).toHaveLength(3);
     const rewrittenEntry = JSON.parse(repairedLines[1]);
@@ -234,14 +250,13 @@ describe("repairSessionFileIfNeeded", () => {
         ],
       },
     };
-    const original = `${JSON.stringify(header)}\n${JSON.stringify(mediaUserEntry)}\n`;
-    await fs.writeFile(file, original, "utf-8");
+    writeTranscriptEvents(file, [header, mediaUserEntry]);
 
     const result = await repairSessionFileIfNeeded({ sessionFile: file });
 
     expect(result.repaired).toBe(true);
     expect(result.rewrittenUserMessages).toBe(1);
-    const repaired = await fs.readFile(file, "utf-8");
+    const repaired = await readTranscriptJsonl(file);
     const repairedEntry = JSON.parse(repaired.trim().split("\n")[1] ?? "{}");
     expect(repairedEntry.message.content).toEqual([
       { type: "image", data: "AA==", mimeType: "image/png" },
@@ -266,8 +281,11 @@ describe("repairSessionFileIfNeeded", () => {
         stopReason: "error",
       },
     };
-    const original = `${JSON.stringify(header)}\n${JSON.stringify(poisonedAssistantEntry)}\n{"type":"message"`;
-    await fs.writeFile(file, original, "utf-8");
+    writeTranscriptEvents(file, [
+      header,
+      poisonedAssistantEntry,
+      { type: "message", id: "corrupt", message: { role: null, content: "bad" } },
+    ]);
 
     const debug = vi.fn();
     const result = await repairSessionFileIfNeeded({ sessionFile: file, debug });
@@ -612,22 +630,13 @@ describe("repairSessionFileIfNeeded", () => {
       message: { role: "   ", content: "blank role" },
     };
 
-    const content = [
-      JSON.stringify(header),
-      JSON.stringify(message),
-      JSON.stringify(nullRoleEntry),
-      JSON.stringify(missingRoleEntry),
-      JSON.stringify(emptyRoleEntry),
-    ].join("\n");
-    await fs.writeFile(file, `${content}\n`, "utf-8");
+    writeTranscriptEvents(file, [header, message, nullRoleEntry, missingRoleEntry, emptyRoleEntry]);
 
     const result = await repairSessionFileIfNeeded({ sessionFile: file });
 
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(3);
-    await expect(fs.readFile(requireBackupPath(result), "utf-8")).resolves.toBe(`${content}\n`);
-
-    const after = await fs.readFile(file, "utf-8");
+    const after = await readTranscriptJsonl(file);
     const lines = after.trimEnd().split("\n");
     expect(lines).toHaveLength(2);
     expect(JSON.parse(lines[0])).toEqual(header);
@@ -653,20 +662,14 @@ describe("repairSessionFileIfNeeded", () => {
       message: "not an object",
     };
 
-    const content = [
-      JSON.stringify(header),
-      JSON.stringify(message),
-      JSON.stringify(missingMessage),
-      JSON.stringify(stringMessage),
-    ].join("\n");
-    await fs.writeFile(file, `${content}\n`, "utf-8");
+    writeTranscriptEvents(file, [header, message, missingMessage, stringMessage]);
 
     const result = await repairSessionFileIfNeeded({ sessionFile: file });
 
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(2);
 
-    const after = await fs.readFile(file, "utf-8");
+    const after = await readTranscriptJsonl(file);
     const lines = after.trimEnd().split("\n");
     expect(lines).toHaveLength(2);
   });

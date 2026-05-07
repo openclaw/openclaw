@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
@@ -284,11 +286,23 @@ describe("sessionFileHasContent", () => {
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "oc-test-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
   });
 
   afterEach(async () => {
+    closeOpenClawStateDatabaseForTest();
+    vi.unstubAllEnvs();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
+
+  function writeTranscript(file: string, events: unknown[]): void {
+    replaceSqliteSessionTranscriptEvents({
+      agentId: "main",
+      sessionId: path.basename(file, ".jsonl"),
+      transcriptPath: file,
+      events: [{ type: "session", id: path.basename(file, ".jsonl") }, ...events],
+    });
+  }
 
   it("returns false for undefined sessionFile", async () => {
     expect(await sessionFileHasContent(undefined)).toBe(false);
@@ -300,63 +314,45 @@ describe("sessionFileHasContent", () => {
 
   it("returns false when session file is empty", async () => {
     const file = path.join(tmpDir, "empty.jsonl");
-    await fs.writeFile(file, "", "utf-8");
     expect(await sessionFileHasContent(file)).toBe(false);
   });
 
   it("returns false when session file has only user message (no assistant flush)", async () => {
     const file = path.join(tmpDir, "user-only.jsonl");
-    await fs.writeFile(
-      file,
-      '{"type":"session","id":"s1"}\n{"type":"message","message":{"role":"user","content":"hello"}}\n',
-      "utf-8",
-    );
+    writeTranscript(file, [{ type: "message", message: { role: "user", content: "hello" } }]);
     expect(await sessionFileHasContent(file)).toBe(false);
   });
 
   it("returns true when session file has assistant message (flushed)", async () => {
     const file = path.join(tmpDir, "with-assistant.jsonl");
-    await fs.writeFile(
-      file,
-      '{"type":"session","id":"s1"}\n{"type":"message","message":{"role":"user","content":"hello"}}\n{"type":"message","message":{"role":"assistant","content":"hi"}}\n',
-      "utf-8",
-    );
+    writeTranscript(file, [
+      { type: "message", message: { role: "user", content: "hello" } },
+      { type: "message", message: { role: "assistant", content: "hi" } },
+    ]);
     expect(await sessionFileHasContent(file)).toBe(true);
   });
 
   it("returns true when session file has spaced JSON (role : assistant)", async () => {
     const file = path.join(tmpDir, "spaced.jsonl");
-    await fs.writeFile(
-      file,
-      '{"type":"message","message":{"role": "assistant","content":"hi"}}\n',
-      "utf-8",
-    );
+    writeTranscript(file, [{ type: "message", message: { role: "assistant", content: "hi" } }]);
     expect(await sessionFileHasContent(file)).toBe(true);
   });
 
   it("returns true when assistant message appears after large user content", async () => {
     const file = path.join(tmpDir, "large-user.jsonl");
     // Create a user message whose JSON line exceeds 256KB to ensure the
-    // JSONL-based parser (CWE-703 fix) finds the assistant record that a
-    // naive byte-prefix approach would miss.
+    // transcript parser finds the assistant record after large earlier content.
     const bigContent = "x".repeat(300 * 1024);
-    const lines =
-      [
-        `{"type":"session","id":"s1"}`,
-        `{"type":"message","message":{"role":"user","content":"${bigContent}"}}`,
-        `{"type":"message","message":{"role":"assistant","content":"done"}}`,
-      ].join("\n") + "\n";
-    await fs.writeFile(file, lines, "utf-8");
+    writeTranscript(file, [
+      { type: "message", message: { role: "user", content: bigContent } },
+      { type: "message", message: { role: "assistant", content: "done" } },
+    ]);
     expect(await sessionFileHasContent(file)).toBe(true);
   });
 
   it("returns false when session file is a symbolic link", async () => {
     const realFile = path.join(tmpDir, "real.jsonl");
-    await fs.writeFile(
-      realFile,
-      '{"type":"message","message":{"role":"assistant","content":"hi"}}\n',
-      "utf-8",
-    );
+    await fs.writeFile(realFile, "", "utf-8");
     const link = path.join(tmpDir, "link.jsonl");
     await fs.symlink(realFile, link);
     expect(await sessionFileHasContent(link)).toBe(false);

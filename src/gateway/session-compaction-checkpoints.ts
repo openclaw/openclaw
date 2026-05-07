@@ -14,8 +14,13 @@ import type {
   SessionEntry,
 } from "../config/sessions.js";
 import { isCompactionCheckpointTranscriptFileName } from "../config/sessions/artifacts.js";
+import {
+  replaceSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScopeForPath,
+} from "../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 
 const log = createSubsystemLogger("gateway/session-compaction-checkpoints");
@@ -274,21 +279,18 @@ export async function forkCompactionCheckpointTranscriptAsync(params: {
   };
 
   try {
-    await fs.mkdir(sessionDir, { recursive: true });
-    const lines = [JSON.stringify(header)];
-    for (const entry of entries) {
-      if ((entry as { type?: unknown }).type !== "session") {
-        lines.push(JSON.stringify(entry));
-      }
-    }
-    await fs.writeFile(sessionFile, `${lines.join("\n")}\n`, { encoding: "utf-8", flag: "wx" });
+    const sourceScope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: sourceFile });
+    replaceSqliteSessionTranscriptEvents({
+      agentId: sourceScope?.agentId ?? DEFAULT_AGENT_ID,
+      sessionId,
+      transcriptPath: sessionFile,
+      events: [
+        header,
+        ...entries.filter((entry) => (entry as { type?: unknown }).type !== "session"),
+      ],
+    });
     return { sessionId, sessionFile };
   } catch {
-    try {
-      await fs.unlink(sessionFile);
-    } catch {
-      // Best-effort cleanup for partial fork files.
-    }
     return null;
   }
 }

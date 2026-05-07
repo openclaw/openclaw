@@ -1,8 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { writeTextAtomic } from "../../infra/json-files.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
@@ -37,7 +35,6 @@ export { withSessionStoreWriterForTest } from "./store-writer.js";
 export { loadSessionStore } from "./store-load.js";
 export { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
 
-const log = createSubsystemLogger("sessions/store");
 let sessionArchiveRuntimePromise: Promise<
   typeof import("../../gateway/session-archive.runtime.js")
 > | null = null;
@@ -148,57 +145,10 @@ async function saveSessionStoreUnlocked(
 
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
   const sqliteOptions = resolveSqliteSessionStoreOptionsForPath(storePath);
-  if (sqliteOptions) {
-    saveSqliteSessionStore(sqliteOptions, store);
-    return;
+  if (!sqliteOptions) {
+    throw new Error(`Session stores are SQLite-only; cannot resolve agent for ${storePath}`);
   }
-
-  const json = JSON.stringify(store, null, 2);
-  // Windows: keep retry semantics because rename can fail while readers hold locks.
-  if (process.platform === "win32") {
-    for (let i = 0; i < 5; i++) {
-      try {
-        await writeSessionStoreAtomic({ storePath, serialized: json });
-        return;
-      } catch (err) {
-        const code = getErrorCode(err);
-        if (code === "ENOENT") {
-          return;
-        }
-        if (i < 4) {
-          await new Promise((r) => setTimeout(r, 50 * (i + 1)));
-          continue;
-        }
-        // Final attempt failed - skip this save. The writer queue ensures
-        // the next save will retry with fresh data. Log for diagnostics.
-        log.warn(`atomic write failed after 5 attempts: ${storePath}`);
-      }
-    }
-    return;
-  }
-
-  try {
-    await writeSessionStoreAtomic({ storePath, serialized: json });
-  } catch (err) {
-    const code = getErrorCode(err);
-
-    if (code === "ENOENT") {
-      // In tests the temp session-store directory may be deleted while writes are in-flight.
-      // Best-effort: try a direct write (recreating the parent dir), otherwise ignore.
-      try {
-        await writeSessionStoreAtomic({ storePath, serialized: json });
-      } catch (err2) {
-        const code2 = getErrorCode(err2);
-        if (code2 === "ENOENT") {
-          return;
-        }
-        throw err2;
-      }
-      return;
-    }
-
-    throw err;
-  }
+  saveSqliteSessionStore(sqliteOptions, store);
 }
 
 export async function saveSessionStore(
@@ -249,13 +199,6 @@ export async function runQuotaSuspensionMaintenance(params: {
   );
 }
 
-function getErrorCode(error: unknown): string | null {
-  if (!error || typeof error !== "object" || !("code" in error)) {
-    return null;
-  }
-  return String((error as { code?: unknown }).code);
-}
-
 export async function archiveRemovedSessionTranscripts(params: {
   removedSessionFiles: Iterable<[string, string | undefined]>;
   referencedSessionIds: ReadonlySet<string>;
@@ -281,13 +224,6 @@ export async function archiveRemovedSessionTranscripts(params: {
     }
   }
   return archivedDirs;
-}
-
-async function writeSessionStoreAtomic(params: {
-  storePath: string;
-  serialized: string;
-}): Promise<void> {
-  await writeTextAtomic(params.storePath, params.serialized, { mode: 0o600 });
 }
 
 async function persistResolvedSessionEntry(params: {

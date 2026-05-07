@@ -24,6 +24,7 @@ import {
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
 import {
+  appendSqliteSessionTranscriptEvent,
   hasSqliteSessionTranscriptEvents,
   loadSqliteSessionTranscriptEvents,
 } from "../config/sessions/transcript-store.sqlite.js";
@@ -691,8 +692,7 @@ export async function performGatewaySessionReset(params: {
     agentId: target.agentId,
     reason: "reset",
   });
-  fs.mkdirSync(path.dirname(next.sessionFile as string), { recursive: true });
-  if (!fs.existsSync(next.sessionFile as string)) {
+  if (!hasSqliteSessionTranscriptEvents({ agentId: target.agentId, sessionId: next.sessionId })) {
     const header = {
       type: "session",
       version: CURRENT_SESSION_VERSION,
@@ -700,9 +700,11 @@ export async function performGatewaySessionReset(params: {
       timestamp: new Date().toISOString(),
       cwd: process.cwd(),
     };
-    fs.writeFileSync(next.sessionFile as string, `${JSON.stringify(header)}\n`, {
-      encoding: "utf-8",
-      mode: 0o600,
+    appendSqliteSessionTranscriptEvent({
+      agentId: target.agentId,
+      sessionId: next.sessionId,
+      transcriptPath: next.sessionFile as string,
+      event: header,
     });
   }
   emitGatewaySessionEndPluginHook({

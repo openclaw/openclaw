@@ -2,20 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
+import {
+  appendSqliteSessionTranscriptEvent,
+  loadSqliteSessionTranscriptEvents,
+} from "../../config/sessions/transcript-store.sqlite.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import { createTranscriptFixtureSync } from "./chat.test-helpers.js";
-
-function readTranscriptLines(transcriptPath: string): string[] {
-  const lines: string[] = [];
-  for (const line of fs.readFileSync(transcriptPath, "utf-8").split(/\r?\n/)) {
-    if (line.length > 0) {
-      lines.push(line);
-    }
-  }
-  return lines;
-}
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -26,14 +19,16 @@ afterEach(() => {
 // current leaf with a `parentId` and must not sever compaction history.
 describe("gateway chat.inject transcript writes", () => {
   it("appends a Pi session entry that includes parentId", async () => {
-    const { dir, transcriptPath } = createTranscriptFixtureSync({
+    const { dir, transcriptPath, sessionId } = createTranscriptFixtureSync({
       prefix: "openclaw-chat-inject-",
       sessionId: "sess-1",
     });
+    vi.stubEnv("OPENCLAW_STATE_DIR", dir);
 
     try {
       const appended = await appendInjectedAssistantMessageToTranscript({
         transcriptPath,
+        sessionId,
         message: "hello",
       });
       expect(appended.ok).toBe(true);
@@ -44,13 +39,13 @@ describe("gateway chat.inject transcript writes", () => {
       }
       expect(messageId.length).toBeGreaterThan(0);
 
-      const lines = readTranscriptLines(transcriptPath);
-      expect(lines.length).toBeGreaterThanOrEqual(2);
-
-      const last = JSON.parse(lines.at(-1) as string) as Record<string, unknown>;
+      const events = loadSqliteSessionTranscriptEvents({
+        agentId: "main",
+        sessionId,
+      }).map((entry) => entry.event as Record<string, unknown>);
+      const last = events.at(-1) as Record<string, unknown>;
       expect(last.type).toBe("message");
 
-      // The regression we saw: raw jsonl appends omitted this field entirely.
       expect(Object.prototype.hasOwnProperty.call(last, "parentId")).toBe(true);
       expect(last).toHaveProperty("id");
       expect(last).toHaveProperty("message");
@@ -59,28 +54,32 @@ describe("gateway chat.inject transcript writes", () => {
     }
   });
 
-  it("uses raw append for oversized append-only transcripts", async () => {
-    const { dir, transcriptPath } = createTranscriptFixtureSync({
+  it("links injected messages after oversized SQLite transcript entries", async () => {
+    const { dir, transcriptPath, sessionId } = createTranscriptFixtureSync({
       prefix: "openclaw-chat-inject-large-",
       sessionId: "sess-1",
     });
+    vi.stubEnv("OPENCLAW_STATE_DIR", dir);
 
     try {
-      fs.appendFileSync(
+      appendSqliteSessionTranscriptEvent({
+        agentId: "main",
+        sessionId,
         transcriptPath,
-        `${JSON.stringify({
+        event: {
           type: "message",
           id: "legacy-large-message",
+          parentId: null,
           message: {
             role: "assistant",
             content: [{ type: "text", text: "x".repeat(9 * 1024 * 1024) }],
           },
-        })}\n`,
-        "utf-8",
-      );
+        },
+      });
 
       const appended = await appendInjectedAssistantMessageToTranscript({
         transcriptPath,
+        sessionId,
         message: "hello",
       });
       expect(appended.ok).toBe(true);
@@ -91,13 +90,16 @@ describe("gateway chat.inject transcript writes", () => {
       }
       expect(messageId.length).toBeGreaterThan(0);
 
-      const lines = readTranscriptLines(transcriptPath);
-      const last = JSON.parse(lines.at(-1) as string) as Record<string, unknown>;
+      const events = loadSqliteSessionTranscriptEvents({
+        agentId: "main",
+        sessionId,
+      }).map((entry) => entry.event as Record<string, unknown>);
+      const last = events.at(-1) as Record<string, unknown>;
 
       expect(last.type).toBe("message");
       expect(last).toHaveProperty("id", messageId);
       expect(last).toHaveProperty("message");
-      expect(Object.prototype.hasOwnProperty.call(last, "parentId")).toBe(false);
+      expect(last).toHaveProperty("parentId", "legacy-large-message");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
@@ -36,6 +37,16 @@ export type ImportJsonlTranscriptToSqliteOptions = SqliteSessionTranscriptStoreO
 };
 
 export type ExportSqliteTranscriptJsonlOptions = SqliteSessionTranscriptStoreOptions;
+
+export type SqliteSessionTranscriptScope = {
+  agentId: string;
+  sessionId: string;
+};
+
+export type SqliteSessionTranscriptFile = SqliteSessionTranscriptScope & {
+  path: string;
+  updatedAt: number;
+};
 
 function normalizeSessionId(value: string): string {
   const sessionId = value.trim();
@@ -78,6 +89,7 @@ function rememberTranscriptFile(params: {
   if (!transcriptPath) {
     return;
   }
+  const resolvedTranscriptPath = path.resolve(transcriptPath);
   runOpenClawStateWriteTransaction((database) => {
     database.db
       .prepare(
@@ -97,11 +109,90 @@ function rememberTranscriptFile(params: {
       .run(
         params.agentId,
         params.sessionId,
-        transcriptPath,
+        resolvedTranscriptPath,
         params.importedAt ?? null,
         params.exportedAt ?? null,
       );
   }, params.options);
+}
+
+export function resolveSqliteSessionTranscriptScopeForPath(
+  options: OpenClawStateDatabaseOptions & { transcriptPath: string },
+): SqliteSessionTranscriptScope | undefined {
+  const transcriptPath = path.resolve(options.transcriptPath);
+  const database = openOpenClawStateDatabase(options);
+  const row = database.db
+    .prepare(
+      `
+        SELECT agent_id, session_id
+        FROM transcript_files
+        WHERE path = ?
+        ORDER BY COALESCE(imported_at, exported_at, 0) DESC
+        LIMIT 1
+      `,
+    )
+    .get(transcriptPath) as { agent_id?: unknown; session_id?: unknown } | undefined;
+  if (typeof row?.agent_id !== "string" || typeof row.session_id !== "string") {
+    return undefined;
+  }
+  return {
+    agentId: normalizeAgentId(row.agent_id),
+    sessionId: normalizeSessionId(row.session_id),
+  };
+}
+
+export function listSqliteSessionTranscriptFiles(
+  options: OpenClawStateDatabaseOptions = {},
+): SqliteSessionTranscriptFile[] {
+  const database = openOpenClawStateDatabase(options);
+  return database.db
+    .prepare(
+      `
+        SELECT
+          files.agent_id,
+          files.session_id,
+          files.path,
+          MAX(
+            COALESCE(events.created_at, 0),
+            COALESCE(files.imported_at, 0),
+            COALESCE(files.exported_at, 0)
+          ) AS updated_at
+        FROM transcript_files files
+        LEFT JOIN transcript_events events
+          ON events.agent_id = files.agent_id
+          AND events.session_id = files.session_id
+        GROUP BY files.agent_id, files.session_id, files.path
+        ORDER BY updated_at DESC, files.path ASC
+      `,
+    )
+    .all()
+    .flatMap((row) => {
+      const record = row as {
+        agent_id?: unknown;
+        session_id?: unknown;
+        path?: unknown;
+        updated_at?: unknown;
+      };
+      if (
+        typeof record.agent_id !== "string" ||
+        typeof record.session_id !== "string" ||
+        typeof record.path !== "string"
+      ) {
+        return [];
+      }
+      const updatedAt =
+        typeof record.updated_at === "bigint"
+          ? Number(record.updated_at)
+          : Number(record.updated_at ?? 0);
+      return [
+        {
+          agentId: normalizeAgentId(record.agent_id),
+          sessionId: normalizeSessionId(record.session_id),
+          path: record.path,
+          updatedAt: Number.isFinite(updatedAt) ? updatedAt : 0,
+        },
+      ];
+    });
 }
 
 export function appendSqliteSessionTranscriptEvent(

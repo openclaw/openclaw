@@ -1,5 +1,6 @@
 import fs, { readFileSync } from "node:fs";
 import type { SQLInputValue, StatementSync } from "node:sqlite";
+import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import {
   type OpenClawStateDatabase,
   openOpenClawStateDatabase,
@@ -39,10 +40,7 @@ export function resolveSqliteSessionStoreOptionsForPath(
   if (!isSqliteSessionStoreBackendEnabled(env)) {
     return null;
   }
-  const agentId = resolveAgentIdFromSessionStorePath(storePath);
-  if (!agentId) {
-    return null;
-  }
+  const agentId = resolveAgentIdFromSessionStorePath(storePath) ?? DEFAULT_AGENT_ID;
   return { agentId, env, sourcePath: storePath };
 }
 

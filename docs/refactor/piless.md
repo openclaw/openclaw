@@ -61,27 +61,22 @@ This plan has started landing in slices:
   canonical SQLite stores avoid that path. The cron timer no longer runs a
   dedicated session reaper; cron run sessions are maintained through the same
   explicit session cleanup path as other rows.
-- Transcript events have a SQLite store primitive with JSONL import/export.
-  Transcript append paths dual-write when the caller already has agent and
-  session scope, including gateway-injected assistant messages. Scoped appends
-  also import the current JSONL stream into SQLite when the SQLite transcript is
-  empty, so headers and legacy rows are not skipped before the new event is
-  mirrored. Scoped latest/tail assistant transcript reads can now use the
-  SQLite mirror first, and delivery-mirror idempotency/latest-match checks use
-  the same scoped mirror before falling back to JSONL for legacy or file-only
-  callers. `/export-session` and `before_reset` hook payload construction can
-  also read scoped SQLite transcript events when the compatibility JSONL is
-  missing, and silent session-rotation replay can use the scoped SQLite
-  transcript tail before falling back to JSONL. Shared async Gateway transcript
-  readers also have a scoped SQLite fallback for chat history, TUI history,
-  restart and subagent recovery, managed outgoing media indexing, token
-  estimation, title/preview/usage helpers, and bounded session inspection
-  surfaces. JSONL remains the compatibility file while the transcript moves to
-  OpenClaw-owned semantics. The remaining transcript tail rewrites for
-  recovery/yield cleanup are now isolated behind OpenClaw-owned helpers instead
-  of being duplicated inline, and live runs no longer need PI's private
-  first-run persistence normalization because OpenClaw's file-backed manager
-  persists the header and initial user message synchronously.
+- Transcript events are SQLite-primary. OpenClaw-owned append paths require
+  agent/session scope and write `transcript_events` directly; `*.jsonl` is no
+  longer a runtime mirror for those paths. JSONL is now an explicit
+  import/export/debug shape only. The OpenClaw transcript session manager,
+  Gateway-injected assistant messages, CLI transcript persistence, Codex
+  app-server mirroring, compaction successor transcripts, manual compaction
+  boundary rewrites, and reset/header creation all persist through SQLite.
+  Scoped latest/tail assistant reads, delivery-mirror idempotency/latest-match
+  checks, `/export-session`, `before_reset` hook payloads, silent rotation
+  replay, chat/TUI history, restart/subagent recovery, managed media indexing,
+  token estimation, title/preview/usage helpers, runtime transcript repair,
+  bootstrap completion checks, and bounded inspection all use the scoped SQLite
+  transcript. Legacy JSONL import is doctor/import/debug only: `openclaw doctor
+--fix` builds the transcript database from old files and removes the JSONL
+  sources after successful import. Runtime paths do not import, prune, or repair
+  JSONL files.
 - `AgentFilesystem` and `SqliteVirtualAgentFs` exist for scratch storage, with
   `disk`, `vfs-scratch`, and `vfs-only` filesystem modes at the runtime
   boundary. VFS contents can be listed and exported for support bundles. When
@@ -195,12 +190,12 @@ This plan has started landing in slices:
   OpenAI completion conversion subpaths route through narrow OpenClaw facades.
   TUI imports route through `src/agents/pi-tui-contract.ts`, with
   `src/tui/pi-tui-contract.ts` left as a local compatibility re-export.
-- Transcript JSONL header, entry, tree, parser, legacy migration, context
+- Transcript header, entry, tree, parser, legacy migration, context
   builder, and session-manager structural types are now defined by OpenClaw's
   transcript contract. The parser, migration, and context builder runtime
   helpers have one OpenClaw-owned implementation under `src/agents/transcript`
   instead of duplicated facade/file-state logic. OpenClaw also owns a
-  synchronous file-backed transcript session manager that implements the live
+  synchronous SQLite-backed transcript session manager that implements the live
   `SessionManager` shape over `TranscriptFileState`, including header creation,
   append persistence, tree, label, branch, session name, branch-summary,
   in-memory, create/open, list/listAll, and fork APIs. Live embedded runs,
@@ -356,9 +351,10 @@ Migration order:
    stores.
 5. Import old `sessions.json` only from `openclaw doctor --fix`, then remove the
    JSON index after SQLite has the rows. Done for session indexes.
-6. Leave `*.jsonl` transcripts on disk while PI owns transcript semantics.
-7. After session manager ownership moves behind OpenClaw APIs, store transcript
-   events in SQLite and export JSONL for compatibility.
+6. Import old `*.jsonl` transcripts only from `openclaw doctor --fix`, then
+   remove the JSONL source after SQLite has the events. Done for canonical
+   transcript files.
+7. Keep JSONL export as explicit debug/support output only.
 
 Keep `openclaw.json` and `auth-profiles.json` file-backed until operator
 repair, secret audit, and backup flows can handle the SQLite layout naturally.
@@ -588,7 +584,7 @@ Phase 5: transcript ownership
 
 - Move transcript mutation behind OpenClaw APIs.
 - Store transcript events in SQLite.
-- Export JSONL for compatibility and debugging.
+- Import legacy JSONL through doctor only; export JSONL for debugging/support.
 - Remove direct PI `SessionManager` usage from non-adapter code.
 
 Phase 6: internalize or replace PI pieces

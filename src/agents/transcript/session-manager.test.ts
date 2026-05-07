@@ -1,14 +1,33 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  loadSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScopeForPath,
+} from "../../config/sessions/transcript-store.sqlite.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { openTranscriptSessionManager } from "./session-manager.js";
-import { parseSessionEntries, SessionManager } from "./session-transcript-contract.js";
+import { SessionManager } from "./session-transcript-contract.js";
 
 async function makeTempSessionFile(name = "session.jsonl"): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-session-"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", dir);
   return path.join(dir, name);
 }
+
+function readSessionEntries(sessionFile: string) {
+  const scope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: sessionFile });
+  if (!scope) {
+    return [];
+  }
+  return loadSqliteSessionTranscriptEvents(scope).map((entry) => entry.event);
+}
+
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
+});
 
 describe("TranscriptSessionManager", () => {
   it("exposes create, in-memory, list, continue, and fork through the contract value", async () => {
@@ -61,7 +80,7 @@ describe("TranscriptSessionManager", () => {
     expect(sessionManager.getCwd()).toBe("/tmp/workspace");
     expect(sessionManager.getSessionFile()).toBe(sessionFile);
 
-    const entries = parseSessionEntries(await fs.readFile(sessionFile, "utf8"));
+    const entries = readSessionEntries(sessionFile);
     expect(entries).toMatchObject([
       {
         type: "session",
@@ -86,7 +105,7 @@ describe("TranscriptSessionManager", () => {
       timestamp: 1,
     });
 
-    const afterUser = parseSessionEntries(await fs.readFile(sessionFile, "utf8"));
+    const afterUser = readSessionEntries(sessionFile);
     expect(afterUser).toHaveLength(2);
     expect(afterUser[1]).toMatchObject({
       type: "message",

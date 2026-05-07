@@ -1,6 +1,9 @@
-import fs from "node:fs/promises";
 import path from "node:path";
-import { replaceFileAtomic } from "../infra/replace-file.js";
+import {
+  loadSqliteSessionTranscriptEvents,
+  replaceSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScopeForPath,
+} from "../config/sessions/transcript-store.sqlite.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "./stream-message-shared.js";
 
 /** Placeholder for blank user messages — preserves the user turn so strict
@@ -193,68 +196,49 @@ export async function repairSessionFileIfNeeded(params: {
     return { repaired: false, droppedLines: 0, reason: "missing session file" };
   }
 
-  let content: string;
-  try {
-    content = await fs.readFile(sessionFile, "utf-8");
-  } catch (err) {
-    const code = (err as { code?: unknown } | undefined)?.code;
-    if (code === "ENOENT") {
-      return { repaired: false, droppedLines: 0, reason: "missing session file" };
-    }
-    const reason = `failed to read session file: ${err instanceof Error ? err.message : "unknown error"}`;
-    params.warn?.(`session file repair skipped: ${reason} (${path.basename(sessionFile)})`);
-    return { repaired: false, droppedLines: 0, reason };
+  const scope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: sessionFile });
+  if (!scope) {
+    return { repaired: false, droppedLines: 0, reason: "missing SQLite transcript" };
   }
 
-  const lines = content.split(/\r?\n/);
+  const storedEntries = loadSqliteSessionTranscriptEvents(scope).map((entry) => entry.event);
   const entries: unknown[] = [];
   let droppedLines = 0;
   let rewrittenAssistantMessages = 0;
   let droppedBlankUserMessages = 0;
   let rewrittenUserMessages = 0;
 
-  for (const line of lines) {
-    if (!line.trim()) {
+  for (const entry of storedEntries) {
+    if (isStructurallyInvalidMessageEntry(entry)) {
+      // Drop "null role" / missing-role message entries the same way the old
+      // JSONL repair dropped malformed lines: providers cannot replay them.
+      droppedLines += 1;
       continue;
     }
-    try {
-      const entry: unknown = JSON.parse(line);
-      if (isStructurallyInvalidMessageEntry(entry)) {
-        // Drop "null role" / missing-role message entries the same way we
-        // drop unparseable JSONL: they cannot be replayed to any provider
-        // and preserving them through repair just relocates the corruption
-        // into the post-repair file (#77228: 935+ null-role entries
-        // surviving the auto-repair pass).
-        droppedLines += 1;
-        continue;
-      }
-      if (isAssistantEntryWithEmptyContent(entry)) {
-        entries.push(rewriteAssistantEntryWithEmptyContent(entry));
-        rewrittenAssistantMessages += 1;
-        continue;
-      }
-      if (
-        entry &&
-        typeof entry === "object" &&
-        (entry as { type?: unknown }).type === "message" &&
-        typeof (entry as { message?: unknown }).message === "object" &&
-        ((entry as { message: { role?: unknown } }).message?.role ?? undefined) === "user"
-      ) {
-        const repairedUser = repairUserEntryWithBlankTextContent(entry as SessionMessageEntry);
-        if (repairedUser.kind === "drop") {
-          droppedBlankUserMessages += 1;
-          continue;
-        }
-        if (repairedUser.kind === "rewrite") {
-          entries.push(repairedUser.entry);
-          rewrittenUserMessages += 1;
-          continue;
-        }
-      }
-      entries.push(entry);
-    } catch {
-      droppedLines += 1;
+    if (isAssistantEntryWithEmptyContent(entry)) {
+      entries.push(rewriteAssistantEntryWithEmptyContent(entry));
+      rewrittenAssistantMessages += 1;
+      continue;
     }
+    if (
+      entry &&
+      typeof entry === "object" &&
+      (entry as { type?: unknown }).type === "message" &&
+      typeof (entry as { message?: unknown }).message === "object" &&
+      ((entry as { message: { role?: unknown } }).message?.role ?? undefined) === "user"
+    ) {
+      const repairedUser = repairUserEntryWithBlankTextContent(entry as SessionMessageEntry);
+      if (repairedUser.kind === "drop") {
+        droppedBlankUserMessages += 1;
+        continue;
+      }
+      if (repairedUser.kind === "rewrite") {
+        entries.push(repairedUser.entry);
+        rewrittenUserMessages += 1;
+        continue;
+      }
+    }
+    entries.push(entry);
   }
 
   if (entries.length === 0) {
@@ -277,19 +261,11 @@ export async function repairSessionFileIfNeeded(params: {
     return { repaired: false, droppedLines: 0 };
   }
 
-  const cleaned = `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
-  const backupPath = `${sessionFile}.bak-${process.pid}-${Date.now()}`;
   try {
-    const stat = await fs.stat(sessionFile).catch(() => null);
-    await fs.writeFile(backupPath, content, "utf-8");
-    if (stat) {
-      await fs.chmod(backupPath, stat.mode);
-    }
-    await replaceFileAtomic({
-      filePath: sessionFile,
-      content: cleaned,
-      preserveExistingMode: true,
-      tempPrefix: `${path.basename(sessionFile)}.repair`,
+    replaceSqliteSessionTranscriptEvents({
+      ...scope,
+      transcriptPath: sessionFile,
+      events: entries,
     });
   } catch (err) {
     return {
@@ -316,6 +292,5 @@ export async function repairSessionFileIfNeeded(params: {
     rewrittenAssistantMessages,
     droppedBlankUserMessages,
     rewrittenUserMessages,
-    backupPath,
   };
 }
