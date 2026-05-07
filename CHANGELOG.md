@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Auto-reply/plugins: preserve explicitly allowlisted plugin tools in embedded direct-lane runs so configs like `tools.allow: ["second_nature_ops"]` keep the registered plugin tool callable through profile filtering instead of failing with no callable tools. Fixes #78907. (#79028) Thanks @Haaaiawd.
 - Discord/voice: stream ElevenLabs TTS directly into Discord playback and send ElevenLabs latency optimization as the documented query parameter so spoken replies can start sooner.
 - Discord/voice: keep TTS playback running when another user starts speaking, ignore new capture during playback to avoid feedback loops, and downgrade expected receive-stream aborts to verbose diagnostics.
 - Telegram: treat successful same-chat `message` tool outbound sends during an inbound telegram turn as delivered when deciding whether to emit the rewritten silent reply fallback (#78685). Thanks @neeravmakwana.
