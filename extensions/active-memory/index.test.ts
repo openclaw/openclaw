@@ -346,6 +346,28 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
   });
 
+  it("reports session status off when the current agent is outside the active-memory allowlist (#78986)", async () => {
+    api.pluginConfig = {
+      agents: ["sandbox"],
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    const statusResult = await registeredCommands["active-memory"].handler({
+      channel: "webchat",
+      isAuthorizedSender: true,
+      sessionKey: "agent:main:main",
+      args: "status",
+      commandBody: "/active-memory status",
+      config: {},
+      requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
+      detachConversationBinding: async () => ({ removed: false }),
+      getCurrentConversationBinding: async () => null,
+    });
+
+    expect(statusResult.text).toBe("Active Memory: off for this session.");
+  });
+
   it("supports an explicit global active-memory config toggle", async () => {
     const command = registeredCommands["active-memory"];
 

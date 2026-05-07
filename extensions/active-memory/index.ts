@@ -2863,6 +2863,10 @@ export default definePluginEntry({
             text: "Active Memory: session toggle unavailable because this command has no session context.",
           };
         }
+        const commandAgentId = resolveStatusUpdateAgentId({ sessionKey });
+        if (!isEnabledForAgent(config, commandAgentId)) {
+          return { text: "Active Memory: off for this session." };
+        }
         if (action === "status") {
           const disabled = await isSessionActiveMemoryDisabled({ api, sessionKey });
           return {
