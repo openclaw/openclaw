@@ -1,21 +1,17 @@
 import { randomBytes } from "node:crypto";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import type {
+  PluginNodeCapabilityClient,
+  PluginNodeCapabilitySurface,
+} from "./plugin-node-capability-types.js";
 
 export const PLUGIN_NODE_CAPABILITY_PATH_PREFIX = "/__openclaw__/cap";
 const PLUGIN_NODE_CAPABILITY_QUERY_PARAM = "oc_cap";
 export const DEFAULT_PLUGIN_NODE_CAPABILITY_TTL_MS = 10 * 60_000;
-
-export type PluginNodeCapabilitySurface = {
-  surface: string;
-  ttlMs?: number;
-  scopeKey?: string;
-};
-
-export type PluginNodeCapabilityClient = {
-  pluginSurfaceUrls?: Record<string, string>;
-  pluginNodeCapabilitySurfaces?: Record<string, PluginNodeCapabilitySurface>;
-  pluginNodeCapabilities?: Record<string, { capability: string; expiresAtMs: number }>;
-};
+export type {
+  PluginNodeCapabilityClient,
+  PluginNodeCapabilitySurface,
+} from "./plugin-node-capability-types.js";
 
 export function indexPluginNodeCapabilitySurfaces(
   surfaces: readonly PluginNodeCapabilitySurface[],
