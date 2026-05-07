@@ -236,6 +236,8 @@ function buildCoreDistEntries(): Record<string, string> {
     "plugins/runtime/index": "src/plugins/runtime/index.ts",
     "llm-slug-generator": "src/hooks/llm-slug-generator.ts",
     "mcp/plugin-tools-serve": "src/mcp/plugin-tools-serve.ts",
+    // Stable worker entry loaded from bundled agent runtime chunks.
+    "agent-runtime.worker": "src/agents/worker-runtime/agent-runtime.worker.ts",
   };
 }
 
