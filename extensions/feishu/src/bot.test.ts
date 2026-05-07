@@ -249,6 +249,7 @@ const {
   mockTouchBinding,
   mockResolveFeishuReasoningPreviewEnabled,
   mockTranscribeFirstAudio,
+  mockMaybeCreateDynamicAgent,
 } = vi.hoisted(() => ({
   mockCreateFeishuReplyDispatcher: vi.fn(() => ({
     dispatcher: createReplyDispatcher(),
@@ -284,6 +285,7 @@ const {
   mockTouchBinding: vi.fn(),
   mockResolveFeishuReasoningPreviewEnabled: vi.fn(() => false),
   mockTranscribeFirstAudio: vi.fn(),
+  mockMaybeCreateDynamicAgent: vi.fn(),
 }));
 
 vi.mock("./reply-dispatcher.js", () => ({
@@ -310,6 +312,10 @@ vi.mock("./audio-preflight.runtime.js", () => ({
 
 vi.mock("./client.js", () => ({
   createFeishuClient: mockCreateFeishuClient,
+}));
+
+vi.mock("./dynamic-agent.js", () => ({
+  maybeCreateDynamicAgent: mockMaybeCreateDynamicAgent,
 }));
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
@@ -406,6 +412,7 @@ describe("handleFeishuMessage ACP routing", () => {
     mockTouchBinding.mockReset();
     mockResolveFeishuReasoningPreviewEnabled.mockReset().mockReturnValue(false);
     mockTranscribeFirstAudio.mockReset().mockResolvedValue(undefined);
+    mockMaybeCreateDynamicAgent.mockReset().mockResolvedValue({ created: false });
     mockResolveAgentRoute.mockReset().mockReturnValue({
       ...buildDefaultResolveRoute(),
       sessionKey: "agent:main:feishu:direct:ou_sender_1",
@@ -605,6 +612,7 @@ describe("handleFeishuMessage command authorization", () => {
     mockResolveBoundConversation.mockReset().mockReturnValue(null);
     mockTouchBinding.mockReset();
     mockTranscribeFirstAudio.mockReset().mockResolvedValue(undefined);
+    mockMaybeCreateDynamicAgent.mockReset().mockResolvedValue({ created: false });
     mockResolveAgentRoute.mockReturnValue(buildDefaultResolveRoute());
     mockCreateFeishuClient.mockReturnValue({
       contact: {
@@ -677,6 +685,48 @@ describe("handleFeishuMessage command authorization", () => {
     await dispatchMessage({ cfg, event });
 
     expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("passes disabled config-write policy to dynamic agent creation", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          configWrites: false,
+          dynamicAgentCreation: {
+            enabled: true,
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-attacker",
+        },
+      },
+      message: {
+        message_id: "msg-dynamic-config-writes-disabled",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockMaybeCreateDynamicAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        senderOpenId: "ou-attacker",
+        configWritesAllowed: false,
+      }),
+    );
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
   it("blocks open DMs when a restrictive allowlist does not match", async () => {
