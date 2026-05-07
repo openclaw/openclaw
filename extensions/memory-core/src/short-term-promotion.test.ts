@@ -1682,6 +1682,57 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("removes stale orphaned private store temp files during repair", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      const phaseSignalPath = resolveShortTermPhaseSignalStorePath(workspaceDir);
+      const artifactsDir = path.dirname(storePath);
+      const oldPrivateRecallTmp = path.join(artifactsDir, ".tmp-1234-1760000000000-abcdef012345");
+      const oldPrivatePhaseTmp = path.join(artifactsDir, ".tmp-1234-1760000000001-bcdef0123456");
+      const oldLegacyRecallTmp = path.join(
+        artifactsDir,
+        "short-term-recall.json.1234.1760000000000.00000000-0000-4000-8000-000000000001.tmp",
+      );
+      const freshPrivateTmp = path.join(artifactsDir, ".tmp-1234-1760000000002-cdef01234567");
+      const unrelatedTmp = `${phaseSignalPath}.manual.tmp`;
+
+      await fs.writeFile(oldPrivateRecallTmp, "{}\n", "utf-8");
+      await fs.writeFile(oldPrivatePhaseTmp, "{}\n", "utf-8");
+      await fs.writeFile(oldLegacyRecallTmp, "{}\n", "utf-8");
+      await fs.writeFile(freshPrivateTmp, "{}\n", "utf-8");
+      await fs.writeFile(unrelatedTmp, "{}\n", "utf-8");
+      const staleMtime = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      await fs.utimes(oldPrivateRecallTmp, staleMtime, staleMtime);
+      await fs.utimes(oldPrivatePhaseTmp, staleMtime, staleMtime);
+      await fs.utimes(oldLegacyRecallTmp, staleMtime, staleMtime);
+
+      const auditBefore = await auditShortTermPromotionArtifacts({ workspaceDir });
+      expect(auditBefore.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "recall-temp-files-stale",
+            fixable: true,
+            message: expect.stringContaining("3 stale orphaned temp files"),
+          }),
+        ]),
+      );
+
+      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+
+      expect(repair.changed).toBe(true);
+      expect(repair.removedTempFiles).toBe(3);
+      expect(repair.rewroteStore).toBe(false);
+      expect(repair.removedStaleLock).toBe(false);
+      await expect(fs.access(oldPrivateRecallTmp)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(oldPrivatePhaseTmp)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(oldLegacyRecallTmp)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(freshPrivateTmp)).resolves.toBeUndefined();
+      await expect(fs.access(unrelatedTmp)).resolves.toBeUndefined();
+      const auditAfter = await auditShortTermPromotionArtifacts({ workspaceDir });
+      expect(auditAfter.issues.map((issue) => issue.code)).not.toContain("recall-temp-files-stale");
+    });
+  });
+
   it("waits for an active short-term lock before repairing", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const storePath = resolveShortTermRecallStorePath(workspaceDir);

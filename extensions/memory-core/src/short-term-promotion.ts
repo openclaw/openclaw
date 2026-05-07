@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
@@ -32,6 +33,7 @@ const SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH = path.join("memory", ".dreams", "ph
 const SHORT_TERM_LOCK_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-promotion.lock");
 const SHORT_TERM_LOCK_WAIT_TIMEOUT_MS = 10_000;
 const SHORT_TERM_LOCK_STALE_MS = 60_000;
+const SHORT_TERM_STORE_TMP_STALE_MS = 60 * 60 * 1000;
 const SHORT_TERM_LOCK_RETRY_DELAY_MS = 40;
 // Repeated dreaming revisits should be able to clear the default promotion gate
 // without requiring separate organic recall traffic for the same snippet.
@@ -145,6 +147,7 @@ type ShortTermAuditIssue = {
     | "recall-store-invalid"
     | "recall-lock-stale"
     | "recall-lock-unreadable"
+    | "recall-temp-files-stale"
     | "qmd-index-missing"
     | "qmd-index-empty"
     | "qmd-collections-empty";
@@ -178,6 +181,7 @@ export type RepairShortTermPromotionArtifactsResult = {
   removedInvalidEntries: number;
   rewroteStore: boolean;
   removedStaleLock: boolean;
+  removedTempFiles: number;
 };
 
 type RankShortTermPromotionOptions = {
@@ -854,6 +858,72 @@ async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Pr
   await privateFileStore(workspaceDir).writeJson(SHORT_TERM_STORE_RELATIVE_PATH, store, {
     trailingNewline: true,
   });
+}
+
+function isShortTermStoreTempFile(fileName: string): boolean {
+  return (
+    /^\.tmp-\d+-\d+-[0-9a-f]{12}$/i.test(fileName) ||
+    /^short-term-recall\.json\.\d+\.\d+\.[0-9a-f-]+\.tmp$/i.test(fileName) ||
+    /^phase-signals\.json\.\d+\.\d+\.[0-9a-f-]+\.tmp$/i.test(fileName)
+  );
+}
+
+async function listStaleShortTermStoreTempFiles(params: {
+  workspaceDir: string;
+  nowMs?: number;
+}): Promise<string[]> {
+  const artifactsDir = resolveShortTermArtifactsDir(params.workspaceDir);
+  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  const staleTempPaths: string[] = [];
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(artifactsDir, { withFileTypes: true });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw err;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !isShortTermStoreTempFile(entry.name)) {
+      continue;
+    }
+    const tempPath = path.join(artifactsDir, entry.name);
+    const stat = await fs.stat(tempPath).catch((err: unknown) => {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return null;
+      }
+      throw err;
+    });
+    if (!stat || nowMs - stat.mtimeMs <= SHORT_TERM_STORE_TMP_STALE_MS) {
+      continue;
+    }
+    staleTempPaths.push(tempPath);
+  }
+  return staleTempPaths;
+}
+
+async function cleanupOrphanedShortTermStoreTempFiles(params: {
+  workspaceDir: string;
+  nowMs?: number;
+}): Promise<number> {
+  let removed = 0;
+  for (const tempPath of await listStaleShortTermStoreTempFiles(params)) {
+    const removedFile = await fs
+      .unlink(tempPath)
+      .then(() => true)
+      .catch((err: unknown) => {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          return false;
+        }
+        throw err;
+      });
+    if (removedFile) {
+      removed += 1;
+    }
+  }
+  return removed;
 }
 
 export function isShortTermMemoryPath(filePath: string): boolean {
@@ -1792,6 +1862,16 @@ export async function auditShortTermPromotionArtifacts(params: {
     }
   }
 
+  const staleTempFileCount = (await listStaleShortTermStoreTempFiles({ workspaceDir })).length;
+  if (staleTempFileCount > 0) {
+    issues.push({
+      severity: "warn",
+      code: "recall-temp-files-stale",
+      message: `Short-term recall artifacts include ${staleTempFileCount} stale orphaned temp file${staleTempFileCount === 1 ? "" : "s"}.`,
+      fixable: true,
+    });
+  }
+
   let qmd: ShortTermAuditSummary["qmd"];
   if (params.qmd) {
     qmd = {
@@ -1859,6 +1939,7 @@ export async function repairShortTermPromotionArtifacts(params: {
   let rewroteStore = false;
   let removedInvalidEntries = 0;
   let removedStaleLock = false;
+  let removedTempFiles = 0;
 
   try {
     const lockPath = resolveLockPath(workspaceDir);
@@ -1875,6 +1956,7 @@ export async function repairShortTermPromotionArtifacts(params: {
   }
 
   await withShortTermLock(workspaceDir, async () => {
+    removedTempFiles = await cleanupOrphanedShortTermStoreTempFiles({ workspaceDir });
     const storePath = resolveStorePath(workspaceDir);
     try {
       const raw = await fs.readFile(storePath, "utf-8");
@@ -1926,10 +2008,11 @@ export async function repairShortTermPromotionArtifacts(params: {
   });
 
   return {
-    changed: rewroteStore || removedStaleLock,
+    changed: rewroteStore || removedStaleLock || removedTempFiles > 0,
     removedInvalidEntries,
     rewroteStore,
     removedStaleLock,
+    removedTempFiles,
   };
 }
 

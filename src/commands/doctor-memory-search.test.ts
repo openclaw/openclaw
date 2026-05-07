@@ -136,6 +136,7 @@ function resetMemoryRecallMocks() {
     removedInvalidEntries: 0,
     rewroteStore: false,
     removedStaleLock: false,
+    removedTempFiles: 0,
   });
   noteWorkspaceMemoryHealth.mockClear();
   maybeRepairWorkspaceMemoryHealth.mockClear();
@@ -801,6 +802,7 @@ describe("memory recall doctor integration", () => {
       removedInvalidEntries: 1,
       rewroteStore: true,
       removedStaleLock: true,
+      removedTempFiles: 0,
     });
     const prompter = createPrompter();
 
@@ -816,6 +818,49 @@ describe("memory recall doctor integration", () => {
     expect(message).toContain("Memory recall artifacts repaired:");
     expect(message).toContain("rewrote recall store");
     expect(message).toContain("removed stale promotion lock");
+  });
+
+  it("runs memory recall repair for stale temp-only artifacts during doctor --fix", async () => {
+    auditShortTermPromotionArtifacts.mockResolvedValueOnce({
+      storePath: "/tmp/agent-default/workspace/memory/.dreams/short-term-recall.json",
+      lockPath: "/tmp/agent-default/workspace/memory/.dreams/short-term-promotion.lock",
+      exists: true,
+      entryCount: 12,
+      promotedCount: 4,
+      spacedEntryCount: 2,
+      conceptTaggedEntryCount: 10,
+      invalidEntryCount: 0,
+      issues: [
+        {
+          severity: "warn",
+          code: "recall-temp-files-stale",
+          message: "Short-term recall artifacts include 2 stale orphaned temp files.",
+          fixable: true,
+        },
+      ],
+    });
+    repairShortTermPromotionArtifacts.mockResolvedValueOnce({
+      changed: true,
+      removedInvalidEntries: 0,
+      rewroteStore: false,
+      removedStaleLock: false,
+      removedTempFiles: 2,
+    });
+    const prompter = createPrompter();
+
+    await maybeRepairMemoryRecallHealth({ cfg, prompter });
+
+    expect(prompter.confirmRuntimeRepair).toHaveBeenCalledWith({
+      message:
+        "Normalize memory recall artifacts, remove stale promotion locks, and clean orphaned temp files?",
+      initialValue: true,
+    });
+    expect(repairShortTermPromotionArtifacts).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/agent-default/workspace",
+    });
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("Memory recall artifacts repaired:");
+    expect(message).toContain("removed 2 orphaned temp files");
   });
 
   it("runs dreaming artifact repair during doctor --fix", async () => {

@@ -250,7 +250,8 @@ export async function maybeRepairMemoryRecallHealth(params: {
     const hasFixableRecallIssue = audit.issues.some((issue) => issue.fixable);
     if (hasFixableRecallIssue) {
       const approved = await params.prompter.confirmRuntimeRepair({
-        message: "Normalize memory recall artifacts and remove stale promotion locks?",
+        message:
+          "Normalize memory recall artifacts, remove stale promotion locks, and clean orphaned temp files?",
         initialValue: true,
       });
       if (approved) {
@@ -262,6 +263,9 @@ export async function maybeRepairMemoryRecallHealth(params: {
               ? `- rewrote recall store${repair.removedInvalidEntries > 0 ? ` (-${repair.removedInvalidEntries} invalid entries)` : ""}`
               : null,
             repair.removedStaleLock ? "- removed stale promotion lock" : null,
+            repair.removedTempFiles > 0
+              ? `- removed ${repair.removedTempFiles} orphaned temp file${repair.removedTempFiles === 1 ? "" : "s"}`
+              : null,
             `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
           ].filter(Boolean);
           note(lines.join("\n"), "Doctor changes");
