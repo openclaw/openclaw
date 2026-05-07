@@ -141,6 +141,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/sessions: clear cached skills snapshots during `/new` and `sessions.reset` so long-lived channel sessions rebuild the visible skill list after skills change. (#78873) Thanks @Evizero.
 - fix(auto-reply): gate inline skill tool dispatch [AI]. (#78517) Thanks @pgondhi987.
 - Canvas plugin: keep legacy root `canvasHost` configs valid until `openclaw doctor --fix` migrates them into `plugins.entries.canvas.config.host`, move Canvas/A2UI clients to gateway protocol v4 plugin surfaces, and refresh the generated A2UI bundle hash so normal builds stay clean.
 - feishu: honor config write policy for dynamic agents [AI]. (#78520) Thanks @pgondhi987.
