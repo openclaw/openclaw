@@ -1764,6 +1764,33 @@ describe("sendMessageTelegram", () => {
     expect(sendMessage.mock.calls.map((call) => String(call[1] ?? "")).join("")).toBe(plainText);
     expect(res.messageId).toBe("96");
   });
+
+  it("suppresses NO_REPLY sentinel before any API call when no payload is attached", async () => {
+    const sendMessage = vi.fn();
+    const api = { sendMessage } as unknown as { sendMessage: typeof sendMessage };
+
+    const res = await sendMessageTelegram("123", "NO_REPLY", { token: "tok", api });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(res).toEqual({ messageId: "suppressed", chatId: "" });
+  });
+
+  it("still sends NO_REPLY when inline buttons are attached so the keyboard payload is preserved", async () => {
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 7, chat: { id: "123" } });
+    const api = { sendMessage } as unknown as { sendMessage: typeof sendMessage };
+
+    const res = await sendMessageTelegram("123", "NO_REPLY", {
+      token: "tok",
+      api,
+      buttons: [[{ text: "OK", callback_data: "ok" }]],
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0][2]?.reply_markup).toEqual({
+      inline_keyboard: [[{ text: "OK", callback_data: "ok" }]],
+    });
+    expect(res.messageId).toBe("7");
+  });
 });
 
 describe("reactMessageTelegram", () => {

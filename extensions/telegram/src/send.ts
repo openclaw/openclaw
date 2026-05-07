@@ -620,7 +620,8 @@ export async function sendMessageTelegram(
   opts: TelegramSendOpts = {},
 ): Promise<TelegramSendResult> {
   const trimmedText = normalizeOptionalString(text) ?? "";
-  if (isSilentReplyText(trimmedText) && !opts.mediaUrl) {
+  const hasButtons = Array.isArray(opts.buttons) && opts.buttons.length > 0;
+  if (isSilentReplyText(trimmedText) && !opts.mediaUrl && !hasButtons) {
     logVerbose("telegram send: suppressed NO_REPLY token before API call");
     return { messageId: "suppressed", chatId: "" };
   }
