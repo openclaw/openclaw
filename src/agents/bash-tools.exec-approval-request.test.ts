@@ -177,7 +177,7 @@ describe("requestExecApprovalDecision", () => {
     expect(vi.mocked(callGatewayTool).mock.calls).toHaveLength(1);
   });
 
-  it("adds command explanation highlights to host approval registration payloads", async () => {
+  it("adds command spans to host approval registration payloads", async () => {
     vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
 
     await registerExecApprovalRequestForHost({
@@ -193,9 +193,10 @@ describe("requestExecApprovalDecision", () => {
       "exec.approval.request",
       expect.anything(),
       expect.objectContaining({
-        commandExplanationHighlights: expect.arrayContaining([
-          expect.objectContaining({ kind: "command", severity: "info" }),
-          expect.objectContaining({ kind: "risk", severity: "danger" }),
+        commandSpans: expect.arrayContaining([
+          { startIndex: 0, endIndex: 2 },
+          { startIndex: 5, endIndex: 9 },
+          { startIndex: 20, endIndex: 26 },
         ]),
       }),
       expect.anything(),
@@ -224,22 +225,19 @@ describe("requestExecApprovalDecision", () => {
       "exec.approval.request",
       expect.anything(),
       expect.objectContaining({
-        commandExplanationHighlights: expect.arrayContaining([
-          expect.objectContaining({ kind: "command", severity: "info" }),
-          expect.objectContaining({ kind: "risk", severity: "danger" }),
-        ]),
+        commandSpans: expect.arrayContaining([{ startIndex: 0, endIndex: 4 }]),
       }),
       expect.anything(),
     );
   });
 
-  it("keeps explicit command explanation lines", async () => {
+  it("keeps explicit command spans", async () => {
     vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
 
     await registerExecApprovalRequestForHost({
       approvalId: "approval-id",
       command: "echo hi",
-      commandExplanationLines: ["custom line"],
+      commandSpans: [{ startIndex: 0, endIndex: 4 }],
       workdir: "/tmp/project",
       host: "node",
       security: "allowlist",
@@ -249,7 +247,7 @@ describe("requestExecApprovalDecision", () => {
     expect(callGatewayTool).toHaveBeenCalledWith(
       "exec.approval.request",
       expect.anything(),
-      expect.objectContaining({ commandExplanationLines: ["custom line"] }),
+      expect.objectContaining({ commandSpans: [{ startIndex: 0, endIndex: 4 }] }),
       expect.anything(),
     );
   });

@@ -32,37 +32,34 @@ function renderMetaRow(label: string, value?: string | null, opts?: { path?: boo
   </div>`;
 }
 
-function renderHighlightedCommand(request: ExecApprovalRequestPayload) {
-  const highlights = [...(request.commandExplanationHighlights ?? [])]
-    .filter(
-      (highlight) => highlight.startIndex >= 0 && highlight.endIndex <= request.command.length,
-    )
+function renderCommandWithSpans(request: ExecApprovalRequestPayload) {
+  const commandSpans = [...(request.commandSpans ?? [])]
+    .filter((span) => span.startIndex >= 0 && span.endIndex <= request.command.length)
     .toSorted((a, b) => a.startIndex - b.startIndex || b.endIndex - a.endIndex);
-  const accepted: typeof highlights = [];
+  const accepted: typeof commandSpans = [];
   let cursor = 0;
-  for (const highlight of highlights) {
-    if (highlight.startIndex < cursor) {
+  for (const span of commandSpans) {
+    if (span.startIndex < cursor) {
       continue;
     }
-    accepted.push(highlight);
-    cursor = highlight.endIndex;
+    accepted.push(span);
+    cursor = span.endIndex;
   }
   if (accepted.length === 0) {
     return html`<div class="exec-approval-command mono">${request.command}</div>`;
   }
   const parts = [];
   cursor = 0;
-  for (const highlight of accepted) {
-    if (highlight.startIndex > cursor) {
-      parts.push(request.command.slice(cursor, highlight.startIndex));
+  for (const span of accepted) {
+    if (span.startIndex > cursor) {
+      parts.push(request.command.slice(cursor, span.startIndex));
     }
-    const severity = highlight.severity ?? (highlight.kind === "risk" ? "danger" : "info");
     parts.push(
-      html`<mark class=${`exec-approval-command-highlight ${highlight.kind} ${severity}`}
-        >${request.command.slice(highlight.startIndex, highlight.endIndex)}</mark
+      html`<mark class="exec-approval-command-span"
+        >${request.command.slice(span.startIndex, span.endIndex)}</mark
       >`,
     );
-    cursor = highlight.endIndex;
+    cursor = span.endIndex;
   }
   if (cursor < request.command.length) {
     parts.push(request.command.slice(cursor));
@@ -70,20 +67,9 @@ function renderHighlightedCommand(request: ExecApprovalRequestPayload) {
   return html`<div class="exec-approval-command mono">${parts}</div>`;
 }
 
-function renderCommandExplanation(lines?: readonly string[]) {
-  const visibleLines = lines?.map((line) => line.trim()).filter(Boolean) ?? [];
-  if (visibleLines.length === 0) {
-    return nothing;
-  }
-  return html`<div class="exec-approval-explanation" aria-label="Command explanation">
-    ${visibleLines.map((line) => html`<div>${line}</div>`)}
-  </div>`;
-}
-
 function renderExecBody(request: ExecApprovalRequestPayload) {
   return html`
-    ${renderHighlightedCommand(request)}
-    ${renderCommandExplanation(request.commandExplanationLines)}
+    ${renderCommandWithSpans(request)}
     <div class="exec-approval-meta">
       ${renderMetaRow(t("execApproval.labels.host"), request.host)}
       ${renderMetaRow(t("execApproval.labels.agent"), request.agentId)}

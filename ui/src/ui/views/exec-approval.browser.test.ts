@@ -7,7 +7,7 @@ import { renderExecApprovalPrompt } from "./exec-approval.ts";
 const root = document.createElement("div");
 document.body.append(root);
 
-test("renders command explanation highlights in Chromium approval modal", async () => {
+test("renders command spans in Chromium approval modal", async () => {
   await i18n.setLocale("en");
   render(
     renderExecApprovalPrompt({
@@ -20,13 +20,9 @@ test("renders command explanation highlights in Chromium approval modal", async 
             host: "gateway",
             security: "allowlist",
             ask: "always",
-            commandExplanationLines: [
-              "Risks:",
-              "• python -c can run arbitrary code on your computer.",
-            ],
-            commandExplanationHighlights: [
-              { startIndex: 0, endIndex: 2, kind: "command", severity: "info" },
-              { startIndex: 20, endIndex: 29, kind: "risk", severity: "danger" },
+            commandSpans: [
+              { startIndex: 0, endIndex: 2 },
+              { startIndex: 20, endIndex: 29 },
             ],
           },
           createdAtMs: Date.now() - 1_000,
@@ -40,14 +36,11 @@ test("renders command explanation highlights in Chromium approval modal", async 
     root,
   );
 
-  const infoHighlight = root.querySelector(".exec-approval-command-highlight.command.info");
-  const dangerHighlight = root.querySelector(".exec-approval-command-highlight.risk.danger");
-
-  expect(infoHighlight?.textContent).toBe("ls");
-  expect(dangerHighlight?.textContent).toBe("python -c");
-  expect(root.querySelector(".exec-approval-explanation")?.textContent).toContain(
-    "python -c can run arbitrary code on your computer.",
+  const spans = [...root.querySelectorAll(".exec-approval-command-span")].map(
+    (span) => span.textContent,
   );
+
+  expect(spans).toEqual(["ls", "python -c"]);
 
   render(html``, root);
 });

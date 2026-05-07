@@ -4041,14 +4041,9 @@ td.data-table-key-col {
   font-size: 13px;
 }
 
-.exec-approval-command-highlight {
+.exec-approval-command-span {
   border-radius: 3px;
   padding: 0 2px;
-}
-
-.exec-approval-command-highlight.info,
-.exec-approval-command-highlight.warning,
-.exec-approval-command-highlight.danger {
   background: color-mix(in srgb, #f97316 34%, transparent);
   color: var(--fg);
 }

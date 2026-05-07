@@ -97,8 +97,8 @@ describe("parsePluginApprovalRequested", () => {
   });
 });
 
-describe("parseExecApprovalRequested command explanations", () => {
-  it("preserves command text spacing for highlight offsets", () => {
+describe("parseExecApprovalRequested command spans", () => {
+  it("preserves command text spacing for span offsets", () => {
     const parsed = parseExecApprovalRequested({
       id: "approval-spaces-1",
       request: { command: "  python -c 'print(1)'" },
@@ -109,28 +109,28 @@ describe("parseExecApprovalRequested command explanations", () => {
     expect(parsed?.request.command).toBe("  python -c 'print(1)'");
   });
 
-  it("preserves command explanation lines and highlight severities from exec approval events", () => {
+  it("preserves valid command spans from exec approval events", () => {
     const parsed = parseExecApprovalRequested({
       id: "approval-explain-1",
       request: {
         command: "ls | grep stuff",
-        commandExplanationLines: ["", 123],
-        commandExplanationHighlights: [
-          { startIndex: 0, endIndex: 2, kind: "command", severity: "info" },
-          { startIndex: 5, endIndex: 9, kind: "risk", severity: "warning" },
-          { startIndex: 10, endIndex: 15, kind: "risk", severity: "danger" },
-          { startIndex: 16, endIndex: 20, kind: "risk", severity: "loud" },
+        commandSpans: [
+          { startIndex: 0, endIndex: 2 },
+          { startIndex: 5, endIndex: 9 },
+          { startIndex: 10, endIndex: 15 },
+          { startIndex: 16, endIndex: 20 },
+          { startIndex: 8, endIndex: 8 },
         ],
       },
       createdAtMs: 1,
       expiresAtMs: 2,
     });
 
-    expect(parsed?.request.commandExplanationLines).toBeUndefined();
-    expect(parsed?.request.commandExplanationHighlights).toEqual([
-      { startIndex: 0, endIndex: 2, kind: "command", severity: "info" },
-      { startIndex: 5, endIndex: 9, kind: "risk", severity: "warning" },
-      { startIndex: 10, endIndex: 15, kind: "risk", severity: "danger" },
+    expect(parsed?.request.commandSpans).toEqual([
+      { startIndex: 0, endIndex: 2 },
+      { startIndex: 5, endIndex: 9 },
+      { startIndex: 10, endIndex: 15 },
+      { startIndex: 16, endIndex: 20 },
     ]);
   });
 });

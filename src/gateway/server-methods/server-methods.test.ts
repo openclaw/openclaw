@@ -1442,7 +1442,7 @@ describe("exec approval handlers", () => {
     expect(request["warningText"]).not.toContain("\\u{A}");
   });
 
-  it("preserves command analysis and accepts command explanation metadata", async () => {
+  it("preserves command analysis and accepts command spans", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
     await requestExecApproval({
       handlers,
@@ -1451,11 +1451,9 @@ describe("exec approval handlers", () => {
       params: {
         timeoutMs: 10,
         command: "ls | python -c 'print(1)'",
-        commandExplanationLines: [""],
-        commandExplanationHighlights: [
-          { startIndex: 0, endIndex: 2, kind: "command", severity: "info" },
-          { startIndex: 3, endIndex: 8, kind: "risk", severity: "warning" },
-          { startIndex: 9, endIndex: 18, kind: "risk", severity: "danger" },
+        commandSpans: [
+          { startIndex: 0, endIndex: 2 },
+          { startIndex: 5, endIndex: 11 },
         ],
       },
     });
@@ -1465,15 +1463,13 @@ describe("exec approval handlers", () => {
     expect(request["commandAnalysis"]).toEqual(
       expect.objectContaining({ commandCount: 1, nestedCommandCount: 0 }),
     );
-    expect(request["commandExplanationLines"]).toEqual([]);
-    expect(request["commandExplanationHighlights"]).toEqual([
-      { startIndex: 0, endIndex: 2, kind: "command", severity: "info" },
-      { startIndex: 3, endIndex: 8, kind: "risk", severity: "warning" },
-      { startIndex: 9, endIndex: 18, kind: "risk", severity: "danger" },
+    expect(request["commandSpans"]).toEqual([
+      { startIndex: 0, endIndex: 2 },
+      { startIndex: 5, endIndex: 11 },
     ]);
   });
 
-  it("drops command explanation highlights when command display sanitization changes offsets", async () => {
+  it("drops command spans when command display sanitization changes offsets", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
     await requestExecApproval({
       handlers,
@@ -1482,16 +1478,16 @@ describe("exec approval handlers", () => {
       params: {
         timeoutMs: 10,
         command: "ls\u0000 | python -c 'print(1)'",
-        commandExplanationHighlights: [
-          { startIndex: 0, endIndex: 2, kind: "command", severity: "info" },
-          { startIndex: 6, endIndex: 15, kind: "risk", severity: "danger" },
+        commandSpans: [
+          { startIndex: 0, endIndex: 2 },
+          { startIndex: 6, endIndex: 12 },
         ],
       },
     });
     const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
     const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
     expect(request["command"]).not.toBe("ls\u0000 | python -c 'print(1)'");
-    expect(request["commandExplanationHighlights"]).toBeUndefined();
+    expect(request["commandSpans"]).toBeUndefined();
   });
 
   it("accepts resolve during broadcast", async () => {

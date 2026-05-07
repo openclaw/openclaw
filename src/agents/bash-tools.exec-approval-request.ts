@@ -1,8 +1,4 @@
-import {
-  explainShellCommand,
-  formatCommandExplanationHighlights,
-  formatCommandExplanationLines,
-} from "../infra/command-explainer/index.js";
+import { explainShellCommand, formatCommandSpans } from "../infra/command-explainer/index.js";
 import type { ExecAsk, ExecSecurity, SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
@@ -23,8 +19,7 @@ export type RequestExecApprovalDecisionParams = {
   security: ExecSecurity;
   ask: ExecAsk;
   warningText?: string;
-  commandExplanationLines?: string[];
-  commandExplanationHighlights?: import("../infra/exec-approvals.js").ExecApprovalCommandHighlight[];
+  commandSpans?: import("../infra/exec-approvals.js").ExecApprovalCommandSpan[];
   agentId?: string;
   resolvedPath?: string;
   sessionKey?: string;
@@ -54,8 +49,7 @@ function buildExecApprovalRequestToolParams(
     security: params.security,
     ask: params.ask,
     warningText: params.warningText,
-    commandExplanationLines: params.commandExplanationLines,
-    commandExplanationHighlights: params.commandExplanationHighlights,
+    commandSpans: params.commandSpans,
     agentId: params.agentId,
     resolvedPath: params.resolvedPath,
     sessionKey: params.sessionKey,
@@ -168,8 +162,7 @@ type HostExecApprovalParams = {
   security: ExecSecurity;
   ask: ExecAsk;
   warningText?: string;
-  commandExplanationLines?: string[];
-  commandExplanationHighlights?: import("../infra/exec-approvals.js").ExecApprovalCommandHighlight[];
+  commandSpans?: import("../infra/exec-approvals.js").ExecApprovalCommandSpan[];
   agentId?: string;
   resolvedPath?: string;
   sessionKey?: string;
@@ -219,19 +212,16 @@ function resolveExplanationCommand(
 }
 
 async function resolveCommandExplanation(command: string | undefined): Promise<{
-  lines?: string[];
-  highlights?: import("../infra/exec-approvals.js").ExecApprovalCommandHighlight[];
+  commandSpans?: import("../infra/exec-approvals.js").ExecApprovalCommandSpan[];
 }> {
   if (!command) {
     return {};
   }
   try {
     const explanation = await explainShellCommand(command);
-    const lines = formatCommandExplanationLines(explanation);
-    const highlights = formatCommandExplanationHighlights(explanation);
+    const commandSpans = formatCommandSpans(explanation);
     return {
-      lines: lines.length > 0 ? lines : undefined,
-      highlights: highlights.length > 0 ? highlights : undefined,
+      commandSpans: commandSpans.length > 0 ? commandSpans : undefined,
     };
   } catch {
     return {};
@@ -253,8 +243,7 @@ function buildHostApprovalDecisionParams(
     security: params.security,
     ask: params.ask,
     warningText: params.warningText,
-    commandExplanationLines: params.commandExplanationLines,
-    commandExplanationHighlights: params.commandExplanationHighlights,
+    commandSpans: params.commandSpans,
     ...buildExecApprovalRequesterContext({
       agentId: params.agentId,
       sessionKey: params.sessionKey,
@@ -267,14 +256,12 @@ function buildHostApprovalDecisionParams(
 async function buildHostApprovalDecisionParamsWithExplanation(
   params: HostExecApprovalParams,
 ): Promise<RequestExecApprovalDecisionParams> {
-  const explanation =
-    params.commandExplanationLines && params.commandExplanationHighlights
-      ? {}
-      : await resolveCommandExplanation(resolveExplanationCommand(params));
+  const explanation = params.commandSpans
+    ? {}
+    : await resolveCommandExplanation(resolveExplanationCommand(params));
   return buildHostApprovalDecisionParams({
     ...params,
-    commandExplanationLines: params.commandExplanationLines ?? explanation.lines,
-    commandExplanationHighlights: params.commandExplanationHighlights ?? explanation.highlights,
+    commandSpans: params.commandSpans ?? explanation.commandSpans,
   });
 }
 

@@ -1162,6 +1162,10 @@ async function walk(
         argv: parsed.argv,
         text: node.text,
         span,
+        executableSpan:
+          nameNode !== null
+            ? spanFromNode(nameNode, state.spanBase)
+            : (parsed.arguments[0]?.span ?? span),
       };
       if (step.executable) {
         output.commands.push(step);

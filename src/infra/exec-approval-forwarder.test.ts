@@ -365,19 +365,6 @@ describe("exec approval forwarder", () => {
     expect(deliver).toHaveBeenCalledTimes(2);
   });
 
-  it("includes command explanation lines in forwarded exec approval messages", async () => {
-    await expectForwardedApprovalText({
-      request: {
-        commandExplanationLines: [
-          "Runs 3 programs: ls, grep, and python.",
-          "Warning: python -c runs inline code.",
-        ],
-      },
-      expectedText:
-        "Command explanation:\nRuns 3 programs: ls, grep, and python.\nWarning: python -c runs inline code.",
-    });
-  });
-
   it("forwards to explicit targets and expires", async () => {
     vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
@@ -611,26 +598,6 @@ describe("exec approval forwarder", () => {
     );
     expect(text).toContain("Command analysis:");
     expect(text).toContain("- Contains inline-eval: python3 -c");
-  });
-
-  it("preserves explicit command explanation line formatting in fallback delivery text", async () => {
-    const text = buildExecApprovalRequestMessage(
-      {
-        ...baseRequest,
-        request: {
-          ...baseRequest.request,
-          commandExplanationLines: [
-            "Risks:",
-            "• python -c can run arbitrary code on your computer.",
-          ],
-        },
-      },
-      1000,
-    );
-
-    expect(text).toContain("Command explanation:\nRisks:\n• python -c can run arbitrary code");
-    expect(text).not.toContain("- Risks:");
-    expect(text).not.toContain("- • python -c");
   });
 
   it("omits allow-always from forwarded fallback text when ask=always", async () => {
