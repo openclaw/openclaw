@@ -10,6 +10,7 @@ export function createBaseToolHandlerState() {
     itemStartedCount: 0,
     itemCompletedCount: 0,
     lastToolError: undefined,
+    firstProgressEmitted: false,
     pendingMessagingTexts: new Map<string, string>(),
     pendingMessagingTargets: new Map<string, unknown>(),
     pendingMessagingMediaUrls: new Map<string, string[]>(),

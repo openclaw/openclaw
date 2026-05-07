@@ -145,6 +145,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     lastStreamedAssistant: undefined,
     lastStreamedAssistantCleaned: undefined,
     emittedAssistantUpdate: false,
+    firstProgressEmitted: false,
     lastStreamedReasoning: undefined,
     lastBlockReplyText: undefined,
     reasoningStreamOpen: false,

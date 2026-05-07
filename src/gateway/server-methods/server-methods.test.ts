@@ -95,6 +95,35 @@ describe("waitForAgentJob", () => {
     expect(snapshot?.endedAt).toBe(400);
   });
 
+  it("preserves startup-failed when a trailing lifecycle end follows", async () => {
+    const runId = `run-startup-failed-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 425 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "startup-failed", startedAt: 425, endedAt: 450, reason: "boot failed" },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 425, endedAt: 500 },
+    });
+
+    const snapshot = await waitPromise;
+    expect(snapshot).not.toBeNull();
+    expect(snapshot?.status).toBe("error");
+    expect(snapshot?.phase).toBe("startup-failed");
+    expect(snapshot?.startedAt).toBe(425);
+    expect(snapshot?.endedAt).toBe(450);
+    expect(snapshot?.error).toBe("boot failed");
+  });
+
   it("ignores transient aborted end events when the same run later succeeds", async () => {
     const runId = `run-timeout-retry-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });

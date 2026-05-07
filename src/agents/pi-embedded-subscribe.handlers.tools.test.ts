@@ -47,6 +47,7 @@ function createTestContext(): {
       itemActiveIds: new Set<string>(),
       itemStartedCount: 0,
       itemCompletedCount: 0,
+      firstProgressEmitted: false,
       pendingMessagingTargets: new Map<string, MessagingToolSend>(),
       pendingMessagingTexts: new Map<string, string>(),
       pendingMessagingMediaUrls: new Map<string, string[]>(),

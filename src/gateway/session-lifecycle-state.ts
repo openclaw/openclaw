@@ -3,7 +3,7 @@ import type { AgentEventPayload } from "../infra/agent-events.js";
 import { loadSessionEntry } from "./session-utils.js";
 import type { GatewaySessionRow, SessionRunStatus } from "./session-utils.types.js";
 
-type LifecyclePhase = "start" | "end" | "error";
+type LifecyclePhase = "start" | "end" | "error" | "startup-failed";
 
 type LifecycleEventLike = Pick<AgentEventPayload, "ts"> & {
   data?: {
@@ -33,12 +33,14 @@ function isFiniteTimestamp(value: unknown): value is number {
 
 function resolveLifecyclePhase(event: LifecycleEventLike): LifecyclePhase | null {
   const phase = typeof event.data?.phase === "string" ? event.data.phase : "";
-  return phase === "start" || phase === "end" || phase === "error" ? phase : null;
+  return phase === "start" || phase === "end" || phase === "error" || phase === "startup-failed"
+    ? phase
+    : null;
 }
 
 function resolveTerminalStatus(event: LifecycleEventLike): SessionRunStatus {
   const phase = resolveLifecyclePhase(event);
-  if (phase === "error") {
+  if (phase === "error" || phase === "startup-failed") {
     return "failed";
   }
 

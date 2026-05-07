@@ -922,6 +922,26 @@ function ensureListener() {
         }
         return;
       }
+      if (phase === "first-progress") {
+        clearPendingLifecycleTimeout(evt.runId);
+        return;
+      }
+      if (phase === "startup-failed") {
+        clearPendingLifecycleError(evt.runId);
+        clearPendingLifecycleTimeout(evt.runId);
+        const endedAt = typeof evt.data?.endedAt === "number" ? evt.data.endedAt : Date.now();
+        const reason = typeof evt.data?.reason === "string" ? evt.data.reason : "startup_failed";
+        await completeSubagentRun({
+          runId: evt.runId,
+          endedAt,
+          outcome: { status: "error", error: reason },
+          reason: SUBAGENT_ENDED_REASON_ERROR,
+          sendFarewell: true,
+          accountId: entry.requesterOrigin?.accountId,
+          triggerCleanup: true,
+        });
+        return;
+      }
       if (phase !== "end" && phase !== "error") {
         return;
       }

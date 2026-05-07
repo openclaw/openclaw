@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../gateway/call.js";
-import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
+import {
+  SUBAGENT_ENDED_REASON_COMPLETE,
+  SUBAGENT_ENDED_REASON_ERROR,
+} from "./subagent-lifecycle-events.js";
 import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -226,14 +229,20 @@ describe("subagent registry lifecycle hardening", () => {
     expect(persist).toHaveBeenCalled();
   });
 
-  it("cleans up tracked browser sessions before subagent cleanup flow", async () => {
+  it("starts subagent cleanup flow without waiting on tracked browser session cleanup", async () => {
     const persist = vi.fn();
     const entry = createRunEntry({
       expectsCompletionMessage: true,
     });
     const runSubagentAnnounceFlow = vi.fn(async () => true);
 
-    const controller = createLifecycleController({ entry, persist, runSubagentAnnounceFlow });
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      runSubagentAnnounceFlow,
+      cleanupBrowserSessionsForLifecycleEnd:
+        browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
+    });
 
     await expect(
       controller.completeSubagentRun({
@@ -245,16 +254,20 @@ describe("subagent registry lifecycle hardening", () => {
       }),
     ).resolves.toBeUndefined();
 
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childSessionKey: entry.childSessionKey,
+      }),
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+
     expect(browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledWith(
       {
         sessionKeys: [entry.childSessionKey],
         onWarn: expect.any(Function),
       },
-    );
-    expect(runSubagentAnnounceFlow).toHaveBeenCalledWith(
-      expect.objectContaining({
-        childSessionKey: entry.childSessionKey,
-      }),
     );
   });
 
@@ -278,11 +291,13 @@ describe("subagent registry lifecycle hardening", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledWith(
-      {
+    await vi.waitFor(() =>
+      expect(
+        browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
+      ).toHaveBeenCalledWith({
         sessionKeys: [entry.childSessionKey],
         onWarn: expect.any(Function),
-      },
+      }),
     );
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
     expect(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId).not.toHaveBeenCalledWith(
@@ -460,6 +475,69 @@ describe("subagent registry lifecycle hardening", () => {
       endedAt: 4_250,
       elapsedMs: 2_250,
     });
+    expect(persist).toHaveBeenCalled();
+  });
+
+  it("does not overwrite a terminal error with a later success completion", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      endedReason: SUBAGENT_ENDED_REASON_ERROR,
+      outcome: { status: "error", error: "terminated", startedAt: 2_000, endedAt: 3_000 },
+      frozenResultText: null,
+      frozenResultCapturedAt: 3_000,
+    });
+
+    const controller = createLifecycleController({ entry, persist });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: false,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(entry.endedReason).toBe(SUBAGENT_ENDED_REASON_ERROR);
+    expect(entry.outcome).toMatchObject({ status: "error", error: "terminated" });
+    expect(taskExecutorMocks.completeTaskRunByRunId).not.toHaveBeenCalled();
+    expect(taskExecutorMocks.failTaskRunByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "failed",
+        error: "terminated",
+      }),
+    );
+    expect(persist).toHaveBeenCalled();
+  });
+
+  it("allows a later success to replace an earlier error after a restart", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      startedAt: 3_100,
+      endedReason: SUBAGENT_ENDED_REASON_ERROR,
+      outcome: { status: "error", error: "rate limit", startedAt: 2_000, endedAt: 3_000 },
+    });
+
+    const controller = createLifecycleController({ entry, persist });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: false,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(entry.endedReason).toBe(SUBAGENT_ENDED_REASON_COMPLETE);
+    expect(entry.outcome).toMatchObject({ status: "ok", startedAt: 3_100, endedAt: 4_000 });
+    expect(taskExecutorMocks.completeTaskRunByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        endedAt: 4_000,
+      }),
+    );
     expect(persist).toHaveBeenCalled();
   });
 
