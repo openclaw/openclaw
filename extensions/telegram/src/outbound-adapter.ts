@@ -24,6 +24,7 @@ import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.j
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 
 export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
+export const TELEGRAM_POLL_OPTION_LIMIT = 10;
 
 type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
 type TelegramSendModule = typeof import("./send.js");
@@ -195,6 +196,7 @@ export function createTelegramOutboundAdapter(
     },
     resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
       typeof fallbackLimit === "number" ? Math.min(fallbackLimit, 4096) : 4096,
+    pollMaxOptions: TELEGRAM_POLL_OPTION_LIMIT,
     supportsPollDurationSeconds: true,
     supportsAnonymousPolls: true,
     ...createAttachedChannelResultAdapter({
