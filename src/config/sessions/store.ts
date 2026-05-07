@@ -499,7 +499,7 @@ async function writeSessionStoreAtomic(params: {
   store: Record<string, SessionEntry>;
   serialized: string;
 }): Promise<void> {
-  await writeTextAtomic(params.storePath, params.serialized, { mode: 0o600 });
+  await writeTextAtomic(params.storePath, params.serialized, { durable: false, mode: 0o600 });
   updateSessionStoreWriteCaches({
     storePath: params.storePath,
     store: params.store,
