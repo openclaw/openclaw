@@ -2,6 +2,7 @@ import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
+import { resolveCanonicalModelAliasForProvider } from "../model-runtime-aliases.js";
 import type { SkillSnapshot } from "../skills.js";
 
 export type EmbeddedCompactionRuntimeContext = {
@@ -45,12 +46,33 @@ export function resolveEmbeddedCompactionTarget(params: {
   const provider = params.provider?.trim() || params.defaultProvider;
   const model = params.modelId?.trim() || params.defaultModel;
   const override = params.config?.agents?.defaults?.compaction?.model?.trim();
-  if (!override) {
+  const finalize = (target: {
+    provider: string | undefined;
+    model: string | undefined;
+    authProfileId: string | undefined;
+  }) => {
+    if (!target.provider || !target.model) {
+      return target;
+    }
+    const canonical = resolveCanonicalModelAliasForProvider({
+      provider: target.provider,
+      model: target.model,
+    });
+    if (!canonical) {
+      return target;
+    }
     return {
+      provider: canonical.provider,
+      model: canonical.model,
+      authProfileId: canonical.provider !== target.provider ? undefined : target.authProfileId,
+    };
+  };
+  if (!override) {
+    return finalize({
       provider,
       model,
       authProfileId: params.authProfileId ?? undefined,
-    };
+    });
   }
   const slashIdx = override.indexOf("/");
   if (slashIdx > 0) {
@@ -62,13 +84,13 @@ export function resolveEmbeddedCompactionTarget(params: {
       overrideProvider !== (params.provider ?? "")?.trim()
         ? undefined
         : (params.authProfileId ?? undefined);
-    return { provider: overrideProvider, model: overrideModel, authProfileId };
+    return finalize({ provider: overrideProvider, model: overrideModel, authProfileId });
   }
-  return {
+  return finalize({
     provider,
     model: override,
     authProfileId: params.authProfileId ?? undefined,
-  };
+  });
 }
 
 export function buildEmbeddedCompactionRuntimeContext(params: {

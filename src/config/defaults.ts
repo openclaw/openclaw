@@ -1,3 +1,4 @@
+import { DEFAULT_MODEL_ALIASES } from "../agents/default-model-aliases.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -16,22 +17,6 @@ type ProviderPolicyDefaultsOptions = {
 };
 
 let defaultWarnState: WarnState = { warned: false };
-
-const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
-  // Anthropic (pi-ai catalog uses "latest" ids without date suffix)
-  opus: "anthropic/claude-opus-4-7",
-  sonnet: "anthropic/claude-sonnet-4-6",
-
-  // OpenAI
-  gpt: "openai/gpt-5.4",
-  "gpt-mini": "openai/gpt-5.4-mini",
-  "gpt-nano": "openai/gpt-5.4-nano",
-
-  // Google Gemini (3.x are preview ids in the catalog)
-  gemini: "google/gemini-3.1-pro-preview",
-  "gemini-flash": "google/gemini-3-flash-preview",
-  "gemini-flash-lite": "google/gemini-3.1-flash-lite-preview",
-};
 
 const DEFAULT_MODEL_COST: ModelDefinitionConfig["cost"] = {
   input: 0,

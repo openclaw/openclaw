@@ -472,6 +472,41 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     );
   });
 
+  it("compacts with claude-cli/opus by resolving the canonical Anthropic model", async () => {
+    resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
+      model: { provider, api: "anthropic-messages", id: modelId, input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    }));
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-primary",
+      config: {
+        agents: {
+          defaults: {
+            compaction: {
+              model: "claude-cli/opus",
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(resolveModelMock).toHaveBeenCalledWith(
+      "anthropic",
+      "claude-opus-4-7",
+      expect.any(String),
+      expect.anything(),
+    );
+  });
+
   it("preserves compaction failure status and code metadata", async () => {
     resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
       model: { provider, api: "responses", id: modelId, input: [] },
