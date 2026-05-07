@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-runtime";
+import type { PluginTrustedToolPolicyRegistration } from "openclaw/plugin-sdk/core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin, {
@@ -657,18 +658,30 @@ describe("skill-workshop", () => {
     const store = new SkillWorkshopStore({ stateDir, workspaceDir });
     expect(await store.list("pending")).toHaveLength(1);
     expect(await store.list("applied")).toHaveLength(0);
+  });
 
-    const applied = await tool?.execute?.("call-2", {
-      action: "apply",
-      id: proposalId,
+  it("requires operator approval before applying queued proposals in pending mode", async () => {
+    let trustedPolicy: PluginTrustedToolPolicyRegistration | undefined;
+    const api = createTestPluginApi({
+      pluginConfig: { approvalPolicy: "pending" },
+      registerTrustedToolPolicy(policy) {
+        trustedPolicy = policy;
+      },
     });
 
-    expect(applied?.details).toMatchObject({ status: "applied" });
-    await expect(
-      fs.access(path.join(workspaceDir, "skills", "screenshot-asset-workflow", "SKILL.md")),
-    ).resolves.toBeUndefined();
-    expect(await store.list("pending")).toHaveLength(0);
-    expect(await store.list("applied")).toHaveLength(1);
+    plugin.register(api);
+
+    const result = await trustedPolicy?.evaluate(
+      { toolName: "skill_workshop", params: { action: "apply", id: "proposal-1" } },
+      { toolName: "skill_workshop" },
+    );
+
+    expect(result).toMatchObject({
+      requireApproval: {
+        title: "Apply workspace skill proposal",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+    });
   });
 
   it("uses the reviewer to propose existing skill repairs", async () => {

@@ -420,6 +420,9 @@ the `apply` action after approval.
 
 Apply a pending proposal.
 
+With `approvalPolicy: "pending"`, this action asks for operator approval before writing the
+workspace skill.
+
 ```json
 {
   "action": "apply",
