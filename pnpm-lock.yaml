@@ -1399,6 +1399,16 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/tinyfish:
+    dependencies:
+      typebox:
+        specifier: 1.1.37
+        version: 1.1.37
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/tlon:
     dependencies:
       '@aws-sdk/client-s3':

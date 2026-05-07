@@ -1,0 +1,58 @@
+{
+  "id": "tinyfish",
+  "activation": {
+    "onStartup": false
+  },
+  "skills": ["./skills"],
+  "providerAuthEnvVars": {
+    "tinyfish": ["TINYFISH_API_KEY"]
+  },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "TinyFish API Key",
+      "help": "TinyFish API key for web search (fallback: TINYFISH_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "tf_live_..."
+    },
+    "webFetch.apiKey": {
+      "label": "TinyFish API Key",
+      "help": "TinyFish API key for web fetch (fallback: TINYFISH_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "tf_live_..."
+    }
+  },
+  "contracts": {
+    "webFetchProviders": ["tinyfish"],
+    "webSearchProviders": ["tinyfish"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "baseUrl": {
+            "type": "string"
+          }
+        }
+      },
+      "webFetch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "baseUrl": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
