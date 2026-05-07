@@ -69,11 +69,17 @@ export function buildCodexHarnessPromptSnapshot(params: {
 
 export function createCodexDynamicToolSpecsForPromptSnapshot(params: {
   tools: AnyAgentTool[];
-  pluginConfig?: Pick<CodexPluginConfig, "codexDynamicToolsProfile" | "codexDynamicToolsExclude">;
+  pluginConfig?: Pick<
+    CodexPluginConfig,
+    "codexDynamicToolsProfile" | "codexDynamicToolsLoading" | "codexDynamicToolsExclude"
+  >;
+  directToolNames?: Iterable<string>;
 }): CodexDynamicToolSpec[] {
   const profiledTools = applyCodexDynamicToolProfile(params.tools, params.pluginConfig ?? {});
   return createCodexDynamicToolBridge({
     tools: profiledTools,
     signal: new AbortController().signal,
+    loading: params.pluginConfig?.codexDynamicToolsLoading ?? "searchable",
+    directToolNames: params.directToolNames,
   }).specs;
 }

@@ -22,9 +22,9 @@ it only posts to the channel when it calls `message(action="send")`. Set
 `messages.visibleReplies: "automatic"` to keep direct-chat final replies on the
 legacy automatic delivery path.
 
-Codex heartbeat turns also get the `heartbeat_respond` tool by default, so the
-agent can record whether the wake should stay quiet or notify without encoding
-that control flow in final text.
+Codex heartbeat turns also get `heartbeat_respond` in the searchable OpenClaw
+tool catalog by default, so the agent can record whether the wake should stay
+quiet or notify without encoding that control flow in final text.
 
 Heartbeat-specific initiative guidance is sent as a Codex collaboration-mode
 developer instruction on the heartbeat turn itself. Ordinary chat turns restore
@@ -606,18 +606,28 @@ If a deployment needs additional environment isolation, add those variables to
 
 `appServer.clearEnv` only affects the spawned Codex app-server child process.
 
-Codex dynamic tools default to the `native-first` profile. In that mode,
-OpenClaw does not expose dynamic tools that duplicate Codex-native workspace
-operations: `read`, `write`, `edit`, `apply_patch`, `exec`, `process`, and
-`update_plan`. OpenClaw integration tools such as messaging, sessions, media,
-cron, browser, nodes, gateway, `heartbeat_respond`, and `web_search` remain
-available.
+Codex dynamic tools default to the `native-first` profile and `searchable`
+loading. In that mode, OpenClaw does not expose dynamic tools that duplicate
+Codex-native workspace operations: `read`, `write`, `edit`, `apply_patch`,
+`exec`, `process`, and `update_plan`. Remaining OpenClaw integration tools such
+as messaging, sessions, media, cron, browser, nodes, gateway,
+`heartbeat_respond`, and `web_search` are available through Codex tool search
+under the `openclaw` namespace, keeping the initial model context smaller.
+`sessions_yield` and message-tool-only source replies stay direct because those
+are turn-control contracts. Heartbeat collaboration instructions tell Codex to
+search for `heartbeat_respond` before ending a heartbeat turn when the tool is
+not already loaded.
+
+Set `codexDynamicToolsLoading: "direct"` only when connecting to a custom Codex
+app-server that cannot search deferred dynamic tools or when debugging the full
+tool payload.
 
 Supported top-level Codex plugin fields:
 
 | Field                      | Default          | Meaning                                                                                   |
 | -------------------------- | ---------------- | ----------------------------------------------------------------------------------------- |
 | `codexDynamicToolsProfile` | `"native-first"` | Use `"openclaw-compat"` to expose the full OpenClaw dynamic tool set to Codex app-server. |
+| `codexDynamicToolsLoading` | `"searchable"`   | Use `"direct"` to put OpenClaw dynamic tools directly in the initial Codex tool context.  |
 | `codexDynamicToolsExclude` | `[]`             | Additional OpenClaw dynamic tool names to omit from Codex app-server turns.               |
 
 Supported `appServer` fields:
