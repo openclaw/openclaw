@@ -41,4 +41,25 @@ describe("buildStreamErrorAssistantMessage", () => {
     // Original errorMessage is preserved verbatim for clients that surface it.
     expect(message.errorMessage).toBe("   ");
   });
+
+  it("surfaces a safe billing hint when the provider rejects the token budget", () => {
+    const message = buildStreamErrorAssistantMessage({
+      model: {
+        api: "openai-completions",
+        provider: "openrouter",
+        id: "moonshotai/kimi-k2.6",
+      },
+      errorMessage:
+        "402 This request requires more credits, or fewer max_tokens. You requested up to 4096 tokens, but can only afford 643. To increase, visit https://openrouter.ai/settings/credits",
+    });
+
+    expect(message.content).toEqual([
+      {
+        type: "text",
+        text: "[model unavailable: billing/credits] openrouter (moonshotai/kimi-k2.6) cannot run with the current API key balance. Requested up to 4096 tokens, but the account can only afford 643. Add credits, lower maxTokens, or switch models.",
+      },
+    ]);
+    expect(JSON.stringify(message.content)).not.toContain("settings/credits");
+    expect(message.errorMessage).toContain("settings/credits");
+  });
 });
