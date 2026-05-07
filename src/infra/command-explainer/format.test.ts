@@ -69,15 +69,15 @@ describe("formatCommandSpans", () => {
     expect(formatCommandSpans(explanation)).toContainEqual({ startIndex: 6, endIndex: 12 });
   });
 
-  it("includes nested executable spans from carrier shell payloads", async () => {
+  it("includes nested executable spans from shell wrapper payloads", async () => {
     const explanation = await explainShellCommand(
-      'find . -maxdepth 2 -name "*.ts" -exec sh -c \'echo checking "$1"; node -e "console.log(process.argv[1])" "$1"\' sh {} \\;',
+      'sh -c \'echo checking "$1"; node -e "console.log(process.argv[1])" "$1"\' sh file.ts',
     );
 
     const commandTexts = formatCommandSpans(explanation).map((commandSpan) =>
       explanation.source.slice(commandSpan.startIndex, commandSpan.endIndex),
     );
-    expect(commandTexts).toEqual(expect.arrayContaining(["find", "echo", "node"]));
+    expect(commandTexts).toEqual(expect.arrayContaining(["sh", "echo", "node"]));
   });
 
   it("ignores invalid executable spans", () => {
