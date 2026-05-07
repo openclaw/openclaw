@@ -96,7 +96,8 @@
     "subagents",
     "session_status",
     "web_search",
-    "web_fetch"
+    "web_fetch",
+    "canvas"
   ],
   "experimentalRawEvents": true,
   "model": "gpt-5.5",
@@ -590,7 +591,8 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
   "subagents",
   "session_status",
   "web_search",
-  "web_fetch"
+  "web_fetch",
+  "canvas"
 ]
 ```
 
