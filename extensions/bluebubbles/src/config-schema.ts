@@ -6,6 +6,8 @@ import {
   GroupPolicySchema,
   MarkdownConfigSchema,
   ToolPolicySchema,
+  requireAllowlistAllowFrom,
+  requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "openclaw/plugin-sdk/zod";
 import { bluebubblesChannelConfigUiHints } from "./config-ui-hints.js";
@@ -125,9 +127,49 @@ const bluebubblesAccountSchema = z
 
 export const BlueBubblesConfigSchema = buildCatchallMultiAccountChannelSchema(
   bluebubblesAccountSchema,
-).safeExtend({
-  actions: bluebubblesActionSchema,
-});
+)
+  .safeExtend({
+    actions: bluebubblesActionSchema,
+  })
+  .superRefine((value, ctx) => {
+    requireOpenAllowFrom({
+      policy: value.dmPolicy,
+      allowFrom: value.allowFrom,
+      ctx,
+      path: ["allowFrom"],
+      message:
+        'channels.bluebubbles.dmPolicy="open" requires channels.bluebubbles.allowFrom to include "*"',
+    });
+    requireAllowlistAllowFrom({
+      policy: value.dmPolicy,
+      allowFrom: value.allowFrom,
+      ctx,
+      path: ["allowFrom"],
+      message:
+        'channels.bluebubbles.dmPolicy="allowlist" requires channels.bluebubbles.allowFrom to contain at least one sender ID',
+    });
+
+    for (const [accountId, account] of Object.entries(value.accounts ?? {})) {
+      const effectivePolicy = account.dmPolicy ?? value.dmPolicy;
+      const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
+      requireOpenAllowFrom({
+        policy: effectivePolicy,
+        allowFrom: effectiveAllowFrom,
+        ctx,
+        path: ["accounts", accountId, "allowFrom"],
+        message:
+          'channels.bluebubbles.accounts.*.dmPolicy="open" requires channels.bluebubbles.accounts.*.allowFrom (or channels.bluebubbles.allowFrom) to include "*"',
+      });
+      requireAllowlistAllowFrom({
+        policy: effectivePolicy,
+        allowFrom: effectiveAllowFrom,
+        ctx,
+        path: ["accounts", accountId, "allowFrom"],
+        message:
+          'channels.bluebubbles.accounts.*.dmPolicy="allowlist" requires channels.bluebubbles.accounts.*.allowFrom (or channels.bluebubbles.allowFrom) to contain at least one sender ID',
+      });
+    }
+  });
 
 export const BlueBubblesChannelConfigSchema = buildChannelConfigSchema(BlueBubblesConfigSchema, {
   uiHints: bluebubblesChannelConfigUiHints,
