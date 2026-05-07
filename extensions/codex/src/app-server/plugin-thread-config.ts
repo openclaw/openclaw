@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import {
   defaultCodexAppInventoryCache,
   type CodexAppInventoryCache,
+  type CodexAppInventoryRequest,
 } from "./app-inventory-cache.js";
 import {
   resolveCodexPluginsPolicy,
@@ -82,7 +83,7 @@ export async function buildCodexPluginThreadConfig(
   params: BuildCodexPluginThreadConfigParams,
 ): Promise<CodexPluginThreadConfig> {
   const appCache = params.appCache ?? defaultCodexAppInventoryCache;
-  const inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
+  let inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
     pluginConfig: params.pluginConfig,
     appCache,
     appCacheKey: params.appCacheKey,
@@ -92,7 +93,7 @@ export async function buildCodexPluginThreadConfig(
     return emptyPluginThreadConfig({ enabled: false, inputFingerprint });
   }
 
-  const inventory = await readCodexPluginInventory({
+  let inventory = await readCodexPluginInventory({
     pluginConfig: params.pluginConfig,
     policy,
     request: params.request,
@@ -100,6 +101,22 @@ export async function buildCodexPluginThreadConfig(
     appCacheKey: params.appCacheKey,
     nowMs: params.nowMs,
   });
+  if (shouldWaitForInitialAppInventory(params, policy, inventory)) {
+    await refreshInitialAppInventory(params, appCache);
+    inventory = await readCodexPluginInventory({
+      pluginConfig: params.pluginConfig,
+      policy,
+      request: params.request,
+      appCache,
+      appCacheKey: params.appCacheKey,
+      nowMs: params.nowMs,
+    });
+    inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
+      pluginConfig: params.pluginConfig,
+      appCache,
+      appCacheKey: params.appCacheKey,
+    });
+  }
   const diagnostics: CodexPluginThreadConfigDiagnostic[] = [...inventory.diagnostics];
   const activationResults: CodexPluginActivationResult[] = [];
   for (const record of inventory.records) {
@@ -157,7 +174,6 @@ export async function buildCodexPluginThreadConfig(
         open_world_enabled: false,
         default_tools_enabled: true,
         default_tools_approval_mode: "prompt",
-        tools: null,
       };
       policyApps[app.id] = {
         appId: app.id,
@@ -249,6 +265,39 @@ function buildPluginAppPolicyContext(
     fingerprint: fingerprintJson({ version: 1, apps }),
     apps,
   };
+}
+
+function shouldWaitForInitialAppInventory(
+  params: BuildCodexPluginThreadConfigParams,
+  policy: ResolvedCodexPluginsPolicy,
+  inventory: CodexPluginInventory,
+): boolean {
+  return Boolean(
+    params.appCacheKey &&
+    policy.pluginPolicies.some((plugin) => plugin.enabled) &&
+    inventory.appInventory?.state === "missing",
+  );
+}
+
+async function refreshInitialAppInventory(
+  params: BuildCodexPluginThreadConfigParams,
+  appCache: CodexAppInventoryCache,
+): Promise<void> {
+  const appCacheKey = params.appCacheKey;
+  if (!appCacheKey) {
+    return;
+  }
+  const request: CodexAppInventoryRequest = async (method, requestParams) =>
+    (await params.request(method, requestParams)) as Awaited<ReturnType<CodexAppInventoryRequest>>;
+  try {
+    await appCache.refreshNow({
+      key: appCacheKey,
+      request,
+      nowMs: params.nowMs,
+    });
+  } catch {
+    // Keep the thread fail-closed if the initial app/list refresh is unavailable.
+  }
 }
 
 function policyFingerprint(policy: ResolvedCodexPluginsPolicy): JsonValue {

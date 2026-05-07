@@ -395,7 +395,6 @@ function createPluginAppConfigPatch() {
         open_world_enabled: false,
         default_tools_enabled: true,
         default_tools_approval_mode: "prompt",
-        tools: null,
       },
     },
   };
