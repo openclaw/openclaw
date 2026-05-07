@@ -2,12 +2,13 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   acquireSessionWriteLock,
-  type SessionWriteLockAcquireTimeoutConfig,
   resolveSessionWriteLockAcquireTimeoutMs,
 } from "../../agents/session-write-lock.js";
-import { redactSecrets } from "../../logging/redact.js";
+import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const TRANSCRIPT_APPEND_SCAN_CHUNK_BYTES = 64 * 1024;
 const SESSION_MANAGER_APPEND_MAX_BYTES = 8 * 1024 * 1024;
@@ -237,8 +238,8 @@ export async function appendSessionTranscriptMessage(params: {
   sessionId?: string;
   cwd?: string;
   useRawWhenLinear?: boolean;
-  config?: SessionWriteLockAcquireTimeoutConfig;
-}): Promise<{ messageId: string }> {
+  config?: OpenClawConfig;
+}): Promise<{ messageId: string; message: AgentMessage }> {
   return await withTranscriptAppendQueue(params.transcriptPath, () =>
     appendSessionTranscriptMessageLocked(params),
   );
@@ -251,8 +252,8 @@ async function appendSessionTranscriptMessageLocked(params: {
   sessionId?: string;
   cwd?: string;
   useRawWhenLinear?: boolean;
-  config?: SessionWriteLockAcquireTimeoutConfig;
-}): Promise<{ messageId: string }> {
+  config?: OpenClawConfig;
+}): Promise<{ messageId: string; message: AgentMessage }> {
   const lock = await acquireSessionWriteLock({
     sessionFile: params.transcriptPath,
     timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
@@ -286,15 +287,16 @@ async function appendSessionTranscriptMessageLocked(params: {
         nonSessionEntryCount: leafInfo.nonSessionEntryCount,
       };
     }
+    const finalMessage = redactTranscriptMessage(params.message as AgentMessage, params.config);
     const entry = {
       type: "message",
       id: messageId,
       ...(shouldRawAppend ? {} : { parentId: leafInfo.leafId ?? null }),
       timestamp: new Date(now).toISOString(),
-      message: redactSecrets(params.message),
+      message: finalMessage,
     };
     await fs.appendFile(params.transcriptPath, `${JSON.stringify(entry)}\n`, "utf-8");
-    return { messageId };
+    return { messageId, message: finalMessage };
   } finally {
     await lock.release();
   }
