@@ -6,14 +6,18 @@ import { createClientHarness } from "./test-support.js";
 const mocks = vi.hoisted(() => ({
   bridgeCodexAppServerStartOptions: vi.fn(async ({ startOptions }) => startOptions),
   applyCodexAppServerAuthProfile: vi.fn(async () => undefined),
+  resolveCodexAppServerAuthProfileIdForAgent: vi.fn(
+    (params?: { authProfileId?: string }) => params?.authProfileId,
+  ),
   resolveManagedCodexAppServerStartOptions: vi.fn(async (startOptions) => startOptions),
   embeddedAgentLog: { debug: vi.fn(), warn: vi.fn() },
-  resolveOpenClawAgentDir: vi.fn(() => "/tmp/openclaw-agent"),
+  resolveDefaultAgentDir: vi.fn(() => "/tmp/openclaw-agent"),
 }));
 
 vi.mock("./auth-bridge.js", () => ({
   applyCodexAppServerAuthProfile: mocks.applyCodexAppServerAuthProfile,
   bridgeCodexAppServerStartOptions: mocks.bridgeCodexAppServerStartOptions,
+  resolveCodexAppServerAuthProfileIdForAgent: mocks.resolveCodexAppServerAuthProfileIdForAgent,
 }));
 
 vi.mock("./managed-binary.js", () => ({
@@ -25,8 +29,8 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   OPENCLAW_VERSION: "test",
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
-  resolveOpenClawAgentDir: mocks.resolveOpenClawAgentDir,
+vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+  resolveDefaultAgentDir: mocks.resolveDefaultAgentDir,
 }));
 
 let listCodexAppServerModels: typeof import("./models.js").listCodexAppServerModels;
@@ -67,13 +71,17 @@ describe("shared Codex app-server client", () => {
     vi.restoreAllMocks();
     mocks.bridgeCodexAppServerStartOptions.mockClear();
     mocks.applyCodexAppServerAuthProfile.mockClear();
+    mocks.resolveCodexAppServerAuthProfileIdForAgent.mockClear();
+    mocks.resolveCodexAppServerAuthProfileIdForAgent.mockImplementation(
+      (params?: { authProfileId?: string }) => params?.authProfileId,
+    );
     mocks.resolveManagedCodexAppServerStartOptions.mockClear();
     mocks.resolveManagedCodexAppServerStartOptions.mockImplementation(
       async (startOptions) => startOptions,
     );
     mocks.embeddedAgentLog.debug.mockClear();
     mocks.embeddedAgentLog.warn.mockClear();
-    mocks.resolveOpenClawAgentDir.mockClear();
+    mocks.resolveDefaultAgentDir.mockClear();
   });
 
   it("closes the shared app-server when the version gate fails", async () => {
@@ -143,6 +151,37 @@ describe("shared Codex app-server client", () => {
     expect(mocks.applyCodexAppServerAuthProfile).toHaveBeenCalledWith(
       expect.objectContaining({
         authProfileId: "openai-codex:work",
+      }),
+    );
+  });
+
+  it("resolves the configured implicit auth profile before sharing a client", async () => {
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    const config = { auth: { order: { "openai-codex": ["openai-codex:work"] } } };
+    mocks.resolveCodexAppServerAuthProfileIdForAgent.mockReturnValue("openai-codex:work");
+
+    const listPromise = listCodexAppServerModels({
+      timeoutMs: 1000,
+      config,
+    });
+    await sendInitializeResult(harness, "openclaw/0.125.0 (macOS; test)");
+    await sendEmptyModelList(harness);
+
+    await expect(listPromise).resolves.toEqual({ models: [] });
+    expect(mocks.resolveCodexAppServerAuthProfileIdForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ config }),
+    );
+    expect(mocks.bridgeCodexAppServerStartOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileId: "openai-codex:work",
+        config,
+      }),
+    );
+    expect(mocks.applyCodexAppServerAuthProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileId: "openai-codex:work",
+        config,
       }),
     );
   });

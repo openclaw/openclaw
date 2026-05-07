@@ -286,6 +286,7 @@ function resolveModelSelectionForCommand(params: {
 async function persistModelDirectiveForTest(params: {
   command: string;
   profiles?: Record<string, ApiKeyProfile>;
+  cfg?: OpenClawConfig;
   aliasIndex?: ModelAliasIndex;
   allowedModelKeys: string[];
   sessionEntry?: SessionEntry;
@@ -297,7 +298,7 @@ async function persistModelDirectiveForTest(params: {
     setAuthProfiles(params.profiles);
   }
   const directives = parseInlineDirectives(params.command);
-  const cfg = baseConfig();
+  const cfg = params.cfg ?? baseConfig();
   const sessionEntry = params.sessionEntry ?? createSessionEntry();
   const persisted = await persistInlineDirectives({
     directives,
@@ -611,6 +612,22 @@ describe("/model chat UX", () => {
     expect(resolved.errorText).toContain("Browse: /models or /models <provider>");
   });
 
+  it("includes additive allowlist repair when a runtime switch targets a blocked model", () => {
+    const resolved = resolveModelSelectionForCommand({
+      command: "/model openai/gpt-5.5 --runtime codex",
+      allowedModelKeys: new Set(["anthropic/claude-opus-4-6"]),
+      allowedModelCatalog: [],
+    });
+
+    expect(resolved.modelSelection).toBeUndefined();
+    expect(resolved.errorText).toContain('Model "openai/gpt-5.5" is not allowed.');
+    expect(resolved.errorText).toContain(
+      `openclaw config set agents.defaults.models '{"openai/gpt-5.5":{}}' --strict-json --merge`,
+    );
+    expect(resolved.errorText).toContain("Then retry: /model openai/gpt-5.5 --runtime codex");
+    expect(resolved.errorText).toContain("openclaw plugins enable codex");
+  });
+
   it("treats explicit default /model selection as resettable default", () => {
     const resolved = resolveModelSelectionForCommand({
       command: "/model anthropic/claude-opus-4-6",
@@ -765,6 +782,39 @@ describe("/model chat UX", () => {
     });
 
     expect(sessionEntry.agentRuntimeOverride).toBe("codex");
+  });
+
+  it("uses Codex OAuth context config for persisted native Codex runtime directives", async () => {
+    const { persisted } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-5.5 --runtime codex hello",
+      allowedModelKeys: ["openai/gpt-5.5"],
+      cfg: {
+        ...baseConfig(),
+        models: {
+          providers: {
+            "openai-codex": {
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT-5.5",
+                  reasoning: true,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1_050_000,
+                  contextTokens: 1_000_000,
+                  maxTokens: 128_000,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(persisted.provider).toBe("openai");
+    expect(persisted.model).toBe("gpt-5.5");
+    expect(persisted.contextTokens).toBe(1_000_000);
   });
 
   it("clears runtime overrides when the model directive asks for default runtime", async () => {
@@ -983,6 +1033,28 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       provider: "openai",
       model: "gpt-4o",
     });
+  });
+
+  it("keeps xhigh when switching to OpenCode Claude Opus 4.7", async () => {
+    const sessionEntry = createSessionEntry({ thinkingLevel: "xhigh" });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/model opencode/claude-opus-4-7"),
+        allowedModelKeys: new Set([...allowedModelKeys, "opencode/claude-opus-4-7"]),
+        allowedModelCatalog: [
+          ...allowedModelCatalog,
+          { provider: "opencode", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
+        ],
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text).toContain("Model set to opencode/claude-opus-4-7 for this session.");
+    expect(result?.text ?? "").not.toContain("xhigh not supported");
+    expect(sessionEntry.thinkingLevel).toBe("xhigh");
   });
 
   it("does not request a live restart when /model mutates an active session", async () => {

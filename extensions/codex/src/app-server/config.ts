@@ -49,6 +49,7 @@ export type CodexAppServerStartOptions = {
 export type CodexAppServerRuntimeOptions = {
   start: CodexAppServerStartOptions;
   requestTimeoutMs: number;
+  turnCompletionIdleTimeoutMs: number;
   approvalPolicy: CodexAppServerApprovalPolicy;
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
@@ -73,6 +74,7 @@ export type CodexPluginConfig = {
     headers?: Record<string, string>;
     clearEnv?: string[];
     requestTimeoutMs?: number;
+    turnCompletionIdleTimeoutMs?: number;
     approvalPolicy?: CodexAppServerApprovalPolicy;
     sandbox?: CodexAppServerSandboxMode;
     approvalsReviewer?: CodexAppServerApprovalsReviewer;
@@ -91,6 +93,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "headers",
   "clearEnv",
   "requestTimeoutMs",
+  "turnCompletionIdleTimeoutMs",
   "approvalPolicy",
   "sandbox",
   "approvalsReviewer",
@@ -166,6 +169,7 @@ const codexPluginConfigSchema = z
         headers: z.record(z.string(), z.string()).optional(),
         clearEnv: z.array(z.string()).optional(),
         requestTimeoutMs: z.number().positive().optional(),
+        turnCompletionIdleTimeoutMs: z.number().positive().optional(),
         approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
         sandbox: codexAppServerSandboxSchema.optional(),
         approvalsReviewer: codexAppServerApprovalsReviewerSchema.optional(),
@@ -227,6 +231,10 @@ export function resolveCodexAppServerRuntimeOptions(
       ...(transport === "stdio" && clearEnv.length > 0 ? { clearEnv } : {}),
     },
     requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
+    turnCompletionIdleTimeoutMs: normalizePositiveNumber(
+      config.turnCompletionIdleTimeoutMs,
+      60_000,
+    ),
     approvalPolicy:
       resolveApprovalPolicy(config.approvalPolicy) ??
       resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY) ??
@@ -331,12 +339,11 @@ export function codexSandboxPolicyForTurn(
     return { type: "dangerFullAccess" };
   }
   if (mode === "read-only") {
-    return { type: "readOnly", access: { type: "fullAccess" }, networkAccess: false };
+    return { type: "readOnly", networkAccess: false };
   }
   return {
     type: "workspaceWrite",
     writableRoots: [cwd],
-    readOnlyAccess: { type: "fullAccess" },
     networkAccess: false,
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false,

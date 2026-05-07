@@ -303,7 +303,8 @@ describe("docker build helper", () => {
     expect(sweep).toContain('plugins install "npm:@openclaw/demo-plugin-npm@0.0.1"');
     expect(sweep).toContain("plugins update demo-plugin-npm");
     expect(assertions).toContain("demo-plugin-npm is up to date (0.0.1).");
-    expect(npmRegistry).toContain('"dist-tags": { latest: entry.version }');
+    expect(npmRegistry).toContain('"dist-tags": { latest: entry.latestVersion }');
+    expect(npmRegistry).toContain("existing.latestVersion = version");
     expect(npmRegistry).toContain("packageArgs.length % 3");
 
     expect(sweep).toContain('plugins install "git:$git_update_repo_url@main"');

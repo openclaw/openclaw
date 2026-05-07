@@ -10,6 +10,7 @@ import {
   getDetachedTaskLifecycleRuntime,
 } from "./detached-task-runtime.js";
 import {
+  getInspectableActiveTaskRestartBlockers,
   previewTaskRegistryMaintenance,
   reconcileInspectableTasks,
   resetTaskRegistryMaintenanceRuntimeForTests,
@@ -250,6 +251,44 @@ describe("task-registry maintenance issue #60299", () => {
     expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
   });
 
+  it("only treats started non-ended running tasks as restart blockers", () => {
+    const now = Date.now();
+    const activeRunning = makeStaleTask({
+      taskId: "task-running-live",
+      runtime: "cli",
+      status: "running",
+      createdAt: now,
+      startedAt: now,
+      lastEventAt: now,
+      runId: "run-running-live",
+    });
+    const queued = makeStaleTask({
+      taskId: "task-queued-durable",
+      runtime: "acp",
+      status: "queued",
+      createdAt: now,
+      startedAt: undefined,
+      lastEventAt: now,
+    });
+    const staleInconsistent = makeStaleTask({
+      taskId: "task-running-ended",
+      runtime: "subagent",
+      status: "running",
+      endedAt: now - 1_000,
+    });
+
+    createTaskRegistryMaintenanceHarness({ tasks: [activeRunning, queued, staleInconsistent] });
+
+    expect(getInspectableActiveTaskRestartBlockers()).toEqual([
+      expect.objectContaining({
+        taskId: "task-running-live",
+        status: "running",
+        runtime: "cli",
+        runId: "run-running-live",
+      }),
+    ]);
+  });
+
   it("marks subagent tasks lost when their child session recovery is tombstoned", async () => {
     const childSessionKey = "agent:main:subagent:wedged-child";
     const task = makeStaleTask({
@@ -406,6 +445,33 @@ describe("task-registry maintenance issue #60299", () => {
       sessionStore: { [channelKey]: { sessionId: channelKey, updatedAt: Date.now() } },
     });
 
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "lost" });
+  });
+
+  it("does not keep stale CLI run-context tasks alive through stale subagent session rows", async () => {
+    const childSessionKey = "agent:main:subagent:stale-cli";
+    const task = makeStaleTask({
+      taskId: "task-cli-stale-subagent",
+      runtime: "cli",
+      sourceId: "run-cli-stale-subagent",
+      runId: "run-cli-stale-subagent",
+      childSessionKey,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      sessionStore: { [childSessionKey]: { sessionId: childSessionKey, updatedAt: Date.now() } },
+    });
+
+    expect(reconcileInspectableTasks()).toEqual([
+      expect.objectContaining({
+        taskId: task.taskId,
+        status: "lost",
+        error: "backing session missing",
+      }),
+    ]);
+    expect(getInspectableActiveTaskRestartBlockers()).toEqual([]);
     expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
     expect(currentTasks.get(task.taskId)).toMatchObject({ status: "lost" });
   });

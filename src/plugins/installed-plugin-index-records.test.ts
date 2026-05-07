@@ -14,6 +14,7 @@ import {
   withoutPluginInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "./installed-plugin-index-records.js";
+import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const tempDirs: string[] = [];
 
@@ -160,6 +161,114 @@ describe("plugin index install records store", () => {
       persisted: {
         source: "npm",
         spec: "persisted@1.0.0",
+      },
+    });
+  });
+
+  it("reads legacy persisted records when the plugin index has no plugin list", async () => {
+    const stateDir = makeStateDir();
+    const indexPath = resolveInstalledPluginIndexRecordsStorePath({ stateDir });
+    fs.mkdirSync(path.dirname(indexPath), { recursive: true });
+    fs.writeFileSync(
+      indexPath,
+      JSON.stringify({
+        installRecords: {
+          legacy: {
+            source: "npm",
+            spec: "legacy@1.0.0",
+            installPath: path.join(stateDir, "plugins", "legacy"),
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).resolves.toEqual({
+      legacy: {
+        source: "npm",
+        spec: "legacy@1.0.0",
+        installPath: path.join(stateDir, "plugins", "legacy"),
+      },
+    });
+  });
+
+  it("recovers managed npm plugin records when the persisted ledger is empty", async () => {
+    const stateDir = makeStateDir();
+    const discordDir = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/discord",
+      pluginId: "discord",
+      version: "2026.5.2",
+    });
+    const codexDir = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/codex",
+      pluginId: "codex",
+      version: "2026.5.2",
+    });
+    const indexPath = resolveInstalledPluginIndexRecordsStorePath({ stateDir });
+    fs.mkdirSync(path.dirname(indexPath), { recursive: true });
+    fs.writeFileSync(indexPath, JSON.stringify({ installRecords: {}, plugins: [] }), "utf8");
+
+    await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).resolves.toMatchObject({
+      codex: {
+        source: "npm",
+        spec: "@openclaw/codex@2026.5.2",
+        installPath: codexDir,
+        version: "2026.5.2",
+        resolvedName: "@openclaw/codex",
+        resolvedVersion: "2026.5.2",
+        resolvedSpec: "@openclaw/codex@2026.5.2",
+      },
+      discord: {
+        source: "npm",
+        spec: "@openclaw/discord@2026.5.2",
+        installPath: discordDir,
+        version: "2026.5.2",
+        resolvedName: "@openclaw/discord",
+        resolvedVersion: "2026.5.2",
+        resolvedSpec: "@openclaw/discord@2026.5.2",
+      },
+    });
+    expect(loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toMatchObject({
+      codex: {
+        source: "npm",
+        installPath: codexDir,
+      },
+      discord: {
+        source: "npm",
+        installPath: discordDir,
+      },
+    });
+  });
+
+  it("keeps persisted install record metadata over recovered npm records", async () => {
+    const stateDir = makeStateDir();
+    writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/discord",
+      pluginId: "discord",
+      version: "2026.5.2",
+    });
+    const candidate = createPluginCandidate(stateDir, "discord");
+    await writePersistedInstalledPluginIndexInstallRecords(
+      {
+        discord: {
+          source: "npm",
+          spec: "@openclaw/discord@beta",
+          installPath: path.join(stateDir, "custom", "discord"),
+          integrity: "sha512-persisted",
+        },
+      },
+      { stateDir, candidates: [candidate] },
+    );
+
+    await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).resolves.toMatchObject({
+      discord: {
+        source: "npm",
+        spec: "@openclaw/discord@beta",
+        installPath: path.join(stateDir, "custom", "discord"),
+        integrity: "sha512-persisted",
       },
     });
   });

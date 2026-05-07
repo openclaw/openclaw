@@ -51,6 +51,29 @@ describe("$schema key in config (#14998)", () => {
   });
 });
 
+describe("legacy Canvas host config", () => {
+  it("keeps root canvasHost valid so doctor can migrate it", () => {
+    const result = validateConfigObjectRaw({
+      canvasHost: {
+        enabled: false,
+        root: "~/canvas",
+        port: 18790,
+        liveReload: false,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect((result.config as { canvasHost?: unknown }).canvasHost).toEqual({
+        enabled: false,
+        root: "~/canvas",
+        port: 18790,
+        liveReload: false,
+      });
+    }
+  });
+});
+
 describe("accessGroups config", () => {
   it("accepts Discord channel audience access groups", () => {
     const result = OpenClawSchema.safeParse({
@@ -374,6 +397,25 @@ describe("plugins.entries.*.hooks", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts bounded typed hook timeout overrides", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "memory-recall": {
+            hooks: {
+              timeoutMs: 30_000,
+              timeouts: {
+                before_prompt_build: 90_000,
+                agent_end: 60_000,
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("rejects non-boolean values", () => {
     const result = OpenClawSchema.safeParse({
       plugins: {
@@ -404,6 +446,24 @@ describe("plugins.entries.*.hooks", () => {
       },
     });
     expect(result.success).toBe(false);
+  });
+
+  it("rejects invalid typed hook timeout overrides", () => {
+    for (const hooks of [
+      { timeoutMs: 0 },
+      { timeoutMs: 600_001 },
+      { timeouts: { before_prompt_build: -1 } },
+      { timeouts: { before_prompt_build: 1.5 } },
+    ]) {
+      const result = OpenClawSchema.safeParse({
+        plugins: {
+          entries: {
+            "memory-recall": { hooks },
+          },
+        },
+      });
+      expect(result.success).toBe(false);
+    }
   });
 });
 

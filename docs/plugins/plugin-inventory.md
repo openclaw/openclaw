@@ -26,6 +26,26 @@ Source checkouts are different from npm installs: after `pnpm install`, bundled
 plugins load from `extensions/<id>` so local edits and package-local workspace
 dependencies are available.
 
+## Install a plugin
+
+Use the **Distribution** column to decide whether install is needed. Plugins that
+say `included in OpenClaw` are already present in the core package. Official
+external packages need one install, then a Gateway restart.
+
+For example, Discord is an official external package:
+
+```bash
+openclaw plugins install @openclaw/discord
+openclaw gateway restart
+openclaw plugins inspect discord --runtime --json
+```
+
+Bare package specs try ClawHub first, then npm fallback. To force a source, use
+`clawhub:@openclaw/discord` or `npm:@openclaw/discord`. After install, follow
+the plugin's setup doc, such as [Discord](/channels/discord), to add credentials
+and channel config. See [Manage plugins](/plugins/manage-plugins) for update,
+uninstall, and publishing commands.
+
 ## Core npm package
 
 | Plugin                                                            | Description                                                                                                                                                          | Distribution                                                         | Surface                                                                                                                                                                                                                                                          |
@@ -40,6 +60,7 @@ dependencies are available.
 | [bonjour](/plugins/reference/bonjour)                             | Advertise the local OpenClaw gateway over Bonjour/mDNS.                                                                                                              | `@openclaw/bonjour`<br />included in OpenClaw                        | plugin                                                                                                                                                                                                                                                           |
 | [browser](/plugins/reference/browser)                             | Adds agent-callable tools.                                                                                                                                           | `@openclaw/browser-plugin`<br />included in OpenClaw                 | contracts: tools; skills                                                                                                                                                                                                                                         |
 | [byteplus](/plugins/reference/byteplus)                           | Adds BytePlus, BytePlus Plan model provider support to OpenClaw.                                                                                                     | `@openclaw/byteplus-provider`<br />included in OpenClaw              | providers: byteplus, byteplus-plan; contracts: videoGenerationProviders                                                                                                                                                                                          |
+| [canvas](/plugins/reference/canvas)                               | Experimental Canvas control and A2UI rendering surfaces for paired nodes.                                                                                            | `@openclaw/canvas-plugin`<br />included in OpenClaw                  | contracts: tools                                                                                                                                                                                                                                                 |
 | [cerebras](/plugins/reference/cerebras)                           | Adds Cerebras model provider support to OpenClaw.                                                                                                                    | `@openclaw/cerebras-provider`<br />included in OpenClaw              | providers: cerebras                                                                                                                                                                                                                                              |
 | [chutes](/plugins/reference/chutes)                               | Adds Chutes model provider support to OpenClaw.                                                                                                                      | `@openclaw/chutes-provider`<br />included in OpenClaw                | providers: chutes                                                                                                                                                                                                                                                |
 | [cloudflare-ai-gateway](/plugins/reference/cloudflare-ai-gateway) | Adds Cloudflare AI Gateway model provider support to OpenClaw.                                                                                                       | `@openclaw/cloudflare-ai-gateway-provider`<br />included in OpenClaw | providers: cloudflare-ai-gateway                                                                                                                                                                                                                                 |

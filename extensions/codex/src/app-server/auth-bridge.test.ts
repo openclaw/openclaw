@@ -69,6 +69,9 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
             : "");
         return apiKey ? { apiKey, provider: credential.provider, email: credential.email } : null;
       }
+      if (credential.type !== "oauth") {
+        return null;
+      }
       let oauthCredential = credential;
       if ((oauthCredential.expires ?? 0) <= Date.now()) {
         const refreshed = await providerRuntimeMocks.refreshProviderOAuthCredentialWithPlugin({
@@ -387,6 +390,92 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
+  it("applies the default OpenAI Codex OAuth profile when no profile id is explicit", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai-codex:default",
+        credential: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "default-access-token",
+          refresh: "default-refresh-token",
+          expires: Date.now() + 24 * 60 * 60_000,
+          accountId: "account-default",
+          email: "codex-default@example.test",
+        },
+      });
+
+      await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir,
+      });
+
+      expect(request).toHaveBeenCalledWith("account/login/start", {
+        type: "chatgptAuthTokens",
+        accessToken: "default-access-token",
+        chatgptAccountId: "account-default",
+        chatgptPlanType: null,
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("honors config auth order when selecting an implicit Codex profile", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai-codex:default",
+        credential: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "default-access-token",
+          refresh: "default-refresh-token",
+          expires: Date.now() + 24 * 60 * 60_000,
+          accountId: "account-default",
+        },
+      });
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai-codex:work",
+        credential: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "work-access-token",
+          refresh: "work-refresh-token",
+          expires: Date.now() + 24 * 60 * 60_000,
+          accountId: "account-work",
+        },
+      });
+
+      await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir,
+        config: {
+          auth: {
+            order: {
+              "openai-codex": ["openai-codex:work", "openai-codex:default"],
+            },
+          },
+        },
+      });
+
+      expect(request).toHaveBeenCalledWith("account/login/start", {
+        type: "chatgptAuthTokens",
+        accessToken: "work-access-token",
+        chatgptAccountId: "account-work",
+        chatgptPlanType: null,
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("refreshes an expired OpenAI Codex OAuth profile before app-server login", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
@@ -454,6 +543,35 @@ describe("bridgeCodexAppServerStartOptions", () => {
         type: "apiKey",
         apiKey: "ref-backed-api-key",
       });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unsupported Codex auth profile credential types before OAuth refresh", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai-codex:aws",
+        credential: {
+          type: "aws-sdk",
+          provider: "openai-codex",
+        } as never,
+      });
+
+      await expect(
+        applyCodexAppServerAuthProfile({
+          client: { request } as never,
+          agentDir,
+          authProfileId: "openai-codex:aws",
+        }),
+      ).rejects.toThrow(
+        'Codex app-server auth profile "openai-codex:aws" does not contain usable credentials.',
+      );
+      expect(oauthMocks.refreshOpenAICodexToken).not.toHaveBeenCalled();
+      expect(request).not.toHaveBeenCalled();
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }

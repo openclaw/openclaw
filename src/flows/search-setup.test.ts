@@ -303,6 +303,7 @@ describe("runSearchSetupFlow", () => {
         entry: expect.objectContaining({
           pluginId: "brave",
           label: "Brave",
+          trustedSourceLinkedOfficialInstall: true,
           install: expect.objectContaining({
             npmSpec: "@openclaw/brave-plugin",
           }),
@@ -351,6 +352,7 @@ describe("runSearchSetupFlow", () => {
         entry: expect.objectContaining({
           pluginId: "brave",
           label: "Brave",
+          trustedSourceLinkedOfficialInstall: true,
           install: expect.objectContaining({
             npmSpec: "@openclaw/brave-plugin",
           }),

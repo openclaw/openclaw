@@ -5,7 +5,7 @@ import type { TaskRegistrySummary } from "../tasks/task-registry.types.js";
 export type SessionStatus = {
   agentId?: string;
   key: string;
-  kind: "direct" | "group" | "global" | "unknown";
+  kind: "cron" | "direct" | "group" | "global" | "unknown";
   sessionId?: string;
   updatedAt: number | null;
   age: number | null;
@@ -26,6 +26,7 @@ export type SessionStatus = {
   remainingTokens: number | null;
   percentUsed: number | null;
   model: string | null;
+  runtime?: string | null;
   contextTokens: number | null;
   flags: string[];
 };

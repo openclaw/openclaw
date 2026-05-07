@@ -14,6 +14,11 @@ import {
 } from "../../tasks/detached-task-runtime.js";
 import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+import {
+  createCronRunDiagnosticsFromError,
+  normalizeCronRunDiagnostics,
+  summarizeCronRunDiagnostics,
+} from "../run-diagnostics.js";
 import { createCronExecutionId } from "../run-id.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
@@ -151,7 +156,13 @@ export async function executeJobCoreWithTimeout(
       return first;
     }
     await cleanupTimedOutCronAgentRun(state, job, jobTimeoutMs, activeExecution);
-    return { status: "error", error: timeoutErrorMessage() };
+    return {
+      status: "error",
+      error: timeoutErrorMessage(),
+      diagnostics: createCronRunDiagnosticsFromError("cron-setup", timeoutErrorMessage(), {
+        nowMs: state.deps.nowMs,
+      }),
+    };
   } finally {
     if (timeoutId) {
       clearTimeout(timeoutId);
@@ -512,6 +523,7 @@ export function applyJobResult(
   result: {
     status: CronRunStatus;
     error?: string;
+    diagnostics?: CronRunOutcome["diagnostics"];
     delivered?: boolean;
     startedAt: number;
     endedAt: number;
@@ -537,10 +549,23 @@ export function applyJobResult(
   job.state.lastStatus = result.status;
   job.state.lastDurationMs = Math.max(0, result.endedAt - result.startedAt);
   job.state.lastError = result.error;
+  job.state.lastDiagnostics = normalizeCronRunDiagnostics(result.diagnostics);
+  job.state.lastDiagnosticSummary = summarizeCronRunDiagnostics(job.state.lastDiagnostics);
   job.state.lastErrorReason =
     result.status === "error" && typeof result.error === "string"
       ? (resolveFailoverReasonFromError(result.error) ?? undefined)
       : undefined;
+  if (result.status === "error") {
+    state.deps.log.warn(
+      {
+        jobId: job.id,
+        jobName: job.name,
+        error: result.error,
+        diagnosticsSummary: job.state.lastDiagnosticSummary,
+      },
+      "cron: job run returned error status",
+    );
+  }
   const deliveryState = resolveDeliveryState({ job, delivered: result.delivered });
   job.state.lastDelivered = deliveryState.delivered;
   job.state.lastDeliveryStatus = deliveryState.status;
@@ -717,6 +742,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
       applyJobResult(state, result.job, {
         status: result.status,
         error: result.error,
+        diagnostics: result.diagnostics,
         delivered: result.delivered,
         startedAt: result.startedAt,
         endedAt: result.endedAt,
@@ -738,6 +764,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
   const shouldDelete = applyJobResult(state, job, {
     status: result.status,
     error: result.error,
+    diagnostics: result.diagnostics,
     delivered: result.delivered,
     startedAt: result.startedAt,
     endedAt: result.endedAt,
@@ -906,6 +933,9 @@ export async function onTimer(state: CronServiceState) {
           taskRunId,
           status: "error",
           error: errorText,
+          diagnostics: createCronRunDiagnosticsFromError("cron-setup", errorText, {
+            nowMs: state.deps.nowMs,
+          }),
           startedAt,
           endedAt: state.deps.nowMs(),
         };
@@ -1228,6 +1258,7 @@ async function runStartupCatchupCandidate(
       status: result.status,
       error: result.error,
       summary: result.summary,
+      diagnostics: result.diagnostics,
       delivered: result.delivered,
       sessionId: result.sessionId,
       sessionKey: result.sessionKey,
@@ -1244,6 +1275,9 @@ async function runStartupCatchupCandidate(
       taskRunId,
       status: "error",
       error: normalizeCronRunErrorText(err),
+      diagnostics: createCronRunDiagnosticsFromError("cron-setup", normalizeCronRunErrorText(err), {
+        nowMs: state.deps.nowMs,
+      }),
       startedAt,
       endedAt: state.deps.nowMs(),
     };
@@ -1289,8 +1323,9 @@ async function applyStartupCatchupOutcomes(
 
     // Preserve any new past-due nextRunAtMs values that became due while
     // startup catch-up was running. They should execute on a future tick
-    // instead of being silently advanced.
-    recomputeNextRunsForMaintenance(state);
+    // instead of being silently advanced. Future repair is disabled here so
+    // startup overflow deferrals survive until their staggered catch-up tick.
+    recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
     await persist(state);
   });
 }
@@ -1473,10 +1508,24 @@ async function executeDetachedCronJob(
     }
 > {
   if (job.payload.kind !== "agentTurn") {
-    return { status: "skipped", error: "isolated job requires payload.kind=agentTurn" };
+    const error = "isolated job requires payload.kind=agentTurn";
+    return {
+      status: "skipped",
+      error,
+      diagnostics: createCronRunDiagnosticsFromError("cron-preflight", error, {
+        severity: "warn",
+        nowMs: state.deps.nowMs,
+      }),
+    };
   }
   if (abortSignal?.aborted) {
-    return resolveAbortError();
+    const aborted = resolveAbortError();
+    return {
+      ...aborted,
+      diagnostics: createCronRunDiagnosticsFromError("cron-setup", aborted.error, {
+        nowMs: state.deps.nowMs,
+      }),
+    };
   }
 
   const res = await state.deps.runIsolatedAgentJob({
@@ -1487,7 +1536,13 @@ async function executeDetachedCronJob(
   });
 
   if (abortSignal?.aborted) {
-    return { status: "error", error: timeoutErrorMessage() };
+    return {
+      status: "error",
+      error: timeoutErrorMessage(),
+      diagnostics: createCronRunDiagnosticsFromError("cron-setup", timeoutErrorMessage(), {
+        nowMs: state.deps.nowMs,
+      }),
+    };
   }
 
   return {
@@ -1499,6 +1554,7 @@ async function executeDetachedCronJob(
     delivery: res.delivery,
     sessionId: res.sessionId,
     sessionKey: res.sessionKey,
+    diagnostics: res.diagnostics,
     model: res.model,
     provider: res.provider,
     usage: res.usage,
@@ -1540,6 +1596,7 @@ export async function executeJob(
   const shouldDelete = applyJobResult(state, job, {
     status: coreResult.status,
     error: coreResult.error,
+    diagnostics: coreResult.diagnostics,
     delivered: coreResult.delivered,
     startedAt,
     endedAt,
@@ -1572,6 +1629,7 @@ function emitJobFinished(
     status: result.status,
     error: result.error,
     summary: result.summary,
+    diagnostics: result.diagnostics,
     delivered: result.delivered,
     deliveryStatus: job.state.lastDeliveryStatus,
     deliveryError: job.state.lastDeliveryError,

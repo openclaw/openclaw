@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { fetchBlueBubblesHistory } from "./history.js";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
@@ -34,7 +34,16 @@ import { _setFetchGuardForTesting } from "./types.js";
 // Mock dependencies
 vi.mock("./send.js", () => ({
   resolveChatGuidForTarget: vi.fn().mockResolvedValue("iMessage;-;+15551234567"),
-  sendMessageBlueBubbles: vi.fn().mockResolvedValue({ messageId: "msg-123" }),
+  sendMessageBlueBubbles: vi.fn().mockResolvedValue({
+    messageId: "msg-123",
+    receipt: {
+      primaryPlatformMessageId: "msg-123",
+      platformMessageIds: ["msg-123"],
+      parts: [],
+      sentAt: 0,
+      raw: [],
+    },
+  }),
 }));
 
 vi.mock("./chat.js", () => ({
@@ -61,6 +70,15 @@ vi.mock("./history.js", () => ({
   fetchBlueBubblesHistory: vi.fn().mockResolvedValue({ entries: [], resolved: true }),
 }));
 
+afterAll(() => {
+  vi.doUnmock("./send.js");
+  vi.doUnmock("./chat.js");
+  vi.doUnmock("./attachments.js");
+  vi.doUnmock("./reactions.js");
+  vi.doUnmock("./history.js");
+  vi.resetModules();
+});
+
 // Mock runtime
 const mockEnqueueSystemEvent = vi.fn();
 const mockBuildPairingReply = vi.fn(() => "Pairing code: TESTCODE");
@@ -78,6 +96,20 @@ const DEFAULT_RESOLVED_AGENT_ROUTE: ReturnType<
   matchedBy: "default",
 };
 const mockResolveAgentRoute = vi.fn(() => DEFAULT_RESOLVED_AGENT_ROUTE);
+
+function blueBubblesTestSendResult(messageId: string) {
+  const hasPlatformId = messageId && messageId !== "ok" && messageId !== "unknown";
+  return {
+    messageId,
+    receipt: {
+      ...(hasPlatformId ? { primaryPlatformMessageId: messageId } : {}),
+      platformMessageIds: hasPlatformId ? [messageId] : [],
+      parts: [],
+      sentAt: 0,
+      raw: [],
+    },
+  };
+}
 const mockBuildMentionRegexes = vi.fn(() => [/\bbert\b/i]);
 const mockMatchesMentionPatterns = vi.fn((text: string, regexes: RegExp[]) =>
   regexes.some((r) => r.test(text)),
@@ -2043,7 +2075,7 @@ describe("BlueBubbles webhook monitor", () => {
       mockEnqueueSystemEvent.mockClear();
 
       const { sendMessageBlueBubbles } = await import("./send.js");
-      vi.mocked(sendMessageBlueBubbles).mockResolvedValueOnce({ messageId: "ok" });
+      vi.mocked(sendMessageBlueBubbles).mockResolvedValueOnce(blueBubblesTestSendResult("ok"));
 
       mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
         await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
@@ -2083,7 +2115,7 @@ describe("BlueBubbles webhook monitor", () => {
       mockEnqueueSystemEvent.mockClear();
 
       const { sendMessageBlueBubbles } = await import("./send.js");
-      vi.mocked(sendMessageBlueBubbles).mockResolvedValueOnce({ messageId: "ok" });
+      vi.mocked(sendMessageBlueBubbles).mockResolvedValueOnce(blueBubblesTestSendResult("ok"));
 
       mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
         await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
@@ -2543,7 +2575,9 @@ describe("BlueBubbles webhook monitor", () => {
       setupWebhookTarget();
 
       const { sendMessageBlueBubbles } = await import("./send.js");
-      vi.mocked(sendMessageBlueBubbles).mockResolvedValueOnce({ messageId: "msg-self-1" });
+      vi.mocked(sendMessageBlueBubbles).mockResolvedValueOnce(
+        blueBubblesTestSendResult("msg-self-1"),
+      );
 
       mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
         await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
@@ -2693,7 +2727,7 @@ describe("BlueBubbles webhook monitor", () => {
       setupWebhookTarget();
 
       const { sendMessageBlueBubbles } = await import("./send.js");
-      vi.mocked(sendMessageBlueBubbles).mockResolvedValueOnce({ messageId: "ok" });
+      vi.mocked(sendMessageBlueBubbles).mockResolvedValueOnce(blueBubblesTestSendResult("ok"));
 
       mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
         await params.dispatcherOptions.deliver({ text: "same text" }, { kind: "final" });

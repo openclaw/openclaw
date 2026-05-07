@@ -3,15 +3,19 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   applyExclusiveSlotSelection,
   buildPluginDiagnosticsReport,
+  buildPluginSnapshotReport,
   clearPluginRegistryLoadCache,
   enablePluginInConfig,
   loadPluginManifestRegistry,
+  planPluginUninstall,
   replaceConfigFile,
   refreshPluginRegistry,
   resetPluginsCliTestState,
   runtimeLogs,
+  setInstalledPluginIndexInstallRecords,
   writeConfigFile,
   writePersistedInstalledPluginIndexInstallRecords,
+  applyPluginUninstallDirectoryRemoval,
 } from "./plugins-cli-test-helpers.js";
 
 describe("persistPluginInstall", () => {
@@ -122,6 +126,233 @@ describe("persistPluginInstall", () => {
     expect(
       runtimeLogs.some((line) => line.includes("Plugin runtime cache invalidation failed")),
     ).toBe(true);
+  });
+
+  it("removes a replaced managed install directory before refreshing the registry", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledConfig = {
+      plugins: {
+        entries: {
+          codex: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    enablePluginInConfig.mockReturnValue({ config: enabledConfig });
+    setInstalledPluginIndexInstallRecords({
+      codex: {
+        source: "clawhub",
+        spec: "clawhub:@openclaw/codex",
+        installPath: "/tmp/openclaw/extensions/codex",
+      },
+    });
+    planPluginUninstall.mockReturnValueOnce({
+      ok: true,
+      config: {} as OpenClawConfig,
+      pluginId: "codex",
+      actions: {
+        entry: false,
+        install: true,
+        allowlist: false,
+        denylist: false,
+        loadPath: false,
+        memorySlot: false,
+        contextEngineSlot: false,
+        channelConfig: false,
+        directory: false,
+      },
+      directoryRemoval: {
+        target: "/tmp/openclaw/extensions/codex",
+      },
+    });
+    applyPluginUninstallDirectoryRemoval.mockResolvedValueOnce({
+      directoryRemoved: true,
+      warnings: [],
+    });
+
+    await persistPluginInstall({
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+      },
+      pluginId: "codex",
+      install: {
+        source: "npm",
+        spec: "@openclaw/codex",
+        installPath: "/tmp/openclaw/npm/node_modules/@openclaw/codex",
+      },
+    });
+
+    expect(planPluginUninstall).toHaveBeenCalledWith({
+      config: {
+        plugins: {
+          installs: {
+            codex: {
+              source: "clawhub",
+              spec: "clawhub:@openclaw/codex",
+              installPath: "/tmp/openclaw/extensions/codex",
+            },
+          },
+        },
+      },
+      pluginId: "codex",
+      deleteFiles: true,
+    });
+    expect(applyPluginUninstallDirectoryRemoval).toHaveBeenCalledWith({
+      target: "/tmp/openclaw/extensions/codex",
+    });
+    const cleanupOrder =
+      applyPluginUninstallDirectoryRemoval.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
+    const refreshOrder = refreshPluginRegistry.mock.invocationCallOrder[0] ?? 0;
+    expect(cleanupOrder).toBeLessThan(refreshOrder);
+    expect(runtimeLogs.join("\n")).toContain(
+      "Removed previous plugin install directory: /tmp/openclaw/extensions/codex",
+    );
+  });
+
+  it("preserves replaced install directories when the new install path overlaps", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledConfig = {
+      plugins: {
+        entries: {
+          codex: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    enablePluginInConfig.mockReturnValue({ config: enabledConfig });
+    setInstalledPluginIndexInstallRecords({
+      codex: {
+        source: "npm",
+        spec: "@openclaw/codex",
+        installPath: "/tmp/openclaw/npm/node_modules/@openclaw/codex",
+      },
+    });
+
+    await persistPluginInstall({
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+      },
+      pluginId: "codex",
+      install: {
+        source: "npm",
+        spec: "@openclaw/codex@latest",
+        installPath: "/tmp/openclaw/npm/node_modules/@openclaw/codex",
+      },
+    });
+
+    expect(planPluginUninstall).not.toHaveBeenCalled();
+    expect(applyPluginUninstallDirectoryRemoval).not.toHaveBeenCalled();
+  });
+
+  it("warns when an installed npm plugin remains shadowed by a config-selected source", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledConfig = {
+      plugins: {
+        entries: {
+          discord: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    enablePluginInConfig.mockReturnValue({ config: enabledConfig });
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [
+        {
+          id: "discord",
+          origin: "config",
+          source: "/tmp/openclaw-upstream/extensions/discord/index.ts",
+          status: "error",
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const next = await persistPluginInstall({
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+      },
+      pluginId: "discord",
+      install: {
+        source: "npm",
+        spec: "@openclaw/discord",
+        installPath: "/tmp/openclaw/npm/node_modules/@openclaw/discord/index.ts",
+      },
+    });
+
+    expect(next).toEqual(enabledConfig);
+    expect(buildPluginSnapshotReport).toHaveBeenCalledWith({
+      config: enabledConfig,
+      effectiveOnly: true,
+      onlyPluginIds: ["discord"],
+    });
+    expect(runtimeLogs.join("\n")).toContain(
+      'Warning: installed plugin "discord" is not the active source',
+    );
+    expect(runtimeLogs.join("\n")).toContain(
+      "active config source: /tmp/openclaw-upstream/extensions/discord/index.ts",
+    );
+    expect(runtimeLogs.join("\n")).toContain(
+      "installed npm source: /tmp/openclaw/npm/node_modules/@openclaw/discord/index.ts",
+    );
+    expect(runtimeLogs.join("\n")).toContain("openclaw plugins doctor");
+  });
+
+  it("does not warn when the config-selected source is inside the npm install path", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledConfig = {
+      plugins: {
+        entries: {
+          discord: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    enablePluginInConfig.mockReturnValue({ config: enabledConfig });
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [
+        {
+          id: "discord",
+          origin: "config",
+          source: "/tmp/openclaw/npm/node_modules/@openclaw/discord/dist/index.js",
+          status: "loaded",
+        },
+      ],
+      diagnostics: [],
+    });
+
+    await persistPluginInstall({
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+      },
+      pluginId: "discord",
+      install: {
+        source: "npm",
+        spec: "@openclaw/discord",
+        installPath: "/tmp/openclaw/npm/node_modules/@openclaw/discord",
+      },
+    });
+
+    expect(runtimeLogs.join("\n")).not.toContain("is not the active source");
   });
 
   it("invalidates runtime cache even when registry refresh fails", async () => {

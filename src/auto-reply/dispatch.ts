@@ -4,6 +4,10 @@ import {
   deriveInboundMessageHookContext,
   toPluginMessageContext,
 } from "../hooks/message-hook-mappers.js";
+import {
+  measureDiagnosticsTimelineSpan,
+  measureDiagnosticsTimelineSpanSync,
+} from "../infra/diagnostics-timeline.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { SilentReplyConversationType } from "../shared/silent-reply-policy.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
@@ -95,6 +99,20 @@ function buildMessageSendingBeforeDeliver(
   };
 }
 
+function buildDispatchTimelineAttributes(ctx: MsgContext | FinalizedMsgContext) {
+  return {
+    surface:
+      typeof ctx.Surface === "string"
+        ? ctx.Surface
+        : typeof ctx.Provider === "string"
+          ? ctx.Provider
+          : "unknown",
+    hasSessionKey:
+      typeof ctx.SessionKey === "string" || typeof ctx.CommandTargetSessionKey === "string",
+    commandSource: typeof ctx.CommandSource === "string" ? ctx.CommandSource : "message",
+  };
+}
+
 export type DispatchInboundResult = DispatchFromConfigResult;
 export { settleReplyDispatcher, withReplyDispatcher } from "./dispatch-dispatcher.js";
 
@@ -103,18 +121,36 @@ function finalizeDispatchResult(
   dispatcher: ReplyDispatcher,
 ): DispatchFromConfigResult {
   const cancelledCounts = dispatcher.getCancelledCounts?.();
-  if (!cancelledCounts) {
+  const failedCounts = dispatcher.getFailedCounts?.();
+  if (!cancelledCounts && !failedCounts) {
     return result;
   }
 
-  const counts = {
-    tool: Math.max(0, result.counts.tool - cancelledCounts.tool),
-    block: Math.max(0, result.counts.block - cancelledCounts.block),
-    final: Math.max(0, result.counts.final - cancelledCounts.final),
+  const resultCounts = {
+    tool: result.counts?.tool ?? 0,
+    block: result.counts?.block ?? 0,
+    final: result.counts?.final ?? 0,
   };
+  const counts = {
+    tool: Math.max(0, resultCounts.tool - (cancelledCounts?.tool ?? 0) - (failedCounts?.tool ?? 0)),
+    block: Math.max(
+      0,
+      resultCounts.block - (cancelledCounts?.block ?? 0) - (failedCounts?.block ?? 0),
+    ),
+    final: Math.max(
+      0,
+      resultCounts.final - (cancelledCounts?.final ?? 0) - (failedCounts?.final ?? 0),
+    ),
+  };
+  const hasFailedCounts =
+    (failedCounts?.tool ?? 0) > 0 ||
+    (failedCounts?.block ?? 0) > 0 ||
+    (failedCounts?.final ?? 0) > 0;
   return {
+    ...result,
     queuedFinal: result.queuedFinal && counts.final > 0,
     counts,
+    ...(hasFailedCounts ? { failedCounts } : {}),
   };
 }
 
@@ -125,17 +161,34 @@ export async function dispatchInboundMessage(params: {
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;
 }): Promise<DispatchInboundResult> {
-  const finalized = finalizeInboundContext(params.ctx);
+  const finalized = measureDiagnosticsTimelineSpanSync(
+    "auto_reply.finalize_context",
+    () => finalizeInboundContext(params.ctx),
+    {
+      phase: "agent-turn",
+      config: params.cfg,
+      attributes: buildDispatchTimelineAttributes(params.ctx),
+    },
+  );
   const result = await withReplyDispatcher({
     dispatcher: params.dispatcher,
     run: () =>
-      dispatchReplyFromConfig({
-        ctx: finalized,
-        cfg: params.cfg,
-        dispatcher: params.dispatcher,
-        replyOptions: params.replyOptions,
-        replyResolver: params.replyResolver,
-      }),
+      measureDiagnosticsTimelineSpan(
+        "auto_reply.dispatch_reply_from_config",
+        () =>
+          dispatchReplyFromConfig({
+            ctx: finalized,
+            cfg: params.cfg,
+            dispatcher: params.dispatcher,
+            replyOptions: params.replyOptions,
+            replyResolver: params.replyResolver,
+          }),
+        {
+          phase: "agent-turn",
+          config: params.cfg,
+          attributes: buildDispatchTimelineAttributes(finalized),
+        },
+      ),
   });
   return finalizeDispatchResult(result, params.dispatcher);
 }

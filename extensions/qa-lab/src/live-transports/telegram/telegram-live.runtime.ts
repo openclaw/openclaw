@@ -47,6 +47,10 @@ type TelegramQaScenarioId =
   | "telegram-tools-compact-command"
   | "telegram-whoami-command"
   | "telegram-context-command"
+  | "telegram-current-session-status-tool"
+  | "telegram-stream-final-single-message"
+  | "telegram-long-final-three-chunks"
+  | "telegram-long-final-reuses-preview"
   | "telegram-mentioned-message-reply"
   | "telegram-mention-gating";
 
@@ -55,8 +59,11 @@ type TelegramQaScenarioRun = {
   expectReply: boolean;
   input: string;
   expectedTextIncludes?: string[];
+  expectedJoinedSutTextIncludes?: string[];
+  expectedSutMessageCount?: number;
   matchText?: string;
   replyToLatestSutMessage?: boolean;
+  settleMs?: number;
 };
 
 type TelegramQaScenarioDefinition = LiveTransportScenarioDefinition<TelegramQaScenarioId> & {
@@ -208,6 +215,7 @@ type TelegramMessage = {
 
 type TelegramUpdate = {
   update_id: number;
+  edited_message?: TelegramMessage;
   message?: TelegramMessage;
 };
 
@@ -271,6 +279,17 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
     }),
   },
   {
+    id: "telegram-current-session-status-tool",
+    title: "Telegram current session_status tool call",
+    defaultEnabled: false,
+    timeoutMs: 60_000,
+    buildRun: (sutUsername) => ({
+      expectReply: true,
+      input: `@${sutUsername} Telegram current session_status QA check. Call session_status with sessionKey set to current, then reply with the exact QA marker and resolved session key.`,
+      expectedTextIncludes: ["QA-TELEGRAM-CURRENT-SESSION-OK", ":telegram:group:"],
+    }),
+  },
+  {
     id: "telegram-mentioned-message-reply",
     title: "Telegram mentioned message gets a reply",
     defaultEnabled: false,
@@ -280,6 +299,57 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
       expectReply: true,
       input: `@${sutUsername} Telegram QA mention routing check. Reply with a short acknowledgement.`,
       replyToLatestSutMessage: true,
+    }),
+  },
+  {
+    id: "telegram-stream-final-single-message",
+    title: "Telegram streamed final stays one message",
+    defaultEnabled: false,
+    timeoutMs: 45_000,
+    buildRun: (sutUsername) => ({
+      allowAnySutReply: true,
+      expectReply: true,
+      input: `@${sutUsername} Quiet streaming QA check. Reply exactly: QA-TELEGRAM-STREAM-SINGLE-OK`,
+      expectedTextIncludes: ["QA-TELEGRAM-STREAM-SINGLE-OK"],
+      expectedJoinedSutTextIncludes: ["QA-TELEGRAM-STREAM-SINGLE-OK"],
+      expectedSutMessageCount: 1,
+      replyToLatestSutMessage: true,
+      settleMs: 4_000,
+    }),
+  },
+  {
+    id: "telegram-long-final-reuses-preview",
+    title: "Telegram long final reuses the preview message",
+    defaultEnabled: false,
+    timeoutMs: 60_000,
+    buildRun: (sutUsername) => ({
+      allowAnySutReply: true,
+      expectReply: true,
+      input: `@${sutUsername} Telegram long final QA check. Use the scripted long final response.`,
+      expectedTextIncludes: ["TELEGRAM-LONG-FINAL-BEGIN"],
+      expectedJoinedSutTextIncludes: ["TELEGRAM-LONG-FINAL-BEGIN", "TELEGRAM-LONG-FINAL-END"],
+      expectedSutMessageCount: 2,
+      replyToLatestSutMessage: true,
+      settleMs: 4_000,
+    }),
+  },
+  {
+    id: "telegram-long-final-three-chunks",
+    title: "Telegram three-chunk final keeps only final chunks",
+    defaultEnabled: false,
+    timeoutMs: 60_000,
+    buildRun: (sutUsername) => ({
+      allowAnySutReply: true,
+      expectReply: true,
+      input: `@${sutUsername} Telegram long final three chunk QA check. Use the scripted three chunk final response.`,
+      expectedTextIncludes: ["TELEGRAM-LONG-FINAL-3CHUNK-BEGIN"],
+      expectedJoinedSutTextIncludes: [
+        "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN",
+        "TELEGRAM-LONG-FINAL-3CHUNK-END",
+      ],
+      expectedSutMessageCount: 3,
+      replyToLatestSutMessage: true,
+      settleMs: 4_000,
     }),
   },
   {
@@ -471,7 +541,7 @@ function detectMediaKinds(message: TelegramMessage) {
 }
 
 function normalizeTelegramObservedMessage(update: TelegramUpdate): TelegramObservedMessage | null {
-  const message = update.message;
+  const message = update.message ?? update.edited_message;
   if (!message?.from?.id) {
     return null;
   }
@@ -608,7 +678,7 @@ async function flushTelegramUpdates(token: string) {
       {
         offset,
         timeout: 0,
-        allowed_updates: ["message"],
+        allowed_updates: ["message", "edited_message"],
       },
       15_000,
     );
@@ -653,10 +723,12 @@ async function waitForObservedMessage(params: {
   observedMessages: TelegramObservedMessage[];
   observationScenarioId: string;
   observationScenarioTitle: string;
+  expectedTextIncludes?: string[];
 }) {
   const startedAt = Date.now();
   let offset = params.initialOffset;
   let lastPollingError: unknown;
+  let lastExpectedMismatch: Error | undefined;
   while (Date.now() - startedAt < params.timeoutMs) {
     const remainingMs = Math.max(
       1_000,
@@ -671,7 +743,7 @@ async function waitForObservedMessage(params: {
         {
           offset,
           timeout: timeoutSeconds,
-          allowed_updates: ["message"],
+          allowed_updates: ["message", "edited_message"],
         },
         timeoutSeconds * 1000 + 5_000,
       );
@@ -703,9 +775,22 @@ async function waitForObservedMessage(params: {
       };
       params.observedMessages.push(observedMessage);
       if (matchedScenario) {
+        try {
+          assertTelegramScenarioReply({
+            expectedTextIncludes: params.expectedTextIncludes,
+            message: observedMessage,
+          });
+        } catch (error) {
+          lastExpectedMismatch =
+            error instanceof Error ? error : new Error(formatErrorMessage(error));
+          continue;
+        }
         return { message: observedMessage, nextOffset: offset, observedAtMs: batchObservedAtMs };
       }
     }
+  }
+  if (lastExpectedMismatch) {
+    throw lastExpectedMismatch;
   }
   const timeoutMessage = `timed out after ${params.timeoutMs}ms waiting for Telegram message`;
   if (lastPollingError) {
@@ -714,6 +799,102 @@ async function waitForObservedMessage(params: {
     );
   }
   throw new Error(timeoutMessage);
+}
+
+async function collectObservedMessages(params: {
+  token: string;
+  initialOffset: number;
+  settleMs: number;
+  predicate: (message: TelegramObservedMessage) => boolean;
+  observedMessages: TelegramObservedMessage[];
+  observationScenarioId: string;
+  observationScenarioTitle: string;
+}) {
+  const startedAt = Date.now();
+  let offset = params.initialOffset;
+  while (Date.now() - startedAt < params.settleMs) {
+    const remainingMs = Math.max(1, params.settleMs - (Date.now() - startedAt));
+    const timeoutSeconds = Math.max(1, Math.min(2, Math.ceil(remainingMs / 1000)));
+    let updates: TelegramUpdate[];
+    try {
+      updates = await callTelegramApi<TelegramUpdate[]>(
+        params.token,
+        "getUpdates",
+        {
+          offset,
+          timeout: timeoutSeconds,
+          allowed_updates: ["message", "edited_message"],
+        },
+        timeoutSeconds * 1000 + 5_000,
+      );
+    } catch (error) {
+      if (!isRecoverableTelegramQaPollError(error)) {
+        throw error;
+      }
+      await waitForTelegramPollRetryDelay(params.settleMs - (Date.now() - startedAt));
+      continue;
+    }
+    if (updates.length === 0) {
+      continue;
+    }
+    offset = (updates.at(-1)?.update_id ?? offset) + 1;
+    for (const update of updates) {
+      const normalized = normalizeTelegramObservedMessage(update);
+      if (!normalized) {
+        continue;
+      }
+      params.observedMessages.push({
+        ...normalized,
+        scenarioId: params.observationScenarioId,
+        scenarioTitle: params.observationScenarioTitle,
+        matchedScenario: params.predicate(normalized),
+      });
+    }
+  }
+  return offset;
+}
+
+function assertTelegramScenarioMessageSet(params: {
+  expectedJoinedSutTextIncludes?: string[];
+  expectedSutMessageCount?: number;
+  groupId: string;
+  observedMessages: TelegramObservedMessage[];
+  scenarioId: string;
+  sutBotId: number;
+}) {
+  if (
+    params.expectedSutMessageCount === undefined &&
+    (params.expectedJoinedSutTextIncludes ?? []).length === 0
+  ) {
+    return;
+  }
+  const byMessageId = new Map<number, TelegramObservedMessage>();
+  for (const message of params.observedMessages) {
+    if (
+      message.scenarioId === params.scenarioId &&
+      message.chatId === Number(params.groupId) &&
+      message.senderId === params.sutBotId
+    ) {
+      byMessageId.set(message.messageId, message);
+    }
+  }
+  const messages = [...byMessageId.values()].toSorted((a, b) => a.messageId - b.messageId);
+  if (
+    params.expectedSutMessageCount !== undefined &&
+    messages.length !== params.expectedSutMessageCount
+  ) {
+    throw new Error(
+      `expected ${params.expectedSutMessageCount} SUT message(s), observed ${messages.length}: ${messages
+        .map((message) => message.messageId)
+        .join(", ")}`,
+    );
+  }
+  const joinedText = messages.map((message) => message.text).join("");
+  for (const expected of params.expectedJoinedSutTextIncludes ?? []) {
+    if (!joinedText.includes(expected)) {
+      throw new Error(`joined SUT reply text missing expected text: ${expected}`);
+    }
+  }
 }
 
 async function waitForTelegramChannelRunning(
@@ -1332,6 +1513,9 @@ export async function runTelegramQaLive(params: {
               observedMessages,
               observationScenarioId: scenario.id,
               observationScenarioTitle: scenario.title,
+              expectedTextIncludes: scenarioRun.expectReply
+                ? scenarioRun.expectedTextIncludes
+                : undefined,
               predicate: (message) =>
                 matchesTelegramScenarioReply({
                   allowAnySutReply: scenarioRun.allowAnySutReply,
@@ -1343,6 +1527,25 @@ export async function runTelegramQaLive(params: {
                 }),
             });
             driverOffset = matched.nextOffset;
+            if (scenarioRun.settleMs !== undefined) {
+              driverOffset = await collectObservedMessages({
+                token: runtimeEnv.driverToken,
+                initialOffset: driverOffset,
+                settleMs: scenarioRun.settleMs,
+                observedMessages,
+                observationScenarioId: scenario.id,
+                observationScenarioTitle: scenario.title,
+                predicate: (message) =>
+                  matchesTelegramScenarioReply({
+                    allowAnySutReply: scenarioRun.allowAnySutReply,
+                    groupId: runtimeEnv.groupId,
+                    matchText: scenarioRun.matchText,
+                    message,
+                    sentMessageId: sent.message_id,
+                    sutBotId: sutIdentity.id,
+                  }),
+              });
+            }
             if (!scenarioRun.expectReply) {
               throw new Error(`unexpected reply message ${matched.message.messageId} matched`);
             }
@@ -1350,14 +1553,26 @@ export async function runTelegramQaLive(params: {
               expectedTextIncludes: scenarioRun.expectedTextIncludes,
               message: matched.message,
             });
+            assertTelegramScenarioMessageSet({
+              expectedJoinedSutTextIncludes: scenarioRun.expectedJoinedSutTextIncludes,
+              expectedSutMessageCount: scenarioRun.expectedSutMessageCount,
+              groupId: runtimeEnv.groupId,
+              observedMessages,
+              scenarioId: scenario.id,
+              sutBotId: sutIdentity.id,
+            });
             const rttMs = matched.observedAtMs - requestStartedAtMs;
+            const suffix =
+              scenarioRun.expectedSutMessageCount === undefined
+                ? ""
+                : `; observed ${scenarioRun.expectedSutMessageCount} SUT message(s)`;
             const result = {
               id: scenario.id,
               title: scenario.title,
               status: "pass",
               details: redactPublicMetadata
-                ? `reply matched in ${rttMs}ms`
-                : `reply message ${matched.message.messageId} matched in ${rttMs}ms`,
+                ? `reply matched in ${rttMs}ms${suffix}`
+                : `reply message ${matched.message.messageId} matched in ${rttMs}ms${suffix}`,
               rttMs,
               requestStartedAt,
               responseObservedAt: new Date(matched.observedAtMs).toISOString(),
@@ -1534,6 +1749,7 @@ export const __testing = {
   buildObservedMessagesArtifact,
   canaryFailureMessage,
   callTelegramApi,
+  assertTelegramScenarioMessageSet,
   isRecoverableTelegramQaPollError,
   assertTelegramScenarioReply,
   classifyCanaryReply,

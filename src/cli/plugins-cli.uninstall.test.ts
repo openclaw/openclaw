@@ -1,5 +1,5 @@
 import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   applyPluginUninstallDirectoryRemoval,
@@ -7,6 +7,7 @@ import {
   buildPluginSnapshotReport,
   loadConfig,
   planPluginUninstall,
+  PromptInputClosedError,
   promptYesNo,
   refreshPluginRegistry,
   replaceConfigFile,
@@ -21,10 +22,39 @@ import {
 
 const CLI_STATE_ROOT = "/tmp/openclaw-state";
 const ALPHA_INSTALL_PATH = installedPluginRoot(CLI_STATE_ROOT, "alpha");
+const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
 
 describe("plugins cli uninstall", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_OPENCLAW_NIX_MODE === undefined) {
+      delete process.env.OPENCLAW_NIX_MODE;
+    } else {
+      process.env.OPENCLAW_NIX_MODE = ORIGINAL_OPENCLAW_NIX_MODE;
+    }
+  });
+
+  it("refuses plugin uninstalls in Nix mode before planning file removal", async () => {
+    const previous = process.env.OPENCLAW_NIX_MODE;
+    process.env.OPENCLAW_NIX_MODE = "1";
+    try {
+      await expect(runPluginsCommand(["plugins", "uninstall", "alpha", "--force"])).rejects.toThrow(
+        "OPENCLAW_NIX_MODE=1",
+      );
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_NIX_MODE;
+      } else {
+        process.env.OPENCLAW_NIX_MODE = previous;
+      }
+    }
+
+    expect(planPluginUninstall).not.toHaveBeenCalled();
+    expect(applyPluginUninstallDirectoryRemoval).not.toHaveBeenCalled();
+    expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("shows uninstall dry-run preview without mutating config", async () => {
@@ -146,6 +176,57 @@ describe("plugins cli uninstall", () => {
       installRecords: {},
       reason: "source-changed",
     });
+  });
+
+  it("exits cleanly when confirmation input closes before an answer", async () => {
+    const baseConfig = {
+      plugins: {
+        entries: {
+          alpha: { enabled: true },
+        },
+        installs: {
+          alpha: {
+            source: "path",
+            sourcePath: ALPHA_INSTALL_PATH,
+            installPath: ALPHA_INSTALL_PATH,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    loadConfig.mockReturnValue(baseConfig);
+    setInstalledPluginIndexInstallRecords(baseConfig.plugins?.installs ?? {});
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [{ id: "alpha", name: "alpha" }],
+      diagnostics: [],
+    });
+    planPluginUninstall.mockReturnValue({
+      ok: true,
+      config: { plugins: { entries: {}, installs: {} } } as OpenClawConfig,
+      actions: {
+        entry: true,
+        install: true,
+        allowlist: false,
+        denylist: false,
+        loadPath: false,
+        memorySlot: false,
+        contextEngineSlot: false,
+        directory: false,
+      },
+      directoryRemoval: null,
+    });
+    promptYesNo.mockRejectedValueOnce(new PromptInputClosedError());
+
+    await expect(runPluginsCommand(["plugins", "uninstall", "alpha"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(runtimeErrors).toContain(
+      "Error: plugins uninstall requires confirmation input. Re-run in an interactive TTY or pass --force.",
+    );
+    expect(writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(refreshPluginRegistry).not.toHaveBeenCalled();
+    expect(applyPluginUninstallDirectoryRemoval).not.toHaveBeenCalled();
   });
 
   it("restores install records when the config write rejects during uninstall", async () => {

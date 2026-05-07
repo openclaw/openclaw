@@ -458,6 +458,86 @@ describe("sanitizeChatHistoryMessages", () => {
 });
 
 describe("projectRecentChatDisplayMessages", () => {
+  it("keeps visible assistant progress text from mixed tool-use messages", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "fix it" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "private reasoning" },
+          {
+            type: "text",
+            text: "I will clean that up now.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "msg-progress",
+              phase: "commentary",
+            }),
+          },
+          {
+            type: "toolCall",
+            id: "call-read",
+            name: "read",
+            arguments: { path: "AGENTS.md" },
+          },
+        ],
+        timestamp: 2,
+        __openclaw: { seq: 2 },
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-read",
+        toolName: "read",
+        content: [{ type: "text", text: "file contents" }],
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result[1]).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "I will clean that up now." }],
+      timestamp: 2,
+      __openclaw: { seq: 2 },
+    });
+  });
+
+  it("keeps pure commentary assistant messages hidden", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "status" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Working...",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "msg-commentary",
+              phase: "commentary",
+            }),
+          },
+        ],
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "status" }],
+        timestamp: 1,
+      },
+    ]);
+  });
+
   it("applies history limits after dropping display-hidden messages", () => {
     const result = projectRecentChatDisplayMessages(
       [
@@ -891,6 +971,43 @@ describe("exec approval handlers", () => {
     await resolveExecApproval({
       handlers,
       id,
+      respond: resolveRespond,
+      context,
+    });
+    await requestPromise;
+  });
+
+  it("attaches shared command analysis to gateway exec approval requests", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        twoPhase: true,
+        host: "gateway",
+        command: "python3 -c 'print(1)'",
+        commandArgv: ["python3", "script.py"],
+        systemRunPlan: undefined,
+        nodeId: undefined,
+      },
+    });
+
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    const request = requested?.payload as { id?: string; request?: { commandAnalysis?: unknown } };
+    expect(request.request?.commandAnalysis).toEqual(
+      expect.objectContaining({
+        commandCount: 1,
+        riskKinds: expect.arrayContaining(["inline-eval"]),
+        warningLines: expect.arrayContaining(["Contains inline-eval: python3 -c"]),
+      }),
+    );
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: request.id ?? "",
       respond: resolveRespond,
       context,
     });

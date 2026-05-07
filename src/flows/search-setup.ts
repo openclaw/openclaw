@@ -353,6 +353,9 @@ async function finalizeSearchProviderSetup(params: {
         pluginId: installEntry.pluginId,
         label: installEntry.label,
         install: installEntry.install,
+        ...(installEntry.trustedSourceLinkedOfficialInstall
+          ? { trustedSourceLinkedOfficialInstall: true }
+          : {}),
       },
       prompter: params.prompter,
       runtime: params.runtime,
@@ -533,6 +536,7 @@ export async function runSearchSetupFlow(
         ? `${credentialLabel} (leave blank to use env var)`
         : credentialLabel,
     placeholder: keyConfigured ? "Leave blank to keep current" : entry.placeholder,
+    sensitive: true,
   });
 
   const key = normalizeOptionalString(keyInput) ?? "";
