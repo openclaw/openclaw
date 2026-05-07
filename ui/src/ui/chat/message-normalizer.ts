@@ -76,6 +76,7 @@ function shouldPreserveRelativeAssistantAttachment(url: string): boolean {
 }
 
 const MIME_BY_EXT: Record<string, string> = {
+  // Images
   png: "image/png",
   jpg: "image/jpeg",
   jpeg: "image/jpeg",
@@ -83,6 +84,7 @@ const MIME_BY_EXT: Record<string, string> = {
   gif: "image/gif",
   heic: "image/heic",
   heif: "image/heif",
+  // Audio
   ogg: "audio/ogg",
   oga: "audio/ogg",
   mp3: "audio/mpeg",
@@ -91,13 +93,40 @@ const MIME_BY_EXT: Record<string, string> = {
   aac: "audio/aac",
   opus: "audio/opus",
   m4a: "audio/mp4",
+  // Video
   mp4: "video/mp4",
   mov: "video/quicktime",
+  // Documents — Office Open XML (Microsoft)
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  xls: "application/vnd.ms-excel",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  doc: "application/msword",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ppt: "application/vnd.ms-powerpoint",
+  // Documents — OpenDocument
+  odt: "application/vnd.oasis.opendocument.text",
+  ods: "application/vnd.oasis.opendocument.spreadsheet",
+  odp: "application/vnd.oasis.opendocument.presentation",
+  // Documents — other
   pdf: "application/pdf",
+  rtf: "application/rtf",
+  // Text-ish
   txt: "text/plain",
   md: "text/markdown",
   csv: "text/csv",
+  html: "text/html",
+  htm: "text/html",
+  xml: "application/xml",
+  yaml: "application/yaml",
+  yml: "application/yaml",
   json: "application/json",
+  // Source code (treated as documents for download/attachment purposes)
+  ts: "text/x-typescript",
+  js: "text/javascript",
+  py: "text/x-python",
+  sh: "application/x-sh",
+  sql: "application/sql",
+  // Archives
   zip: "application/zip",
 };
 

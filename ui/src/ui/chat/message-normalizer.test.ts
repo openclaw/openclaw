@@ -241,6 +241,98 @@ describe("message-normalizer", () => {
       ]);
     });
 
+    describe("document MIME mappings (Bug #9)", () => {
+      // Office Open XML / Microsoft Office formats reach Save As as "Webpage Complete"
+      // when the chat surface fails to infer their MIME type. Each entry below maps an
+      // extension Todd Bolyard's Excel pricing analysis hit and verifies the normalizer
+      // produces a document attachment with the correct application MIME.
+      const documentCases: Array<{ ext: string; mime: string }> = [
+        // Office Open XML
+        {
+          ext: "xlsx",
+          mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        },
+        { ext: "xls", mime: "application/vnd.ms-excel" },
+        {
+          ext: "docx",
+          mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        },
+        { ext: "doc", mime: "application/msword" },
+        {
+          ext: "pptx",
+          mime: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        },
+        { ext: "ppt", mime: "application/vnd.ms-powerpoint" },
+        // OpenDocument
+        { ext: "odt", mime: "application/vnd.oasis.opendocument.text" },
+        { ext: "ods", mime: "application/vnd.oasis.opendocument.spreadsheet" },
+        { ext: "odp", mime: "application/vnd.oasis.opendocument.presentation" },
+        // Other documents
+        { ext: "pdf", mime: "application/pdf" },
+        { ext: "rtf", mime: "application/rtf" },
+      ];
+
+      for (const { ext, mime } of documentCases) {
+        it(`infers ${mime} for .${ext} attachments`, () => {
+          const url = `/tmp/openclaw/report.${ext}`;
+          const result = normalizeMessage({
+            role: "assistant",
+            content: `MEDIA:${url}`,
+          });
+
+          expect(result.content).toEqual([
+            {
+              type: "attachment",
+              attachment: {
+                url,
+                kind: "document",
+                label: `report.${ext}`,
+                mimeType: mime,
+              },
+            },
+          ]);
+        });
+      }
+
+      it("infers text/html for .html attachments and treats them as documents", () => {
+        const result = normalizeMessage({
+          role: "assistant",
+          content: "MEDIA:/tmp/openclaw/page.html",
+        });
+
+        expect(result.content).toEqual([
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/openclaw/page.html",
+              kind: "document",
+              label: "page.html",
+              mimeType: "text/html",
+            },
+          },
+        ]);
+      });
+
+      it("infers text/x-typescript for .ts attachments and treats them as documents", () => {
+        const result = normalizeMessage({
+          role: "assistant",
+          content: "MEDIA:/tmp/openclaw/script.ts",
+        });
+
+        expect(result.content).toEqual([
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/openclaw/script.ts",
+              kind: "document",
+              label: "script.ts",
+              mimeType: "text/x-typescript",
+            },
+          },
+        ]);
+      });
+    });
+
     it("keeps home-relative MEDIA paths as assistant attachments", () => {
       const result = normalizeMessage({
         role: "assistant",
