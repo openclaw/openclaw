@@ -113,7 +113,8 @@ Token resolution order is account-aware. In practice, config values win over env
 
     `dmPolicy: "open"` with `allowFrom: ["*"]` lets any Telegram account that finds or guesses the bot username command the bot. Use it only for intentionally public bots with tightly restricted tools; one-owner bots should use `allowlist` with numeric user IDs.
 
-    `channels.telegram.allowFrom` accepts numeric Telegram user IDs. `telegram:` / `tg:` prefixes are accepted and normalized.
+    `channels.telegram.allowFrom` accepts numeric Telegram user IDs, `*` for intentionally open DMs, and `accessGroup:<name>` aliases. `telegram:` / `tg:` prefixes are accepted and normalized for direct numeric sender entries.
+    When using `accessGroup:<name>`, keep the Telegram entries inside `accessGroups.<name>.members.telegram` as numeric sender user IDs. Missing access groups fail closed.
     In multi-account configs, a restrictive top-level `channels.telegram.allowFrom` is treated as a safety boundary: account-level `allowFrom: ["*"]` entries do not make that account public unless the effective account allowlist still contains an explicit wildcard after merging.
     `dmPolicy: "allowlist"` with empty `allowFrom` blocks all DMs and is rejected by config validation.
     Setup asks for numeric user IDs only.
@@ -160,9 +161,10 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
        - `disabled`
 
     `groupAllowFrom` is used for group sender filtering. If not set, Telegram falls back to `allowFrom`.
-    `groupAllowFrom` entries should be numeric Telegram user IDs (`telegram:` / `tg:` prefixes are normalized).
+    `groupAllowFrom` entries should be numeric Telegram user IDs or `accessGroup:<name>` aliases. `telegram:` / `tg:` prefixes are normalized for direct numeric sender entries.
+    When using `accessGroup:<name>`, keep the Telegram entries inside `accessGroups.<name>.members.telegram` as numeric sender user IDs. Missing access groups fail closed.
     Do not put Telegram group or supergroup chat IDs in `groupAllowFrom`. Negative chat IDs belong under `channels.telegram.groups`.
-    Non-numeric entries are ignored for sender authorization.
+    Other non-numeric entries are ignored for sender authorization.
     Security boundary (`2026.2.25+`): group sender auth does **not** inherit DM pairing-store approvals.
     Pairing stays DM-only. For groups, set `groupAllowFrom` or per-group/per-topic `allowFrom`.
     If `groupAllowFrom` is unset, Telegram falls back to config `allowFrom`, not the pairing store.
