@@ -1244,6 +1244,7 @@ export async function updateNpmInstalledPlugins(params: {
       const probeSpec = usedNpmFallback ? npmSpecs?.fallbackSpec : effectiveSpec;
       const resolvedProbeVersion =
         probe.version ??
+        probe.npmResolution?.version ??
         (record.source === "npm" ? resolveExactNpmSpecVersion(probeSpec) : undefined);
       const nextVersion = resolvedProbeVersion ?? "unknown";
       const currentLabel = currentVersion ?? "unknown";
