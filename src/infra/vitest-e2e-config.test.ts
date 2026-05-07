@@ -4,7 +4,7 @@ import {
   normalizeConfigPaths,
 } from "../../test/helpers/vitest-config-paths.js";
 import { BUNDLED_PLUGIN_E2E_TEST_GLOB } from "../../test/vitest/vitest.bundled-plugin-paths.ts";
-import e2eConfig, { resolveE2EWorkerCount } from "../../test/vitest/vitest.e2e.config.ts";
+import e2eConfig from "../../test/vitest/vitest.e2e.config.ts";
 
 describe("e2e vitest config", () => {
   it("runs as a standalone config instead of inheriting unit projects", () => {
@@ -27,13 +27,5 @@ describe("e2e vitest config", () => {
     expect(normalizeConfigPaths(e2eConfig.test?.setupFiles)).toContain(
       "test/setup-openclaw-runtime.ts",
     );
-  });
-
-  it("serializes default e2e runs while preserving explicit worker overrides", () => {
-    expect(e2eConfig.test?.maxWorkers).toBe(1);
-    expect(resolveE2EWorkerCount({})).toBe(1);
-    expect(resolveE2EWorkerCount({ OPENCLAW_E2E_WORKERS: "4" })).toBe(4);
-    expect(resolveE2EWorkerCount({ OPENCLAW_E2E_WORKERS: "99" })).toBe(16);
-    expect(resolveE2EWorkerCount({ OPENCLAW_E2E_WORKERS: "0" })).toBe(1);
   });
 });

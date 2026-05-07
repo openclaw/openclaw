@@ -10,12 +10,7 @@ import { normalizeAccountId, resolveThreadSessionKeys } from "openclaw/plugin-sd
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { mergeTelegramAccountConfig, resolveDefaultTelegramAccountId } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import {
-  expandTelegramAllowFromWithAccessGroups,
-  firstDefined,
-  normalizeAllowFrom,
-  normalizeDmAllowFromWithStore,
-} from "./bot-access.js";
+import { firstDefined, normalizeAllowFrom, normalizeDmAllowFromWithStore } from "./bot-access.js";
 import { resolveTelegramInboundBody } from "./bot-message-context.body.js";
 import {
   buildTelegramInboundContextPayload,
@@ -263,25 +258,13 @@ export const buildTelegramMessageContext = async ({
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
   // For DMs, prefer per-DM/topic allowFrom (groupAllowOverride) over account-level allowFrom
   const dmAllowFrom = groupAllowOverride ?? allowFrom;
-  const expandedDmAllowFrom = await expandTelegramAllowFromWithAccessGroups({
-    cfg: freshCfg,
-    allowFrom: dmAllowFrom,
-    accountId: account.accountId,
-    senderId,
-  });
   const effectiveDmAllow = normalizeDmAllowFromWithStore({
-    allowFrom: expandedDmAllowFrom,
+    allowFrom: dmAllowFrom,
     storeAllowFrom,
     dmPolicy: effectiveDmPolicy,
   });
   // Group sender checks are explicit and must not inherit DM pairing-store entries.
-  const expandedGroupAllowFrom = await expandTelegramAllowFromWithAccessGroups({
-    cfg: freshCfg,
-    allowFrom: groupAllowOverride ?? groupAllowFrom,
-    accountId: account.accountId,
-    senderId,
-  });
-  const effectiveGroupAllow = normalizeAllowFrom(expandedGroupAllowFrom);
+  const effectiveGroupAllow = normalizeAllowFrom(groupAllowOverride ?? groupAllowFrom);
   const hasGroupAllowOverride = groupAllowOverride !== undefined;
   const senderUsername = msg.from?.username ?? "";
   const baseAccess = evaluateTelegramGroupBaseAccess({

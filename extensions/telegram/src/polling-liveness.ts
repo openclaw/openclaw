@@ -10,12 +10,6 @@ type TelegramPollingStall = {
   message: string;
 };
 
-type TelegramPollingStallSnapshot = {
-  elapsedMs: number;
-  apiElapsedMs: number;
-  label: string;
-};
-
 export class TelegramPollingLivenessTracker {
   #lastGetUpdatesAt: number;
   #lastApiActivityAt: number;
@@ -97,9 +91,22 @@ export class TelegramPollingLivenessTracker {
 
   detectStall(params: { thresholdMs: number; now?: number }): TelegramPollingStall | null {
     const now = params.now ?? this.#now();
-    const stall = this.#resolvePollingStallSnapshot(now);
+    const activeElapsed =
+      this.#inFlightGetUpdates > 0 && this.#lastGetUpdatesStartedAt != null
+        ? now - this.#lastGetUpdatesStartedAt
+        : 0;
+    const idleElapsed =
+      this.#inFlightGetUpdates > 0
+        ? 0
+        : now - (this.#lastGetUpdatesFinishedAt ?? this.#lastGetUpdatesAt);
+    const elapsed = this.#inFlightGetUpdates > 0 ? activeElapsed : idleElapsed;
+    const apiLivenessAt =
+      this.#latestInFlightApiStartedAt == null
+        ? this.#lastApiActivityAt
+        : Math.max(this.#lastApiActivityAt, this.#latestInFlightApiStartedAt);
+    const apiElapsed = now - apiLivenessAt;
 
-    if (stall.elapsedMs <= params.thresholdMs) {
+    if (elapsed <= params.thresholdMs || apiElapsed <= params.thresholdMs) {
       return null;
     }
     if (this.#stallDiagLoggedAt && now - this.#stallDiagLoggedAt < params.thresholdMs / 2) {
@@ -107,8 +114,12 @@ export class TelegramPollingLivenessTracker {
     }
     this.#stallDiagLoggedAt = now;
 
+    const elapsedLabel =
+      this.#inFlightGetUpdates > 0
+        ? `active getUpdates stuck for ${formatDurationPrecise(elapsed)}`
+        : `no completed getUpdates for ${formatDurationPrecise(elapsed)}`;
     return {
-      message: `Polling stall detected (${stall.label}); forcing restart. [diag ${this.formatDiagnosticFields("error")} apiElapsedMs=${stall.apiElapsedMs}]`,
+      message: `Polling stall detected (${elapsedLabel}); forcing restart. [diag ${this.formatDiagnosticFields("error")}]`,
     };
   }
 
@@ -125,28 +136,6 @@ export class TelegramPollingLivenessTracker {
         newestStartedAt == null ? activeStartedAt : Math.max(newestStartedAt, activeStartedAt);
     }
     return newestStartedAt;
-  }
-
-  #resolvePollingStallSnapshot(now: number): TelegramPollingStallSnapshot {
-    const activeElapsed =
-      this.#inFlightGetUpdates > 0 && this.#lastGetUpdatesStartedAt != null
-        ? now - this.#lastGetUpdatesStartedAt
-        : 0;
-    const idleElapsed =
-      this.#inFlightGetUpdates > 0
-        ? 0
-        : now - (this.#lastGetUpdatesFinishedAt ?? this.#lastGetUpdatesAt);
-    const elapsedMs = this.#inFlightGetUpdates > 0 ? activeElapsed : idleElapsed;
-    const apiLivenessAt =
-      this.#latestInFlightApiStartedAt == null
-        ? this.#lastApiActivityAt
-        : Math.max(this.#lastApiActivityAt, this.#latestInFlightApiStartedAt);
-    const apiElapsedMs = now - apiLivenessAt;
-    const label =
-      this.#inFlightGetUpdates > 0
-        ? `active getUpdates stuck for ${formatDurationPrecise(elapsedMs)}`
-        : `no completed getUpdates for ${formatDurationPrecise(elapsedMs)}`;
-    return { elapsedMs, apiElapsedMs, label };
   }
 
   #now(): number {

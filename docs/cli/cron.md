@@ -157,8 +157,6 @@ Retention and pruning are controlled in config:
 
 <Note>
 If you have cron jobs from before the current delivery and store format, run `openclaw doctor --fix`. Doctor normalizes legacy cron fields (`jobId`, `schedule.cron`, top-level delivery fields including legacy `threadId`, payload `provider` delivery aliases) and migrates simple `notify: true` webhook fallback jobs to explicit webhook delivery when `cron.webhook` is configured.
-
-Doctor also removes persisted cron `payload.model` sentinels such as `"default"`, `"null"`, blank strings, and JSON `null`. Cron runtime still treats any non-empty `payload.model` string as an explicit model override and validates it against `agents.defaults.models`; omit the model key when a job should use the agent/default model selection.
 </Note>
 
 ## Common edits

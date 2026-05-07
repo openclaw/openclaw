@@ -74,7 +74,7 @@ vi.mock("./gateway.ts", async (importOriginal) => {
           this.opts.onHello?.(
             hello ?? {
               type: "hello-ok",
-              protocol: 3,
+              protocol: 4,
               snapshot: {},
               auth: { role: "operator", scopes: [] },
             },
@@ -314,7 +314,7 @@ describe("connectGateway", () => {
 
     client.emitHello({
       type: "hello-ok",
-      protocol: 3,
+      protocol: 4,
       server: { version: "2.0.0" },
       auth: { role: "operator", scopes: [] },
       snapshot: {},
@@ -350,7 +350,7 @@ describe("connectGateway", () => {
 
     client.emitHello({
       type: "hello-ok",
-      protocol: 3,
+      protocol: 4,
       server: { version: "1.0.0" },
       auth: { role: "operator", scopes: [] },
       snapshot: {},
@@ -389,7 +389,7 @@ describe("connectGateway", () => {
 
     client.emitHello({
       type: "hello-ok",
-      protocol: 3,
+      protocol: 4,
       server: { version: "1.0.0" },
       auth: { role: "operator", scopes: [] },
       snapshot: {},
