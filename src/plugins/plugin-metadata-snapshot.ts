@@ -199,11 +199,12 @@ export function loadPluginMetadataSnapshot(
 export function loadPluginMetadataSnapshotAsync(
   params: LoadPluginMetadataSnapshotParams,
 ): Promise<PluginMetadataSnapshot> {
+  const activeTimelineSpan = getActiveDiagnosticsTimelineSpan();
   return measureDiagnosticsTimelineSpan(
     "plugins.metadata.scan",
     () => loadPluginMetadataSnapshotImplAsync(params),
     {
-      phase: "startup",
+      phase: activeTimelineSpan?.phase ?? "startup",
       config: params.config,
       env: params.env,
       attributes: {

@@ -21,6 +21,8 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: mocks.applyPluginAutoEnable,
+  applyPluginAutoEnableAsync: async (...args: Parameters<typeof mocks.applyPluginAutoEnable>) =>
+    mocks.applyPluginAutoEnable(...args),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({

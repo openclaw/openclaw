@@ -72,6 +72,8 @@ vi.mock("../../agents/agent-scope.js", () => ({
 vi.mock("../../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: ({ config, env }: { config: unknown; env?: unknown }) =>
     mocks.applyPluginAutoEnable({ config, env }),
+  applyPluginAutoEnableAsync: async ({ config, env }: { config: unknown; env?: unknown }) =>
+    mocks.applyPluginAutoEnable({ config, env }),
 }));
 
 vi.mock("../../plugins/loader.js", () => ({

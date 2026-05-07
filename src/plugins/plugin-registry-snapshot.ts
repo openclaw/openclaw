@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "./bundled-dir.js";
 import { fileSignatureMatches, fileSignatureMatchesAsync } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import {
@@ -442,16 +442,25 @@ type AsyncRegistrySnapshotInflight = {
 let registrySnapshotInflight: AsyncRegistrySnapshotInflight | null = null;
 
 function buildAsyncRegistrySnapshotKey(params: LoadPluginRegistryParams): string {
-  // Used only to dedup concurrent async calls — env and installRecords are
-  // request-stable across one event loop turn, so we can hash a few stable bits
-  // and let the persisted-read short-circuit dedupe the cheap calls anyway.
+  // Dedup concurrent async calls only when every behavior-affecting input
+  // matches; otherwise distinct callers must each compute their own snapshot.
+  const env = params.env ?? process.env;
   const policyHash = params.config ? resolveInstalledPluginIndexPolicyHash(params.config) : "";
+  const installRecordsKey = params.installRecords
+    ? Object.keys(params.installRecords).sort().join(",")
+    : "";
+  const bundledRoot = resolveBundledPluginsDir(env) ?? "";
   return [
     params.stateDir ?? "",
     params.filePath ?? "",
     params.pluginIndexFilePath ?? "",
+    params.workspaceDir ?? "",
     params.preferPersisted === undefined ? "u" : String(params.preferPersisted),
     policyHash,
+    installRecordsKey,
+    bundledRoot,
+    hasEnvFlag(env, DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV) ? "1" : "0",
+    areBundledPluginsDisabled(env) ? "1" : "0",
   ].join("|");
 }
 
