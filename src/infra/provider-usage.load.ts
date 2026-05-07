@@ -1,6 +1,7 @@
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { resolveProviderUsageSnapshotWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveFetch } from "./fetch.js";
+import { resolveProxyFetchFromEnv } from "./net/proxy-fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
   DEFAULT_TIMEOUT_MS,
@@ -14,7 +15,6 @@ import type {
   UsageProviderId,
   UsageSummary,
 } from "./provider-usage.types.js";
-import { resolveProxyFetchFromEnv } from "./net/proxy-fetch.js";
 
 async function fetchProviderUsageSnapshotFallback(params: {
   auth: ProviderAuth;
@@ -87,7 +87,10 @@ export async function loadProviderUsageSummary(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const config = opts.config ?? getRuntimeConfig();
   const env = opts.env ?? process.env;
-  const fetchFn = resolveProxyFetchFromEnv(env) ?? resolveFetch(opts.fetch);
+  const fetchFn =
+    opts.fetch != null
+      ? resolveFetch(opts.fetch)
+      : (resolveProxyFetchFromEnv(env) ?? resolveFetch(opts.fetch));
   if (!fetchFn) {
     throw new Error("fetch is not available");
   }

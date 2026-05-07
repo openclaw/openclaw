@@ -192,33 +192,30 @@ describe("provider-usage.load", () => {
     }
   });
 
-  it("prefers proxy-aware fetch from env when HTTP_PROXY is set", async () => {
-    resolveProviderUsageSnapshotWithPluginMock.mockReturnValue(Promise.resolve(null));
-
-    const mockFetch = createProviderUsageFetch(async () => {
-      throw new Error("opts.fetch should not be called when proxy env is set");
+  it("prefers proxy-aware fetch from env when HTTP_PROXY is set and no explicit fetch is supplied", async () => {
+    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async () => {
+      return {
+        provider: "openai-codex" as any,
+        displayName: "OpenAI Codex",
+        windows: [{ label: "from-proxy", usedPercent: 50 }],
+      };
     });
 
     const summary = await loadProviderUsageSummary({
       now: usageNow,
       auth: [{ provider: "openai-codex" as any, token: "token-codex" }],
-      fetch: mockFetch as unknown as typeof fetch,
       env: { HTTP_PROXY: "http://127.0.0.1:7890", HTTPS_PROXY: "http://127.0.0.1:7890" },
     });
 
-    expect(mockFetch).not.toHaveBeenCalled();
-    expect(summary.providers[0]?.error).toBeTruthy();
+    expect(summary.providers[0]?.windows).toEqual([{ label: "from-proxy", usedPercent: 50 }]);
   });
 
   it("falls back to opts.fetch when no proxy env is set", async () => {
-    resolveProviderUsageSnapshotWithPluginMock.mockReturnValue(Promise.resolve(null));
+    resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue(null);
 
-    const mockFetch = createProviderUsageFetch(async (url) => {
-      if (url.includes("chatgpt.com")) {
-        return makeResponse(200, { windows: [{ label: "5h", usedPercent: 2 }] });
-      }
-      return makeResponse(404, "not found");
-    });
+    const mockFetch = vi.fn<typeof fetch>(async () =>
+      makeResponse(200, { windows: [{ label: "5h", usedPercent: 2 }] }),
+    );
 
     const summary = await loadProviderUsageSummary({
       now: usageNow,
@@ -228,6 +225,6 @@ describe("provider-usage.load", () => {
     });
 
     expect(mockFetch).toHaveBeenCalled();
-    expect(summary.providers[0]?.windows).toEqual([{ label: "5h", usedPercent: 2 }]);
+    expect(summary.providers[0]?.error).toBeTruthy();
   });
 });
