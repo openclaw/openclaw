@@ -15,12 +15,16 @@ let clearPluginDoctorContractRegistryCache: typeof import("./doctor-contract-reg
 let collectRelevantDoctorPluginIdsForTouchedPaths: typeof import("./doctor-contract-registry.js").collectRelevantDoctorPluginIdsForTouchedPaths;
 let listPluginDoctorLegacyConfigRules: typeof import("./doctor-contract-registry.js").listPluginDoctorLegacyConfigRules;
 let listPluginDoctorSessionRouteStateOwners: typeof import("./doctor-contract-registry.js").listPluginDoctorSessionRouteStateOwners;
+let setPluginDoctorContractRegistryModuleLoaderFactoryForTest:
+  | typeof import("./doctor-contract-registry.js").setPluginDoctorContractRegistryModuleLoaderFactoryForTest
+  | undefined;
 
 function makeTempDir(): string {
   return makeTrackedTempDir("openclaw-doctor-contract-registry", tempDirs);
 }
 
 afterEach(() => {
+  setPluginDoctorContractRegistryModuleLoaderFactoryForTest?.(undefined);
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -33,7 +37,9 @@ describe("doctor-contract-registry module loader", () => {
       collectRelevantDoctorPluginIdsForTouchedPaths,
       listPluginDoctorLegacyConfigRules,
       listPluginDoctorSessionRouteStateOwners,
+      setPluginDoctorContractRegistryModuleLoaderFactoryForTest,
     } = await import("./doctor-contract-registry.js"));
+    setPluginDoctorContractRegistryModuleLoaderFactoryForTest(mocks.createJiti);
     clearPluginDoctorContractRegistryCache();
   });
 

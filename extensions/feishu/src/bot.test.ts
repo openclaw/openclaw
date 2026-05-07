@@ -1,7 +1,7 @@
 import type * as ConversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import { handleFeishuMessage } from "./bot.js";
@@ -351,6 +351,17 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
       touch: mockTouchBinding,
     }),
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("./reply-dispatcher.js");
+  vi.doUnmock("./reasoning-preview.js");
+  vi.doUnmock("./send.js");
+  vi.doUnmock("./media.js");
+  vi.doUnmock("./audio-preflight.runtime.js");
+  vi.doUnmock("./client.js");
+  vi.doUnmock("openclaw/plugin-sdk/conversation-runtime");
+  vi.resetModules();
 });
 
 async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessageEvent }) {

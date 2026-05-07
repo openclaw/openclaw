@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const telemetryState = vi.hoisted(() => {
   const counters = new Map<string, { add: ReturnType<typeof vi.fn> }>();
@@ -227,6 +227,20 @@ async function emitAndCaptureLog(
 function flushDiagnosticEvents() {
   return new Promise<void>((resolve) => setImmediate(resolve));
 }
+
+afterAll(() => {
+  vi.doUnmock("@opentelemetry/api");
+  vi.doUnmock("@opentelemetry/sdk-node");
+  vi.doUnmock("@opentelemetry/exporter-metrics-otlp-proto");
+  vi.doUnmock("@opentelemetry/exporter-trace-otlp-proto");
+  vi.doUnmock("@opentelemetry/exporter-logs-otlp-proto");
+  vi.doUnmock("@opentelemetry/sdk-logs");
+  vi.doUnmock("@opentelemetry/sdk-metrics");
+  vi.doUnmock("@opentelemetry/sdk-trace-base");
+  vi.doUnmock("@opentelemetry/resources");
+  vi.doUnmock("@opentelemetry/semantic-conventions");
+  vi.resetModules();
+});
 
 describe("diagnostics-otel service", () => {
   beforeEach(() => {

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Model } from "@mariozechner/pi-ai";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
   buildGuardedModelFetchMock: vi.fn(),
@@ -105,6 +105,11 @@ describe("google transport stream", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("openclaw/plugin-sdk/provider-transport-runtime");
+    vi.resetModules();
   });
 
   it("uses the guarded fetch transport and parses Gemini SSE output", async () => {

@@ -92,6 +92,20 @@ import { getAcpRuntimeBackend } from "../runtime-api.js";
 import { createAcpxRuntimeService } from "./service.js";
 
 const tempDirs: string[] = [];
+const previousEnv = {
+  OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE: process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE,
+  OPENCLAW_SKIP_ACPX_RUNTIME: process.env.OPENCLAW_SKIP_ACPX_RUNTIME,
+  OPENCLAW_SKIP_ACPX_RUNTIME_PROBE: process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE,
+};
+
+function restoreEnv(name: keyof typeof previousEnv): void {
+  const value = previousEnv[name];
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+}
 
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-service-"));
@@ -107,9 +121,9 @@ afterEach(async () => {
   acpxRuntimeConstructorMock.mockClear();
   createAgentRegistryMock.mockClear();
   createFileSessionStoreMock.mockClear();
-  delete process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE;
-  delete process.env.OPENCLAW_SKIP_ACPX_RUNTIME;
-  delete process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE;
+  restoreEnv("OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE");
+  restoreEnv("OPENCLAW_SKIP_ACPX_RUNTIME");
+  restoreEnv("OPENCLAW_SKIP_ACPX_RUNTIME_PROBE");
   for (const dir of tempDirs.splice(0)) {
     await fs.rm(dir, { recursive: true, force: true });
   }

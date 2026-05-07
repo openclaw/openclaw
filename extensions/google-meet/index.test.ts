@@ -7,7 +7,7 @@ import { createContext, Script } from "node:vm";
 import { validateJsonSchemaValue, type JsonSchemaObject } from "openclaw/plugin-sdk/config-schema";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin, { __testing as googleMeetPluginTesting } from "./index.js";
 import {
   extractGoogleMeetUriFromCalendarEvent,
@@ -345,9 +345,16 @@ describe("google-meet plugin", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     chromeTransportTesting.setDepsForTest(null);
     googleMeetPluginTesting.setCallGatewayFromCliForTests();
     googleMeetPluginTesting.setPlatformForTests();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+    vi.doUnmock("./src/voice-call-gateway.js");
+    vi.resetModules();
   });
 
   it("defaults to chrome agent mode with safe read-only tools", () => {
