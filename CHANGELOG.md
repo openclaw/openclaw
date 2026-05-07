@@ -157,6 +157,7 @@ Docs: https://docs.openclaw.ai
 
 - Providers: preserve non-OK `text/event-stream` response bodies so provider HTTP errors keep their JSON detail instead of collapsing to generic streaming failures. Fixes #78180.
 - Tools/session status: render the active heartbeat/run model for `session_status({"sessionKey":"current"})` instead of falling back to the persisted session default. Fixes #77493.
+- Doctor/secrets: allow safe inherited exec SecretRef `passEnv` names such as `HOME` while still blocking dangerous runtime env hooks. Fixes #78216.
 - Chat commands: make `/model default` reset the session model override instead of treating it as a literal model name. Fixes #78182.
 - Cron: make rejected `payload.model` errors show the configured `agents.defaults.models` allowlist instead of echoing the rejected model twice. Fixes #79058.
 - Agents/subagents: retry parent wake announces when the announce-summary model run fails with fallback cooldown exhaustion instead of dropping the wake on the first transient provider overload. Refs #78581.
