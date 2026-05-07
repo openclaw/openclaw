@@ -144,6 +144,29 @@ describe("createSessionVisibilityGuard", () => {
     ).toEqual({ allowed: true });
   });
 
+  it("keeps agent visibility same-agent-only for cross-agent owned child rows", () => {
+    const guard = createSessionVisibilityRowChecker({
+      action: "list",
+      requesterSessionKey: "agent:main:main",
+      visibility: "agent",
+      a2aPolicy: createAgentToAgentPolicy({
+        tools: { agentToAgent: { enabled: true, allow: ["main", "codex"] } },
+      } as unknown as OpenClawConfig),
+    });
+
+    expect(
+      guard.check({
+        key: "agent:codex:acp:child-1",
+        spawnedBy: "agent:main:main",
+      }),
+    ).toEqual({
+      allowed: false,
+      status: "forbidden",
+      error:
+        "Session list visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.",
+    });
+  });
+
   it("does not do spawned lookup for list visibility without row metadata", async () => {
     const callGateway = vi.fn(async () => ({
       sessions: [{ key: "agent:codex:acp:child-1" }],

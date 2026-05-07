@@ -242,7 +242,11 @@ export function createSessionVisibilityRowChecker(params: {
     const isRequesterOwned = rowOwnedByRequester(row, params.requesterSessionKey);
     // Row ownership is stronger than agent ids: ACP children may use a backend
     // agent id while still belonging to the requester that spawned them.
-    if (!isRequesterSession && isRequesterOwned && params.visibility !== "self") {
+    if (
+      !isRequesterSession &&
+      isRequesterOwned &&
+      (params.visibility === "tree" || params.visibility === "all")
+    ) {
       return { allowed: true };
     }
     const isCrossAgent = targetAgentId !== requesterAgentId;

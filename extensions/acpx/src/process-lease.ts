@@ -86,25 +86,35 @@ function writeLeaseFile(filePath: string, value: LeaseFile): Promise<void> {
 
 export function createAcpxProcessLeaseStore(params: { stateDir: string }): AcpxProcessLeaseStore {
   const filePath = path.join(params.stateDir, LEASE_FILE);
+  let updateQueue: Promise<void> = Promise.resolve();
 
   async function update(
     mutator: (leases: AcpxProcessLease[]) => AcpxProcessLease[],
   ): Promise<void> {
-    await fs.mkdir(params.stateDir, { recursive: true });
-    const current = await readLeaseFile(filePath);
-    await writeLeaseFile(filePath, {
-      version: 1,
-      leases: mutator(current.leases),
+    const run = updateQueue.then(async () => {
+      await fs.mkdir(params.stateDir, { recursive: true });
+      const current = await readLeaseFile(filePath);
+      await writeLeaseFile(filePath, {
+        version: 1,
+        leases: mutator(current.leases),
+      });
     });
+    updateQueue = run.catch(() => {});
+    await run;
+  }
+
+  async function readCurrent(): Promise<LeaseFile> {
+    await updateQueue;
+    return await readLeaseFile(filePath);
   }
 
   return {
     async load(leaseId) {
-      const current = await readLeaseFile(filePath);
+      const current = await readCurrent();
       return current.leases.find((lease) => lease.leaseId === leaseId);
     },
     async listOpen(gatewayInstanceId) {
-      const current = await readLeaseFile(filePath);
+      const current = await readCurrent();
       return current.leases.filter(
         (lease) =>
           (lease.state === "open" || lease.state === "closing") &&

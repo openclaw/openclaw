@@ -123,6 +123,19 @@ function extractGeneratedWrapperPath(command: string | undefined): string {
   );
 }
 
+function selectCurrentSessionLease(params: {
+  leases: AcpxProcessLease[];
+  sessionKeys: string[];
+  rootPid?: number;
+}): AcpxProcessLease | undefined {
+  const sessionKeys = new Set(params.sessionKeys.map((entry) => entry.trim()).filter(Boolean));
+  const candidates = params.leases.filter((lease) => sessionKeys.has(lease.sessionKey));
+  if (params.rootPid) {
+    return candidates.find((lease) => lease.rootPid === params.rootPid);
+  }
+  return [...candidates].sort((a, b) => b.startedAt - a.startedAt)[0];
+}
+
 function createResetAwareSessionStore(
   baseStore: AcpSessionStore,
   params?: {
@@ -144,9 +157,11 @@ function createResetAwareSessionStore(
         return record;
       }
       const sessionName = readSessionRecordName(record) || normalized;
-      const lease = (await params.leaseStore.listOpen(params.gatewayInstanceId)).find(
-        (entry) => entry.sessionKey === sessionName || entry.sessionKey === normalized,
-      );
+      const lease = selectCurrentSessionLease({
+        leases: await params.leaseStore.listOpen(params.gatewayInstanceId),
+        sessionKeys: [sessionName, normalized],
+        rootPid: readRecordAgentPid(record),
+      });
       if (!lease) {
         return record;
       }
@@ -723,12 +738,25 @@ export class AcpxRuntime implements AcpRuntime {
     record: AcpLoadedSessionRecord,
   ): Promise<void> {
     const leaseId = readOpenClawLeaseIdFromRecord(record);
+    const rootPid = readAgentPidFromRecord(record);
+    const sessionKeys = [handle.sessionKey, readSessionRecordName(record)];
+    const openLeases =
+      this.gatewayInstanceId && this.processLeaseStore
+        ? await this.processLeaseStore.listOpen(this.gatewayInstanceId)
+        : [];
+    const selectedLease = selectCurrentSessionLease({
+      leases: openLeases,
+      sessionKeys,
+      rootPid,
+    });
+    const loadedLease = leaseId ? await this.processLeaseStore?.load(leaseId) : undefined;
     const lease =
-      (leaseId ? await this.processLeaseStore?.load(leaseId) : undefined) ??
-      (this.gatewayInstanceId
-        ? (await this.processLeaseStore?.listOpen(this.gatewayInstanceId))?.find(
-            (entry) => entry.sessionKey === handle.sessionKey,
-          )
+      selectedLease ??
+      (loadedLease &&
+      loadedLease.gatewayInstanceId === this.gatewayInstanceId &&
+      (!rootPid || loadedLease.rootPid === rootPid) &&
+      sessionKeys.includes(loadedLease.sessionKey)
+        ? loadedLease
         : undefined);
     if (lease && lease.gatewayInstanceId === this.gatewayInstanceId && lease.rootPid > 0) {
       await this.processLeaseStore?.markState(lease.leaseId, "closing");
@@ -749,7 +777,6 @@ export class AcpxRuntime implements AcpRuntime {
       return;
     }
 
-    const rootPid = readAgentPidFromRecord(record);
     const rootCommand =
       readAgentCommandFromRecord(record) ??
       resolveAgentCommandForName({
