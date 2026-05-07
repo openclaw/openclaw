@@ -340,10 +340,12 @@ async function readLastNonzeroUsageFromSessionLog(logPath: string) {
         break;
       }
       const chunk = buffer.toString("utf-8", 0, bytesRead);
+      const appendedPartialBytes = Buffer.byteLength(leadingPartial, "utf8");
       const combined = `${chunk}${leadingPartial}`;
       const lines = combined.split(/\n+/);
       leadingPartial = lines.shift() ?? "";
       const suffixBytesBeforeChunk = stat.size - position;
+      const suffixBytesOutsideCombined = Math.max(0, suffixBytesBeforeChunk - appendedPartialBytes);
       for (let i = lines.length - 1; i >= 0; i -= 1) {
         const usage = parseUsageFromTranscriptLine(lines[i] ?? "");
         if (usage) {
@@ -352,7 +354,7 @@ async function readLastNonzeroUsageFromSessionLog(logPath: string) {
             Buffer.byteLength(trailingLines.join("\n"), "utf8") + trailingLines.length;
           return {
             usage,
-            trailingBytes: suffixBytesBeforeChunk + trailingBytesInChunk,
+            trailingBytes: suffixBytesOutsideCombined + trailingBytesInChunk,
           };
         }
       }
