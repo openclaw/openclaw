@@ -752,6 +752,34 @@ describe("resolveEmbeddedAgentStreamFn", () => {
 
     expect(streamFn).toBe(currentStreamFn);
   });
+
+  it("keeps captured custom currentStreamFn values unchanged", () => {
+    resetEmbeddedAgentBaseStreamFnCacheForTest();
+    const customStreamFn = vi.fn((model, context, options) =>
+      streamSimple(model, context, options),
+    );
+    const session = {
+      agent: {
+        streamFn: customStreamFn,
+      },
+    };
+
+    const capturedStreamFn = resolveEmbeddedAgentBaseStreamFn({ session });
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: capturedStreamFn,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-completions",
+        provider: "llama",
+        id: "qwen36-35b-a3b",
+      } as never,
+    });
+
+    expect(capturedStreamFn).toBe(customStreamFn);
+    expect(streamFn).toBe(customStreamFn);
+    expect(customStreamFn).not.toHaveBeenCalled();
+  });
 });
 
 describe("resolveAttemptFsWorkspaceOnly", () => {

@@ -1,5 +1,5 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+import { getApiProvider, streamSimple, type Api } from "@mariozechner/pi-ai";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
 import { createOpenAIWebSocketStreamFn } from "../openai-ws-stream.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
@@ -8,6 +8,7 @@ import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
 let embeddedAgentBaseStreamFnCache = new WeakMap<object, StreamFn | undefined>();
+let embeddedAgentManagedDefaultStreamFns = new WeakSet<StreamFn>();
 
 export function resolveEmbeddedAgentBaseStreamFn(params: {
   session: { agent: { streamFn?: StreamFn } };
@@ -18,11 +19,44 @@ export function resolveEmbeddedAgentBaseStreamFn(params: {
   }
   const baseStreamFn = params.session.agent.streamFn;
   embeddedAgentBaseStreamFnCache.set(params.session, baseStreamFn);
+  if (baseStreamFn && isPiManagedDefaultSessionStreamFn(baseStreamFn)) {
+    embeddedAgentManagedDefaultStreamFns.add(baseStreamFn);
+  }
   return baseStreamFn;
 }
 
 export function resetEmbeddedAgentBaseStreamFnCacheForTest(): void {
   embeddedAgentBaseStreamFnCache = new WeakMap<object, StreamFn | undefined>();
+  embeddedAgentManagedDefaultStreamFns = new WeakSet<StreamFn>();
+}
+
+function isPiManagedDefaultSessionStreamFn(streamFn: StreamFn): boolean {
+  if (streamFn.name !== "streamFn") {
+    return false;
+  }
+  const source = Function.prototype.toString.call(streamFn);
+  return (
+    source.includes("modelRegistry.getApiKeyAndHeaders") &&
+    source.includes("settingsManager.getProviderRetrySettings") &&
+    source.includes("getAttributionHeaders") &&
+    source.includes("streamSimple")
+  );
+}
+
+function isDefaultEmbeddedAgentStreamFn(params: {
+  currentStreamFn: StreamFn | undefined;
+  modelApi: Api;
+}): boolean {
+  if (params.currentStreamFn === undefined || params.currentStreamFn === streamSimple) {
+    return true;
+  }
+  if (embeddedAgentManagedDefaultStreamFns.has(params.currentStreamFn)) {
+    return true;
+  }
+  const provider = getApiProvider(params.modelApi);
+  return (
+    params.currentStreamFn === provider?.streamSimple || params.currentStreamFn === provider?.stream
+  );
 }
 
 export function describeEmbeddedAgentStreamStrategy(params: {
@@ -41,7 +75,12 @@ export function describeEmbeddedAgentStreamStrategy(params: {
   if (params.model.provider === "anthropic-vertex") {
     return "anthropic-vertex";
   }
-  if (params.currentStreamFn === undefined || params.currentStreamFn === streamSimple) {
+  if (
+    isDefaultEmbeddedAgentStreamFn({
+      currentStreamFn: params.currentStreamFn,
+      modelApi: params.model.api,
+    })
+  ) {
     return createBoundaryAwareStreamFnForModel(params.model)
       ? `boundary-aware:${params.model.api}`
       : "stream-simple";
@@ -104,7 +143,12 @@ export function resolveEmbeddedAgentStreamFn(params: {
     return createAnthropicVertexStreamFnForModel(params.model);
   }
 
-  if (params.currentStreamFn === undefined || params.currentStreamFn === streamSimple) {
+  if (
+    isDefaultEmbeddedAgentStreamFn({
+      currentStreamFn: params.currentStreamFn,
+      modelApi: params.model.api,
+    })
+  ) {
     const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
     if (boundaryAwareStreamFn) {
       // Boundary-aware transports read credentials from options.apiKey just

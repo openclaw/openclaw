@@ -1,9 +1,11 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as providerTransportStream from "../provider-transport-stream.js";
 import {
   describeEmbeddedAgentStreamStrategy,
+  resetEmbeddedAgentBaseStreamFnCacheForTest,
+  resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentStreamFn,
 } from "./stream-resolution.js";
@@ -26,6 +28,42 @@ const overrideBoundaryAwareStreamFnOnce = (streamFn: StreamFn): void => {
     streamFn,
   );
 };
+
+type TrackedStreamFn = StreamFn & { callCount(): number };
+
+const makePiManagedSessionStreamFn = (): TrackedStreamFn => {
+  let calls = 0;
+  const modelRegistry = {
+    getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "managed-key", headers: undefined }),
+  };
+  const settingsManager = {
+    getProviderRetrySettings: () => ({
+      timeoutMs: undefined,
+      maxRetries: undefined,
+      maxRetryDelayMs: undefined,
+    }),
+  };
+  const getAttributionHeaders = (): Record<string, string> | undefined => undefined;
+  const streamFn: StreamFn = async function streamFn(model, context, options) {
+    calls += 1;
+    const auth = await modelRegistry.getApiKeyAndHeaders();
+    const providerRetrySettings = settingsManager.getProviderRetrySettings();
+    const attributionHeaders = getAttributionHeaders();
+    return streamSimple(model, context, {
+      ...options,
+      apiKey: auth.apiKey,
+      timeoutMs: options?.timeoutMs ?? providerRetrySettings.timeoutMs,
+      maxRetries: options?.maxRetries ?? providerRetrySettings.maxRetries,
+      maxRetryDelayMs: options?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
+      headers: attributionHeaders ?? options?.headers,
+    });
+  };
+  return Object.assign(streamFn, { callCount: () => calls });
+};
+
+afterEach(() => {
+  resetEmbeddedAgentBaseStreamFnCacheForTest();
+});
 
 describe("describeEmbeddedAgentStreamStrategy", () => {
   it("describes provider-owned stream paths explicitly", () => {
@@ -84,6 +122,24 @@ describe("describeEmbeddedAgentStreamStrategy", () => {
       }),
     ).toBe("session-custom");
   });
+
+  it("describes captured PI-managed openai-completions session streams as boundary-aware", () => {
+    const defaultSessionStreamFn = makePiManagedSessionStreamFn();
+    const session = { agent: { streamFn: defaultSessionStreamFn } };
+
+    expect(resolveEmbeddedAgentBaseStreamFn({ session })).toBe(defaultSessionStreamFn);
+    expect(
+      describeEmbeddedAgentStreamStrategy({
+        currentStreamFn: defaultSessionStreamFn,
+        shouldUseWebSocketTransport: false,
+        model: {
+          api: "openai-completions",
+          provider: "llama",
+          id: "qwen",
+        } as never,
+      }),
+    ).toBe("boundary-aware:openai-completions");
+  });
 });
 
 describe("resolveEmbeddedAgentStreamFn", () => {
@@ -115,6 +171,87 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     });
 
     expect(streamFn).not.toBe(streamSimple);
+  });
+
+  it("routes captured PI-managed openai-completions session streams through boundary-aware transports", async () => {
+    const defaultSessionStreamFn = makePiManagedSessionStreamFn();
+    const session = { agent: { streamFn: defaultSessionStreamFn } };
+    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+
+    expect(resolveEmbeddedAgentBaseStreamFn({ session })).toBe(defaultSessionStreamFn);
+    overrideBoundaryAwareStreamFnOnce(innerStreamFn);
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: defaultSessionStreamFn,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-completions",
+        provider: "llama",
+        id: "qwen36-35b-a3b",
+      } as never,
+      resolvedApiKey: "local-token",
+    });
+
+    expect(streamFn).not.toBe(defaultSessionStreamFn);
+    await expect(
+      streamFn({ provider: "llama", id: "qwen36-35b-a3b" } as never, {} as never, {}),
+    ).resolves.toMatchObject({ apiKey: "local-token" });
+    expect(defaultSessionStreamFn.callCount()).toBe(0);
+    expect(innerStreamFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps uncaptured custom openai-completions session streams unchanged", () => {
+    const customStreamFn = vi.fn((model, context, options) =>
+      streamSimple(model, context, options),
+    );
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: customStreamFn,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-completions",
+        provider: "llama",
+        id: "qwen36-35b-a3b",
+      } as never,
+      resolvedApiKey: "local-token",
+    });
+
+    expect(streamFn).toBe(customStreamFn);
+    expect(customStreamFn).not.toHaveBeenCalled();
+  });
+
+  it("keeps captured custom openai-completions session streams unchanged", () => {
+    const customStreamFn = vi.fn((model, context, options) =>
+      streamSimple(model, context, options),
+    );
+    const session = { agent: { streamFn: customStreamFn } };
+
+    expect(resolveEmbeddedAgentBaseStreamFn({ session })).toBe(customStreamFn);
+    expect(
+      describeEmbeddedAgentStreamStrategy({
+        currentStreamFn: customStreamFn,
+        shouldUseWebSocketTransport: false,
+        model: {
+          api: "openai-completions",
+          provider: "llama",
+          id: "qwen36-35b-a3b",
+        } as never,
+      }),
+    ).toBe("session-custom");
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: customStreamFn,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-completions",
+        provider: "llama",
+        id: "qwen36-35b-a3b",
+      } as never,
+      resolvedApiKey: "local-token",
+    });
+
+    expect(streamFn).toBe(customStreamFn);
+    expect(customStreamFn).not.toHaveBeenCalled();
   });
 
   it("routes Codex responses fallbacks through boundary-aware transports", () => {
