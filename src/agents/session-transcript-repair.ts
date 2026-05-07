@@ -506,7 +506,9 @@ export function repairToolUseResultPairing(
     const toolCallNamesById = new Map<string, string>();
     for (const toolCall of toolCalls) {
       toolCallIds.add(toolCall.id);
-      toolCallNamesById.set(toolCall.id, toolCall.name);
+      if (typeof toolCall.name === "string") {
+        toolCallNamesById.set(toolCall.id, toolCall.name);
+      }
     }
 
     const spanResultsById = new Map<string, Extract<AgentMessage, { role: "toolResult" }>>();
