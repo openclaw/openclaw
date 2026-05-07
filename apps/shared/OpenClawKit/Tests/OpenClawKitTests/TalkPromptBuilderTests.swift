@@ -4,8 +4,8 @@ import XCTest
 final class TalkPromptBuilderTests: XCTestCase {
     func testBuildIncludesTranscript() {
         let prompt = TalkPromptBuilder.build(transcript: "Hello", interruptedAtSeconds: nil)
-        XCTAssertTrue(prompt.contains("Talk Mode active."))
-        XCTAssertTrue(prompt.hasSuffix("\n\nHello"))
+        XCTAssertEqual(prompt, "Hello")
+        XCTAssertFalse(prompt.contains("Talk Mode active."))
     }
 
     func testBuildIncludesInterruptionLineWhenProvided() {
@@ -13,9 +13,9 @@ final class TalkPromptBuilderTests: XCTestCase {
         XCTAssertTrue(prompt.contains("Assistant speech interrupted at 1.2s."))
     }
 
-    func testBuildIncludesVoiceDirectiveHintByDefault() {
+    func testBuildExcludesVoiceDirectiveHintByDefault() {
         let prompt = TalkPromptBuilder.build(transcript: "Hello", interruptedAtSeconds: nil)
-        XCTAssertTrue(prompt.contains("ElevenLabs voice"))
+        XCTAssertFalse(prompt.contains("ElevenLabs voice"))
     }
 
     func testBuildExcludesVoiceDirectiveHintWhenDisabled() {
@@ -24,6 +24,6 @@ final class TalkPromptBuilderTests: XCTestCase {
             interruptedAtSeconds: nil,
             includeVoiceDirectiveHint: false)
         XCTAssertFalse(prompt.contains("ElevenLabs voice"))
-        XCTAssertTrue(prompt.contains("Talk Mode active."))
+        XCTAssertFalse(prompt.contains("Talk Mode active."))
     }
 }

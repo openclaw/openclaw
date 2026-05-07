@@ -125,6 +125,17 @@ class TalkModeManagerTest {
       job.join()
     }
 
+  @Test
+  fun talkPromptDoesNotIncludeInstructionPreamble() {
+    val manager = createManager()
+
+    val prompt = invokeBuildPrompt(manager, "Hello Thomas")
+
+    assertEquals("Hello Thomas", prompt)
+    assertFalse(prompt.contains("Talk Mode active."))
+    assertFalse(prompt.contains("ElevenLabs voice"))
+  }
+
   private fun createManager(
     talkSpeakClient: TalkSpeechSynthesizing = TalkSpeakClient(),
     talkAudioPlayer: TalkAudioPlaying? = null,
@@ -171,6 +182,15 @@ class TalkModeManagerTest {
     val field = target.javaClass.getDeclaredField(name)
     field.isAccessible = true
     return field.get(target)
+  }
+
+  private fun invokeBuildPrompt(
+    manager: TalkModeManager,
+    transcript: String,
+  ): String {
+    val method = manager.javaClass.getDeclaredMethod("buildPrompt", String::class.java)
+    method.isAccessible = true
+    return method.invoke(manager, transcript) as String
   }
 
   private fun chatFinalPayload(
