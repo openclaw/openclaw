@@ -152,11 +152,19 @@ export async function refreshCodexPluginRuntimeState(params: {
     params.appCache.invalidate(params.appCacheKey, "Codex plugin activation changed app inventory");
     const request: CodexAppInventoryRequest = async (method, requestParams) =>
       (await params.request(method, requestParams)) as v2.AppsListResponse;
-    await params.appCache.refreshNow({
-      key: params.appCacheKey,
-      request,
-      forceRefetch: true,
-    });
+    try {
+      await params.appCache.refreshNow({
+        key: params.appCacheKey,
+        request,
+        forceRefetch: true,
+      });
+    } catch (error) {
+      diagnostics.push({
+        message: `Codex app inventory refresh skipped: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      });
+    }
     appInventoryInvalidated = true;
   }
 

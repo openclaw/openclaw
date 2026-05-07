@@ -131,6 +131,48 @@ describe("Codex plugin activation", () => {
     expect(appCache.getRevision()).toBeGreaterThan(0);
   });
 
+  it("keeps activation fail-closed when post-install app inventory refresh fails", async () => {
+    const appCache = new CodexAppInventoryCache();
+    const result = await ensureCodexPluginActivation({
+      identity: identity("google-calendar"),
+      appCache,
+      appCacheKey: "runtime",
+      request: async (method) => {
+        if (method === "plugin/list") {
+          return pluginList([
+            pluginSummary("google-calendar", { installed: false, enabled: false }),
+          ]);
+        }
+        if (method === "plugin/install") {
+          return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
+        }
+        if (method === "skills/list") {
+          return { data: [] } satisfies v2.SkillsListResponse;
+        }
+        if (method === "hooks/list") {
+          return { data: [] } satisfies v2.HooksListResponse;
+        }
+        if (method === "config/mcpServer/reload") {
+          return {};
+        }
+        if (method === "app/list") {
+          throw new Error("app/list unavailable");
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      reason: "installed",
+      installAttempted: true,
+    });
+    expect(result.diagnostics).toContainEqual({
+      message: "Codex app inventory refresh skipped: app/list unavailable",
+    });
+    expect(appCache.getRevision()).toBeGreaterThan(0);
+  });
+
   it("installs from a remote curated marketplace when no local marketplace path is present", async () => {
     const calls: Array<{ method: string; params: unknown }> = [];
     const result = await ensureCodexPluginActivation({
