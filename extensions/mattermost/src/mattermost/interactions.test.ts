@@ -475,6 +475,7 @@ describe("createMattermostInteractionHandler", () => {
     const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
 
     const req = {
+      destroyed: false,
       method: params.method ?? "POST",
       headers: params.headers ?? {},
       socket: { remoteAddress: params.remoteAddress ?? "203.0.113.10" },
@@ -482,6 +483,18 @@ describe("createMattermostInteractionHandler", () => {
         const existing = listeners.get(event) ?? [];
         existing.push(handler);
         listeners.set(event, existing);
+        return this;
+      },
+      removeListener(event: string, handler: (...args: unknown[]) => void) {
+        const existing = listeners.get(event) ?? [];
+        listeners.set(
+          event,
+          existing.filter((entry) => entry !== handler),
+        );
+        return this;
+      },
+      destroy() {
+        this.destroyed = true;
         return this;
       },
     } as IncomingMessage & { emitTest: (event: string, ...args: unknown[]) => void };

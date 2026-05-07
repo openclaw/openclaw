@@ -233,6 +233,10 @@
       "types": "./dist/plugin-sdk/config-schema.d.ts",
       "default": "./dist/plugin-sdk/config-schema.js"
     },
+    "./plugin-sdk/json-schema-runtime": {
+      "types": "./dist/plugin-sdk/json-schema-runtime.d.ts",
+      "default": "./dist/plugin-sdk/json-schema-runtime.js"
+    },
     "./plugin-sdk/reply-runtime": {
       "types": "./dist/plugin-sdk/reply-runtime.d.ts",
       "default": "./dist/plugin-sdk/reply-runtime.js"

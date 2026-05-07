@@ -1,5 +1,5 @@
 import { createHmac, randomBytes } from "node:crypto";
-import { z } from "zod";
+import { z } from "openclaw/plugin-sdk/zod";
 import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
 
 const START_OPTIONS_KEY_SECRET = randomBytes(32);

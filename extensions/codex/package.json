@@ -11,8 +11,7 @@
     "@mariozechner/pi-coding-agent": "0.73.0",
     "@openai/codex": "0.128.0",
     "ajv": "^8.20.0",
-    "ws": "^8.20.0",
-    "zod": "^4.4.3"
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
