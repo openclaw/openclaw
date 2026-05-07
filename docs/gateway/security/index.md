@@ -126,6 +126,65 @@ Use this as the quick model when triaging risk:
 | Node pairing and node commands                            | Operator-level remote execution on paired devices | "Remote device control should be treated as untrusted user access by default" |
 | `gateway.nodes.pairing.autoApproveCidrs`                  | Opt-in trusted-network node enrollment policy     | "A disabled-by-default allowlist is an automatic pairing vulnerability"       |
 
+## Multi-agent and sub-agent boundaries
+
+OpenClaw can run many agents inside one Gateway, but those agents still sit
+inside the same trusted-operator boundary unless you split the deployment by
+Gateway, OS user, host, or sandbox. Treat sub-agent delegation as a tool-policy
+and sandboxing decision, not as a hostile multi-tenant authorization layer.
+
+Expected behavior inside one trusted Gateway:
+
+- An authenticated operator can route work to sessions and agents they are
+  allowed to use by config.
+- `sessionKey`, session id, labels, and sub-agent session keys select
+  conversation context. They are not bearer credentials and are not per-user
+  authorization boundaries.
+- Sub-agents have separate sessions by default. Native `sessions_spawn` uses
+  isolated context unless the caller explicitly asks for `context: "fork"`;
+  thread-bound follow-up sessions use forked context because they continue the
+  conversation thread.
+- A forked sub-agent can see the transcript context it was deliberately given.
+  That is expected. It becomes a security issue only if it receives context that
+  policy said it must not receive.
+- Tool access comes from the effective profile, channel/group/provider policy,
+  sandbox policy, per-agent policy, and the sub-agent restriction layer. A broad
+  tool profile intentionally gives broad capability.
+- Sub-agent auth profiles are resolved by target agent id. Main-agent auth can
+  be available as fallback unless you split credentials/deployments; do not rely
+  on sub-agent identity alone for strong secret isolation.
+
+What counts as a real boundary bypass:
+
+- `sessions_spawn` works even though the effective tool policy denied it.
+- A child runs unsandboxed even though the requester is sandboxed or the call
+  required `sandbox: "require"`.
+- A child receives session tools, system tools, or target-agent access that the
+  resolved config denied.
+- A leaf sub-agent controls, kills, steers, or messages sibling sessions that it
+  did not spawn.
+- A sub-agent sees transcript, memory, credentials, or files that were excluded
+  by an explicit policy or sandbox boundary.
+- A Gateway/API caller without the required Gateway auth or trusted-proxy/device
+  identity can trigger agent or tool execution.
+
+Hardening knobs:
+
+- Keep `sessions_spawn` denied unless an agent truly needs delegation.
+- Prefer `tools.profile: "messaging"` or another narrow profile for agents that
+  talk to external channels.
+- Set `agents.list[].subagents.requireAgentId: true` for agents that may spawn
+  work, so target selection is explicit.
+- Keep `agents.defaults.subagents.allowAgents` and
+  `agents.list[].subagents.allowAgents` narrow; avoid `["*"]` for agents that
+  receive untrusted input.
+- Use `tools.subagents.tools.allow` to make sub-agent tools allow-only instead
+  of inheriting a broad parent profile.
+- For workflows that must remain sandboxed, use `sessions_spawn` with
+  `sandbox: "require"`.
+- Use separate gateways, OS users, hosts, browser profiles, and credentials when
+  agents or users are mutually untrusted.
+
 ## Not vulnerabilities by design
 
 <Accordion title="Common findings that are out of scope">
@@ -139,6 +198,10 @@ a real boundary bypass is demonstrated:
 - Claims that classify normal operator read-path access (for example
   `sessions.list` / `sessions.preview` / `chat.history`) as IDOR in a
   shared-gateway setup.
+- Claims that treat expected `context: "fork"` transcript inheritance as a
+  boundary bypass when the requester explicitly forked that context.
+- Claims that treat broad sub-agent tool access as a bypass when the configured
+  profile or allowlist intentionally granted those tools.
 - Localhost-only deployment findings (for example HSTS on a loopback-only
   gateway).
 - Discord inbound webhook signature findings for inbound paths that do not
