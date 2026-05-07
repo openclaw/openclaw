@@ -44,7 +44,8 @@ vi.mock("./fetch.js", () => ({
   resolveTelegramApiBase,
 }));
 
-vi.mock("grammy", () => ({
+vi.mock("grammy", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("grammy")>()),
   API_CONSTANTS: {
     DEFAULT_UPDATE_TYPES: ["message"],
     ALL_UPDATE_TYPES: ["message"],
