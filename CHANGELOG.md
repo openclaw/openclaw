@@ -184,6 +184,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Cron/agents: recognize cross-tool same-target file-mutation as recovery in `isSameToolMutationAction`, so a successful `write` to a path clears an earlier failed `edit`/`apply_patch` on the same path. Stops cron from reporting fatal failures when an agent self-heals across tools, while preserving same-tool fingerprint matching, blocking different-target writes, and ignoring non-file-mutating recovery tools. Fixes #79024.
 - Agents/compaction: keep the recent tail after manual `/compact` when Pi returns an empty or no-op compaction summary, preventing blank checkpoints from replacing the live context.
 - fix(discord): gate user allowlist name resolution [AI]. (#79002) Thanks @pgondhi987.
 - fix(msteams): gate startup user allowlist resolution [AI]. (#79003) Thanks @pgondhi987.

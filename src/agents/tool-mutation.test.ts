@@ -88,6 +88,95 @@ describe("tool mutation helpers", () => {
     ).toBe(false);
   });
 
+  it("recognizes cross-tool file-mutation recovery on the same target (#79024)", () => {
+    expect(
+      isSameToolMutationAction(
+        { toolName: "edit", actionFingerprint: "tool=edit|path=/tmp/a" },
+        { toolName: "write", actionFingerprint: "tool=write|path=/tmp/a" },
+      ),
+    ).toBe(true);
+    expect(
+      isSameToolMutationAction(
+        { toolName: "write", actionFingerprint: "tool=write|path=/tmp/a" },
+        { toolName: "edit", actionFingerprint: "tool=edit|path=/tmp/a" },
+      ),
+    ).toBe(true);
+    expect(
+      isSameToolMutationAction(
+        { toolName: "edit", actionFingerprint: "tool=edit|path=/tmp/a" },
+        { toolName: "apply_patch", actionFingerprint: "tool=apply_patch|path=/tmp/a" },
+      ),
+    ).toBe(true);
+  });
+
+  it("does not cross-recover file mutations on different targets (#79024)", () => {
+    expect(
+      isSameToolMutationAction(
+        { toolName: "edit", actionFingerprint: "tool=edit|path=/tmp/a" },
+        { toolName: "write", actionFingerprint: "tool=write|path=/tmp/b" },
+      ),
+    ).toBe(false);
+  });
+
+  it("does not cross-recover when the recovery tool is not file-mutating (#79024)", () => {
+    expect(
+      isSameToolMutationAction(
+        { toolName: "edit", actionFingerprint: "tool=edit|path=/tmp/a" },
+        { toolName: "bash", actionFingerprint: "tool=bash|meta=cat /tmp/a" },
+      ),
+    ).toBe(false);
+    expect(
+      isSameToolMutationAction(
+        { toolName: "edit", actionFingerprint: "tool=edit|path=/tmp/a" },
+        { toolName: "exec", actionFingerprint: "tool=exec|meta=touch /tmp/a" },
+      ),
+    ).toBe(false);
+  });
+
+  it("ignores call-specific noise when comparing the cross-tool target (#79024)", () => {
+    // `id=...` and `meta=...` segments must not block recovery when the
+    // stable `path=...` target still matches.
+    expect(
+      isSameToolMutationAction(
+        {
+          toolName: "edit",
+          actionFingerprint: "tool=edit|path=/tmp/a|id=42|meta=edit /tmp/a",
+        },
+        {
+          toolName: "write",
+          actionFingerprint: "tool=write|path=/tmp/a|id=99|meta=write /tmp/a",
+        },
+      ),
+    ).toBe(true);
+  });
+
+  it("requires `oldpath` to agree across cross-tool recovery (#79024)", () => {
+    expect(
+      isSameToolMutationAction(
+        {
+          toolName: "apply_patch",
+          actionFingerprint: "tool=apply_patch|path=/tmp/a|oldpath=/tmp/old",
+        },
+        {
+          toolName: "write",
+          actionFingerprint: "tool=write|path=/tmp/a|oldpath=/tmp/old",
+        },
+      ),
+    ).toBe(true);
+    expect(
+      isSameToolMutationAction(
+        {
+          toolName: "apply_patch",
+          actionFingerprint: "tool=apply_patch|path=/tmp/a|oldpath=/tmp/old",
+        },
+        {
+          toolName: "apply_patch",
+          actionFingerprint: "tool=apply_patch|path=/tmp/a|oldpath=/tmp/different",
+        },
+      ),
+    ).toBe(false);
+  });
+
   it("keeps legacy name-only mutating heuristics for payload fallback", () => {
     expect(isLikelyMutatingToolName("sessions_spawn")).toBe(true);
     expect(isLikelyMutatingToolName("sessions_send")).toBe(true);

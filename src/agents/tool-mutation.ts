@@ -21,6 +21,17 @@ const MUTATING_TOOL_NAMES = new Set([
   "session_status",
 ]);
 
+// File-mutation tools that operate on the same `path`/`oldpath` target identity.
+// Recovery is allowed across these even when the tool name differs (e.g.
+// edit-fails-then-write-succeeds on the same path), because the user-visible
+// invariant is "the file at this path is in the desired state."
+const FILE_MUTATING_TOOL_NAMES = new Set(["edit", "write", "apply_patch"]);
+
+// Stable target segments produced by `buildToolActionFingerprint` that identify
+// the file being mutated. Other segments (`tool=`, `action=`, `id=`, `meta=`)
+// are call-specific and excluded from cross-tool target comparison.
+const FILE_TARGET_FINGERPRINT_KEYS = new Set(["path", "oldpath"]);
+
 const READ_ONLY_ACTIONS = new Set([
   "get",
   "list",
@@ -214,14 +225,54 @@ export function buildToolMutationState(
   };
 }
 
+function isFileMutatingToolName(rawName: string): boolean {
+  return FILE_MUTATING_TOOL_NAMES.has(normalizeLowercaseStringOrEmpty(rawName));
+}
+
+function extractFileTargetFingerprint(fingerprint: string | undefined): string | undefined {
+  if (!fingerprint) {
+    return undefined;
+  }
+  const segments: string[] = [];
+  for (const segment of fingerprint.split("|")) {
+    const eqIndex = segment.indexOf("=");
+    if (eqIndex < 0) {
+      continue;
+    }
+    const key = segment.slice(0, eqIndex);
+    if (FILE_TARGET_FINGERPRINT_KEYS.has(key)) {
+      segments.push(segment);
+    }
+  }
+  return segments.length > 0 ? segments.join("|") : undefined;
+}
+
 export function isSameToolMutationAction(existing: ToolActionRef, next: ToolActionRef): boolean {
   if (existing.actionFingerprint != null || next.actionFingerprint != null) {
-    // For mutating flows, fail closed: only clear when both fingerprints exist and match.
-    return (
-      existing.actionFingerprint != null &&
-      next.actionFingerprint != null &&
-      existing.actionFingerprint === next.actionFingerprint
-    );
+    // For mutating flows, fail closed: only clear when both fingerprints exist
+    // and either match exactly or describe the same file-mutation target.
+    if (existing.actionFingerprint == null || next.actionFingerprint == null) {
+      return false;
+    }
+    if (existing.actionFingerprint === next.actionFingerprint) {
+      return true;
+    }
+    // Cross-tool recovery: a successful file-mutation on the same `path`
+    // (and `oldpath`, where applicable) clears an unresolved file-mutation
+    // failure even when the tool name differs (e.g. edit→write self-heal).
+    // Different paths or non-file-mutating tools never qualify.
+    if (isFileMutatingToolName(existing.toolName) && isFileMutatingToolName(next.toolName)) {
+      const existingTarget = extractFileTargetFingerprint(existing.actionFingerprint);
+      const nextTarget = extractFileTargetFingerprint(next.actionFingerprint);
+      if (
+        existingTarget !== undefined &&
+        nextTarget !== undefined &&
+        existingTarget === nextTarget
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
   return existing.toolName === next.toolName && (existing.meta ?? "") === (next.meta ?? "");
 }
