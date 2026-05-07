@@ -350,7 +350,7 @@ async function switchChatModel(state: AppViewState, nextModel: string): Promise<
   let switchPromise: Promise<boolean>;
   const clearPendingSwitch = () => {
     if (state.chatModelSwitchPromises?.[targetSessionKey] === switchPromise) {
-      const nextSwitches = { ...(state.chatModelSwitchPromises ?? {}) };
+      const nextSwitches = { ...state.chatModelSwitchPromises };
       delete nextSwitches[targetSessionKey];
       state.chatModelSwitchPromises = nextSwitches;
     }
@@ -374,7 +374,7 @@ async function switchChatModel(state: AppViewState, nextModel: string): Promise<
     }
   })();
   state.chatModelSwitchPromises = {
-    ...(state.chatModelSwitchPromises ?? {}),
+    ...state.chatModelSwitchPromises,
     [targetSessionKey]: switchPromise,
   };
   return switchPromise;
