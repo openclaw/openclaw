@@ -7,6 +7,7 @@ import {
   resolveSessionAgentId,
   resolveAgentModelFallbacksOverride,
 } from "../agents/agent-scope.js";
+import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
 import {
@@ -81,6 +82,19 @@ function loadStatusQueueRuntime(): Promise<typeof import("./status-queue.runtime
   return runtimePromise;
 }
 
+function resolveStatusRuntimeContextTokens(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): number | undefined {
+  return resolveContextTokensForModel({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    allowAsyncLoad: false,
+  });
+}
+
 function shouldLoadUsageSummary(params: {
   provider?: string;
   selectedModelAuth?: string;
@@ -146,6 +160,9 @@ function resolveStatusAuthProvider(params: {
   const provider = normalizeOptionalLowercaseString(params.provider);
   if (harness === "codex" && provider === "openai") {
     return "openai-codex";
+  }
+  if (harness === "claude-cli" && provider === "anthropic") {
+    return "claude-cli";
   }
   return params.provider;
 }
@@ -342,6 +359,15 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
     (agentDefaults.thinkingDefault as ThinkLevel | undefined);
+  const runtimeContextProvider = resolveStatusAuthProvider({
+    provider: modelRefs.active.provider || provider,
+    effectiveHarness,
+  });
+  const runtimeContextTokens = resolveStatusRuntimeContextTokens({
+    cfg,
+    provider: runtimeContextProvider,
+    model: modelRefs.active.model || model,
+  });
   return buildStatusMessage({
     config: cfg,
     agent: {
@@ -362,6 +388,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       typeof agentDefaults.contextTokens === "number" && agentDefaults.contextTokens > 0
         ? agentDefaults.contextTokens
         : undefined,
+    runtimeContextTokens,
     sessionEntry,
     sessionKey,
     parentSessionKey,

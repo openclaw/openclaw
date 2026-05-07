@@ -32,6 +32,10 @@
     "target": "消息生命周期重构"
   },
   {
+    "source": "ACP lifecycle refactor",
+    "target": "ACP 生命周期重构"
+  },
+  {
     "source": "Channel message API",
     "target": "频道消息 API"
   },
@@ -582,6 +586,14 @@
   {
     "source": "Manage plugins",
     "target": "管理插件"
+  },
+  {
+    "source": "Plugin path ownership",
+    "target": "插件路径所有权"
+  },
+  {
+    "source": "Docker permissions",
+    "target": "Docker 权限"
   },
   {
     "source": "Plugin manifest",

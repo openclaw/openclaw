@@ -5,6 +5,7 @@ import { resolveArchiveKind } from "../infra/archive.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
+import { tryReadJson } from "../infra/json-files.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -315,12 +316,7 @@ async function readClaudeKnownMarketplaces(): Promise<Record<string, KnownMarket
     return {};
   }
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await fs.readFile(knownPath, "utf-8"));
-  } catch {
-    return {};
-  }
+  const parsed = await tryReadJson<unknown>(knownPath);
 
   if (!parsed || typeof parsed !== "object") {
     return {};

@@ -5,12 +5,15 @@ import { describe, expect, it, vi } from "vitest";
 import type { SessionsListResult } from "../types.ts";
 import { renderSessions, type SessionsProps } from "./sessions.ts";
 
-function buildResult(session: SessionsListResult["sessions"][number]): SessionsListResult {
+function buildResult(
+  session: SessionsListResult["sessions"][number],
+  defaults?: Partial<SessionsListResult["defaults"]>,
+): SessionsListResult {
   return {
     ts: Date.now(),
     path: "(multiple)",
     count: 1,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
+    defaults: { modelProvider: null, model: null, contextTokens: null, ...defaults },
     sessions: [session],
   };
 }
@@ -229,7 +232,7 @@ describe("sessions view", () => {
       Array.from(thinking?.options ?? [])
         .find((option) => option.value === "max")
         ?.textContent?.trim(),
-    ).toBe("maximum");
+    ).toBe("Override: maximum");
 
     thinking!.value = "max";
     thinking!.dispatchEvent(new Event("change", { bubbles: true }));
@@ -260,7 +263,47 @@ describe("sessions view", () => {
 
     const thinking = container.querySelector("tbody select") as HTMLSelectElement | null;
     expect(thinking?.value).toBe("");
-    expect(thinking?.options[0]?.textContent?.trim()).toBe("Default (adaptive)");
+    expect(thinking?.options[0]?.textContent?.trim()).toBe("Inherited: adaptive");
+    expect(
+      Array.from(thinking?.options ?? [])
+        .find((option) => option.value === "adaptive")
+        ?.textContent?.trim(),
+    ).toBe("Override: adaptive");
+  });
+
+  it("labels inherited thinking from list defaults when lightweight rows omit row defaults", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult(
+            {
+              key: "agent:main:main",
+              kind: "direct",
+              updatedAt: Date.now(),
+            },
+            {
+              modelProvider: "openai-codex",
+              model: "gpt-5.5",
+              thinkingDefault: "high",
+              thinkingLevels: [
+                { id: "off", label: "off" },
+                { id: "high", label: "high" },
+              ],
+            },
+          ),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const thinking = container.querySelector("tbody select") as HTMLSelectElement | null;
+    expect(thinking?.value).toBe("");
+    expect(thinking?.options[0]?.textContent?.trim()).toBe("Inherited: high");
+    expect(Array.from(thinking?.options ?? []).map((option) => option.textContent?.trim())).toEqual(
+      ["Inherited: high", "Off", "Override: high"],
+    );
   });
 
   it("keeps legacy binary thinking labels patching canonical ids", async () => {
@@ -289,7 +332,7 @@ describe("sessions view", () => {
       Array.from(thinking?.options ?? [])
         .find((option) => option.value === "low")
         ?.textContent?.trim(),
-    ).toBe("on");
+    ).toBe("Override: on");
 
     thinking!.value = "low";
     thinking!.dispatchEvent(new Event("change", { bubbles: true }));
@@ -455,6 +498,96 @@ describe("sessions view", () => {
     expect(onToggleCheckpointDetails).toHaveBeenCalledWith("agent:main:main");
     const tokenCell = container.querySelector(".session-token-cell");
     expect(tokenCell?.textContent?.trim()).toBe("123456 / 200000");
+  });
+
+  it("renders the checkpoint count as the compaction disclosure", async () => {
+    const container = document.createElement("div");
+    const onToggleCheckpointDetails = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            compactionCheckpointCount: 1,
+            latestCompactionCheckpoint: {
+              checkpointId: "checkpoint-1",
+              createdAt: Date.now(),
+              reason: "manual",
+            },
+          }),
+        ),
+        onToggleCheckpointDetails,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const compactionCell = container.querySelector("tbody .session-compaction-col");
+    expect(compactionCell?.textContent).toContain("1 Checkpoint");
+    expect(compactionCell?.textContent).not.toContain("manual");
+    const trigger = container.querySelector<HTMLButtonElement>(".session-compaction-trigger");
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector(".session-checkpoint-toggle")).toBeNull();
+
+    trigger?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onToggleCheckpointDetails).toHaveBeenCalledWith("agent:main:main");
+  });
+
+  it("renders expanded session details with compaction history", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            totalTokens: 123456,
+            contextTokens: 200000,
+            model: "gpt-5.5",
+            modelProvider: "openai",
+            status: "running",
+            runtimeMs: 125000,
+            compactionCheckpointCount: 1,
+            latestCompactionCheckpoint: {
+              checkpointId: "checkpoint-1",
+              createdAt: Date.now(),
+              reason: "manual",
+            },
+          }),
+        ),
+        expandedCheckpointKey: "agent:main:main",
+        checkpointItemsByKey: {
+          "agent:main:main": [
+            {
+              checkpointId: "checkpoint-1",
+              sessionKey: "agent:main:main",
+              sessionId: "session-1",
+              createdAt: Date.now(),
+              reason: "manual",
+              tokensBefore: 123456,
+              tokensAfter: 38920,
+              summary: "Trimmed earlier setup chatter and kept the active execution plan.",
+              preCompaction: { sessionId: "session-1" },
+              postCompaction: { sessionId: "session-1" },
+            },
+          ],
+        },
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const details = container.querySelector(".session-details-panel");
+    expect(details?.textContent).toContain("Session details");
+    expect(details?.textContent).toContain("gpt-5.5");
+    expect(details?.textContent).toContain("openai");
+    expect(details?.textContent).toContain("2m 5s");
+    expect(details?.textContent).toContain("Compaction history");
+    expect(details?.textContent).toContain("123,456 to 38,920 tokens");
+    expect(details?.textContent).not.toContain("->");
   });
 
   it("does not expand checkpoint details when the row has none or a nested control was used", async () => {

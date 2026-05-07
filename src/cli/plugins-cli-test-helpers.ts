@@ -81,6 +81,7 @@ export class PromptInputClosedError extends Error {
   }
 }
 export const installPluginFromNpmSpec: AsyncUnknownMock = vi.fn();
+export const installPluginFromNpmPackArchive: AsyncUnknownMock = vi.fn();
 export const installPluginFromPath: AsyncUnknownMock = vi.fn();
 export const installPluginFromClawHub: AsyncUnknownMock = vi.fn();
 export const parseClawHubPluginSpec: Mock<ParseClawHubPluginSpecFn> = vi.fn();
@@ -164,6 +165,18 @@ vi.mock("../runtime.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
+  assertConfigWriteAllowedInCurrentMode: () => {
+    if (process.env.OPENCLAW_NIX_MODE === "1") {
+      throw new Error(
+        [
+          "Config is managed by Nix (`OPENCLAW_NIX_MODE=1`), so OpenClaw treats openclaw.json as immutable.",
+          "Do not run setup, onboarding, openclaw update, plugin install/update/uninstall/enable, doctor repair/token-generation, or config set against this file.",
+          "Agent-first Nix setup: https://github.com/openclaw/nix-openclaw#quick-start",
+          "OpenClaw Nix overview: https://docs.openclaw.ai/install/nix",
+        ].join("\n"),
+      );
+    }
+  },
   getRuntimeConfig: () => loadConfig(),
   loadConfig: () => loadConfig(),
   readConfigFileSnapshot: ((
@@ -485,6 +498,16 @@ vi.mock("../plugins/install.js", () => ({
       installPluginFromNpmSpec,
       ...args,
     )) as (typeof import("../plugins/install.js"))["installPluginFromNpmSpec"],
+  installPluginFromNpmPackArchive: ((
+    ...args: Parameters<(typeof import("../plugins/install.js"))["installPluginFromNpmPackArchive"]>
+  ) =>
+    invokeMock<
+      Parameters<(typeof import("../plugins/install.js"))["installPluginFromNpmPackArchive"]>,
+      ReturnType<(typeof import("../plugins/install.js"))["installPluginFromNpmPackArchive"]>
+    >(
+      installPluginFromNpmPackArchive,
+      ...args,
+    )) as (typeof import("../plugins/install.js"))["installPluginFromNpmPackArchive"],
   installPluginFromPath: ((
     ...args: Parameters<(typeof import("../plugins/install.js"))["installPluginFromPath"]>
   ) =>
@@ -650,6 +673,7 @@ export function resetPluginsCliTestState() {
   installPluginFromGitSpec.mockReset();
   parseGitPluginSpec.mockReset();
   installPluginFromNpmSpec.mockReset();
+  installPluginFromNpmPackArchive.mockReset();
   installPluginFromPath.mockReset();
   installPluginFromClawHub.mockReset();
   parseClawHubPluginSpec.mockReset();

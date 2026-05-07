@@ -181,7 +181,7 @@ Details: [Configuration](/gateway/config-agents#messages) and channel docs.
 
 ## Silent replies
 
-The exact silent token `NO_REPLY` / `no_reply` means “do not deliver a user-visible reply”.
+The exact silent token `NO_REPLY` / `no_reply` means "do not deliver a user-visible reply".
 When a turn also has pending tool media, such as generated TTS audio, OpenClaw
 strips the silent text but still delivers the media attachment.
 OpenClaw resolves that behavior by conversation type:

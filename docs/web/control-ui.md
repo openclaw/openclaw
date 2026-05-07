@@ -96,12 +96,14 @@ Imported themes are stored only in the current browser profile. They are not wri
 <AccordionGroup>
   <Accordion title="Chat and Talk">
     - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`).
+    - Chat history refreshes request a bounded recent window with per-message text caps so large sessions do not force the browser to render a full transcript payload before the chat becomes usable.
     - Talk through browser realtime sessions. OpenAI uses direct WebRTC, Google Live uses a constrained one-use browser token over WebSocket, and backend-only realtime voice plugins use the Gateway relay transport. Client-owned provider sessions start with `talk.client.create`; Gateway relay sessions start with `talk.session.create`. The relay keeps provider credentials on the Gateway while the browser streams microphone PCM through `talk.session.appendAudio` and forwards `openclaw_agent_consult` provider tool calls through `talk.client.toolCall` for Gateway policy and the larger configured OpenClaw model.
     - Stream tool calls + live tool output cards in Chat (agent events).
 
   </Accordion>
   <Accordion title="Channels, instances, sessions, dreams">
     - Channels: built-in plus bundled/external plugin channels status, QR login, and per-channel config (`channels.status`, `web.login.*`, `config.patch`).
+    - Channel probe refreshes keep the previous snapshot visible while slow provider checks finish, and partial snapshots are labeled when a probe or audit exceeds its UI budget.
     - Instances: presence list + refresh (`system-presence`).
     - Sessions: list + per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`).
     - Dreams: dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`).
@@ -127,7 +129,7 @@ Imported themes are stored only in the current browser profile. They are not wri
   </Accordion>
   <Accordion title="Debug, logs, update">
     - Debug: status/health/models snapshots + event log + manual RPC calls (`status`, `health`, `models.list`).
-    - The event log includes Control UI refresh/RPC timings plus browser responsiveness entries for long animation frames or long tasks when the browser exposes those PerformanceObserver entry types.
+    - The event log includes Control UI refresh/RPC timings, slow chat/config render timings, and browser responsiveness entries for long animation frames or long tasks when the browser exposes those PerformanceObserver entry types.
     - Logs: live tail of gateway file logs with filter/export (`logs.tail`).
     - Update: run a package/git update + restart (`update.run`) with a restart report, then poll `update.status` after reconnect to verify the running gateway version.
 

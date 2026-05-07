@@ -33,7 +33,6 @@ import {
 } from "../../config/sessions.js";
 import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { sameFileIdentity } from "../../infra/fs-safe-advanced.js";
 import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
@@ -131,41 +130,29 @@ type FileMeta = {
   updatedAtMs: number;
 };
 
-function isPathInsideDirectory(rootDir: string, candidatePath: string): boolean {
-  const relative = path.relative(rootDir, candidatePath);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
+type WorkspaceRoot = Awaited<ReturnType<typeof root>>;
 
 async function statWorkspaceFileSafely(
-  workspaceDir: string,
+  workspaceRoot: WorkspaceRoot,
   name: string,
 ): Promise<FileMeta | null> {
   try {
-    const workspaceReal = await fs.realpath(workspaceDir);
-    const candidatePath = path.resolve(workspaceReal, name);
-    if (!isPathInsideDirectory(workspaceReal, candidatePath)) {
+    const stat = await workspaceRoot.stat(name);
+    if (!stat.isFile || stat.isSymbolicLink || stat.nlink > 1) {
       return null;
     }
-
-    const pathStat = await fs.lstat(candidatePath);
-    if (!pathStat.isFile() || pathStat.nlink > 1) {
-      return null;
-    }
-
-    const realPath = await fs.realpath(candidatePath);
-    if (!isPathInsideDirectory(workspaceReal, realPath)) {
-      return null;
-    }
-
-    const realStat = await fs.stat(realPath);
-    if (!realStat.isFile() || realStat.nlink > 1 || !sameFileIdentity(pathStat, realStat)) {
-      return null;
-    }
-
     return {
-      size: realStat.size,
-      updatedAtMs: Math.floor(realStat.mtimeMs),
+      size: stat.size,
+      updatedAtMs: Math.floor(stat.mtimeMs),
     };
+  } catch {
+    return null;
+  }
+}
+
+async function openWorkspaceRootSafely(workspaceDir: string): Promise<WorkspaceRoot | null> {
+  try {
+    return await agentsHandlerDeps.root(workspaceDir);
   } catch {
     return null;
   }
@@ -180,12 +167,25 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
     updatedAtMs?: number;
   }> = [];
 
+  const workspaceRoot = await openWorkspaceRootSafely(workspaceDir);
+  if (!workspaceRoot) {
+    const missingNames = [
+      ...(options?.hideBootstrap ? BOOTSTRAP_FILE_NAMES_POST_ONBOARDING : BOOTSTRAP_FILE_NAMES),
+      DEFAULT_MEMORY_FILENAME,
+    ];
+    return missingNames.map((name) => ({
+      name,
+      path: path.join(workspaceDir, name),
+      missing: true,
+    }));
+  }
+
   const bootstrapFileNames = options?.hideBootstrap
     ? BOOTSTRAP_FILE_NAMES_POST_ONBOARDING
     : BOOTSTRAP_FILE_NAMES;
   for (const name of bootstrapFileNames) {
     const filePath = path.join(workspaceDir, name);
-    const meta = await statWorkspaceFileSafely(workspaceDir, name);
+    const meta = await statWorkspaceFileSafely(workspaceRoot, name);
     if (meta) {
       files.push({
         name,
@@ -199,7 +199,7 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
     }
   }
 
-  const primaryMeta = await statWorkspaceFileSafely(workspaceDir, DEFAULT_MEMORY_FILENAME);
+  const primaryMeta = await statWorkspaceFileSafely(workspaceRoot, DEFAULT_MEMORY_FILENAME);
   if (primaryMeta) {
     files.push({
       name: DEFAULT_MEMORY_FILENAME,
@@ -757,8 +757,9 @@ export const agentsHandlers: GatewayRequestHandlers = {
     await fs.mkdir(workspaceDir, { recursive: true });
     const filePath = path.join(workspaceDir, name);
     const content = params.content;
+    let workspaceRoot: WorkspaceRoot;
     try {
-      const workspaceRoot = await agentsHandlerDeps.root(workspaceDir);
+      workspaceRoot = await agentsHandlerDeps.root(workspaceDir);
       await workspaceRoot.write(name, content, { encoding: "utf8" });
     } catch (err) {
       if (!(err instanceof FsSafeError)) {
@@ -767,7 +768,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
       respondWorkspaceFileUnsafe(respond, name);
       return;
     }
-    const meta = await statWorkspaceFileSafely(workspaceDir, name);
+    const meta = await statWorkspaceFileSafely(workspaceRoot, name);
     respond(
       true,
       {

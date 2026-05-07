@@ -909,8 +909,9 @@ function resolveRestartLifecycleError(
   const pending = [err];
   const seen = new Set<unknown>();
 
-  while (pending.length > 0) {
-    const candidate = pending.shift();
+  let pendingIndex = 0;
+  while (pendingIndex < pending.length) {
+    const candidate = pending[pendingIndex++];
     if (!candidate || seen.has(candidate)) {
       continue;
     }
@@ -1660,8 +1661,7 @@ export async function runAgentTurnWithFallback(params: {
                     const phase = readStringValue(evt.data.phase) ?? "";
                     const name = readStringValue(evt.data.name);
                     if (phase === "start" || phase === "update") {
-                      await params.typingSignals.signalToolStart();
-                      await params.opts?.onToolStart?.({
+                      const toolStartProgressPromise = params.opts?.onToolStart?.({
                         name,
                         phase,
                         args:
@@ -1670,9 +1670,17 @@ export async function runAgentTurnWithFallback(params: {
                             : undefined,
                         detailMode: params.toolProgressDetail,
                       });
+                      await Promise.all([
+                        params.typingSignals.signalToolStart(),
+                        toolStartProgressPromise,
+                      ]);
                     }
                   }
-                  if (evt.stream === "item") {
+                  const suppressItemChannelProgress =
+                    evt.stream === "item" &&
+                    evt.data.suppressChannelProgress === true &&
+                    Boolean(params.opts?.onToolStart);
+                  if (evt.stream === "item" && !suppressItemChannelProgress) {
                     await params.opts?.onItemEvent?.({
                       itemId: readStringValue(evt.data.itemId),
                       kind: readStringValue(evt.data.kind),

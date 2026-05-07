@@ -1,6 +1,10 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { resolveGoogleMeetConfig } from "./config.js";
-import { joinMeetViaVoiceCallGateway } from "./voice-call-gateway.js";
+import {
+  endMeetVoiceCallGatewayCall,
+  getMeetVoiceCallGatewayCall,
+  joinMeetViaVoiceCallGateway,
+} from "./voice-call-gateway.js";
 
 const gatewayMocks = vi.hoisted(() => ({
   request: vi.fn(),
@@ -98,6 +102,40 @@ describe("Google Meet voice-call gateway", () => {
     expect(result).toMatchObject({ callId: "call-1", dtmfSent: true, introSent: false });
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("Skipped intro speech because realtime bridge was not ready"),
+    );
+  });
+
+  it("treats missing delegated calls as already ended", async () => {
+    gatewayMocks.request.mockRejectedValueOnce(new Error("Call not found"));
+    const config = resolveGoogleMeetConfig({
+      voiceCall: { gatewayUrl: "ws://127.0.0.1:18789" },
+    });
+
+    await expect(
+      endMeetVoiceCallGatewayCall({ config, callId: "call-1" }),
+    ).resolves.toBeUndefined();
+
+    expect(gatewayMocks.request).toHaveBeenCalledWith(
+      "voicecall.end",
+      { callId: "call-1" },
+      { timeoutMs: 30_000 },
+    );
+  });
+
+  it("reads delegated call status from the gateway", async () => {
+    gatewayMocks.request.mockResolvedValueOnce({ found: false });
+    const config = resolveGoogleMeetConfig({
+      voiceCall: { gatewayUrl: "ws://127.0.0.1:18789" },
+    });
+
+    await expect(getMeetVoiceCallGatewayCall({ config, callId: "call-1" })).resolves.toEqual({
+      found: false,
+    });
+
+    expect(gatewayMocks.request).toHaveBeenCalledWith(
+      "voicecall.status",
+      { callId: "call-1" },
+      { timeoutMs: 30_000 },
     );
   });
 });

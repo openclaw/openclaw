@@ -2361,23 +2361,78 @@ module.exports = { id: "throws-after-import", register() {} };`,
     ).toBe(true);
   });
 
-  it("can scope bundled provider loads to deepseek without hanging", () => {
+  it("can scope bundled provider loads without hanging", () => {
+    const bundledDir = makeTempDir();
+    const scopedDir = path.join(bundledDir, "scoped-provider");
+    mkdirSafe(scopedDir);
+    fs.writeFileSync(
+      path.join(scopedDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/scoped-provider",
+        openclaw: { extensions: ["./index.cjs"] },
+      }),
+      "utf-8",
+    );
+    const plugin = writePlugin({
+      id: "scoped-provider",
+      dir: scopedDir,
+      filename: "index.cjs",
+      body: `module.exports = {
+        id: "scoped-provider",
+        register(api) {
+          api.registerProvider({
+            id: "scoped-provider",
+            label: "Scoped Provider",
+            auth: [],
+          });
+        },
+      };`,
+    });
+    updatePluginManifest(plugin, { enabledByDefault: true, providers: ["scoped-provider"] });
+
+    const unscopedDir = path.join(bundledDir, "unscoped-provider");
+    mkdirSafe(unscopedDir);
+    fs.writeFileSync(
+      path.join(unscopedDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/unscoped-provider",
+        openclaw: { extensions: ["./index.cjs"] },
+      }),
+      "utf-8",
+    );
+    const unscoped = writePlugin({
+      id: "unscoped-provider",
+      dir: unscopedDir,
+      filename: "index.cjs",
+      body: `module.exports = {
+        id: "unscoped-provider",
+        register() {
+          throw new Error("unscoped provider should not load");
+        },
+      };`,
+    });
+    updatePluginManifest(unscoped, {
+      enabledByDefault: true,
+      providers: ["unscoped-provider"],
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+
     const scoped = loadOpenClawPlugins({
       cache: false,
       activate: false,
-      pluginSdkResolution: "dist",
       config: {
         plugins: {
           enabled: true,
-          allow: ["deepseek"],
+          allow: ["scoped-provider", "unscoped-provider"],
         },
       },
-      onlyPluginIds: ["deepseek"],
+      onlyPluginIds: ["scoped-provider"],
     });
 
-    expect(scoped.plugins.map((entry) => entry.id)).toEqual(["deepseek"]);
+    expect(scoped.plugins.map((entry) => entry.id)).toEqual(["scoped-provider"]);
     expect(scoped.plugins[0]?.status).toBe("loaded");
-    expect(scoped.providers.map((entry) => entry.provider.id)).toEqual(["deepseek"]);
+    expect(scoped.providers.map((entry) => entry.provider.id)).toEqual(["scoped-provider"]);
   });
 
   it("does not replace active memory plugin registries during non-activating loads", () => {
@@ -5025,6 +5080,131 @@ module.exports = {
     expect(fs.existsSync(runtimeMarker)).toBe(false);
   });
 
+  it("invokes setChannelRuntime from a non-bundled setup entry for a configured deferred channel during startup Phase 1", () => {
+    // Regression test for #77779. When a configured external channel plugin opts into
+    // deferred full loading (startupDeferConfiguredChannelFullLoadUntilAfterListen) the
+    // loader runs in setup-runtime mode during Phase 1 (before gateway listen). In that
+    // phase api.registerChannel is active and writes the plugin into registry.channels,
+    // so the channel provider starts immediately — before Phase 2 runs register(). Any
+    // runtime initializer (e.g. setWeixinRuntime) that the provider polls for must
+    // therefore be invoked via setChannelRuntime in the setup entry. Before this fix,
+    // resolveSetupChannelRegistration silently dropped setChannelRuntime from non-bundled
+    // {plugin, setChannelRuntime} exports, leaving the runtime unset and causing
+    // waitForWeixinRuntime() to time out.
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const runtimeMarker = path.join(makeTempDir(), "deferred-configured-setup-runtime-applied.txt");
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/non-bundled-deferred-setup-runtime-test",
+          openclaw: {
+            extensions: ["./index.cjs"],
+            setupEntry: "./setup-entry.cjs",
+            startup: {
+              deferConfiguredChannelFullLoadUntilAfterListen: true,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "non-bundled-deferred-setup-runtime-test",
+          configSchema: { type: "object", properties: {} },
+          channels: ["non-bundled-deferred-setup-runtime-test"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `module.exports = {
+  id: "non-bundled-deferred-setup-runtime-test",
+  register(api) {
+    api.registerChannel({
+      plugin: {
+        id: "non-bundled-deferred-setup-runtime-test",
+        meta: {
+          id: "non-bundled-deferred-setup-runtime-test",
+          label: "Non-Bundled Deferred Setup Runtime Test",
+          selectionLabel: "Non-Bundled Deferred Setup Runtime Test",
+          docsPath: "/channels/non-bundled-deferred-setup-runtime-test",
+          blurb: "full channel entry",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: { listAccountIds: () => ["default"], resolveAccount: () => ({ accountId: "default", token: "configured" }) },
+        outbound: { deliveryMode: "direct" },
+      },
+    });
+  },
+};`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "setup-entry.cjs"),
+      `module.exports = {
+  plugin: {
+    id: "non-bundled-deferred-setup-runtime-test",
+    meta: {
+      id: "non-bundled-deferred-setup-runtime-test",
+      label: "Non-Bundled Deferred Setup Runtime Test",
+      selectionLabel: "Non-Bundled Deferred Setup Runtime Test",
+      docsPath: "/channels/non-bundled-deferred-setup-runtime-test",
+      blurb: "setup entry",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: { listAccountIds: () => ["default"], resolveAccount: () => ({ accountId: "default", token: "configured" }) },
+    outbound: { deliveryMode: "direct" },
+  },
+  setChannelRuntime: () => {
+    require("node:fs").writeFileSync(${JSON.stringify(runtimeMarker)}, "applied", "utf-8");
+  },
+};`,
+      "utf-8",
+    );
+
+    // Phase 1: preferSetupRuntimeForChannelPlugins=true simulates gateway startup when
+    // at least one deferred configured channel plugin is present. The configured channel
+    // opts into deferral, so setup-runtime mode is used. setup-entry.cjs is loaded and
+    // setChannelRuntime must be invoked. The channel is also written into registry.channels
+    // (runtimeChannel=true in setup-runtime), so the provider starts in Phase 1.
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      preferSetupRuntimeForChannelPlugins: true,
+      config: {
+        channels: {
+          "non-bundled-deferred-setup-runtime-test": {
+            enabled: true,
+            token: "configured",
+          },
+        },
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["non-bundled-deferred-setup-runtime-test"],
+        },
+      },
+    });
+
+    // setChannelRuntime must have been called so that any runtime initializer the
+    // provider polls for (e.g. waitForWeixinRuntime) is satisfied before the provider
+    // times out.
+    expect(fs.existsSync(runtimeMarker)).toBe(true);
+    // The channel is registered in registry.channels during Phase 1 (not deferred to
+    // Phase 2), confirming the provider would start and need setChannelRuntime.
+    expect(registry.channels).toHaveLength(1);
+    expect(registry.channels[0]?.plugin.id).toBe("non-bundled-deferred-setup-runtime-test");
+  });
+
   it("isolates loadSetupPlugin errors as per-plugin diagnostics instead of crashing registry load", () => {
     useNoBundledPlugins();
     const pluginDir = makeTempDir();
@@ -5295,6 +5475,7 @@ module.exports = {
           "hook-policy": {
             hooks: {
               allowPromptInjection: false,
+              allowConversationAccess: true,
             },
           },
         },
@@ -5410,6 +5591,7 @@ module.exports = {
         entries: {
           "hook-timeouts": {
             hooks: {
+              allowConversationAccess: true,
               timeoutMs: 250,
               timeouts: {
                 before_model_resolve: 750,
@@ -5435,10 +5617,13 @@ module.exports = {
       id: "conversation-hooks",
       filename: "conversation-hooks.cjs",
       body: `module.exports = { id: "conversation-hooks", register(api) {
+  api.on("before_model_resolve", () => undefined);
+  api.on("before_agent_reply", () => undefined);
   api.on("llm_input", () => undefined);
   api.on("llm_output", () => undefined);
   api.on("before_agent_finalize", () => undefined);
   api.on("agent_end", () => undefined);
+  api.on("before_agent_run", () => undefined);
 } };`,
     });
 
@@ -5455,7 +5640,7 @@ module.exports = {
         "non-bundled plugins must set plugins.entries.conversation-hooks.hooks.allowConversationAccess=true",
       ),
     );
-    expect(blockedDiagnostics).toHaveLength(4);
+    expect(blockedDiagnostics).toHaveLength(7);
   });
 
   it("allows conversation typed hooks for non-bundled plugins when explicitly enabled", () => {
@@ -5464,10 +5649,13 @@ module.exports = {
       id: "conversation-hooks-allowed",
       filename: "conversation-hooks-allowed.cjs",
       body: `module.exports = { id: "conversation-hooks-allowed", register(api) {
+  api.on("before_model_resolve", () => undefined);
+  api.on("before_agent_reply", () => undefined);
   api.on("llm_input", () => undefined);
   api.on("llm_output", () => undefined);
   api.on("before_agent_finalize", () => undefined);
   api.on("agent_end", () => undefined);
+  api.on("before_agent_run", () => undefined);
 } };`,
     });
 
@@ -5486,10 +5674,13 @@ module.exports = {
     });
 
     expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual([
+      "before_model_resolve",
+      "before_agent_reply",
       "llm_input",
       "llm_output",
       "before_agent_finalize",
       "agent_end",
+      "before_agent_run",
     ]);
   });
 
@@ -5509,6 +5700,13 @@ module.exports = {
       plugin,
       pluginConfig: {
         allow: ["hook-unknown"],
+        entries: {
+          "hook-unknown": {
+            hooks: {
+              allowConversationAccess: true,
+            },
+          },
+        },
       },
     });
 

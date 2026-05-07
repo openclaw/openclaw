@@ -5,6 +5,7 @@ import path from "node:path";
 import { getLatestSubagentRunByChildSessionKey } from "../agents/subagent-registry.js";
 import { resolveStateDir } from "../config/paths.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
+import { tryReadJson, writeJson } from "../infra/json-files.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import {
   getImageMetadata,
@@ -381,8 +382,7 @@ async function getVariantStats(filePath: string) {
 
 async function writeManagedImageRecord(record: ManagedImageRecord, stateDir = resolveStateDir()) {
   const recordPath = resolveOutgoingRecordPath(record.attachmentId, stateDir);
-  await fs.mkdir(path.dirname(recordPath), { recursive: true });
-  await fs.writeFile(recordPath, JSON.stringify(record, null, 2), "utf-8");
+  await writeJson(recordPath, record, { trailingNewline: true });
 }
 
 async function deleteManagedImageRecordArtifacts(
@@ -479,10 +479,8 @@ export async function cleanupManagedOutgoingImageRecords(params?: {
       continue;
     }
     const recordPath = path.join(recordsDir, name);
-    let record: ManagedImageRecord;
-    try {
-      record = JSON.parse(await fs.readFile(recordPath, "utf-8")) as ManagedImageRecord;
-    } catch {
+    const record = await tryReadJson<ManagedImageRecord>(recordPath);
+    if (!record) {
       try {
         await fs.rm(recordPath, { force: true });
       } catch {

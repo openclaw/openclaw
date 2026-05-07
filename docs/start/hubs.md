@@ -9,7 +9,7 @@ title: "Docs hubs"
 If you are new to OpenClaw, start with [Getting Started](/start/getting-started).
 </Note>
 
-Use these hubs to discover every page, including deep dives and reference docs that don’t appear in the left nav.
+Use these hubs to discover every page, including deep dives and reference docs that don't appear in the left nav.
 
 ## Start here
 
@@ -73,9 +73,9 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Discord](/channels/discord)
 - [Mattermost](/channels/mattermost)
 - [Signal](/channels/signal)
-- [BlueBubbles (iMessage)](/channels/bluebubbles)
+- [BlueBubbles (legacy iMessage bridge)](/channels/bluebubbles)
 - [QQ Bot](/channels/qqbot)
-- [iMessage (legacy)](/channels/imessage)
+- [iMessage](/channels/imessage)
 - [Location parsing](/channels/location)
 - [WebChat](/web/webchat)
 - [Webhooks](/automation/cron-jobs#webhooks)

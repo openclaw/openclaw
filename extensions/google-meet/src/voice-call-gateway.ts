@@ -19,6 +19,11 @@ type VoiceCallSpeakResult = {
   error?: string;
 };
 
+type VoiceCallStatusResult = {
+  found?: boolean;
+  call?: unknown;
+};
+
 type VoiceCallMeetJoinResult = {
   callId: string;
   dtmfSent: boolean;
@@ -75,6 +80,11 @@ async function createConnectedGatewayClient(
       });
   });
   return client!;
+}
+
+export function isVoiceCallMissingError(error: unknown): boolean {
+  const message = formatErrorMessage(error).toLowerCase();
+  return message.includes("call not found") || message.includes("call is not active");
 }
 
 export async function joinMeetViaVoiceCallGateway(params: {
@@ -173,13 +183,39 @@ export async function endMeetVoiceCallGatewayCall(params: {
 
   try {
     client = await createConnectedGatewayClient(params.config);
-    await client.request(
-      "voicecall.end",
+    try {
+      await client.request(
+        "voicecall.end",
+        {
+          callId: params.callId,
+        },
+        { timeoutMs: params.config.voiceCall.requestTimeoutMs },
+      );
+    } catch (err) {
+      if (!isVoiceCallMissingError(err)) {
+        throw err;
+      }
+    }
+  } finally {
+    await client?.stopAndWait({ timeoutMs: 1_000 });
+  }
+}
+
+export async function getMeetVoiceCallGatewayCall(params: {
+  config: GoogleMeetConfig;
+  callId: string;
+}): Promise<VoiceCallStatusResult> {
+  let client: VoiceCallGatewayClient | undefined;
+
+  try {
+    client = await createConnectedGatewayClient(params.config);
+    return (await client.request(
+      "voicecall.status",
       {
         callId: params.callId,
       },
       { timeoutMs: params.config.voiceCall.requestTimeoutMs },
-    );
+    )) as VoiceCallStatusResult;
   } finally {
     await client?.stopAndWait({ timeoutMs: 1_000 });
   }

@@ -5,7 +5,7 @@ read_when:
   - Debugging slow Mantis Slack desktop runs
   - Choosing source, prehydrated, or warm-lease mode
   - Posting screenshot and video evidence to a PR
-title: "Mantis Slack Desktop Runbook"
+title: "Mantis Slack desktop runbook"
 ---
 
 Mantis Slack desktop QA is the real-UI lane for Slack-class bugs that need a
@@ -14,7 +14,7 @@ videos, and a PR evidence comment.
 
 Use it when unit tests or the headless Slack live lane cannot prove the bug.
 
-## Storage Model
+## Storage model
 
 Mantis uses three different storage layers:
 
@@ -31,7 +31,7 @@ Mantis uses three different storage layers:
 Never put secrets, browser cookies, Slack login state, repository checkouts,
 `node_modules`, or `dist/` into a prebaked provider image.
 
-## GitHub Dispatch
+## GitHub dispatch
 
 Run the workflow from `main`:
 
@@ -116,7 +116,7 @@ Use `--hydrate-mode prehydrated` only when the reused remote workspace already
 has `node_modules` and a built `dist/`. Mantis fails closed if those are
 missing.
 
-## Hydrate Modes
+## Hydrate modes
 
 | Mode          | Use when                                  | Remote behavior                                                                       | Tradeoff                                                 |
 | ------------- | ----------------------------------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------- |
@@ -127,7 +127,7 @@ GitHub Actions always prepares the candidate checkout before the VM run. Its
 pnpm store is cached by OS, Node version, and lockfile. The VM source run also
 uses `/var/cache/crabbox/pnpm` when present.
 
-## Timing Interpretation
+## Timing interpretation
 
 `mantis-slack-desktop-smoke-report.md` includes phase timings:
 
@@ -152,7 +152,7 @@ If the run is slow:
   ready, or the gateway/browser/Slack setup is slow;
 - artifact copy dominates: inspect video size and artifact directory contents.
 
-## Evidence Checklist
+## Evidence checklist
 
 A good PR comment should show:
 
@@ -168,7 +168,7 @@ A good PR comment should show:
 Do not commit screenshots or videos into the repository. Keep them in GitHub
 Actions artifacts or the PR comment.
 
-## Failure Handling
+## Failure handling
 
 If the workflow fails before the VM run, inspect the Actions job first. Typical
 causes are untrusted `candidate_ref`, missing environment secrets, or candidate
@@ -195,8 +195,8 @@ crabbox stop --provider aws <cbx_id-or-slug>
 If Slack login expired, repair it in VNC on a kept lease and rerun with
 `--lease-id`. Do not bake that browser profile into a provider image.
 
-Related docs:
+## Related
 
-- [QA overview](qa-e2e-automation.md)
-- [Slack channel](../channels/slack.md)
-- [Testing](../help/testing.md)
+- [QA overview](/concepts/qa-e2e-automation)
+- [Slack channel](/channels/slack)
+- [Testing](/help/testing)
