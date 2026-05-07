@@ -578,7 +578,7 @@ function createCachedDescriptorPluginTool(params: {
               return runtimeTool.execute(toolCallId, executeParams, signal, onUpdate);
             }
           }
-        } catch (error) {
+        } catch {
           // Continue to next candidate if this one fails
           // This preserves the uncached path behavior where factory failures are isolated
           continue;
@@ -953,7 +953,7 @@ export function resolvePluginTools(params: {
         requiredPluginIds: runtimePluginIds,
         loadOptions,
       });
-    } catch (error) {
+    } catch {
       context.logger.error(
         `failed to cold-load plugin tool registry for plugin ids [${runtimePluginIds.join(", ")}]: ${error instanceof Error ? error.message : String(error)
         }`,
