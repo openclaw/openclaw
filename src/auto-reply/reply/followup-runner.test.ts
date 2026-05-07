@@ -477,6 +477,9 @@ describe("createFollowupRunner runtime config", () => {
       },
     };
     const runtimeConfig: OpenClawConfig = {
+      tools: {
+        allow: ["example_plugin_tool"],
+      },
       models: {
         providers: {
           openai: {
@@ -512,9 +515,11 @@ describe("createFollowupRunner runtime config", () => {
     const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
       | {
           config?: unknown;
+          toolsAllow?: string[];
         }
       | undefined;
     expect(call?.config).toBe(runtimeConfig);
+    expect(call?.toolsAllow).toEqual(["example_plugin_tool"]);
   });
 
   it("resolves queued embedded followups before preflight helpers read config", async () => {

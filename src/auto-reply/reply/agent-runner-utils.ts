@@ -1,3 +1,8 @@
+import {
+  resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
+} from "../../agents/pi-tools.policy.js";
+import { collectExplicitAllowlist, type ToolPolicyLike } from "../../agents/tool-policy.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type {
   ChannelId,
@@ -16,6 +21,7 @@ import {
   selectApplicableRuntimeConfig,
   type OpenClawConfig,
 } from "../../config/config.js";
+import { resolveGroupSessionKey } from "../../config/sessions.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -180,6 +186,58 @@ export const resolveEnforceFinalTag = (
   model = run.model,
 ) => resolveEnforceFinalTagWithResolver(run, provider, model, isReasoningTagProvider);
 
+function deriveExplicitToolsAllow(
+  policies: Array<ToolPolicyLike | undefined>,
+): string[] | undefined {
+  const allowlist = collectExplicitAllowlist(policies);
+  return allowlist.length > 0 ? allowlist : undefined;
+}
+
+export function resolveEmbeddedRunToolsAllow(params: {
+  run: FollowupRun["run"];
+  provider: string;
+  model?: string;
+  messageProvider?: string;
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  accountId?: string | null;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
+}): string[] | undefined {
+  const sessionKey = params.run.runtimePolicySessionKey ?? params.run.sessionKey;
+  const { globalPolicy, globalProviderPolicy, agentPolicy, agentProviderPolicy } =
+    resolveEffectiveToolPolicy({
+      config: params.run.config,
+      sessionKey,
+      agentId: params.run.agentId,
+      modelProvider: params.provider,
+      modelId: params.model ?? params.run.model,
+    });
+  const groupPolicy = resolveGroupToolPolicy({
+    config: params.run.config,
+    sessionKey,
+    messageProvider: params.messageProvider ?? params.run.messageProvider,
+    groupId: params.groupId ?? params.run.groupId,
+    groupChannel: params.groupChannel ?? params.run.groupChannel,
+    groupSpace: params.groupSpace ?? params.run.groupSpace,
+    accountId: params.accountId ?? params.run.agentAccountId,
+    senderId: params.senderId ?? params.run.senderId,
+    senderName: params.senderName ?? params.run.senderName,
+    senderUsername: params.senderUsername ?? params.run.senderUsername,
+    senderE164: params.senderE164 ?? params.run.senderE164,
+  });
+  return deriveExplicitToolsAllow([
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    groupPolicy,
+  ]);
+}
+
 export function buildEmbeddedRunBaseParams(
   params: Parameters<typeof buildEmbeddedRunBaseParamsCore>[0],
 ) {
@@ -265,17 +323,31 @@ export function buildEmbeddedRunExecutionParams(params: {
   allowTransientCooldownProbe?: boolean;
 }) {
   const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts(params);
-  const runBaseParams = buildEmbeddedRunBaseParams({
+  const runBaseParams = buildEmbeddedRunBaseParamsCore({
     run: params.run,
     provider: params.provider,
     model: params.model,
     runId: params.runId,
     authProfile,
+    isReasoningTagProvider,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
+  });
+  const toolsAllow = resolveEmbeddedRunToolsAllow({
+    run: params.run,
+    provider: params.provider,
+    model: params.model,
+    messageProvider: embeddedContext.messageProvider,
+    groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
+    groupChannel:
+      normalizeOptionalString(params.sessionCtx.GroupChannel) ??
+      normalizeOptionalString(params.sessionCtx.GroupSubject),
+    groupSpace: params.sessionCtx.GroupSpace,
+    accountId: params.sessionCtx.AccountId,
+    ...senderContext,
   });
   return {
     embeddedContext,
     senderContext,
-    runBaseParams,
+    runBaseParams: toolsAllow ? { ...runBaseParams, toolsAllow } : runBaseParams,
   };
 }

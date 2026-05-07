@@ -19,6 +19,7 @@ import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import {
+  resolveEmbeddedRunToolsAllow,
   resolveQueuedReplyExecutionConfig,
   resolveQueuedReplyRuntimeConfig,
   resolveModelFallbackOptions,
@@ -265,6 +266,20 @@ export function createFollowupRunner(params: {
             outcomePlan.classifyRunResult({ result, provider, model }),
           run: async (provider, model, runOptions) => {
             const authProfile = resolveRunAuthProfile(run, provider, { config: runtimeConfig });
+            const toolsAllow = resolveEmbeddedRunToolsAllow({
+              run,
+              provider,
+              model,
+              messageProvider: run.messageProvider,
+              groupId: run.groupId,
+              groupChannel: run.groupChannel,
+              groupSpace: run.groupSpace,
+              accountId: run.agentAccountId,
+              senderId: run.senderId,
+              senderName: run.senderName,
+              senderUsername: run.senderUsername,
+              senderE164: run.senderE164,
+            });
             let attemptCompactionCount = 0;
             try {
               const result = await runEmbeddedPiAgent({
@@ -318,6 +333,7 @@ export function createFollowupRunner(params: {
                 bashElevated: run.bashElevated,
                 timeoutMs: run.timeoutMs,
                 runId,
+                ...(toolsAllow ? { toolsAllow } : {}),
                 images: queuedImages,
                 imageOrder: queuedImageOrder,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
