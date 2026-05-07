@@ -504,6 +504,80 @@ describe("google transport stream", () => {
     });
   });
 
+  it("uses Gemini skip-validator thought signatures for cross-provider tool-call replay", () => {
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [
+        {
+          role: "assistant",
+          provider: "anthropic",
+          api: "anthropic-messages",
+          model: "claude-opus-4-7",
+          stopReason: "toolUse",
+          timestamp: 0,
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "lookup",
+              arguments: { q: "hello" },
+            },
+          ],
+        },
+      ],
+    } as never);
+
+    expect(params.contents[0]).toMatchObject({
+      role: "model",
+      parts: [
+        {
+          thoughtSignature: "skip_thought_signature_validator",
+          functionCall: { name: "lookup", args: { q: "hello" } },
+        },
+      ],
+    });
+  });
+
+  it("does not trust cross-provider tool-call thought signatures for non-Gemini-3 models", () => {
+    const model = buildGeminiModel({
+      id: "gemini-2.5-pro",
+      name: "Gemini 2.5 Pro",
+    });
+
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [
+        {
+          role: "assistant",
+          provider: "anthropic",
+          api: "anthropic-messages",
+          model: "claude-opus-4-7",
+          stopReason: "toolUse",
+          timestamp: 0,
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "lookup",
+              arguments: { q: "hello" },
+              thoughtSignature: "foreign_sig",
+            },
+          ],
+        },
+      ],
+    } as never);
+
+    expect(params.contents[0]).toMatchObject({
+      role: "model",
+      parts: [{ functionCall: { name: "lookup", args: { q: "hello" } } }],
+    });
+    expect(JSON.stringify(params.contents)).not.toContain("foreign_sig");
+    expect(JSON.stringify(params.contents)).not.toContain("skip_thought_signature_validator");
+  });
+
   it("builds direct Gemini payloads without negative fallback thinking budgets", () => {
     const model = {
       id: "custom-gemini-model",

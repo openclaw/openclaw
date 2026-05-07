@@ -1581,6 +1581,60 @@ describe("createTelegramBot", () => {
       expectedReplyCount: 1,
     },
     {
+      name: "allows group messages from senders in accessGroup allowFrom when groupPolicy is 'allowlist'",
+      config: {
+        accessGroups: {
+          owners: {
+            type: "message.senders",
+            members: {
+              telegram: ["123456789"],
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+            allowFrom: ["accessGroup:owners"],
+            groups: { "*": { requireMention: false } },
+          },
+        },
+      },
+      message: {
+        chat: { id: -100123456789, type: "group", title: "Test Group" },
+        from: { id: 123456789, username: "testuser" },
+        text: "hello",
+        date: 1736380800,
+      },
+      expectedReplyCount: 1,
+    },
+    {
+      name: "blocks group messages from senders outside accessGroup allowFrom when groupPolicy is 'allowlist'",
+      config: {
+        accessGroups: {
+          owners: {
+            type: "message.senders",
+            members: {
+              telegram: ["123456789"],
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+            allowFrom: ["accessGroup:owners"],
+            groups: { "*": { requireMention: false } },
+          },
+        },
+      },
+      message: {
+        chat: { id: -100123456789, type: "group", title: "Test Group" },
+        from: { id: 999999, username: "notallowed" },
+        text: "hello",
+        date: 1736380800,
+      },
+      expectedReplyCount: 0,
+    },
+    {
       name: "blocks group messages when allowFrom is configured with @username entries (numeric IDs required)",
       config: {
         channels: {
@@ -2638,6 +2692,31 @@ describe("createTelegramBot", () => {
         channels: {
           telegram: {
             allowFrom: ["123456789"],
+          },
+        },
+      },
+      message: {
+        chat: { id: 777777777, type: "private" },
+        from: { id: 123456789, username: "testuser" },
+        text: "hello",
+        date: 1736380800,
+      },
+      expectedReplyCount: 1,
+    },
+    {
+      name: "allows direct messages with accessGroup allowFrom entries",
+      config: {
+        accessGroups: {
+          owners: {
+            type: "message.senders",
+            members: {
+              telegram: ["123456789"],
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            allowFrom: ["accessGroup:owners"],
           },
         },
       },

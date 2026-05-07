@@ -255,6 +255,7 @@ function loadPluginDoctorContractEntry(
 }
 
 function resolvePluginDoctorContracts(params?: {
+  config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
@@ -265,6 +266,7 @@ function resolvePluginDoctorContracts(params?: {
   }
 
   const manifestRegistry = loadPluginManifestRegistryForPluginRegistry({
+    config: params?.config,
     workspaceDir: params?.workspaceDir,
     env,
     includeDisabled: true,
@@ -295,6 +297,7 @@ export function clearPluginDoctorContractRegistryCache(): void {
 }
 
 export function listPluginDoctorLegacyConfigRules(params?: {
+  config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
@@ -303,6 +306,7 @@ export function listPluginDoctorLegacyConfigRules(params?: {
 }
 
 export function listPluginDoctorSessionRouteStateOwners(params?: {
+  config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
@@ -321,6 +325,7 @@ export function listPluginDoctorSessionRouteStateOwners(params?: {
 export function applyPluginDoctorCompatibilityMigrations(
   cfg: OpenClawConfig,
   params?: {
+    config?: OpenClawConfig;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
     pluginIds?: readonly string[];

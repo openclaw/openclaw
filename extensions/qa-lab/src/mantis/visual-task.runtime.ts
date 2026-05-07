@@ -2,7 +2,7 @@ import { spawn, type SpawnOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { pathExists, writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 
 export type MantisVisualTaskVisionMode = "image-describe" | "metadata";
@@ -283,6 +283,44 @@ async function runCommand(params: {
     env: params.env,
     stdio: params.stdio ?? "pipe",
   });
+}
+
+async function runCommandWithExternalOutput(params: {
+  outputPath: string;
+  buildArgs: (tempPath: string) => readonly string[];
+  command: string;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  preserveOutputOnError?: (params: { error: unknown; tempPath: string }) => Promise<boolean>;
+  runner: CommandRunner;
+  stdio?: "inherit" | "pipe";
+}): Promise<void> {
+  let deferredError: unknown;
+  await writeExternalFileWithinRoot({
+    rootDir: path.dirname(params.outputPath),
+    path: path.basename(params.outputPath),
+    write: async (tempPath) => {
+      try {
+        await runCommand({
+          command: params.command,
+          args: params.buildArgs(tempPath),
+          cwd: params.cwd,
+          env: params.env,
+          runner: params.runner,
+          stdio: params.stdio,
+        });
+      } catch (error) {
+        if (await params.preserveOutputOnError?.({ error, tempPath })) {
+          deferredError = error;
+          return;
+        }
+        throw error;
+      }
+    },
+  });
+  if (deferredError) {
+    throw deferredError;
+  }
 }
 
 async function warmupCrabbox(params: {
@@ -629,16 +667,17 @@ export async function runMantisVisualDriver(
       stdio: "inherit",
     });
     await new Promise((resolve) => setTimeout(resolve, opts.settleMs ?? DEFAULT_SETTLE_MS));
-    await runCommand({
+    await runCommandWithExternalOutput({
       command: crabboxBin,
-      args: [
+      outputPath: screenshotPath,
+      buildArgs: (tempPath) => [
         "screenshot",
         "--provider",
         provider,
         "--id",
         leaseId,
         "--output",
-        screenshotPath,
+        tempPath,
         "--reclaim",
       ],
       cwd: repoRoot,
@@ -777,19 +816,24 @@ export async function runMantisVisualTask(
       runner,
     });
     let recordingError: string | undefined;
+    const activeLeaseId = leaseId;
+    if (!activeLeaseId) {
+      throw new Error("Crabbox lease id missing after warmup.");
+    }
     try {
-      await runCommand({
+      await runCommandWithExternalOutput({
         command: crabboxBin,
-        args: [
+        outputPath: videoPath,
+        buildArgs: (tempPath) => [
           "record",
           "--provider",
           provider,
           "--id",
-          leaseId,
+          activeLeaseId,
           "--duration",
           trimToValue(opts.duration) ?? DEFAULT_DURATION,
           "--output",
-          videoPath,
+          tempPath,
           "--while",
           "--",
           "pnpm",
@@ -797,7 +841,7 @@ export async function runMantisVisualTask(
             browserUrl,
             crabboxBin,
             expectText,
-            leaseId,
+            leaseId: activeLeaseId,
             outputDir,
             provider,
             repoRoot,
@@ -810,6 +854,8 @@ export async function runMantisVisualTask(
         ],
         cwd: repoRoot,
         env,
+        preserveOutputOnError: async ({ tempPath }) =>
+          (await pathExists(driverResultPath)) && (await nonEmptyFileExists(tempPath)),
         runner,
         stdio: "inherit",
       });

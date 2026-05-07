@@ -125,7 +125,8 @@ describe("fetchWithBearerAuthScopeFallback", () => {
       enumerable: false,
     });
     const fetchFn = vi.fn(async (_url: string, init?: RequestInit) => {
-      new Headers(init?.headers);
+      const normalizedHeaders = new Headers(init?.headers);
+      expect(normalizedHeaders.get("accept")).toBe("application/json");
       return fetchFn.mock.calls.length === 1
         ? new Response("unauthorized", { status: 401 })
         : new Response("ok", { status: 200 });

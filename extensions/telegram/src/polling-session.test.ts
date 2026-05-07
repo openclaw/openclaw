@@ -765,7 +765,7 @@ describe("TelegramPollingSession", () => {
     });
   });
 
-  it("does not trigger stall restart when non-getUpdates API calls are active", async () => {
+  it("triggers stall restart when getUpdates is stale despite recent non-getUpdates API success", async () => {
     const abort = new AbortController();
     const botStop = vi.fn(async () => undefined);
     const runnerStop = vi.fn(async () => undefined);
@@ -773,9 +773,8 @@ describe("TelegramPollingSession", () => {
     const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
 
     // t=0: lastGetUpdatesAt and lastApiActivityAt initialized
-    // t=150_001: watchdog fires (getUpdates stale for 150s)
-    // But right before watchdog, a sendMessage succeeds at t=150_001
-    // All subsequent Date.now calls return the same value, giving apiIdle = 0.
+    // t=150_001: watchdog fires (getUpdates stale for 150s).
+    // Right before watchdog, a sendMessage succeeds at t=150_001.
     const watchdogHarness = installPollingStallWatchdogHarness();
 
     const log = vi.fn();
@@ -789,20 +788,19 @@ describe("TelegramPollingSession", () => {
       const watchdog = await watchdogHarness.waitForWatchdog();
 
       // Simulate a sendMessage call through the middleware before watchdog fires.
-      // This updates lastApiActivityAt, proving the network is alive.
+      // This updates unrelated API liveness, but inbound getUpdates remains stale.
       const apiMiddleware = getApiMiddleware();
       if (apiMiddleware) {
         const fakePrev = vi.fn(async () => ({ ok: true }));
         await apiMiddleware(fakePrev, "sendMessage", { chat_id: 123, text: "hello" });
       }
 
-      // Now fire the watchdog — getUpdates is stale (120s) but API was just active
+      // Now fire the watchdog — getUpdates is stale (120s) even though API was just active.
       watchdog?.();
 
-      // The watchdog should NOT have triggered a restart
-      expect(runnerStop).not.toHaveBeenCalled();
-      expect(botStop).not.toHaveBeenCalled();
-      expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
+      expect(runnerStop).toHaveBeenCalledTimes(1);
+      expect(botStop).toHaveBeenCalledTimes(1);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
 
       // Clean up: abort to end the session
       abort.abort();
@@ -813,7 +811,7 @@ describe("TelegramPollingSession", () => {
     }
   });
 
-  it("does not trigger stall restart while a recent non-getUpdates API call is in-flight", async () => {
+  it("triggers stall restart while a recent non-getUpdates API call is in-flight", async () => {
     const abort = new AbortController();
     const botStop = vi.fn(async () => undefined);
     const runnerStop = vi.fn(async () => undefined);
@@ -848,13 +846,12 @@ describe("TelegramPollingSession", () => {
         const sendPromise = apiMiddleware(slowPrev, "sendMessage", { chat_id: 123, text: "hello" });
 
         // Fire the watchdog while sendMessage is still in-flight.
-        // The in-flight call started 60s ago, so API liveness is still recent.
+        // API liveness is still recent, but inbound getUpdates is stale.
         watchdog?.();
 
-        // The watchdog should NOT have triggered a restart
-        expect(runnerStop).not.toHaveBeenCalled();
-        expect(botStop).not.toHaveBeenCalled();
-        expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
+        expect(runnerStop).toHaveBeenCalledTimes(1);
+        expect(botStop).toHaveBeenCalledTimes(1);
+        expect(log).toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
 
         // Resolve the in-flight call to clean up
         resolveSendMessage?.({ ok: true });
@@ -920,7 +917,7 @@ describe("TelegramPollingSession", () => {
     }
   });
 
-  it("does not trigger stall restart when a newer non-getUpdates API call starts while an older one is still in-flight", async () => {
+  it("triggers stall restart when getUpdates is stale despite newer in-flight non-getUpdates API activity", async () => {
     const abort = new AbortController();
     const botStop = vi.fn(async () => undefined);
     const runnerStop = vi.fn(async () => undefined);
@@ -965,13 +962,13 @@ describe("TelegramPollingSession", () => {
           { chat_id: 123, text: "newer" },
         );
 
-        // The older send is stale, but the newer send started just now.
-        // Watchdog liveness must follow the newest active non-getUpdates call.
+        // The older send is stale and the newer send started recently.
+        // Watchdog liveness must still follow getUpdates, not unrelated API calls.
         watchdog?.();
 
-        expect(runnerStop).not.toHaveBeenCalled();
-        expect(botStop).not.toHaveBeenCalled();
-        expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
+        expect(runnerStop).toHaveBeenCalledTimes(1);
+        expect(botStop).toHaveBeenCalledTimes(1);
+        expect(log).toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
 
         resolveFirstSend?.({ ok: true });
         resolveSecondSend?.({ ok: true });

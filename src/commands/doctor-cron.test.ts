@@ -159,6 +159,67 @@ describe("maybeRepairLegacyCronStore", () => {
     );
   });
 
+  it("repairs invalid persisted cron payload model sentinels", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [
+      {
+        id: "bad-model-default",
+        name: "Bad model default",
+        enabled: true,
+        createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
+        updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: {
+          kind: "agentTurn",
+          message: "Status",
+          model: "default",
+        },
+        delivery: { mode: "announce" },
+        state: {},
+      },
+      {
+        id: "bad-model-null",
+        name: "Bad model null",
+        enabled: true,
+        createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
+        updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: {
+          kind: "agentTurn",
+          message: "Status",
+          model: "null",
+        },
+        delivery: { mode: "announce" },
+        state: {},
+      },
+    ]);
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    for (const job of persisted.jobs) {
+      expect((job.payload as Record<string, unknown>).model).toBeUndefined();
+    }
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("2 jobs store an invalid cron payload model inheritance sentinel"),
+      "Cron",
+    );
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("Cron store normalized"),
+      "Doctor changes",
+    );
+  });
+
   it("warns instead of replacing announce delivery for notify fallback jobs", async () => {
     const storePath = await makeTempStorePath();
     await fs.mkdir(path.dirname(storePath), { recursive: true });

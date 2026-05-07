@@ -281,6 +281,74 @@ export function resolveSessionFilePath(
   return resolveSessionTranscriptPathInDir(sessionId, sessionsDir);
 }
 
+const GENERATED_UUID_SESSION_FILE_RE =
+  /^([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})(-topic-.+)?\.jsonl$/i;
+
+function resolveGeneratedSessionFileSuffix(
+  previousSessionId: string,
+  previousSessionFile: string,
+): string | undefined {
+  const baseName = path.basename(previousSessionFile);
+  if (baseName === `${previousSessionId}.jsonl`) {
+    return ".jsonl";
+  }
+  const topicPrefix = `${previousSessionId}-topic-`;
+  if (baseName.startsWith(topicPrefix) && baseName.endsWith(".jsonl")) {
+    return baseName.slice(previousSessionId.length);
+  }
+  const generatedUuidMatch = GENERATED_UUID_SESSION_FILE_RE.exec(baseName);
+  if (generatedUuidMatch) {
+    return `${generatedUuidMatch[2] ?? ""}.jsonl`;
+  }
+  return undefined;
+}
+
+export function resolveRotatedGeneratedSessionFilePath(params: {
+  previousSessionId: string;
+  nextSessionId: string;
+  previousSessionFile?: string;
+  sessionsDir: string;
+  agentId?: string;
+}): string | undefined {
+  const previousSessionFile = params.previousSessionFile?.trim();
+  if (!previousSessionFile || params.previousSessionId === params.nextSessionId) {
+    return undefined;
+  }
+  try {
+    resolvePathWithinSessionsDir(params.sessionsDir, previousSessionFile, {
+      agentId: params.agentId,
+    });
+  } catch {
+    if (!path.isAbsolute(previousSessionFile)) {
+      return undefined;
+    }
+    const relative = path.relative(
+      path.resolve(params.sessionsDir),
+      path.resolve(previousSessionFile),
+    );
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+      return undefined;
+    }
+  }
+
+  const generatedSuffix = resolveGeneratedSessionFileSuffix(
+    params.previousSessionId,
+    previousSessionFile,
+  );
+  if (!generatedSuffix) {
+    return undefined;
+  }
+  const nextFileName = `${params.nextSessionId}${generatedSuffix}`;
+
+  try {
+    return resolvePathWithinSessionsDir(params.sessionsDir, nextFileName, {
+      agentId: params.agentId,
+    });
+  } catch {
+    return undefined;
+  }
+}
+
 export function resolveStorePath(
   store?: string,
   opts?: { agentId?: string; env?: NodeJS.ProcessEnv },

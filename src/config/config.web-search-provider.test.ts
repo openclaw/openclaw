@@ -434,7 +434,7 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("rejects installable provider ids when the plugin is not active", () => {
+  it("warns for installable provider ids when the plugin is not available", () => {
     const res = validateConfigObjectWithPlugins(
       buildWebSearchProviderConfig({
         provider: "brave",
@@ -449,18 +449,18 @@ describe("web search provider config", () => {
       },
     );
 
-    expect(res.ok).toBe(false);
+    expect(res.ok).toBe(true);
     if (res.ok) {
+      expect(res.warnings).toContainEqual(
+        expect.objectContaining({
+          path: "tools.web.search.provider",
+          message:
+            'web_search provider is not available: brave (install or enable plugin "brave", then run openclaw doctor --fix)',
+          allowedValues: expect.arrayContaining(["brave"]),
+        }),
+      );
       return;
     }
-    expect(res.issues).toContainEqual(
-      expect.objectContaining({
-        path: "tools.web.search.provider",
-        message:
-          'web_search provider is not available: brave (install or enable plugin "brave", then run openclaw doctor --fix)',
-        allowedValues: expect.arrayContaining(["brave"]),
-      }),
-    );
   });
 
   it("rejects unknown provider ids without plugin evidence", () => {

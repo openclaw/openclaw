@@ -70,6 +70,8 @@ import type {
   SpeechProviderId,
   SpeechSynthesisRequest,
   SpeechSynthesisResult,
+  SpeechSynthesisStreamRequest,
+  SpeechSynthesisStreamResult,
   SpeechTelephonySynthesisRequest,
   SpeechTelephonySynthesisResult,
   SpeechVoiceOption,
@@ -539,6 +541,8 @@ export type {
  * plugin-owned transport family.
  */
 export type ProviderNormalizeTransportContext = {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
   provider: string;
   api?: string | null;
   baseUrl?: string;
@@ -1805,6 +1809,7 @@ export type SpeechProviderPlugin = {
     | Promise<SpeechProviderPreparedSynthesis | undefined>;
   isConfigured: (ctx: SpeechProviderConfiguredContext) => boolean;
   synthesize: (req: SpeechSynthesisRequest) => Promise<SpeechSynthesisResult>;
+  streamSynthesize?: (req: SpeechSynthesisStreamRequest) => Promise<SpeechSynthesisStreamResult>;
   synthesizeTelephony?: (
     req: SpeechTelephonySynthesisRequest,
   ) => Promise<SpeechTelephonySynthesisResult>;

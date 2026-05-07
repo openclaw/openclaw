@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { ChannelType } from "discord-api-types/v10";
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -169,6 +170,33 @@ describe("discordPlugin outbound", () => {
     expect(parseExplicitTarget({ raw: "1470130713209602050" })).toEqual({
       to: "channel:1470130713209602050",
       chatType: "channel",
+    });
+  });
+
+  it("resolves bare allowlisted Discord user IDs as message-tool DM targets", async () => {
+    const resolveTarget = discordPlugin.messaging?.targetResolver?.resolveTarget;
+    if (!resolveTarget) {
+      throw new Error(
+        "Expected discordPlugin.messaging.targetResolver.resolveTarget to be defined",
+      );
+    }
+
+    await expect(
+      resolveTarget({
+        cfg: {
+          channels: {
+            discord: {
+              allowFrom: ["1439091261670948987"],
+            },
+          },
+        } as OpenClawConfig,
+        input: "1439091261670948987",
+        normalized: "channel:1439091261670948987",
+        preferredKind: "channel",
+      }),
+    ).resolves.toMatchObject({
+      to: "user:1439091261670948987",
+      kind: "user",
     });
   });
 
@@ -383,6 +411,42 @@ describe("discordPlugin outbound", () => {
       includeApplication: true,
     });
     expect(runtimeProbeDiscord).not.toHaveBeenCalled();
+  });
+
+  it("reports missing voice permissions in targeted capabilities diagnostics", async () => {
+    const fetchPermissionsSpy = vi
+      .spyOn(sendModule, "fetchChannelPermissionsDiscord")
+      .mockResolvedValueOnce({
+        channelId: "222",
+        guildId: "123",
+        permissions: ["ViewChannel", "SendMessages"],
+        raw: "0",
+        isDm: false,
+        channelType: ChannelType.GuildVoice,
+      });
+    try {
+      const cfg = createCfg();
+      const diagnostics = await discordPlugin.status!.buildCapabilitiesDiagnostics!({
+        account: resolveAccount(cfg),
+        timeoutMs: 5000,
+        cfg,
+        target: "channel:222",
+      });
+
+      expect(fetchPermissionsSpy).toHaveBeenCalledWith(
+        "222",
+        expect.objectContaining({ token: "discord-token" }),
+      );
+      expect(diagnostics?.details?.permissions).toMatchObject({
+        channelId: "222",
+        missingRequired: ["Connect", "Speak", "ReadMessageHistory"],
+      });
+      expect(diagnostics?.lines?.map((line) => line.text).join("\n")).toContain(
+        "Missing required: Connect, Speak, ReadMessageHistory",
+      );
+    } finally {
+      fetchPermissionsSpy.mockRestore();
+    }
   });
 
   it("uses direct Discord startup helpers for async startup enrichment", async () => {
