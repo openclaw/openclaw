@@ -1388,7 +1388,7 @@ Defaults for Talk mode (macOS/iOS/Android).
       provider: "openai",
       providers: {
         openai: {
-          model: "gpt-realtime",
+          model: "gpt-realtime-2",
           voice: "alloy",
         },
       },
