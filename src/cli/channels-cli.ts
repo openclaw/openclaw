@@ -100,7 +100,7 @@ export async function registerChannelsCli(
       "after",
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
-          ["openclaw channels list", "List configured channels and auth profiles."],
+          ["openclaw channels list", "List available and configured channels."],
           ["openclaw channels status --probe", "Run channel status checks and probes."],
           [
             "openclaw channels add --channel telegram --token <token>",

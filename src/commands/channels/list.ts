@@ -1,14 +1,15 @@
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listChatChannels } from "../../channels/chat-meta.js";
 import { isChannelVisibleInConfiguredLists } from "../../channels/plugins/exposure.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
-import { withProgress } from "../../cli/progress.js";
-import { formatUsageReportLines, loadProviderUsageSummary } from "../../infra/provider-usage.js";
+import { isStaticallyChannelConfigured } from "../../config/channel-configured-shared.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
+import { listTrustedChannelPluginCatalogEntries } from "../channel-setup/trusted-catalog.js";
 import { formatChannelAccountLabel, requireValidConfig } from "./shared.js";
 
 export type ChannelsListOptions = {
@@ -89,21 +90,51 @@ function formatAccountLine(params: {
   }
   return `- ${label}: ${bits.join(", ")}`;
 }
-async function loadUsageWithProgress(
-  runtime: RuntimeEnv,
-  progress = true,
-): Promise<Awaited<ReturnType<typeof loadProviderUsageSummary>> | null> {
-  try {
-    return await withProgress(
-      { label: "Fetching usage snapshot…", indeterminate: true, enabled: progress },
-      async () => await loadProviderUsageSummary({ skipPluginAuthWithoutCredentialSource: true }),
-    );
-  } catch (err) {
-    if (progress) {
-      runtime.error(String(err));
+type ChannelListEntry = {
+  id: string;
+  label: string;
+  order: number;
+  configured: boolean;
+  enabled: boolean;
+  installed: boolean;
+  accounts: string[];
+  source: "bundled" | "catalog" | "configured";
+};
+
+const NON_CHANNEL_CONFIG_KEYS = new Set(["defaults"]);
+
+function resolveChannelEnabled(cfg: Record<string, unknown>, channelId: string): boolean {
+  const channels = cfg.channels;
+  if (channels && typeof channels === "object" && !Array.isArray(channels)) {
+    const channelConfig = (channels as Record<string, unknown>)[channelId];
+    if (channelConfig && typeof channelConfig === "object" && !Array.isArray(channelConfig)) {
+      if ((channelConfig as Record<string, unknown>).enabled === false) {
+        return false;
+      }
     }
-    return null;
   }
+  return true;
+}
+
+function formatInstalled(value: boolean): string {
+  return value ? theme.success("installed") : theme.warn("not installed");
+}
+
+function formatChannelSummaryLine(entry: ChannelListEntry): string {
+  const bits = [
+    formatConfigured(entry.configured),
+    formatEnabled(entry.enabled),
+    formatInstalled(entry.installed),
+  ];
+  return `- ${theme.accent(entry.label)}: ${bits.join(", ")}`;
+}
+
+function configuredChannelIdsFromConfig(cfg: Record<string, unknown>): string[] {
+  const channels = cfg.channels;
+  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+    return [];
+  }
+  return Object.keys(channels).filter((id) => !NON_CHANNEL_CONFIG_KEYS.has(id));
 }
 
 export async function channelsListCommand(
@@ -114,78 +145,129 @@ export async function channelsListCommand(
   if (!cfg) {
     return;
   }
-  const includeUsage = opts.usage !== false;
+  void opts.usage;
 
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
     includeSetupFallbackPlugins: true,
   });
+  const pluginById = new Map(plugins.map((plugin) => [plugin.id, plugin]));
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  const catalogEntries = listTrustedChannelPluginCatalogEntries({ cfg, workspaceDir });
+  const entries = new Map<string, ChannelListEntry>();
 
-  const authStore = loadAuthProfileStoreWithoutExternalProfiles();
-  const authProfiles = Object.entries(authStore.profiles).map(([profileId, profile]) => ({
-    id: profileId,
-    provider: profile.provider,
-    type: profile.type,
-    isExternal: false,
-  }));
-  if (opts.json) {
-    const usage = includeUsage ? await loadUsageWithProgress(runtime, false) : undefined;
-    const chat: Record<string, string[]> = {};
-    for (const plugin of plugins) {
-      chat[plugin.id] = plugin.config.listAccountIds(cfg);
+  const upsert = (entry: ChannelListEntry) => {
+    const existing = entries.get(entry.id);
+    entries.set(entry.id, {
+      ...entry,
+      ...existing,
+      configured: Boolean(existing?.configured || entry.configured),
+      enabled: existing?.enabled === false || entry.enabled === false ? false : true,
+      installed: Boolean(existing?.installed || entry.installed),
+      accounts: existing?.accounts.length ? existing.accounts : entry.accounts,
+      source: existing?.source ?? entry.source,
+    });
+  };
+
+  for (const meta of listChatChannels()) {
+    const plugin = pluginById.get(meta.id);
+    upsert({
+      id: meta.id,
+      label: meta.label ?? meta.id,
+      order: meta.order ?? Number.MAX_SAFE_INTEGER,
+      configured: isStaticallyChannelConfigured(cfg, meta.id),
+      enabled: resolveChannelEnabled(cfg, meta.id),
+      installed: Boolean(plugin),
+      accounts: plugin?.config.listAccountIds(cfg) ?? [],
+      source: "bundled",
+    });
+  }
+
+  for (const plugin of plugins) {
+    const accounts = plugin.config.listAccountIds(cfg);
+    upsert({
+      id: plugin.id,
+      label: plugin.meta.label ?? plugin.id,
+      order: plugin.meta.order ?? Number.MAX_SAFE_INTEGER,
+      configured: accounts.length > 0 || isStaticallyChannelConfigured(cfg, plugin.id),
+      enabled: resolveChannelEnabled(cfg, plugin.id),
+      installed: true,
+      accounts,
+      source: "bundled",
+    });
+  }
+
+  for (const entry of catalogEntries) {
+    const plugin = pluginById.get(entry.id);
+    const accounts = plugin?.config.listAccountIds(cfg) ?? [];
+    upsert({
+      id: entry.id,
+      label: entry.meta.label ?? entry.id,
+      order: entry.meta.order ?? Number.MAX_SAFE_INTEGER,
+      configured: accounts.length > 0 || isStaticallyChannelConfigured(cfg, entry.id),
+      enabled: resolveChannelEnabled(cfg, entry.id),
+      installed: Boolean(plugin),
+      accounts,
+      source: "catalog",
+    });
+  }
+
+  for (const channelId of configuredChannelIdsFromConfig(cfg)) {
+    const plugin = pluginById.get(channelId);
+    const accounts = plugin?.config.listAccountIds(cfg) ?? [];
+    upsert({
+      id: channelId,
+      label: plugin?.meta.label ?? channelId,
+      order: plugin?.meta.order ?? Number.MAX_SAFE_INTEGER,
+      configured: accounts.length > 0 || isStaticallyChannelConfigured(cfg, channelId),
+      enabled: resolveChannelEnabled(cfg, channelId),
+      installed: Boolean(plugin),
+      accounts,
+      source: "configured",
+    });
+  }
+
+  const channels = [...entries.values()].toSorted((left, right) => {
+    if (left.order !== right.order) {
+      return left.order - right.order;
     }
-    const payload = { chat, auth: authProfiles, ...(usage ? { usage } : {}) };
-    writeRuntimeJson(runtime, payload);
+    return left.label.localeCompare(right.label);
+  });
+
+  if (opts.json) {
+    writeRuntimeJson(runtime, { channels });
     return;
   }
 
   const lines: string[] = [];
   lines.push(theme.heading("Chat channels:"));
 
-  for (const plugin of plugins) {
-    const accounts = plugin.config.listAccountIds(cfg);
-    if (!accounts || accounts.length === 0) {
+  if (channels.length === 0) {
+    lines.push(theme.muted("- none"));
+  }
+
+  for (const entry of channels) {
+    const plugin = pluginById.get(entry.id);
+    lines.push(formatChannelSummaryLine(entry));
+    if (!plugin || entry.accounts.length === 0) {
       continue;
     }
-    for (const accountId of accounts) {
+    for (const accountId of entry.accounts) {
       const snapshot = await buildChannelAccountSnapshot({
         plugin,
         cfg,
         accountId,
       });
       lines.push(
-        formatAccountLine({
+        `  ${formatAccountLine({
           channel: plugin,
           snapshot,
-        }),
+        }).slice(2)}`,
       );
-    }
-  }
-
-  lines.push("");
-  lines.push(theme.heading("Auth providers (OAuth + API keys):"));
-  if (authProfiles.length === 0) {
-    lines.push(theme.muted("- none"));
-  } else {
-    for (const profile of authProfiles) {
-      const external = profile.isExternal ? theme.muted(" (synced)") : "";
-      lines.push(`- ${theme.accent(profile.id)} (${theme.success(profile.type)}${external})`);
     }
   }
 
   runtime.log(lines.join("\n"));
 
-  if (includeUsage) {
-    runtime.log("");
-    const usage = await loadUsageWithProgress(runtime);
-    if (usage) {
-      const usageLines = formatUsageReportLines(usage);
-      if (usageLines.length > 0) {
-        usageLines[0] = theme.accent(usageLines[0]);
-        runtime.log(usageLines.join("\n"));
-      }
-    }
-  }
-
   runtime.log("");
-  runtime.log(`Docs: ${formatDocsLink("/gateway/configuration", "gateway/configuration")}`);
+  runtime.log(`Docs: ${formatDocsLink("/channels", "channels")}`);
 }
