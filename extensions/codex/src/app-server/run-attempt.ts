@@ -64,6 +64,7 @@ import {
 import { ensureCodexComputerUse } from "./computer-use.js";
 import {
   readCodexPluginConfig,
+  resolveCodexPluginsPolicy,
   resolveCodexAppServerRuntimeOptions,
   type CodexAppServerRuntimeOptions,
   type CodexPluginConfig,
@@ -670,6 +671,12 @@ export async function runCodexAppServerAttempt(
           appCacheKey: pluginAppCacheKey,
         })
       : undefined;
+    const enabledPluginConfigKeys = pluginThreadConfigEnabled
+      ? resolveCodexPluginsPolicy(pluginConfig)
+          .pluginPolicies.filter((plugin) => plugin.enabled)
+          .map((plugin) => plugin.configKey)
+          .toSorted()
+      : undefined;
     ({ client, thread } = await withCodexStartupTimeout({
       timeoutMs: params.timeoutMs,
       timeoutFloorMs: options.startupTimeoutFloorMs,
@@ -703,6 +710,7 @@ export async function runCodexAppServerAttempt(
               ? {
                   enabled: true,
                   inputFingerprint: pluginThreadConfigInputFingerprint,
+                  enabledPluginConfigKeys,
                   build: () =>
                     buildCodexPluginThreadConfig({
                       pluginConfig,

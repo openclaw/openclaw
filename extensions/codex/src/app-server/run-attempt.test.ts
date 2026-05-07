@@ -416,6 +416,38 @@ function createPluginAppPolicyContext() {
   };
 }
 
+function createTwoPluginAppConfigPatch() {
+  return {
+    apps: {
+      ...createPluginAppConfigPatch().apps,
+      "gmail-app": {
+        enabled: true,
+        destructive_enabled: true,
+        open_world_enabled: false,
+        default_tools_enabled: true,
+        default_tools_approval_mode: "prompt",
+      },
+    },
+  };
+}
+
+function createTwoPluginAppPolicyContext() {
+  return {
+    fingerprint: "plugin-policy-2",
+    apps: {
+      ...createPluginAppPolicyContext().apps,
+      "gmail-app": {
+        appId: "gmail-app",
+        configKey: "gmail",
+        marketplaceName: "openai-curated",
+        pluginName: "gmail",
+        allowDestructiveActions: false,
+        mcpServerNames: ["gmail"],
+      },
+    },
+  };
+}
+
 type AppServerRequestHandler = (request: {
   id: string | number;
   method: string;
@@ -3051,6 +3083,7 @@ describe("runCodexAppServerAttempt", () => {
       pluginThreadConfig: {
         enabled: true,
         inputFingerprint: "plugin-apps-input-1",
+        enabledPluginConfigKeys: ["google-calendar"],
         build: buildPluginThreadConfig,
       },
     });
@@ -3120,6 +3153,7 @@ describe("runCodexAppServerAttempt", () => {
       pluginThreadConfig: {
         enabled: true,
         inputFingerprint: "plugin-apps-input-1",
+        enabledPluginConfigKeys: ["google-calendar"],
         build: async () => {
           throw new Error("plugin thread config should not rebuild for compatible bindings");
         },
@@ -3255,6 +3289,63 @@ describe("runCodexAppServerAttempt", () => {
     expect(request.mock.calls).toEqual([
       ["thread/resume", expect.not.objectContaining({ config: expect.anything() })],
     ]);
+  });
+
+  it("rebuilds a partial plugin app binding after another plugin recovers", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      dynamicToolsFingerprint: "[]",
+      pluginAppsFingerprint: "plugin-apps-partial",
+      pluginAppsInputFingerprint: "plugin-apps-input-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext(),
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-recovered");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const recoveredPolicyContext = createTwoPluginAppPolicyContext();
+    const buildPluginThreadConfig = vi.fn(async () => ({
+      enabled: true,
+      configPatch: createTwoPluginAppConfigPatch(),
+      fingerprint: "plugin-apps-config-2",
+      inputFingerprint: "plugin-apps-input-1",
+      policyContext: recoveredPolicyContext,
+      diagnostics: [],
+    }));
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-apps-input-1",
+        enabledPluginConfigKeys: ["google-calendar", "gmail"],
+        build: buildPluginThreadConfig,
+      },
+    });
+
+    expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls).toEqual([
+      [
+        "thread/start",
+        expect.objectContaining({
+          config: createTwoPluginAppConfigPatch(),
+        }),
+      ],
+    ]);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-recovered",
+      pluginAppsFingerprint: "plugin-apps-config-2",
+      pluginAppPolicyContext: recoveredPolicyContext,
+    });
   });
 
   it("starts a new configured thread for legacy bindings missing plugin app metadata", async () => {

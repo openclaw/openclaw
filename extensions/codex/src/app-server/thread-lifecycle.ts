@@ -40,6 +40,7 @@ import {
 export type CodexPluginThreadConfigProvider = {
   enabled: boolean;
   inputFingerprint?: string;
+  enabledPluginConfigKeys?: readonly string[];
   build: () => Promise<CodexPluginThreadConfig>;
 };
 
@@ -270,7 +271,19 @@ function shouldRecheckRecoverablePluginBinding(params: {
     return false;
   }
   const policyContext = params.binding.pluginAppPolicyContext;
-  return Boolean(policyContext && Object.keys(policyContext.apps).length === 0);
+  if (!policyContext) {
+    return false;
+  }
+  const boundAppEntries = Object.values(policyContext.apps);
+  if (boundAppEntries.length === 0) {
+    return true;
+  }
+  const expectedPluginConfigKeys = params.pluginThreadConfig.enabledPluginConfigKeys ?? [];
+  if (expectedPluginConfigKeys.length === 0) {
+    return false;
+  }
+  const boundPluginConfigKeys = new Set(boundAppEntries.map((app) => app.configKey));
+  return expectedPluginConfigKeys.some((configKey) => !boundPluginConfigKeys.has(configKey));
 }
 
 export function buildThreadStartParams(
