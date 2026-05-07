@@ -672,6 +672,7 @@ Docs: https://docs.openclaw.ai
 - Agents/failover: rotate auth profiles before deferred cooldown marking on rate-limit failures, so file-lock contention cannot stall profile failover. Fixes #57281. (#57283) Thanks @jeremyknows.
 - Gateway/sessions: when `session.dmScope: "main"` is configured, route a bare webchat `/new` against the agent's main session (`sessions.create` with `emitCommandHooks=true`) to an in-place reset instead of creating a parallel `dashboard:` child, matching `/new` behavior on Telegram/Discord. Fixes #77434. (#71170) Thanks @statxc.
 - Scripts/UI/Windows: launch `.cmd` and `.bat` UI runners through the shared cmd.exe escaping path with shell mode disabled, avoiding Node.js v24 DEP0190 warnings while preserving argument boundaries. (#62910) Thanks @nandanadileep.
+- Memory/reindex: restore in-memory dirty flags, session dirty files, session deltas, and a new `sessionFullRetryPending` sentinel when a safe or unsafe reindex rolls back, so the next sync retries the rolled-back work instead of silently converging; mirror successful embedding batches into the original index during a safe temp-DB reindex so the cache survives a later batch failure; and check for an existing `embedding_cache` table before seeding, so enabling cache on an older index no longer crashes the reindex. (#59137) Thanks @TSHOGX.
 
 ## 2026.5.3-1
 

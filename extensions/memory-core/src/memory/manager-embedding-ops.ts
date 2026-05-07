@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   enforceEmbeddingMaxInputTokens,
@@ -125,24 +126,29 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (!max || max <= 0) {
       return;
     }
-    const row = this.db.prepare(`SELECT COUNT(*) as c FROM ${EMBEDDING_CACHE_TABLE}`).get() as
-      | { c: number }
-      | undefined;
-    const count = row?.c ?? 0;
-    if (count <= max) {
-      return;
-    }
-    const excess = count - max;
-    this.db
-      .prepare(
+    const pruneExcess = (db: DatabaseSync) => {
+      const row = db.prepare(`SELECT COUNT(*) as c FROM ${EMBEDDING_CACHE_TABLE}`).get() as
+        | { c: number }
+        | undefined;
+      const count = row?.c ?? 0;
+      if (count <= max) {
+        return;
+      }
+      const excess = count - max;
+      db.prepare(
         `DELETE FROM ${EMBEDDING_CACHE_TABLE}\n` +
           ` WHERE rowid IN (\n` +
           `   SELECT rowid FROM ${EMBEDDING_CACHE_TABLE}\n` +
           `   ORDER BY updated_at ASC\n` +
           `   LIMIT ?\n` +
           ` )`,
-      )
-      .run(excess);
+      ).run(excess);
+    };
+    pruneExcess(this.db);
+    const mirror = this.embeddingCacheMirrorDb;
+    if (mirror && mirror !== this.db) {
+      pruneExcess(mirror);
+    }
   }
 
   private async embedChunksInBatches(chunks: MemoryChunk[]): Promise<number[][]> {
@@ -157,7 +163,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
     const missingChunks = missing.map((m) => m.chunk);
     const batches = buildMemoryEmbeddingBatches(missingChunks, EMBEDDING_BATCH_MAX_TOKENS);
-    const toCache: Array<{ hash: string; embedding: number[] }> = [];
     const provider = this.provider;
     if (!provider) {
       throw new Error("Cannot embed batch in FTS-only mode (no embedding provider)");
@@ -174,25 +179,50 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       const batchEmbeddings = hasStructuredInputs
         ? await this.embedBatchInputsWithRetry(inputs)
         : await this.embedBatchWithRetry(batch.map((chunk) => chunk.text));
+      const batchCache: Array<{ hash: string; embedding: number[] }> = [];
       for (let i = 0; i < batch.length; i += 1) {
         const item = missing[cursor + i];
         const embedding = batchEmbeddings[i] ?? [];
         if (item) {
           embeddings[item.index] = embedding;
-          toCache.push({ hash: item.chunk.hash, embedding });
+          batchCache.push({ hash: item.chunk.hash, embedding });
         }
       }
       cursor += batch.length;
+      // Persist per-batch instead of at the end of the loop so an error in a
+      // later batch still leaves earlier batches durably cached — both in the
+      // live DB the current reindex is writing to, *and* in the mirror DB
+      // (i.e. the original index) when a safe reindex is in progress. Without
+      // the mirror, the temp DB gets thrown away on rollback and we have to
+      // re-pay the provider for work we already completed.
+      this.persistEmbeddingBatchCache(batchCache);
+    }
+    return embeddings;
+  }
+
+  private persistEmbeddingBatchCache(entries: Array<{ hash: string; embedding: number[] }>): void {
+    if (entries.length === 0) {
+      return;
     }
     upsertMemoryEmbeddingCache({
       db: this.db,
       enabled: this.cache.enabled,
       provider: this.provider,
       providerKey: this.providerKey,
-      entries: toCache,
+      entries,
       tableName: EMBEDDING_CACHE_TABLE,
     });
-    return embeddings;
+    const mirror = this.embeddingCacheMirrorDb;
+    if (mirror && mirror !== this.db) {
+      upsertMemoryEmbeddingCache({
+        db: mirror,
+        enabled: this.cache.enabled,
+        provider: this.provider,
+        providerKey: this.providerKey,
+        entries,
+        tableName: EMBEDDING_CACHE_TABLE,
+      });
+    }
   }
 
   protected computeProviderKey(): string {
