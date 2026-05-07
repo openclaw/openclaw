@@ -222,7 +222,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     "  Docs: https://docs.openclaw.ai/gateway/remote",
   ];
 
-  if (isExposed && !isTruthyEnvValue(process.env.OPENCLAW_IGNORE_BIND_WARNING)) {
+  if (isExposed) {
     if (!hasSharedSecret) {
       const authFixLines =
         resolvedAuth.mode === "password"
@@ -243,7 +243,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
         ...saferRemoteAccessLines,
         ...authFixLines,
       );
-    } else {
+    } else if (!isTruthyEnvValue(process.env.OPENCLAW_IGNORE_BIND_WARNING)) {
       // Auth is configured, but still warn about network exposure
       warnings.push(
         `- WARNING: Gateway bound to ${bindDescriptor} (network-accessible).`,
