@@ -729,7 +729,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
   });
   const index: SessionManagedOutgoingAttachmentIndex = new Set();
   for (const message of messages) {
-    const meta = (message as { __openclaw?: { id?: string } } | null)?.__openclaw;
+    const meta = (message as { __openclaw?: { id?: string } } | null)?.["__openclaw"];
     const messageId = meta?.id;
     if (typeof messageId !== "string" || !messageId) {
       continue;
@@ -1030,19 +1030,6 @@ export async function handleManagedOutgoingImageHttpRequest(
     return true;
   }
 
-  const requesterSessionKey = resolveRequesterSessionKey(req);
-  if (requesterSessionKey) {
-    const ownsSession = await requesterOwnsManagedImageSession({
-      requesterSessionKey,
-      targetSessionKey: record.sessionKey,
-    });
-    if (ownsSession) {
-      return await serveManagedOutgoingImageRecord(res, record, variant, {
-        thumbnailMaxSide: opts.thumbnailMaxSide,
-      });
-    }
-  }
-
   const requestAuth = await authorizeGatewayHttpRequestOrReply({
     req,
     res,
@@ -1071,6 +1058,7 @@ export async function handleManagedOutgoingImageHttpRequest(
     return true;
   }
 
+  const requesterSessionKey = resolveRequesterSessionKey(req);
   if (!privilegedAccess) {
     if (!requesterSessionKey) {
       sendJson(res, 403, {

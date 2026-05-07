@@ -767,7 +767,6 @@ function renderMessageImages(images: RenderableImageBlock[], opts?: ImageRenderO
   const renderImageElement = (img: RenderableImageBlock, previewUrl: string) => html`
     ${renderImageFrame({
       previewUrl,
-      openUrl: img.displayUrl,
       actionUrl: img.displayUrl,
       alt: img.alt ?? "Attached image",
       width: img.width,
@@ -1133,7 +1132,28 @@ async function downloadImageAction(source: string, opts?: ImageActionOptions) {
     downloadBlob(blob, imageDownloadFileName(opts?.label, source, blob));
   } catch (err) {
     console.warn("Could not download image", err);
+    if (!isManagedOutgoingImageSource(source)) {
+      openExternalUrlSafe(source, { allowDataImage: true });
+    }
+  }
+}
+
+async function openImageAction(source: string, opts?: ImageActionOptions) {
+  if (!isManagedOutgoingImageSource(source)) {
     openExternalUrlSafe(source, { allowDataImage: true });
+    return;
+  }
+  try {
+    const blob = await fetchImageBlobForAction(source, opts);
+    const blobUrl = URL.createObjectURL(blob);
+    const opened = openExternalUrlSafe(blobUrl);
+    if (!opened) {
+      URL.revokeObjectURL(blobUrl);
+      return;
+    }
+    window.setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
+  } catch (err) {
+    console.warn("Could not open image", err);
   }
 }
 
@@ -1150,11 +1170,7 @@ async function copyImageAction(source: string, opts?: ImageActionOptions) {
   }
 }
 
-function renderImageActions(params: {
-  openUrl: string;
-  actionUrl: string;
-  actionOptions?: ImageActionOptions;
-}) {
+function renderImageActions(params: { actionUrl: string; actionOptions?: ImageActionOptions }) {
   const stop = (evt: Event) => evt.stopPropagation();
   return html`
     <div class="chat-image-actions" @click=${stop}>
@@ -1163,7 +1179,7 @@ function renderImageActions(params: {
         class="chat-image-action"
         title="Open image"
         aria-label="Open image"
-        @click=${() => openExternalUrlSafe(params.openUrl, { allowDataImage: true })}
+        @click=${() => openImageAction(params.actionUrl, params.actionOptions)}
       >
         ${icons.externalLink}
       </button>
@@ -1191,7 +1207,6 @@ function renderImageActions(params: {
 
 function renderImageFrame(params: {
   previewUrl: string;
-  openUrl: string;
   actionUrl: string;
   alt: string;
   width?: number;
@@ -1210,10 +1225,9 @@ function renderImageFrame(params: {
         class="chat-message-image"
         width=${displaySize?.width ?? nothing}
         height=${displaySize?.height ?? nothing}
-        @click=${() => openExternalUrlSafe(params.openUrl, { allowDataImage: true })}
+        @click=${() => openImageAction(params.actionUrl, params.actionOptions)}
       />
       ${renderImageActions({
-        openUrl: params.openUrl,
         actionUrl: params.actionUrl,
         actionOptions: params.actionOptions,
       })}
@@ -1260,10 +1274,7 @@ function resolveChatImageDisplaySize(
   };
 }
 
-function buildAssistantAttachmentMetaUrl(
-  source: string,
-  basePath?: string,
-): string {
+function buildAssistantAttachmentMetaUrl(source: string, basePath?: string): string {
   const attachmentUrl = buildAssistantAttachmentUrl(source, basePath);
   return `${attachmentUrl}${attachmentUrl.includes("?") ? "&" : "?"}meta=1`;
 }
@@ -1472,7 +1483,6 @@ function renderAssistantAttachments(
             previewUrl: buildAssistantAttachmentUrl(attachment.url, basePath, mediaTicket, {
               thumbnail: true,
             }),
-            openUrl: attachmentUrl,
             actionUrl: attachmentUrl,
             alt: attachment.label,
             actionOptions: { basePath, authToken, localMediaPreviewRoots, label: attachment.label },

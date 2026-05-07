@@ -1034,20 +1034,27 @@ describe("grouped chat rendering", () => {
       },
       { interval: 1, timeout: 100 },
     );
-    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+    const fullObjectUrl = "blob:managed-full-image";
+    const createObjectUrlMock = URL.createObjectURL as ReturnType<typeof vi.fn>;
+    createObjectUrlMock.mockReturnValue(fullObjectUrl);
+    const revokeObjectUrlMock = URL.revokeObjectURL as ReturnType<typeof vi.fn>;
+    const timeoutSpy = vi.spyOn(window, "setTimeout").mockImplementation(((cb: TimerHandler) => {
+      if (typeof cb === "function") {
+        cb();
+      }
+      return 0;
+    }) as typeof window.setTimeout);
+    const openSpy = vi.spyOn(window, "open").mockReturnValue({ opener: null } as WindowProxy);
     try {
       container
         .querySelector<HTMLButtonElement>('[aria-label="Open image"]')
         ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      expect(openSpy).toHaveBeenCalledWith(
-        new URL(
-          "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
-          window.location.href,
-        ).toString(),
-        "_blank",
-        "noopener,noreferrer",
-      );
+      await vi.waitFor(() => {
+        expect(openSpy).toHaveBeenCalledWith(fullObjectUrl, "_blank", "noopener,noreferrer");
+      });
+      expect(revokeObjectUrlMock).toHaveBeenCalledWith(fullObjectUrl);
     } finally {
+      timeoutSpy.mockRestore();
       openSpy.mockRestore();
     }
     expect(fetchMock).toHaveBeenCalledWith(

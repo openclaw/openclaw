@@ -239,7 +239,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.body.toString("utf-8")).toBe("original-image");
   });
 
-  it("serves same-session requester image reads before bearer auth", async () => {
+  it("requires gateway auth before same-session requester image reads", async () => {
     const { attachmentId, sessionKey } = await createFixture(stateDir);
 
     const { result } = await requestManagedImage({
@@ -249,10 +249,9 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       denyAuth: true,
     });
 
-    expect(result.statusCode).toBe(200);
-    expect(result.headers["content-type"]).toBe("image/png");
-    expect(result.body.toString("utf-8")).toBe("original-image");
-    expect(authorizeGatewayHttpRequestOrReplyMock).not.toHaveBeenCalled();
+    expect(result.statusCode).toBe(401);
+    expect(result.body.byteLength).toBe(0);
+    expect(authorizeGatewayHttpRequestOrReplyMock).toHaveBeenCalledTimes(1);
   });
 
   it("uses configured thumbnail sizing for managed outgoing previews", async () => {
