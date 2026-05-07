@@ -83,6 +83,7 @@ type CodexPromptSnapshotApi = {
   createCodexDynamicToolSpecsForPromptSnapshot: (params: {
     tools: AnyAgentTool[];
     pluginConfig?: { codexDynamicToolsProfile?: "native-first" | "openclaw-compat" };
+    directToolNames?: string[];
   }) => CodexDynamicToolSpec[];
 };
 
