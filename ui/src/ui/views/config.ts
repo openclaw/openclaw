@@ -1218,14 +1218,16 @@ export function renderConfig(props: ConfigProps) {
   const schemaProps = analysis.schema?.properties ?? {};
 
   const VIRTUAL_SECTIONS = new Set(["__appearance__", "__notifications__"]);
-  const localizedCategories = SECTION_CATEGORIES.map((cat) => ({
-    ...cat,
-    label: translateConfigLabel(cat.label) ?? cat.label,
-    sections: cat.sections.map((section) => ({
-      ...section,
-      label: translateConfigLabel(section.label) ?? section.label,
-    })),
-  }));
+  const localizedCategories = SECTION_CATEGORIES.map((cat) =>
+    Object.assign({}, cat, {
+      label: translateConfigLabel(cat.label) ?? cat.label,
+      sections: cat.sections.map((section) =>
+        Object.assign({}, section, {
+          label: translateConfigLabel(section.label) ?? section.label,
+        }),
+      ),
+    }),
+  );
 
   const visibleCategories = localizedCategories
     .map((cat) =>
