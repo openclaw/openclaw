@@ -11,6 +11,7 @@ const tasksListJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const tasksAuditJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const channelsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const channelsStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const agentsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("../config-cli.js", () => ({
   runConfigGet: runConfigGetMock,
@@ -49,6 +50,10 @@ vi.mock("../../commands/channels/status.js", () => ({
   channelsStatusCommand: channelsStatusCommandMock,
 }));
 
+vi.mock("../../commands/agents.js", () => ({
+  agentsListCommand: agentsListCommandMock,
+}));
+
 describe("program routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -80,13 +85,41 @@ describe("program routes", () => {
     expect(expectRoute(["channels", "status"])?.loadPlugins).toBeUndefined();
   });
 
+  it("matches agents read-only routes without plugin preload", () => {
+    expect(expectRoute(["agents"])?.loadPlugins).toBeUndefined();
+    expect(expectRoute(["agents", "list"])?.loadPlugins).toBeUndefined();
+  });
+
+  it("passes parsed agents list flags through", async () => {
+    await expect(expectRoute(["agents"])?.run(["node", "openclaw", "agents"])).resolves.toBe(true);
+    expect(agentsListCommandMock).toHaveBeenCalledWith(
+      { json: false, bindings: false },
+      expect.any(Object),
+    );
+
+    await expect(
+      expectRoute(["agents", "list"])?.run([
+        "node",
+        "openclaw",
+        "agents",
+        "list",
+        "--json",
+        "--bindings",
+      ]),
+    ).resolves.toBe(true);
+    expect(agentsListCommandMock).toHaveBeenLastCalledWith(
+      { json: true, bindings: true },
+      expect.any(Object),
+    );
+  });
+
   it("passes parsed channel read-only route flags through", async () => {
     const listRoute = expectRoute(["channels", "list"]);
-    await expect(
-      listRoute?.run(["node", "openclaw", "channels", "list", "--json", "--no-usage"]),
-    ).resolves.toBe(true);
+    await expect(listRoute?.run(["node", "openclaw", "channels", "list", "--json"])).resolves.toBe(
+      true,
+    );
     expect(channelsListCommandMock).toHaveBeenCalledWith(
-      { json: true, usage: false },
+      { json: true, all: false },
       expect.any(Object),
     );
 

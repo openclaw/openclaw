@@ -2,6 +2,9 @@ import crypto from "node:crypto";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
+import type { CurrentTurnPromptContext } from "../../agents/pi-embedded-runner/run/params.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
 import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
@@ -17,12 +20,14 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import {
   isAcpSessionKey,
   isSubagentSessionKey,
   normalizeMainKey,
 } from "../../routing/session-key.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
@@ -61,6 +66,7 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { buildReplyPromptBodies } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
+import { isSteeringQueueMode } from "./queue/steering.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
 import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
@@ -98,6 +104,10 @@ export function resolvePromptSilentReplyConversationType(params: {
 function normalizePromptRouteChannel(raw?: string | null): string | undefined {
   const normalized = normalizeOptionalString(raw);
   return normalized && normalized !== "none" ? normalized : undefined;
+}
+
+function normalizeToolProgressDetail(value: unknown): "explain" | "raw" | undefined {
+  return value === "explain" || value === "raw" ? value : undefined;
 }
 
 function resolvePersistedPromptProvider(entry?: SessionEntry): string | undefined {
@@ -236,34 +246,32 @@ export function buildExecOverridePromptHint(params: {
     .join("\n");
 }
 
-let piEmbeddedRuntimePromise: Promise<typeof import("../../agents/pi-embedded.runtime.js")> | null =
-  null;
-let agentRunnerRuntimePromise: Promise<typeof import("./agent-runner.runtime.js")> | null = null;
-let sessionUpdatesRuntimePromise: Promise<typeof import("./session-updates.runtime.js")> | null =
-  null;
-let sessionStoreRuntimePromise: Promise<
-  typeof import("../../config/sessions/store.runtime.js")
-> | null = null;
+const piEmbeddedRuntimeLoader = createLazyImportLoader(
+  () => import("../../agents/pi-embedded.runtime.js"),
+);
+const agentRunnerRuntimeLoader = createLazyImportLoader(() => import("./agent-runner.runtime.js"));
+const sessionUpdatesRuntimeLoader = createLazyImportLoader(
+  () => import("./session-updates.runtime.js"),
+);
+const sessionStoreRuntimeLoader = createLazyImportLoader(
+  () => import("../../config/sessions/store.runtime.js"),
+);
 const UNTRUSTED_SYSTEM_EVENT_LINE_RE = /^System \(untrusted\):/m;
 
 function loadPiEmbeddedRuntime() {
-  piEmbeddedRuntimePromise ??= import("../../agents/pi-embedded.runtime.js");
-  return piEmbeddedRuntimePromise;
+  return piEmbeddedRuntimeLoader.load();
 }
 
 function loadAgentRunnerRuntime() {
-  agentRunnerRuntimePromise ??= import("./agent-runner.runtime.js");
-  return agentRunnerRuntimePromise;
+  return agentRunnerRuntimeLoader.load();
 }
 
 function loadSessionUpdatesRuntime() {
-  sessionUpdatesRuntimePromise ??= import("./session-updates.runtime.js");
-  return sessionUpdatesRuntimePromise;
+  return sessionUpdatesRuntimeLoader.load();
 }
 
 function loadSessionStoreRuntime() {
-  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
-  return sessionStoreRuntimePromise;
+  return sessionStoreRuntimeLoader.load();
 }
 
 function stripPromptThinkingDirectives(body: string): string {
@@ -340,6 +348,24 @@ type RunPreparedReplyParams = {
   abortedLastRun: boolean;
 };
 
+function resolveCurrentTurnPromptContext(
+  ctx: TemplateContext,
+): CurrentTurnPromptContext | undefined {
+  const replyBody = normalizeOptionalString(ctx.ReplyToBody);
+  if (!replyBody) {
+    return undefined;
+  }
+  return {
+    reply: {
+      body: replyBody,
+      ...(normalizeOptionalString(ctx.ReplyToSender)
+        ? { senderLabel: normalizeOptionalString(ctx.ReplyToSender) }
+        : {}),
+      ...(ctx.ReplyToIsQuote === true ? { isQuote: true } : {}),
+    },
+  };
+}
+
 export async function runPreparedReply(
   params: RunPreparedReplyParams,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
@@ -394,20 +420,33 @@ export async function runPreparedReply(
     abortedLastRun,
   } = params;
   const isHeartbeat = opts?.isHeartbeat === true;
+  const traceAttributes = {
+    provider,
+    hasSessionKey: Boolean(sessionKey),
+    isHeartbeat,
+    queueMode: perMessageQueueMode ?? "configured",
+  };
+  const traceRunPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
+    measureDiagnosticsTimelineSpan(name, run, {
+      phase: "agent-turn",
+      config: cfg,
+      attributes: traceAttributes,
+    });
   const promptSessionCtx = resolvePromptSessionContextForSystemEvent({
     sessionCtx,
     sessionEntry,
     ctx,
     isHeartbeat,
   });
+  const silentReplyConversationType = resolvePromptSilentReplyConversationType({
+    ctx: promptSessionCtx,
+    inboundSessionKey: ctx.SessionKey,
+  });
   const silentReplySettings = resolveSilentReplySettings({
     cfg,
     sessionKey: runtimePolicySessionKey,
     surface: promptSessionCtx.Surface ?? promptSessionCtx.Provider,
-    conversationType: resolvePromptSilentReplyConversationType({
-      ctx: promptSessionCtx,
-      inboundSessionKey: ctx.SessionKey,
-    }),
+    conversationType: silentReplyConversationType,
   });
   const useFastReplyRuntime = shouldUseReplyFastTestRuntime({
     cfg,
@@ -425,6 +464,7 @@ export async function runPreparedReply(
   const isFirstTurnInSession = isNewSession || !currentSystemSent;
   const isGroupChat =
     promptSessionCtx.ChatType === "group" || promptSessionCtx.ChatType === "channel";
+  const isDirectChat = promptSessionCtx.ChatType === "direct" || promptSessionCtx.ChatType === "dm";
   const wasMentioned = ctx.WasMentioned === true;
   const { typingPolicy, suppressTyping } = resolveRunTypingPolicy({
     requestedPolicy: opts?.typingPolicy,
@@ -444,15 +484,15 @@ export async function runPreparedReply(
   const shouldInjectGroupIntro = Boolean(
     isGroupChat && (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
   );
-  const directChatContext =
-    promptSessionCtx.ChatType === "direct" || promptSessionCtx.ChatType === "dm"
-      ? buildDirectChatContext({
-          sessionCtx: promptSessionCtx,
-          silentReplyPolicy: silentReplySettings.policy,
-          silentReplyRewrite: silentReplySettings.rewrite,
-          silentToken: SILENT_REPLY_TOKEN,
-        })
-      : "";
+  const directChatContext = isDirectChat
+    ? buildDirectChatContext({
+        sessionCtx: promptSessionCtx,
+        sourceReplyDeliveryMode: opts?.sourceReplyDeliveryMode,
+        silentReplyPolicy: silentReplySettings.policy,
+        silentReplyRewrite: silentReplySettings.rewrite,
+        silentToken: SILENT_REPLY_TOKEN,
+      })
+    : "";
   // Always include persistent group chat context (provider + reply guidance).
   const groupChatContext = isGroupChat
     ? buildGroupChatContext({
@@ -476,13 +516,16 @@ export async function runPreparedReply(
       })
     : "";
   const allowEmptyAssistantReplyAsSilent =
-    isGroupChat &&
-    resolveGroupSilentReplyBehavior({
-      sessionEntry,
-      defaultActivation,
-      silentReplyPolicy: silentReplySettings.policy,
-      silentReplyRewrite: silentReplySettings.rewrite,
-    }).allowEmptyAssistantReplyAsSilent;
+    (isDirectChat &&
+      silentReplyConversationType === "direct" &&
+      silentReplySettings.policy === "allow") ||
+    (isGroupChat &&
+      resolveGroupSilentReplyBehavior({
+        sessionEntry,
+        defaultActivation,
+        silentReplyPolicy: silentReplySettings.policy,
+        silentReplyRewrite: silentReplySettings.rewrite,
+      }).allowEmptyAssistantReplyAsSilent);
   const groupSystemPrompt = normalizeOptionalString(promptSessionCtx.GroupSystemPrompt) ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
@@ -705,9 +748,9 @@ export async function runPreparedReply(
           skillsSnapshot: sessionEntry?.skillsSnapshot,
           systemSent: currentSystemSent,
         }
-      : await (async () => {
+      : await traceRunPhase("reply.ensure_skill_snapshot", async () => {
           const { ensureSkillSnapshot } = await loadSessionUpdatesRuntime();
-          return ensureSkillSnapshot({
+          return await ensureSkillSnapshot({
             sessionEntry,
             sessionStore,
             sessionKey,
@@ -718,11 +761,15 @@ export async function runPreparedReply(
             cfg,
             skillFilter: opts?.skillFilter,
           });
-        })();
+        });
   sessionEntry = skillResult.sessionEntry ?? sessionEntry;
   currentSystemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
-  let { prefixedCommandBody, queuedBody, transcriptCommandBody } = await rebuildPromptBodies();
+  let { prefixedCommandBody, queuedBody, transcriptCommandBody } = await traceRunPhase(
+    "reply.build_prompt_bodies",
+    () => rebuildPromptBodies(),
+  );
+  const currentTurnContext = resolveCurrentTurnPromptContext(sessionCtx);
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
@@ -809,32 +856,64 @@ export async function runPreparedReply(
         inlineMode: perMessageQueueMode,
         inlineOptions: perMessageQueueOptions,
       });
-  const piRuntime = useFastReplyRuntime ? null : await loadPiEmbeddedRuntime();
+  const piRuntime = useFastReplyRuntime
+    ? null
+    : await traceRunPhase("reply.load_pi_runtime", () => loadPiEmbeddedRuntime());
   const sessionLaneKey = piRuntime
     ? piRuntime.resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal)
     : undefined;
   const laneSize = sessionLaneKey ? getQueueSize(sessionLaneKey) : 0;
-  if (resolvedQueue.mode === "interrupt" && sessionLaneKey && laneSize > 0) {
+  const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
+  const activeSessionIdForInterrupt = piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey);
+  if (
+    activeRunQueueMode === "interrupt" &&
+    sessionLaneKey &&
+    (laneSize > 0 || activeSessionIdForInterrupt)
+  ) {
     const cleared = clearCommandLane(sessionLaneKey);
-    const activeSessionId = piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey);
     const aborted = piRuntime?.abortEmbeddedPiRun(
-      activeSessionId ?? preparedSessionState.sessionId,
+      activeSessionIdForInterrupt ?? preparedSessionState.sessionId,
     );
     logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
+  const agentHarnessPolicy = useFastReplyRuntime
+    ? undefined
+    : resolveAgentHarnessPolicy({
+        provider,
+        modelId: model,
+        config: cfg,
+        agentId,
+        sessionKey: runtimePolicySessionKey,
+      });
+  const resolveAcceptedAuthProfileProviders = (entry: SessionEntry | undefined) =>
+    agentHarnessPolicy
+      ? listOpenAIAuthProfileProvidersForAgentRuntime({
+          provider,
+          harnessRuntime: agentHarnessPolicy.runtime,
+          sessionAgentHarnessId: entry?.agentHarnessId,
+          sessionAgentRuntimeOverride: entry?.agentRuntimeOverride,
+        })
+      : [provider];
   let authProfileId = useFastReplyRuntime
     ? preparedSessionState.sessionEntry?.authProfileOverride
-    : await resolveSessionAuthProfileOverride({
-        cfg,
-        provider,
-        agentDir,
-        sessionEntry: preparedSessionState.sessionEntry,
-        sessionStore,
-        sessionKey,
-        storePath,
-        isNewSession,
-      });
-  const { runReplyAgent } = await loadAgentRunnerRuntime();
+    : await traceRunPhase("reply.resolve_auth_profile", () =>
+        resolveSessionAuthProfileOverride({
+          cfg,
+          provider,
+          acceptedProviderIds: resolveAcceptedAuthProfileProviders(
+            preparedSessionState.sessionEntry,
+          ),
+          agentDir,
+          sessionEntry: preparedSessionState.sessionEntry,
+          sessionStore,
+          sessionKey,
+          storePath,
+          isNewSession,
+        }),
+      );
+  const { runReplyAgent } = await traceRunPhase("reply.load_agent_runner_runtime", () =>
+    loadAgentRunnerRuntime(),
+  );
   const queueKey = sessionKey ?? sessionIdFinal;
   preparedSessionState = resolvePreparedSessionState();
   const resolveActiveQueueSessionId = () =>
@@ -851,22 +930,24 @@ export async function runPreparedReply(
     };
   };
   let { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
-  const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
+  const shouldSteer = !effectiveResetTriggered && isSteeringQueueMode(resolvedQueue.mode);
   const shouldFollowup =
-    resolvedQueue.mode === "followup" ||
-    resolvedQueue.mode === "collect" ||
-    resolvedQueue.mode === "steer-backlog";
+    !effectiveResetTriggered &&
+    (resolvedQueue.mode === "followup" ||
+      resolvedQueue.mode === "collect" ||
+      resolvedQueue.mode === "steer-backlog");
   const activeRunQueueAction = resolveActiveRunQueueAction({
     isActive,
     isHeartbeat: opts?.isHeartbeat === true,
     shouldFollowup,
-    queueMode: resolvedQueue.mode,
+    queueMode: activeRunQueueMode,
+    resetTriggered: effectiveResetTriggered,
   });
   if (isActive && activeRunQueueAction === "run-now") {
     const queueState = await resolvePreparedReplyQueueState({
       activeRunQueueAction,
       activeSessionId: activeSessionId ?? resolveActiveQueueSessionId(),
-      queueMode: resolvedQueue.mode,
+      queueMode: activeRunQueueMode,
       sessionKey,
       sessionId: sessionIdFinal,
       abortActiveRun: (activeRunSessionId) =>
@@ -880,6 +961,9 @@ export async function runPreparedReply(
           : await resolveSessionAuthProfileOverride({
               cfg,
               provider,
+              acceptedProviderIds: resolveAcceptedAuthProfileProviders(
+                preparedSessionState.sessionEntry,
+              ),
               agentDir,
               sessionEntry: preparedSessionState.sessionEntry,
               sessionStore,
@@ -888,7 +972,10 @@ export async function runPreparedReply(
               isNewSession,
             });
         preparedSessionState = resolvePreparedSessionState();
-        ({ prefixedCommandBody, queuedBody, transcriptCommandBody } = await rebuildPromptBodies());
+        ({ prefixedCommandBody, queuedBody, transcriptCommandBody } = await traceRunPhase(
+          "reply.build_prompt_bodies",
+          () => rebuildPromptBodies(),
+        ));
       },
       resolveBusyState: resolveQueueBusyState,
     });
@@ -906,6 +993,7 @@ export async function runPreparedReply(
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
+    currentTurnContext,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
@@ -1034,6 +1122,9 @@ export async function runPreparedReply(
     defaultModel,
     agentCfgContextTokens: agentCfg?.contextTokens,
     resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
+    toolProgressDetail:
+      normalizeToolProgressDetail(agentCfg?.toolProgressDetail) ??
+      normalizeToolProgressDetail(cfg.agents?.defaults?.toolProgressDetail),
     isNewSession,
     blockStreamingEnabled,
     blockReplyChunking,

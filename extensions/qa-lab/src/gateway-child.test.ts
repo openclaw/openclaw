@@ -85,6 +85,7 @@ describe("buildQaRuntimeEnv", () => {
     });
 
     expect(env.OPENCLAW_TEST_FAST).toBe("1");
+    expect(env.OPENCLAW_QA_PARENT_PID).toBe(String(process.pid));
     expect(env.OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER).toBe("1");
     expect(env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS).toBe("1");
     expect(env.OPENCLAW_SKIP_STARTUP_MODEL_PREWARM).toBe("1");
@@ -344,6 +345,23 @@ describe("buildQaRuntimeEnv", () => {
     await expect(wait).resolves.toBeUndefined();
   });
 
+  it("keeps restart offsets stable after stderr output", async () => {
+    const output = __testing.createQaGatewayChildLogCollector();
+    output.push(Buffer.from("gateway ready\n"));
+    output.push(Buffer.from("stderr warning\n"));
+    const offset = output.text().length;
+    const wait = __testing.waitForQaGatewayRestartBoundary({
+      logs: () => output.text(),
+      offset,
+      pollMs: 1,
+      timeoutMs: 100,
+    });
+
+    output.push(Buffer.from("signal SIGUSR1 received\nrestart mode: in-process restart\n"));
+
+    await expect(wait).resolves.toBeUndefined();
+  });
+
   it("times out when a SIGUSR1 restart never reaches the boundary", async () => {
     await expect(
       __testing.waitForQaGatewayRestartBoundary({
@@ -387,6 +405,44 @@ describe("buildQaRuntimeEnv", () => {
         },
       },
     });
+  });
+
+  it("stages live env API-key profiles for isolated QA workers", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "qa-live-api-key-state-"));
+    cleanups.push(async () => {
+      await rm(stateDir, { recursive: true, force: true });
+    });
+
+    const cfg = await __testing.stageQaLiveApiKeyProfiles({
+      cfg: {},
+      stateDir,
+      providerIds: ["openai"],
+      env: {
+        OPENAI_API_KEY: "qa-live-not-a-real-key",
+      },
+    });
+
+    expect(cfg.auth?.profiles?.["qa-live-openai-env"]).toMatchObject({
+      provider: "openai",
+      mode: "api_key",
+      displayName: "QA live openai env credential",
+    });
+
+    for (const agentId of ["main", "qa"]) {
+      const storeRaw = await readFile(
+        path.join(stateDir, "agents", agentId, "agent", "auth-profiles.json"),
+        "utf8",
+      );
+      expect(JSON.parse(storeRaw)).toMatchObject({
+        profiles: {
+          "qa-live-openai-env": {
+            type: "api_key",
+            provider: "openai",
+            key: "qa-live-not-a-real-key",
+          },
+        },
+      });
+    }
   });
 
   it("stages placeholder mock auth profiles per agent dir so mock-openai runs can resolve credentials", async () => {
@@ -773,6 +829,33 @@ describe("qa bundled plugin dir", () => {
     ).toBe(path.join(repoRoot, "extensions", "qa-channel"));
   });
 
+  it("resolves bundled plugins by manifest id when the directory name differs", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-manifest-id-root-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+    await mkdir(path.join(repoRoot, "dist", "extensions", "kimi-coding"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(repoRoot, "dist", "extensions", "kimi-coding", "openclaw.plugin.json"),
+      JSON.stringify({ id: "kimi", providers: ["kimi"] }),
+      "utf8",
+    );
+    await writeFile(
+      path.join(repoRoot, "dist", "extensions", "kimi-coding", "package.json"),
+      "{}",
+      "utf8",
+    );
+
+    expect(
+      __testing.resolveQaBundledPluginSourceDir({
+        repoRoot,
+        pluginId: "kimi",
+      }),
+    ).toBe(path.join(repoRoot, "dist", "extensions", "kimi-coding"));
+  });
+
   it("uses a source bundled plugin when the built copy is missing CLI metadata", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-cli-metadata-root-"));
     cleanups.push(async () => {
@@ -915,57 +998,6 @@ describe("qa bundled plugin dir", () => {
         ),
       ),
     ).resolves.toBeTruthy();
-  });
-
-  it("skips transient runtime dependency artifacts while staging built bundled plugins", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-runtime-deps-"));
-    cleanups.push(async () => {
-      await rm(repoRoot, { recursive: true, force: true });
-    });
-    await writeFile(
-      path.join(repoRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
-      "utf8",
-    );
-    const pluginDir = path.join(repoRoot, "dist", "extensions", "qa-channel");
-    await mkdir(path.join(pluginDir, ".openclaw-runtime-deps-copy-active", "node_modules"), {
-      recursive: true,
-    });
-    await writeFile(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({ name: "@openclaw/qa-channel", type: "module" }, null, 2),
-      "utf8",
-    );
-    await writeFile(path.join(pluginDir, "index.js"), "export const ok = true;\n", "utf8");
-    await writeFile(path.join(pluginDir, ".openclaw-runtime-deps.json"), "{}\n", "utf8");
-    await writeFile(path.join(pluginDir, ".openclaw-runtime-deps-stamp.json"), "{}\n", "utf8");
-    await writeFile(
-      path.join(pluginDir, ".openclaw-runtime-deps-copy-active", "node_modules", "transient.js"),
-      "export {};\n",
-      "utf8",
-    );
-    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-runtime-deps-target-"));
-    cleanups.push(async () => {
-      await rm(tempRoot, { recursive: true, force: true });
-    });
-
-    const { bundledPluginsDir } = await __testing.createQaBundledPluginsDir({
-      repoRoot,
-      tempRoot,
-      allowedPluginIds: ["qa-channel"],
-    });
-
-    const stagedPluginDir = path.join(bundledPluginsDir, "qa-channel");
-    await expect(readFile(path.join(stagedPluginDir, "index.js"), "utf8")).resolves.toContain("ok");
-    await expect(lstat(path.join(stagedPluginDir, ".openclaw-runtime-deps.json"))).rejects.toThrow(
-      /ENOENT/u,
-    );
-    await expect(
-      lstat(path.join(stagedPluginDir, ".openclaw-runtime-deps-stamp.json")),
-    ).rejects.toThrow(/ENOENT/u);
-    await expect(
-      lstat(path.join(stagedPluginDir, ".openclaw-runtime-deps-copy-active")),
-    ).rejects.toThrow(/ENOENT/u);
   });
 
   it("preserves dist-runtime-only root chunks when dist also exists", async () => {

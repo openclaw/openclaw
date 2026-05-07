@@ -63,8 +63,8 @@ loopback/private fallbacks are rejected by design.
 
 Live tests are split into two layers so we can isolate failures:
 
-- “Direct model” tells us the provider/model can answer at all with the given key.
-- “Gateway smoke” tells us the full gateway+agent pipeline works for that model (sessions, history, tools, sandbox policy, etc.).
+- "Direct model" tells us the provider/model can answer at all with the given key.
+- "Gateway smoke" tells us the full gateway+agent pipeline works for that model (sessions, history, tools, sandbox policy, etc.).
 
 ### Layer 1: Direct model completion (no gateway)
 
@@ -77,7 +77,7 @@ Live tests are split into two layers so we can isolate failures:
   - `pnpm test:live` (or `OPENCLAW_LIVE_TEST=1` if invoking Vitest directly)
 - Set `OPENCLAW_LIVE_MODELS=modern` (or `all`, alias for modern) to actually run this suite; otherwise it skips to keep `pnpm test:live` focused on gateway smoke
 - How to select models:
-  - `OPENCLAW_LIVE_MODELS=modern` to run the modern allowlist (Opus/Sonnet 4.6+, GPT-5.2 + Codex, Gemini 3, DeepSeek V4, GLM 4.7, MiniMax M2.7, Grok 4)
+  - `OPENCLAW_LIVE_MODELS=modern` to run the modern allowlist (Opus/Sonnet 4.6+, GPT-5.2 + Codex, Gemini 3, DeepSeek V4, GLM 4.7, MiniMax M2.7, Grok 4.3)
   - `OPENCLAW_LIVE_MODELS=all` is an alias for the modern allowlist
   - or `OPENCLAW_LIVE_MODELS="openai/gpt-5.5,openai-codex/gpt-5.5,anthropic/claude-opus-4-6,..."` (comma allowlist)
   - Modern/all sweeps default to a curated high-signal cap; set `OPENCLAW_LIVE_MAX_MODELS=0` for an exhaustive modern sweep or a positive number for a smaller cap.
@@ -89,7 +89,7 @@ Live tests are split into two layers so we can isolate failures:
   - By default: profile store and env fallbacks
   - Set `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to enforce **profile store** only
 - Why this exists:
-  - Separates “provider API is broken / key is invalid” from “gateway agent pipeline is broken”
+  - Separates "provider API is broken / key is invalid" from "gateway agent pipeline is broken"
   - Contains small, isolated regressions (example: OpenAI Responses/Codex Responses reasoning replay + tool-call flows)
 
 ### Layer 2: Gateway + dev agent smoke (what "@openclaw" actually does)
@@ -99,7 +99,7 @@ Live tests are split into two layers so we can isolate failures:
   - Spin up an in-process gateway
   - Create/patch a `agent:dev:*` session (model override per run)
   - Iterate models-with-keys and assert:
-    - “meaningful” response (no tools)
+    - "meaningful" response (no tools)
     - a real tool invocation works (read probe)
     - optional extra tool probes (exec+read probe)
     - OpenAI regression paths (tool-call-only → follow-up) keep working
@@ -111,17 +111,17 @@ Live tests are split into two layers so we can isolate failures:
 - How to enable:
   - `pnpm test:live` (or `OPENCLAW_LIVE_TEST=1` if invoking Vitest directly)
 - How to select models:
-  - Default: modern allowlist (Opus/Sonnet 4.6+, GPT-5.2 + Codex, Gemini 3, DeepSeek V4, GLM 4.7, MiniMax M2.7, Grok 4)
+  - Default: modern allowlist (Opus/Sonnet 4.6+, GPT-5.2 + Codex, Gemini 3, DeepSeek V4, GLM 4.7, MiniMax M2.7, Grok 4.3)
   - `OPENCLAW_LIVE_GATEWAY_MODELS=all` is an alias for the modern allowlist
   - Or set `OPENCLAW_LIVE_GATEWAY_MODELS="provider/model"` (or comma list) to narrow
   - Modern/all gateway sweeps default to a curated high-signal cap; set `OPENCLAW_LIVE_GATEWAY_MAX_MODELS=0` for an exhaustive modern sweep or a positive number for a smaller cap.
-- How to select providers (avoid “OpenRouter everything”):
+- How to select providers (avoid "OpenRouter everything"):
   - `OPENCLAW_LIVE_GATEWAY_PROVIDERS="google,google-antigravity,google-gemini-cli,openai,anthropic,zai,minimax"` (comma allowlist)
 - Tool + image probes are always on in this live test:
   - `read` probe + `exec+read` probe (tool stress)
   - image probe runs when the model advertises image input support
   - Flow (high level):
-    - Test generates a tiny PNG with “CAT” + random code (`src/gateway/live-image-probe.ts`)
+    - Test generates a tiny PNG with "CAT" + random code (`src/gateway/live-image-probe.ts`)
     - Sends it via `agent` `attachments: [{ mimeType: "image/png", content: "<base64>" }]`
     - Gateway parses attachments into `images[]` (`src/gateway/server-methods/agent.ts` + `src/gateway/chat-attachments.ts`)
     - Embedded agent forwards a multimodal user message to the model
@@ -203,6 +203,15 @@ Notes:
 - The live CLI-backend smoke now exercises the same end-to-end flow for Claude, Codex, and Gemini: text turn, image classification turn, then MCP `cron` tool call verified through the gateway CLI.
 - Claude's default smoke also patches the session from Sonnet to Opus and verifies the resumed session still remembers an earlier note.
 
+## Live: APNs HTTP/2 proxy reachability
+
+- Test: `src/infra/push-apns-http2.live.test.ts`
+- Goal: tunnel through a local HTTP CONNECT proxy to Apple's sandbox APNs endpoint, send the APNs HTTP/2 validation request, and assert Apple's real `403 InvalidProviderToken` response comes back through the proxy path.
+- Enable:
+  - `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_APNS_REACHABILITY=1 pnpm test:live src/infra/push-apns-http2.live.test.ts`
+- Optional timeout:
+  - `OPENCLAW_LIVE_APNS_TIMEOUT_MS=30000`
+
 ## Live: ACP bind smoke (`/acp spawn ... --bind here`)
 
 - Test: `src/gateway/gateway-acp-bind.live.test.ts`
@@ -266,7 +275,7 @@ Docker notes:
 - The Docker runner lives at `scripts/test-live-acp-bind-docker.sh`.
 - By default, it runs the ACP bind smoke against the aggregate live CLI agents in sequence: `claude`, `codex`, then `gemini`.
 - Use `OPENCLAW_LIVE_ACP_BIND_AGENTS=claude`, `OPENCLAW_LIVE_ACP_BIND_AGENTS=codex`, `OPENCLAW_LIVE_ACP_BIND_AGENTS=droid`, `OPENCLAW_LIVE_ACP_BIND_AGENTS=gemini`, or `OPENCLAW_LIVE_ACP_BIND_AGENTS=opencode` to narrow the matrix.
-- It sources `~/.profile`, stages the matching CLI auth material into the container, then installs the requested live CLI (`@anthropic-ai/claude-code`, `@openai/codex`, Factory Droid via `https://app.factory.ai/cli`, `@google/gemini-cli`, or `opencode-ai`) if missing. The ACP backend itself is the bundled embedded `acpx/runtime` package from the `acpx` plugin.
+- It sources `~/.profile`, stages the matching CLI auth material into the container, then installs the requested live CLI (`@anthropic-ai/claude-code`, `@openai/codex`, Factory Droid via `https://app.factory.ai/cli`, `@google/gemini-cli`, or `opencode-ai`) if missing. The ACP backend itself is the embedded `acpx/runtime` package from the official `acpx` plugin.
 - The Droid Docker variant stages `~/.factory` for settings, forwards `FACTORY_API_KEY`, and requires that API key because local Factory OAuth/keyring auth is not portable into the container. It uses ACPX's built-in `droid exec --output-format acp` registry entry.
 - The OpenCode Docker variant is a strict single-agent regression lane. It writes a temporary `OPENCODE_CONFIG_CONTENT` default model from `OPENCLAW_LIVE_ACP_BIND_OPENCODE_MODEL` (default `opencode/kimi-k2.6`) after sourcing `~/.profile`, and `pnpm test:docker:live-acp-bind:opencode` requires a bound assistant transcript instead of accepting the generic post-bind skip.
 - Direct `acpx` CLI calls are only a manual/workaround path for comparing behavior outside the Gateway. The Docker ACP bind smoke exercises OpenClaw's embedded `acpx` runtime backend.
@@ -291,8 +300,8 @@ Docker notes:
 - Optional image probe: `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=1`
 - Optional MCP/tool probe: `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=1`
 - Optional Guardian probe: `OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=1`
-- The smoke sets `OPENCLAW_AGENT_HARNESS_FALLBACK=none` so a broken Codex
-  harness cannot pass by silently falling back to PI.
+- The smoke uses `agentRuntime.id: "codex"` so a broken Codex harness cannot
+  pass by silently falling back to PI.
 - Auth: Codex app-server auth from the local Codex subscription login. Docker
   smokes can also provide `OPENAI_API_KEY` for non-Codex probes when applicable,
   plus optional copied `~/.codex/auth.json` and `~/.codex/config.toml`.
@@ -327,9 +336,8 @@ Docker notes:
   `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0` or
   `OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=0` when you need a narrower debug
   run.
-- Docker also exports `OPENCLAW_AGENT_HARNESS_FALLBACK=none`, matching the live
-  test config so legacy aliases or PI fallback cannot hide a Codex harness
-  regression.
+- Docker uses the same explicit Codex runtime config, so legacy aliases or PI
+  fallback cannot hide a Codex harness regression.
 
 ### Recommended live recipes
 
@@ -359,16 +367,16 @@ Notes:
 - `google-antigravity/...` uses the Antigravity OAuth bridge (Cloud Code Assist-style agent endpoint).
 - `google-gemini-cli/...` uses the local Gemini CLI on your machine (separate auth + tooling quirks).
 - Gemini API vs Gemini CLI:
-  - API: OpenClaw calls Google’s hosted Gemini API over HTTP (API key / profile auth); this is what most users mean by “Gemini”.
+  - API: OpenClaw calls Google's hosted Gemini API over HTTP (API key / profile auth); this is what most users mean by "Gemini".
   - CLI: OpenClaw shells out to a local `gemini` binary; it has its own auth and can behave differently (streaming/tool support/version skew).
 
 ## Live: model matrix (what we cover)
 
-There is no fixed “CI model list” (live is opt-in), but these are the **recommended** models to cover regularly on a dev machine with keys.
+There is no fixed "CI model list" (live is opt-in), but these are the **recommended** models to cover regularly on a dev machine with keys.
 
 ### Modern smoke set (tool calling + image)
 
-This is the “common models” run we expect to keep working:
+This is the "common models" run we expect to keep working:
 
 - OpenAI (non-Codex): `openai/gpt-5.5`
 - OpenAI Codex OAuth: `openai-codex/gpt-5.5`
@@ -395,8 +403,8 @@ Pick at least one per provider family:
 
 Optional additional coverage (nice to have):
 
-- xAI: `xai/grok-4` (or latest available)
-- Mistral: `mistral/`… (pick one “tools” capable model you have enabled)
+- xAI: `xai/grok-4.3` (or latest available)
+- Mistral: `mistral/`… (pick one "tools" capable model you have enabled)
 - Cerebras: `cerebras/`… (if you have access)
 - LM Studio: `lmstudio/`… (local; tool calling depends on API mode)
 
@@ -425,9 +433,9 @@ Do not hardcode "all models" in docs. The authoritative list is whatever `discov
 Live tests discover credentials the same way the CLI does. Practical implications:
 
 - If the CLI works, live tests should find the same keys.
-- If a live test says “no creds”, debug the same way you’d debug `openclaw models list` / model selection.
+- If a live test says "no creds", debug the same way you'd debug `openclaw models list` / model selection.
 
-- Per-agent auth profiles: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (this is what “profile keys” means in the live tests)
+- Per-agent auth profiles: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (this is what "profile keys" means in the live tests)
 - Config: `~/.openclaw/openclaw.json` (or `OPENCLAW_CONFIG_PATH`)
 - Legacy state dir: `~/.openclaw/credentials/` (copied into the staged live home when present, but not the main profile-key store)
 - Live local runs copy the active config, per-agent `auth-profiles.json` files, legacy `credentials/`, and supported external CLI auth dirs into a temp test home by default; staged live homes skip `workspace/` and `sandboxes/`, and `agents.*.workspace` / `agentDir` path overrides are stripped so probes stay off your real host workspace.
@@ -498,8 +506,8 @@ openclaw infer image generate \
 ```
 
 This covers CLI argument parsing, config/default-agent resolution, bundled
-plugin activation, on-demand bundled runtime-dependency repair, the shared
-image-generation runtime, and the live provider request.
+plugin activation, the shared image-generation runtime, and the live provider
+request. Plugin dependencies are expected to be present before runtime load.
 
 ## Music generation live
 
@@ -576,4 +584,4 @@ image-generation runtime, and the live provider request.
 
 ## Related
 
-- [Testing](/help/testing) — unit, integration, QA, and Docker suites
+- [Testing](/help/testing) - unit, integration, QA, and Docker suites

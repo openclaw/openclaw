@@ -40,6 +40,7 @@
         "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"]
       },
       "timeoutMs": { "type": "integer", "minimum": 250, "maximum": 120000 },
+      "setupGraceTimeoutMs": { "type": "integer", "minimum": 0, "maximum": 30000 },
       "queryMode": {
         "type": "string",
         "enum": ["message", "recent", "full"]
@@ -99,7 +100,7 @@
     },
     "modelFallbackPolicy": {
       "label": "Model Fallback Policy",
-      "help": "Deprecated compatibility field. Active Memory no longer uses a built-in fallback model; set modelFallback explicitly if you want a fallback."
+      "help": "Deprecated compatibility field. modelFallback is only the chain-resolution last resort when no explicit plugin model, session model, or agent primary model resolves; it is not runtime failover."
     },
     "allowedChatTypes": {
       "label": "Allowed Chat Types",
@@ -115,6 +116,10 @@
     },
     "timeoutMs": {
       "label": "Timeout (ms)"
+    },
+    "setupGraceTimeoutMs": {
+      "label": "Setup Grace Timeout (ms)",
+      "help": "Advanced: extra blocking budget for cold embedded-run setup before the recall timeout is considered exhausted. Defaults to 0 so timeoutMs remains the main-lane hook budget unless you opt in."
     },
     "queryMode": {
       "label": "Query Mode",

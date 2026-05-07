@@ -108,6 +108,88 @@ describe("install.sh", () => {
     expect(output).toContain(`path=${nvmNode}`);
     expect(output).toContain("version=v22.22.1");
   });
+
+  it("warns before redirecting an unwritable npm prefix", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-npm-prefix-"));
+    const home = join(tmp, "home");
+    const events = join(tmp, "events.log");
+    mkdirSync(home, { recursive: true });
+
+    let result: ReturnType<typeof runInstallShell> | undefined;
+    try {
+      result = runInstallShell(`
+        set -euo pipefail
+        source "${SCRIPT_PATH}"
+        OS=linux
+        HOME=${JSON.stringify(home)}
+        prefix=${JSON.stringify(join(tmp, "root-owned-prefix"))}
+        events=${JSON.stringify(events)}
+        npm() {
+          if [[ "$1" == "config" && "$2" == "get" && "$3" == "prefix" ]]; then
+            printf '%s\\n' "$prefix"
+            return 0
+          fi
+          if [[ "$1" == "config" && "$2" == "set" && "$3" == "prefix" ]]; then
+            printf 'npm-set:%s\\n' "$4" >> "$events"
+            return 0
+          fi
+          return 1
+        }
+        ui_info() { printf 'info:%s\\n' "$*" >> "$events"; }
+        ui_warn() { printf 'warn:%s\\n' "$*" >> "$events"; }
+        ui_success() { printf 'success:%s\\n' "$*" >> "$events"; }
+        fix_npm_permissions
+        cat "$events"
+      `);
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+
+    expect(result?.status).toBe(0);
+    const lines = (result?.stdout ?? "").trim().split("\n");
+    const warningIndex = lines.findIndex((line) =>
+      line.includes("The installer will switch npm's user prefix"),
+    );
+    const npmSetIndex = lines.findIndex((line) => line.startsWith("npm-set:"));
+    const noSudoWarningIndex = lines.findIndex((line) => line.includes("Avoid sudo npm i -g"));
+    expect(warningIndex).toBeGreaterThanOrEqual(0);
+    expect(npmSetIndex).toBeGreaterThan(warningIndex);
+    expect(noSudoWarningIndex).toBeGreaterThan(npmSetIndex);
+    expect(result?.stdout).toContain("npm global prefix is not writable");
+    expect(result?.stdout).toContain("npm normally writes that setting to ~/.npmrc");
+    expect(result?.stdout).toContain("npm i -g openclaw@latest");
+    expect(result?.stdout).toContain("using this user prefix");
+    expect(result?.stdout).not.toContain("has been saved");
+  });
+
+  it("uses a quoted absolute openclaw path in follow-up commands when npm bin is not on the original PATH", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-command-"));
+    const npmBin = join(tmp, "npm bin");
+    const visibleBin = join(tmp, "visible-bin");
+    mkdirSync(npmBin, { recursive: true });
+    mkdirSync(visibleBin, { recursive: true });
+    const openclawBin = join(npmBin, "openclaw");
+    writeFileSync(openclawBin, "#!/bin/sh\nexit 0\n");
+    chmodSync(openclawBin, 0o755);
+
+    let result: ReturnType<typeof runInstallShell> | undefined;
+    try {
+      result = runInstallShell(`
+        set -euo pipefail
+        source "${SCRIPT_PATH}"
+        ORIGINAL_PATH=${JSON.stringify(`${visibleBin}:/usr/bin:/bin`)}
+        printf 'missing=%s\\n' "$(openclaw_command_for_user "${openclawBin}")"
+        ORIGINAL_PATH=${JSON.stringify(`${npmBin}:${visibleBin}:/usr/bin:/bin`)}
+        printf 'present=%s\\n' "$(openclaw_command_for_user "${openclawBin}")"
+      `);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+
+    expect(result?.status).toBe(0);
+    expect(result?.stdout).toContain(`missing=${openclawBin.replace(/ /g, "\\ ")}`);
+    expect(result?.stdout).toContain("present=openclaw");
+  });
 });
 
 describe("install.sh macOS Homebrew Node behavior", () => {

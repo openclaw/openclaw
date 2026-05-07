@@ -11,10 +11,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
+import { markDiagnosticSessionProgress } from "../../logging/diagnostic.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -37,36 +40,33 @@ import {
 import { hasInboundMedia } from "./inbound-media.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
-let dispatchAcpManagerRuntimePromise: Promise<
-  typeof import("./dispatch-acp-manager.runtime.js")
-> | null = null;
-let dispatchAcpSessionRuntimePromise: Promise<
-  typeof import("./dispatch-acp-session.runtime.js")
-> | null = null;
-let dispatchAcpTtsRuntimePromise: Promise<typeof import("./dispatch-acp-tts.runtime.js")> | null =
-  null;
-let dispatchAcpTranscriptRuntimePromise: Promise<
-  typeof import("./dispatch-acp-transcript.runtime.js")
-> | null = null;
+const dispatchAcpManagerRuntimeLoader = createLazyImportLoader(
+  () => import("./dispatch-acp-manager.runtime.js"),
+);
+const dispatchAcpSessionRuntimeLoader = createLazyImportLoader(
+  () => import("./dispatch-acp-session.runtime.js"),
+);
+const dispatchAcpTtsRuntimeLoader = createLazyImportLoader(
+  () => import("./dispatch-acp-tts.runtime.js"),
+);
+const dispatchAcpTranscriptRuntimeLoader = createLazyImportLoader(
+  () => import("./dispatch-acp-transcript.runtime.js"),
+);
 
 function loadDispatchAcpManagerRuntime() {
-  dispatchAcpManagerRuntimePromise ??= import("./dispatch-acp-manager.runtime.js");
-  return dispatchAcpManagerRuntimePromise;
+  return dispatchAcpManagerRuntimeLoader.load();
 }
 
 function loadDispatchAcpSessionRuntime() {
-  dispatchAcpSessionRuntimePromise ??= import("./dispatch-acp-session.runtime.js");
-  return dispatchAcpSessionRuntimePromise;
+  return dispatchAcpSessionRuntimeLoader.load();
 }
 
 function loadDispatchAcpTtsRuntime() {
-  dispatchAcpTtsRuntimePromise ??= import("./dispatch-acp-tts.runtime.js");
-  return dispatchAcpTtsRuntimePromise;
+  return dispatchAcpTtsRuntimeLoader.load();
 }
 
 function loadDispatchAcpTranscriptRuntime() {
-  dispatchAcpTranscriptRuntimePromise ??= import("./dispatch-acp-transcript.runtime.js");
-  return dispatchAcpTranscriptRuntimePromise;
+  return dispatchAcpTranscriptRuntimeLoader.load();
 }
 
 type DispatchProcessedRecorder = (
@@ -342,6 +342,23 @@ export async function tryDispatchAcpReply(params: {
   }
   const canonicalSessionKey = acpResolution.sessionKey;
   const acpAgentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
+  const progressSessionKeys = isDiagnosticsEnabled(params.cfg)
+    ? Array.from(
+        new Set(
+          [params.ctx.SessionKey, sessionKey, canonicalSessionKey]
+            .map((key) => normalizeOptionalString(key))
+            .filter((key): key is string => Boolean(key)),
+        ),
+      )
+    : [];
+  const markAcpProgress =
+    progressSessionKeys.length > 0
+      ? () => {
+          for (const key of progressSessionKeys) {
+            markDiagnosticSessionProgress({ sessionKey: key });
+          }
+        }
+      : undefined;
 
   let queuedFinal = false;
   const delivery = createAcpDispatchDeliveryCoordinator({
@@ -401,6 +418,7 @@ export async function tryDispatchAcpReply(params: {
     cfg: params.cfg,
     shouldSendToolSummaries: params.shouldSendToolSummaries,
     deliver: delivery.deliver,
+    onProgress: markAcpProgress,
     provider: params.ctx.Surface ?? params.ctx.Provider,
     accountId: effectiveDispatchAccountId,
   });

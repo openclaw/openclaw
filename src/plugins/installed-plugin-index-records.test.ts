@@ -14,6 +14,7 @@ import {
   withoutPluginInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "./installed-plugin-index-records.js";
+import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const tempDirs: string[] = [];
 
@@ -160,6 +161,187 @@ describe("plugin index install records store", () => {
       persisted: {
         source: "npm",
         spec: "persisted@1.0.0",
+      },
+    });
+  });
+
+  it("reads legacy persisted records when the plugin index has no plugin list", async () => {
+    const stateDir = makeStateDir();
+    const indexPath = resolveInstalledPluginIndexRecordsStorePath({ stateDir });
+    fs.mkdirSync(path.dirname(indexPath), { recursive: true });
+    fs.writeFileSync(
+      indexPath,
+      JSON.stringify({
+        installRecords: {
+          legacy: {
+            source: "npm",
+            spec: "legacy@1.0.0",
+            installPath: path.join(stateDir, "plugins", "legacy"),
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).resolves.toEqual({
+      legacy: {
+        source: "npm",
+        spec: "legacy@1.0.0",
+        installPath: path.join(stateDir, "plugins", "legacy"),
+      },
+    });
+  });
+
+  it("recovers managed npm plugin records when the persisted ledger is empty", async () => {
+    const stateDir = makeStateDir();
+    const discordDir = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/discord",
+      pluginId: "discord",
+      version: "2026.5.2",
+    });
+    const codexDir = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/codex",
+      pluginId: "codex",
+      version: "2026.5.2",
+    });
+    const indexPath = resolveInstalledPluginIndexRecordsStorePath({ stateDir });
+    fs.mkdirSync(path.dirname(indexPath), { recursive: true });
+    fs.writeFileSync(indexPath, JSON.stringify({ installRecords: {}, plugins: [] }), "utf8");
+
+    await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).resolves.toMatchObject({
+      codex: {
+        source: "npm",
+        spec: "@openclaw/codex@2026.5.2",
+        installPath: codexDir,
+        version: "2026.5.2",
+        resolvedName: "@openclaw/codex",
+        resolvedVersion: "2026.5.2",
+        resolvedSpec: "@openclaw/codex@2026.5.2",
+      },
+      discord: {
+        source: "npm",
+        spec: "@openclaw/discord@2026.5.2",
+        installPath: discordDir,
+        version: "2026.5.2",
+        resolvedName: "@openclaw/discord",
+        resolvedVersion: "2026.5.2",
+        resolvedSpec: "@openclaw/discord@2026.5.2",
+      },
+    });
+    expect(loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toMatchObject({
+      codex: {
+        source: "npm",
+        installPath: codexDir,
+      },
+      discord: {
+        source: "npm",
+        installPath: discordDir,
+      },
+    });
+  });
+
+  it("keeps persisted install record metadata over recovered npm records", async () => {
+    const stateDir = makeStateDir();
+    writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/discord",
+      pluginId: "discord",
+      version: "2026.5.2",
+    });
+    const candidate = createPluginCandidate(stateDir, "discord");
+    await writePersistedInstalledPluginIndexInstallRecords(
+      {
+        discord: {
+          source: "npm",
+          spec: "@openclaw/discord@beta",
+          installPath: path.join(stateDir, "custom", "discord"),
+          integrity: "sha512-persisted",
+        },
+      },
+      { stateDir, candidates: [candidate] },
+    );
+
+    await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).resolves.toMatchObject({
+      discord: {
+        source: "npm",
+        spec: "@openclaw/discord@beta",
+        installPath: path.join(stateDir, "custom", "discord"),
+        integrity: "sha512-persisted",
+      },
+    });
+  });
+
+  it("preserves git install resolution fields in persisted records", async () => {
+    const stateDir = makeStateDir();
+    const candidate = createPluginCandidate(stateDir, "git-demo");
+    await writePersistedInstalledPluginIndexInstallRecords(
+      {
+        "git-demo": {
+          source: "git",
+          spec: "git:file:///tmp/git-demo@abc123",
+          installPath: path.join(stateDir, "plugins", "git-demo"),
+          gitUrl: "file:///tmp/git-demo",
+          gitRef: "abc123",
+          gitCommit: "abc123",
+        },
+      },
+      { stateDir, candidates: [candidate] },
+    );
+
+    await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).resolves.toMatchObject({
+      "git-demo": {
+        source: "git",
+        spec: "git:file:///tmp/git-demo@abc123",
+        gitUrl: "file:///tmp/git-demo",
+        gitRef: "abc123",
+        gitCommit: "abc123",
+      },
+    });
+  });
+
+  it("preserves ClawHub ClawPack install metadata in persisted records", async () => {
+    const stateDir = makeStateDir();
+    const candidate = createPluginCandidate(stateDir, "clawpack-demo");
+    await writePersistedInstalledPluginIndexInstallRecords(
+      {
+        "clawpack-demo": {
+          source: "clawhub",
+          spec: "clawhub:clawpack-demo",
+          installPath: path.join(stateDir, "plugins", "clawpack-demo"),
+          clawhubUrl: "https://clawhub.ai",
+          clawhubPackage: "clawpack-demo",
+          clawhubFamily: "code-plugin",
+          clawhubChannel: "official",
+          artifactKind: "npm-pack",
+          artifactFormat: "tgz",
+          npmIntegrity: "sha512-clawpack",
+          npmShasum: "1".repeat(40),
+          npmTarballName: "clawpack-demo-2026.5.1-beta.2.tgz",
+          clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          clawpackSpecVersion: 1,
+          clawpackManifestSha256:
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          clawpackSize: 4096,
+        },
+      },
+      { stateDir, candidates: [candidate] },
+    );
+
+    await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).resolves.toMatchObject({
+      "clawpack-demo": {
+        source: "clawhub",
+        spec: "clawhub:clawpack-demo",
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        npmIntegrity: "sha512-clawpack",
+        npmShasum: "1".repeat(40),
+        npmTarballName: "clawpack-demo-2026.5.1-beta.2.tgz",
+        clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        clawpackSpecVersion: 1,
+        clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        clawpackSize: 4096,
       },
     });
   });

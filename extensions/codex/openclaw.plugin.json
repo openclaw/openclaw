@@ -4,7 +4,8 @@
   "description": "Codex app-server harness and Codex-managed GPT model catalog.",
   "providers": ["codex"],
   "contracts": {
-    "mediaUnderstandingProviders": ["codex"]
+    "mediaUnderstandingProviders": ["codex"],
+    "migrationProviders": ["codex"]
   },
   "mediaUnderstandingProviderMetadata": {
     "codex": {
@@ -32,6 +33,16 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "codexDynamicToolsProfile": {
+        "type": "string",
+        "enum": ["native-first", "openclaw-compat"],
+        "default": "native-first"
+      },
+      "codexDynamicToolsExclude": {
+        "type": "array",
+        "items": { "type": "string" },
+        "default": []
+      },
       "discovery": {
         "type": "object",
         "additionalProperties": false,
@@ -124,6 +135,11 @@
             "minimum": 1,
             "default": 120000
           },
+          "turnCompletionIdleTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 60000
+          },
           "approvalPolicy": {
             "type": "string",
             "enum": ["never", "on-request", "on-failure", "untrusted"]
@@ -145,6 +161,16 @@
     }
   },
   "uiHints": {
+    "codexDynamicToolsProfile": {
+      "label": "Dynamic Tools Profile",
+      "help": "Select which OpenClaw dynamic tools are exposed to Codex app-server. native-first omits tools Codex already owns.",
+      "advanced": true
+    },
+    "codexDynamicToolsExclude": {
+      "label": "Dynamic Tool Excludes",
+      "help": "Additional OpenClaw dynamic tool names to omit from Codex app-server turns.",
+      "advanced": true
+    },
     "discovery": {
       "label": "Model Discovery",
       "help": "Plugin-owned controls for discovering Codex app-server models."
@@ -256,7 +282,12 @@
     },
     "appServer.startupTimeoutMs": {
       "label": "Startup Timeout",
-      "help": "Maximum time to wait for the Codex app-server child process to start, separate from the per-turn timeout. A short ceiling here lets local startup failures (for example a partially extracted plugin runtime) fail fast instead of holding the agent lane for the full turn budget.",
+      "help": "Maximum time to wait for the Codex app-server child process to start, separate from the per-turn timeout. A short ceiling here lets local startup failures fail fast instead of holding the agent lane for the full turn budget.",
+      "advanced": true
+    },
+    "appServer.turnCompletionIdleTimeoutMs": {
+      "label": "Turn Completion Idle Timeout",
+      "help": "Maximum quiet time after a turn-scoped Codex app-server request before OpenClaw interrupts the turn while waiting for turn/completed.",
       "advanced": true
     },
     "appServer.approvalPolicy": {

@@ -1,14 +1,58 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 
-const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
+const mocks = vi.hoisted(() => ({
+  refreshOpenAICodexToken: vi.fn(),
+  openAIResponsesTransportStreamFn: vi.fn(),
+}));
 
 vi.mock("./openai-codex-provider.runtime.js", () => ({
-  refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
+  refreshOpenAICodexToken: mocks.refreshOpenAICodexToken,
 }));
+
+vi.mock("openclaw/plugin-sdk/provider-stream-family", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/provider-stream-family")>();
+  const wrapStreamFn: NonNullable<typeof actual.OPENAI_RESPONSES_STREAM_HOOKS.wrapStreamFn> = (
+    ctx,
+  ) => {
+    let nextStreamFn = actual.createOpenAIAttributionHeadersWrapper(ctx.streamFn);
+
+    if (actual.resolveOpenAIFastMode(ctx.extraParams)) {
+      nextStreamFn = actual.createOpenAIFastModeWrapper(nextStreamFn);
+    }
+
+    const serviceTier = actual.resolveOpenAIServiceTier(ctx.extraParams);
+    if (serviceTier) {
+      nextStreamFn = actual.createOpenAIServiceTierWrapper(nextStreamFn, serviceTier);
+    }
+
+    const textVerbosity = actual.resolveOpenAITextVerbosity(ctx.extraParams);
+    if (textVerbosity) {
+      nextStreamFn = actual.createOpenAITextVerbosityWrapper(nextStreamFn, textVerbosity);
+    }
+
+    nextStreamFn = actual.createCodexNativeWebSearchWrapper(nextStreamFn, {
+      config: ctx.config,
+      agentDir: ctx.agentDir,
+    });
+    return actual.createOpenAIResponsesContextManagementWrapper(
+      actual.createOpenAIReasoningCompatibilityWrapper(nextStreamFn),
+      ctx.extraParams,
+    );
+  };
+
+  return {
+    ...actual,
+    OPENAI_RESPONSES_STREAM_HOOKS: {
+      ...actual.OPENAI_RESPONSES_STREAM_HOOKS,
+      wrapStreamFn,
+    },
+  };
+});
 
 function runWrappedPayloadCase(params: {
   wrap: NonNullable<ReturnType<typeof buildOpenAIProvider>["wrapStreamFn"]>;
@@ -49,6 +93,13 @@ function runWrappedPayloadCase(params: {
 }
 
 describe("buildOpenAIProvider", () => {
+  beforeEach(() => {
+    mocks.openAIResponsesTransportStreamFn.mockReset();
+    mocks.openAIResponsesTransportStreamFn.mockImplementation(() => {
+      throw new Error("unexpected native OpenAI Responses transport call");
+    });
+  });
+
   it("exposes grouped model/auth picker labels for API key setup", () => {
     const provider = buildOpenAIProvider();
     const apiKey = provider.auth.find((method) => method.id === "api-key");
@@ -231,6 +282,60 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
+  it("resolves chat-latest as an explicit direct API model override", () => {
+    const provider = buildOpenAIProvider();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "chat-latest",
+      modelRegistry: {
+        find: (_provider: string, id: string) =>
+          id === "gpt-5.5"
+            ? {
+                id,
+                name: "GPT-5.5",
+                provider: "openai",
+                api: "openai-responses",
+                baseUrl: "https://api.openai.com/v1",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+                contextWindow: 1_050_000,
+                maxTokens: 128_000,
+              }
+            : null,
+      } as never,
+    });
+
+    expect(model).toMatchObject({
+      provider: "openai",
+      id: "chat-latest",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text", "image"],
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+    });
+
+    const fallback = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "chat-latest",
+      modelRegistry: { find: () => null },
+    } as never);
+
+    expect(fallback).toMatchObject({
+      provider: "openai",
+      id: "chat-latest",
+      api: "openai-responses",
+      reasoning: false,
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+    });
+  });
+
   it("leaves gpt-5.5 to Pi and resolves gpt-5.5-pro locally", () => {
     const provider = buildOpenAIProvider();
 
@@ -289,7 +394,7 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
-  it("surfaces gpt-5.5 in xhigh without synthetic catalog metadata", () => {
+  it("keeps chat-latest and gpt-5.5 out of synthetic catalog metadata", () => {
     const provider = buildOpenAIProvider();
 
     expect(
@@ -312,9 +417,15 @@ describe("buildOpenAIProvider", () => {
         id: "gpt-5.5",
       }),
     );
+    expect(entries).not.toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "chat-latest",
+      }),
+    );
   });
 
-  it("keeps modern live selection on OpenAI 5.2+ and Codex 5.2+", () => {
+  it("keeps modern live selection on OpenAI 5.2+ and current Codex models", () => {
     const provider = buildOpenAIProvider();
     const codexProvider = buildOpenAICodexProviderPlugin();
 
@@ -334,6 +445,12 @@ describe("buildOpenAIProvider", () => {
       provider.isModernModelRef?.({
         provider: "openai",
         modelId: "gpt-5.4",
+      } as never),
+    ).toBe(true);
+    expect(
+      provider.isModernModelRef?.({
+        provider: "openai",
+        modelId: "chat-latest",
       } as never),
     ).toBe(true);
     expect(
@@ -360,7 +477,7 @@ describe("buildOpenAIProvider", () => {
         provider: "openai-codex",
         modelId: "gpt-5.2-codex",
       } as never),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       codexProvider.isModernModelRef?.({
         provider: "openai-codex",
@@ -457,9 +574,9 @@ describe("buildOpenAIProvider", () => {
     });
 
     expect(extraParams).toMatchObject({
-      transport: "auto",
-      openaiWsWarmup: true,
+      transport: "sse",
     });
+    expect(extraParams?.openaiWsWarmup).toBeUndefined();
     expect(result.payload.store).toBe(true);
     expect(result.payload.context_management).toEqual([
       { type: "compaction", compact_threshold: 140_000 },
@@ -468,6 +585,40 @@ describe("buildOpenAIProvider", () => {
     expect(result.payload.text).toEqual({ verbosity: "low" });
     expect(result.payload.reasoning).toEqual({ effort: "none" });
     expect(result.payload.tools).toEqual([{ type: "web_search" }]);
+  });
+
+  it("clamps chat-latest text verbosity to the only live-supported value", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+    const extraParams = provider.prepareExtraParams?.({
+      provider: "openai",
+      modelId: "chat-latest",
+      extraParams: {
+        textVerbosity: "low",
+      },
+    } as never);
+    const result = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "chat-latest",
+      extraParams: extraParams ?? undefined,
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "chat-latest",
+        baseUrl: "https://api.openai.com/v1",
+        contextWindow: 400_000,
+      } as Model<"openai-responses">,
+      payload: {
+        text: { verbosity: "high" },
+      },
+    });
+
+    expect(result.payload.text).toEqual({ verbosity: "medium" });
   });
 
   it("uses native OpenAI web search instead of the managed web_search function", () => {
@@ -683,6 +834,15 @@ describe("buildOpenAIProvider", () => {
     if (!wrap) {
       throw new Error("expected Codex wrapper");
     }
+    const payload = {
+      store: false,
+      text: { verbosity: "medium" },
+      tools: [{ type: "function", name: "read" }],
+    };
+    mocks.openAIResponsesTransportStreamFn.mockImplementation((model, _context, options) => {
+      options?.onPayload?.(payload, model);
+      return {} as ReturnType<StreamFn>;
+    });
     const result = runWrappedPayloadCase({
       wrap,
       provider: "openai-codex",
@@ -720,13 +880,14 @@ describe("buildOpenAIProvider", () => {
         id: "gpt-5.4",
         baseUrl: "https://chatgpt.com/backend-api",
       } as Model<"openai-codex-responses">,
-      payload: {
-        store: false,
-        text: { verbosity: "medium" },
-        tools: [{ type: "function", name: "read" }],
-      },
+      payload,
     });
 
+    expect(mocks.openAIResponsesTransportStreamFn).not.toHaveBeenCalled();
+    expect(result.options?.headers).toMatchObject({
+      originator: "openclaw",
+      "User-Agent": expect.stringMatching(/^openclaw\//u),
+    });
     expect(result.payload.store).toBe(false);
     expect(result.payload.service_tier).toBe("priority");
     expect(result.payload.text).toEqual({ verbosity: "high" });
@@ -749,8 +910,8 @@ describe("buildOpenAIProvider", () => {
       expires: Date.now() - 60_000,
     };
 
-    refreshOpenAICodexTokenMock.mockReset();
-    refreshOpenAICodexTokenMock.mockRejectedValueOnce(
+    mocks.refreshOpenAICodexToken.mockReset();
+    mocks.refreshOpenAICodexToken.mockRejectedValueOnce(
       new Error("Failed to extract accountId from token"),
     );
 

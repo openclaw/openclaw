@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
-import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { access } from "node:fs/promises";
 import module from "node:module";
+import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const MIN_NODE_MAJOR = 22;
@@ -45,7 +47,138 @@ const isSourceCheckoutLauncher = () =>
 
 const isNodeCompileCacheDisabled = () => process.env.NODE_DISABLE_COMPILE_CACHE !== undefined;
 const isNodeCompileCacheRequested = () =>
-  process.env.NODE_COMPILE_CACHE !== undefined && !isNodeCompileCacheDisabled();
+  Boolean(process.env.NODE_COMPILE_CACHE) && !isNodeCompileCacheDisabled();
+const sanitizeCompileCachePathSegment = (value) => {
+  const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
+  return normalized.length > 0 ? normalized : "unknown";
+};
+const readPackageVersion = () => {
+  try {
+    const parsed = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
+    if (typeof parsed?.version === "string" && parsed.version.trim().length > 0) {
+      return parsed.version;
+    }
+  } catch {
+    // Fall through to an install-metadata-only cache key.
+  }
+  return "unknown";
+};
+const resolvePackagedCompileCacheDirectory = () => {
+  const packageJsonUrl = new URL("./package.json", import.meta.url);
+  const version = sanitizeCompileCachePathSegment(readPackageVersion());
+  let installMarker = "no-package-json";
+  try {
+    const stat = statSync(packageJsonUrl);
+    installMarker = `${Math.trunc(stat.mtimeMs)}-${stat.size}`;
+  } catch {
+    // Package archives should always have package.json, but keep startup best-effort.
+  }
+  const baseDirectory = isNodeCompileCacheRequested()
+    ? process.env.NODE_COMPILE_CACHE
+    : path.join(os.tmpdir(), "node-compile-cache");
+  return path.join(
+    baseDirectory,
+    "openclaw",
+    version,
+    sanitizeCompileCachePathSegment(installMarker),
+  );
+};
+
+const respawnSignals =
+  process.platform === "win32"
+    ? ["SIGTERM", "SIGINT", "SIGBREAK"]
+    : ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"];
+const respawnSignalExitGraceMs = 1_000;
+const respawnSignalForceKillGraceMs = 1_000;
+
+const runRespawnedChild = (command, args, env) => {
+  const child = spawn(command, args, {
+    stdio: "inherit",
+    env,
+  });
+  const listeners = new Map();
+  // This intentionally overlaps with src/entry.compile-cache.ts; keep the
+  // respawn supervision behavior in sync until the launcher can share TS code.
+  // Give the child a moment to honor forwarded signals, then exit the wrapper so
+  // a child that ignores SIGTERM cannot keep the launcher alive indefinitely.
+  let signalExitTimer = null;
+  let signalForceKillTimer = null;
+  const detach = () => {
+    for (const [signal, listener] of listeners) {
+      process.off(signal, listener);
+    }
+    listeners.clear();
+    if (signalExitTimer) {
+      clearTimeout(signalExitTimer);
+      signalExitTimer = null;
+    }
+    if (signalForceKillTimer) {
+      clearTimeout(signalForceKillTimer);
+      signalForceKillTimer = null;
+    }
+  };
+  const forceKillChild = () => {
+    try {
+      child.kill(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
+    } catch {
+      // Best-effort shutdown fallback.
+    }
+  };
+  const requestChildTermination = () => {
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      // Best-effort shutdown fallback.
+    }
+    signalForceKillTimer = setTimeout(() => {
+      forceKillChild();
+      process.exit(1);
+    }, respawnSignalForceKillGraceMs);
+    signalForceKillTimer.unref?.();
+  };
+  const scheduleParentExit = () => {
+    if (signalExitTimer) {
+      return;
+    }
+    signalExitTimer = setTimeout(() => {
+      requestChildTermination();
+    }, respawnSignalExitGraceMs);
+    signalExitTimer.unref?.();
+  };
+  for (const signal of respawnSignals) {
+    const listener = () => {
+      try {
+        child.kill(signal);
+      } catch {
+        // Best-effort signal forwarding.
+      }
+      scheduleParentExit();
+    };
+    try {
+      process.on(signal, listener);
+      listeners.set(signal, listener);
+    } catch {
+      // Unsupported signal on this platform.
+    }
+  }
+  child.once("exit", (code, signal) => {
+    detach();
+    if (signal) {
+      process.exit(1);
+    }
+    process.exit(code ?? 1);
+  });
+  child.once("error", (error) => {
+    detach();
+    process.stderr.write(
+      `[openclaw] Failed to respawn launcher: ${
+        error instanceof Error ? (error.stack ?? error.message) : String(error)
+      }\n`,
+    );
+    process.exit(1);
+  });
+  return true;
+};
 
 const respawnWithoutCompileCacheIfNeeded = () => {
   if (!isSourceCheckoutLauncher()) {
@@ -63,26 +196,52 @@ const respawnWithoutCompileCacheIfNeeded = () => {
     OPENCLAW_SOURCE_COMPILE_CACHE_RESPAWNED: "1",
   };
   delete env.NODE_COMPILE_CACHE;
-  const result = spawnSync(
+  return runRespawnedChild(
     process.execPath,
     [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)],
-    {
-      stdio: "inherit",
-      env,
-    },
+    env,
   );
-  if (result.error) {
-    throw result.error;
-  }
-  process.exit(result.status ?? 1);
 };
 
-respawnWithoutCompileCacheIfNeeded();
+const respawnWithPackagedCompileCacheIfNeeded = () => {
+  if (isSourceCheckoutLauncher() || isNodeCompileCacheDisabled()) {
+    return false;
+  }
+  if (process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED === "1") {
+    return false;
+  }
+  const currentDirectory = module.getCompileCacheDir?.();
+  if (!currentDirectory) {
+    return false;
+  }
+  const desiredDirectory = resolvePackagedCompileCacheDirectory();
+  if (path.resolve(currentDirectory) === path.resolve(desiredDirectory)) {
+    return false;
+  }
+  const env = {
+    ...process.env,
+    NODE_COMPILE_CACHE: desiredDirectory,
+    OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "1",
+  };
+  return runRespawnedChild(
+    process.execPath,
+    [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)],
+    env,
+  );
+};
+
+const waitingForCompileCacheRespawn =
+  respawnWithoutCompileCacheIfNeeded() || respawnWithPackagedCompileCacheIfNeeded();
 
 // https://nodejs.org/api/module.html#module-compile-cache
-if (module.enableCompileCache && !isNodeCompileCacheDisabled() && !isSourceCheckoutLauncher()) {
+if (
+  !waitingForCompileCacheRespawn &&
+  module.enableCompileCache &&
+  !isNodeCompileCacheDisabled() &&
+  !isSourceCheckoutLauncher()
+) {
   try {
-    module.enableCompileCache();
+    module.enableCompileCache(resolvePackagedCompileCacheDirectory());
   } catch {
     // Ignore errors
   }
@@ -224,17 +383,19 @@ const tryOutputBrowserHelp = () => {
   return true;
 };
 
-if (!isHelpFastPathDisabled() && (await tryOutputBareRootHelp())) {
-  // OK
-} else if (!isHelpFastPathDisabled() && tryOutputBrowserHelp()) {
-  // OK
-} else {
-  await installProcessWarningFilter();
-  if (await tryImport("./dist/entry.js")) {
+if (!waitingForCompileCacheRespawn) {
+  if (!isHelpFastPathDisabled() && (await tryOutputBareRootHelp())) {
     // OK
-  } else if (await tryImport("./dist/entry.mjs")) {
+  } else if (!isHelpFastPathDisabled() && tryOutputBrowserHelp()) {
     // OK
   } else {
-    throw new Error(await buildMissingEntryErrorMessage());
+    await installProcessWarningFilter();
+    if (await tryImport("./dist/entry.js")) {
+      // OK
+    } else if (await tryImport("./dist/entry.mjs")) {
+      // OK
+    } else {
+      throw new Error(await buildMissingEntryErrorMessage());
+    }
   }
 }

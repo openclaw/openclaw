@@ -1,11 +1,28 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+function createGatewayInfoBody(overrides?: {
+  url?: string;
+  shards?: number;
+  maxConcurrency?: number;
+}): string {
+  return JSON.stringify({
+    url: overrides?.url ?? "wss://gateway.discord.gg",
+    shards: overrides?.shards ?? 1,
+    session_start_limit: {
+      total: 1000,
+      remaining: 999,
+      reset_after: 120_000,
+      max_concurrency: overrides?.maxConcurrency ?? 1,
+    },
+  });
+}
+
 function resolveGatewayInfoFetch(resolve: ((value: Response) => void) | undefined): void {
   expect(resolve).toBeDefined();
   resolve!({
     ok: true,
     status: 200,
-    text: async () => JSON.stringify({ url: "wss://gateway.discord.gg" }),
+    text: async () => createGatewayInfoBody(),
   } as Response);
 }
 
@@ -16,14 +33,18 @@ const {
   captureWsEventSpy,
   GatewayPlugin,
   globalFetchMock,
+  HttpsAgent,
   HttpsProxyAgent,
   getLastAgent,
+  getLastProxyAgent,
   resolveDebugProxySettingsMock,
   resetLastAgent,
   webSocketSpy,
+  httpsAgentSpy,
   wsProxyAgentSpy,
 } = vi.hoisted(() => {
   const wsProxyAgentSpy = vi.fn();
+  const httpsAgentSpy = vi.fn();
   const globalFetchMock = vi.fn();
   const baseRegisterClientSpy = vi.fn();
   const webSocketSpy = vi.fn();
@@ -61,6 +82,16 @@ const {
     }
   }
 
+  class HttpsAgent {
+    static lastCreated: HttpsAgent | undefined;
+    options: unknown;
+    constructor(options?: unknown) {
+      this.options = options;
+      HttpsAgent.lastCreated = this;
+      httpsAgentSpy(options);
+    }
+  }
+
   class HttpsProxyAgent {
     static lastCreated: HttpsProxyAgent | undefined;
     proxyUrl: string;
@@ -79,12 +110,16 @@ const {
     GatewayIntents,
     GatewayPlugin,
     globalFetchMock,
+    HttpsAgent,
     HttpsProxyAgent,
-    getLastAgent: () => HttpsProxyAgent.lastCreated,
+    getLastAgent: () => HttpsAgent.lastCreated,
+    getLastProxyAgent: () => HttpsProxyAgent.lastCreated,
     captureHttpExchangeSpy,
     captureWsEventSpy,
+    httpsAgentSpy,
     resolveDebugProxySettingsMock,
     resetLastAgent: () => {
+      HttpsAgent.lastCreated = undefined;
       HttpsProxyAgent.lastCreated = undefined;
     },
     webSocketSpy,
@@ -92,15 +127,19 @@ const {
   };
 });
 
-// Unit test: don't import Carbon just to check the prototype chain.
-vi.mock("@buape/carbon/gateway", () => ({
+// Unit test: don't import the real gateway just to check the prototype chain.
+vi.mock("../internal/gateway.js", () => ({
   GatewayIntents,
   GatewayPlugin,
 }));
 
-vi.mock("@buape/carbon/dist/src/plugins/gateway/index.js", () => ({
+vi.mock("../internal/gateway.js", () => ({
   GatewayIntents,
   GatewayPlugin,
+}));
+
+vi.mock("node:https", () => ({
+  Agent: HttpsAgent,
 }));
 
 vi.mock("https-proxy-agent", () => ({
@@ -249,7 +288,7 @@ describe("createDiscordGatewayPlugin", () => {
     params.fetchMock.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ url: "wss://gateway.discord.gg" }),
+      text: async () => createGatewayInfoBody(),
     } as Response);
     await registerGatewayClient(params.plugin);
   }
@@ -262,6 +301,7 @@ describe("createDiscordGatewayPlugin", () => {
     vi.useRealTimers();
     baseRegisterClientSpy.mockClear();
     globalFetchMock.mockClear();
+    httpsAgentSpy.mockClear();
     wsProxyAgentSpy.mockClear();
     webSocketSpy.mockClear();
     captureHttpExchangeSpy.mockClear();
@@ -304,9 +344,16 @@ describe("createDiscordGatewayPlugin", () => {
       .createWebSocket;
     createWebSocket("wss://gateway.discord.gg");
 
-    expect(webSocketSpy).toHaveBeenCalledWith("wss://gateway.discord.gg", {
-      handshakeTimeout: 30_000,
-    });
+    expect(httpsAgentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ lookup: expect.any(Function) }),
+    );
+    expect(webSocketSpy).toHaveBeenCalledWith(
+      "wss://gateway.discord.gg",
+      expect.objectContaining({
+        agent: getLastAgent(),
+        handshakeTimeout: 30_000,
+      }),
+    );
     expect(wsProxyAgentSpy).not.toHaveBeenCalled();
   });
 
@@ -344,7 +391,7 @@ describe("createDiscordGatewayPlugin", () => {
     } as Response);
   });
 
-  it("keeps Carbon-ignored fatal metadata failures handled for supervised startup", async () => {
+  it("keeps ignored fatal metadata failures handled for supervised startup", async () => {
     const runtime = createRuntime();
     const unhandledReasons: unknown[] = [];
     const onUnhandledRejection = (reason: unknown) => {
@@ -377,12 +424,12 @@ describe("createDiscordGatewayPlugin", () => {
     }
   });
 
-  it("exposes Carbon-ignored successful registrations for startup await", async () => {
+  it("exposes ignored successful registrations for startup await", async () => {
     const runtime = createRuntime();
     globalFetchMock.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ url: "wss://gateway.discord.gg" }),
+      text: async () => createGatewayInfoBody(),
     } as Response);
     const plugin = createDiscordGatewayPlugin({
       discordConfig: {},
@@ -420,7 +467,7 @@ describe("createDiscordGatewayPlugin", () => {
     expect(wsProxyAgentSpy).toHaveBeenCalledWith("http://127.0.0.1:8080");
     expect(webSocketSpy).toHaveBeenCalledWith(
       "wss://gateway.discord.gg",
-      expect.objectContaining({ agent: getLastAgent(), handshakeTimeout: 30_000 }),
+      expect.objectContaining({ agent: getLastProxyAgent(), handshakeTimeout: 30_000 }),
     );
     expect(runtime.log).toHaveBeenCalledWith("discord: gateway proxy enabled");
     expect(runtime.error).not.toHaveBeenCalled();
@@ -702,15 +749,10 @@ describe("createDiscordGatewayPlugin", () => {
         ok: true,
         status: 200,
         text: async () =>
-          JSON.stringify({
+          createGatewayInfoBody({
             url: "wss://gateway.discord.gg/?v=10",
             shards: 8,
-            session_start_limit: {
-              total: 1000,
-              remaining: 999,
-              reset_after: 120_000,
-              max_concurrency: 16,
-            },
+            maxConcurrency: 16,
           }),
       } as Response);
     const plugin = createDiscordGatewayPlugin({

@@ -4,14 +4,16 @@ import {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
 } from "../../gateway/mcp-http.loopback-runtime.js";
+import { isClaudeCliProvider } from "../../plugin-sdk/anthropic-cli.js";
 import type {
   CliBackendAuthEpochMode,
   CliBackendPreparedExecution,
 } from "../../plugins/cli-backend.types.js";
+import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
-import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
+import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
 import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import {
@@ -27,6 +29,7 @@ import {
 import { CLI_AUTH_EPOCH_VERSION, resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
+import { claudeCliSessionTranscriptHasContent } from "../command/attempt-execution.helpers.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   resolveBootstrapMaxChars,
@@ -49,7 +52,7 @@ import {
   loadCliSessionHistoryMessages,
   loadCliSessionReseedMessages,
 } from "./session-history.js";
-import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
+import type { CliReusableSession, PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const prepareDeps = {
   makeBootstrapWarn: makeBootstrapWarnImpl,
@@ -60,6 +63,9 @@ const prepareDeps = {
   resolveOpenClawReferencePaths: async (
     params: Parameters<typeof import("../docs-path.js").resolveOpenClawReferencePaths>[0],
   ) => (await import("../docs-path.js")).resolveOpenClawReferencePaths(params),
+  // Surfaced as a dep so tests can stub the on-disk Claude CLI transcript probe
+  // without touching ~/.claude/projects.
+  claudeCliSessionTranscriptHasContent,
 };
 
 export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
@@ -107,7 +113,17 @@ export async function prepareCliRunContext(
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
-  const agentDir = resolveOpenClawAgentDir();
+  if (params.disableTools === true && backendResolved.nativeToolMode === "always-on") {
+    throw new Error(
+      `CLI backend ${backendResolved.id} cannot run with tools disabled because it exposes native tools`,
+    );
+  }
+  const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+    agentId: params.agentId,
+  });
+  const agentDir = resolveAgentDir(params.config ?? {}, sessionAgentId);
   const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
   const effectiveAuthProfileId =
     requestedAuthProfileId ?? backendResolved.defaultAuthProfileId?.trim() ?? undefined;
@@ -115,7 +131,10 @@ export async function prepareCliRunContext(
   if (effectiveAuthProfileId) {
     const authStore = loadAuthProfileStoreForRuntime(agentDir, {
       readOnly: true,
-      allowKeychainPrompt: false,
+      externalCli: externalCliDiscoveryForProviderAuth({
+        provider: params.provider,
+        profileId: effectiveAuthProfileId,
+      }),
     });
     authCredential = authStore.profiles[effectiveAuthProfileId];
   }
@@ -160,15 +179,9 @@ export async function prepareCliRunContext(
     seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
     previousSignature: params.bootstrapPromptWarningSignature,
   });
-  const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.config,
-    agentId: params.agentId,
-  });
-  let mcpLoopbackRuntime = backendResolved.bundleMcp
-    ? prepareDeps.getActiveMcpLoopbackRuntime()
-    : undefined;
-  if (backendResolved.bundleMcp && !mcpLoopbackRuntime) {
+  const bundleMcpEnabled = backendResolved.bundleMcp && params.disableTools !== true;
+  let mcpLoopbackRuntime = bundleMcpEnabled ? prepareDeps.getActiveMcpLoopbackRuntime() : undefined;
+  if (bundleMcpEnabled && !mcpLoopbackRuntime) {
     try {
       await prepareDeps.ensureMcpLoopbackServer();
     } catch (error) {
@@ -177,7 +190,7 @@ export async function prepareCliRunContext(
     mcpLoopbackRuntime = prepareDeps.getActiveMcpLoopbackRuntime();
   }
   const preparedBackend = await prepareCliBundleMcpConfig({
-    enabled: backendResolved.bundleMcp,
+    enabled: bundleMcpEnabled,
     mode: backendResolved.bundleMcpMode,
     backend: backendResolved.config,
     workspaceDir,
@@ -247,27 +260,44 @@ export async function prepareCliRunContext(
     ...(preparedBackendEnv ? { env: preparedBackendEnv } : {}),
     ...(preparedBackendCleanup ? { cleanup: preparedBackendCleanup } : {}),
   };
-  const reusableCliSession = params.cliSessionBinding
-    ? resolveCliSessionReuse({
-        binding: params.cliSessionBinding,
-        authProfileId: effectiveAuthProfileId,
-        authEpoch,
-        authEpochVersion: CLI_AUTH_EPOCH_VERSION,
-        extraSystemPromptHash,
-        mcpConfigHash: preparedBackendFinal.mcpConfigHash,
-        mcpResumeHash: preparedBackendFinal.mcpResumeHash,
-      })
-    : params.cliSessionId
-      ? { sessionId: params.cliSessionId }
-      : {};
+  // Pre-flight: if a saved Claude CLI sessionId points at a transcript that no
+  // longer exists on disk (e.g. update.run aborted mid-swap, Claude CLI was
+  // reinstalled, or the projects tree was manually pruned), `claude --resume`
+  // hangs or fails outside the cli-runner session_expired path. The persisted
+  // binding then never gets refreshed, causing every subsequent turn to retry
+  // the same dead sessionId. Drop the binding here so this turn starts fresh
+  // and the post-run flow writes the new sessionId back via setCliSessionBinding.
+  const candidateClaudeCliSessionId =
+    params.cliSessionBinding?.sessionId?.trim() || params.cliSessionId?.trim() || undefined;
+  const claudeCliTranscriptMissing =
+    candidateClaudeCliSessionId !== undefined &&
+    isClaudeCliProvider(params.provider) &&
+    !(await prepareDeps.claudeCliSessionTranscriptHasContent({
+      sessionId: candidateClaudeCliSessionId,
+    }));
+  const reusableCliSession: CliReusableSession = claudeCliTranscriptMissing
+    ? { invalidatedReason: "missing-transcript" }
+    : params.cliSessionBinding
+      ? resolveCliSessionReuse({
+          binding: params.cliSessionBinding,
+          authProfileId: effectiveAuthProfileId,
+          authEpoch,
+          authEpochVersion: CLI_AUTH_EPOCH_VERSION,
+          extraSystemPromptHash,
+          mcpConfigHash: preparedBackendFinal.mcpConfigHash,
+          mcpResumeHash: preparedBackendFinal.mcpResumeHash,
+        })
+      : params.cliSessionId
+        ? { sessionId: params.cliSessionId }
+        : {};
   if (reusableCliSession.invalidatedReason) {
     cliBackendLog.info(
       `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,
     );
   }
   let openClawHistoryMessages: unknown[] | undefined;
-  const loadOpenClawHistoryMessages = () => {
-    openClawHistoryMessages ??= loadCliSessionHistoryMessages({
+  const loadOpenClawHistoryMessages = async () => {
+    openClawHistoryMessages ??= await loadCliSessionHistoryMessages({
       sessionId: params.sessionId,
       sessionFile: params.sessionFile,
       sessionKey: params.sessionKey,
@@ -332,7 +362,7 @@ export async function prepareCliRunContext(
     const hookResult = await resolvePromptBuildHookResult({
       config: params.config ?? getRuntimeConfig(),
       prompt: params.prompt,
-      messages: loadOpenClawHistoryMessages(),
+      messages: await loadOpenClawHistoryMessages(),
       hookCtx: {
         runId: params.runId,
         agentId: sessionAgentId,
@@ -341,9 +371,8 @@ export async function prepareCliRunContext(
         workspaceDir,
         modelProviderId: params.provider,
         modelId,
-        messageProvider: params.messageProvider,
         trigger: params.trigger,
-        channelId: params.messageChannel ?? params.messageProvider,
+        ...buildAgentHookContextChannelFields(params),
       },
       hookRunner,
     });
@@ -374,7 +403,7 @@ export async function prepareCliRunContext(
   const openClawHistoryPrompt = reusableCliSession.sessionId
     ? undefined
     : buildCliSessionHistoryPrompt({
-        messages: loadCliSessionReseedMessages({
+        messages: await loadCliSessionReseedMessages({
           sessionId: params.sessionId,
           sessionFile: params.sessionFile,
           sessionKey: params.sessionKey,

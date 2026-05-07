@@ -227,10 +227,6 @@ export type DoctorMemoryRemHarnessErrorPayload = {
   error: string;
 };
 
-export type DoctorMemoryRemHarnessPayload =
-  | DoctorMemoryRemHarnessSuccessPayload
-  | DoctorMemoryRemHarnessErrorPayload;
-
 function extractIsoDayFromPath(filePath: string): string | null {
   const match = filePath.replaceAll("\\", "/").match(/(\d{4}-\d{2}-\d{2})\.md$/i);
   return match?.[1] ?? null;
@@ -909,9 +905,10 @@ export const doctorHandlers: GatewayRequestHandlers = {
       const nowMs = Date.now();
       const dreamingConfig = resolveDreamingConfig(cfg);
       const workspaceDir = normalizeTrimmedString((status as Record<string, unknown>).workspaceDir);
-      const configuredWorkspaces = resolveMemoryDreamingWorkspaces(cfg).map(
-        (entry) => entry.workspaceDir,
-      );
+      const configuredWorkspaces = resolveMemoryDreamingWorkspaces(cfg, {
+        primaryWorkspaceDir: workspaceDir,
+        primaryAgentId: resolveDefaultAgentId(cfg),
+      }).map((entry) => entry.workspaceDir);
       const allWorkspaces =
         configuredWorkspaces.length > 0 ? configuredWorkspaces : workspaceDir ? [workspaceDir] : [];
       const storeStats =

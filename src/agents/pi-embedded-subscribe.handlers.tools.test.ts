@@ -8,6 +8,7 @@ import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
+  handleToolExecutionUpdate,
 } from "./pi-embedded-subscribe.handlers.tools.js";
 import type {
   ToolCallSummary,
@@ -713,6 +714,160 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
 });
 
 describe("handleToolExecutionEnd derived tool events", () => {
+  it("emits command output deltas for exec update results", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-update-output",
+        args: { command: "npm test" },
+      } as never,
+    );
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "exec",
+        toolCallId: "tool-exec-update-output",
+        partialResult: {
+          details: {
+            status: "running",
+            aggregated: "RUN  src/example.test.ts",
+          },
+        },
+      } as never,
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "command_output",
+        data: expect.objectContaining({
+          itemId: "command:tool-exec-update-output",
+          phase: "delta",
+          output: "RUN  src/example.test.ts",
+          status: "running",
+        }),
+      }),
+    );
+  });
+
+  it("caps and throttles exec update output before live events", async () => {
+    resetAgentEventsForTest();
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+    const { ctx, onAgentEvent } = createTestContext();
+    const largeOutput = "x".repeat(9000);
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-large-update",
+        args: { command: "yes" },
+      } as never,
+    );
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "exec",
+        toolCallId: "tool-exec-large-update",
+        partialResult: {
+          details: {
+            status: "running",
+            aggregated: largeOutput,
+          },
+        },
+      } as never,
+    );
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "exec",
+        toolCallId: "tool-exec-large-update",
+        partialResult: {
+          details: {
+            status: "running",
+            aggregated: `${largeOutput}again`,
+          },
+        },
+      } as never,
+    );
+
+    const updateEvents = events.filter(
+      (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "update",
+    );
+    expect(updateEvents).toHaveLength(1);
+    const partialResult = updateEvents[0]?.data?.partialResult as
+      | { details?: { aggregated?: string } }
+      | undefined;
+    expect(partialResult?.details?.aggregated).toContain("...(live output truncated)...");
+    expect(partialResult?.details?.aggregated?.length).toBeLessThan(largeOutput.length);
+
+    const commandOutputCalls = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter((arg: unknown) => (arg as { stream?: string })?.stream === "command_output");
+    expect(commandOutputCalls).toHaveLength(1);
+    const output = (commandOutputCalls[0] as { data?: { output?: string } }).data?.output;
+    expect(output).toContain("...(live output truncated)...");
+    expect(output?.length).toBeLessThan(largeOutput.length);
+
+    resetAgentEventsForTest();
+  });
+
+  it("caps exec final output before result and command output events", async () => {
+    resetAgentEventsForTest();
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+    const { ctx, onAgentEvent } = createTestContext();
+    const largeOutput = "z".repeat(9000);
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-large-result",
+        isError: false,
+        result: {
+          details: {
+            status: "completed",
+            aggregated: largeOutput,
+            exitCode: 0,
+          },
+        },
+      } as never,
+    );
+
+    const resultEvent = events.find(
+      (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "result",
+    );
+    const result = resultEvent?.data?.result as { details?: { aggregated?: string } } | undefined;
+    expect(result?.details?.aggregated).toContain("...(live output truncated)...");
+    expect(result?.details?.aggregated?.length).toBeLessThan(largeOutput.length);
+
+    const commandOutputCalls = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter((arg: unknown) => (arg as { stream?: string })?.stream === "command_output");
+    const output = (commandOutputCalls.at(-1) as { data?: { output?: string } } | undefined)?.data
+      ?.output;
+    expect(output).toContain("...(live output truncated)...");
+    expect(output?.length).toBeLessThan(largeOutput.length);
+
+    resetAgentEventsForTest();
+  });
+
   it("emits command output events for exec results", async () => {
     const { ctx, onAgentEvent } = createTestContext();
 
@@ -847,6 +1002,13 @@ describe("messaging tool media URL tracking", () => {
     await handleToolExecutionEnd(ctx, endEvt);
 
     expect(ctx.state.messagingToolSentMediaUrls).toContain("file:///img.jpg");
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        to: "channel:123",
+        text: "hi",
+        mediaUrls: ["file:///img.jpg"],
+      }),
+    ]);
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-m2")).toBe(false);
   });
 
@@ -882,6 +1044,92 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.messagingToolSentMediaUrls).toEqual([
       "file:///img-a.jpg",
       "file:///img-b.jpg",
+    ]);
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        to: "channel:123",
+        text: "hi",
+        mediaUrls: ["file:///img-a.jpg", "file:///img-b.jpg"],
+      }),
+    ]);
+  });
+
+  it("commits upload-file args as message delivery evidence", async () => {
+    const { ctx } = createTestContext();
+
+    const startEvt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-upload-file",
+      args: {
+        action: "upload-file",
+        channel: "discord",
+        to: "channel:123",
+        message: "track ready",
+        path: "/tmp/generated-song.mp3",
+      },
+    };
+    await handleToolExecutionStart(ctx, startEvt);
+
+    expect(ctx.state.pendingMessagingMediaUrls.get("tool-upload-file")).toEqual([
+      "/tmp/generated-song.mp3",
+    ]);
+
+    const endEvt: ToolExecutionEndEvent = {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-upload-file",
+      isError: false,
+      result: { ok: true },
+    };
+    await handleToolExecutionEnd(ctx, endEvt);
+
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual(["/tmp/generated-song.mp3"]);
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        provider: "discord",
+        to: "channel:123",
+        text: "track ready",
+        mediaUrls: ["/tmp/generated-song.mp3"],
+      }),
+    ]);
+    expect(ctx.state.pendingMessagingMediaUrls.has("tool-upload-file")).toBe(false);
+  });
+
+  it("commits sendAttachment args as message delivery evidence", async () => {
+    const { ctx } = createTestContext();
+
+    const startEvt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-send-attachment",
+      args: {
+        action: "sendAttachment",
+        provider: "discord",
+        to: "channel:123",
+        content: "track ready",
+        filePath: "/tmp/generated-song.mp3",
+      },
+    };
+    await handleToolExecutionStart(ctx, startEvt);
+
+    const endEvt: ToolExecutionEndEvent = {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-send-attachment",
+      isError: false,
+      result: { ok: true },
+    };
+    await handleToolExecutionEnd(ctx, endEvt);
+
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual(["/tmp/generated-song.mp3"]);
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        provider: "discord",
+        to: "channel:123",
+        text: "track ready",
+        mediaUrls: ["/tmp/generated-song.mp3"],
+      }),
     ]);
   });
 

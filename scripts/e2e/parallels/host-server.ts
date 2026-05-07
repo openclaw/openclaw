@@ -1,8 +1,7 @@
-import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:http";
+import { createConnection } from "node:net";
 import path from "node:path";
-import { exists } from "./filesystem.ts";
 import { die, run, say, sh, warn } from "./host-command.ts";
 import type { HostServer } from "./types.ts";
 
@@ -65,43 +64,67 @@ export async function startHostServer(input: {
   artifactPath: string;
   label: string;
 }): Promise<HostServer> {
-  const artifactName = path.basename(input.artifactPath);
-  const server = createServer(async (request, response) => {
-    const requestPath = decodeURIComponent(
-      new URL(request.url ?? "/", "http://127.0.0.1").pathname,
-    );
-    const fileName = path.basename(requestPath);
-    const filePath = path.join(input.dir, fileName);
-    if (fileName !== artifactName && !(await exists(filePath))) {
-      response.statusCode = 404;
-      response.end("not found");
-      return;
-    }
-    try {
-      const info = await stat(filePath);
-      response.setHeader("Content-Length", String(info.size));
-      response.setHeader("Content-Type", "application/octet-stream");
-      createReadStream(filePath).pipe(response);
-    } catch {
-      response.statusCode = 404;
-      response.end("not found");
-    }
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(input.port, "0.0.0.0", () => resolve());
-  });
-  const address = server.address();
-  const actualPort = typeof address === "object" && address ? address.port : input.port;
+  const actualPort = input.port || allocateHostPort();
+  const child = spawn(
+    "python3",
+    ["-m", "http.server", String(actualPort), "--bind", "0.0.0.0", "--directory", input.dir],
+    {
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  await waitForHostServer(child, actualPort);
   say(`Serve ${input.label} on ${input.hostIp}:${actualPort}`);
   return {
     hostIp: input.hostIp,
     port: actualPort,
     stop: async () => {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      child.kill("SIGTERM");
+      await new Promise<void>((resolve) => {
+        child.once("exit", () => resolve());
+        setTimeout(() => {
+          child.kill("SIGKILL");
+          resolve();
+        }, 2_000).unref();
+      });
     },
     urlFor: (filePath) =>
       `http://${input.hostIp}:${actualPort}/${encodeURIComponent(path.basename(filePath))}`,
   };
+}
+
+async function waitForHostServer(
+  child: ChildProcessWithoutNullStreams,
+  port: number,
+): Promise<void> {
+  let stderr = "";
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString("utf8");
+  });
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 10_000) {
+    if (child.exitCode != null) {
+      die(`host artifact server exited early: ${stderr.trim() || `exit ${child.exitCode}`}`);
+    }
+    if (await canConnect(port)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  child.kill("SIGTERM");
+  die(`host artifact server did not start on port ${port}: ${stderr.trim()}`);
+}
+
+async function canConnect(port: number): Promise<boolean> {
+  return await new Promise((resolve) => {
+    const socket = createConnection({ host: "127.0.0.1", port });
+    socket.once("connect", () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once("error", () => resolve(false));
+    socket.setTimeout(250, () => {
+      socket.destroy();
+      resolve(false);
+    });
+  });
 }

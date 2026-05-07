@@ -127,7 +127,7 @@ export function buildThreadingToolContext(params: {
     };
   }
   const provider = normalizeChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
-  // Fallback for unrecognized/plugin channels (e.g., BlueBubbles before plugin registry init)
+  // Fallback for unrecognized/plugin channels (e.g., iMessage before plugin registry init)
   const threading = provider ? getChannelPlugin(provider)?.threading : undefined;
   if (!threading?.buildToolContext) {
     return {
@@ -189,7 +189,7 @@ export function buildEmbeddedRunBaseParams(
   });
 }
 
-export function buildEmbeddedContextFromTemplate(params: {
+function buildEmbeddedContextFromTemplate(params: {
   run: FollowupRun["run"];
   sessionCtx: TemplateContext;
   hasRepliedRef: { value: boolean } | undefined;
@@ -229,7 +229,7 @@ function normalizeMemberRoleIds(value: TemplateContext["MemberRoleIds"]): string
   return roles.length > 0 ? roles : undefined;
 }
 
-export function buildTemplateSenderContext(sessionCtx: TemplateContext) {
+function buildTemplateSenderContext(sessionCtx: TemplateContext) {
   return {
     senderId: normalizeOptionalString(sessionCtx.SenderId),
     senderName: normalizeOptionalString(sessionCtx.SenderName),

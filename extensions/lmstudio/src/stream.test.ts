@@ -1,6 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetLmstudioPreloadCooldownForTest, wrapLmstudioInferencePreload } from "./stream.js";
 
 const ensureLmstudioModelLoadedMock = vi.hoisted(() => vi.fn());
@@ -26,6 +26,12 @@ vi.mock("./runtime.js", async (importOriginal) => {
     resolveLmstudioProviderHeaders: (params: unknown) => resolveLmstudioProviderHeadersMock(params),
     resolveLmstudioRuntimeApiKey: (params: unknown) => resolveLmstudioRuntimeApiKeyMock(params),
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("./models.fetch.js");
+  vi.doUnmock("./runtime.js");
+  vi.resetModules();
 });
 
 type StreamEvent = { type: string } & Record<string, unknown>;
@@ -108,6 +114,7 @@ describe("lmstudio stream wrapper", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     ensureLmstudioModelLoadedMock.mockReset();
     resolveLmstudioProviderHeadersMock.mockReset();
     resolveLmstudioRuntimeApiKeyMock.mockReset();
@@ -197,6 +204,49 @@ describe("lmstudio stream wrapper", () => {
     const events = await collectEvents(stream);
     expect(events).toEqual([expect.objectContaining({ type: "done" })]);
     expect(baseStream).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips native model preload when provider params disable it", async () => {
+    const baseStream = buildDoneStreamFn();
+    const wrapped = wrapLmstudioInferencePreload({
+      provider: "lmstudio",
+      modelId: "qwen3-8b-instruct",
+      config: {
+        models: {
+          providers: {
+            lmstudio: {
+              baseUrl: "http://localhost:1234",
+              params: { preload: false },
+              models: [],
+            },
+          },
+        },
+      },
+      streamFn: baseStream,
+    } as never);
+
+    const events = await collectEvents(
+      wrapped(
+        {
+          provider: "lmstudio",
+          api: "openai-completions",
+          id: "qwen3-8b-instruct",
+        } as never,
+        { messages: [] } as never,
+        undefined as never,
+      ),
+    );
+
+    expect(events).toEqual([expect.objectContaining({ type: "done" })]);
+    expect(ensureLmstudioModelLoadedMock).not.toHaveBeenCalled();
+    expect(baseStream).toHaveBeenCalledTimes(1);
+    expect(baseStream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        compat: expect.objectContaining({ supportsUsageInStreaming: true }),
+      }),
+      expect.anything(),
+      undefined,
+    );
   });
 
   it("dedupes concurrent preload requests for the same model and context", async () => {

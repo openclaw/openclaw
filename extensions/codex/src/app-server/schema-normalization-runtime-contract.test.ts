@@ -28,6 +28,7 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
     disableTools: true,
     timeoutMs: 5_000,
     authStorage: {} as never,
+    authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
   } as EmbeddedRunAttemptParams;
 }
@@ -42,6 +43,7 @@ function createAppServerOptions(): Parameters<typeof startOrResumeThread>[0]["ap
     },
     requestTimeoutMs: 60_000,
     startupTimeoutMs: 120_000,
+    turnCompletionIdleTimeoutMs: 60_000,
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: "workspace-write",

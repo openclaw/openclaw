@@ -141,9 +141,6 @@ jobs:
           import {
             createChannelContractTestShards,
           } from "./scripts/lib/channel-contract-test-plan.mjs";
-          import {
-            createPluginContractTestShards,
-          } from "./scripts/lib/plugin-contract-test-plan.mjs";
 
           const parseBoolean = (value, fallback = false) => {
             if (value === undefined) return fallback;
@@ -152,6 +149,24 @@ jobs:
             if (normalized === "false" || normalized === "0" || normalized === "") return false;
             return fallback;
           };
+
+          const { createPluginContractTestShards } = await import(
+            "./scripts/lib/plugin-contract-test-plan.mjs"
+          ).catch((error) => {
+            if (error?.code !== "ERR_MODULE_NOT_FOUND") {
+              throw error;
+            }
+            return {
+              createPluginContractTestShards: () => [
+                {
+                  checkName: "checks-fast-contracts-plugins-legacy",
+                  includePatterns: ["src/plugins/contracts/**/*.test.ts"],
+                  runtime: "node",
+                  task: "contracts-plugins",
+                },
+              ],
+            };
+          });
 
           const createMatrix = (include) => ({ include });
           const outputPath = process.env.GITHUB_OUTPUT;
@@ -532,11 +547,13 @@ jobs:
           path: dist-runtime-build.tar.zst
           retention-days: 1
 
-      - name: Upload A2UI bundle artifact
+      - name: Upload bundled plugin asset artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: canvas-a2ui-bundle
-          path: src/canvas-host/a2ui/
+          name: bundled-plugin-assets
+          path: |
+            extensions/*/src/host/**/.bundle.hash
+            extensions/*/src/host/**/*.bundle.js
           include-hidden-files: true
           retention-days: 1
 
@@ -548,9 +565,6 @@ jobs:
 
       - name: Smoke test built bundled plugin singleton
         run: pnpm test:build:singleton
-
-      - name: Smoke test built bundled runtime deps
-        run: pnpm test:build:bundled-runtime-deps
 
       - name: Check CLI startup memory
         run: pnpm test:startup:memory
@@ -840,7 +854,7 @@ jobs:
     name: ${{ matrix.checkName }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1381,6 +1395,7 @@ jobs:
               pnpm check:no-conflict-markers
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
+              pnpm dup:check:coverage
               ;;
             prod-types)
               pnpm tsgo:prod
@@ -1389,8 +1404,13 @@ jobs:
               pnpm lint --threads=8
               ;;
             dependencies)
-              pnpm deadcode:dependencies
-              pnpm deadcode:unused-files
+              if pnpm run --silent 2>/dev/null | grep -q '^  deadcode:dependencies$'; then
+                pnpm deadcode:dependencies
+                pnpm deadcode:unused-files
+                pnpm deadcode:report:ci:ts-unused
+              else
+                pnpm deadcode:ci
+              fi
               ;;
             policy-guards)
               pnpm lint:webhook:no-low-level-body-read
@@ -1410,6 +1430,14 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Upload deadcode reports
+        if: ${{ always() && matrix.task == 'dependencies' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: deadcode-reports
+          path: .artifacts/deadcode
+          if-no-files-found: ignore
 
   check:
     permissions:
@@ -1435,14 +1463,24 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check_additional == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         include:
-          - check_name: check-additional-boundaries
+          - check_name: check-additional-boundaries-a
             group: boundaries
+            boundary_shard: 1/4
+          - check_name: check-additional-boundaries-b
+            group: boundaries
+            boundary_shard: 2/4
+          - check_name: check-additional-boundaries-c
+            group: boundaries
+            boundary_shard: 3/4
+          - check_name: check-additional-boundaries-d
+            group: boundaries
+            boundary_shard: 4/4
           - check_name: check-additional-extension-channels
             group: extension-channels
           - check_name: check-additional-extension-bundled
@@ -1547,6 +1585,7 @@ jobs:
       - name: Run additional check shard
         env:
           ADDITIONAL_CHECK_GROUP: ${{ matrix.group }}
+          OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: ${{ matrix.boundary_shard || '' }}
           RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
           OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY: 4
           OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 6
@@ -1732,10 +1771,10 @@ jobs:
           python -m pip install pytest ruff pyyaml
 
       - name: Lint Python skill scripts
-        run: python -m ruff check skills
+        run: python -m ruff check --config skills/pyproject.toml skills
 
       - name: Test skill Python scripts
-        run: python -m pytest -q skills
+        run: python -m pytest -q -c skills/pyproject.toml skills
 
   checks-windows:
     permissions:
@@ -1935,7 +1974,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: apps/macos/.build
-          key: ${{ runner.os }}-swift-build-v2-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'Swabble/Package.swift', 'Swabble/Sources/**') }}
+          key: ${{ runner.os }}-swift-build-v2-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'apps/swabble/Package.swift', 'apps/swabble/Sources/**') }}
           restore-keys: |
             ${{ runner.os }}-swift-build-v2-${{ steps.swift-toolchain.outputs.key }}-
 
@@ -1945,13 +1984,13 @@ jobs:
           set -euo pipefail
           # Exact source-hash cache hits already match these inputs; checkout
           # mtimes are the only reason SwiftPM rebuilds cached products.
-          find apps/macos/Sources apps/macos/Tests apps/shared/OpenClawKit/Sources Swabble/Sources apps/macos/.build/checkouts \
+          find apps/macos/Sources apps/macos/Tests apps/shared/OpenClawKit/Sources apps/swabble/Sources apps/macos/.build/checkouts \
             -type f -exec touch -t 200001010000 {} +
           touch -t 200001010000 \
             apps/macos/Package.swift \
             apps/macos/Package.resolved \
             apps/shared/OpenClawKit/Package.swift \
-            Swabble/Package.swift
+            apps/swabble/Package.swift
 
       - name: Show toolchain
         run: |
@@ -1961,8 +2000,8 @@ jobs:
 
       - name: Swift lint
         run: |
-          swiftlint --config .swiftlint.yml
-          swiftformat --lint apps/macos/Sources --config .swiftformat
+          swiftlint lint --config config/swiftlint.yml
+          swiftformat --lint apps/macos/Sources --config config/swiftformat --exclude '**/OpenClawProtocol,**/HostEnvSecurityPolicy.generated.swift'
 
       - name: Swift build (release)
         run: |

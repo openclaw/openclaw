@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import type { ModelRow } from "./list.types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -17,7 +16,6 @@ const mocks = vi.hoisted(() => ({
       input: ["text"],
     },
   ]),
-  listProfilesForProvider: vi.fn().mockReturnValue(["codex:synthetic"]),
 }));
 
 vi.mock("../../agents/model-suppression.js", () => ({
@@ -29,36 +27,16 @@ vi.mock("./list.provider-catalog.js", () => ({
   loadProviderCatalogModelsForList: mocks.loadProviderCatalogModelsForList,
 }));
 
-vi.mock("../../agents/auth-profiles/profile-list.js", () => ({
-  listProfilesForProvider: mocks.listProfilesForProvider,
-}));
-
-vi.mock("../../agents/model-auth.js", () => ({
-  resolveAwsSdkEnvVarName: vi.fn().mockReturnValue(undefined),
-  resolveEnvApiKey: vi.fn().mockReturnValue(null),
-  hasUsableCustomProviderApiKey: vi.fn().mockReturnValue(false),
-}));
-
-vi.mock("../../plugins/synthetic-auth.runtime.js", () => ({
-  resolveRuntimeSyntheticAuthProviderRefs: vi.fn().mockReturnValue([]),
-}));
-
 import { appendProviderCatalogRows } from "./list.rows.js";
+
+const authIndex = {
+  hasProviderAuth: (provider: string) => provider === "codex",
+  allowsProviderAuthAvailabilityFallback: () => false,
+};
 
 describe("appendProviderCatalogRows", () => {
   it("can skip runtime model-suppression hooks for provider-catalog fast paths", async () => {
     const rows: ModelRow[] = [];
-    const authStore: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "codex:synthetic": {
-          type: "token",
-          provider: "codex",
-          token: "codex-app-server",
-        },
-      },
-      order: {},
-    };
 
     await appendProviderCatalogRows({
       rows,
@@ -69,7 +47,7 @@ describe("appendProviderCatalogRows", () => {
           models: { providers: {} },
         },
         agentDir: "/tmp/openclaw-agent",
-        authStore,
+        authIndex,
         configuredByKey: new Map(),
         discoveredKeys: new Set(),
         filter: { provider: "codex", local: false },
@@ -118,7 +96,10 @@ describe("appendProviderCatalogRows", () => {
           models: { providers: {} },
         },
         agentDir: "/tmp/openclaw-agent",
-        authStore: { version: 1, profiles: {}, order: {} },
+        authIndex: {
+          hasProviderAuth: () => false,
+          allowsProviderAuthAvailabilityFallback: () => false,
+        },
         configuredByKey: new Map(),
         discoveredKeys: new Set(),
         filter: { provider: "openai", local: false },
@@ -136,5 +117,58 @@ describe("appendProviderCatalogRows", () => {
       },
     });
     expect(rows).toEqual([]);
+  });
+
+  it("uses Codex auth availability for configured canonical OpenAI rows", async () => {
+    mocks.loadProviderCatalogModelsForList.mockResolvedValueOnce([
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        input: ["text", "image"],
+      },
+    ]);
+    const rows: ModelRow[] = [];
+
+    await appendProviderCatalogRows({
+      rows,
+      seenKeys: new Set(),
+      context: {
+        cfg: {
+          agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+          models: { providers: {} },
+        },
+        agentDir: "/tmp/openclaw-agent",
+        authIndex: {
+          hasProviderAuth: (provider: string) => provider === "openai",
+          allowsProviderAuthAvailabilityFallback: (provider: string) => provider === "openai",
+        },
+        configuredByKey: new Map([
+          [
+            "openai/gpt-5.5",
+            {
+              key: "openai/gpt-5.5",
+              ref: { provider: "openai", model: "gpt-5.5" },
+              tags: new Set(["configured"]),
+              aliases: [],
+            },
+          ],
+        ]),
+        discoveredKeys: new Set(["openai/gpt-5.5"]),
+        availableKeys: new Set(),
+        filter: { provider: "openai", local: false },
+        skipRuntimeModelSuppression: true,
+      },
+    });
+
+    expect(rows).toMatchObject([
+      {
+        key: "openai/gpt-5.5",
+        available: true,
+        tags: ["configured"],
+      },
+    ]);
   });
 });

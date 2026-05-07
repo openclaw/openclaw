@@ -1,5 +1,6 @@
 import { isAuthErrorMessage } from "../agents/pi-embedded-helpers.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
@@ -48,6 +49,8 @@ type EventHandlerContext = {
 };
 
 const DEFAULT_STREAMING_WATCHDOG_MS = 30_000;
+const STREAMING_WATCHDOG_USER_MESSAGE =
+  "This response is taking longer than expected. Send another message to continue.";
 
 export function createEventHandlers(context: EventHandlerContext) {
   const {
@@ -128,11 +131,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       flushPendingHistoryRefreshIfIdle();
-      chatLog.addSystem(
-        `streaming watchdog: no stream updates for ${Math.round(
-          streamingWatchdogMs / 1000,
-        )}s; resetting status. The backend may have dropped this run silently — send a new message to resync.`,
-      );
+      chatLog.addSystem(STREAMING_WATCHDOG_USER_MESSAGE);
       tui.requestRender();
     }, streamingWatchdogMs);
     const maybeUnref = (streamingWatchdogTimer as { unref?: () => void }).unref;
@@ -174,6 +173,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     streamAssembler = new TuiStreamAssembler();
     pendingHistoryRefresh = false;
     state.pendingOptimisticUserMessage = false;
+    state.pendingChatRunId = null;
     reconnectPendingRunId = null;
     clearLocalRunIds?.();
     clearLocalBtwRunIds?.();
@@ -369,6 +369,9 @@ export function createEventHandlers(context: EventHandlerContext) {
         state.pendingOptimisticUserMessage = false;
       }
     }
+    if (state.pendingChatRunId === evt.runId) {
+      state.pendingChatRunId = null;
+    }
     if (evt.state === "delta") {
       // Arm watchdog and mark streaming on every delta, even when the visible
       // text hasn't changed yet (e.g. first commentary-only or tool-call delta).
@@ -450,7 +453,8 @@ export function createEventHandlers(context: EventHandlerContext) {
       forgetLocalBtwRunId?.(evt.runId);
       const wasActiveRun = state.activeChatRunId === evt.runId;
       const errorMessage = evt.errorMessage ?? "unknown";
-      chatLog.addSystem(resolveAuthErrorHint(errorMessage) ?? `run error: ${errorMessage}`);
+      const renderedError = formatRawAssistantErrorForUi(errorMessage);
+      chatLog.addSystem(resolveAuthErrorHint(errorMessage) ?? `run error: ${renderedError}`);
       terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
       maybeRefreshHistoryForRun(evt.runId);
     }

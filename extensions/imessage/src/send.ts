@@ -1,3 +1,9 @@
+import {
+  createMessageReceiptFromOutboundResults,
+  type MessageReceipt,
+  type MessageReceiptPartKind,
+  type MessageReceiptSourceResult,
+} from "openclaw/plugin-sdk/channel-message";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
@@ -9,7 +15,7 @@ import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { formatIMessageChatTarget, type IMessageService, parseIMessageTarget } from "./targets.js";
 
-export type IMessageSendOpts = {
+type IMessageSendOpts = {
   cliPath?: string;
   dbPath?: string;
   service?: IMessageService;
@@ -36,9 +42,10 @@ export type IMessageSendOpts = {
   createClient?: (params: { cliPath: string; dbPath?: string }) => Promise<IMessageRpcClient>;
 };
 
-export type IMessageSendResult = {
+type IMessageSendResult = {
   messageId: string;
   sentText: string;
+  receipt: MessageReceipt;
 };
 
 const MAX_REPLY_TO_ID_LENGTH = 256;
@@ -93,6 +100,44 @@ function resolveDeliveredIMessageText(text: string, mediaContentType?: string): 
     return text;
   }
   return kind === "image" ? "<media:image>" : `<media:${kind}>`;
+}
+
+function createIMessageSendReceipt(params: {
+  messageId: string;
+  target: ReturnType<typeof parseIMessageTarget>;
+  kind: MessageReceiptPartKind;
+  replyToId?: string;
+}): MessageReceipt {
+  const messageId = params.messageId.trim();
+  const results: MessageReceiptSourceResult[] =
+    messageId && messageId !== "unknown" && messageId !== "ok"
+      ? [
+          {
+            channel: "imessage",
+            messageId,
+            meta: {
+              targetKind: params.target.kind,
+            },
+          },
+        ]
+      : [];
+  if (results[0]) {
+    if (params.target.kind === "chat_id") {
+      results[0].chatId = String(params.target.chatId);
+    } else if (params.target.kind === "chat_guid") {
+      results[0].conversationId = params.target.chatGuid;
+    } else if (params.target.kind === "chat_identifier") {
+      results[0].conversationId = params.target.chatIdentifier;
+    }
+  }
+  const receiptParams: Parameters<typeof createMessageReceiptFromOutboundResults>[0] = {
+    results,
+    kind: params.kind,
+  };
+  if (params.replyToId) {
+    receiptParams.replyToId = params.replyToId;
+  }
+  return createMessageReceiptFromOutboundResults(receiptParams);
 }
 
 export async function sendMessageIMessage(
@@ -183,9 +228,16 @@ export async function sendMessageIMessage(
       timeoutMs: opts.timeoutMs,
     });
     const resolvedId = resolveMessageId(result);
+    const messageId = resolvedId ?? (result?.ok ? "ok" : "unknown");
     return {
-      messageId: resolvedId ?? (result?.ok ? "ok" : "unknown"),
+      messageId,
       sentText: message,
+      receipt: createIMessageSendReceipt({
+        messageId,
+        target,
+        kind: filePath ? "media" : "text",
+        ...(resolvedReplyToId ? { replyToId: resolvedReplyToId } : {}),
+      }),
     };
   } finally {
     if (shouldClose) {

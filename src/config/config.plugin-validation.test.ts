@@ -97,11 +97,12 @@ describe("config plugin validation", () => {
   let suiteHome = "";
   let badPluginDir = "";
   let enumPluginDir = "";
-  let bluebubblesPluginDir = "";
+  let chatPluginDir = "";
   let googleOverridePluginDir = "";
   let voiceCallSchemaPluginDir = "";
   let bundlePluginDir = "";
   let manifestlessClaudeBundleDir = "";
+  let blockedPluginDir = "";
   const suiteEnv = () =>
     ({
       HOME: suiteHome,
@@ -134,7 +135,7 @@ describe("config plugin validation", () => {
     await mkdirSafe(suiteHome);
     badPluginDir = path.join(suiteHome, "bad-plugin");
     enumPluginDir = path.join(suiteHome, "enum-plugin");
-    bluebubblesPluginDir = path.join(suiteHome, "bluebubbles-plugin");
+    chatPluginDir = path.join(suiteHome, "chat-plugin");
     await writePluginFixture({
       dir: badPluginDir,
       id: "bad-plugin",
@@ -162,9 +163,9 @@ describe("config plugin validation", () => {
       },
     });
     await writePluginFixture({
-      dir: bluebubblesPluginDir,
-      id: "bluebubbles-plugin",
-      channels: ["bluebubbles"],
+      dir: chatPluginDir,
+      id: "chat-plugin",
+      channels: ["chat"],
       schema: { type: "object" },
     });
     googleOverridePluginDir = path.join(suiteHome, "google");
@@ -187,6 +188,12 @@ describe("config plugin validation", () => {
     manifestlessClaudeBundleDir = path.join(suiteHome, "manifestless-claude-bundle");
     await writeManifestlessClaudeBundleFixture({
       dir: manifestlessClaudeBundleDir,
+    });
+    blockedPluginDir = path.join(suiteHome, "blocked-plugin");
+    await writePluginFixture({
+      dir: blockedPluginDir,
+      id: "blocked-plugin",
+      schema: { type: "object" },
     });
     voiceCallSchemaPluginDir = path.join(suiteHome, "voice-call-schema-plugin");
     const voiceCallManifestPath = path.join(
@@ -246,6 +253,203 @@ describe("config plugin validation", () => {
     }
   });
 
+  it("reports catalog install hints for missing configured official external plugins", async () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          entries: { brave: { enabled: true } },
+          allow: ["brave"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    const message =
+      "plugin not installed: brave — install the official external plugin with: openclaw plugins install @openclaw/brave-plugin";
+    expect(res.warnings ?? []).toEqual(
+      expect.arrayContaining([
+        { path: "plugins.entries.brave", message },
+        { path: "plugins.allow", message },
+      ]),
+    );
+    expect(
+      (res.warnings ?? []).some(
+        (warning) =>
+          (warning.path === "plugins.entries.brave" || warning.path === "plugins.allow") &&
+          warning.message.includes("remove it from plugins config"),
+      ),
+    ).toBe(false);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "reports configured blocked plugins without stale not-found wording",
+    async () => {
+      await fs.chmod(blockedPluginDir, 0o777);
+      try {
+        const res = validateInSuite({
+          agents: { list: [{ id: "pi" }] },
+          plugins: {
+            enabled: true,
+            load: { paths: [blockedPluginDir] },
+            entries: { "blocked-plugin": { enabled: true } },
+            allow: ["blocked-plugin"],
+          },
+        });
+
+        expect(res.ok).toBe(true);
+        if (!res.ok) {
+          return;
+        }
+        expect(res.warnings).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              path: "plugins.entries.blocked-plugin",
+              message: expect.stringContaining("plugin present but blocked: blocked-plugin"),
+            }),
+            expect.objectContaining({
+              path: "plugins.allow",
+              message: expect.stringContaining("plugin present but blocked: blocked-plugin"),
+            }),
+          ]),
+        );
+        expect(
+          res.warnings.some(
+            (warning) =>
+              warning.message.includes("plugin not found: blocked-plugin") ||
+              warning.message.includes("remove it from plugins config"),
+          ),
+        ).toBe(false);
+      } finally {
+        await chmodSafeDir(blockedPluginDir);
+      }
+    },
+  );
+
+  it("maps legacy blocked diagnostics without plugin ids to configured load paths", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          enabled: true,
+          load: { paths: [blockedPluginDir] },
+          entries: { "blocked-plugin": { enabled: true } },
+          allow: ["blocked-plugin"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [
+              {
+                level: "warn",
+                source: path.join(blockedPluginDir, "index.js"),
+                message: `blocked plugin candidate: world-writable path (${blockedPluginDir}, mode=0777)`,
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "plugins.entries.blocked-plugin",
+          message: expect.stringContaining("plugin present but blocked: blocked-plugin"),
+        }),
+        expect.objectContaining({
+          path: "plugins.allow",
+          message: expect.stringContaining("plugin present but blocked: blocked-plugin"),
+        }),
+      ]),
+    );
+    expect(
+      res.warnings.some((warning) => warning.message.includes("plugin not found: blocked-plugin")),
+    ).toBe(false);
+  });
+
+  it("does not source-match blocked diagnostics that already name a different plugin id", () => {
+    const aliasDir = path.join(suiteHome, "alias-dir");
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          enabled: true,
+          load: { paths: [aliasDir] },
+          entries: {
+            "actual-id": { enabled: true },
+            "alias-dir": { enabled: true },
+          },
+          allow: ["actual-id", "alias-dir"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [
+              {
+                level: "warn",
+                pluginId: "actual-id",
+                source: path.join(aliasDir, "index.js"),
+                message: `blocked plugin candidate: world-writable path (${aliasDir}, mode=0777)`,
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "plugins.entries.actual-id",
+          message: expect.stringContaining("plugin present but blocked: actual-id"),
+        }),
+        expect.objectContaining({
+          path: "plugins.allow",
+          message: expect.stringContaining("plugin present but blocked: actual-id"),
+        }),
+        expect.objectContaining({
+          path: "plugins.entries.alias-dir",
+          message:
+            "plugin not found: alias-dir (stale config entry ignored; remove it from plugins config)",
+        }),
+        expect.objectContaining({
+          path: "plugins.allow",
+          message:
+            "plugin not found: alias-dir (stale config entry ignored; remove it from plugins config)",
+        }),
+      ]),
+    );
+    expect(
+      res.warnings.some((warning) =>
+        warning.message.includes("plugin present but blocked: alias-dir"),
+      ),
+    ).toBe(false);
+  });
+
   it("warns instead of failing for stale channel config backed by missing plugin refs", async () => {
     const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },
@@ -299,6 +503,36 @@ describe("config plugin validation", () => {
       message: "unknown channel id: telegarm",
     });
     expect(res.warnings).not.toContainEqual(expect.objectContaining({ path: "channels.telegarm" }));
+  });
+
+  it("warns when plugins.allow contains a channel id without a plugin manifest (#76872)", async () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        channels: {
+          discord: { token: "xxx" },
+        },
+        plugins: {
+          allow: ["discord"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    expect(res.warnings ?? []).toContainEqual({
+      path: "plugins.allow",
+      message:
+        "plugin not installed: discord — install the official external plugin with: openclaw plugins install @openclaw/discord",
+    });
   });
 
   it("uses persisted installed-plugin records as stale channel evidence", async () => {
@@ -406,7 +640,7 @@ describe("config plugin validation", () => {
   it("does not auto-allow config-loaded overrides of bundled web search plugin ids", async () => {
     const res = validateInSuite({
       plugins: {
-        allow: ["bluebubbles", "memory-core"],
+        allow: ["imessage", "memory-core"],
         load: {
           paths: [googleOverridePluginDir],
         },
@@ -675,8 +909,8 @@ describe("config plugin validation", () => {
 
   it("accepts plugin heartbeat targets", async () => {
     const res = validateInSuite({
-      agents: { defaults: { heartbeat: { target: "bluebubbles" } }, list: [{ id: "pi" }] },
-      plugins: { enabled: false, load: { paths: [bluebubblesPluginDir] } },
+      agents: { defaults: { heartbeat: { target: "chat" } }, list: [{ id: "pi" }] },
+      plugins: { enabled: false, load: { paths: [chatPluginDir] } },
     });
     expect(res.ok).toBe(true);
   });

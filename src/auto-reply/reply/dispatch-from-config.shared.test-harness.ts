@@ -28,6 +28,7 @@ const diagnosticMocks = vi.hoisted(() => ({
   logMessageQueued: vi.fn(),
   logMessageProcessed: vi.fn(),
   logSessionStateChange: vi.fn(),
+  markDiagnosticSessionProgress: vi.fn(),
 }));
 const hookMocks = vi.hoisted(() => ({
   registry: {
@@ -91,6 +92,21 @@ const sessionStoreMocks = vi.hoisted(() => ({
   loadSessionStore: vi.fn(() => ({})),
   resolveStorePath: vi.fn(() => "/tmp/mock-sessions.json"),
   resolveSessionStoreEntry: vi.fn(() => ({ existing: sessionStoreMocks.currentEntry })),
+  updateSessionStoreEntry: vi.fn(
+    async (params: {
+      update: (entry: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
+    }) => {
+      if (!sessionStoreMocks.currentEntry) {
+        return null;
+      }
+      const patch = await params.update(sessionStoreMocks.currentEntry);
+      if (!patch) {
+        return sessionStoreMocks.currentEntry;
+      }
+      sessionStoreMocks.currentEntry = { ...sessionStoreMocks.currentEntry, ...patch };
+      return sessionStoreMocks.currentEntry;
+    },
+  ),
 }));
 const acpManagerRuntimeMocks = vi.hoisted(() => ({
   getAcpSessionManager: vi.fn(),
@@ -132,16 +148,12 @@ export {
   hookMocks,
   internalHookMocks,
   mocks,
-  pluginConversationBindingMocks,
   sessionBindingMocks,
   sessionStoreMocks,
-  replyMediaPathMocks,
   runtimePluginMocks,
-  threadInfoMocks,
-  ttsMocks,
 };
 
-export function parseGenericThreadSessionInfo(sessionKey: string | undefined) {
+function parseGenericThreadSessionInfo(sessionKey: string | undefined) {
   const trimmed = sessionKey?.trim();
   if (!trimmed) {
     return { baseSessionKey: undefined, threadId: undefined };
@@ -181,6 +193,7 @@ vi.mock("../../logging/diagnostic.js", () => ({
   logMessageQueued: diagnosticMocks.logMessageQueued,
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
+  markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
 }));
 vi.mock("../../config/sessions/thread-info.js", () => ({
   parseSessionThreadInfo: (sessionKey: string | undefined) =>
@@ -194,6 +207,7 @@ vi.mock("./dispatch-from-config.runtime.js", () => ({
   resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
   resolveStorePath: sessionStoreMocks.resolveStorePath,
   triggerInternalHook: internalHookMocks.triggerInternalHook,
+  updateSessionStoreEntry: sessionStoreMocks.updateSessionStoreEntry,
 }));
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   initializeGlobalHookRunner: vi.fn(),

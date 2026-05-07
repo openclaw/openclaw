@@ -24,7 +24,10 @@ import {
   type DeliverableMessageChannel,
 } from "../utils/message-channel.js";
 import { matchesApprovalRequestFilters } from "./approval-request-filters.js";
-import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
+import {
+  resolveExecApprovalCommandDisplay,
+  sanitizeExecApprovalWarningText,
+} from "./exec-approval-command-display.js";
 import { formatExecApprovalExpiresIn } from "./exec-approval-reply.js";
 import {
   resolveExecApprovalRequestAllowedDecisions,
@@ -35,13 +38,12 @@ import {
   approvalDecisionLabel,
   buildPluginApprovalExpiredMessage,
   buildPluginApprovalRequestMessage,
+  resolvePluginApprovalRequestAllowedDecisions,
   type PluginApprovalRequest,
   type PluginApprovalResolved,
 } from "./plugin-approvals.js";
 
 const log = createSubsystemLogger("gateway/exec-approvals");
-export type { ExecApprovalRequest, ExecApprovalResolved };
-
 type DeliverOutboundPayloads = typeof import("./outbound/deliver.js").deliverOutboundPayloads;
 type MaybePromise<T> = T | Promise<T>;
 type ResolveSessionTargetFn = (params: {
@@ -126,7 +128,7 @@ export type ExecApprovalForwarder = {
   stop: () => void;
 };
 
-export type ExecApprovalForwarderDeps = {
+type ExecApprovalForwarderDeps = {
   getConfig?: () => OpenClawConfig;
   deliver?: DeliverOutboundPayloads;
   nowMs?: () => number;
@@ -228,13 +230,23 @@ function formatApprovalCommand(command: string): { inline: boolean; text: string
   return { inline: false, text: `${fence}\n${command}\n${fence}` };
 }
 
-function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
+export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(request.request);
   const decisionText = allowedDecisions.join("|");
   const lines: string[] = ["🔒 Exec approval required", `ID: ${request.id}`];
   const warningText = request.request.warningText?.trim();
   if (warningText) {
     lines.push("", warningText);
+  }
+  const analysisWarningLines = request.request.commandAnalysis?.warningLines
+    .map((line) => sanitizeExecApprovalWarningText(line).trim())
+    .filter(Boolean)
+    .slice(0, 5);
+  if (analysisWarningLines && analysisWarningLines.length > 0) {
+    lines.push("", "Command analysis:");
+    for (const line of analysisWarningLines) {
+      lines.push(`- ${line}`);
+    }
   }
   const command = formatApprovalCommand(
     resolveExecApprovalCommandDisplay(request.request).commandText,
@@ -409,7 +421,7 @@ function buildExecPendingPayload(params: {
       buildApprovalPendingReplyPayload({
         approvalId: params.request.id,
         approvalSlug: params.request.id.slice(0, 8),
-        text: buildRequestMessage(params.request, params.nowMs),
+        text: buildExecApprovalRequestMessage(params.request, params.nowMs),
         agentId: params.request.request.agentId ?? null,
         allowedDecisions: resolveExecApprovalRequestAllowedDecisions(params.request.request),
         sessionKey: params.request.request.sessionKey ?? null,
@@ -450,6 +462,7 @@ function buildPluginPendingPayload(params: {
         request: params.request,
         nowMs: params.nowMs,
         text: buildPluginApprovalRequestMessage(params.request, params.nowMs),
+        allowedDecisions: resolvePluginApprovalRequestAllowedDecisions(params.request.request),
       }),
   });
 }
@@ -790,14 +803,4 @@ export function createExecApprovalForwarder(
       pluginHandlers.stop();
     },
   };
-}
-
-export function shouldForwardExecApproval(params: {
-  config?: ExecApprovalForwardingConfig;
-  request: ExecApprovalRequest;
-}): boolean {
-  return shouldForwardRoute({
-    config: params.config,
-    routeRequest: execApprovalStrategy.getRouteRequestFromRequest(params.request),
-  });
 }

@@ -202,6 +202,77 @@ describe("model-pricing-cache", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("uses a provided metadata registry view without rebuilding manifest metadata", async () => {
+    const manifestRegistry = {
+      diagnostics: [],
+      plugins: [
+        createManifestRecord({
+          id: "search-plugin",
+          contracts: { webSearchProviders: ["search-plugin"] },
+        }),
+      ],
+    };
+    const config = {
+      plugins: {
+        entries: {
+          "search-plugin": {
+            config: {
+              webSearch: {
+                model: "local-search/search-model",
+              },
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          "local-search": {
+            baseUrl: "http://127.0.0.1:43210/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "search-model",
+                cost: { input: 0.2, output: 0.4 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await refreshGatewayModelPricingCache({
+      config,
+      fetchImpl,
+      pluginMetadataSnapshot: {
+        index: {
+          plugins: [
+            {
+              pluginId: "search-plugin",
+              origin: "global",
+              enabled: true,
+              enabledByDefault: true,
+            },
+          ],
+        } as never,
+        manifestRegistry,
+      },
+    });
+
+    expect(
+      pluginManifestRegistryMocks.loadPluginManifestRegistryForInstalledIndex,
+    ).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(
+      getCachedGatewayModelPricing({ provider: "local-search", model: "search-model" }),
+    ).toEqual({
+      input: 0.2,
+      output: 0.4,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+  });
+
   it("does not load plugin manifests for pricing when plugins are globally disabled", async () => {
     const config = {
       plugins: {
@@ -343,7 +414,7 @@ describe("model-pricing-cache", () => {
         ],
       },
       tools: {
-        subagents: { model: { primary: "zai/glm-5" } },
+        subagents: { model: { primary: "zai/glm-openrouter-test" } },
       },
     } as unknown as OpenClawConfig;
 
@@ -371,7 +442,7 @@ describe("model-pricing-cache", () => {
                 },
               },
               {
-                id: "z-ai/glm-5",
+                id: "z-ai/glm-openrouter-test",
                 pricing: {
                   prompt: "0.000001",
                   completion: "0.000004",
@@ -413,12 +484,14 @@ describe("model-pricing-cache", () => {
       cacheRead: 0.3,
       cacheWrite: 0,
     });
-    expect(getCachedGatewayModelPricing({ provider: "zai", model: "glm-5" })).toEqual({
-      input: 1,
-      output: 4,
-      cacheRead: 0,
-      cacheWrite: 0,
-    });
+    expect(getCachedGatewayModelPricing({ provider: "zai", model: "glm-openrouter-test" })).toEqual(
+      {
+        input: 1,
+        output: 4,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+    );
   });
 
   it("does not recurse forever for native openrouter auto refs", async () => {
@@ -759,6 +832,54 @@ describe("model-pricing-cache", () => {
     await vi.dynamicImportSettled();
     expect(fetchImpl).toHaveBeenCalled();
     stop();
+  });
+
+  it("aborts in-flight bootstrap pricing fetches after stop", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const abortedUrls: string[] = [];
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const fetchImpl = withFetchPreconnect(
+      vi.fn(
+        (input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            const url =
+              typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+            const signal = init?.signal;
+            expect(signal).toBeDefined();
+            signal?.addEventListener(
+              "abort",
+              () => {
+                abortedUrls.push(url);
+                reject(signal.reason);
+              },
+              { once: true },
+            );
+          }),
+      ),
+    );
+
+    try {
+      const stop = startGatewayModelPricingRefresh({ config, fetchImpl });
+
+      await vi.dynamicImportSettled();
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      stop();
+      await vi.waitFor(() => expect(abortedUrls).toHaveLength(2));
+      await vi.dynamicImportSettled();
+
+      expect(setTimeoutSpy.mock.calls.some(([, delay]) => delay === 24 * 60 * 60_000)).toBe(false);
+      expect(
+        getCachedGatewayModelPricing({ provider: "anthropic", model: "claude-opus-4-6" }),
+      ).toBeUndefined();
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 
   it("does not bootstrap remote pricing when pricing is disabled", async () => {

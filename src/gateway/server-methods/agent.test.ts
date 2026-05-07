@@ -12,6 +12,7 @@ import {
   resetTaskRegistryForTests,
 } from "../../tasks/task-registry.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { agentHandlers } from "./agent.js";
 import { chatHandlers } from "./chat.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
@@ -25,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   updateSessionStore: vi.fn(),
   agentCommand: vi.fn(),
   registerAgentRunContext: vi.fn(),
+  emitAgentEvent: vi.fn(),
   performGatewaySessionReset: vi.fn(),
   getLatestSubagentRunByChildSessionKey: vi.fn(),
   replaceSubagentRunAfterSteer: vi.fn(),
@@ -34,6 +36,7 @@ const mocks = vi.hoisted(() => ({
   loadConfigReturn: {} as Record<string, unknown>,
   loadVoiceWakeRoutingConfig: vi.fn(),
   resolveVoiceWakeRouteByTrigger: vi.fn(),
+  resolveSendPolicy: vi.fn(() => "allow"),
 }));
 
 vi.mock("../session-utils.js", async () => {
@@ -102,6 +105,7 @@ vi.mock("../../auto-reply/reply/session-reset-prompt.js", async () => {
 });
 
 vi.mock("../../infra/agent-events.js", () => ({
+  emitAgentEvent: mocks.emitAgentEvent,
   registerAgentRunContext: mocks.registerAgentRunContext,
   onAgentEvent: vi.fn(),
 }));
@@ -125,7 +129,8 @@ vi.mock("../../infra/voicewake-routing.js", () => ({
 }));
 
 vi.mock("../../sessions/send-policy.js", () => ({
-  resolveSendPolicy: () => "allow",
+  resolveSendPolicy: (...args: unknown[]) =>
+    (mocks.resolveSendPolicy as (...args: unknown[]) => unknown)(...args),
 }));
 
 vi.mock("../../utils/delivery-context.js", async () => {
@@ -164,32 +169,39 @@ type AgentCommandCall = Record<string, unknown>;
 type AgentIdentityGetHandlerArgs = Parameters<(typeof agentHandlers)["agent.identity.get"]>[0];
 type AgentIdentityGetParams = AgentIdentityGetHandlerArgs["params"];
 
+const realSetTimeout = globalThis.setTimeout.bind(globalThis);
+let dateOnlyFakeClockActive = false;
+
+function waitForRealTimer(ms: number) {
+  return new Promise<void>((resolve) => realSetTimeout(resolve, ms));
+}
+
 async function waitForAssertion(assertion: () => void, timeoutMs = 2_000, stepMs = 5) {
-  vi.useFakeTimers();
-  try {
-    let lastError: unknown;
-    for (let elapsed = 0; elapsed <= timeoutMs; elapsed += stepMs) {
-      try {
-        assertion();
-        return;
-      } catch (error) {
-        lastError = error;
-      }
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(stepMs);
+  let lastError: unknown;
+  for (let elapsed = 0; elapsed <= timeoutMs; elapsed += stepMs) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
     }
-    throw lastError ?? new Error("assertion did not pass in time");
-  } finally {
-    vi.useRealTimers();
+
+    await Promise.resolve();
+    if (vi.isFakeTimers() && !dateOnlyFakeClockActive) {
+      await vi.advanceTimersByTimeAsync(stepMs);
+    } else {
+      await waitForRealTimer(stepMs);
+    }
   }
+  throw lastError ?? new Error("assertion did not pass in time");
 }
 
 async function flushScheduledDispatchStep() {
   await Promise.resolve();
-  if (vi.isFakeTimers()) {
+  if (vi.isFakeTimers() && !dateOnlyFakeClockActive) {
     await vi.runOnlyPendingTimersAsync();
   } else {
-    await new Promise<void>((resolve) => setTimeout(resolve, 15));
+    await waitForRealTimer(15);
   }
   await Promise.resolve();
 }
@@ -237,7 +249,8 @@ function buildExistingMainStoreEntry(overrides: Record<string, unknown> = {}) {
 }
 
 function setupNewYorkTimeConfig(isoDate: string) {
-  vi.useFakeTimers();
+  vi.useFakeTimers({ toFake: ["Date"] });
+  dateOnlyFakeClockActive = true;
   vi.setSystemTime(new Date(isoDate)); // Wed Jan 28, 8:30 PM EST
   mocks.agentCommand.mockClear();
   mocks.loadConfigReturn = {
@@ -251,6 +264,7 @@ function setupNewYorkTimeConfig(isoDate: string) {
 
 function resetTimeConfig() {
   mocks.loadConfigReturn = {};
+  dateOnlyFakeClockActive = false;
   vi.useRealTimers();
 }
 
@@ -407,6 +421,9 @@ describe("gateway agent handler", () => {
     mocks.resolveExplicitAgentSessionKey.mockReset().mockReturnValue(undefined);
     mocks.resolveBareResetBootstrapFileAccess.mockReset().mockReturnValue(true);
     mocks.listAgentIds.mockReset().mockReturnValue(["main"]);
+    mocks.resolveSendPolicy.mockReset().mockReturnValue("allow");
+    dateOnlyFakeClockActive = false;
+    vi.useRealTimers();
   });
 
   it("preserves ACP metadata from the current stored session entry", async () => {
@@ -443,6 +460,118 @@ describe("gateway agent handler", () => {
     expect(mocks.updateSessionStore).toHaveBeenCalled();
     expect(capturedEntry).toBeDefined();
     expect(capturedEntry?.acp).toEqual(existingAcpMeta);
+  });
+
+  it("keeps stored group metadata when a trusted group session receives caller-supplied selectors", async () => {
+    const sessionKey = "agent:main:slack:group:C123";
+    const existingEntry = buildExistingMainStoreEntry({
+      channel: "slack",
+      groupId: "C123",
+      groupChannel: "#trusted",
+      space: "TTRUSTED",
+    });
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: existingEntry,
+      canonicalKey: sessionKey,
+    });
+
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        [sessionKey]: { ...existingEntry },
+      };
+      const result = await updater(store);
+      capturedEntry = result as Record<string, unknown>;
+      return result;
+    });
+
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "trusted group turn",
+        agentId: "main",
+        sessionKey,
+        channel: "slack",
+        groupId: "C123",
+        groupChannel: "#forged-admin",
+        groupSpace: "TFORGED",
+        idempotencyKey: "trusted-group-forged-selectors",
+      },
+      { reqId: "trusted-group-forged-selectors" },
+    );
+
+    expect(mocks.updateSessionStore).toHaveBeenCalled();
+    expect(capturedEntry?.groupId).toBe("C123");
+    expect(capturedEntry?.groupChannel).toBe("#trusted");
+    expect(capturedEntry?.space).toBe("TTRUSTED");
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      groupChannel?: string;
+      groupSpace?: string;
+      runContext?: { groupChannel?: string; groupSpace?: string };
+    };
+    expect(callArgs.groupChannel).toBe("#trusted");
+    expect(callArgs.groupSpace).toBe("TTRUSTED");
+    expect(callArgs.runContext?.groupChannel).toBe("#trusted");
+    expect(callArgs.runContext?.groupSpace).toBe("TTRUSTED");
+  });
+
+  it("persists first-turn group selectors for a trusted new group session", async () => {
+    const sessionKey = "agent:main:slack:group:C123";
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: undefined,
+      canonicalKey: sessionKey,
+    });
+
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {};
+      const result = await updater(store);
+      capturedEntry = result as Record<string, unknown>;
+      return result;
+    });
+
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "first trusted group turn",
+        agentId: "main",
+        sessionKey,
+        channel: "slack",
+        groupId: "C123",
+        groupChannel: "#general",
+        groupSpace: "TWORKSPACE",
+        idempotencyKey: "trusted-group-first-turn-selectors",
+      },
+      { reqId: "trusted-group-first-turn-selectors" },
+    );
+
+    expect(mocks.updateSessionStore).toHaveBeenCalled();
+    expect(capturedEntry?.groupId).toBe("C123");
+    expect(capturedEntry?.groupChannel).toBe("#general");
+    expect(capturedEntry?.space).toBe("TWORKSPACE");
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      groupChannel?: string;
+      groupSpace?: string;
+      runContext?: { groupChannel?: string; groupSpace?: string };
+    };
+    expect(callArgs.groupChannel).toBe("#general");
+    expect(callArgs.groupSpace).toBe("TWORKSPACE");
+    expect(callArgs.runContext?.groupChannel).toBe("#general");
+    expect(callArgs.runContext?.groupSpace).toBe("TWORKSPACE");
   });
 
   it("tags newly-created plugin runtime sessions with the plugin owner", async () => {
@@ -893,6 +1022,82 @@ describe("gateway agent handler", () => {
     resetTimeConfig();
   });
 
+  it("rejects public transcriptMessage overrides", async () => {
+    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
+    mocks.agentCommand.mockClear();
+
+    const respond = await invokeAgent(
+      {
+        message: "runtime-only announce bookkeeping",
+        transcriptMessage: "",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:discord:source",
+          sourceTool: "sessions_send",
+        },
+        idempotencyKey: "test-transcript-message",
+      } as AgentParams,
+      { reqId: "transcript-message", flushDispatch: false },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("invalid agent params"),
+      }),
+    );
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+
+  it("logs attachment parse failures with stack details", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const context = makeContext();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "inspect this",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-agent-attachment-parse-stack",
+        attachments: [
+          {
+            type: "file",
+            mimeType: "image/png",
+            fileName: "broken.png",
+            content: "not-base64",
+          },
+        ],
+      },
+      { respond, context, reqId: "agent-attachment-parse-stack", flushDispatch: false },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("attachment broken.png: invalid base64 content"),
+      }),
+    );
+    expect(context.logGateway.error).toHaveBeenCalledWith(
+      "agent attachment parse failed",
+      expect.objectContaining({
+        consoleMessage: expect.stringContaining(
+          "agent attachment parse failed: Error: attachment broken.png",
+        ),
+        error: expect.stringContaining("Error: attachment broken.png: invalid base64 content"),
+      }),
+    );
+    const logMeta = (context.logGateway.error as unknown as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[1] as { error?: string } | undefined;
+    expect(logMeta?.error).toContain("\n    at ");
+  });
+
   it("keeps model-run gateway prompts undecorated and forwards raw-run flags", async () => {
     setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
     primeMainAgentRun({ cfg: mocks.loadConfigReturn });
@@ -995,6 +1200,38 @@ describe("gateway agent handler", () => {
     expect(callArgs.bestEffortDeliver).toBe(false);
   });
 
+  it("rejects strict delivery with a missing target before dispatching the agent", async () => {
+    mocks.agentCommand.mockClear();
+    primeMainAgentRun();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "strict missing delivery target",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        deliver: true,
+        replyChannel: "telegram",
+        bestEffortDeliver: false,
+        idempotencyKey: "test-strict-delivery-missing-target",
+      },
+      {
+        reqId: "strict-delivery-missing-target",
+        respond,
+        flushDispatch: false,
+      },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("requires target"),
+      }),
+    );
+  });
+
   it("downgrades to session-only when bestEffortDeliver=true and no external channel is configured", async () => {
     mocks.agentCommand.mockClear();
     primeMainAgentRun();
@@ -1063,6 +1300,21 @@ describe("gateway agent handler", () => {
         message: expect.stringContaining("invalid agent params"),
       }),
     );
+  });
+
+  it("forwards one-shot bundle MCP cleanup from agent RPC into the runner", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent({
+      message: "cleanup probe",
+      sessionKey: "agent:main:subagent:cleanup-probe",
+      idempotencyKey: "test-idem-agent-cleanup-bundle-mcp",
+      cleanupBundleMcpOnRunEnd: true,
+    });
+
+    const call = await waitForAgentCommandCall();
+    expect(call.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
   it.each(
@@ -1337,6 +1589,7 @@ describe("gateway agent handler", () => {
         payloads: [],
         meta: { durationMs: 100, aborted: true },
       });
+      const context = makeContext();
 
       await invokeAgent(
         {
@@ -1344,7 +1597,7 @@ describe("gateway agent handler", () => {
           sessionKey: "agent:main:main",
           idempotencyKey: "task-registry-agent-run-aborted",
         },
-        { reqId: "task-registry-agent-run-aborted" },
+        { context, reqId: "task-registry-agent-run-aborted" },
       );
 
       await waitForAssertion(() => {
@@ -1353,6 +1606,11 @@ describe("gateway agent handler", () => {
           childSessionKey: "agent:main:main",
           status: "timed_out",
           terminalSummary: "aborted",
+        });
+        expect(context.dedupe.get("agent:task-registry-agent-run-aborted")?.payload).toMatchObject({
+          runId: "task-registry-agent-run-aborted",
+          status: "timeout",
+          summary: "aborted",
         });
       });
     });
@@ -1366,6 +1624,7 @@ describe("gateway agent handler", () => {
       const abortError = new Error("This operation was aborted");
       abortError.name = "AbortError";
       mocks.agentCommand.mockRejectedValueOnce(abortError);
+      const context = makeContext();
 
       await invokeAgent(
         {
@@ -1373,7 +1632,7 @@ describe("gateway agent handler", () => {
           sessionKey: "agent:main:main",
           idempotencyKey: "task-registry-agent-run-abort-error",
         },
-        { reqId: "task-registry-agent-run-abort-error" },
+        { context, reqId: "task-registry-agent-run-abort-error" },
       );
 
       await waitForAssertion(() => {
@@ -1382,6 +1641,13 @@ describe("gateway agent handler", () => {
           childSessionKey: "agent:main:main",
           status: "timed_out",
           error: "AbortError: This operation was aborted",
+        });
+        expect(
+          context.dedupe.get("agent:task-registry-agent-run-abort-error")?.payload,
+        ).toMatchObject({
+          runId: "task-registry-agent-run-abort-error",
+          status: "timeout",
+          summary: "aborted",
         });
       });
     });
@@ -2288,6 +2554,93 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it.each(["all", "non-main"] as const)(
+    "does not preload startup memory from inherited workspaces for spawned sandboxed sessions in %s mode",
+    async (sandboxMode) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-04-27T12:00:00.000Z"));
+      try {
+        await withTempDir(
+          { prefix: "openclaw-gateway-startup-canonical-" },
+          async (canonicalWorkspaceDir) => {
+            await withTempDir(
+              { prefix: "openclaw-gateway-startup-inherited-" },
+              async (inheritedWorkspaceDir) => {
+                await fs.mkdir(`${inheritedWorkspaceDir}/memory`, { recursive: true });
+                const inheritedMarker = "OC_INHERITED_WORKSPACE_MEMORY_MARKER";
+                await fs.writeFile(
+                  `${inheritedWorkspaceDir}/memory/2026-04-27.md`,
+                  inheritedMarker,
+                  "utf-8",
+                );
+                mocks.loadConfigReturn = {
+                  agents: {
+                    defaults: {
+                      workspace: canonicalWorkspaceDir,
+                      userTimezone: "UTC",
+                      startupContext: {
+                        enabled: true,
+                        applyOn: ["new"],
+                        dailyMemoryDays: 1,
+                      },
+                      sandbox: {
+                        mode: sandboxMode,
+                        scope: "session",
+                        workspaceAccess: "none",
+                      },
+                    },
+                  },
+                };
+                mockSessionResetSuccess({
+                  reason: "new",
+                  key: "agent:main:subagent:sandbox-child",
+                });
+                mocks.loadSessionEntry.mockReturnValue({
+                  cfg: mocks.loadConfigReturn,
+                  storePath: "/tmp/sessions.json",
+                  entry: {
+                    sessionId: "existing-child-session",
+                    updatedAt: Date.now(),
+                    spawnedBy: "agent:main:main",
+                    spawnedWorkspaceDir: inheritedWorkspaceDir,
+                  },
+                  canonicalKey: "agent:main:subagent:sandbox-child",
+                });
+                mocks.updateSessionStore.mockResolvedValue(undefined);
+                mocks.agentCommand.mockResolvedValue({
+                  payloads: [{ text: "ok" }],
+                  meta: { durationMs: 100 },
+                });
+
+                await invokeAgent(
+                  {
+                    message: "/new",
+                    sessionKey: "agent:main:subagent:sandbox-child",
+                    idempotencyKey: `test-idem-new-spawned-sandbox-memory-${sandboxMode}`,
+                  },
+                  {
+                    reqId: `4-startup-spawned-sandbox-memory-${sandboxMode}`,
+                    client: {
+                      connect: { scopes: ["operator.admin"] },
+                    } as AgentHandlerArgs["client"],
+                  },
+                );
+
+                await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+                const call = readLastAgentCommandCall();
+                expect(call?.message).toContain("Execute your Session Startup sequence now");
+                expect(call?.message).not.toContain("[Startup context loaded by runtime]");
+                expect(call?.message).not.toContain(inheritedMarker);
+              },
+            );
+          },
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("uses /reset suffix as the post-reset message and still injects timestamp", async () => {
     setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
     mockSessionResetSuccess({ reason: "reset" });
@@ -2451,6 +2804,118 @@ describe("gateway agent handler", () => {
       }),
       undefined,
     );
+  });
+
+  it("allows non-delivery agent invocations when sendPolicy is deny", async () => {
+    mocks.agentCommand.mockClear();
+    primeMainAgentRun();
+    mocks.resolveSendPolicy.mockReturnValue("deny");
+
+    const respond = await runMainAgent("smoke", "non-delivery-deny");
+
+    expect(mocks.resolveSendPolicy).not.toHaveBeenCalled();
+    expect(respond).not.toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "send blocked by session policy" }),
+    );
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalledTimes(1));
+  });
+
+  it("blocks delivery agent invocations when sendPolicy is deny", async () => {
+    primeMainAgentRun();
+    mocks.resolveSendPolicy.mockReturnValue("deny");
+    mocks.agentCommand.mockClear();
+
+    const respond = vi.fn();
+    await invokeAgent(
+      {
+        message: "smoke",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "delivery-deny",
+        deliver: true,
+      },
+      { respond, reqId: "delivery-deny" },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "send blocked by session policy" }),
+    );
+    expect(mocks.resolveSendPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: expect.objectContaining({ sessionId: "existing-session-id" }),
+        sessionKey: "agent:main:main",
+      }),
+    );
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+
+  describe("groupId session-entry persistence validation", () => {
+    async function captureGroupEntryFields(
+      sessionKey: string,
+      entry: Record<string, unknown>,
+      requestGroupId?: string,
+    ) {
+      mocks.loadSessionEntry.mockReturnValue({
+        cfg: {},
+        storePath: "/tmp/sessions.json",
+        entry: { sessionId: "existing-session-id", updatedAt: Date.now(), ...entry },
+        canonicalKey: sessionKey,
+      });
+      let capturedEntry: Record<string, unknown> | undefined;
+      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+        const store: Record<string, unknown> = {
+          [sessionKey]: { sessionId: "existing-session-id" },
+        };
+        await updater(store);
+        capturedEntry = store[sessionKey] as Record<string, unknown>;
+      });
+      mocks.agentCommand.mockResolvedValue({ payloads: [{ text: "ok" }], meta: { durationMs: 1 } });
+      await invokeAgent({
+        message: "hi",
+        agentId: "main",
+        sessionKey,
+        idempotencyKey: `group-persist-${sessionKey}-${requestGroupId ?? "none"}`,
+        ...(requestGroupId !== undefined ? { groupId: requestGroupId } : {}),
+      });
+      return capturedEntry;
+    }
+
+    it("drops forged groupId on non-group session before writing session entry", async () => {
+      const entry = await captureGroupEntryFields("agent:main:main", {}, "trusted-group");
+      expect(entry?.groupId).toBeUndefined();
+    });
+
+    it("preserves groupId when session key encodes matching group membership", async () => {
+      const entry = await captureGroupEntryFields(
+        "agent:main:slack:group:trusted-group",
+        {},
+        "trusted-group",
+      );
+      expect(entry?.groupId).toBe("trusted-group");
+    });
+
+    it("clears a previously forged groupId from the session entry on reconnection", async () => {
+      // Entry carries a forged groupId from a prior request; new request supplies none.
+      const entry = await captureGroupEntryFields(
+        "agent:main:main",
+        { groupId: "trusted-group" },
+        undefined,
+      );
+      expect(entry?.groupId).toBeUndefined();
+    });
+
+    it("trusts groupId when spawnedBy session key encodes the matching group", async () => {
+      const entry = await captureGroupEntryFields(
+        "agent:main:main",
+        { spawnedBy: "agent:main:slack:group:trusted-group" },
+        "trusted-group",
+      );
+      expect(entry?.groupId).toBe("trusted-group");
+    });
   });
 });
 
@@ -2628,6 +3093,69 @@ describe("gateway agent handler chat.abort integration", () => {
     );
     expect(capturedSignal?.aborted).toBe(true);
     expect(context.chatAbortControllers.has(runId)).toBe(false);
+  });
+
+  it("keeps the sessions.abort wait snapshot after late agent completion", async () => {
+    prime();
+    let capturedSignal: AbortSignal | undefined;
+    let resolveRun:
+      | ((value: { payloads: Array<{ text: string }>; meta: { durationMs: number } }) => void)
+      | undefined;
+    mocks.agentCommand.mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
+      capturedSignal = opts.abortSignal;
+      return new Promise((resolve) => {
+        resolveRun = resolve;
+      });
+    });
+
+    const context = makeContext();
+    const runId = "idem-abort-snapshot-wins";
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      { context, reqId: runId },
+    );
+
+    const abortRespond = vi.fn();
+    await chatHandlers["chat.abort"]({
+      params: { sessionKey: "agent:main:main", runId },
+      respond: abortRespond as never,
+      context,
+      req: { type: "req", id: "abort-req", method: "chat.abort" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+    expect(capturedSignal?.aborted).toBe(true);
+
+    setGatewayDedupeEntry({
+      dedupe: context.dedupe,
+      key: `agent:${runId}`,
+      entry: {
+        ts: 100,
+        ok: true,
+        payload: {
+          runId,
+          status: "timeout",
+          stopReason: "rpc",
+          endedAt: 100,
+        },
+      },
+    });
+
+    resolveRun?.({ payloads: [{ text: "late ok" }], meta: { durationMs: 1 } });
+
+    await waitForAssertion(() => {
+      expect(context.dedupe.get(`agent:${runId}`)?.payload).toMatchObject({
+        runId,
+        status: "timeout",
+        stopReason: "rpc",
+        endedAt: 100,
+      });
+    });
   });
 
   it("chat.abort without runId aborts the active agent run for the sessionKey", async () => {
