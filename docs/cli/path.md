@@ -17,23 +17,23 @@ against the SDK directly.
 
 ## Subcommands
 
-| Subcommand | Purpose |
-| ---------- | ------- |
-| `resolve <oc-path>`   | Print the match at the path (or "not found"). |
-| `find <pattern>`      | Enumerate matches for a wildcard / predicate path. |
-| `set <oc-path> <value>` | Write a leaf at the path. Supports `--dry-run`. |
-| `validate <oc-path>`  | Parse-only — print structural breakdown (file / section / item / field). |
-| `emit <file>`         | Round-trip a file through `parseXxx` + `emitXxx` (byte-fidelity diagnostic). |
+| Subcommand              | Purpose                                                                      |
+| ----------------------- | ---------------------------------------------------------------------------- |
+| `resolve <oc-path>`     | Print the match at the path (or "not found").                                |
+| `find <pattern>`        | Enumerate matches for a wildcard / predicate path.                           |
+| `set <oc-path> <value>` | Write a leaf at the path. Supports `--dry-run`.                              |
+| `validate <oc-path>`    | Parse-only — print structural breakdown (file / section / item / field).     |
+| `emit <file>`           | Round-trip a file through `parseXxx` + `emitXxx` (byte-fidelity diagnostic). |
 
 ## Global flags
 
-| Flag           | Purpose                                                                                  |
-| -------------- | ---------------------------------------------------------------------------------------- |
-| `--cwd <dir>`  | Resolve the file slot against this directory (default: `process.cwd()`).                 |
-| `--file <path>`| Override the file slot's resolved path (absolute access).                                |
-| `--json`       | Force JSON output (default when stdout is not a TTY).                                    |
-| `--human`      | Force human output (default when stdout is a TTY).                                       |
-| `--dry-run`    | (only on `set`) print the bytes that would be written without writing.                   |
+| Flag            | Purpose                                                                  |
+| --------------- | ------------------------------------------------------------------------ |
+| `--cwd <dir>`   | Resolve the file slot against this directory (default: `process.cwd()`). |
+| `--file <path>` | Override the file slot's resolved path (absolute access).                |
+| `--json`        | Force JSON output (default when stdout is not a TTY).                    |
+| `--human`       | Force human output (default when stdout is a TTY).                       |
+| `--dry-run`     | (only on `set`) print the bytes that would be written without writing.   |
 
 ## `oc://` syntax
 
@@ -89,11 +89,11 @@ openclaw path emit ./AGENTS.md
 
 ## Exit codes
 
-| Code | Meaning                                                                       |
-| ---- | ----------------------------------------------------------------------------- |
-| `0`  | Success. (`resolve` / `find`: at least one match. `set`: write succeeded.)    |
-| `1`  | No match, or `set` rejected by the substrate (no system-level error).         |
-| `2`  | Argument or parse error.                                                      |
+| Code | Meaning                                                                    |
+| ---- | -------------------------------------------------------------------------- |
+| `0`  | Success. (`resolve` / `find`: at least one match. `set`: write succeeded.) |
+| `1`  | No match, or `set` rejected by the substrate (no system-level error).      |
+| `2`  | Argument or parse error.                                                   |
 
 ## Output mode
 

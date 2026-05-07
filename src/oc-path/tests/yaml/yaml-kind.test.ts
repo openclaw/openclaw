@@ -4,10 +4,8 @@
  * Real-world fixture: lobster `.lobster` workflow file shape.
  */
 import { describe, expect, it } from 'vitest';
-import {
-  emitYaml,
-  parseYaml,
-} from '../../yaml/index.js';
+import { emitYaml } from '../../yaml/emit.js';
+import { parseYaml } from '../../yaml/parse.js';
 import { resolveYamlOcPath } from '../../yaml/resolve.js';
 import { setYamlOcPath } from '../../yaml/edit.js';
 import { parseOcPath } from '../../oc-path.js';
