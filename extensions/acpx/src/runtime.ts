@@ -133,7 +133,7 @@ function selectCurrentSessionLease(params: {
   if (params.rootPid) {
     return candidates.find((lease) => lease.rootPid === params.rootPid);
   }
-  return [...candidates].sort((a, b) => b.startedAt - a.startedAt)[0];
+  return candidates.toSorted((a, b) => b.startedAt - a.startedAt)[0];
 }
 
 function createResetAwareSessionStore(

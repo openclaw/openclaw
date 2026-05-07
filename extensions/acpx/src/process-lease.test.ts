@@ -26,8 +26,8 @@ describe("createAcpxProcessLeaseStore", () => {
       await Promise.all(Array.from({ length: 25 }, (_, index) => store.save(makeLease(index))));
 
       const leases = await store.listOpen("gateway-test");
-      expect(leases.map((lease) => lease.leaseId).sort()).toEqual(
-        Array.from({ length: 25 }, (_, index) => `lease-${index}`).sort(),
+      expect(leases.map((lease) => lease.leaseId).toSorted()).toEqual(
+        Array.from({ length: 25 }, (_, index) => `lease-${index}`).toSorted(),
       );
     } finally {
       await rm(stateDir, { recursive: true, force: true });
