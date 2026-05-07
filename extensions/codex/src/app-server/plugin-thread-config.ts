@@ -61,8 +61,8 @@ export type BuildCodexPluginThreadConfigParams = {
   nowMs?: number;
 };
 
-const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 2;
-const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 2;
+const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 1;
+const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 1;
 
 export function shouldBuildCodexPluginThreadConfig(pluginConfig?: unknown): boolean {
   return resolveCodexPluginsPolicy(pluginConfig).configured;

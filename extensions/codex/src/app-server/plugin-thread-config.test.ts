@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { CodexAppInventoryCache } from "./app-inventory-cache.js";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./config.js";
@@ -529,39 +528,6 @@ describe("Codex plugin thread config", () => {
     expect(third).not.toBe(second);
   });
 
-  it("versions the input fingerprint to invalidate prior generated plugin app config shapes", () => {
-    const pluginConfig = {
-      codexPlugins: {
-        enabled: true,
-        plugins: {
-          "google-calendar": {
-            marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-            pluginName: "google-calendar",
-          },
-        },
-      },
-    };
-    const legacyInputFingerprint = legacyPluginThreadConfigInputFingerprint({
-      pluginConfig,
-      appCacheKey: "runtime-a",
-    });
-    const currentInputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
-      pluginConfig,
-      appCacheKey: "runtime-a",
-    });
-
-    expect(currentInputFingerprint).not.toBe(legacyInputFingerprint);
-    expect(
-      isCodexPluginThreadBindingStale({
-        codexPluginsEnabled: true,
-        bindingFingerprint: "old-config-with-per-tool-deny-list",
-        bindingInputFingerprint: legacyInputFingerprint,
-        currentInputFingerprint,
-        hasBindingPolicyContext: true,
-      }),
-    ).toBe(true);
-  });
-
   it("uses app-level destructive policy for plugins without OpenClaw tool-name knowledge", async () => {
     const appCache = new CodexAppInventoryCache();
     await appCache.refreshNow({
@@ -624,7 +590,7 @@ describe("Codex plugin thread config", () => {
     });
   });
 
-  it("marks legacy and changed plugin app bindings stale only when relevant", () => {
+  it("marks missing and changed plugin app bindings stale only when relevant", () => {
     expect(
       isCodexPluginThreadBindingStale({
         codexPluginsEnabled: true,
@@ -734,67 +700,6 @@ function appInfo(id: string, accessible: boolean, enabled = true): v2.AppInfo {
     isEnabled: enabled,
     pluginDisplayNames: [],
   };
-}
-
-function legacyPluginThreadConfigInputFingerprint(params: {
-  pluginConfig?: unknown;
-  appCacheKey?: string;
-}): string {
-  return fingerprintJson({
-    version: 1,
-    policy: legacyPolicyFingerprint(params.pluginConfig),
-    appCacheKey: params.appCacheKey ?? null,
-  });
-}
-
-function legacyPolicyFingerprint(pluginConfig: unknown) {
-  const config = pluginConfig as {
-    codexPlugins?: {
-      enabled?: boolean;
-      allow_destructive_actions?: boolean;
-      plugins?: Record<
-        string,
-        {
-          enabled?: boolean;
-          marketplaceName?: string;
-          pluginName?: string;
-          allow_destructive_actions?: boolean;
-        }
-      >;
-    };
-  };
-  const codexPlugins = config.codexPlugins ?? {};
-  const globalAllowDestructive = codexPlugins.allow_destructive_actions === true;
-  return {
-    enabled: codexPlugins.enabled === true,
-    allowDestructiveActions: globalAllowDestructive,
-    plugins: Object.entries(codexPlugins.plugins ?? {})
-      .map(([configKey, plugin]) => ({
-        configKey,
-        marketplaceName: plugin.marketplaceName,
-        pluginName: plugin.pluginName,
-        enabled: plugin.enabled !== false,
-        allowDestructiveActions: plugin.allow_destructive_actions ?? globalAllowDestructive,
-      }))
-      .toSorted((left, right) => left.configKey.localeCompare(right.configKey)),
-  };
-}
-
-function fingerprintJson(value: unknown): string {
-  return crypto.createHash("sha256").update(stableStringify(value)).digest("hex");
-}
-
-function stableStringify(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
-  }
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
 }
 
 async function buildReadyGoogleCalendarThreadConfig(
