@@ -309,6 +309,8 @@ export function createFollowupRunner(params: {
                 allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
                 provider,
                 model,
+                liveModelDefaultProvider: run.provider,
+                liveModelDefaultModel: run.model,
                 ...authProfile,
                 thinkLevel: run.thinkLevel,
                 verboseLevel: run.verboseLevel,

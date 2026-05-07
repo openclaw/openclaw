@@ -148,6 +148,7 @@ async function runAuthContractAttempt(params: {
   await runAgentAttempt({
     providerOverride: params.providerOverride,
     originalProvider: params.providerOverride,
+    originalModel: "gpt-5.4",
     modelOverride: "gpt-5.4",
     cfg,
     sessionEntry,

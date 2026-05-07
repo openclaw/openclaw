@@ -646,6 +646,36 @@ describe("createFollowupRunner runtime config", () => {
     expect(call?.images).toBe(images);
     expect(call?.imageOrder).toBe(imageOrder);
   });
+
+  it("forwards the caller-selected provider/model as live-model defaults for queued runs", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          provider: "openai",
+          model: "gpt-5.4",
+        },
+      }),
+    );
+
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
+      | {
+          liveModelDefaultProvider?: unknown;
+          liveModelDefaultModel?: unknown;
+        }
+      | undefined;
+    expect(call?.liveModelDefaultProvider).toBe("openai");
+    expect(call?.liveModelDefaultModel).toBe("gpt-5.4");
+  });
 });
 
 describe("createFollowupRunner compaction", () => {
