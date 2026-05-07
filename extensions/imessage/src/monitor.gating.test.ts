@@ -343,6 +343,39 @@ describe("imessage monitor gating + envelope builders", () => {
     expect(decision.kind).toBe("drop");
   });
 
+  it("allows groupPolicy allowlist groups when groupAllowFrom handles sender access", () => {
+    const cfg = baseCfg();
+    cfg.channels ??= {};
+    cfg.channels.imessage ??= {};
+    cfg.channels.imessage.groupPolicy = "allowlist";
+    delete cfg.channels.imessage.groups;
+
+    const groupHistories = new Map();
+    const decision = resolveIMessageInboundDecision({
+      cfg,
+      accountId: "default",
+      message: {
+        id: 15,
+        chat_id: 123,
+        sender: "+15550001111",
+        is_from_me: false,
+        text: "@openclaw hello",
+        is_group: true,
+      },
+      opts: {},
+      messageText: "@openclaw hello",
+      bodyText: "@openclaw hello",
+      allowFrom: ["*"],
+      groupAllowFrom: ["+15550001111"],
+      groupPolicy: "allowlist",
+      dmPolicy: "open",
+      storeAllowFrom: [],
+      historyLimit: 0,
+      groupHistories,
+    });
+    expect(decision.kind).toBe("dispatch");
+  });
+
   it("honors group allowlist and ignores pairing-store senders in groups", () => {
     const cfg = baseCfg();
     cfg.channels ??= {};
