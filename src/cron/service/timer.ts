@@ -1312,8 +1312,9 @@ async function applyStartupCatchupOutcomes(
 
     // Preserve any new past-due nextRunAtMs values that became due while
     // startup catch-up was running. They should execute on a future tick
-    // instead of being silently advanced.
-    recomputeNextRunsForMaintenance(state);
+    // instead of being silently advanced. Future repair is disabled here so
+    // startup overflow deferrals survive until their staggered catch-up tick.
+    recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
     await persist(state);
   });
 }

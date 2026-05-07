@@ -43,7 +43,11 @@ import {
   setupGoogleMeetPlugin,
 } from "./src/test-support/plugin-harness.js";
 import { __testing as chromeTransportTesting } from "./src/transports/chrome.js";
-import { buildMeetDtmfSequence, normalizeDialInNumber } from "./src/transports/twilio.js";
+import {
+  buildMeetDtmfSequence,
+  normalizeDialInNumber,
+  prefixDtmfWait,
+} from "./src/transports/twilio.js";
 import type { GoogleMeetSession } from "./src/transports/types.js";
 
 const voiceCallMocks = vi.hoisted(() => ({
@@ -53,6 +57,13 @@ const voiceCallMocks = vi.hoisted(() => ({
     introSent: true,
   })),
   endMeetVoiceCallGatewayCall: vi.fn(async () => {}),
+  getMeetVoiceCallGatewayCall: vi.fn(
+    async (): Promise<{ found: boolean; call?: { callId: string } }> => ({
+      found: true,
+      call: { callId: "call-1" },
+    }),
+  ),
+  isVoiceCallMissingError: vi.fn((error: unknown) => String(error).includes("Call not found")),
   speakMeetViaVoiceCallGateway: vi.fn(async () => {}),
 }));
 
@@ -82,6 +93,8 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 vi.mock("./src/voice-call-gateway.js", () => ({
   joinMeetViaVoiceCallGateway: voiceCallMocks.joinMeetViaVoiceCallGateway,
   endMeetVoiceCallGatewayCall: voiceCallMocks.endMeetVoiceCallGatewayCall,
+  getMeetVoiceCallGatewayCall: voiceCallMocks.getMeetVoiceCallGatewayCall,
+  isVoiceCallMissingError: voiceCallMocks.isVoiceCallMissingError,
   speakMeetViaVoiceCallGateway: voiceCallMocks.speakMeetViaVoiceCallGateway,
 }));
 
@@ -313,6 +326,20 @@ type TestBridgeProcess = {
 describe("google-meet plugin", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    voiceCallMocks.joinMeetViaVoiceCallGateway.mockResolvedValue({
+      callId: "call-1",
+      dtmfSent: true,
+      introSent: true,
+    });
+    voiceCallMocks.endMeetVoiceCallGatewayCall.mockResolvedValue(undefined);
+    voiceCallMocks.getMeetVoiceCallGatewayCall.mockResolvedValue({
+      found: true,
+      call: { callId: "call-1" },
+    });
+    voiceCallMocks.isVoiceCallMissingError.mockImplementation((error: unknown) =>
+      String(error).includes("Call not found"),
+    );
+    voiceCallMocks.speakMeetViaVoiceCallGateway.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -388,7 +415,7 @@ describe("google-meet plugin", () => {
       voiceCall: {
         enabled: true,
         requestTimeoutMs: 30000,
-        dtmfDelayMs: 2500,
+        dtmfDelayMs: 12000,
         postDtmfSpeechDelayMs: 5000,
       },
       realtime: {
@@ -1226,6 +1253,7 @@ describe("google-meet plugin", () => {
     expect(normalizeDialInNumber("+1 (555) 123-4567")).toBe("+15551234567");
     expect(buildMeetDtmfSequence({ pin: "123 456" })).toBe("123456#");
     expect(buildMeetDtmfSequence({ dtmfSequence: "ww123#" })).toBe("ww123#");
+    expect(prefixDtmfWait("123456#", 12000)).toBe("wwwwwwwwwwwwwwwwwwwwwwww123456#");
   });
 
   it("joins a Twilio session through the tool without page parsing", async () => {
@@ -1246,7 +1274,7 @@ describe("google-meet plugin", () => {
       twilio: {
         dialInNumber: "+15551234567",
         pinProvided: true,
-        dtmfSequence: "123456#",
+        dtmfSequence: "wwwwwwwwwwwwwwwwwwwwwwww123456#",
         voiceCallId: "call-1",
         dtmfSent: true,
         introSent: true,
@@ -1256,7 +1284,7 @@ describe("google-meet plugin", () => {
       expect.objectContaining({
         config: expect.objectContaining({ defaultTransport: "twilio" }),
         dialInNumber: "+15551234567",
-        dtmfSequence: "123456#",
+        dtmfSequence: "wwwwwwwwwwwwwwwwwwwwwwww123456#",
         logger: expect.objectContaining({ info: expect.any(Function) }),
         message: "Say exactly: I'm here and listening.",
         sessionKey: expect.stringMatching(/^voice:google-meet:meet_/),
@@ -1323,6 +1351,34 @@ describe("google-meet plugin", () => {
       config: expect.objectContaining({ defaultTransport: "twilio" }),
       callId: "call-1",
     });
+  });
+
+  it("does not reuse Twilio Meet sessions whose delegated call is no longer active", async () => {
+    voiceCallMocks.getMeetVoiceCallGatewayCall.mockResolvedValueOnce({ found: false });
+    const { tools } = setup({ defaultTransport: "twilio" });
+    const tool = tools[0] as {
+      execute: (
+        id: string,
+        params: unknown,
+      ) => Promise<{ details: { session: { id: string; state: string; notes: string[] } } }>;
+    };
+    const first = await tool.execute("id", {
+      action: "join",
+      url: "https://meet.google.com/abc-defg-hij",
+      dialInNumber: "+15551234567",
+      pin: "123456",
+    });
+    const second = await tool.execute("id", {
+      action: "join",
+      url: "https://meet.google.com/abc-defg-hij",
+      dialInNumber: "+15551234567",
+      pin: "123456",
+    });
+
+    expect(first.details.session.state).toBe("ended");
+    expect(first.details.session.notes).toContain("Voice Call is no longer active.");
+    expect(second.details.session.id).not.toBe(first.details.session.id);
+    expect(voiceCallMocks.joinMeetViaVoiceCallGateway).toHaveBeenCalledTimes(2);
   });
 
   it("delegates Twilio session speech through voice-call", async () => {
@@ -2829,11 +2885,14 @@ describe("google-meet plugin", () => {
           }) => Promise<void>)
         | undefined;
       const respond = vi.fn();
+      vi.useFakeTimers();
 
-      await handler?.({
+      const run = handler?.({
         params: { url: "https://meet.google.com/abc-defg-hij" },
         respond,
       });
+      await vi.advanceTimersByTimeAsync(2_000);
+      await run;
 
       expect(respond.mock.calls[0]?.[1]).toMatchObject({
         spoken: false,
@@ -2849,6 +2908,7 @@ describe("google-meet plugin", () => {
       });
       expect(inspectCount).toBeGreaterThanOrEqual(2);
     } finally {
+      vi.useRealTimers();
       Object.defineProperty(process, "platform", { value: originalPlatform });
     }
   });
@@ -4775,6 +4835,7 @@ describe("google-meet plugin", () => {
   });
 
   it("stops paired-node realtime audio after repeated input pull failures", async () => {
+    vi.useFakeTimers();
     const bridge = {
       connect: vi.fn(async () => {}),
       sendAudio: vi.fn(),
@@ -4804,38 +4865,42 @@ describe("google-meet plugin", () => {
       },
     };
 
-    const handle = await startNodeRealtimeAudioBridge({
-      config: resolveGoogleMeetConfig({
-        realtime: { provider: "openai", model: "gpt-realtime" },
-      }),
-      fullConfig: {} as never,
-      runtime: runtime as never,
-      meetingSessionId: "meet-1",
-      nodeId: "node-1",
-      bridgeId: "bridge-1",
-      logger: noopLogger,
-      providers: [provider],
-    });
-
-    await vi.waitFor(
-      () => {
-        expect(bridge.close).toHaveBeenCalled();
-      },
-      { timeout: 3_000 },
-    );
-    expect(handle.getHealth()).toMatchObject({
-      bridgeClosed: true,
-      consecutiveInputErrors: 5,
-      lastInputError: "node invoke timeout",
-    });
-    expect(runtime.nodes.invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
+    try {
+      const handle = await startNodeRealtimeAudioBridge({
+        config: resolveGoogleMeetConfig({
+          realtime: { provider: "openai", model: "gpt-realtime" },
+        }),
+        fullConfig: {} as never,
+        runtime: runtime as never,
+        meetingSessionId: "meet-1",
         nodeId: "node-1",
-        command: "googlemeet.chrome",
-        params: { action: "stop", bridgeId: "bridge-1" },
-        timeoutMs: 5_000,
-      }),
-    );
+        bridgeId: "bridge-1",
+        logger: noopLogger,
+        providers: [provider],
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(bridge.close).toHaveBeenCalled();
+        },
+        { timeout: 3_000 },
+      );
+      expect(handle.getHealth()).toMatchObject({
+        bridgeClosed: true,
+        consecutiveInputErrors: 5,
+        lastInputError: "node invoke timeout",
+      });
+      expect(runtime.nodes.invoke).toHaveBeenCalledWith(
+        expect.objectContaining({
+          nodeId: "node-1",
+          command: "googlemeet.chrome",
+          params: { action: "stop", bridgeId: "bridge-1" },
+          timeoutMs: 5_000,
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("exposes node-host list and stop-by-url bridge actions", async () => {

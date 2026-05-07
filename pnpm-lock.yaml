@@ -15,7 +15,7 @@ overrides:
   fast-xml-parser: 5.7.0
   request: npm:@cypress/request@3.0.10
   request-promise: npm:@cypress/request-promise@5.0.0
-  basic-ftp: 5.3.0
+  basic-ftp: 5.3.1
   file-type: 22.0.1
   form-data: 2.5.4
   ip-address: 10.2.0
@@ -105,8 +105,8 @@ importers:
         specifier: ^0.6.0
         version: 0.6.0
       '@openclaw/fs-safe':
-        specifier: github:openclaw/fs-safe#3c508734af0b
-        version: https://codeload.github.com/openclaw/fs-safe/tar.gz/3c508734af0baaad4f61cf70619bea98c783043b
+        specifier: github:openclaw/fs-safe#3412e03c09cdfd31c2da04b7d74e39ad7a92d07d
+        version: https://codeload.github.com/openclaw/fs-safe/tar.gz/3412e03c09cdfd31c2da04b7d74e39ad7a92d07d
       '@slack/bolt':
         specifier: ^4.7.2
         version: 4.7.2(@types/express@5.0.6)
@@ -3234,8 +3234,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@openclaw/fs-safe@https://codeload.github.com/openclaw/fs-safe/tar.gz/3c508734af0baaad4f61cf70619bea98c783043b':
-    resolution: {tarball: https://codeload.github.com/openclaw/fs-safe/tar.gz/3c508734af0baaad4f61cf70619bea98c783043b}
+  '@openclaw/fs-safe@https://codeload.github.com/openclaw/fs-safe/tar.gz/3412e03c09cdfd31c2da04b7d74e39ad7a92d07d':
+    resolution: {tarball: https://codeload.github.com/openclaw/fs-safe/tar.gz/3412e03c09cdfd31c2da04b7d74e39ad7a92d07d}
     version: 0.1.2
     engines: {node: '>=20.11'}
 
@@ -4448,6 +4448,7 @@ packages:
 
   '@ungap/structured-clone@1.3.0':
     resolution: {integrity: sha512-WmoN8qaIAo7WTYWbAZuG8PYEhn5fkz7dZrqTBZ7dtt//lL2Gwms1IcnQ5yHqjDfX8Ft5j4YzDM23f87zBfDe9g==}
+    deprecated: Potential CWE-502 - Update to 1.3.1 or higher
 
   '@urbit/aura@3.0.0':
     resolution: {integrity: sha512-N8/FHc/lmlMDCumMuTXyRHCxlov5KZY6unmJ9QR2GOw+OpROZMBsXYGwE+ZMtvN21ql9+Xb8KhGNBj08IrG3Wg==}
@@ -4805,8 +4806,8 @@ packages:
   base64-js@1.5.1:
     resolution: {integrity: sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA==}
 
-  basic-ftp@5.3.0:
-    resolution: {integrity: sha512-5K9eNNn7ywHPsYnFwjKgYH8Hf8B5emh7JKcPaVjjrMJFQQwGpwowEnZNEtHs7DfR7hCZsmaK3VA4HUK0YarT+w==}
+  basic-ftp@5.3.1:
+    resolution: {integrity: sha512-bopVNp6ugyA150DDuZfPFdt1KZ5a94ZDiwX4hMgZDzF+GttD80lEy8kj98kbyhLXnPvhtIo93mdnLIjpCAeeOw==}
     engines: {node: '>=10.0.0'}
 
   bidi-js@1.0.3:
@@ -10003,7 +10004,7 @@ snapshots:
   '@openai/codex@0.128.0-win32-x64':
     optional: true
 
-  '@openclaw/fs-safe@https://codeload.github.com/openclaw/fs-safe/tar.gz/3c508734af0baaad4f61cf70619bea98c783043b':
+  '@openclaw/fs-safe@https://codeload.github.com/openclaw/fs-safe/tar.gz/3412e03c09cdfd31c2da04b7d74e39ad7a92d07d':
     optionalDependencies:
       jszip: 3.10.1
       tar: 7.5.13
@@ -11645,7 +11646,7 @@ snapshots:
 
   base64-js@1.5.1: {}
 
-  basic-ftp@5.3.0: {}
+  basic-ftp@5.3.1: {}
 
   bidi-js@1.0.3:
     dependencies:
@@ -12446,7 +12447,7 @@ snapshots:
 
   get-uri@6.0.5:
     dependencies:
-      basic-ftp: 5.3.0
+      basic-ftp: 5.3.1
       data-uri-to-buffer: 6.0.2
       debug: 4.4.3
     transitivePeerDependencies:
@@ -12454,7 +12455,7 @@ snapshots:
 
   get-uri@8.0.0:
     dependencies:
-      basic-ftp: 5.3.0
+      basic-ftp: 5.3.1
       data-uri-to-buffer: 8.0.0
       debug: 4.4.3
     transitivePeerDependencies:

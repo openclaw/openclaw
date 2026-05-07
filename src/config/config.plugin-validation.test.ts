@@ -483,6 +483,55 @@ describe("config plugin validation", () => {
     });
   });
 
+  it("warns instead of failing for installable channel plugins that are not available", async () => {
+    const catalogPath = path.join(fixtureRoot, "channel-catalog.json");
+    await fs.writeFile(
+      catalogPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@acme/openclaw-chat",
+            openclaw: {
+              plugin: { id: "acme-chat" },
+              channel: {
+                id: "acme-chat",
+                label: "Acme Chat",
+              },
+              install: {
+                npmSpec: "@acme/openclaw-chat",
+              },
+            },
+          },
+        ],
+      }),
+      "utf-8",
+    );
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        channels: {
+          "acme-chat": { token: "configured" },
+        },
+      },
+      {
+        env: {
+          ...suiteEnv(),
+          OPENCLAW_PLUGIN_CATALOG_PATHS: catalogPath,
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.warnings).toContainEqual({
+      path: "channels.acme-chat",
+      message:
+        'channel plugin is not available: acme-chat (install or enable plugin "acme-chat", then run openclaw doctor --fix)',
+    });
+  });
+
   it("keeps unknown channel typos fatal when there is no stale plugin evidence", async () => {
     const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },
