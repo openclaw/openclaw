@@ -39,7 +39,7 @@ vi.mock("./gateway.ts", async (importOriginal) => {
           this.opts.onHello?.(
             hello ?? {
               type: "hello-ok",
-              protocol: 3,
+              protocol: 4,
               snapshot: {},
               auth: { role: "operator", scopes: [] },
             },

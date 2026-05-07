@@ -189,20 +189,15 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shardName: "core-runtime-media-ui",
       },
       {
-        configs: ["test/vitest/vitest.cron.config.ts"],
-        requiresDist: false,
-        runner: "blacksmith-4vcpu-ubuntu-2404",
-        shardName: "core-runtime-cron",
-      },
-      {
         configs: [
           "test/vitest/vitest.acp.config.ts",
+          "test/vitest/vitest.cron.config.ts",
           "test/vitest/vitest.shared-core.config.ts",
           "test/vitest/vitest.tasks.config.ts",
           "test/vitest/vitest.utils.config.ts",
         ],
         requiresDist: false,
-        runner: "blacksmith-4vcpu-ubuntu-2404",
+        runner: undefined,
         shardName: "core-runtime-shared",
       },
     ]);

@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import {
   listAgentIds,
   resolveDefaultAgentId,
@@ -34,7 +33,6 @@ import {
   resolveAgentIdFromSessionKey,
   resolveExplicitAgentSessionKey,
   resolveAgentMainSessionKey,
-  resolveRotatedGeneratedSessionFilePath,
   resolveSessionLifecycleTimestamps,
   resolveSessionResetPolicy,
   resolveSessionResetType,
@@ -1030,16 +1028,6 @@ export const agentHandlers: GatewayRequestHandlers = {
       const effectiveDeliveryFields = normalizeSessionDeliveryFields({
         deliveryContext: effectiveDelivery,
       });
-      const rotatedGeneratedSessionFile =
-        storePath && isNewSession && entry?.sessionId
-          ? resolveRotatedGeneratedSessionFilePath({
-              previousSessionId: entry.sessionId,
-              nextSessionId: sessionId,
-              previousSessionFile: entry.sessionFile,
-              sessionsDir: path.dirname(storePath),
-              agentId: resolveAgentIdFromSessionKey(canonicalKey),
-            })
-          : undefined;
       const nextEntryPatch: SessionEntry = {
         sessionId,
         updatedAt: now,
@@ -1079,7 +1067,6 @@ export const agentHandlers: GatewayRequestHandlers = {
         cliSessionIds: entry?.cliSessionIds,
         cliSessionBindings: entry?.cliSessionBindings,
         claudeCliSessionId: entry?.claudeCliSessionId,
-        ...(rotatedGeneratedSessionFile ? { sessionFile: rotatedGeneratedSessionFile } : {}),
       };
       sessionEntry = mergeSessionEntry(entry, nextEntryPatch);
       if (request.deliver === true) {

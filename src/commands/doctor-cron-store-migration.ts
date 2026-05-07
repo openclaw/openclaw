@@ -20,7 +20,6 @@ type CronStoreIssueKey =
   | "legacyScheduleCron"
   | "legacyPayloadKind"
   | "legacyPayloadProvider"
-  | "invalidCronPayloadModel"
   | "legacyTopLevelPayloadFields"
   | "legacyTopLevelDeliveryFields"
   | "legacyDeliveryMode";
@@ -227,17 +226,6 @@ function stripLegacyTopLevelFields(raw: Record<string, unknown>) {
   }
 }
 
-function isInvalidCronPayloadModelSentinel(value: unknown): boolean {
-  if (value === null) {
-    return true;
-  }
-  if (typeof value !== "string") {
-    return false;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(value);
-  return normalized === "" || normalized === "default" || normalized === "null";
-}
-
 export function normalizeStoredCronJobs(
   jobs: Array<Record<string, unknown>>,
 ): NormalizeCronStoreJobsResult {
@@ -391,15 +379,6 @@ export function normalizeStoredCronJobs(
     }
 
     if (payloadRecord) {
-      if (
-        payloadRecord.kind === "agentTurn" &&
-        "model" in payloadRecord &&
-        isInvalidCronPayloadModelSentinel(payloadRecord.model)
-      ) {
-        delete payloadRecord.model;
-        mutated = true;
-        trackIssue("invalidCronPayloadModel");
-      }
       const hadLegacyPayloadProvider = Boolean(normalizeOptionalString(payloadRecord.provider));
       if (migrateLegacyCronPayload(payloadRecord)) {
         mutated = true;

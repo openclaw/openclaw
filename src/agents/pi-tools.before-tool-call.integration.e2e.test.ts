@@ -11,7 +11,7 @@ import {
 import { addTestHook, createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
 import { patchPluginSessionExtension } from "../plugins/host-hook-state.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginHookRegistration } from "../plugins/types.js";
 
 type ToolDefinitionAdapterModule = typeof import("./pi-tool-definition-adapter.js");
@@ -326,7 +326,6 @@ describe("before_tool_call hook deduplication (#15502)", () => {
 describe("before_tool_call hook integration for client tools", () => {
   beforeEach(() => {
     resetGlobalHookRunner();
-    resetPluginRuntimeStateForTest();
     resetDiagnosticSessionStateForTest();
     installBeforeToolCallHook();
   });

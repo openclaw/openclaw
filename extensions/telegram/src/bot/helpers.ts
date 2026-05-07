@@ -1,7 +1,6 @@
 import type { Chat, Message } from "@grammyjs/types";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import type {
-  OpenClawConfig,
   TelegramAccountConfig,
   TelegramDirectConfig,
   TelegramGroupConfig,
@@ -11,12 +10,7 @@ import type {
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import {
-  expandTelegramAllowFromWithAccessGroups,
-  firstDefined,
-  normalizeAllowFrom,
-  type NormalizedAllowFrom,
-} from "../bot-access.js";
+import { firstDefined, normalizeAllowFrom, type NormalizedAllowFrom } from "../bot-access.js";
 import { normalizeTelegramReplyToMessageId } from "../outbound-params.js";
 import { resolveTelegramPreviewStreamMode } from "../preview-streaming.js";
 import {
@@ -174,10 +168,8 @@ export function withResolvedTelegramForumFlag<T extends { chat: object }>(
 }
 
 export async function resolveTelegramGroupAllowFromContext(params: {
-  cfg?: OpenClawConfig;
   chatId: string | number;
   accountId?: string;
-  senderId?: string;
   isGroup?: boolean;
   isForum?: boolean;
   messageThreadId?: number | null;
@@ -222,13 +214,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
   // Group sender access must remain explicit (groupAllowFrom/per-group allowFrom only).
   // DM pairing store entries are not a group authorization source.
-  const expandedGroupAllowFrom = await expandTelegramAllowFromWithAccessGroups({
-    cfg: params.cfg,
-    allowFrom: groupAllowOverride ?? params.groupAllowFrom,
-    accountId,
-    senderId: params.senderId,
-  });
-  const effectiveGroupAllow = normalizeAllowFrom(expandedGroupAllowFrom);
+  const effectiveGroupAllow = normalizeAllowFrom(groupAllowOverride ?? params.groupAllowFrom);
   const hasGroupAllowOverride = groupAllowOverride !== undefined;
   return {
     resolvedThreadId,

@@ -36,7 +36,6 @@ import {
   reconcileOrphanedRestoredRuns,
   reconcileOrphanedRun,
   resolveAnnounceRetryDelayMs,
-  resolveArchiveAfterMs,
   resolveSubagentRunOrphanReason,
   resolveSubagentSessionStatus,
   safeRemoveAttachmentsDir,
@@ -197,6 +196,8 @@ const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
  * `timed out` completion right before the eventual success.
  */
 const LIFECYCLE_TIMEOUT_RETRY_GRACE_MS = 15_000;
+/** Absolute TTL for session-mode runs after cleanup completes (no archiveAtMs). */
+const SESSION_RUN_TTL_MS = 5 * 60_000; // 5 minutes
 /** Absolute TTL for orphaned pendingLifecycleError / pendingLifecycleTimeout entries. */
 const PENDING_LIFECYCLE_TERMINAL_TTL_MS = 5 * 60_000; // 5 minutes
 /** Grace period before treating a "running" subagent without a live run context as stale. */
@@ -750,7 +751,6 @@ async function sweepSubagentRuns() {
   try {
     const now = Date.now();
     const storeCache = new Map<string, Record<string, SessionEntry>>();
-    const sessionRetentionMs = resolveArchiveAfterMs(subagentRegistryDeps.getRuntimeConfig());
     let mutated = false;
     for (const [runId, entry] of subagentRuns.entries()) {
       if (typeof entry.endedAt !== "number") {
@@ -813,18 +813,12 @@ async function sweepSubagentRuns() {
         }
       }
 
-      // Session-mode runs have no archiveAtMs because the child session is retained
-      // independently — but the registry row itself still needs to be reaped after
-      // cleanup, otherwise `subagents list` and other registry-backed surfaces grow
-      // without bound. Honor the same `agents.defaults.subagents.archiveAfterMinutes`
-      // window run-mode uses for `archiveAtMs`, so operators get one consistent
-      // retention knob (default 60 minutes; 0 disables session-mode reaping).
+      // Session-mode runs have no archiveAtMs — apply absolute TTL after cleanup completes.
       // Use cleanupCompletedAt (not endedAt) to avoid interrupting deferred cleanup flows.
       if (!entry.archiveAtMs) {
         if (
-          typeof sessionRetentionMs === "number" &&
           typeof entry.cleanupCompletedAt === "number" &&
-          now - entry.cleanupCompletedAt > sessionRetentionMs
+          now - entry.cleanupCompletedAt > SESSION_RUN_TTL_MS
         ) {
           clearPendingLifecycleError(runId);
           void notifyContextEngineSubagentEnded({

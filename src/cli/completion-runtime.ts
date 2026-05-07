@@ -69,9 +69,9 @@ function formatCompletionSourceLine(
   cachePath: string,
 ): string {
   if (shell === "fish") {
-    return `test -f "${cachePath}"; and source "${cachePath}"`;
+    return `source "${cachePath}"`;
   }
-  return `[ -f "${cachePath}" ] && source "${cachePath}"`;
+  return `source "${cachePath}"`;
 }
 
 function isCompletionProfileHeader(line: string): boolean {

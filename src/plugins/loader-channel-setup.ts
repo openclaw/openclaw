@@ -174,18 +174,12 @@ export function resolveSetupChannelRegistration(moduleExport: unknown): {
   }
   const setup = resolved as {
     plugin?: unknown;
-    setChannelRuntime?: unknown;
   };
   if (!setup.plugin || typeof setup.plugin !== "object") {
     return {};
   }
   return {
     plugin: setup.plugin as ChannelPlugin,
-    ...(typeof setup.setChannelRuntime === "function"
-      ? {
-          setChannelRuntime: setup.setChannelRuntime as (runtime: PluginRuntime) => void,
-        }
-      : {}),
   };
 }
 

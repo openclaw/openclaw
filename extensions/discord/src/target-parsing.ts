@@ -21,10 +21,6 @@ export function parseDiscordTarget(
   if (!trimmed) {
     return undefined;
   }
-  const providerPrefixedTarget = parseDiscordProviderPrefixedTarget(trimmed);
-  if (providerPrefixedTarget) {
-    return providerPrefixedTarget;
-  }
   const userTarget = parseMentionPrefixOrAtUserTarget({
     raw: trimmed,
     mentionPattern: /^<@!?(\d+)>$/,
@@ -49,19 +45,6 @@ export function parseDiscordTarget(
     );
   }
   return buildMessagingTarget("channel", trimmed, trimmed);
-}
-
-function parseDiscordProviderPrefixedTarget(raw: string): DiscordTarget | undefined {
-  const match = /^discord:(channel|user):(.+)$/i.exec(raw);
-  if (!match) {
-    return undefined;
-  }
-  const kind = match[1]?.toLowerCase() as "channel" | "user" | undefined;
-  const id = match[2]?.trim();
-  if (!kind || !id) {
-    return undefined;
-  }
-  return buildMessagingTarget(kind, id, `${kind}:${id}`);
 }
 
 export function resolveDiscordChannelId(raw: string): string {

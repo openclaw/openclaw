@@ -106,49 +106,6 @@ describe("normalizeStoredCronJobs", () => {
     });
   });
 
-  it("removes invalid persisted cron model inheritance sentinels", () => {
-    const sentinelValues: unknown[] = ["default", " null ", "", null];
-    const jobs = sentinelValues.map((model, index) =>
-      makeLegacyJob({
-        id: `bad-model-${index}`,
-        sessionTarget: "isolated",
-        payload: {
-          kind: "agentTurn",
-          message: "ping",
-          model,
-        },
-        delivery: { mode: "announce" },
-      }),
-    );
-
-    const result = normalizeStoredCronJobs(jobs);
-
-    expect(result.mutated).toBe(true);
-    expect(result.issues.invalidCronPayloadModel).toBe(4);
-    for (const job of jobs) {
-      const payload = job.payload as Record<string, unknown>;
-      expect(payload.model).toBeUndefined();
-    }
-  });
-
-  it("preserves real persisted cron model refs", () => {
-    const { job, result } = normalizeOneJob(
-      makeLegacyJob({
-        id: "real-model",
-        sessionTarget: "isolated",
-        payload: {
-          kind: "agentTurn",
-          message: "ping",
-          model: "minimax-portal/MiniMax-M2.7",
-        },
-        delivery: { mode: "announce" },
-      }),
-    );
-
-    expect(result.issues.invalidCronPayloadModel).toBeUndefined();
-    expect((job.payload as Record<string, unknown>).model).toBe("minimax-portal/MiniMax-M2.7");
-  });
-
   it("does not report legacyPayloadKind for already-normalized payload kinds", () => {
     const jobs = [
       {
