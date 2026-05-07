@@ -1568,19 +1568,22 @@ public struct SessionsCleanupParams: Codable, Sendable {
     public let enforce: Bool?
     public let activekey: String?
     public let fixmissing: Bool?
+    public let fixdmscope: Bool?
 
     public init(
         agent: String?,
         allagents: Bool?,
         enforce: Bool?,
         activekey: String?,
-        fixmissing: Bool?)
+        fixmissing: Bool?,
+        fixdmscope: Bool?)
     {
         self.agent = agent
         self.allagents = allagents
         self.enforce = enforce
         self.activekey = activekey
         self.fixmissing = fixmissing
+        self.fixdmscope = fixdmscope
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1589,6 +1592,7 @@ public struct SessionsCleanupParams: Codable, Sendable {
         case enforce
         case activekey = "activeKey"
         case fixmissing = "fixMissing"
+        case fixdmscope = "fixDmScope"
     }
 }
 
