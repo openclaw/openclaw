@@ -61,6 +61,7 @@ export type ChatHost = ChatInputHistoryState & {
   chatSideResult?: ChatSideResult | null;
   chatSideResultTerminalRuns?: Set<string>;
   chatModelOverrides: Record<string, ChatModelOverride | null>;
+  chatModelSwitchPromises?: Record<string, Promise<boolean>>;
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
   sessionsResult?: SessionsListResult | null;
@@ -261,7 +262,7 @@ async function sendChatMessageNow(
     host.refreshSessionsAfterChat.add(runId);
   }
   if (ok) {
-    discardChatAttachmentDataUrls(opts?.attachments);
+    discardChatAttachmentDataUrls(excludeComposerAttachments(host, opts?.attachments));
   }
   return ok;
 }
@@ -316,6 +317,70 @@ async function withChatSubmitGuard<T>(
   }
 }
 
+function waitForPendingChatModelSwitch(
+  host: ChatHost,
+  sessionKey: string,
+): Promise<boolean> | true {
+  const pending = host.chatModelSwitchPromises?.[sessionKey];
+  if (!pending) {
+    return true;
+  }
+  return pending.then((ok) => ok !== false);
+}
+
+function clearSubmittedComposerState(
+  host: ChatHost,
+  submittedDraft: string,
+  submittedAttachments: ChatAttachment[],
+): {
+  previousAttachments?: ChatAttachment[];
+  previousDraft?: string;
+} {
+  const attachmentsUnchanged =
+    host.chatAttachments.length === submittedAttachments.length &&
+    host.chatAttachments.every(
+      (attachment, index) =>
+        attachmentSubmitSignature(attachment) ===
+        attachmentSubmitSignature(submittedAttachments[index]!),
+    );
+  const clearedDraft = host.chatMessage === submittedDraft && attachmentsUnchanged;
+  const clearedAttachments = clearedDraft;
+  if (clearedDraft) {
+    host.chatMessage = "";
+  }
+  if (clearedAttachments) {
+    host.chatAttachments = [];
+  }
+  if (clearedDraft || clearedAttachments) {
+    resetChatInputHistoryNavigation(host);
+  }
+  return {
+    previousAttachments: clearedAttachments ? submittedAttachments : undefined,
+    previousDraft: clearedDraft ? submittedDraft : undefined,
+  };
+}
+
+function excludeComposerAttachments(
+  host: ChatHost,
+  attachments: readonly ChatAttachment[] | undefined,
+): ChatAttachment[] | undefined {
+  if (!attachments?.length) {
+    return attachments ? [] : undefined;
+  }
+  const retainedIds = new Set((host.chatAttachments ?? []).map((attachment) => attachment.id));
+  return attachments.filter((attachment) => !retainedIds.has(attachment.id));
+}
+
+function snapshotChatAttachments(attachments: readonly ChatAttachment[]): ChatAttachment[] {
+  return attachments.map((attachment) => {
+    const dataUrl = getChatAttachmentDataUrl(attachment);
+    return {
+      ...attachment,
+      ...(dataUrl ? { dataUrl } : {}),
+    };
+  });
+}
+
 async function sendDetachedBtwMessage(
   host: ChatHost,
   message: string,
@@ -342,7 +407,7 @@ async function sendDetachedBtwMessage(
       host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
       host.sessionKey,
     );
-    releaseChatAttachmentPayloads(opts?.attachments);
+    releaseChatAttachmentPayloads(excludeComposerAttachments(host, opts?.attachments));
   }
   return ok;
 }
@@ -446,8 +511,9 @@ export async function handleSendChat(
   }
   const previousDraft = host.chatMessage;
   const message = (messageOverride ?? host.chatMessage).trim();
+  const submittedSessionKey = host.sessionKey;
   const attachments = host.chatAttachments ?? [];
-  const attachmentsToSend = messageOverride == null ? attachments : [];
+  const attachmentsToSend = messageOverride == null ? snapshotChatAttachments(attachments) : [];
   const hasAttachments = attachmentsToSend.length > 0;
 
   if (!message && !hasAttachments) {
@@ -469,16 +535,24 @@ export async function handleSendChat(
   if (isBtwCommand(message)) {
     const submitKey = chatSubmitKey(host, "btw", message, attachmentsToSend);
     await withChatSubmitGuard(host, submitKey, async () => {
+      const modelSwitchReady = waitForPendingChatModelSwitch(host, submittedSessionKey);
+      if (modelSwitchReady !== true && !(await modelSwitchReady)) {
+        return;
+      }
+      if (host.sessionKey !== submittedSessionKey) {
+        return;
+      }
+      const cleared =
+        messageOverride == null
+          ? clearSubmittedComposerState(host, previousDraft, attachmentsToSend)
+          : {};
       if (messageOverride == null) {
         recordNonTranscriptInputHistory(host, message);
-        host.chatMessage = "";
-        host.chatAttachments = [];
-        resetChatInputHistoryNavigation(host);
       }
       await sendDetachedBtwMessage(host, message, {
-        previousDraft: messageOverride == null ? previousDraft : undefined,
+        previousDraft: cleared.previousDraft,
         attachments: hasAttachments ? attachmentsToSend : undefined,
-        previousAttachments: messageOverride == null ? attachments : undefined,
+        previousAttachments: cleared.previousAttachments,
       });
     });
     return;
@@ -517,11 +591,17 @@ export async function handleSendChat(
   const refreshSessions = isChatResetCommand(message);
   const submitKey = chatSubmitKey(host, "message", message, attachmentsToSend);
   await withChatSubmitGuard(host, submitKey, async () => {
-    if (messageOverride == null) {
-      host.chatMessage = "";
-      host.chatAttachments = [];
-      resetChatInputHistoryNavigation(host);
+    const modelSwitchReady = waitForPendingChatModelSwitch(host, submittedSessionKey);
+    if (modelSwitchReady !== true && !(await modelSwitchReady)) {
+      return;
     }
+    if (host.sessionKey !== submittedSessionKey) {
+      return;
+    }
+    const cleared =
+      messageOverride == null
+        ? clearSubmittedComposerState(host, previousDraft, attachmentsToSend)
+        : {};
 
     if (isChatBusy(host)) {
       if (messageOverride == null) {
@@ -532,10 +612,10 @@ export async function handleSendChat(
     }
 
     await sendChatMessageNow(host, message, {
-      previousDraft: messageOverride == null ? previousDraft : undefined,
+      previousDraft: cleared.previousDraft,
       restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
       attachments: hasAttachments ? attachmentsToSend : undefined,
-      previousAttachments: messageOverride == null ? attachments : undefined,
+      previousAttachments: cleared.previousAttachments,
       restoreAttachments: Boolean(messageOverride && opts?.restoreDraft),
       refreshSessions,
     });
