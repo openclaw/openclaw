@@ -147,6 +147,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Docs/memory: correct the documented default for `agents.defaults.memorySearch.cache.enabled` from `false` to `true` so the memory configuration reference matches the runtime, schema help text, and `types.tools.ts` doc-comment. Fixes #78953. Thanks @martins-oss.
 - Compute plugin callback authorization dynamically [AI]. (#78866) Thanks @pgondhi987.
 - fix(active-memory): require admin scope for global toggles [AI]. (#78863) Thanks @pgondhi987.
 - Honor owner enforcement for native commands [AI]. (#78864) Thanks @pgondhi987.
