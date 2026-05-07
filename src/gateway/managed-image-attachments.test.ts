@@ -262,13 +262,26 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.statusCode).toBe(403);
   });
 
-  it("allows device-token access without requester session ownership", async () => {
+  it("rejects device-token access without requester session ownership", async () => {
     const { attachmentId, sessionKey } = await createFixture(stateDir);
 
     const { result } = await requestManagedImage({
       stateDir,
       pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
       authResponse: { authMethod: "device-token" },
+    });
+
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("allows device-token access with requester session ownership header", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+      authResponse: { authMethod: "device-token" },
+      headers: { "x-openclaw-requester-session-key": sessionKey },
     });
 
     expect(result.statusCode).toBe(200);

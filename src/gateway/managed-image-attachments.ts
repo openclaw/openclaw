@@ -1009,8 +1009,7 @@ export async function handleManagedOutgoingImageHttpRequest(
     return true;
   }
 
-  const privilegedAccess =
-    requestAuth.trustDeclaredOperatorScopes || requestAuth.authMethod === "device-token";
+  const privilegedAccess = requestAuth.trustDeclaredOperatorScopes;
 
   const requestedScopes = resolveOpenAiCompatibleHttpOperatorScopes(req, requestAuth);
   const scopeAuth = authorizeOperatorScopesForMethod("chat.history", requestedScopes);

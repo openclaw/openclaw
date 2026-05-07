@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Fixes
+
+- Gateway/media: enforce requester-session ownership on the managed outgoing image endpoint for device-token callers, preventing cross-session attachment access (IDOR). Fixes #78723. Thanks @hclsys.
+
 ### Changes
 
 - Docs/iMessage: deprecate BlueBubbles for new OpenClaw setups, document the upstream server-release rationale, and point new iMessage deployments toward the native `imsg` path while keeping BlueBubbles as a supported legacy fallback.
