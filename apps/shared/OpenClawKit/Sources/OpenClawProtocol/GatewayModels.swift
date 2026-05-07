@@ -1517,6 +1517,7 @@ public struct SessionsListParams: Codable, Sendable {
     public let activeminutes: Int?
     public let includeglobal: Bool?
     public let includeunknown: Bool?
+    public let configuredagentsonly: Bool?
     public let includederivedtitles: Bool?
     public let includelastmessage: Bool?
     public let label: String?
@@ -1529,6 +1530,7 @@ public struct SessionsListParams: Codable, Sendable {
         activeminutes: Int?,
         includeglobal: Bool?,
         includeunknown: Bool?,
+        configuredagentsonly: Bool?,
         includederivedtitles: Bool?,
         includelastmessage: Bool?,
         label: String?,
@@ -1540,6 +1542,7 @@ public struct SessionsListParams: Codable, Sendable {
         self.activeminutes = activeminutes
         self.includeglobal = includeglobal
         self.includeunknown = includeunknown
+        self.configuredagentsonly = configuredagentsonly
         self.includederivedtitles = includederivedtitles
         self.includelastmessage = includelastmessage
         self.label = label
@@ -1553,6 +1556,7 @@ public struct SessionsListParams: Codable, Sendable {
         case activeminutes = "activeMinutes"
         case includeglobal = "includeGlobal"
         case includeunknown = "includeUnknown"
+        case configuredagentsonly = "configuredAgentsOnly"
         case includederivedtitles = "includeDerivedTitles"
         case includelastmessage = "includeLastMessage"
         case label

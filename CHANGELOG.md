@@ -267,6 +267,7 @@ Docs: https://docs.openclaw.ai
 - CLI/update: make dev-channel preflight lint opt-in and constrained when enabled, so `openclaw update --channel dev` no longer walks back otherwise-good main commits when Ubuntu hosts OOM-kill or fail parallel oxlint shards. Thanks @vincentkoc.
 - Google Meet: fork the caller's current agent transcript into agent-mode meeting consultant sessions, so Meet replies inherit the context from the tool call that joined the meeting.
 - Google Meet: log the concrete agent-mode TTS provider, model, voice, output format, and sample rate after speech synthesis, so Meet logs show which voice backend spoke each reply.
+- Control UI/Sessions: hide disk-discovered unregistered-agent sessions by default and fall back from restored unconfigured agent session keys before chat refresh, preventing deleted-agent stores from reopening the wrong workspace. Fixes #41685. Thanks @BunsDev.
 - Google Meet: log the resolved audio provider model when starting Chrome and paired-node Meet talk-back bridges, so agent-mode joins show the STT model and bidi joins show the realtime voice model.
 - Google Meet: stop advertising legacy `mode: "realtime"` to agents and config UIs, while keeping it as a hidden compatibility alias for `mode: "agent"`, so new joins use the STT -> OpenClaw agent -> TTS path instead of selecting the direct realtime voice fallback.
 - Google Meet: add `chrome.audioBufferBytes` for generated command-pair SoX audio commands and lower the default buffer from SoX's 8192 bytes to 4096 bytes to reduce Chrome talk-back latency.
