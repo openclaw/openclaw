@@ -47,7 +47,6 @@ import {
 import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
-import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
 import { loadValidConfigOrThrow, resolveKnownAgentId, updateConfig } from "./shared.js";
 
@@ -244,7 +243,6 @@ async function persistProviderAuthResult(params: {
   agentDir: string;
   runtime: RuntimeEnv;
   prompter: ReturnType<typeof createClackPrompter>;
-  workspaceDir: string;
   setDefault?: boolean;
 }) {
   for (const profile of params.result.profiles) {
@@ -260,7 +258,7 @@ async function persistProviderAuthResult(params: {
     });
   }
 
-  const updated = await updateConfig((cfg) => {
+  await updateConfig((cfg) => {
     let next = cfg;
     if (params.result.configPatch) {
       next = applyProviderAuthConfigPatch(next, params.result.configPatch, {
@@ -279,15 +277,6 @@ async function persistProviderAuthResult(params: {
     }
     return next;
   });
-  if (params.setDefault && params.result.defaultModel) {
-    const repaired = await repairCodexRuntimePluginInstallForModelSelection({
-      cfg: updated,
-      model: params.result.defaultModel,
-    });
-    for (const warning of repaired.warnings) {
-      params.runtime.error?.(warning);
-    }
-  }
 
   logConfigUpdated(params.runtime);
   for (const profile of params.result.profiles) {
@@ -342,7 +331,6 @@ async function runProviderAuthMethod(params: {
     agentDir: params.agentDir,
     runtime: params.runtime,
     prompter: params.prompter,
-    workspaceDir: params.workspaceDir,
     setDefault: params.setDefault,
   });
 }

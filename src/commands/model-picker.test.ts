@@ -186,7 +186,7 @@ beforeEach(() => {
 });
 
 describe("promptDefaultModel", () => {
-  it("adds runtime-route hints for canonical and legacy OpenAI Codex models", async () => {
+  it("adds auth-route hints for OpenAI API and Codex OAuth models", async () => {
     loadModelCatalog.mockResolvedValue([
       {
         provider: "openai",
@@ -216,11 +216,11 @@ describe("promptDefaultModel", () => {
       expect.arrayContaining([
         expect.objectContaining({
           value: "openai/gpt-5.5",
-          hint: expect.stringContaining("Codex runtime route"),
+          hint: expect.stringContaining("API key route"),
         }),
         expect.objectContaining({
           value: "openai-codex/gpt-5.5",
-          hint: expect.stringContaining("legacy Codex OAuth route"),
+          hint: expect.stringContaining("ChatGPT OAuth route"),
         }),
       ]),
     );
