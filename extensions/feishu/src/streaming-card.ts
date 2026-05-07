@@ -85,6 +85,7 @@ async function getToken(creds: Credentials): Promise<string> {
     },
     policy: { allowedHostnames: resolveAllowedHostnames(creds.domain) },
     auditContext: "feishu.streaming-card.token",
+    mode: "trusted_env_proxy",
   });
   if (!response.ok) {
     await release();
@@ -245,6 +246,7 @@ export class FeishuStreamingSession {
       },
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.create",
+      mode: "trusted_env_proxy",
     });
     if (!createRes.ok) {
       await releaseCreate();
@@ -334,6 +336,7 @@ export class FeishuStreamingSession {
       },
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.update",
+      mode: "trusted_env_proxy",
     })
       .then(async ({ release }) => {
         await release();
@@ -421,6 +424,7 @@ export class FeishuStreamingSession {
       },
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.note-update",
+      mode: "trusted_env_proxy",
     })
       .then(async ({ release }) => {
         await release();
@@ -472,6 +476,7 @@ export class FeishuStreamingSession {
       },
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.close",
+      mode: "trusted_env_proxy",
     })
       .then(async ({ release }) => {
         await release();

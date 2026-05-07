@@ -102,6 +102,7 @@ async function fetchFeishuJson<T>(params: {
     init: params.init,
     policy: { allowedHostnames: [new URL(params.url).hostname] },
     auditContext: params.auditContext,
+    mode: "trusted_env_proxy",
   });
   try {
     // Registration poll returns 4xx for pending/error states with a JSON body.
