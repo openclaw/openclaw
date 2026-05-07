@@ -243,6 +243,7 @@ export function createCronPromptExecutor(params: {
           onExecutionStarted: params.onExecutionStarted,
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature,
+          allowEmptyAssistantReplyAsSilent: params.job.delivery?.mode === "none",
         });
         bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
           result.meta?.systemPromptReport,

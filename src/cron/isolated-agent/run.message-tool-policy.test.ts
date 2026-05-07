@@ -911,4 +911,35 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     const prompt: string = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
     expect(prompt).not.toMatch(/\bsummary\b/i);
   });
+
+  it('passes allowEmptyAssistantReplyAsSilent=true when delivery.mode is "none"', async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeMessageToolPolicyJob({ mode: "none" }),
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.allowEmptyAssistantReplyAsSilent).toBe(true);
+  });
+
+  it('passes allowEmptyAssistantReplyAsSilent=false when delivery.mode is "announce"', async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "123",
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeMessageToolPolicyJob({ mode: "announce", channel: "messagechat", to: "123" }),
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.allowEmptyAssistantReplyAsSilent).toBe(false);
+  });
 });
