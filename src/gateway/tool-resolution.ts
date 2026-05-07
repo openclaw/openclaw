@@ -1,11 +1,8 @@
-import {
-  resolveAgentConfig,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { describeExecTool } from "../agents/bash-tools.descriptions.js";
 import type { ExecToolDefaults } from "../agents/bash-tools.exec-types.js";
 import { execSchema } from "../agents/bash-tools.schemas.js";
+import { resolveExecConfig } from "../agents/exec-config-resolution.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
   resolveEffectiveToolPolicy,
@@ -41,19 +38,22 @@ function createLazyHttpExecTool(opts: {
   sessionKey: string;
   workspaceDir?: string;
 }): AnyAgentTool {
-  const globalExec = opts.cfg.tools?.exec;
-  const agentExec = opts.agentId
-    ? resolveAgentConfig(opts.cfg, opts.agentId)?.tools?.exec
-    : undefined;
+  const execConfig = resolveExecConfig({ cfg: opts.cfg, agentId: opts.agentId });
   const defaults: ExecToolDefaults = {
-    host: agentExec?.host ?? globalExec?.host,
-    security: agentExec?.security ?? globalExec?.security,
-    ask: agentExec?.ask ?? globalExec?.ask,
-    pathPrepend: agentExec?.pathPrepend ?? globalExec?.pathPrepend,
-    safeBins: agentExec?.safeBins ?? globalExec?.safeBins,
-    safeBinTrustedDirs: agentExec?.safeBinTrustedDirs ?? globalExec?.safeBinTrustedDirs,
-    strictInlineEval: agentExec?.strictInlineEval ?? globalExec?.strictInlineEval,
-    timeoutSec: agentExec?.timeoutSec ?? globalExec?.timeoutSec,
+    host: execConfig.host,
+    security: execConfig.security,
+    ask: execConfig.ask,
+    node: execConfig.node,
+    pathPrepend: execConfig.pathPrepend,
+    safeBins: execConfig.safeBins,
+    safeBinTrustedDirs: execConfig.safeBinTrustedDirs,
+    safeBinProfiles: execConfig.safeBinProfiles,
+    strictInlineEval: execConfig.strictInlineEval,
+    backgroundMs: execConfig.backgroundMs,
+    timeoutSec: execConfig.timeoutSec,
+    approvalRunningNoticeMs: execConfig.approvalRunningNoticeMs,
+    notifyOnExit: execConfig.notifyOnExit,
+    notifyOnExitEmptySuccess: execConfig.notifyOnExitEmptySuccess,
     agentId: opts.agentId,
     sessionKey: opts.sessionKey,
     cwd: opts.workspaceDir,
