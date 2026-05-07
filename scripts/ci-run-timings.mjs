@@ -22,11 +22,6 @@ function formatSeconds(value) {
   return value === null ? "" : `${value}s`;
 }
 
-function parseRunList(raw) {
-  const parsed = JSON.parse(raw);
-  return Array.isArray(parsed) ? parsed : [];
-}
-
 function normalizeRun(run) {
   return {
     ...run,

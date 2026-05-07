@@ -35,9 +35,13 @@ const MAX_RUNS_TO_SCAN = 8;
 const MAX_JOB_PAGES_PER_RUN = 2;
 
 function parseBoolean(value, fallback = false) {
-  if (value === undefined) return fallback;
+  if (value === undefined) {
+    return fallback;
+  }
   const normalized = value.trim().toLowerCase();
-  if (normalized === "1" || normalized === "true" || normalized === "yes") return true;
+  if (normalized === "1" || normalized === "true" || normalized === "yes") {
+    return true;
+  }
   if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "") {
     return false;
   }
@@ -109,7 +113,9 @@ async function collectQueuedBlacksmithJobs({ repository, token }) {
           token,
         );
         for (const job of jobs.jobs ?? []) {
-          if (job.status !== "queued") continue;
+          if (job.status !== "queued") {
+            continue;
+          }
           for (const label of job.labels ?? []) {
             if (typeof label === "string" && label.startsWith("blacksmith-")) {
               runCounts[label] = (runCounts[label] ?? 0) + 1;
@@ -135,7 +141,7 @@ function writeOutputs(outputs) {
     return;
   }
   for (const [key, value] of Object.entries(outputs)) {
-    appendFileSync(outputPath, `${key}=${value}\n`, "utf8");
+    appendFileSync(outputPath, `${key}=${String(value)}\n`, "utf8");
   }
 }
 
@@ -156,7 +162,8 @@ async function main() {
         token: process.env.GITHUB_TOKEN,
       });
     } catch (error) {
-      console.log(`::warning title=Blacksmith fallback probe failed::${error.message}`);
+      const message = error instanceof Error ? error.message : String(error);
+      console.log(`::warning title=Blacksmith fallback probe failed::${message}`);
     }
   }
 
