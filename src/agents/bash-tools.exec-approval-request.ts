@@ -210,16 +210,12 @@ export function buildExecApprovalTurnSourceContext(
   };
 }
 
-function resolveCommandTextForSpans(
-  params: Pick<HostExecApprovalParams, "command" | "systemRunPlan">,
-): string | null {
-  const command = params.command ?? params.systemRunPlan?.commandText;
-  return command && command.length > 0 ? command : null;
-}
-
 async function resolveCommandSpans(
-  command: string,
+  command: string | undefined,
 ): Promise<ExecApprovalCommandSpan[] | undefined> {
+  if (!command) {
+    return undefined;
+  }
   try {
     const explanation = await explainShellCommand(command);
     const commandSpans = formatCommandSpans(explanation);
@@ -229,9 +225,12 @@ async function resolveCommandSpans(
   }
 }
 
-function buildHostApprovalDecisionParams(
+async function buildHostApprovalDecisionParams(
   params: HostExecApprovalParams,
-): RequestExecApprovalDecisionParams {
+): Promise<RequestExecApprovalDecisionParams> {
+  const commandSpans =
+    params.commandSpans ??
+    (await resolveCommandSpans(params.command ?? params.systemRunPlan?.commandText));
   return {
     id: params.approvalId,
     command: params.command,
@@ -244,7 +243,7 @@ function buildHostApprovalDecisionParams(
     security: params.security,
     ask: params.ask,
     warningText: params.warningText,
-    commandSpans: params.commandSpans,
+    commandSpans,
     ...buildExecApprovalRequesterContext({
       agentId: params.agentId,
       sessionKey: params.sessionKey,
@@ -254,34 +253,16 @@ function buildHostApprovalDecisionParams(
   };
 }
 
-async function buildHostApprovalDecisionParamsWithCommandSpans(
-  params: HostExecApprovalParams,
-): Promise<RequestExecApprovalDecisionParams> {
-  if (params.commandSpans) {
-    return buildHostApprovalDecisionParams(params);
-  }
-  const command = resolveCommandTextForSpans(params);
-  const commandSpans = command ? await resolveCommandSpans(command) : undefined;
-  return buildHostApprovalDecisionParams({
-    ...params,
-    commandSpans,
-  });
-}
-
 export async function requestExecApprovalDecisionForHost(
   params: HostExecApprovalParams,
 ): Promise<string | null> {
-  return await requestExecApprovalDecision(
-    await buildHostApprovalDecisionParamsWithCommandSpans(params),
-  );
+  return await requestExecApprovalDecision(await buildHostApprovalDecisionParams(params));
 }
 
 export async function registerExecApprovalRequestForHost(
   params: HostExecApprovalParams,
 ): Promise<ExecApprovalRegistration> {
-  return await registerExecApprovalRequest(
-    await buildHostApprovalDecisionParamsWithCommandSpans(params),
-  );
+  return await registerExecApprovalRequest(await buildHostApprovalDecisionParams(params));
 }
 
 export async function registerExecApprovalRequestForHostOrThrow(
