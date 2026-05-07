@@ -127,6 +127,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Approvals: interpolate the request id into the chat fallback `Reply with: /approve <id> ...` line in both the exec and plugin approval forwarders so owners can copy-paste the command directly instead of seeing a literal `<id>` placeholder. (#78782) Thanks @itsuzef.
 - Exec approvals/node: let trusted backend node invokes complete no-device Control UI approvals after the original request connection changes, while keeping node, command, cwd, env, and allow-once replay bindings enforced. Fixes #78569. Thanks @naturedogdog.
 - Agents/subagents: keep background completion delivery on the requester-agent handoff/queue-retry path instead of raw-sending child results directly, and strip child-result wrapper or OpenClaw runtime-context scaffolding from queued outbound retries. Fixes #78531. Thanks @EthanSK.
 - CLI/completion: guard the shell-profile source line written by `openclaw completion --install` with a file existence check (`[ -f ... ] && source ...` for bash/zsh, `test -f ...; and source ...` for fish) so uninstalling OpenClaw no longer makes new login shells error on a missing completion cache. (#78659) Thanks @sjf.
