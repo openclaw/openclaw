@@ -10,9 +10,11 @@ const {
   joinVoiceChannelMock,
   entersStateMock,
   createAudioPlayerMock,
+  createAudioResourceMock,
   resolveAgentRouteMock,
   agentCommandMock,
   transcribeAudioFileMock,
+  textToSpeechStreamMock,
   textToSpeechMock,
 } = vi.hoisted(() => {
   type EventHandler = (...args: unknown[]) => unknown;
@@ -94,6 +96,7 @@ const {
     entersStateMock: vi.fn(async (_target?: unknown, _state?: string, _timeoutMs?: number) => {
       return undefined;
     }),
+    createAudioResourceMock: vi.fn(),
     createAudioPlayerMock: vi.fn(() => ({
       on: vi.fn(),
       off: vi.fn(),
@@ -104,6 +107,9 @@ const {
     resolveAgentRouteMock: vi.fn(() => ({ agentId: "agent-1", sessionKey: "discord:g1:c1" })),
     agentCommandMock: vi.fn(async (_opts?: unknown, _runtime?: unknown) => ({ payloads: [] })),
     transcribeAudioFileMock: vi.fn(async () => ({ text: "hello from voice" })),
+    textToSpeechStreamMock: vi.fn(
+      async (): Promise<unknown> => ({ success: false, error: "stream unavailable" }),
+    ),
     textToSpeechMock: vi.fn(async () => ({ success: true, audioPath: "/tmp/voice.mp3" })),
   };
 });
@@ -121,7 +127,7 @@ vi.mock("./sdk-runtime.js", () => ({
       Connecting: "connecting",
     },
     createAudioPlayer: createAudioPlayerMock,
-    createAudioResource: vi.fn(),
+    createAudioResource: createAudioResourceMock,
     entersState: entersStateMock,
     getVoiceConnection: getVoiceConnectionMock,
     joinVoiceChannel: joinVoiceChannelMock,
@@ -154,6 +160,7 @@ vi.mock("../runtime.js", () => ({
       transcribeAudioFile: transcribeAudioFileMock,
     },
     tts: {
+      textToSpeechStream: textToSpeechStreamMock,
       textToSpeech: textToSpeechMock,
     },
   }),
@@ -207,8 +214,11 @@ describe("DiscordVoiceManager", () => {
     agentCommandMock.mockResolvedValue({ payloads: [] });
     transcribeAudioFileMock.mockReset();
     transcribeAudioFileMock.mockResolvedValue({ text: "hello from voice" });
+    textToSpeechStreamMock.mockReset();
+    textToSpeechStreamMock.mockResolvedValue({ success: false, error: "stream unavailable" });
     textToSpeechMock.mockReset();
     textToSpeechMock.mockResolvedValue({ success: true, audioPath: "/tmp/voice.mp3" });
+    createAudioResourceMock.mockClear();
   });
 
   const createManager = (
@@ -748,6 +758,49 @@ describe("DiscordVoiceManager", () => {
         text: "hello back",
       }),
     );
+  });
+
+  it("plays streaming TTS audio before falling back to a synthesized file", async () => {
+    const release = vi.fn(async () => undefined);
+    textToSpeechStreamMock.mockResolvedValue({
+      success: true,
+      audioStream: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+          controller.close();
+        },
+      }),
+      release,
+    });
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello back" }],
+    } as never);
+
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Guest Nick",
+      user: {
+        id: "u-guest",
+        username: "guest",
+        globalName: "Guest",
+        discriminator: "4321",
+      },
+    });
+    const manager = createManager({ groupPolicy: "open" }, client, {
+      commands: { useAccessGroups: false },
+    });
+    await processVoiceSegment(manager, "u-guest");
+
+    expect(textToSpeechStreamMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        disableFallback: true,
+        text: "hello back",
+      }),
+    );
+    expect(textToSpeechMock).not.toHaveBeenCalled();
+    expect(createAudioResourceMock).toHaveBeenCalledWith(expect.anything());
+    await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
   });
 
   it("passes per-channel system prompt overrides to voice agent runs", async () => {
