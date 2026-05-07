@@ -41,7 +41,10 @@ function shouldKeepImportedHistoryMessage(message: unknown): boolean {
   return resolveAssistantMessagePhase(message) !== "commentary";
 }
 
-function cliHistoryImportMatchesProvider(importProvider: string, normalizedProvider: string): boolean {
+function cliHistoryImportMatchesProvider(
+  importProvider: string,
+  normalizedProvider: string,
+): boolean {
   if (importProvider === normalizedProvider) {
     return true;
   }
