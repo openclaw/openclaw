@@ -36,6 +36,14 @@
     "target": "ACP 生命周期重构"
   },
   {
+    "source": "ACP protocol implementation PR plan",
+    "target": "ACP 协议实现 PR 计划"
+  },
+  {
+    "source": "ACP protocol PR plan",
+    "target": "ACP 协议 PR 计划"
+  },
+  {
     "source": "Channel message API",
     "target": "频道消息 API"
   },
