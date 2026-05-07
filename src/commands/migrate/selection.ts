@@ -36,6 +36,10 @@ function readMigrationPluginConfigKey(item: MigrationItem): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function migrationSkillRefs(item: MigrationItem): string[] {
   const skillName = readMigrationSkillName(item);
   const idSuffix = item.id.startsWith("skill:") ? item.id.slice("skill:".length) : undefined;
@@ -275,7 +279,16 @@ export function applyMigrationPluginSelection(
   const selectable = getSelectableMigrationPluginItems(plan);
   const selectedIds = resolveSelectedPluginItemIds(selectable, selectedPluginRefs);
   const selectableIds = new Set(selectable.map((item) => item.id));
+  const selectedConfigKeys = new Set(
+    selectable
+      .filter((item) => selectedIds.has(item.id))
+      .map(readMigrationPluginConfigKey)
+      .filter((value): value is string => value !== undefined),
+  );
   const items = plan.items.map((item) => {
+    if (isCodexPluginConfigItem(item)) {
+      return applyCodexPluginConfigSelection(item, selectedConfigKeys);
+    }
     if (!selectableIds.has(item.id) || selectedIds.has(item.id)) {
       return item;
     }
@@ -285,6 +298,65 @@ export function applyMigrationPluginSelection(
     ...plan,
     items,
     summary: summarizeMigrationItems(items),
+  };
+}
+
+function isCodexPluginConfigItem(item: MigrationItem): boolean {
+  if (item.kind !== "config" || item.action !== "merge") {
+    return false;
+  }
+  const value = item.details?.value;
+  if (!isRecord(value)) {
+    return false;
+  }
+  const config = value.config;
+  if (!isRecord(config)) {
+    return false;
+  }
+  const codexPlugins = config.codexPlugins;
+  if (!isRecord(codexPlugins)) {
+    return false;
+  }
+  return isRecord(codexPlugins.plugins);
+}
+
+function applyCodexPluginConfigSelection(
+  item: MigrationItem,
+  selectedConfigKeys: ReadonlySet<string>,
+): MigrationItem {
+  const value = item.details?.value;
+  if (!isRecord(value)) {
+    return item;
+  }
+  const config = value.config;
+  if (!isRecord(config)) {
+    return item;
+  }
+  const codexPlugins = config.codexPlugins;
+  if (!isRecord(codexPlugins) || !isRecord(codexPlugins.plugins)) {
+    return item;
+  }
+  const plugins = Object.fromEntries(
+    Object.entries(codexPlugins.plugins).filter(([configKey]) => selectedConfigKeys.has(configKey)),
+  );
+  if (Object.keys(plugins).length === 0) {
+    return markMigrationItemSkipped(item, MIGRATION_PLUGIN_NOT_SELECTED_REASON);
+  }
+  return {
+    ...item,
+    details: {
+      ...item.details,
+      value: {
+        ...value,
+        config: {
+          ...config,
+          codexPlugins: {
+            ...codexPlugins,
+            plugins,
+          },
+        },
+      },
+    },
   };
 }
 
