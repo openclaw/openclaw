@@ -988,7 +988,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     to the gateway (iOS/Android nodes, or macOS "node mode" in the menubar app). For headless node
     hosts and CLI control, see [Node host CLI](/cli/node).
 
-    A full restart is required for `gateway`, `discovery`, and `canvasHost` changes.
+    A full restart is required for `gateway`, `discovery`, and hosted plugin surface changes.
 
   </Accordion>
 

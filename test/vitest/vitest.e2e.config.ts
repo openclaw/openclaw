@@ -1,22 +1,19 @@
+import os from "node:os";
 import { defineConfig } from "vitest/config";
 import { BUNDLED_PLUGIN_E2E_TEST_GLOB } from "./vitest.bundled-plugin-paths.ts";
 import baseConfig from "./vitest.config.ts";
 import { resolveRepoRootPath } from "./vitest.shared.config.ts";
 
-type E2EWorkerEnv = {
-  OPENCLAW_E2E_WORKERS?: string;
-};
-
-export function resolveE2EWorkerCount(env: E2EWorkerEnv = process.env): number {
-  const requestedWorkers = Number.parseInt(env.OPENCLAW_E2E_WORKERS ?? "", 10);
-  return Number.isFinite(requestedWorkers) && requestedWorkers > 0
-    ? Math.min(16, requestedWorkers)
-    : 1;
-}
-
 const base = baseConfig as unknown as Record<string, unknown>;
-// Keep e2e runs deterministic by default; callers can still opt into parallelism.
-const e2eWorkers = resolveE2EWorkerCount();
+const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
+const cpuCount = os.cpus().length;
+// Keep e2e runs cheap by default; callers can still override via OPENCLAW_E2E_WORKERS.
+const defaultWorkers = isCI ? Math.min(2, Math.max(1, Math.floor(cpuCount * 0.25))) : 1;
+const requestedWorkers = Number.parseInt(process.env.OPENCLAW_E2E_WORKERS ?? "", 10);
+const e2eWorkers =
+  Number.isFinite(requestedWorkers) && requestedWorkers > 0
+    ? Math.min(16, requestedWorkers)
+    : defaultWorkers;
 const verboseE2E = process.env.OPENCLAW_E2E_VERBOSE === "1";
 
 const baseTestWithProjects =
