@@ -4,17 +4,23 @@ import { getOptionalMatrixRuntime } from "./runtime.js";
 const MATRIX_APPROVAL_REACTION_META = {
   "allow-once": {
     emoji: "✅",
+    nativeKeys: ["approval.allow_once"],
     label: "Allow once",
   },
   "allow-always": {
     emoji: "♾️",
+    nativeKeys: ["approval.allow_always"],
     label: "Allow always",
   },
   deny: {
     emoji: "❌",
+    nativeKeys: ["approval.deny"],
     label: "Deny",
   },
-} satisfies Record<ExecApprovalReplyDecision, { emoji: string; label: string }>;
+} satisfies Record<
+  ExecApprovalReplyDecision,
+  { emoji: string; nativeKeys: readonly string[]; label: string }
+>;
 
 const MATRIX_APPROVAL_REACTION_ORDER = [
   "allow-once",
@@ -197,7 +203,8 @@ function resolveMatrixApprovalReactionDecision(
     if (!allowed.has(decision)) {
       continue;
     }
-    if (MATRIX_APPROVAL_REACTION_META[decision].emoji === normalizedReaction) {
+    const meta = MATRIX_APPROVAL_REACTION_META[decision];
+    if (meta.emoji === normalizedReaction || meta.nativeKeys.includes(normalizedReaction)) {
       return decision;
     }
   }

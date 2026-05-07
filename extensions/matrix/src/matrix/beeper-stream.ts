@@ -1,4 +1,5 @@
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { registerMatrixApprovalReactionTarget } from "../approval-reactions.js";
 import type { CoreConfig } from "../types.js";
 import type { MatrixClient, MatrixRawEvent } from "./sdk.js";
 import { editMessageMatrix, sendSingleTextMessageMatrix } from "./send.js";
@@ -347,6 +348,7 @@ export function createMatrixBeeperStreamController(params: {
       await publish({ data: payload, id: "plan", type: "data-openclaw-plan" });
     },
     onApprovalEvent: async (payload) => {
+      const active = await ensureState();
       const toolCallId =
         payload.toolCallId ??
         payload.itemId ??
@@ -355,6 +357,14 @@ export function createMatrixBeeperStreamController(params: {
         payload.phase === "resolved" || payload.status === "resolved"
           ? "tool-approval-response"
           : "tool-approval-request";
+      if (type === "tool-approval-request" && payload.approvalId?.trim()) {
+        registerMatrixApprovalReactionTarget({
+          roomId: active.roomId,
+          eventId: active.eventId,
+          approvalId: payload.approvalId,
+          allowedDecisions: ["allow-once", "allow-always", "deny"],
+        });
+      }
       await publish({
         approvalId: payload.approvalId,
         approved: payload.status === "approved",

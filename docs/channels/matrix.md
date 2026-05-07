@@ -181,7 +181,7 @@ A practical baseline with DM pairing, room allowlist, and E2EE:
 
 Matrix reply streaming is opt-in. `streaming` controls how OpenClaw delivers the in-flight assistant reply; `blockStreaming` controls whether each completed block is preserved as its own Matrix message.
 
-On Beeper homeservers (`beeper.com`, `beeper-staging.com`, `beeper-dev.com`, and subdomains), the Matrix plugin uses Beeper-native AI stream events when Matrix streaming is enabled. Beeper clients receive live structured parts for assistant text, thinking, tool progress, plans, command output, patches, and approval state, then OpenClaw finalizes the original Matrix message with `com.beeper.ai` content. Non-Beeper homeservers keep the standard Matrix preview/edit behavior described below.
+On Beeper homeservers (`beeper.com`, `beeper-staging.com`, `beeper-dev.com`, and subdomains), the Matrix plugin uses Beeper-native AI stream events when Matrix streaming is enabled. Beeper clients receive live structured parts for assistant text, thinking, tool progress, plans, command output, patches, and approval state, Beeper Desktop approval buttons resolve the underlying OpenClaw approval through Matrix reactions, and OpenClaw finalizes the original Matrix message with `com.beeper.ai` content. Non-Beeper homeservers keep the standard Matrix preview/edit behavior described below.
 
 ```json5
 {
@@ -694,6 +694,8 @@ Both kinds share Matrix reaction shortcuts and message updates. Approvers see re
 - `♾️` allow always (when the effective exec policy allows it)
 
 Fallback slash commands: `/approve <id> allow-once`, `/approve <id> allow-always`, `/approve <id> deny`.
+
+On Beeper homeservers using Beeper-native AI streams, Beeper Desktop's approval buttons send the equivalent native reaction keys (`approval.allow_once`, `approval.allow_always`, and `approval.deny`) to the streamed AI message. OpenClaw resolves those reactions through the same Matrix approval authorization and persistence path as the emoji shortcuts.
 
 Only resolved approvers can approve or deny. Channel delivery for exec approvals includes the command text - only enable `channel` or `both` in trusted rooms.
 

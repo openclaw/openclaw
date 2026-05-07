@@ -70,6 +70,37 @@ describe("matrix approval reactions", () => {
     });
   });
 
+  it("resolves Beeper native approval reaction keys", () => {
+    registerMatrixApprovalReactionTarget({
+      roomId: "!ops:beeper.com",
+      eventId: "$beeper-stream",
+      approvalId: "req-beeper",
+      allowedDecisions: ["allow-once", "allow-always", "deny"],
+    });
+
+    expect(
+      resolveMatrixApprovalReactionTarget({
+        roomId: "!ops:beeper.com",
+        eventId: "$beeper-stream",
+        reactionKey: "approval.allow_once",
+      }),
+    ).toEqual({ approvalId: "req-beeper", decision: "allow-once" });
+    expect(
+      resolveMatrixApprovalReactionTarget({
+        roomId: "!ops:beeper.com",
+        eventId: "$beeper-stream",
+        reactionKey: "approval.allow_always",
+      }),
+    ).toEqual({ approvalId: "req-beeper", decision: "allow-always" });
+    expect(
+      resolveMatrixApprovalReactionTarget({
+        roomId: "!ops:beeper.com",
+        eventId: "$beeper-stream",
+        reactionKey: "approval.deny",
+      }),
+    ).toEqual({ approvalId: "req-beeper", decision: "deny" });
+  });
+
   it("ignores reactions that are not allowed on the registered approval anchor event", () => {
     registerMatrixApprovalReactionTarget({
       roomId: "!ops:example.org",

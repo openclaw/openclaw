@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearMatrixApprovalReactionTargetsForTest,
+  resolveMatrixApprovalReactionTarget,
+} from "../approval-reactions.js";
 import { createMatrixBeeperStreamController, isBeeperHomeserver } from "./beeper-stream.js";
 
 const sendMocks = vi.hoisted(() => ({
@@ -12,6 +16,10 @@ const sendMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./send.js", () => sendMocks);
+
+afterEach(() => {
+  clearMatrixApprovalReactionTargetsForTest();
+});
 
 describe("Matrix Beeper stream controller", () => {
   it("gates native streams to Beeper homeservers", () => {
@@ -52,6 +60,13 @@ describe("Matrix Beeper stream controller", () => {
       reason: "Needs shell access",
       toolCallId: "tool-1",
     });
+    expect(
+      resolveMatrixApprovalReactionTarget({
+        roomId: "!room:beeper.com",
+        eventId: "$target",
+        reactionKey: "approval.allow_once",
+      }),
+    ).toEqual({ approvalId: "approval-1", decision: "allow-once" });
 
     listeners.get("to_device.event")?.({
       content: {
