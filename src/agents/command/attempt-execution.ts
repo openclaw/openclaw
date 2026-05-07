@@ -9,6 +9,7 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { isAbortError } from "../../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -577,6 +578,29 @@ export function runAgentAttempt(params: {
             }
             return result;
           });
+        }
+        // Clear the stored CLI session before rethrowing so the next turn
+        // doesn't reuse a damaged session id. The session_expired path above
+        // already handles clearing + retry; here we clear only (no retry) for
+        // AbortError and all other FailoverError reasons. (#78785)
+        if (
+          (isAbortError(err) ||
+            (err instanceof FailoverError && err.reason !== "session_expired")) &&
+          activeCliSessionBinding?.sessionId &&
+          params.sessionKey &&
+          params.sessionStore &&
+          params.storePath
+        ) {
+          log.warn(
+            `CLI session damaged (${err instanceof FailoverError ? err.reason : "abort"}), clearing from session store: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${params.sessionKey}`,
+          );
+          params.sessionEntry =
+            (await clearCliSessionInStore({
+              provider: cliExecutionProvider,
+              sessionKey: params.sessionKey,
+              sessionStore: params.sessionStore,
+              storePath: params.storePath,
+            })) ?? params.sessionEntry;
         }
         throw err;
       }
