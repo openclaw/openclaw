@@ -55,12 +55,33 @@ export async function handlePortError(
 ): Promise<never> {
   // Uniform messaging for EADDRINUSE with optional owner details.
   if (err instanceof PortInUseError || (isErrno(err) && err.code === "EADDRINUSE")) {
+    const diagnostics = await inspectPortUsage(port).catch(() => null);
     const details =
-      err instanceof PortInUseError
-        ? (err.details ?? (await describePortOwner(port)))
-        : await describePortOwner(port);
+      err instanceof PortInUseError && err.details
+        ? err.details
+        : diagnostics
+          ? formatPortDiagnostics(diagnostics).join("\n")
+          : undefined;
+
     runtime.error(danger(`${context} failed: port ${port} is already in use.`));
-    if (details) {
+
+    // Check for intra-process conflict: a plugin is trying to bind a port that
+    // the gateway parent process already owns. This is the Manifest/clawrouter
+    // EADDRINUSE retry loop described in #73655 — the embedded plugin and the
+    // gateway race on the same loopback address because the plugin is not aware
+    // that the parent already bound the port.
+    const listenerPids = diagnostics?.listeners.map((l) => l.pid).filter((p) => p != null) ?? [];
+    if (listenerPids.includes(process.pid)) {
+      runtime.error(
+        warn(
+          `Port ${port} is already bound by this gateway process (pid ${process.pid}). ` +
+            "A bundled plugin is attempting to re-bind it — this is the intra-process " +
+            "port-collision described in https://github.com/openclaw/openclaw/issues/73655. " +
+            "If you are using the Manifest or clawrouter plugin, try disabling its built-in " +
+            "port binding via MANIFEST_DISABLE_BUILTIN_PORT=1.",
+        ),
+      );
+    } else if (details) {
       runtime.error(info("Port listener details:"));
       runtime.error(details);
       if (/openclaw|src\/index\.ts|dist\/index\.js/.test(details)) {
