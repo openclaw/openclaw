@@ -152,11 +152,17 @@ class NodeSqliteKyselyConnection implements DatabaseConnection {
     }
 
     const { changes, lastInsertRowid } = stmt.run(...sqliteParameters);
-    return Promise.resolve({
-      insertId: BigInt(lastInsertRowid),
+    const baseResult: QueryResult<O> = {
       numAffectedRows: BigInt(changes),
       rows: [],
-    });
+    };
+    if (isInsertStatement(sql) && changes > 0) {
+      return Promise.resolve({
+        ...baseResult,
+        insertId: BigInt(lastInsertRowid),
+      });
+    }
+    return Promise.resolve(baseResult);
   }
 
   async *streamQuery<O>(
@@ -170,6 +176,10 @@ class NodeSqliteKyselyConnection implements DatabaseConnection {
       yield { rows: [row as O] };
     }
   }
+}
+
+function isInsertStatement(sql: string): boolean {
+  return sql.trimStart().toLowerCase().startsWith("insert");
 }
 
 function createSavepointCommand(command: string, savepointName: string): RawNode {

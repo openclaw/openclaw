@@ -47,5 +47,17 @@ describe("NodeSqliteKyselyDialect", () => {
     ).resolves.toMatchObject({
       rows: [{ id: 3, name: "Lin" }],
     });
+
+    const ignoredInsert = await sql`
+      insert or ignore into person (id, name) values (${1}, ${"Ada Again"})
+    `.execute(db);
+    expect(ignoredInsert.insertId).toBeUndefined();
+    expect(ignoredInsert.numAffectedRows).toBe(0n);
+
+    const update = await sql`update person set name = ${"Ada Lovelace"} where id = ${1}`.execute(
+      db,
+    );
+    expect(update.insertId).toBeUndefined();
+    expect(update.numAffectedRows).toBe(1n);
   });
 });
