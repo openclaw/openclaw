@@ -147,6 +147,7 @@ Docs: https://docs.openclaw.ai
 
 - fix(active-memory): require admin scope for global toggles [AI]. (#78863) Thanks @pgondhi987.
 - Honor owner enforcement for native commands [AI]. (#78864) Thanks @pgondhi987.
+- Config/BlueBubbles: remove the duplicate core-owned BlueBubbles config schema while preserving plugin-owned `dmPolicy` allowFrom validation for channel and account configs. Fixes #69238. Thanks @omarshahine.
 - Tavily: resolve dedicated `tavily_search` and `tavily_extract` tool credentials from the active runtime config snapshot, so `exec` SecretRef-backed API keys do not reach the tools unresolved. (#78610) Thanks @VACInc.
 - Gateway/sessions: clear cached skills snapshots during `/new` and `sessions.reset` so long-lived channel sessions rebuild the visible skill list after skills change. (#78873) Thanks @Evizero.
 - fix(auto-reply): gate inline skill tool dispatch [AI]. (#78517) Thanks @pgondhi987.

@@ -557,6 +557,96 @@ describe("BlueBubblesConfigSchema", () => {
         ?.work?.replyContextApiFallback,
     ).toBe(false);
   });
+
+  it('rejects dmPolicy="allowlist" without channel allowFrom', () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      dmPolicy: "allowlist",
+    });
+    expect(parsed.success).toBe(false);
+    if (parsed.success) {
+      return;
+    }
+    expect(parsed.error.issues[0]?.path).toEqual(["allowFrom"]);
+    expect(parsed.error.issues[0]?.message).toBe(
+      'channels.bluebubbles.dmPolicy="allowlist" requires channels.bluebubbles.allowFrom to contain at least one sender ID',
+    );
+  });
+
+  it('rejects dmPolicy="open" without channel allowFrom wildcard', () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      dmPolicy: "open",
+      allowFrom: ["user@example.com"],
+    });
+    expect(parsed.success).toBe(false);
+    if (parsed.success) {
+      return;
+    }
+    expect(parsed.error.issues[0]?.path).toEqual(["allowFrom"]);
+    expect(parsed.error.issues[0]?.message).toBe(
+      'channels.bluebubbles.dmPolicy="open" requires channels.bluebubbles.allowFrom to include "*"',
+    );
+  });
+
+  it("rejects account allowlist when neither account nor channel has allowFrom", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      accounts: {
+        work: {
+          dmPolicy: "allowlist",
+        },
+      },
+    });
+    expect(parsed.success).toBe(false);
+    if (parsed.success) {
+      return;
+    }
+    expect(parsed.error.issues[0]?.path).toEqual(["accounts", "work", "allowFrom"]);
+    expect(parsed.error.issues[0]?.message).toBe(
+      'channels.bluebubbles.accounts.*.dmPolicy="allowlist" requires channels.bluebubbles.accounts.*.allowFrom (or channels.bluebubbles.allowFrom) to contain at least one sender ID',
+    );
+  });
+
+  it("accepts account allowlist when channel allowFrom is inherited", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      allowFrom: ["user@example.com"],
+      accounts: {
+        work: {
+          dmPolicy: "allowlist",
+        },
+      },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects account open policy when effective allowFrom has no wildcard", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      allowFrom: ["user@example.com"],
+      accounts: {
+        work: {
+          dmPolicy: "open",
+        },
+      },
+    });
+    expect(parsed.success).toBe(false);
+    if (parsed.success) {
+      return;
+    }
+    expect(parsed.error.issues[0]?.path).toEqual(["accounts", "work", "allowFrom"]);
+    expect(parsed.error.issues[0]?.message).toBe(
+      'channels.bluebubbles.accounts.*.dmPolicy="open" requires channels.bluebubbles.accounts.*.allowFrom (or channels.bluebubbles.allowFrom) to include "*"',
+    );
+  });
+
+  it("accepts account open policy when channel allowFrom wildcard is inherited", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      allowFrom: ["*"],
+      accounts: {
+        work: {
+          dmPolicy: "open",
+        },
+      },
+    });
+    expect(parsed.success).toBe(true);
+  });
 });
 
 describe("bluebubbles group policy", () => {
