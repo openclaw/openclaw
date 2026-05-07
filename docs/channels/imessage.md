@@ -177,6 +177,32 @@ imsg send <handle> "test"
     Some multi-participant iMessage threads can arrive with `is_group=false`.
     If that `chat_id` is explicitly configured under `channels.imessage.groups`, OpenClaw treats it as group traffic (group gating + group session isolation).
 
+    Per-group system prompt:
+
+    Each entry under `channels.imessage.groups.*` accepts an optional `systemPrompt` string. The value is injected into the agent's system prompt on every turn that handles a message in that chat, so you can set per-group persona or behavioral rules without editing agent prompts:
+
+    ```json5
+    {
+      channels: {
+        imessage: {
+          groups: {
+            "chat_id:42": {
+              systemPrompt: "Keep responses under 3 sentences. Mirror the chat's casual tone.",
+            },
+            "iMessage;+;chat-family": {
+              systemPrompt: "When replying in this thread, address the family by first name.",
+            },
+            "*": {
+              systemPrompt: "Default per-group prompt for any otherwise-unmatched chat.",
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    The key matches whatever iMessage reports as `chat_id`, `chat_guid`, or `chat_identifier` for the group, with optional `chat_id:` / `chat_guid:` / `chat_identifier:` prefixes. A `"*"` wildcard entry provides a default for any chat without an exact match. Setting an explicit empty string (`systemPrompt: ""`) for a specific chat suppresses the wildcard for that chat — operators can deliberately opt a single chat out of any prompt. DMs ignore this field; use agent-level or account-level prompt customization instead.
+
   </Tab>
 </Tabs>
 

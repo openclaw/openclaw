@@ -79,6 +79,8 @@ export type IMessageAccountConfig = {
       requireMention?: boolean;
       tools?: GroupToolPolicyConfig;
       toolsBySender?: GroupToolPolicyBySenderConfig;
+      /** Trusted system prompt addition injected on every turn that handles a message in this group. */
+      systemPrompt?: string;
     }
   >;
   /** Heartbeat visibility settings for this channel. */

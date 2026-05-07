@@ -30,7 +30,9 @@ import {
 } from "openclaw/plugin-sdk/security-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
+import { resolveIMessageAccount } from "../accounts.js";
 import { resolveIMessageConversationRoute } from "../conversation-route.js";
+import { resolveIMessageGroupSystemPrompt } from "../group-system-prompt.js";
 import {
   formatIMessageChatTarget,
   isAllowedIMessageSender,
@@ -607,6 +609,18 @@ export function buildIMessageInboundContext(params: {
         }))
       : undefined;
 
+  const groupSystemPrompt = decision.isGroup
+    ? resolveIMessageGroupSystemPrompt({
+        account: resolveIMessageAccount({
+          cfg: params.cfg,
+          accountId: decision.route.accountId,
+        }),
+        chatId: decision.chatId,
+        chatGuid: decision.chatGuid,
+        chatIdentifier: decision.chatIdentifier,
+      })
+    : undefined;
+
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
     BodyForAgent: decision.bodyText,
@@ -625,6 +639,7 @@ export function buildIMessageInboundContext(params: {
     GroupMembers: decision.isGroup
       ? (params.message.participants ?? []).filter(Boolean).join(", ")
       : undefined,
+    GroupSystemPrompt: groupSystemPrompt,
     SenderName: decision.senderNormalized,
     SenderId: decision.sender,
     Provider: "imessage",
