@@ -164,7 +164,12 @@ function extractTrailingAttachmentMediaUris(prompt: string, count: number): stri
     }
     uris.push(match[1]);
   }
-  return uris.reverse();
+  for (let left = 0, right = uris.length - 1; left < right; left += 1, right -= 1) {
+    const uri = uris[left];
+    uris[left] = uris[right];
+    uris[right] = uri;
+  }
+  return uris;
 }
 
 export function splitPromptAndAttachmentRefs(params: {
