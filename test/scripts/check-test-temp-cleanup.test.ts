@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   collectTestTempCleanupFindings,
-  main,
   renderTestTempCleanupReport,
 } from "../../scripts/check-test-temp-cleanup.mjs";
 
@@ -44,6 +43,7 @@ describe("check-test-temp-cleanup", () => {
           hasAfterEach: false,
           hasAfterAll: false,
           hasFinally: false,
+          bindings: [expect.objectContaining({ variableName: "dir", hasCleanupCall: false })],
         }),
       }),
     ]);
@@ -64,6 +64,29 @@ describe("check-test-temp-cleanup", () => {
           hasAfterEach: true,
           hasAfterAll: false,
           hasFinally: false,
+          bindings: [expect.objectContaining({ variableName: "dir", hasCleanupCall: false })],
+        }),
+      }),
+    ]);
+  });
+
+  it("does not treat unrelated rm hooks as cleanup for another temp-dir binding", async () => {
+    const root = await createFixtureRepo({
+      relativePath: "src/unrelated-cleanup.test.ts",
+      source: `import fs from "node:fs";\nimport os from "node:os";\nimport path from "node:path";\nimport { afterEach } from "vitest";\nconst artifactDir = path.join(os.tmpdir(), "artifact-cache");\nafterEach(() => { fs.rmSync(artifactDir, { recursive: true, force: true }); });\nconst tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "leaky-"));\nconsole.log(tempDir);\n`,
+    });
+
+    await expect(collectTestTempCleanupFindings(root)).resolves.toEqual([
+      expect.objectContaining({
+        file: "src/unrelated-cleanup.test.ts",
+        severity: "error",
+        reason: expect.stringContaining("tempDir"),
+        cleanup: expect.objectContaining({
+          hasCleanupCall: true,
+          hasAfterEach: true,
+          hasAfterAll: false,
+          hasFinally: false,
+          bindings: [expect.objectContaining({ variableName: "tempDir", hasCleanupCall: false })],
         }),
       }),
     ]);

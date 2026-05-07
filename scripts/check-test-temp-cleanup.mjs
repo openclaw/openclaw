@@ -11,6 +11,8 @@ const TEST_FILE_GLOBS = ["src", "test", "packages", "extensions", "scripts"];
 const TEST_FILE_PATTERN =
   /(?:\.test(?:-[^./]+)?|\.test-helpers|\.test-harness|\.test-support)\.ts$/u;
 const MKDTEMP_PATTERN = /\bmkdtemp(?:Sync)?\s*\(/u;
+const MKDTEMP_BINDING_PATTERN =
+  /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?(?:[A-Za-z_$][\w$]*\s*\.\s*)*mkdtemp(?:Sync)?\s*\(/gu;
 const CLEANUP_CALL_PATTERN = /\brm(?:Sync)?\s*\(/u;
 const AFTER_EACH_PATTERN = /\bafterEach\s*\(/u;
 const AFTER_ALL_PATTERN = /\bafterAll\s*\(/u;
@@ -28,7 +30,7 @@ function listTrackedTestFiles(root = repoRoot) {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function collectCleanupSignals(source) {
+function collectFileCleanupSignals(source) {
   return {
     hasCleanupCall: CLEANUP_CALL_PATTERN.test(source),
     hasAfterEach: AFTER_EACH_PATTERN.test(source),
@@ -37,23 +39,71 @@ function collectCleanupSignals(source) {
   };
 }
 
+function collectMkdtempBindings(source) {
+  return Array.from(source.matchAll(MKDTEMP_BINDING_PATTERN), (match) => match[1]);
+}
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function hasCleanupCallForBinding(source, variableName) {
+  const escapedVariableName = escapeRegExp(variableName);
+  const cleanupPattern = new RegExp(
+    String.raw`\brm(?:Sync)?\s*\([^\n;]*\b${escapedVariableName}\b`,
+    "u",
+  );
+  return cleanupPattern.test(source);
+}
+
 function classifyCleanupRisk(source) {
   if (!MKDTEMP_PATTERN.test(source)) {
     return null;
   }
-  const cleanup = collectCleanupSignals(source);
-  if (
-    cleanup.hasCleanupCall &&
-    (cleanup.hasAfterEach || cleanup.hasAfterAll || cleanup.hasFinally)
-  ) {
+
+  const cleanup = collectFileCleanupSignals(source);
+  const hasLifecycleScope = cleanup.hasAfterEach || cleanup.hasAfterAll || cleanup.hasFinally;
+  const bindings = collectMkdtempBindings(source).map((variableName) => ({
+    variableName,
+    hasCleanupCall: hasCleanupCallForBinding(source, variableName),
+  }));
+
+  if (bindings.length === 0) {
+    return {
+      severity: cleanup.hasCleanupCall ? "warning" : "error",
+      reason: cleanup.hasCleanupCall
+        ? "uses mkdtemp without cleanup tied to a temp-dir binding in afterEach/afterAll/finally scope"
+        : "uses mkdtemp without any obvious cleanup",
+      cleanup: {
+        ...cleanup,
+        bindings,
+      },
+    };
+  }
+
+  const unresolvedBindings = bindings.filter(
+    (binding) => !binding.hasCleanupCall || !hasLifecycleScope,
+  );
+  if (unresolvedBindings.length === 0) {
     return null;
   }
+
+  const bindingsMissingCleanup = unresolvedBindings
+    .filter((binding) => !binding.hasCleanupCall)
+    .map((binding) => binding.variableName);
+
   return {
-    severity: cleanup.hasCleanupCall ? "warning" : "error",
-    reason: cleanup.hasCleanupCall
-      ? "uses mkdtemp without file-level afterEach/afterAll/finally cleanup scope"
-      : "uses mkdtemp without any obvious cleanup",
-    cleanup,
+    severity: bindingsMissingCleanup.length > 0 ? "error" : "warning",
+    reason:
+      bindingsMissingCleanup.length > 0
+        ? `uses mkdtemp without cleanup for temp-dir binding(s): ${bindingsMissingCleanup.join(", ")}`
+        : `uses mkdtemp without file-level afterEach/afterAll/finally cleanup scope for temp-dir binding(s): ${unresolvedBindings
+            .map((binding) => binding.variableName)
+            .join(", ")}`,
+    cleanup: {
+      ...cleanup,
+      bindings,
+    },
   };
 }
 
