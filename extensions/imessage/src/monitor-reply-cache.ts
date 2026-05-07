@@ -413,6 +413,14 @@ export function resolveIMessageMessageId(
   if (!trimmed) {
     return trimmed;
   }
+  // Hydrate the on-disk JSONL into the in-memory maps before reading them.
+  // Without this, the first post-restart action that arrives with a short
+  // MessageSid would miss `imessageShortIdToUuid` and fall through to the
+  // "no longer available" path, breaking the persistence contract — the
+  // mapping was on disk, we just hadn't read it yet on this read path.
+  // `rememberIMessageReplyCache` already hydrates on its own, so this only
+  // matters for the resolve-first-after-restart sequence.
+  hydrateFromDiskOnce();
 
   if (/^\d+$/.test(trimmed)) {
     // Cache hit: the cached entry carries the chat info this short id was

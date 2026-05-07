@@ -344,6 +344,45 @@ describe("reply cache disk permissions", () => {
   });
 });
 
+describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
+  it("hydrates the on-disk JSONL before resolving a short id whose mapping predates this run", () => {
+    // Issue-then-restart contract: a shortId we issued before a gateway
+    // restart must still resolve afterwards. The first resolve call after
+    // process boot would otherwise miss the persisted mapping because the
+    // in-memory maps haven't been hydrated yet — that's the bug codex
+    // review flagged. resolveIMessageMessageId now hydrates on entry.
+    const issued = rememberIMessageReplyCache({
+      accountId: "default",
+      messageId: "outbound-guid-pre-restart",
+      chatGuid: "iMessage;+;chatA",
+      timestamp: Date.now(),
+      isFromMe: true,
+    });
+    expect(issued.shortId).not.toBe("");
+
+    // Simulate a restart: clear the in-memory state but leave the JSONL on
+    // disk. _resetIMessageShortIdState only deletes the persisted file when
+    // OPENCLAW_STATE_DIR is set, so we have to keep the file ourselves
+    // since this test runs under the suite's temp state dir.
+    const cachePath = path.join(tempStateDir, "imessage", "reply-cache.jsonl");
+    const persisted = fs.readFileSync(cachePath, "utf8");
+    _resetIMessageShortIdState();
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    fs.writeFileSync(cachePath, persisted, "utf8");
+
+    // Now resolve the short id we issued before the "restart". Without the
+    // hydrate-on-resolve fix this throws "no longer available" because the
+    // in-memory maps are empty and rememberIMessageReplyCache hasn't been
+    // called yet to trigger hydration.
+    expect(
+      resolveIMessageMessageId(issued.shortId, {
+        requireKnownShortId: true,
+        chatContext: { chatGuid: "iMessage;+;chatA" },
+      }),
+    ).toBe("outbound-guid-pre-restart");
+  });
+});
+
 describe("hydrate counter advancement (rowid-collision protection)", () => {
   it("advances the short-id counter past a corrupt persisted line so new allocations don't collide", () => {
     // Direct hydrate isn't easy to invoke without disk fixtures; instead

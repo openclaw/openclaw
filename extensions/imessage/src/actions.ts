@@ -306,6 +306,17 @@ function effectIdFromParam(raw?: string): string | undefined {
     balloons: "com.apple.MobileSMS.expressivesend.balloon",
     balloon: "com.apple.MobileSMS.expressivesend.balloon",
     heart: "com.apple.MobileSMS.expressivesend.heart",
+    // Background screen effects (com.apple.messages.effect.CK*Effect).
+    // The error message below advertises these short names, so they must
+    // map to the canonical CKEffect identifier — without this, agents
+    // that follow our own guidance get "unknown effect" thrown back.
+    echo: "com.apple.messages.effect.CKEchoEffect",
+    happybirthday: "com.apple.messages.effect.CKHappyBirthdayEffect",
+    "happy-birthday": "com.apple.messages.effect.CKHappyBirthdayEffect",
+    shootingstar: "com.apple.messages.effect.CKShootingStarEffect",
+    "shooting-star": "com.apple.messages.effect.CKShootingStarEffect",
+    sparkles: "com.apple.messages.effect.CKSparklesEffect",
+    spotlight: "com.apple.messages.effect.CKSpotlightEffect",
   };
   const resolved = aliases[value] ?? raw;
   if (typeof resolved === "string" && KNOWN_EFFECT_IDS.has(resolved)) {

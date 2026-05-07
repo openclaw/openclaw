@@ -449,6 +449,42 @@ describe("imessage message actions", () => {
       );
     });
 
+    it.each([
+      ["echo", "com.apple.messages.effect.CKEchoEffect"],
+      ["happybirthday", "com.apple.messages.effect.CKHappyBirthdayEffect"],
+      ["shootingstar", "com.apple.messages.effect.CKShootingStarEffect"],
+      ["sparkles", "com.apple.messages.effect.CKSparklesEffect"],
+      ["spotlight", "com.apple.messages.effect.CKSpotlightEffect"],
+    ])(
+      "resolves the screen-effect alias %s that the error message advertises",
+      async (alias, canonical) => {
+        // Codex review caught these: the error message at effectIdFromParam
+        // listed echo / happybirthday / shootingstar / sparkles / spotlight
+        // as valid aliases, but they were missing from the alias map. Agents
+        // following our own guidance got "unknown effect" thrown back.
+        probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+          available: true,
+          v2Ready: true,
+          selectors: {},
+        });
+        runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "ok" });
+
+        await imessageMessageActions.handleAction?.({
+          action: "sendWithEffect",
+          cfg: cfg(),
+          params: {
+            chatGuid: "iMessage;+;chat0000",
+            text: "boom",
+            effect: alias,
+          },
+        } as never);
+
+        expect(runtimeMock.sendRichMessage).toHaveBeenCalledWith(
+          expect.objectContaining({ effectId: canonical }),
+        );
+      },
+    );
+
     it("trims whitespace-only currentChannelId so parseIMessageTarget never sees it", async () => {
       // Scenario from the audit: a whitespace-only currentChannelId would
       // hit parseIMessageTarget which throws on empty input, aborting the
