@@ -741,6 +741,7 @@ export function createOpenClawCodingTools(options?: {
           disableMessageTool: options?.disableMessageTool,
           enableHeartbeatTool,
           disablePluginTools: !includePluginTools,
+          wrapBeforeToolCallHook: false,
           ...(cronSelfRemoveOnlyJobId ? { cronSelfRemoveOnlyJobId } : {}),
           requesterAgentIdOverride: agentId,
           requesterSenderId: options?.senderId,

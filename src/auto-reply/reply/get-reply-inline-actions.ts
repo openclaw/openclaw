@@ -1,8 +1,6 @@
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import type { BlockReplyChunking } from "../../agents/pi-embedded-block-chunker.js";
-import type { HookContext } from "../../agents/pi-tools.before-tool-call.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
-import { resolveToolLoopDetectionConfig } from "../../agents/tool-loop-detection-config.js";
 import { applyOwnerOnlyToolPolicy } from "../../agents/tool-policy.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -40,7 +38,6 @@ import type { TypingController } from "./typing.js";
 
 type SkillCommandsRuntime = typeof import("../skill-commands.runtime.js");
 type OpenClawToolsRuntime = typeof import("../../agents/openclaw-tools.runtime.js");
-type BeforeToolCallRuntime = typeof import("../../agents/pi-tools.before-tool-call.js");
 type AbortCutoffRuntime = typeof import("./abort-cutoff.runtime.js");
 type CommandsRuntime = typeof import("./commands.runtime.js");
 
@@ -49,9 +46,6 @@ const skillCommandsRuntimeLoader = createLazyImportLoader<SkillCommandsRuntime>(
 );
 const openClawToolsRuntimeLoader = createLazyImportLoader<OpenClawToolsRuntime>(
   () => import("../../agents/openclaw-tools.runtime.js"),
-);
-const beforeToolCallRuntimeLoader = createLazyImportLoader<BeforeToolCallRuntime>(
-  () => import("../../agents/pi-tools.before-tool-call.js"),
 );
 const abortCutoffRuntimeLoader = createLazyImportLoader<AbortCutoffRuntime>(
   () => import("./abort-cutoff.runtime.js"),
@@ -67,10 +61,6 @@ function loadSkillCommandsRuntime(): Promise<SkillCommandsRuntime> {
 
 function loadOpenClawToolsRuntime(): Promise<OpenClawToolsRuntime> {
   return openClawToolsRuntimeLoader.load();
-}
-
-function loadBeforeToolCallRuntime(): Promise<BeforeToolCallRuntime> {
-  return beforeToolCallRuntimeLoader.load();
 }
 
 function loadAbortCutoffRuntime(): Promise<AbortCutoffRuntime> {
@@ -152,6 +142,22 @@ function extractTextFromToolResult(result: unknown): string | null {
   const out = parts.join("");
   const trimmed = out.trim();
   return trimmed ? trimmed : null;
+}
+
+function extractBlockedToolReason(result: unknown): string | null {
+  if (!result || typeof result !== "object") {
+    return null;
+  }
+  const details = (result as { details?: unknown }).details;
+  if (!details || typeof details !== "object") {
+    return null;
+  }
+  const status = (details as { status?: unknown }).status;
+  if (status !== "blocked") {
+    return null;
+  }
+  const reason = (details as { reason?: unknown }).reason;
+  return typeof reason === "string" && reason.trim() ? reason.trim() : null;
 }
 
 export async function handleInlineActions(params: {
@@ -296,6 +302,8 @@ export async function handleInlineActions(params: {
         config: cfg,
         allowGatewaySubagentBinding: true,
         senderIsOwner: command.senderIsOwner,
+        sessionId: targetSessionEntry?.sessionId,
+        currentChannelId: command.channelId,
       });
       const authorizedTools = applyOwnerOnlyToolPolicy(tools, command.senderIsOwner);
 
@@ -312,30 +320,15 @@ export async function handleInlineActions(params: {
           commandName: skillInvocation.command.name,
           skillName: skillInvocation.command.skillName,
         };
-        const { runBeforeToolCallHook } = await loadBeforeToolCallRuntime();
-        const hookContext: HookContext = {
-          agentId,
-          config: cfg,
-          sessionKey,
-          ...(targetSessionEntry?.sessionId ? { sessionId: targetSessionEntry.sessionId } : {}),
-          ...(command.channelId ? { channelId: command.channelId } : {}),
-          loopDetection: resolveToolLoopDetectionConfig({ cfg, agentId }),
-        };
-        const hookResult = await runBeforeToolCallHook({
-          toolName: dispatch.toolName,
-          params: toolArgs,
-          toolCallId,
-          ctx: hookContext,
-          ...(opts?.abortSignal ? { signal: opts.abortSignal } : {}),
-        });
-        if (hookResult.blocked) {
+        const result = await tool.execute(toolCallId, toolArgs, opts?.abortSignal);
+        const blockedReason = extractBlockedToolReason(result);
+        if (blockedReason) {
           typing.cleanup();
           return {
             kind: "reply",
-            reply: { text: `❌ Tool call blocked: ${hookResult.reason}` },
+            reply: { text: `❌ Tool call blocked: ${blockedReason}` },
           };
         }
-        const result = await tool.execute(toolCallId, hookResult.params);
         const text = extractTextFromToolResult(result) ?? "✅ Done.";
         typing.cleanup();
         return { kind: "reply", reply: { text } };
