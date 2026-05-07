@@ -553,26 +553,24 @@ function createCachedDescriptorPluginTool(params: {
         loadOptions,
         onlyPluginIds: [pluginId],
       });
-      const entry = registry?.tools.find(
-        (candidate) =>
-          candidate.pluginId === pluginId &&
-          (candidate.names.length > 0 ? candidate.names : (candidate.declaredNames ?? [])).some(
-            (name) => normalizeToolName(name) === normalizeToolName(toolName),
-          ),
+      const candidates = registry?.tools.filter(
+        (candidate) => candidate.pluginId === pluginId,
       );
-      if (!entry) {
+      if (!candidates || candidates.length === 0) {
         throw new Error(`plugin tool runtime unavailable (${pluginId}): ${toolName}`);
       }
-      const resolved = entry.factory(params.ctx);
-      const listRaw: unknown[] = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];
-      for (const toolRaw of listRaw) {
-        const malformedReason = describeMalformedPluginTool(toolRaw);
-        if (malformedReason) {
-          throw new Error(`plugin tool is malformed (${pluginId}): ${malformedReason}`);
-        }
-        const runtimeTool = toolRaw as AnyAgentTool;
-        if (normalizeToolName(runtimeTool.name) === normalizeToolName(toolName)) {
-          return runtimeTool.execute(toolCallId, executeParams, signal, onUpdate);
+      for (const candidate of candidates) {
+        const resolved = candidate.factory(params.ctx);
+        const listRaw: unknown[] = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];
+        for (const toolRaw of listRaw) {
+          const malformedReason = describeMalformedPluginTool(toolRaw);
+          if (malformedReason) {
+            throw new Error(`plugin tool is malformed (${pluginId}): ${malformedReason}`);
+          }
+          const runtimeTool = toolRaw as AnyAgentTool;
+          if (normalizeToolName(runtimeTool.name) === normalizeToolName(toolName)) {
+            return runtimeTool.execute(toolCallId, executeParams, signal, onUpdate);
+          }
         }
       }
       throw new Error(`plugin tool runtime missing (${pluginId}): ${toolName}`);
@@ -802,13 +800,13 @@ function resolvePluginToolLoadState(params: {
   env?: NodeJS.ProcessEnv;
 }):
   | {
-      context: ReturnType<typeof resolvePluginRuntimeLoadContext>;
-      env: NodeJS.ProcessEnv;
-      loadOptions: PluginLoadOptions;
-      onlyPluginIds: string[];
-      runtimeOptions: PluginLoadOptions["runtimeOptions"];
-      snapshot: PluginMetadataManifestView;
-    }
+    context: ReturnType<typeof resolvePluginRuntimeLoadContext>;
+    env: NodeJS.ProcessEnv;
+    loadOptions: PluginLoadOptions;
+    onlyPluginIds: string[];
+    runtimeOptions: PluginLoadOptions["runtimeOptions"];
+    snapshot: PluginMetadataManifestView;
+  }
   | undefined {
   const env = params.env ?? process.env;
   const baseConfig = applyTestPluginDefaults(params.context.config ?? {}, env);
@@ -946,8 +944,7 @@ export function resolvePluginTools(params: {
       });
     } catch (error) {
       context.logger.error(
-        `failed to cold-load plugin tool registry for plugin ids [${runtimePluginIds.join(", ")}]: ${
-          error instanceof Error ? error.message : String(error)
+        `failed to cold-load plugin tool registry for plugin ids [${runtimePluginIds.join(", ")}]: ${error instanceof Error ? error.message : String(error)
         }`,
       );
       throw error;
@@ -1016,19 +1013,19 @@ export function resolvePluginTools(params: {
       declaredNames.length > 0 ? declaredNames : (entry.declaredNames ?? []);
     const allowlistNames = manifestPlugin
       ? filterManifestToolNamesForAvailability({
-          plugin: manifestPlugin,
-          toolNames: availabilityNames,
-          config: params.context.runtimeConfig ?? context.config,
-          env,
-          hasAuthForProvider: params.hasAuthForProvider,
-        }).filter(
-          (toolName) =>
-            !denylistBlocksPluginTool({
-              pluginId: entry.pluginId,
-              toolName,
-              denylist,
-            }),
-        )
+        plugin: manifestPlugin,
+        toolNames: availabilityNames,
+        config: params.context.runtimeConfig ?? context.config,
+        env,
+        hasAuthForProvider: params.hasAuthForProvider,
+      }).filter(
+        (toolName) =>
+          !denylistBlocksPluginTool({
+            pluginId: entry.pluginId,
+            toolName,
+            denylist,
+          }),
+      )
       : declaredNames;
     if (manifestPlugin && availabilityNames.length > 0 && allowlistNames.length === 0) {
       continue;
@@ -1074,33 +1071,33 @@ export function resolvePluginTools(params: {
         : undefined;
     const availableList = manifestPlugin
       ? listRaw.filter((tool) => {
-          const toolName = readPluginToolName(tool);
-          const normalizedToolName = normalizeToolName(toolName);
-          if (
-            isManifestToolOptional(manifestPlugin, toolName) &&
-            !isOptionalToolAllowed({
-              toolName,
-              pluginId: entry.pluginId,
-              allowlist,
-            })
-          ) {
-            return false;
-          }
-          if (
-            selectedManifestToolNames &&
-            manifestContractToolNames?.has(normalizedToolName) &&
-            !selectedManifestToolNames.has(normalizedToolName)
-          ) {
-            return false;
-          }
-          return isManifestToolNameAvailable({
-            plugin: manifestPlugin,
+        const toolName = readPluginToolName(tool);
+        const normalizedToolName = normalizeToolName(toolName);
+        if (
+          isManifestToolOptional(manifestPlugin, toolName) &&
+          !isOptionalToolAllowed({
             toolName,
-            config: params.context.runtimeConfig ?? context.config,
-            env,
-            hasAuthForProvider: params.hasAuthForProvider,
-          });
-        })
+            pluginId: entry.pluginId,
+            allowlist,
+          })
+        ) {
+          return false;
+        }
+        if (
+          selectedManifestToolNames &&
+          manifestContractToolNames?.has(normalizedToolName) &&
+          !selectedManifestToolNames.has(normalizedToolName)
+        ) {
+          return false;
+        }
+        return isManifestToolNameAvailable({
+          plugin: manifestPlugin,
+          toolName,
+          config: params.context.runtimeConfig ?? context.config,
+          env,
+          hasAuthForProvider: params.hasAuthForProvider,
+        });
+      })
       : listRaw;
     const policyAvailableList = availableList.filter(
       (tool) =>
@@ -1112,12 +1109,12 @@ export function resolvePluginTools(params: {
     );
     const list = entry.optional
       ? policyAvailableList.filter((tool) =>
-          isOptionalToolAllowed({
-            toolName: readPluginToolName(tool),
-            pluginId: entry.pluginId,
-            allowlist,
-          }),
-        )
+        isOptionalToolAllowed({
+          toolName: readPluginToolName(tool),
+          pluginId: entry.pluginId,
+          allowlist,
+        }),
+      )
       : policyAvailableList;
     if (list.length === 0) {
       continue;
@@ -1141,9 +1138,9 @@ export function resolvePluginTools(params: {
       const tool = toolRaw as AnyAgentTool;
       const undeclared = entry.declaredNames
         ? findUndeclaredPluginToolNames({
-            declaredNames: entry.declaredNames,
-            toolNames: [tool.name],
-          })
+          declaredNames: entry.declaredNames,
+          toolNames: [tool.name],
+        })
         : [];
       if (undeclared.length > 0) {
         const message = `plugin tool is undeclared (${entry.pluginId}): ${undeclared.join(", ")}`;
