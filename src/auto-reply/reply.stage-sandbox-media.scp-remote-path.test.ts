@@ -117,4 +117,22 @@ describe("stageSandboxMedia scp remote paths", () => {
       }
     });
   });
+
+  it("invokes scp by bare command name so PATH resolves the binary on all platforms", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const { cfg, workspaceDir, sessionKey } = createRemoteStageParams(home);
+      const remotePath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
+      const { ctx, sessionCtx } = createRemoteContexts(remotePath);
+
+      let spawnCommand: string | undefined;
+      childProcessMocks.spawn.mockImplementation((cmd: string) => {
+        spawnCommand = cmd;
+        throw new Error("stop before scp");
+      });
+
+      await stageSandboxMedia({ ctx, sessionCtx, cfg, sessionKey, workspaceDir });
+
+      expect(spawnCommand).toBe("scp");
+    });
+  });
 });
