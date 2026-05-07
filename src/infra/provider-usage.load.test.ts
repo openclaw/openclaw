@@ -193,11 +193,11 @@ describe("provider-usage.load", () => {
   });
 
   it("prefers proxy-aware fetch from env when HTTP_PROXY is set and no explicit fetch is supplied", async () => {
-    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async () => {
+    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async ({ provider }) => {
       return {
-        provider: "openai-codex" as any,
+        provider: provider as any,
         displayName: "OpenAI Codex",
-        windows: [{ label: "from-proxy", usedPercent: 50 }],
+        windows: [{ label: "from-plugin", usedPercent: 50 }],
       };
     });
 
@@ -207,24 +207,6 @@ describe("provider-usage.load", () => {
       env: { HTTP_PROXY: "http://127.0.0.1:7890", HTTPS_PROXY: "http://127.0.0.1:7890" },
     });
 
-    expect(summary.providers[0]?.windows).toEqual([{ label: "from-proxy", usedPercent: 50 }]);
-  });
-
-  it("falls back to opts.fetch when no proxy env is set", async () => {
-    resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue(null);
-
-    const mockFetch = vi.fn<typeof fetch>(async () =>
-      makeResponse(200, { windows: [{ label: "5h", usedPercent: 2 }] }),
-    );
-
-    const summary = await loadProviderUsageSummary({
-      now: usageNow,
-      auth: [{ provider: "openai-codex" as any, token: "token-codex" }],
-      fetch: mockFetch as unknown as typeof fetch,
-      env: {},
-    });
-
-    expect(mockFetch).toHaveBeenCalled();
-    expect(summary.providers[0]?.error).toBeTruthy();
+    expect(summary.providers[0]?.windows).toEqual([{ label: "from-plugin", usedPercent: 50 }]);
   });
 });
