@@ -564,6 +564,7 @@ Docs: https://docs.openclaw.ai
 - Tools/BTW: add `/side` as a text and native slash-command alias for `/btw` side questions.
 - Doctor/config: `doctor --fix` now commits safe legacy migrations even when unrelated validation issues (e.g. a missing plugin) prevent full validation from passing, so `agents.defaults.llm` and other known-legacy keys are always cleaned up by `doctor --fix` regardless of other config problems. Fixes #76798. (#76800) Thanks @hclsys.
 - Agents/tools: skip optional media and PDF tool factories when the effective tool denylist already blocks them, avoiding unnecessary hot-path setup for tools that will be filtered out before model use. (#76773) Thanks @dorukardahan.
+- Agents/compaction: ignore pre-usage transcript metadata bytes when stale token snapshots estimate preflight compaction pressure, while still counting post-usage transcript tail pressure. Fixes #78604. Thanks @amknight.
 - Discord/status: let explicit reaction tool calls opt into tracking subsequent tool progress on the reacted message with `trackToolCalls: true`, and use the shared tool display emoji table for status reactions.
 - Gateway/config: stop Gateway startup and hot reload from auto-restoring invalid config; invalid config now fails closed and `openclaw doctor --fix` owns last-known-good repair.
 - Gateway/performance: lazy-load early runtime discovery and shutdown-hook helpers, defer maintenance timers until after readiness, and trim duplicate plugin auto-enable work during Gateway startup.
