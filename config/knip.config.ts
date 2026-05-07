@@ -9,6 +9,7 @@ const rootEntries = [
   "src/index.ts!",
   "src/entry.ts!",
   "src/cli/daemon-cli.ts!",
+  "src/infra/kysely-node-sqlite.ts!",
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",
   bundledPluginFile("telegram", "src/audit.ts", "!"),
