@@ -437,6 +437,9 @@ function resolveCommandSenderAuthorization(params: {
   providerResolutionError: boolean;
   commandsAllowFromConfigured: boolean;
 }): boolean {
+  if (!params.isOwnerForCommands) {
+    return false;
+  }
   if (
     params.commandsAllowFromList !== null ||
     (params.providerResolutionError && params.commandsAllowFromConfigured)

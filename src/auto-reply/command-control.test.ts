@@ -44,6 +44,20 @@ describe("resolveCommandAuthorization", () => {
     });
   }
 
+  function createOwnerEnforcingAllowFromPlugin(
+    id: string,
+    resolveAllowFrom: () => Array<string | number> | undefined,
+  ) {
+    const entry = createAllowFromPlugin(id, resolveAllowFrom);
+    return {
+      ...entry,
+      plugin: {
+        ...entry.plugin,
+        commands: { enforceOwnerForCommands: true },
+      },
+    };
+  }
+
   function registerAllowFromPlugins(...plugins: ReturnType<typeof createAllowFromPlugin>[]) {
     setActivePluginRegistry(createTestRegistry(plugins));
   }
@@ -630,6 +644,34 @@ describe("resolveCommandAuthorization", () => {
       });
 
       expect(auth.isAuthorizedSender).toBe(true);
+    });
+
+    it("requires owner identity before commands.allowFrom when the plugin enforces owner-only commands", () => {
+      registerAllowFromPlugins(createOwnerEnforcingAllowFromPlugin("telegram", () => ["*"]));
+      const cfg = {
+        commands: {
+          allowFrom: {
+            "*": ["*"],
+          },
+        },
+        channels: { telegram: { allowFrom: ["*"] } },
+      } as OpenClawConfig;
+
+      const auth = resolveCommandAuthorization({
+        ctx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          From: "telegram:999",
+          SenderId: "999",
+          CommandSource: "native",
+        } as MsgContext,
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(auth.senderIsOwner).toBe(false);
+      expect(auth.isAuthorizedSender).toBe(false);
     });
 
     it("does not treat conversation ids in From as sender identities", () => {

@@ -166,6 +166,7 @@ describe("subagents command dispatch", () => {
   it("rejects native spawn commands from non-owner senders when the plugin enforces owner-only commands", async () => {
     registerOwnerEnforcingTelegramPlugin();
     const cfg = {
+      commands: { allowFrom: { "*": ["*"] } },
       channels: { telegram: { allowFrom: ["*"] } },
     } as OpenClawConfig;
     const ctx = {

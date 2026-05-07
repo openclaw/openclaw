@@ -156,7 +156,7 @@ describe("handleStopCommand target fallback", () => {
     registerOwnerEnforcingTelegramPlugin();
     const params = buildStopParams();
     const cfg = {
-      commands: { text: true },
+      commands: { text: true, allowFrom: { "*": ["*"] } },
       channels: { telegram: { allowFrom: ["*"] } },
     } as OpenClawConfig;
     const ctx = {
