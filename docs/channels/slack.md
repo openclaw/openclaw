@@ -907,6 +907,8 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     - mention regex patterns (`agents.list[].groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
     - implicit reply-to-bot thread behavior (disabled when `thread.requireExplicitMention` is `true`)
 
+    Slack prompt metadata preserves the collapsed wake decision (`was_mentioned`) plus provider-native mention detail for the current turn: `explicitly_mentioned_bot`, `mentioned_user_ids`, `mentioned_subteam_ids`, `implicit_mention_kinds`, and `mention_source`. Agents can distinguish a direct bot mention from an implicit thread wake where the message explicitly mentions another Slack user.
+
     Per-channel controls (`channels.slack.channels.<id>`; names only via startup resolution or `dangerouslyAllowNameMatching`):
 
     - `requireMention`
