@@ -764,19 +764,10 @@ async function sendSubagentAnnounceDirectly(params: {
           path: "steered",
         };
       }
-      if (requesterActivity.isActive) {
-        // Active requester sessions should receive completion data through their
-        // running agent turn. If wake fails, let the dispatch layer queue/retry;
-        // do not bypass the requester agent with raw child output.
-        return {
-          delivered: false,
-          path: "direct",
-          error: formatQueueWakeFailureError(
-            "active requester session could not be woken",
-            wakeOutcome,
-          ),
-        };
-      }
+      // Active but non-consuming — fall through to the requester-agent
+      // handoff (callGateway) below instead of returning a dead-end.
+      // The handoff starts a new agent turn that properly rewrites and
+      // delivers the child result through the requester session.
     }
     if (params.signal?.aborted) {
       return {
