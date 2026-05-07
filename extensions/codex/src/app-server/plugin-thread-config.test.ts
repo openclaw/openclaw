@@ -156,6 +156,61 @@ describe("Codex plugin thread config", () => {
     expect(request.mock.calls.filter(([method]) => method === "app/list")).toHaveLength(1);
   });
 
+  it("does not expose plugin apps missing from the app inventory snapshot", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () => ({
+        data: [],
+        nextCursor: null,
+      }),
+    });
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            "google-calendar": {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      nowMs: 1,
+      request: async (method) => {
+        if (method === "plugin/list") {
+          return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+        }
+        if (method === "plugin/read") {
+          return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(config.configPatch).toEqual({
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+      },
+    });
+    expect(config.policyContext.apps).toEqual({});
+    expect(config.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "app_not_ready",
+        message: "google-calendar-app is not accessible or enabled for google-calendar.",
+      }),
+    );
+  });
+
   it("re-reads app readiness after re-enabling an installed plugin", async () => {
     const appCache = new CodexAppInventoryCache();
     await appCache.refreshNow({

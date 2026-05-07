@@ -303,12 +303,21 @@ function resolveOwnedApps(params: {
   return detailApps
     .map((app) => {
       const info = appInfoById.get(app.id);
+      if (!info) {
+        return {
+          id: app.id,
+          name: app.name,
+          accessible: false,
+          enabled: false,
+          needsAuth: true,
+        };
+      }
       return {
         id: app.id,
         name: app.name,
-        accessible: info?.isAccessible ?? !app.needsAuth,
-        enabled: info?.isEnabled ?? true,
-        needsAuth: app.needsAuth || info?.isAccessible === false,
+        accessible: info.isAccessible,
+        enabled: info.isEnabled,
+        needsAuth: app.needsAuth || !info.isAccessible,
       };
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
