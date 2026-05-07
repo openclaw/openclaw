@@ -51,7 +51,7 @@ type ResolvedGatewayConnection = {
   token?: string;
   password?: string;
   preauthHandshakeTimeoutMs?: number;
-  allowInsecureLocalOperatorUi?: boolean;
+  allowInsecureLocalOperatorUi: boolean;
 };
 
 function throwGatewayAuthResolutionError(reason: string): never {
@@ -163,11 +163,15 @@ export class GatewayChatClient implements TuiBackend {
   start() {
     void startGatewayClientWhenEventLoopReady(this.client, {
       clientOptions: { preauthHandshakeTimeoutMs: this.connection.preauthHandshakeTimeoutMs },
-    }).then((readiness) => {
-      if (!readiness.ready && !readiness.aborted) {
-        this.onDisconnected?.("gateway event loop readiness timeout");
-      }
-    });
+    })
+      .then((readiness) => {
+        if (!readiness.ready && !readiness.aborted) {
+          this.onDisconnected?.("gateway event loop readiness timeout");
+        }
+      })
+      .catch((err: unknown) => {
+        this.onDisconnected?.(err instanceof Error ? err.message : String(err));
+      });
   }
 
   stop() {
@@ -220,15 +224,7 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   async listSessions(opts?: SessionsListParams) {
-    return await this.client.request<GatewaySessionList>("sessions.list", {
-      limit: opts?.limit,
-      activeMinutes: opts?.activeMinutes,
-      includeGlobal: opts?.includeGlobal,
-      includeUnknown: opts?.includeUnknown,
-      includeDerivedTitles: opts?.includeDerivedTitles,
-      includeLastMessage: opts?.includeLastMessage,
-      agentId: opts?.agentId,
-    });
+    return await this.client.request<GatewaySessionList>("sessions.list", opts ?? {});
   }
 
   async listAgents() {

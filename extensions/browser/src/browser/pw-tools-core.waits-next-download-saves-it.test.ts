@@ -130,20 +130,15 @@ describe("pw-tools-core", () => {
   async function expectAtomicDownloadSave(params: {
     saveAs: ReturnType<typeof vi.fn>;
     targetPath: string;
-    tempDir: string;
     content: string;
   }) {
     const savedPath = params.saveAs.mock.calls[0]?.[0];
     expect(typeof savedPath).toBe("string");
     expect(savedPath).not.toBe(params.targetPath);
-    const [savedDirReal, tempDirReal] = await Promise.all([
-      fs.realpath(path.dirname(String(savedPath))).catch(() => path.dirname(String(savedPath))),
-      fs.realpath(params.tempDir).catch(() => params.tempDir),
-    ]);
-    expect(savedDirReal).toBe(tempDirReal);
     expect(path.basename(String(savedPath))).toContain(".openclaw-output-");
     expect(path.basename(String(savedPath))).toContain(".part");
     expect(await fs.readFile(params.targetPath, "utf8")).toBe(params.content);
+    await expect(fs.access(String(savedPath))).rejects.toThrow();
   }
 
   it("waits for the next download and atomically finalizes explicit output paths", async () => {
@@ -172,7 +167,7 @@ describe("pw-tools-core", () => {
       harness.trigger(download);
 
       const res = await p;
-      await expectAtomicDownloadSave({ saveAs, targetPath, tempDir, content: "file-content" });
+      await expectAtomicDownloadSave({ saveAs, targetPath, content: "file-content" });
       await expect(fs.realpath(res.path)).resolves.toBe(await fs.realpath(targetPath));
     });
   });
@@ -233,7 +228,7 @@ describe("pw-tools-core", () => {
       harness.trigger(download);
 
       const res = await p;
-      await expectAtomicDownloadSave({ saveAs, targetPath, tempDir, content: "report-content" });
+      await expectAtomicDownloadSave({ saveAs, targetPath, content: "report-content" });
       await expect(fs.realpath(res.path)).resolves.toBe(await fs.realpath(targetPath));
     });
   });

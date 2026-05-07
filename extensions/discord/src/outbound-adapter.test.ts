@@ -30,6 +30,13 @@ describe("normalizeDiscordOutboundTarget", () => {
     expect(normalizeDiscordOutboundTarget("channel:123")).toEqual({ ok: true, to: "channel:123" });
   });
 
+  it("normalizes provider-prefixed channel targets", () => {
+    expect(normalizeDiscordOutboundTarget("discord:channel:123")).toEqual({
+      ok: true,
+      to: "channel:123",
+    });
+  });
+
   it("passes through user: prefixed targets", () => {
     expect(normalizeDiscordOutboundTarget("user:123")).toEqual({ ok: true, to: "user:123" });
   });
@@ -539,6 +546,38 @@ describe("discordOutbound", () => {
       (hoisted.sendMessageDiscordMock.mock.calls[0]?.[2] as { replyTo?: unknown } | undefined)
         ?.replyTo,
     ).toBe("reply-1");
+  });
+
+  it("sends prepared native Discord payload data through outbound delivery", async () => {
+    await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload: {
+        text: "hello",
+        mediaUrl: "https://example.com/photo.png",
+        channelData: {
+          discord: {
+            components: [{ type: 1, components: [] }],
+            filename: "photo.png",
+          },
+        },
+      },
+      accountId: "default",
+      replyToId: "reply-1",
+    });
+
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:123456",
+      "hello",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/photo.png",
+        components: [{ type: 1, components: [] }],
+        filename: "photo.png",
+        accountId: "default",
+        replyTo: "reply-1",
+      }),
+    );
   });
 
   it("preserves explicit component payload replies when replyToMode is off", async () => {
