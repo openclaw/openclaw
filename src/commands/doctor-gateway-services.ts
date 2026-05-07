@@ -103,16 +103,23 @@ async function buildExpectedGatewayServicePlan(params: {
   runtime: GatewayDaemonRuntime;
   nodePath?: string;
 }) {
-  return buildGatewayInstallPlan({
+  let runtimeWarningEmitted = false;
+  const plan = await buildGatewayInstallPlan({
     env: params.serviceInstallEnv,
     port: params.port,
     runtime: params.runtime,
     nodePath: params.nodePath,
     existingEnvironment: params.command.environment,
     existingEnvironmentValueSources: params.command.environmentValueSources,
-    warn: (message, title) => note(message, title),
+    warn: (message, title) => {
+      if (title === "Gateway runtime") {
+        runtimeWarningEmitted = true;
+      }
+      note(message, title);
+    },
     config: params.cfg,
   });
+  return { plan, runtimeWarningEmitted };
 }
 
 async function buildGatewayServiceAuditInputs(params: {
@@ -122,7 +129,7 @@ async function buildGatewayServiceAuditInputs(params: {
 }) {
   const port = resolveGatewayPort(params.cfg, process.env);
   const runtimeChoice = detectGatewayRuntime(params.command.programArguments);
-  const expectedPlan = await buildExpectedGatewayServicePlan({
+  const { plan: expectedPlan, runtimeWarningEmitted } = await buildExpectedGatewayServicePlan({
     cfg: params.cfg,
     command: params.command,
     serviceInstallEnv: params.serviceInstallEnv,
@@ -132,7 +139,13 @@ async function buildGatewayServiceAuditInputs(params: {
   const expectedManagedServiceEnvKeys = readManagedServiceEnvKeysFromEnvironment(
     expectedPlan.environment,
   );
-  return { expectedManagedServiceEnvKeys, expectedPlan, port, runtimeChoice };
+  return {
+    expectedManagedServiceEnvKeys,
+    expectedPlan,
+    port,
+    runtimeChoice,
+    runtimeWarningEmitted,
+  };
 }
 
 async function normalizeExecutablePath(value: string): Promise<string> {
@@ -394,12 +407,17 @@ export async function maybeRepairGatewayServiceConfig(
     );
   }
   const expectedGatewayToken = tokenRefConfigured ? undefined : gatewayTokenResolution.token;
-  const { expectedManagedServiceEnvKeys, expectedPlan, port, runtimeChoice } =
-    await buildGatewayServiceAuditInputs({
-      cfg,
-      command,
-      serviceInstallEnv,
-    });
+  const {
+    expectedManagedServiceEnvKeys,
+    expectedPlan,
+    port,
+    runtimeChoice,
+    runtimeWarningEmitted,
+  } = await buildGatewayServiceAuditInputs({
+    cfg,
+    command,
+    serviceInstallEnv,
+  });
   const audit = await auditGatewayServiceConfig({
     env: process.env,
     command,
@@ -422,7 +440,7 @@ export async function maybeRepairGatewayServiceConfig(
     ? await resolveSystemNodeInfo({ env: process.env })
     : null;
   const systemNodePath = systemNodeInfo?.supported ? systemNodeInfo.path : null;
-  if (needsNodeRuntime && !systemNodePath) {
+  if (needsNodeRuntime && !systemNodePath && !runtimeWarningEmitted) {
     const warning =
       renderSystemNodeWarning(systemNodeInfo) ??
       "System Node 22 LTS (22.14+) or Node 24 not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.";
@@ -431,14 +449,16 @@ export async function maybeRepairGatewayServiceConfig(
 
   const expectedRuntimePlan =
     needsNodeRuntime && systemNodePath
-      ? await buildExpectedGatewayServicePlan({
-          cfg,
-          command,
-          serviceInstallEnv,
-          port,
-          runtime: "node",
-          nodePath: systemNodePath,
-        })
+      ? (
+          await buildExpectedGatewayServicePlan({
+            cfg,
+            command,
+            serviceInstallEnv,
+            port,
+            runtime: "node",
+            nodePath: systemNodePath,
+          })
+        ).plan
       : expectedPlan;
   const { programArguments } = expectedRuntimePlan;
   const expectedEntrypoint = findGatewayEntrypoint(programArguments);
@@ -575,7 +595,7 @@ export async function maybeRepairGatewayServiceConfig(
   }
 
   const updatedPort = resolveGatewayPort(cfgForServiceInstall, process.env);
-  const updatedPlan = await buildExpectedGatewayServicePlan({
+  const { plan: updatedPlan } = await buildExpectedGatewayServicePlan({
     cfg: cfgForServiceInstall,
     command,
     serviceInstallEnv,

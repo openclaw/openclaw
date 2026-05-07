@@ -1001,6 +1001,32 @@ describe("maybeRepairGatewayServiceConfig — Gateway runtime note deduplication
     expect(gatewayRuntimeCalls).toHaveLength(1);
     expect(gatewayRuntimeCalls[0]![0]).toContain("not found");
   });
+
+  it("suppresses doctor-side Gateway runtime note when install plan already emitted one", async () => {
+    const { needsNodeRuntimeMigration } = await import("../daemon/service-audit.js");
+    const { renderSystemNodeWarning, resolveSystemNodeInfo } =
+      await import("../daemon/runtime-paths.js");
+    vi.mocked(needsNodeRuntimeMigration).mockReturnValue(true);
+    vi.mocked(resolveSystemNodeInfo).mockResolvedValue(null);
+    vi.mocked(renderSystemNodeWarning).mockReturnValue(null);
+
+    // Simulate buildGatewayInstallPlan calling warn("...", "Gateway runtime")
+    mocks.buildGatewayInstallPlan.mockImplementation(async ({ warn }) => {
+      warn?.("System Node 20.20.2 is below required Node 22.14+.", "Gateway runtime");
+      return {
+        programArguments: ["/usr/bin/node", "/usr/lib/openclaw/dist/index.js", "gateway"],
+        environment: {},
+        environmentValueSources: {},
+      };
+    });
+
+    await runRepair({ gateway: {} });
+
+    const gatewayRuntimeCalls = vi
+      .mocked(mocks.note)
+      .mock.calls.filter(([, title]) => title === "Gateway runtime");
+    expect(gatewayRuntimeCalls).toHaveLength(1);
+  });
 });
 
 describe("maybeScanExtraGatewayServices", () => {
