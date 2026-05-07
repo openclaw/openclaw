@@ -13,6 +13,8 @@ export type {
   RealtimeVoiceRole,
   RealtimeVoiceTool,
   RealtimeVoiceToolCallEvent,
+  RealtimeVoiceVideoFrameMimeType,
+  RealtimeVoiceVideoFrameOptions,
 } from "../realtime-voice/provider-types.js";
 export {
   REALTIME_VOICE_AGENT_CONSULT_TOOL,
