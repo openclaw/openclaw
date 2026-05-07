@@ -10,8 +10,10 @@ import { callGateway } from "../../gateway/call.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
+import type { SpawnAcpAttachment } from "../acp-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
+import { decodeStrictBase64 } from "../subagent-attachments.js";
 import { registerSubagentRun } from "../subagent-registry.js";
 import {
   SUBAGENT_SPAWN_CONTEXT_MODES,
@@ -33,6 +35,8 @@ import {
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
+const ACP_IMAGE_ATTACHMENT_MAX_COUNT = 8;
+const ACP_IMAGE_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 // Keep the schema local to avoid a circular import through acp-spawn/openclaw-tools.
 const SESSIONS_SPAWN_ACP_STREAM_TARGETS = ["parent"] as const;
 const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
@@ -47,6 +51,16 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
 ] as const;
 
 type AcpSpawnModule = typeof import("../acp-spawn.js");
+type SessionsSpawnAttachment = {
+  name: string;
+  content: string;
+  encoding?: "utf8" | "base64";
+  mimeType?: string;
+};
+
+type ResolveAcpImageAttachmentsResult =
+  | { status: "ok"; attachments?: SpawnAcpAttachment[] }
+  | { status: "error"; error: string };
 
 const acpSpawnModuleLoader = createLazyImportLoader<AcpSpawnModule>(
   () => import("../acp-spawn.js"),
@@ -84,6 +98,52 @@ function resolveTrackedSpawnMode(params: {
     return params.requestedMode;
   }
   return params.threadRequested ? "session" : "run";
+}
+
+function resolveAcpImageAttachments(
+  attachments: SessionsSpawnAttachment[] | undefined,
+): ResolveAcpImageAttachmentsResult {
+  if (!Array.isArray(attachments) || attachments.length === 0) {
+    return { status: "ok" };
+  }
+  if (attachments.length > ACP_IMAGE_ATTACHMENT_MAX_COUNT) {
+    return {
+      status: "error",
+      error: `runtime=acp image attachment count exceeded (max=${ACP_IMAGE_ATTACHMENT_MAX_COUNT})`,
+    };
+  }
+
+  const resolved: SpawnAcpAttachment[] = [];
+  for (const attachment of attachments) {
+    const mimeType =
+      typeof attachment.mimeType === "string" ? attachment.mimeType.trim().toLowerCase() : "";
+    if (!mimeType.startsWith("image/")) {
+      return {
+        status: "error",
+        error: "runtime=acp attachments only support image/* mimeType values",
+      };
+    }
+    if (attachment.encoding !== "base64") {
+      return {
+        status: "error",
+        error: "runtime=acp image attachments require encoding=base64",
+      };
+    }
+    const decoded = decodeStrictBase64(attachment.content, ACP_IMAGE_ATTACHMENT_MAX_BYTES);
+    if (decoded === null) {
+      return {
+        status: "error",
+        error: `runtime=acp image attachment is invalid base64 or exceeds ${ACP_IMAGE_ATTACHMENT_MAX_BYTES} bytes`,
+      };
+    }
+    resolved.push({
+      type: "image",
+      mimeType,
+      content: decoded.toString("base64"),
+    });
+  }
+
+  return { status: "ok", attachments: resolved };
 }
 
 async function cleanupUntrackedAcpSession(sessionKey: string): Promise<void> {
@@ -311,21 +371,16 @@ export function createSessionsSpawnTool(
           : undefined;
       const thread = params.thread === true;
       const attachments = Array.isArray(params.attachments)
-        ? (params.attachments as Array<{
-            name: string;
-            content: string;
-            encoding?: "utf8" | "base64";
-            mimeType?: string;
-          }>)
+        ? (params.attachments as SessionsSpawnAttachment[])
         : undefined;
 
       if (runtime === "acp") {
         const { isSpawnAcpAcceptedResult, spawnAcpDirect } = await loadAcpSpawnModule();
-        if (Array.isArray(attachments) && attachments.length > 0) {
+        const acpAttachments = resolveAcpImageAttachments(attachments);
+        if (acpAttachments.status === "error") {
           return jsonResult({
             status: "error",
-            error:
-              "attachments are currently unsupported for runtime=acp; use runtime=subagent or remove attachments",
+            error: acpAttachments.error,
             ...roleContext,
           });
         }
@@ -343,6 +398,7 @@ export function createSessionsSpawnTool(
             thread,
             sandbox,
             streamTo,
+            attachments: acpAttachments.attachments,
           },
           {
             agentSessionKey: opts?.agentSessionKey,

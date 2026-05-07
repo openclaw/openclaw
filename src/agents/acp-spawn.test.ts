@@ -728,6 +728,37 @@ describe("spawnAcpDirect", () => {
     expect(transcriptCalls[1]?.threadId).toBe("child-thread");
   });
 
+  it("passes image attachments to the ACP gateway dispatch", async () => {
+    const result = await spawnAcpDirect(
+      createSpawnRequest({
+        task: "Analyze attached diagram",
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            content: "cG5nLWJ5dGVz",
+          },
+        ],
+      }),
+      createRequesterContext(),
+    );
+
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted.runId).toBe("run-1");
+    const agentCall = findAgentGatewayCall();
+    expect(agentCall?.params).toMatchObject({
+      message: "Analyze attached diagram",
+      attachments: [
+        {
+          type: "image",
+          mimeType: "image/png",
+          content: "cG5nLWJ5dGVz",
+        },
+      ],
+      acpTurnSource: "manual_spawn",
+    });
+  });
+
   it("allows ACP resume IDs recorded for the requester session", async () => {
     const resumeSessionId = "codex-inner-resume";
     hoisted.loadSessionStoreMock.mockReturnValue({
