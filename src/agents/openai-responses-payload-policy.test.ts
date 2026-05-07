@@ -159,6 +159,23 @@ describe("openai responses payload policy", () => {
     expect(payload).not.toHaveProperty("reasoning");
   });
 
+  it("does not emit store false for proxy-like endpoints in disable mode", () => {
+    const policy = resolveOpenAIResponsesPayloadPolicy(
+      {
+        api: "openai-responses",
+        provider: "litellm",
+        baseUrl: "http://litellm-host:4000/v1",
+      },
+      { storeMode: "disable" },
+    );
+
+    expect(policy.explicitStore).toBeUndefined();
+
+    const payload = {} satisfies Record<string, unknown>;
+    applyOpenAIResponsesPayloadPolicy(payload, policy);
+    expect(payload).not.toHaveProperty("store");
+  });
+
   it("emits store false for native OpenAI Codex responses disable mode", () => {
     const policy = resolveOpenAIResponsesPayloadPolicy(
       {
