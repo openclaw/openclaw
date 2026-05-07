@@ -464,6 +464,20 @@ export const sendHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (
+      hasLocation &&
+      (message || mediaUrl || (mediaUrls?.length ?? 0) > 0 || request.asVoice === true)
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "invalid send params: location sends cannot include text or media payloads",
+        ),
+      );
+      return;
+    }
     if (!hasLocation && !message && !mediaUrl && (mediaUrls?.length ?? 0) === 0) {
       respond(
         false,

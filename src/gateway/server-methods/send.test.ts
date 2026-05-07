@@ -290,6 +290,29 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("rejects mixed location and message payloads", async () => {
+    const { respond } = await runSend({
+      to: "channel:C1",
+      latitude: 28.2723,
+      longitude: -16.6424,
+      message: "note",
+      mediaUrl: "https://example.com/a.png",
+      mediaUrls: ["https://example.com/b.png"],
+      channel: "slack",
+      idempotencyKey: "idem-location-mixed",
+    });
+
+    expect(mocks.getChannelPlugin).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("location sends cannot include text or media payloads"),
+      }),
+    );
+  });
+
   it("accepts media-only sends without message", async () => {
     mockDeliverySuccess("m-media");
 
