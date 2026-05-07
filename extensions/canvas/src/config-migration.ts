@@ -11,10 +11,7 @@ function mergeHostConfig(params: {
   legacyHost: MutableRecord;
   existingHost: MutableRecord | undefined;
 }): MutableRecord {
-  return {
-    ...params.legacyHost,
-    ...(params.existingHost ?? {}),
-  };
+  return Object.assign({}, params.legacyHost, params.existingHost);
 }
 
 export function migrateLegacyCanvasHostConfig(config: OpenClawConfig): {
