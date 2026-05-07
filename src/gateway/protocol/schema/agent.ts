@@ -103,6 +103,12 @@ export const SendParamsSchema = Type.Object(
     threadId: Type.Optional(Type.String()),
     /** Optional session key for mirroring delivered output back into the transcript. */
     sessionKey: Type.Optional(Type.String()),
+    /**
+     * Discord interactive components (action rows with buttons, selects, etc.)
+     * to attach to the message. Passed through to the Discord API as-is.
+     * Ignored by non-Discord channels.
+     */
+    components: Type.Optional(Type.Array(Type.Any())),
     idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },

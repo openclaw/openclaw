@@ -1,5 +1,6 @@
 import {
   type ChannelOutboundAdapter,
+  type ChannelOutboundContext,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
@@ -24,6 +25,7 @@ import {
   type DiscordSendFn,
   type DiscordVoiceSendFn,
 } from "./outbound-send-context.js";
+import type { DiscordSendComponents, DiscordSendEmbeds } from "./send.shared.js";
 
 export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
 const DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE =
@@ -145,19 +147,39 @@ export const discordOutbound: ChannelOutboundAdapter = {
     }),
   ...createAttachedChannelResultAdapter({
     channel: "discord",
-    sendText: async ({
-      cfg,
-      to,
-      text,
-      accountId,
-      deps,
-      replyToId,
-      threadId,
-      identity,
-      silent,
-      formatting,
-    }) => {
-      if (!silent) {
+    sendText: async (ctx) => {
+      const {
+        cfg,
+        to,
+        text,
+        accountId,
+        deps,
+        replyToId,
+        threadId,
+        identity,
+        silent,
+        formatting,
+      } = ctx;
+      // Native interactive components (action rows / V2 layouts) optionally
+      // attached by the gateway via channelData.discord.rawComponents — they
+      // ride along on the outbound context here so a plain-text send can
+      // still attach buttons / selects without going through the
+      // presentation-spec or sendPayload paths.
+      const extraCtx = ctx as ChannelOutboundContext & {
+        components?: DiscordSendComponents;
+        embeds?: DiscordSendEmbeds;
+        filename?: string;
+      };
+      const components = extraCtx.components;
+      const embeds = extraCtx.embeds;
+      const filename = extraCtx.filename;
+      const hasNativeComponents =
+        (Array.isArray(components) && components.length > 0) ||
+        (Array.isArray(embeds) && embeds.length > 0) ||
+        Boolean(filename);
+      if (!silent && !hasNativeComponents) {
+        // Webhook delivery does not support attaching action rows; only
+        // try the webhook path when no components are present.
         const webhookResult = await maybeSendDiscordWebhookText({
           cfg,
           text,
@@ -183,6 +205,9 @@ export const discordOutbound: ChannelOutboundAdapter = {
             accountId: accountId ?? undefined,
             silent: silent ?? undefined,
             cfg,
+            components,
+            embeds,
+            filename,
             ...resolveDiscordFormattingOptions({ formatting }),
           }),
       });

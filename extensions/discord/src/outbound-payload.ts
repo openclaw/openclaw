@@ -17,6 +17,46 @@ import { createDiscordPayloadSendContext } from "./outbound-send-context.js";
 import { createDiscordSendReceipt } from "./send.receipt.js";
 import type { DiscordSendComponents, DiscordSendEmbeds } from "./send.shared.js";
 
+type OutboundPayload = Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0]["payload"];
+
+/**
+ * Wrap a raw Discord component JSON object so it satisfies the internal
+ * `TopLevelComponents` shape expected by `serializePayload`: an object with
+ * a `.serialize()` method returning the raw API payload, plus an `isV2` flag
+ * derived from the component's `type` (V2 component types are 9..18 per the
+ * current Discord components-v2 spec).
+ */
+function wrapRawDiscordComponent(raw: Record<string, unknown>): {
+  isV2: boolean;
+  serialize: () => unknown;
+} {
+  const t = raw.type;
+  const isV2 = typeof t === "number" && t >= 9 && t <= 18;
+  return {
+    isV2,
+    serialize: () => raw,
+  };
+}
+
+/**
+ * Extract raw Discord API components stored in channelData by the gateway send
+ * handler. These are passed through to the Discord API as-is (e.g. action rows
+ * with buttons for HITL approval flows). Each entry is wrapped so that the
+ * internal serializer treats it as a top-level component.
+ */
+function resolveDiscordRawComponents(payload: OutboundPayload): DiscordSendComponents | undefined {
+  const discordData = payload.channelData?.discord as
+    | { rawComponents?: unknown }
+    | undefined;
+  const raw = discordData?.rawComponents;
+  if (Array.isArray(raw) && raw.length > 0) {
+    return raw.map((entry) =>
+      wrapRawDiscordComponent(entry as Record<string, unknown>),
+    ) as unknown as DiscordSendComponents;
+  }
+  return undefined;
+}
+
 export async function sendDiscordOutboundPayload(params: {
   ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0];
   fallbackAdapter: ChannelOutboundAdapter;
@@ -80,9 +120,10 @@ export async function sendDiscordOutboundPayload(params: {
       !Array.isArray(payload.channelData.discord)
         ? (payload.channelData.discord as Record<string, unknown>)
         : {};
-    const nativeComponents = Array.isArray(discordData.components)
-      ? (discordData.components as DiscordSendComponents)
-      : undefined;
+    const nativeComponents =
+      (Array.isArray(discordData.components)
+        ? (discordData.components as DiscordSendComponents)
+        : undefined) ?? resolveDiscordRawComponents(payload);
     const embeds = Array.isArray(discordData.embeds)
       ? (discordData.embeds as DiscordSendEmbeds)
       : undefined;
