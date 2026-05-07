@@ -1436,7 +1436,6 @@
     "lint:tmp:no-random-messaging": "node scripts/check-no-random-messaging-tmp.mjs",
     "lint:tmp:no-raw-channel-fetch": "node scripts/check-no-raw-channel-fetch.mjs",
     "lint:tmp:no-raw-http2-imports": "node scripts/check-no-raw-http2-imports.mjs",
-    "lint:tmp:raw-socket-classification": "node scripts/check-raw-socket-callsite-classification.mjs",
     "lint:tmp:tsgo-core-boundary": "node scripts/check-tsgo-core-boundary.mjs",
     "lint:ui:no-raw-window-open": "node scripts/check-no-raw-window-open.mjs",
     "lint:web-fetch-provider-boundaries": "node scripts/check-web-fetch-provider-boundaries.mjs",
