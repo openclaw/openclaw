@@ -49,6 +49,7 @@ export function resolveIMessageAccount(params: {
     merged.dmPolicy ||
     merged.groupPolicy ||
     typeof merged.includeAttachments === "boolean" ||
+    merged.catchup !== undefined ||
     (merged.attachmentRoots && merged.attachmentRoots.length > 0) ||
     (merged.remoteAttachmentRoots && merged.remoteAttachmentRoots.length > 0) ||
     typeof merged.mediaMaxMb === "number" ||

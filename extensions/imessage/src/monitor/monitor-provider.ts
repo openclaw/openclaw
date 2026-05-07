@@ -44,6 +44,11 @@ import { probeIMessage } from "../probe.js";
 import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
+import {
+  buildIMessageWatchSubscribeParams,
+  readIMessageCatchupCursor,
+  recordIMessageCatchupCursor,
+} from "./catchup-cursor.js";
 import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import {
@@ -217,6 +222,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       }
       if (entries.length === 1) {
         await handleMessageNow(last.message);
+        await recordIMessageCursor(last.message);
         return;
       }
       const combinedText = entries
@@ -229,6 +235,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         attachments: null,
       };
       await handleMessageNow(syntheticMessage);
+      await recordIMessageCursor(syntheticMessage);
     },
     onError: (err) => {
       runtime.error?.(`imessage debounce flush failed: ${String(err)}`);
@@ -532,6 +539,15 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     });
   }
 
+  async function recordIMessageCursor(message: IMessagePayload) {
+    await recordIMessageCatchupCursor({
+      accountId: accountInfo.accountId,
+      messageId: message.id,
+    }).catch((err) => {
+      logVerbose(`imessage: failed to persist catchup cursor: ${String(err)}`);
+    });
+  }
+
   const handleMessage = async (raw: unknown) => {
     const message = parseIMessageNotification(raw);
     if (!message) {
@@ -607,11 +623,25 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         client: attemptClient,
         getSubscriptionId: () => attemptSubscriptionId,
       });
+      const catchupCursor = await readIMessageCatchupCursor({
+        accountId: accountInfo.accountId,
+      }).catch((err) => {
+        logVerbose(`imessage: failed to read catchup cursor: ${String(err)}`);
+        return null;
+      });
+      const watchParams = buildIMessageWatchSubscribeParams({
+        attachments: includeAttachments,
+        cursor: catchupCursor,
+        catchup: imessageCfg.catchup,
+      });
+      if (catchupCursor && imessageCfg.catchup?.enabled !== false) {
+        logVerbose(
+          `imessage: resuming watch from rowid ${catchupCursor.lastSeenRowid} for account ${accountInfo.accountId}`,
+        );
+      }
       const result = await attemptClient.request<{ subscription?: number }>(
         "watch.subscribe",
-        {
-          attachments: includeAttachments,
-        },
+        watchParams,
         { timeoutMs: probeTimeoutMs },
       );
       attemptSubscriptionId = result?.subscription ?? null;

@@ -1,8 +1,12 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient, IMessageRpcClient } from "./client.js";
 import { monitorIMessageProvider } from "./monitor.js";
 import type { attachIMessageMonitorAbortHandler } from "./monitor/abort-handler.js";
+import { recordIMessageCatchupCursor } from "./monitor/catchup-cursor.js";
 
 const waitForTransportReadyMock = vi.hoisted(() =>
   vi.fn<typeof waitForTransportReady>(async () => {}),
@@ -60,15 +64,26 @@ function createRpcClient(overrides?: {
 }
 
 describe("monitorIMessageProvider watch.subscribe startup retry", () => {
+  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+  let tmpDirs: string[] = [];
+
   beforeEach(() => {
-    vi.useFakeTimers();
     waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
     createIMessageRpcClientMock.mockReset();
     attachIMessageMonitorAbortHandlerMock.mockReset().mockReturnValue(() => {});
   });
 
   afterEach(() => {
-    vi.useRealTimers();
+    if (originalStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalStateDir;
+    }
+    const dirs = tmpDirs;
+    tmpDirs = [];
+    return Promise.all(dirs.map((dir) => fs.rm(dir, { recursive: true, force: true }))).then(
+      () => undefined,
+    );
   });
 
   afterAll(() => {
@@ -96,7 +111,6 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
       runtime: runtime as never,
     });
 
-    await vi.runAllTimersAsync();
     await monitorPromise;
 
     expect(createIMessageRpcClientMock).toHaveBeenCalledTimes(2);
@@ -108,6 +122,42 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
     );
     expect(runtime.error).not.toHaveBeenCalledWith(
       expect.stringContaining("imessage: monitor failed"),
+    );
+  });
+
+  it("resumes watch.subscribe from the persisted catchup cursor", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-monitor-"));
+    tmpDirs.push(stateDir);
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    await recordIMessageCatchupCursor({ accountId: "main", messageId: 9000 });
+    const runtime = createRuntime();
+    const client = createRpcClient();
+    createIMessageRpcClientMock.mockResolvedValueOnce(client);
+
+    const monitorPromise = monitorIMessageProvider({
+      accountId: "main",
+      config: {
+        channels: {
+          imessage: {
+            catchup: {
+              maxAgeMinutes: 30,
+            },
+          },
+        },
+      } as never,
+      runtime: runtime as never,
+    });
+
+    await monitorPromise;
+
+    expect(client.request).toHaveBeenCalledWith(
+      "watch.subscribe",
+      expect.objectContaining({
+        attachments: false,
+        since_rowid: 9000,
+        start: expect.any(String),
+      }),
+      { timeoutMs: 10_000 },
     );
   });
 
@@ -126,7 +176,6 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
       runtime: runtime as never,
     }).catch((error) => error);
 
-    await vi.runAllTimersAsync();
     const monitorError = await monitorErrorPromise;
 
     expect(monitorError).toBeInstanceOf(Error);

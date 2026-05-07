@@ -21,6 +21,8 @@ export type IMessageAccountConfig = {
   markdown?: MarkdownConfig;
   /** Allow channel-initiated config writes (default: true). */
   configWrites?: boolean;
+  /** Internal runtime-only marker stripped before config writes. */
+  runtimeOnlyDefault?: boolean;
   /** If false, do not start this iMessage account. Default: true. */
   enabled?: boolean;
   /** imsg CLI binary path (default: imsg). */
@@ -58,6 +60,11 @@ export type IMessageAccountConfig = {
   dms?: Record<string, DmConfig>;
   /** Include attachments + reactions in watch payloads. */
   includeAttachments?: boolean;
+  /** Restart catchup from the last processed imsg rowid (default: enabled, maxAgeMinutes 1440). */
+  catchup?: {
+    enabled?: boolean;
+    maxAgeMinutes?: number;
+  };
   /** Allowed local iMessage attachment roots (supports single-segment `*` wildcards). */
   attachmentRoots?: string[];
   /** Allowed remote iMessage attachment roots for SCP fetches (supports `*`). */

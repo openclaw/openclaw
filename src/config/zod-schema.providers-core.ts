@@ -1375,6 +1375,13 @@ export const IMessageAccountSchemaBase = z
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     includeAttachments: z.boolean().optional(),
+    catchup: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxAgeMinutes: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
     attachmentRoots: z
       .array(z.string().refine(isValidInboundPathRootPattern, "expected absolute path root"))
       .optional(),

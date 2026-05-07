@@ -109,4 +109,31 @@ describe("imessage config schema", () => {
       expect(res.error.issues[0]?.path.join(".")).toBe("attachmentRoots.0");
     }
   });
+
+  it("accepts bounded catchup config", () => {
+    const res = IMessageConfigSchema.safeParse({
+      catchup: {
+        enabled: true,
+        maxAgeMinutes: 120,
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.catchup?.maxAgeMinutes).toBe(120);
+    }
+  });
+
+  it("rejects invalid catchup bounds", () => {
+    const res = IMessageConfigSchema.safeParse({
+      catchup: {
+        maxAgeMinutes: 0,
+      },
+    });
+
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues[0]?.path.join(".")).toBe("catchup.maxAgeMinutes");
+    }
+  });
 });

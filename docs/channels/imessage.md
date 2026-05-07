@@ -290,6 +290,26 @@ exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
     Each account can override fields such as `cliPath`, `dbPath`, `allowFrom`, `groupPolicy`, `mediaMaxMb`, history settings, and attachment root allowlists.
 
   </Accordion>
+
+  <Accordion title="Restart catchup">
+    The iMessage monitor stores the last processed `imsg` message rowid per account under `$OPENCLAW_STATE_DIR/imessage/catchup-cursors.json`. On restart, OpenClaw passes that cursor to `imsg rpc` `watch.subscribe` so inbound messages written while the Gateway was down can replay through the normal access-control, echo-dedupe, and reply pipeline.
+
+    Catchup is enabled by default after the first live message creates a cursor. First-run subscriptions remain live-only so an existing Messages database is not replayed unexpectedly.
+
+    Replay is time-bounded to the last 24 hours by default. To tune or disable it:
+
+    ```ts
+    channels: {
+      imessage: {
+        catchup: {
+          enabled: true,
+          maxAgeMinutes: 120,
+        },
+      },
+    }
+    ```
+
+  </Accordion>
 </AccordionGroup>
 
 ## Media, chunking, and delivery targets
