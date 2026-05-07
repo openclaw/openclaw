@@ -970,7 +970,7 @@ describe("maybeRepairGatewayServiceConfig — Gateway runtime note deduplication
       supported: false,
       path: "/usr/bin/node",
       version: "20.20.2",
-    } as Parameters<typeof renderSystemNodeWarning>[0] & { supported: false });
+    });
     vi.mocked(renderSystemNodeWarning).mockReturnValue(
       "System Node 20.20.2 at /usr/bin/node is below the required Node 22.14+. Install Node 24 (recommended) or Node 22 LTS from nodejs.org or Homebrew.",
     );
