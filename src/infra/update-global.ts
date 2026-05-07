@@ -600,11 +600,17 @@ export async function resolveGlobalInstallTarget(params: {
     params.timeoutMs,
     params.pkgRoot,
   );
+  const inferredPkgRootGlobalRoot = inferGlobalRootFromPackageRoot(params.pkgRoot);
+  const npmPkgRootGlobalRoot =
+    command.manager === "npm" &&
+    resolveNpmGlobalPrefixLayoutFromGlobalRoot(inferredPkgRootGlobalRoot)
+      ? inferredPkgRootGlobalRoot
+      : null;
   const pkgRootGlobalRoot =
     command.manager === "pnpm" && (await isPnpmGlobalPackageRoot(params.pkgRoot))
       ? inferPnpmGlobalRootFromPackageRoot(params.pkgRoot)
       : null;
-  const targetGlobalRoot = pkgRootGlobalRoot ?? globalRoot;
+  const targetGlobalRoot = npmPkgRootGlobalRoot ?? pkgRootGlobalRoot ?? globalRoot;
   return {
     ...command,
     globalRoot: targetGlobalRoot,

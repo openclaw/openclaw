@@ -356,6 +356,31 @@ describe("update global helpers", () => {
     }
   });
 
+  it("keeps npm update staging on the package root prefix when bare npm reports another root", async () => {
+    await withTempDir({ prefix: "openclaw-update-npm-target-prefix-" }, async (base) => {
+      const nvmRoot = path.join(base, "nvm", "versions", "node", "v22.17.0", "lib", "node_modules");
+      const pathNpmRoot = path.join(base, "usr", "local", "lib", "node_modules");
+      const pkgRoot = path.join(nvmRoot, "openclaw");
+      await fs.mkdir(pkgRoot, { recursive: true });
+
+      const runCommand = createNpmRootRunner({ defaultNpmRoot: pathNpmRoot });
+
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: { manager: "npm", command: "npm" },
+          runCommand,
+          timeoutMs: 1000,
+          pkgRoot,
+        }),
+      ).resolves.toEqual({
+        manager: "npm",
+        command: "npm",
+        globalRoot: nvmRoot,
+        packageRoot: pkgRoot,
+      });
+    });
+  });
+
   it("does not infer npm ownership from path shape alone when the owning npm binary is absent", async () => {
     await withTempDir({ prefix: "openclaw-update-npm-missing-bin-" }, async (base) => {
       const brewRoot = path.join(base, "opt", "homebrew", "lib", "node_modules");
