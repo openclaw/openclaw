@@ -481,6 +481,7 @@ Docs: https://docs.openclaw.ai
 - Dependencies: bump transitive `basic-ftp` to 5.3.1 so the runtime lockfile no longer includes the vulnerable 5.3.0 build flagged by the production dependency audit. (#78637) Thanks @sallyom.
 - Agents/compaction: clamp compaction summary reserve tokens to each model's output limit so high-context compaction no longer requests invalid `max_tokens` values. (#54392) Thanks @adzendo.
 - Agents/subagents: have completed session-mode subagent registry rows honor `agents.defaults.subagents.archiveAfterMinutes` (default 60 minutes; same knob run-mode already uses for `archiveAtMs`) instead of a hardcoded 5-minute TTL, so `subagents list` and other registry-backed surfaces still show recently-completed runs and operators have one consistent retention knob across spawn modes. (#78263) Thanks @arniesaha.
+- Plugins/channel setup: fix `setChannelRuntime` being silently dropped from non-bundled external plugin setup entries — external channel plugins that export `{ plugin, setChannelRuntime }` from their setup entry now have the runtime setter invoked, so the runtime initializer the provider polls for is set before the channel starts, preventing a poll timeout and gateway crash loop when the plugin opts into deferred startup loading. Fixes #77779. (#77799) Thanks @openperf.
 
 ## 2026.5.3-1
 
