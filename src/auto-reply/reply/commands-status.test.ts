@@ -638,19 +638,19 @@ describe("buildStatusReply subagent summary", () => {
           },
           ...commonParams,
         });
-        const implicitCodexText = await buildStatusText({
+        const piText = await buildStatusText({
           cfg: baseCfg,
           ...commonParams,
         });
 
         const normalizedCodex = normalizeTestText(codexText);
-        const normalizedImplicitCodex = normalizeTestText(implicitCodexText);
+        const normalizedPi = normalizeTestText(piText);
         expect(normalizedCodex).toContain("Model: openai/gpt-5.5");
         expect(normalizedCodex).toContain("oauth (openai-codex:status)");
         expect(normalizedCodex).toContain("openai-codex:status");
-        expect(normalizedImplicitCodex).toContain("Model: openai/gpt-5.5");
-        expect(normalizedImplicitCodex).toContain("oauth (openai-codex:status)");
-        expect(normalizedImplicitCodex).toContain("Runtime: OpenAI Codex");
+        expect(normalizedPi).toContain("Model: openai/gpt-5.5");
+        expect(normalizedPi).toContain("unknown");
+        expect(normalizedPi).not.toContain("openai-codex:status");
       },
       {
         env: {
