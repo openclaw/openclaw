@@ -1,14 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import {
   createBundleMcpToolRuntime,
+  getBundleMcpToolMaterializationCacheStatsForTest,
   materializeBundleMcpToolsForRun,
+  resetBundleMcpToolMaterializationCacheForTest,
 } from "./pi-bundle-mcp-materialize.js";
 import type { McpCatalogTool } from "./pi-bundle-mcp-types.js";
 import type { SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
 
 function makeToolRuntime(
   params: {
+    onGetCatalog?: () => void;
     tools?: McpCatalogTool[];
     serverName?: string;
     resultText?: string;
@@ -32,18 +35,21 @@ function makeToolRuntime(
     createdAt: 0,
     lastUsedAt: 0,
     markUsed: () => {},
-    getCatalog: async () => ({
-      version: 1,
-      generatedAt: 0,
-      servers: {
-        [serverName]: {
-          serverName,
-          launchSummary: serverName,
-          toolCount: tools.length,
+    getCatalog: async () => {
+      params.onGetCatalog?.();
+      return {
+        version: 1,
+        generatedAt: 0,
+        servers: {
+          [serverName]: {
+            serverName,
+            launchSummary: serverName,
+            toolCount: tools.length,
+          },
         },
-      },
-      tools,
-    }),
+        tools,
+      };
+    },
     callTool: async () => ({
       content: [{ type: "text", text: params.resultText ?? "FROM-BUNDLE" }],
       isError: false,
@@ -51,6 +57,21 @@ function makeToolRuntime(
     dispose: async () => {},
   };
 }
+
+const previousBundleMcpToolCacheEnv = process.env.OPENCLAW_BUNDLE_MCP_TOOL_CACHE;
+
+beforeEach(() => {
+  delete process.env.OPENCLAW_BUNDLE_MCP_TOOL_CACHE;
+});
+
+afterEach(() => {
+  if (previousBundleMcpToolCacheEnv === undefined) {
+    delete process.env.OPENCLAW_BUNDLE_MCP_TOOL_CACHE;
+  } else {
+    process.env.OPENCLAW_BUNDLE_MCP_TOOL_CACHE = previousBundleMcpToolCacheEnv;
+  }
+  resetBundleMcpToolMaterializationCacheForTest();
+});
 
 describe("createBundleMcpToolRuntime", () => {
   it("materializes bundle MCP tools and executes them", async () => {
@@ -170,5 +191,68 @@ describe("createBundleMcpToolRuntime", () => {
       "multi__mu",
       "multi__zeta",
     ]);
+  });
+
+  it("reuses cached descriptors while creating fresh proxy tools per materialization", async () => {
+    let getCatalogCalls = 0;
+    const runtime = makeToolRuntime({
+      onGetCatalog: () => {
+        getCatalogCalls += 1;
+      },
+    });
+
+    const first = await materializeBundleMcpToolsForRun({ runtime });
+    const second = await materializeBundleMcpToolsForRun({ runtime });
+
+    expect(first.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
+    expect(second.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
+    expect(first.tools[0]).not.toBe(second.tools[0]);
+    expect(getCatalogCalls).toBe(1);
+    expect(getPluginToolMeta(second.tools[0])?.pluginId).toBe("bundle-mcp");
+    expect(getBundleMcpToolMaterializationCacheStatsForTest()).toEqual({
+      bypass: 0,
+      hit: 1,
+      miss: 1,
+      store: 1,
+    });
+  });
+
+  it("keeps reserved tool-name sets in separate materialization cache entries", async () => {
+    const runtime = makeToolRuntime();
+
+    const first = await materializeBundleMcpToolsForRun({ runtime });
+    const second = await materializeBundleMcpToolsForRun({
+      runtime,
+      reservedToolNames: ["bundleProbe__bundle_probe"],
+    });
+    const third = await materializeBundleMcpToolsForRun({
+      runtime,
+      reservedToolNames: ["bundleProbe__bundle_probe"],
+    });
+
+    expect(first.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
+    expect(second.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe-2"]);
+    expect(third.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe-2"]);
+    expect(getBundleMcpToolMaterializationCacheStatsForTest()).toEqual({
+      bypass: 0,
+      hit: 1,
+      miss: 2,
+      store: 2,
+    });
+  });
+
+  it("can disable bundle MCP materialization descriptor caching", async () => {
+    process.env.OPENCLAW_BUNDLE_MCP_TOOL_CACHE = "0";
+    const runtime = makeToolRuntime();
+
+    await materializeBundleMcpToolsForRun({ runtime });
+    await materializeBundleMcpToolsForRun({ runtime });
+
+    expect(getBundleMcpToolMaterializationCacheStatsForTest()).toEqual({
+      bypass: 2,
+      hit: 0,
+      miss: 0,
+      store: 0,
+    });
   });
 });

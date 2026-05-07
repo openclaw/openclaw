@@ -17,7 +17,12 @@ vi.mock("../config/runtime-snapshot.js", () => ({
 import {
   buildPluginToolDescriptorCacheKey,
   createPluginToolDescriptorConfigCacheKeyMemo,
+  getPluginToolDescriptorCacheStatsForTest,
+  recordPluginToolDescriptorCacheHit,
+  recordPluginToolDescriptorCacheMiss,
+  recordPluginToolDescriptorCachePartial,
   resetPluginToolDescriptorCache,
+  writeCachedPluginToolDescriptors,
 } from "./tool-descriptor-cache.js";
 
 describe("plugin tool descriptor cache keys", () => {
@@ -135,5 +140,43 @@ describe("plugin tool descriptor cache keys", () => {
     });
 
     expect(firstKey).toBe(secondKey);
+  });
+
+  it("tracks descriptor cache hit/miss/store stats for diagnostics", () => {
+    writeCachedPluginToolDescriptors({
+      cacheKey: "demo",
+      descriptors: [
+        {
+          optional: false,
+          descriptor: {
+            name: "demo_tool",
+            description: "Demo tool",
+            inputSchema: { type: "object", properties: {} },
+            owner: { kind: "plugin", pluginId: "demo" },
+            executor: { kind: "plugin", pluginId: "demo", toolName: "demo_tool" },
+          },
+        },
+      ],
+    });
+    recordPluginToolDescriptorCacheHit();
+    recordPluginToolDescriptorCacheMiss();
+    recordPluginToolDescriptorCachePartial();
+
+    expect(getPluginToolDescriptorCacheStatsForTest()).toEqual({
+      hit: 1,
+      miss: 1,
+      partial: 1,
+      store: 1,
+      size: 1,
+    });
+
+    resetPluginToolDescriptorCache();
+    expect(getPluginToolDescriptorCacheStatsForTest()).toEqual({
+      hit: 0,
+      miss: 0,
+      partial: 0,
+      store: 0,
+      size: 0,
+    });
   });
 });

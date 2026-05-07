@@ -24,6 +24,9 @@ import {
   capturePluginToolDescriptor,
   createPluginToolDescriptorConfigCacheKeyMemo,
   readCachedPluginToolDescriptors,
+  recordPluginToolDescriptorCacheHit,
+  recordPluginToolDescriptorCacheMiss,
+  recordPluginToolDescriptorCachePartial,
   type CachedPluginToolDescriptor,
   type PluginToolDescriptorConfigCacheKeyMemo,
   writeCachedPluginToolDescriptors,
@@ -31,6 +34,7 @@ import {
 import type { OpenClawPluginToolContext } from "./types.js";
 
 export {
+  getPluginToolDescriptorCacheStatsForTest,
   resetPluginToolDescriptorCache,
   resetPluginToolDescriptorCache as resetPluginToolFactoryCache,
 } from "./tool-descriptor-cache.js";
@@ -662,15 +666,20 @@ function resolveCachedPluginTools(params: {
         configCacheKeyMemo: params.configCacheKeyMemo,
       }),
     );
+    if (!cached) {
+      recordPluginToolDescriptorCacheMiss();
+      continue;
+    }
     if (
-      !cached ||
       !cachedDescriptorsCoverToolNames({
         descriptors: cached,
         toolNames: availableToolNames,
       })
     ) {
+      recordPluginToolDescriptorCachePartial();
       continue;
     }
+    recordPluginToolDescriptorCacheHit();
     const pluginTools: AnyAgentTool[] = [];
     let hasNameConflict = false;
     const localNormalizedNames = new Set<string>();

@@ -19,6 +19,20 @@ const descriptorCache = new Map<string, CachedPluginToolDescriptor[]>();
 let descriptorCacheObjectIds = new WeakMap<object, number>();
 let nextDescriptorCacheObjectId = 1;
 
+type PluginToolDescriptorCacheStats = {
+  hit: number;
+  miss: number;
+  partial: number;
+  store: number;
+};
+
+const descriptorCacheStats: PluginToolDescriptorCacheStats = {
+  hit: 0,
+  miss: 0,
+  partial: 0,
+  store: 0,
+};
+
 export type PluginToolDescriptorConfigCacheKeyMemo = WeakMap<object, string | number | null>;
 
 export function createPluginToolDescriptorConfigCacheKeyMemo(): PluginToolDescriptorConfigCacheKeyMemo {
@@ -29,6 +43,31 @@ export function resetPluginToolDescriptorCache(): void {
   descriptorCache.clear();
   descriptorCacheObjectIds = new WeakMap();
   nextDescriptorCacheObjectId = 1;
+  descriptorCacheStats.hit = 0;
+  descriptorCacheStats.miss = 0;
+  descriptorCacheStats.partial = 0;
+  descriptorCacheStats.store = 0;
+}
+
+export function getPluginToolDescriptorCacheStatsForTest(): PluginToolDescriptorCacheStats & {
+  size: number;
+} {
+  return {
+    ...descriptorCacheStats,
+    size: descriptorCache.size,
+  };
+}
+
+export function recordPluginToolDescriptorCacheHit(): void {
+  descriptorCacheStats.hit += 1;
+}
+
+export function recordPluginToolDescriptorCacheMiss(): void {
+  descriptorCacheStats.miss += 1;
+}
+
+export function recordPluginToolDescriptorCachePartial(): void {
+  descriptorCacheStats.partial += 1;
 }
 
 function sourceFingerprint(source: string): string {
@@ -184,4 +223,5 @@ export function writeCachedPluginToolDescriptors(params: {
     }
   }
   descriptorCache.set(params.cacheKey, [...params.descriptors]);
+  descriptorCacheStats.store += 1;
 }

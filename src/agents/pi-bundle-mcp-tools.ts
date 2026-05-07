@@ -18,5 +18,7 @@ export {
 } from "./pi-bundle-mcp-runtime.js";
 export {
   createBundleMcpToolRuntime,
+  getBundleMcpToolMaterializationCacheStatsForTest,
   materializeBundleMcpToolsForRun,
+  resetBundleMcpToolMaterializationCacheForTest,
 } from "./pi-bundle-mcp-materialize.js";
