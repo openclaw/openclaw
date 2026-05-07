@@ -148,6 +148,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Providers/proxy: honor IPv4 CIDR and trailing wildcard `NO_PROXY` entries such as `100.64.0.0/10`, `100.64.*`, and `10.*` before routing private model-provider requests through an environment proxy. Fixes #79030. Thanks @briqt.
 - Docs/Docker: document a local Compose override for Docker Desktop DNS failures in the shared-network `openclaw-cli` sidecar, keeping the default compose setup hardened while unblocking `openclaw plugins install` when users opt in. Fixes #79018. Thanks @Jason-Vaughan.
 - Compute plugin callback authorization dynamically [AI]. (#78866) Thanks @pgondhi987.
 - fix(active-memory): require admin scope for global toggles [AI]. (#78863) Thanks @pgondhi987.

@@ -1,3 +1,5 @@
+import { isIP } from "node:net";
+
 export const PROXY_ENV_KEYS = [
   "HTTP_PROXY",
   "HTTPS_PROXY",
@@ -114,7 +116,9 @@ export function shouldUseEnvHttpProxyForUrl(
 /**
  * Check whether a target URL should bypass the HTTP proxy per NO_PROXY env var.
  *
- * Mirrors undici EnvHttpProxyAgent semantics
+ * Mirrors undici EnvHttpProxyAgent semantics, plus OpenClaw's target-aware
+ * IPv4 CIDR and trailing-octet wildcard extensions for private provider
+ * endpoints
  * (`undici/lib/dispatcher/env-http-proxy-agent.js`):
  * - Entries separated by commas OR whitespace (undici splits on `/[,\s]/`)
  * - Case-insensitive
@@ -128,9 +132,11 @@ export function shouldUseEnvHttpProxyForUrl(
  * - Subdomain suffix match (`openai.com` matches `api.openai.com`)
  * - Optional `:port` suffix; when present, must match target port
  * - IPv6 literals in bracketed form (`[::1]`)
+ * - IPv4 CIDR entries (`100.64.0.0/10`)
+ * - IPv4 trailing-octet wildcard entries (`100.64.*`, `10.*`)
  *
  * Undici does not export its matcher, so this is a targeted reimplementation
- * kept in sync with the upstream file above. Paired with
+ * kept in sync with the upstream file above where behavior overlaps. Paired with
  * `hasEnvHttpProxyConfigured` this gates the trusted-env-proxy auto-upgrade
  * in provider HTTP helpers; see openclaw#64974 review thread on NO_PROXY
  * SSRF bypass.
@@ -205,6 +211,10 @@ export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = proce
       continue;
     }
 
+    if (matchesIpv4NoProxyExtension(targetHost, normalizedEntry)) {
+      return true;
+    }
+
     if (targetHost === normalizedEntry) {
       return true;
     }
@@ -213,4 +223,87 @@ export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = proce
     }
   }
   return false;
+}
+
+function matchesIpv4NoProxyExtension(targetHost: string, entryHost: string): boolean {
+  if (isIP(targetHost) !== 4) {
+    return false;
+  }
+
+  if (entryHost.includes("/")) {
+    return matchesIpv4Cidr(targetHost, entryHost);
+  }
+
+  if (entryHost.includes("*")) {
+    return matchesIpv4TrailingWildcard(targetHost, entryHost);
+  }
+
+  return false;
+}
+
+function parseIpv4Address(value: string): number | undefined {
+  if (isIP(value) !== 4) {
+    return undefined;
+  }
+
+  const octets = value.split(".").map((octet) => Number.parseInt(octet, 10));
+  if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet))) {
+    return undefined;
+  }
+
+  return (((octets[0] << 24) >>> 0) | (octets[1] << 16) | (octets[2] << 8) | octets[3]) >>> 0;
+}
+
+function matchesIpv4Cidr(targetHost: string, entryHost: string): boolean {
+  const parts = entryHost.split("/");
+  if (parts.length !== 2) {
+    return false;
+  }
+
+  const [networkHost, prefixRaw] = parts;
+  if (!networkHost || !/^\d{1,2}$/.test(prefixRaw)) {
+    return false;
+  }
+
+  const prefix = Number.parseInt(prefixRaw, 10);
+  if (prefix < 0 || prefix > 32) {
+    return false;
+  }
+
+  const target = parseIpv4Address(targetHost);
+  const network = parseIpv4Address(networkHost);
+  if (target === undefined || network === undefined) {
+    return false;
+  }
+
+  const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+  return (target & mask) === (network & mask);
+}
+
+function matchesIpv4TrailingWildcard(targetHost: string, entryHost: string): boolean {
+  const targetOctets = targetHost.split(".");
+  const patternOctets = entryHost.split(".");
+  if (
+    patternOctets.length < 2 ||
+    patternOctets.length > 4 ||
+    patternOctets[patternOctets.length - 1] !== "*"
+  ) {
+    return false;
+  }
+
+  const fixedOctets = patternOctets.slice(0, -1);
+  if (
+    fixedOctets.length === 0 ||
+    fixedOctets.some((octet) => {
+      if (!/^\d{1,3}$/.test(octet)) {
+        return true;
+      }
+      const value = Number.parseInt(octet, 10);
+      return value < 0 || value > 255;
+    })
+  ) {
+    return false;
+  }
+
+  return fixedOctets.every((octet, index) => targetOctets[index] === String(Number(octet)));
 }

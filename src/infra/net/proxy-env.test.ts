@@ -294,6 +294,54 @@ describe("matchesNoProxy", () => {
       expected: true,
     },
     {
+      name: "matches IPv4 CIDR entries",
+      url: "http://100.64.0.3:8990/v1/messages",
+      env: { NO_PROXY: "100.64.0.0/10" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "matches IPv4 CIDR entries with port constraints",
+      url: "http://100.64.0.3:8990/v1/messages",
+      env: { NO_PROXY: "100.64.0.0/10:8990" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "does not match IPv4 CIDR entries when target is outside the range",
+      url: "http://100.128.0.3:8990/v1/messages",
+      env: { NO_PROXY: "100.64.0.0/10" } as NodeJS.ProcessEnv,
+      expected: false,
+    },
+    {
+      name: "matches trailing IPv4 wildcard entries",
+      url: "http://100.64.0.3:8990/v1/messages",
+      env: { NO_PROXY: "100.64.*" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "matches single-octet IPv4 wildcard entries",
+      url: "http://10.42.1.2:11434/api/chat",
+      env: { NO_PROXY: "10.*" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "matches trailing IPv4 wildcard entries with port constraints",
+      url: "http://100.64.0.3:8990/v1/messages",
+      env: { NO_PROXY: "100.64.*:8990" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "does not match trailing IPv4 wildcard entries when port differs",
+      url: "http://100.64.0.3:8991/v1/messages",
+      env: { NO_PROXY: "100.64.*:8990" } as NodeJS.ProcessEnv,
+      expected: false,
+    },
+    {
+      name: "does not treat mid-host IPv4 wildcard entries as supported",
+      url: "http://100.64.0.3:8990/v1/messages",
+      env: { NO_PROXY: "100.*.0.3" } as NodeJS.ProcessEnv,
+      expected: false,
+    },
+    {
       name: "returns false for malformed target URL",
       url: "not-a-url",
       env: { NO_PROXY: "*" } as NodeJS.ProcessEnv,
@@ -336,6 +384,24 @@ describe("shouldUseEnvHttpProxyForUrl", () => {
       env: {
         HTTPS_PROXY: "http://proxy.test:8080",
         NO_PROXY: "corp.example",
+      } as NodeJS.ProcessEnv,
+      expected: false,
+    },
+    {
+      name: "keeps strict mode for IPv4 CIDR NO_PROXY matches",
+      url: "http://100.64.0.3:8990/v1/messages",
+      env: {
+        HTTP_PROXY: "http://proxy.test:8080",
+        NO_PROXY: "100.64.0.0/10",
+      } as NodeJS.ProcessEnv,
+      expected: false,
+    },
+    {
+      name: "keeps strict mode for IPv4 wildcard NO_PROXY matches",
+      url: "http://100.64.0.3:8990/v1/messages",
+      env: {
+        HTTP_PROXY: "http://proxy.test:8080",
+        NO_PROXY: "100.64.*",
       } as NodeJS.ProcessEnv,
       expected: false,
     },
