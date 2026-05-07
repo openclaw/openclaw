@@ -13,7 +13,12 @@ import {
   makeAgentAssistantMessage,
   makeAgentUserMessage,
 } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  loadSqliteSessionTranscriptEvents,
+  replaceSqliteSessionTranscriptEvents,
+} from "../../../../src/config/sessions/transcript-store.sqlite.js";
+import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 import { attachCodexMirrorIdentity, mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
 
 type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
@@ -29,6 +34,8 @@ const tempDirs: string[] = [];
 
 afterEach(async () => {
   resetGlobalHookRunner();
+  closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
   for (const dir of tempDirs.splice(0)) {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -37,23 +44,31 @@ afterEach(async () => {
 async function createTempSessionFile() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-transcript-"));
   tempDirs.push(dir);
+  vi.stubEnv("OPENCLAW_STATE_DIR", dir);
   return path.join(dir, "session.jsonl");
 }
 
 async function makeRoot(prefix: string): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   tempDirs.push(root);
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
   return root;
 }
 
-function parseJsonLines<T>(raw: string): T[] {
-  const records: T[] = [];
-  for (const line of raw.trim().split("\n")) {
-    if (line.length > 0) {
-      records.push(JSON.parse(line) as T);
-    }
-  }
-  return records;
+function sessionIdFromFile(sessionFile: string): string {
+  return path.basename(sessionFile).replace(/\.jsonl$/i, "");
+}
+
+function readTranscriptEvents(sessionFile: string, sessionId = sessionIdFromFile(sessionFile)) {
+  return loadSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId,
+  }).map((entry) => entry.event);
+}
+
+function readTranscriptRaw(sessionFile: string, sessionId = sessionIdFromFile(sessionFile)) {
+  const lines = readTranscriptEvents(sessionFile, sessionId).map((event) => JSON.stringify(event));
+  return lines.length ? `${lines.join("\n")}\n` : "";
 }
 
 describe("mirrorCodexAppServerTranscript", () => {
@@ -88,7 +103,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyScope: "scope-1",
     });
 
-    const raw = await fs.readFile(sessionFile, "utf8");
+    const raw = readTranscriptRaw(sessionFile);
     expect(raw).toContain('"role":"user"');
     expect(raw).toContain('"content":[{"type":"text","text":"hello"}]');
     expect(raw).toContain('"role":"assistant"');
@@ -121,7 +136,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyScope: "scope-1",
     });
 
-    const raw = await fs.readFile(sessionFile, "utf8");
+    const raw = readTranscriptRaw(sessionFile);
     expect(raw).toContain('"role":"assistant"');
     expect(raw).toContain('"content":[{"type":"text","text":"first mirror"}]');
   });
@@ -152,9 +167,11 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyScope: "scope-1",
     });
 
-    const records = parseJsonLines<{ type?: string; message?: { role?: string } }>(
-      await fs.readFile(sessionFile, "utf8"),
-    );
+    const records = readTranscriptRaw(sessionFile)
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type?: string; message?: { role?: string } });
     expect(records.slice(1)).toHaveLength(2);
   });
 
@@ -185,7 +202,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyScope: "scope-1",
     });
 
-    const raw = await fs.readFile(sessionFile, "utf8");
+    const raw = readTranscriptRaw(sessionFile);
     expect(raw).toContain('"content":[{"type":"text","text":"hello [hooked]"}]');
     // The idempotency fingerprint is derived from the pre-hook message so a
     // hook rewrite cannot bypass dedupe by reshaping content on every retry.
@@ -221,7 +238,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyScope: "scope-1",
     });
 
-    const raw = await fs.readFile(sessionFile, "utf8");
+    const raw = readTranscriptRaw(sessionFile);
     expect(raw).toContain(
       `"idempotencyKey":"scope-1:assistant:${expectedFingerprint(sourceMessage)}"`,
     );
@@ -251,33 +268,36 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyScope: "scope-1",
     });
 
-    await expect(fs.readFile(sessionFile, "utf8")).rejects.toHaveProperty("code", "ENOENT");
+    expect(readTranscriptRaw(sessionFile)).toBe("");
   });
 
   it("migrates small linear transcripts before mirroring", async () => {
     const sessionFile = await createTempSessionFile();
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify({
+    replaceSqliteSessionTranscriptEvents({
+      agentId: "main",
+      sessionId: "linear-codex-session",
+      transcriptPath: sessionFile,
+      events: [
+        {
           type: "session",
           version: 3,
           id: "linear-codex-session",
           timestamp: new Date().toISOString(),
           cwd: process.cwd(),
-        }),
-        JSON.stringify({
+        },
+        {
           type: "message",
           id: "legacy-user",
+          parentId: null,
           timestamp: new Date().toISOString(),
           message: { role: "user", content: "legacy user" },
-        }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
+        },
+      ],
+    });
 
     await mirrorCodexAppServerTranscript({
       sessionFile,
+      sessionId: "linear-codex-session",
       sessionKey: "session-1",
       messages: [
         makeAgentAssistantMessage({
@@ -288,7 +308,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyScope: "scope-1",
     });
 
-    const records = (await fs.readFile(sessionFile, "utf8"))
+    const records = readTranscriptRaw(sessionFile, "linear-codex-session")
       .trim()
       .split("\n")
       .map(
@@ -374,9 +394,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyScope: "codex-app-server:thread-X",
     });
 
-    const messageTexts = readFileMessages(await fs.readFile(sessionFile, "utf8")).map(
-      (m) => m.text,
-    );
+    const messageTexts = readFileMessages(readTranscriptRaw(sessionFile)).map((m) => m.text);
     expect(messageTexts).toEqual(["hello", "hi there", "[Codex reasoning] thinking"]);
   });
 
@@ -428,7 +446,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyScope: "codex-app-server:thread-X",
     });
 
-    expect(readFileMessages(await fs.readFile(sessionFile, "utf8"))).toEqual([
+    expect(readFileMessages(readTranscriptRaw(sessionFile))).toEqual([
       { role: "user", text: "yes" },
       { role: "assistant", text: "ok 1" },
       { role: "user", text: "yes" },
@@ -488,7 +506,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyScope: "codex-app-server:thread-X",
     });
 
-    expect(readFileMessages(await fs.readFile(sessionFile, "utf8"))).toEqual([
+    expect(readFileMessages(readTranscriptRaw(sessionFile))).toEqual([
       { role: "user", text: "msg1" },
       { role: "assistant", text: "reply1" },
       { role: "user", text: "msg2" },
@@ -518,7 +536,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyScope: "scope-1",
     });
 
-    const raw = await fs.readFile(sessionFile, "utf8");
+    const raw = readTranscriptRaw(sessionFile);
     expect(raw).toContain(`"idempotencyKey":"scope-1:user:${expectedFingerprint(userMessage)}"`);
     expect(raw).toContain(
       `"idempotencyKey":"scope-1:assistant:${expectedFingerprint(assistantMessage)}"`,

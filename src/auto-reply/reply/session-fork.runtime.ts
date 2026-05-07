@@ -15,11 +15,16 @@ import {
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import {
+  replaceSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScopeForPath,
+} from "../../config/sessions/transcript-store.sqlite.js";
+import {
   resolveFreshSessionTotalTokens,
   type SessionEntry as StoreSessionEntry,
 } from "../../config/sessions/types.js";
 import { readLatestRecentSessionUsageFromTranscriptAsync } from "../../gateway/session-utils.fs.js";
 import { readRegularFile } from "../../infra/fs-safe.js";
+import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 
 type ForkSourceTranscript = {
   cwd: string;
@@ -231,11 +236,14 @@ async function writeForkHeaderOnly(params: {
     cwd: params.cwd,
     parentSession: params.parentSessionFile,
   } satisfies SessionHeader;
-  await fs.mkdir(path.dirname(sessionFile), { recursive: true });
-  await fs.writeFile(sessionFile, `${JSON.stringify(header)}\n`, {
-    encoding: "utf-8",
-    mode: 0o600,
-    flag: "wx",
+  const parentScope = resolveSqliteSessionTranscriptScopeForPath({
+    transcriptPath: params.parentSessionFile,
+  });
+  replaceSqliteSessionTranscriptEvents({
+    agentId: parentScope?.agentId ?? DEFAULT_AGENT_ID,
+    sessionId,
+    transcriptPath: sessionFile,
+    events: [header],
   });
   return { sessionId, sessionFile };
 }
@@ -268,16 +276,15 @@ async function writeBranchedSession(params: {
     (entry) => entry.type === "message" && entry.message.role === "assistant",
   );
   if (hasAssistant) {
-    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
-    await fs.writeFile(
-      sessionFile,
-      `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
-      {
-        encoding: "utf-8",
-        mode: 0o600,
-        flag: "wx",
-      },
-    );
+    const parentScope = resolveSqliteSessionTranscriptScopeForPath({
+      transcriptPath: params.parentSessionFile,
+    });
+    replaceSqliteSessionTranscriptEvents({
+      agentId: parentScope?.agentId ?? DEFAULT_AGENT_ID,
+      sessionId,
+      transcriptPath: sessionFile,
+      events: entries,
+    });
   }
   return { sessionId, sessionFile };
 }

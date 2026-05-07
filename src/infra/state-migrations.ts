@@ -16,6 +16,7 @@ import {
 import type { SessionEntry } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import { mergeSqliteSessionStore } from "../config/sessions/store-backend.sqlite.js";
+import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import type { SessionScope } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -84,6 +85,59 @@ type LegacySessionSurface = {
     agentId: string;
   }) => string | null | undefined;
 };
+
+function parseJsonlEvents(filePath: string): unknown[] {
+  const raw = fs.readFileSync(filePath, "utf-8");
+  const events: unknown[] = [];
+  for (const [index, line] of raw.split(/\r?\n/).entries()) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      events.push(JSON.parse(line));
+    } catch (err) {
+      throw new Error(`Invalid JSONL at ${filePath}:${index + 1}`, { cause: err });
+    }
+  }
+  return events;
+}
+
+function resolveSessionIdFromTranscriptEvents(events: unknown[]): string | null {
+  for (const event of events) {
+    if (
+      event &&
+      typeof event === "object" &&
+      !Array.isArray(event) &&
+      (event as { type?: unknown }).type === "session" &&
+      typeof (event as { id?: unknown }).id === "string" &&
+      (event as { id: string }).id.trim()
+    ) {
+      return (event as { id: string }).id;
+    }
+  }
+  return null;
+}
+
+function importLegacyTranscriptFileToSqlite(params: {
+  sourcePath: string;
+  transcriptPath: string;
+  agentId: string;
+  env?: NodeJS.ProcessEnv;
+}): { imported: number; sessionId: string } {
+  const events = parseJsonlEvents(params.sourcePath);
+  const sessionId = resolveSessionIdFromTranscriptEvents(events);
+  if (!sessionId) {
+    throw new Error(`Transcript missing session header: ${params.sourcePath}`);
+  }
+  replaceSqliteSessionTranscriptEvents({
+    agentId: params.agentId,
+    sessionId,
+    transcriptPath: params.transcriptPath,
+    events,
+    env: params.env,
+  });
+  return { imported: events.length, sessionId };
+}
 
 function getLegacySessionSurfaces(): LegacySessionSurface[] {
   // Legacy migrations run on cold doctor/startup paths. Prefer the narrower
@@ -894,16 +948,46 @@ async function migrateLegacySessions(
     if (entry.name === "sessions.json") {
       continue;
     }
-    const from = path.join(detected.sessions.legacyDir, entry.name);
-    const to = path.join(detected.sessions.targetDir, entry.name);
-    if (fileExists(to)) {
+    if (!entry.name.endsWith(".jsonl")) {
       continue;
     }
+    const from = path.join(detected.sessions.legacyDir, entry.name);
+    const to = path.join(detected.sessions.targetDir, entry.name);
     try {
-      fs.renameSync(from, to);
-      changes.push(`Moved ${entry.name} → agents/${detected.targetAgentId}/sessions`);
+      const imported = importLegacyTranscriptFileToSqlite({
+        sourcePath: from,
+        transcriptPath: to,
+        agentId: detected.targetAgentId,
+        env: detected.env,
+      });
+      fs.rmSync(from, { force: true });
+      changes.push(
+        `Imported ${entry.name} transcript (${imported.imported} event(s)) into SQLite for agent ${detected.targetAgentId}`,
+      );
     } catch (err) {
-      warnings.push(`Failed moving ${from}: ${String(err)}`);
+      warnings.push(`Failed importing transcript ${from}: ${String(err)}`);
+    }
+  }
+
+  const targetEntries = safeReadDir(detected.sessions.targetDir);
+  for (const entry of targetEntries) {
+    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
+      continue;
+    }
+    const transcriptPath = path.join(detected.sessions.targetDir, entry.name);
+    try {
+      const imported = importLegacyTranscriptFileToSqlite({
+        sourcePath: transcriptPath,
+        transcriptPath,
+        agentId: detected.targetAgentId,
+        env: detected.env,
+      });
+      fs.rmSync(transcriptPath, { force: true });
+      changes.push(
+        `Imported canonical ${entry.name} transcript (${imported.imported} event(s)) into SQLite for agent ${detected.targetAgentId}`,
+      );
+    } catch (err) {
+      warnings.push(`Failed importing transcript ${transcriptPath}: ${String(err)}`);
     }
   }
 

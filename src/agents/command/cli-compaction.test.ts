@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
@@ -43,24 +44,26 @@ function buildContextEngine(params: {
 
 async function writeSessionFile(params: { sessionFile: string; sessionId: string }) {
   await fs.mkdir(path.dirname(params.sessionFile), { recursive: true });
-  await fs.writeFile(
-    params.sessionFile,
-    [
-      JSON.stringify({
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: params.sessionId,
+    transcriptPath: params.sessionFile,
+    events: [
+      {
         type: "session",
         version: CURRENT_SESSION_VERSION,
         id: params.sessionId,
         timestamp: new Date(0).toISOString(),
         cwd: path.dirname(params.sessionFile),
-      }),
-      JSON.stringify({
+      },
+      {
         type: "message",
         id: "user-1",
         parentId: null,
         message: { role: "user", content: "old ask", timestamp: 1 },
         timestamp: new Date(1).toISOString(),
-      }),
-      JSON.stringify({
+      },
+      {
         type: "message",
         id: "assistant-1",
         parentId: "user-1",
@@ -70,11 +73,9 @@ async function writeSessionFile(params: { sessionFile: string; sessionId: string
           timestamp: 2,
         },
         timestamp: new Date(2).toISOString(),
-      }),
-      "",
-    ].join("\n"),
-    "utf-8",
-  );
+      },
+    ],
+  });
 }
 
 describe("runCliTurnCompactionLifecycle", () => {
@@ -82,10 +83,12 @@ describe("runCliTurnCompactionLifecycle", () => {
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-compaction-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
   });
 
   afterEach(async () => {
     resetCliCompactionTestDeps();
+    vi.unstubAllEnvs();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 

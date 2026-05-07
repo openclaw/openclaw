@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSqliteSessionStore } from "../config/sessions/store-backend.sqlite.js";
+import { loadSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   autoMigrateLegacyStateDir,
@@ -369,8 +370,20 @@ describe("doctor legacy state migrations", () => {
         "subagent:xyz": { sessionId: "e", updatedAt: 50 },
       },
       transcripts: {
-        "a.jsonl": "a",
-        "b.jsonl": "b",
+        "a.jsonl": `${JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "a",
+          timestamp: "2026-04-25T00:00:00Z",
+          cwd: root,
+        })}\n`,
+        "b.jsonl": `${JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "b",
+          timestamp: "2026-04-25T00:00:00Z",
+          cwd: root,
+        })}\n`,
       },
     });
 
@@ -385,8 +398,8 @@ describe("doctor legacy state migrations", () => {
 
     expect(result.warnings).toStrictEqual([]);
     const targetDir = path.join(root, "agents", "main", "sessions");
-    expect(fs.existsSync(path.join(targetDir, "a.jsonl"))).toBe(true);
-    expect(fs.existsSync(path.join(targetDir, "b.jsonl"))).toBe(true);
+    expect(fs.existsSync(path.join(targetDir, "a.jsonl"))).toBe(false);
+    expect(fs.existsSync(path.join(targetDir, "b.jsonl"))).toBe(false);
     expect(fs.existsSync(path.join(legacySessionsDir, "a.jsonl"))).toBe(false);
 
     expect(fs.existsSync(path.join(targetDir, "sessions.json"))).toBe(false);
@@ -399,6 +412,20 @@ describe("doctor legacy state migrations", () => {
     expect(store["agent:main:slack:channel:c123"]?.sessionId).toBe("c");
     expect(store["agent:main:unknown:group:abc"]?.sessionId).toBe("d");
     expect(store["agent:main:subagent:xyz"]?.sessionId).toBe("e");
+    expect(
+      loadSqliteSessionTranscriptEvents({
+        agentId: "main",
+        sessionId: "a",
+        env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+      }),
+    ).toHaveLength(1);
+    expect(
+      loadSqliteSessionTranscriptEvents({
+        agentId: "main",
+        sessionId: "b",
+        env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+      }),
+    ).toHaveLength(1);
   });
 
   it("keeps shipped WhatsApp legacy group keys channel-qualified during migration", async () => {

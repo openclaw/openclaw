@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveStoredSessionOwnerAgentId } from "../../gateway/session-store-key.js";
@@ -11,11 +10,7 @@ import {
   resolveSessionArtifactCanonicalPathsForEntry,
   type SessionUnreferencedArtifactSweepResult,
 } from "./disk-budget.js";
-import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-  resolveStorePath,
-} from "./paths.js";
+import { resolveStorePath } from "./paths.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
@@ -28,6 +23,7 @@ import {
   type SessionStoreTarget,
   type SessionStoreSelectionOptions,
 } from "./targets.js";
+import { hasSqliteSessionTranscriptEvents } from "./transcript-store.sqlite.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionsCleanupOptions = SessionStoreSelectionOptions & {
@@ -200,18 +196,19 @@ export function serializeSessionCleanupResult(params: {
 function pruneMissingTranscriptEntries(params: {
   store: Record<string, SessionEntry>;
   storePath: string;
+  agentId: string;
   onPruned?: (key: string) => void;
 }): number {
-  const sessionPathOpts = resolveSessionFilePathOptions({
-    storePath: params.storePath,
-  });
   let removed = 0;
   for (const [key, entry] of Object.entries(params.store)) {
     if (!entry?.sessionId) {
       continue;
     }
-    const transcriptPath = resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts);
-    if (!fs.existsSync(transcriptPath)) {
+    const hasTranscript = hasSqliteSessionTranscriptEvents({
+      agentId: params.agentId,
+      sessionId: entry.sessionId,
+    });
+    if (!hasTranscript) {
       delete params.store[key];
       removed += 1;
       params.onPruned?.(key);
@@ -262,6 +259,7 @@ async function previewStoreCleanup(params: {
       ? pruneMissingTranscriptEntries({
           store: previewStore,
           storePath: params.target.storePath,
+          agentId: params.target.agentId,
           onPruned: (key) => {
             missingKeys.add(key);
           },
@@ -411,6 +409,7 @@ export async function runSessionsCleanup(params: {
           ? pruneMissingTranscriptEntries({
               store,
               storePath: target.storePath,
+              agentId: target.agentId,
             })
           : 0;
         let pruned = 0;

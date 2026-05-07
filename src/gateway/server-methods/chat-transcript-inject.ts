@@ -1,8 +1,10 @@
 import type { SessionWriteLockAcquireTimeoutConfig } from "../../agents/session-write-lock.js";
 import type { SessionManager } from "../../agents/transcript/session-transcript-contract.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
+import { resolveSqliteSessionTranscriptScopeForPath } from "../../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
@@ -55,7 +57,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   idempotencyKey?: string;
   abortMeta?: GatewayInjectedAbortMeta;
   now?: number;
-  config?: OpenClawConfig;
+  config?: OpenClawConfig & SessionWriteLockAcquireTimeoutConfig;
 }): Promise<GatewayInjectedTranscriptAppendResult> {
   const now = params.now ?? Date.now();
   const usage = {
@@ -106,10 +108,13 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   };
 
   try {
+    const existingScope = resolveSqliteSessionTranscriptScopeForPath({
+      transcriptPath: params.transcriptPath,
+    });
     const { messageId, message: appendedMessage } = await appendSessionTranscriptMessage({
       transcriptPath: params.transcriptPath,
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+      agentId: params.agentId ?? existingScope?.agentId ?? DEFAULT_AGENT_ID,
+      sessionId: params.sessionId ?? existingScope?.sessionId,
       message: messageBody,
       now,
       useRawWhenLinear: true,
@@ -120,7 +125,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
       message: appendedMessage,
       messageId,
     });
-    return { ok: true, messageId, message: appendedMessage as unknown as Record<string, unknown> };
+    return { ok: true, messageId, message: appendedMessage as Record<string, unknown> };
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };
   }

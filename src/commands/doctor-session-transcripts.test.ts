@@ -9,6 +9,7 @@ vi.mock("../terminal/note.js", () => ({
   note,
 }));
 
+import { loadSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import {
   noteSessionTranscriptHealth,
   repairBrokenSessionTranscriptFile,
@@ -38,9 +39,11 @@ describe("doctor session transcript repair", () => {
   beforeEach(async () => {
     note.mockClear();
     root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-transcripts-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -143,9 +146,44 @@ describe("doctor session transcript repair", () => {
     expect(note).toHaveBeenCalledTimes(1);
     const [message, title] = requireFirstMockCall(note, "doctor note") as [string, string];
     expect(title).toBe("Session transcripts");
-    expect(message).toContain("duplicated prompt-rewrite branches");
+    expect(message).toContain("legacy transcript JSONL");
     expect(message).toContain('Run "openclaw doctor --fix"');
     expect(countNonEmptyLines(await fs.readFile(filePath, "utf-8"))).toBe(3);
+  });
+
+  it("imports legacy transcript files into SQLite during repair mode", async () => {
+    const filePath = await writeTranscript([
+      {
+        type: "session",
+        version: 3,
+        id: "session-1",
+        timestamp: "2026-04-25T00:00:00Z",
+        cwd: root,
+      },
+      {
+        type: "message",
+        id: "user-1",
+        parentId: null,
+        message: { role: "user", content: "hello" },
+      },
+    ]);
+    const sessionsDir = path.dirname(filePath);
+
+    await noteSessionTranscriptHealth({ shouldRepair: true, sessionDirs: [sessionsDir] });
+
+    await expect(fs.access(filePath)).rejects.toThrow();
+    expect(
+      loadSqliteSessionTranscriptEvents({
+        agentId: "main",
+        sessionId: "session-1",
+      }).map((entry) => entry.event),
+    ).toMatchObject([
+      { type: "session", id: "session-1" },
+      { type: "message", id: "user-1" },
+    ]);
+    const [message, title] = note.mock.calls[0] as [string, string];
+    expect(title).toBe("Session transcripts");
+    expect(message).toContain("Imported 1 transcript file into SQLite");
   });
 
   it("ignores ordinary branch history without internal runtime context", async () => {
