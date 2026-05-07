@@ -10,6 +10,10 @@ import {
   hasSyntheticLocalProviderAuthConfig,
   hasUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
+import {
+  OPENAI_CODEX_PROVIDER_ID,
+  openAIProviderUsesCodexRuntimeByDefault,
+} from "../../agents/openai-codex-routing.js";
 import { resolveProviderAuthAliasMap } from "../../agents/provider-auth-aliases.js";
 import { normalizeProviderIdForAuth } from "../../agents/provider-id.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
@@ -156,11 +160,22 @@ export function createModelListAuthIndex(
   return {
     hasProviderAuth(provider: string): boolean {
       const normalizedProvider = normalizeAuthProvider(provider, aliasMap);
-      return (
+      const hasDirectAuth =
         authenticatedProviders.has(normalizedProvider) ||
         syntheticAuthProviders.has(normalizeProviderIdForAuth(provider)) ||
-        hasEnvProviderAuth(provider)
-      );
+        hasEnvProviderAuth(provider);
+      if (hasDirectAuth) {
+        return true;
+      }
+      if (
+        openAIProviderUsesCodexRuntimeByDefault({
+          provider: normalizedProvider,
+          config: params.cfg,
+        })
+      ) {
+        return authenticatedProviders.has(OPENAI_CODEX_PROVIDER_ID);
+      }
+      return false;
     },
   };
 }

@@ -414,6 +414,53 @@ describe("modelsStatusCommand auth overview", () => {
     );
   });
 
+  it("does not report canonical OpenAI agent routes missing when Codex auth is present", async () => {
+    const localRuntime = createRuntime();
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    const originalProfiles = { ...mocks.store.profiles };
+    const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5", fallbacks: [] },
+          models: { "openai/gpt-5.5": {} },
+        },
+      },
+      models: { providers: {} },
+      env: { shellEnv: { enabled: true } },
+    });
+    mocks.store.profiles = {
+      "openai-codex:default": originalProfiles["openai-codex:default"]!,
+    };
+    mocks.resolveEnvApiKey.mockImplementation((provider: string) =>
+      provider === "openai-codex"
+        ? {
+            apiKey: "oauth-token",
+            source: "env: OPENAI_OAUTH_TOKEN",
+          }
+        : null,
+    );
+
+    try {
+      await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+      expect(payload.auth.missingProvidersInUse).toEqual([]);
+      expect(localRuntime.exit).not.toHaveBeenCalledWith(1);
+    } finally {
+      mocks.store.profiles = originalProfiles;
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+      if (originalEnvImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(originalEnvImpl);
+      } else if (defaultResolveEnvApiKeyImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(defaultResolveEnvApiKeyImpl);
+      } else {
+        mocks.resolveEnvApiKey.mockImplementation(() => null);
+      }
+    }
+  });
+
   it("does not double-prefix provider-qualified resolved default models", async () => {
     const localRuntime = createRuntime();
     const originalLoadConfig = mocks.loadConfig.getMockImplementation();

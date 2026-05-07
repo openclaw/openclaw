@@ -30,6 +30,10 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import {
+  OPENAI_CODEX_PROVIDER_ID,
+  openAIProviderUsesCodexRuntimeByDefault,
+} from "../../agents/openai-codex-routing.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { createConfigIO } from "../../config/config.js";
 import {
@@ -344,9 +348,17 @@ export async function modelsStatusCommand(
       return hasAny;
     });
   const providerAuthMap = new Map(providerAuth.map((entry) => [entry.provider, entry]));
+  const hasUsableAuthForProviderInUse = (provider: string): boolean => {
+    if (providerAuthMap.has(provider) || syntheticAuthByProvider.has(provider)) {
+      return true;
+    }
+    return (
+      openAIProviderUsesCodexRuntimeByDefault({ provider, config: cfg }) &&
+      providerAuthMap.has(OPENAI_CODEX_PROVIDER_ID)
+    );
+  };
   const missingProvidersInUse = Array.from(providersInUse)
-    .filter((provider) => !providerAuthMap.has(provider))
-    .filter((provider) => !syntheticAuthByProvider.has(provider))
+    .filter((provider) => !hasUsableAuthForProviderInUse(provider))
     .filter((provider) => !isCliProvider(provider, cfg))
     .toSorted((a, b) => a.localeCompare(b));
 
