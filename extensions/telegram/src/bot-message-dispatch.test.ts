@@ -924,6 +924,24 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("waits for queued draft-lane partials before finalizing the Telegram reply", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        const pendingPartial = replyOptions?.onPartialReply?.({ text: "Working" });
+        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+        await pendingPartial;
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Working");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Done");
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("keeps progress updates in a draft and sends the final answer normally", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
