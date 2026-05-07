@@ -22,9 +22,8 @@ import {
 import type { JsonObject, JsonValue } from "./protocol.js";
 
 export type PluginAppPolicyContextEntry = {
-  appId: string;
   configKey: string;
-  marketplaceName: string;
+  marketplaceName: ResolvedCodexPluginPolicy["marketplaceName"];
   pluginName: string;
   allowDestructiveActions: boolean;
   mcpServerNames: string[];
@@ -136,7 +135,7 @@ export async function buildCodexPluginThreadConfig(
       continue;
     }
     const activation = await ensureCodexPluginActivation({
-      identity: record.identity,
+      identity: record.policy,
       request: params.request,
       appCache,
       appCacheKey: params.appCacheKey,
@@ -182,7 +181,7 @@ export async function buildCodexPluginThreadConfig(
   for (const record of inventory.records) {
     if (record.activationRequired) {
       const activation = activationResults.find(
-        (item) => item.identity.configKey === record.identity.configKey,
+        (item) => item.identity.configKey === record.policy.configKey,
       );
       if (!activation?.ok) {
         continue;
@@ -191,13 +190,13 @@ export async function buildCodexPluginThreadConfig(
     if (record.appOwnership !== "proven") {
       continue;
     }
-    pluginAppIds[record.identity.configKey] = [...record.ownedAppIds].toSorted();
+    pluginAppIds[record.policy.configKey] = [...record.ownedAppIds].toSorted();
     for (const app of record.apps) {
       if (!app.accessible || !app.enabled) {
         diagnostics.push({
           code: "app_not_ready",
           plugin: record.policy,
-          message: `${app.id} is not accessible or enabled for ${record.identity.pluginName}.`,
+          message: `${app.id} is not accessible or enabled for ${record.policy.pluginName}.`,
         });
         continue;
       }
@@ -214,10 +213,9 @@ export async function buildCodexPluginThreadConfig(
       }
       apps[app.id] = appConfig;
       policyApps[app.id] = {
-        appId: app.id,
-        configKey: record.identity.configKey,
-        marketplaceName: record.identity.marketplaceName,
-        pluginName: record.identity.pluginName,
+        configKey: record.policy.configKey,
+        marketplaceName: record.policy.marketplaceName,
+        pluginName: record.policy.pluginName,
         allowDestructiveActions: record.policy.allowDestructiveActions,
         mcpServerNames: [...(record.detail?.mcpServers ?? [])].toSorted(),
       };

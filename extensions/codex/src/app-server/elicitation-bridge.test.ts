@@ -116,9 +116,8 @@ function createPluginAppPolicyContext(
       apps.map((app) => [
         app.appId,
         {
-          appId: app.appId,
           configKey: app.pluginName,
-          marketplaceName: "openai-curated",
+          marketplaceName: "openai-curated" as const,
           pluginName: app.pluginName,
           allowDestructiveActions: params.allowDestructiveActions ?? false,
           mcpServerNames: app.mcpServerNames,

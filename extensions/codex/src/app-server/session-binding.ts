@@ -6,7 +6,11 @@ import {
   resolveProviderIdForAuth,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
-import type { CodexAppServerApprovalPolicy, CodexAppServerSandboxMode } from "./config.js";
+import {
+  CODEX_PLUGINS_MARKETPLACE_NAME,
+  type CodexAppServerApprovalPolicy,
+  type CodexAppServerSandboxMode,
+} from "./config.js";
 import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
 import type { CodexServiceTier } from "./protocol.js";
 
@@ -161,9 +165,9 @@ function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | un
     }
     const entry = rawEntry as Record<string, unknown>;
     if (
-      typeof entry.appId !== "string" ||
+      "appId" in entry ||
       typeof entry.configKey !== "string" ||
-      typeof entry.marketplaceName !== "string" ||
+      entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME ||
       typeof entry.pluginName !== "string" ||
       typeof entry.allowDestructiveActions !== "boolean" ||
       !Array.isArray(entry.mcpServerNames) ||
@@ -172,7 +176,6 @@ function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | un
       return undefined;
     }
     parsedApps[appId] = {
-      appId: entry.appId,
       configKey: entry.configKey,
       marketplaceName: entry.marketplaceName,
       pluginName: entry.pluginName,

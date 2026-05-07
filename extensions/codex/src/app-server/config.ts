@@ -62,13 +62,10 @@ export type CodexPluginsConfig = {
   plugins?: Record<string, CodexPluginEntryConfig>;
 };
 
-export type CodexMigratedPluginIdentity = {
+export type ResolvedCodexPluginPolicy = {
   configKey: string;
   marketplaceName: typeof CODEX_PLUGINS_MARKETPLACE_NAME;
   pluginName: string;
-};
-
-export type ResolvedCodexPluginPolicy = CodexMigratedPluginIdentity & {
   enabled: boolean;
   allowDestructiveActions: CodexPluginDestructivePolicy;
 };
@@ -77,7 +74,6 @@ export type ResolvedCodexPluginsPolicy = {
   configured: boolean;
   enabled: boolean;
   allowDestructiveActions: CodexPluginDestructivePolicy;
-  migratedPlugins: CodexMigratedPluginIdentity[];
   pluginPolicies: ResolvedCodexPluginPolicy[];
 };
 
@@ -281,8 +277,8 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
   const configured = config !== undefined;
   const enabled = config?.enabled === true;
   const allowDestructiveActions = config?.allow_destructive_actions ?? false;
-  const migratedPlugins = Object.entries(config?.plugins ?? {})
-    .flatMap(([configKey, entry]): CodexMigratedPluginIdentity[] => {
+  const pluginPolicies = Object.entries(config?.plugins ?? {})
+    .flatMap(([configKey, entry]): ResolvedCodexPluginPolicy[] => {
       if (entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME || !entry.pluginName) {
         return [];
       }
@@ -291,23 +287,16 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
           configKey,
           marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
           pluginName: entry.pluginName,
+          enabled: enabled && entry.enabled !== false,
+          allowDestructiveActions: entry.allow_destructive_actions ?? allowDestructiveActions,
         },
       ];
     })
     .toSorted((left, right) => left.configKey.localeCompare(right.configKey));
-  const pluginPolicies = migratedPlugins.map((identity) => {
-    const entry = config?.plugins?.[identity.configKey];
-    return {
-      ...identity,
-      enabled: enabled && entry?.enabled !== false,
-      allowDestructiveActions: entry?.allow_destructive_actions ?? allowDestructiveActions,
-    };
-  });
   return {
     configured,
     enabled,
     allowDestructiveActions,
-    migratedPlugins,
     pluginPolicies,
   };
 }

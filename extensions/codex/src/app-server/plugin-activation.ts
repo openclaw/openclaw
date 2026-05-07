@@ -4,7 +4,7 @@ import {
   type CodexAppInventoryCache,
   type CodexAppInventoryRequest,
 } from "./app-inventory-cache.js";
-import { CODEX_PLUGINS_MARKETPLACE_NAME, type CodexMigratedPluginIdentity } from "./config.js";
+import { CODEX_PLUGINS_MARKETPLACE_NAME, type ResolvedCodexPluginPolicy } from "./config.js";
 import {
   findOpenAiCuratedPluginSummary,
   pluginReadParams,
@@ -26,11 +26,9 @@ export type CodexPluginActivationDiagnostic = {
 };
 
 export type CodexPluginActivationResult = {
-  identity: CodexMigratedPluginIdentity;
+  identity: ResolvedCodexPluginPolicy;
   ok: boolean;
   reason: CodexPluginActivationReason;
-  installed: boolean;
-  enabled: boolean;
   installAttempted: boolean;
   marketplace?: CodexPluginMarketplaceRef;
   installResponse?: v2.PluginInstallResponse;
@@ -38,7 +36,7 @@ export type CodexPluginActivationResult = {
 };
 
 export type EnsureCodexPluginActivationParams = {
-  identity: CodexMigratedPluginIdentity;
+  identity: ResolvedCodexPluginPolicy;
   request: CodexPluginRuntimeRequest;
   appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
@@ -46,11 +44,6 @@ export type EnsureCodexPluginActivationParams = {
 };
 
 export type CodexPluginRuntimeRefreshResult = {
-  pluginListRefreshed: boolean;
-  skillsRefreshed: boolean;
-  hooksListed: boolean;
-  mcpReloaded: boolean;
-  appInventoryInvalidated: boolean;
   diagnostics: CodexPluginActivationDiagnostic[];
 };
 
@@ -78,8 +71,6 @@ export async function ensureCodexPluginActivation(
       identity: params.identity,
       ok: true,
       reason: "already_active",
-      installed: true,
-      enabled: true,
       installAttempted: false,
       marketplace: resolved.marketplace,
       diagnostics: [],
@@ -93,11 +84,21 @@ export async function ensureCodexPluginActivation(
       params.identity.pluginName,
     ) satisfies v2.PluginInstallParams,
   )) as v2.PluginInstallResponse;
-  const refreshResult = await refreshCodexPluginRuntimeState({
-    request: params.request,
-    appCache: params.appCache,
-    appCacheKey: params.appCacheKey,
-  });
+  const refreshDiagnostics: CodexPluginActivationDiagnostic[] = [];
+  try {
+    const refreshResult = await refreshCodexPluginRuntimeState({
+      request: params.request,
+      appCache: params.appCache,
+      appCacheKey: params.appCacheKey,
+    });
+    refreshDiagnostics.push(...refreshResult.diagnostics);
+  } catch (error) {
+    refreshDiagnostics.push({
+      message: `Codex plugin runtime refresh failed after install: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    });
+  }
   const authRequired = installResponse.appsNeedingAuth.length > 0;
   return {
     identity: params.identity,
@@ -107,13 +108,11 @@ export async function ensureCodexPluginActivation(
       : resolved.summary.installed && resolved.summary.enabled
         ? "already_active"
         : "installed",
-    installed: true,
-    enabled: !authRequired,
     installAttempted: true,
     marketplace: resolved.marketplace,
     installResponse,
     diagnostics: [
-      ...refreshResult.diagnostics,
+      ...refreshDiagnostics,
       ...installResponse.appsNeedingAuth.map((app) => ({
         message: `${app.name} requires app authentication before plugin tools are exposed.`,
       })),
@@ -134,12 +133,10 @@ export async function refreshCodexPluginRuntimeState(params: {
     cwds: [],
     forceReload: true,
   } satisfies v2.SkillsListParams);
-  let hooksListed = false;
   try {
     await params.request("hooks/list", {
       cwds: [],
     } satisfies v2.HooksListParams);
-    hooksListed = true;
   } catch (error) {
     diagnostics.push({
       message: `Codex hooks refresh skipped: ${error instanceof Error ? error.message : String(error)}`,
@@ -147,7 +144,6 @@ export async function refreshCodexPluginRuntimeState(params: {
   }
   await params.request("config/mcpServer/reload", undefined);
 
-  let appInventoryInvalidated = false;
   if (params.appCache && params.appCacheKey) {
     params.appCache.invalidate(params.appCacheKey, "Codex plugin activation changed app inventory");
     const request: CodexAppInventoryRequest = async (method, requestParams) =>
@@ -165,17 +161,9 @@ export async function refreshCodexPluginRuntimeState(params: {
         }`,
       });
     }
-    appInventoryInvalidated = true;
   }
 
-  return {
-    pluginListRefreshed: true,
-    skillsRefreshed: true,
-    hooksListed,
-    mcpReloaded: true,
-    appInventoryInvalidated,
-    diagnostics,
-  };
+  return { diagnostics };
 }
 
 export async function ensureCodexAppsSubstrateConfig(params: {
@@ -260,7 +248,7 @@ export function upsertTomlBoolean(
 }
 
 function activationFailure(
-  identity: CodexMigratedPluginIdentity,
+  identity: ResolvedCodexPluginPolicy,
   reason: CodexPluginActivationReason,
   diagnostic: CodexPluginActivationDiagnostic,
 ): CodexPluginActivationResult {
@@ -268,8 +256,6 @@ function activationFailure(
     identity,
     ok: false,
     reason,
-    installed: false,
-    enabled: false,
     installAttempted: false,
     diagnostics: [diagnostic],
   };

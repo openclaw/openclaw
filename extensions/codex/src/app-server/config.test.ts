@@ -186,14 +186,6 @@ describe("Codex app-server config", () => {
       configured: true,
       enabled: true,
       allowDestructiveActions: false,
-      migratedPlugins: [
-        {
-          configKey: "google-calendar",
-          marketplaceName: "openai-curated",
-          pluginName: "google-calendar",
-        },
-        { configKey: "slack", marketplaceName: "openai-curated", pluginName: "slack" },
-      ],
       pluginPolicies: [
         {
           configKey: "google-calendar",
@@ -227,7 +219,7 @@ describe("Codex app-server config", () => {
     });
 
     expect(config.codexPlugins).toBeUndefined();
-    expect(resolveCodexPluginsPolicy(config).migratedPlugins).toEqual([]);
+    expect(resolveCodexPluginsPolicy(config).pluginPolicies).toEqual([]);
   });
 
   it("treats configured and environment commands as explicit overrides", () => {

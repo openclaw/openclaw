@@ -23,9 +23,12 @@ import type {
 import { defaultCodexAppInventoryCache } from "../app-server/app-inventory-cache.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
-  type CodexMigratedPluginIdentity,
+  type ResolvedCodexPluginPolicy,
 } from "../app-server/config.js";
-import { ensureCodexPluginActivation } from "../app-server/plugin-activation.js";
+import {
+  ensureCodexPluginActivation,
+  type CodexPluginActivationResult,
+} from "../app-server/plugin-activation.js";
 import type { v2 } from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
 import { buildCodexMigrationPlan } from "./plan.js";
@@ -93,8 +96,8 @@ async function applyCodexPluginInstallItem(
   ctx: MigrationProviderContext,
   item: MigrationItem,
 ): Promise<MigrationItem> {
-  const identity = readCodexPluginIdentity(item);
-  if (!identity) {
+  const policy = readCodexPluginPolicy(item);
+  if (!policy) {
     return {
       ...markMigrationItemError(item, "invalid Codex plugin migration item"),
       details: { ...item.details, code: "invalid_plugin_item" },
@@ -102,7 +105,7 @@ async function applyCodexPluginInstallItem(
   }
   try {
     const result = await ensureCodexPluginActivation({
-      identity,
+      identity: policy,
       installEvenIfActive: true,
       request: async (method, requestParams) =>
         await requestCodexAppServerJson({
@@ -117,8 +120,7 @@ async function applyCodexPluginInstallItem(
       ...item.details,
       code: result.reason,
       activationReason: result.reason,
-      installed: result.installed,
-      enabled: result.enabled,
+      ...codexPluginActivationReportState(result),
       installAttempted: result.installAttempted,
       diagnostics: result.diagnostics.map((diagnostic) => diagnostic.message),
     };
@@ -224,7 +226,7 @@ function readAppliedPluginConfigEntry(
   return undefined;
 }
 
-function readCodexPluginIdentity(item: MigrationItem): CodexMigratedPluginIdentity | undefined {
+function readCodexPluginPolicy(item: MigrationItem): ResolvedCodexPluginPolicy | undefined {
   const configKey = item.details?.configKey;
   const marketplaceName = item.details?.marketplaceName;
   const pluginName = item.details?.pluginName;
@@ -239,7 +241,26 @@ function readCodexPluginIdentity(item: MigrationItem): CodexMigratedPluginIdenti
     configKey,
     marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
     pluginName,
+    enabled: true,
+    allowDestructiveActions: false,
   };
+}
+
+function codexPluginActivationReportState(result: CodexPluginActivationResult): {
+  installed?: boolean;
+  enabled?: boolean;
+} {
+  switch (result.reason) {
+    case "already_active":
+    case "installed":
+      return { installed: true, enabled: true };
+    case "auth_required":
+      return { installed: true, enabled: false };
+    case "disabled":
+    case "marketplace_missing":
+    case "plugin_missing":
+      return { installed: false, enabled: false };
+  }
 }
 
 function sanitizeAppsNeedingAuth(apps: readonly v2.AppSummary[]): Array<{

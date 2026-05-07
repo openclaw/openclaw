@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { CodexAppInventoryCache } from "./app-inventory-cache.js";
-import { CODEX_PLUGINS_MARKETPLACE_NAME, type CodexMigratedPluginIdentity } from "./config.js";
+import { CODEX_PLUGINS_MARKETPLACE_NAME, type ResolvedCodexPluginPolicy } from "./config.js";
 import {
   ensureCodexAppsSubstrateConfig,
   ensureCodexPluginActivation,
@@ -173,6 +173,35 @@ describe("Codex plugin activation", () => {
     expect(appCache.getRevision()).toBeGreaterThan(0);
   });
 
+  it("reports post-install runtime refresh failures without hiding the install attempt", async () => {
+    const result = await ensureCodexPluginActivation({
+      identity: identity("google-calendar"),
+      request: async (method) => {
+        if (method === "plugin/list") {
+          return pluginList([
+            pluginSummary("google-calendar", { installed: false, enabled: false }),
+          ]);
+        }
+        if (method === "plugin/install") {
+          return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
+        }
+        if (method === "skills/list") {
+          throw new Error("skills/list unavailable");
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      reason: "installed",
+      installAttempted: true,
+    });
+    expect(result.diagnostics).toContainEqual({
+      message: "Codex plugin runtime refresh failed after install: skills/list unavailable",
+    });
+  });
+
   it("installs from a remote curated marketplace when no local marketplace path is present", async () => {
     const calls: Array<{ method: string; params: unknown }> = [];
     const result = await ensureCodexPluginActivation({
@@ -249,11 +278,13 @@ describe("Codex plugin activation", () => {
   });
 });
 
-function identity(pluginName: string): CodexMigratedPluginIdentity {
+function identity(pluginName: string): ResolvedCodexPluginPolicy {
   return {
     configKey: pluginName,
     marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
     pluginName,
+    enabled: true,
+    allowDestructiveActions: false,
   };
 }
 

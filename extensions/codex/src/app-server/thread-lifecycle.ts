@@ -274,7 +274,7 @@ function shouldRecheckRecoverablePluginBinding(params: {
   if (!policyContext) {
     return false;
   }
-  const boundAppEntries = Object.values(policyContext.apps);
+  const boundAppEntries = Object.entries(policyContext.apps);
   if (boundAppEntries.length === 0) {
     return true;
   }
@@ -283,9 +283,9 @@ function shouldRecheckRecoverablePluginBinding(params: {
     return false;
   }
   const boundAppIdsByConfigKey = new Map<string, Set<string>>();
-  for (const app of boundAppEntries) {
+  for (const [appId, app] of boundAppEntries) {
     const appIds = boundAppIdsByConfigKey.get(app.configKey) ?? new Set<string>();
-    appIds.add(app.appId);
+    appIds.add(appId);
     boundAppIdsByConfigKey.set(app.configKey, appIds);
   }
   return expectedPluginConfigKeys.some((configKey) => {

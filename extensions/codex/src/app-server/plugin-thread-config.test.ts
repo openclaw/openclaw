@@ -70,7 +70,6 @@ describe("Codex plugin thread config", () => {
       },
     });
     expect(config.policyContext.apps["google-calendar-app"]).toEqual({
-      appId: "google-calendar-app",
       configKey: "google-calendar",
       marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
       pluginName: "google-calendar",
@@ -260,7 +259,6 @@ describe("Codex plugin thread config", () => {
       },
     });
     expect(config.policyContext.apps["google-calendar-app"]).toMatchObject({
-      appId: "google-calendar-app",
       pluginName: "google-calendar",
     });
     expect(config.diagnostics).toEqual([]);
@@ -390,7 +388,6 @@ describe("Codex plugin thread config", () => {
       },
     });
     expect(config.policyContext.apps["google-calendar-app"]).toMatchObject({
-      appId: "google-calendar-app",
       pluginName: "google-calendar",
     });
     expect(config.diagnostics).toEqual([]);

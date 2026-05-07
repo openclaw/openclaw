@@ -156,8 +156,8 @@ function resolvePluginElicitation(params: {
     if (!context) {
       return { kind: "decline", reason: "missing_policy_context" };
     }
-    const matches = entries.filter((entry) => entry.appId === appId);
-    return uniquePluginMatch(matches, "app_id");
+    const entry = context.apps[appId];
+    return uniquePluginMatch(entry ? [entry] : [], "app_id");
   }
 
   const serverName = readString(requestParams, "serverName");

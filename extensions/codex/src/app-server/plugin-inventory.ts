@@ -6,7 +6,6 @@ import {
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   resolveCodexPluginsPolicy,
-  type CodexMigratedPluginIdentity,
   type ResolvedCodexPluginPolicy,
   type ResolvedCodexPluginsPolicy,
 } from "./config.js";
@@ -32,7 +31,7 @@ export type CodexPluginInventoryDiagnosticCode =
 
 export type CodexPluginInventoryDiagnostic = {
   code: CodexPluginInventoryDiagnosticCode;
-  plugin?: CodexMigratedPluginIdentity;
+  plugin?: ResolvedCodexPluginPolicy;
   message: string;
 };
 
@@ -45,19 +44,14 @@ export type CodexPluginOwnedApp = {
 };
 
 export type CodexPluginInventoryRecord = {
-  identity: CodexMigratedPluginIdentity;
   policy: ResolvedCodexPluginPolicy;
-  marketplace: CodexPluginMarketplaceRef;
   summary: v2.PluginSummary;
   detail?: v2.PluginDetail;
-  installed: boolean;
-  enabled: boolean;
   activationRequired: boolean;
   authRequired: boolean;
   appOwnership: "proven" | "ambiguous" | "none";
   ownedAppIds: string[];
   apps: CodexPluginOwnedApp[];
-  ready: boolean;
 };
 
 export type CodexPluginInventory = {
@@ -177,19 +171,14 @@ export async function readCodexPluginInventory(
       appInventory,
     });
     records.push({
-      identity: identityFromPolicy(pluginPolicy),
       policy: pluginPolicy,
-      marketplace,
       summary,
       ...(detail ? { detail } : {}),
-      installed: summary.installed,
-      enabled: summary.enabled,
       activationRequired: !summary.installed || !summary.enabled,
       authRequired: apps.some((app) => app.needsAuth || !app.accessible),
       appOwnership,
       ownedAppIds,
       apps,
-      ready: summary.installed && summary.enabled,
     });
   }
 
@@ -340,13 +329,5 @@ function marketplaceRef(marketplace: v2.PluginMarketplaceEntry): CodexPluginMark
     name: CODEX_PLUGINS_MARKETPLACE_NAME,
     ...(marketplace.path ? { path: marketplace.path } : {}),
     ...(!marketplace.path ? { remoteMarketplaceName: marketplace.name } : {}),
-  };
-}
-
-function identityFromPolicy(policy: ResolvedCodexPluginPolicy): CodexMigratedPluginIdentity {
-  return {
-    configKey: policy.configKey,
-    marketplaceName: policy.marketplaceName,
-    pluginName: policy.pluginName,
   };
 }

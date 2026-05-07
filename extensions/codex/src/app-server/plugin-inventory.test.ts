@@ -57,13 +57,11 @@ describe("Codex plugin inventory", () => {
 
     expect(inventory.records).toHaveLength(1);
     expect(inventory.records[0]).toMatchObject({
-      identity: { pluginName: "google-calendar" },
-      installed: true,
-      enabled: true,
+      policy: { pluginName: "google-calendar" },
+      summary: { installed: true, enabled: true },
       appOwnership: "proven",
       ownedAppIds: ["google-calendar-app"],
       apps: [{ id: "google-calendar-app", accessible: true, enabled: true }],
-      ready: true,
     });
     expect(calls).toEqual(["plugin/list", "plugin/read"]);
   });

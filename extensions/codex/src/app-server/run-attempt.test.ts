@@ -408,9 +408,8 @@ function createPluginAppPolicyContext() {
     fingerprint: "plugin-policy-1",
     apps: {
       "google-calendar-app": {
-        appId: "google-calendar-app",
         configKey: "google-calendar",
-        marketplaceName: "openai-curated",
+        marketplaceName: "openai-curated" as const,
         pluginName: "google-calendar",
         allowDestructiveActions: false,
         mcpServerNames: ["google-calendar"],
@@ -443,9 +442,8 @@ function createTwoPluginAppPolicyContext() {
     apps: {
       ...createPluginAppPolicyContext().apps,
       "gmail-app": {
-        appId: "gmail-app",
         configKey: "gmail",
-        marketplaceName: "openai-curated",
+        marketplaceName: "openai-curated" as const,
         pluginName: "gmail",
         allowDestructiveActions: false,
         mcpServerNames: ["gmail"],
@@ -479,9 +477,8 @@ function createTwoCalendarAppPolicyContext() {
     apps: {
       ...createPluginAppPolicyContext().apps,
       "google-calendar-secondary-app": {
-        appId: "google-calendar-secondary-app",
         configKey: "google-calendar",
-        marketplaceName: "openai-curated",
+        marketplaceName: "openai-curated" as const,
         pluginName: "google-calendar",
         allowDestructiveActions: false,
         mcpServerNames: ["google-calendar"],
