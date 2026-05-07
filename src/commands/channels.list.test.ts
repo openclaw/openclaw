@@ -13,7 +13,6 @@ const mocks = vi.hoisted(() => ({
   })),
   listReadOnlyChannelPluginsForConfig: vi.fn<() => ChannelPlugin[]>(() => []),
   buildChannelAccountSnapshot: vi.fn(),
-  loadProviderUsageSummary: vi.fn(),
   listTrustedChannelPluginCatalogEntries: vi.fn<() => ChannelPluginCatalogEntry[]>(() => []),
   isCatalogChannelInstalled: vi.fn<() => boolean>(() => true),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
@@ -38,11 +37,6 @@ vi.mock("../channels/plugins/read-only.js", () => ({
 
 vi.mock("../channels/plugins/status.js", () => ({
   buildChannelAccountSnapshot: mocks.buildChannelAccountSnapshot,
-}));
-
-vi.mock("../infra/provider-usage.js", () => ({
-  formatUsageReportLines: () => [],
-  loadProviderUsageSummary: mocks.loadProviderUsageSummary,
 }));
 
 vi.mock("./channel-setup/trusted-catalog.js", () => ({
@@ -104,7 +98,6 @@ describe("channels list", () => {
   beforeEach(() => {
     mocks.readConfigFileSnapshot.mockReset();
     mocks.resolveCommandConfigWithSecrets.mockClear();
-    mocks.loadProviderUsageSummary.mockReset();
     mocks.listReadOnlyChannelPluginsForConfig.mockReset();
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
     mocks.buildChannelAccountSnapshot.mockReset();
@@ -121,7 +114,7 @@ describe("channels list", () => {
       config: {},
     });
 
-    await channelsListCommand({ json: true, usage: false }, runtime);
+    await channelsListCommand({ json: true }, runtime);
 
     const payload = JSON.parse(runtime.log.mock.calls[0]?.[0] as string) as Record<string, unknown>;
     expect(payload.auth).toBeUndefined();
@@ -147,7 +140,7 @@ describe("channels list", () => {
       },
     });
 
-    await channelsListCommand({ json: true, usage: false }, runtime);
+    await channelsListCommand({ json: true }, runtime);
 
     expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(
       expect.any(Object),
@@ -163,13 +156,12 @@ describe("channels list", () => {
     });
   });
 
-  it("keeps JSON output valid when usage loading fails", async () => {
+  it("keeps JSON output valid when only channels are provided (no usage field)", async () => {
     const runtime = createTestRuntime();
     mocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseConfigSnapshot,
       config: {},
     });
-    mocks.loadProviderUsageSummary.mockRejectedValue(new Error("fetch failed"));
 
     await channelsListCommand({ json: true }, runtime);
 
@@ -204,7 +196,7 @@ describe("channels list", () => {
       },
     });
 
-    await channelsListCommand({ usage: false }, runtime);
+    await channelsListCommand({}, runtime);
 
     expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(
       expect.any(Object),
@@ -231,7 +223,7 @@ describe("channels list", () => {
       config: {},
     });
 
-    await channelsListCommand({ usage: false }, runtime);
+    await channelsListCommand({}, runtime);
 
     const output = stripAnsi(runtime.log.mock.calls[0]?.[0] as string);
     expect(output).toContain("Chat channels:");
@@ -252,7 +244,7 @@ describe("channels list", () => {
       config: {},
     });
 
-    await channelsListCommand({ usage: false, all: true }, runtime);
+    await channelsListCommand({ all: true }, runtime);
 
     const output = stripAnsi(runtime.log.mock.calls[0]?.[0] as string);
     expect(output).toContain("QQ Bot");
@@ -276,14 +268,14 @@ describe("channels list", () => {
     });
 
     // Without --all: discord should not appear.
-    await channelsListCommand({ usage: false }, runtime);
+    await channelsListCommand({}, runtime);
     const noAllOutput = stripAnsi(runtime.log.mock.calls[0]?.[0] as string);
     expect(noAllOutput).not.toContain("Discord default:");
 
     runtime.log.mockClear();
 
     // With --all: discord is rendered with installed + not configured + disabled.
-    await channelsListCommand({ usage: false, all: true }, runtime);
+    await channelsListCommand({ all: true }, runtime);
     const allOutput = stripAnsi(runtime.log.mock.calls[0]?.[0] as string);
     expect(allOutput).toContain("Discord default:");
     expect(allOutput).toContain("installed");
@@ -315,7 +307,7 @@ describe("channels list", () => {
       },
     });
 
-    await channelsListCommand({ json: true, usage: false, all: true }, runtime);
+    await channelsListCommand({ json: true, all: true }, runtime);
 
     const payload = JSON.parse(runtime.log.mock.calls[0]?.[0] as string) as {
       chat: Record<string, { origin: string; installed: boolean }>;
@@ -345,7 +337,7 @@ describe("channels list", () => {
         config: {},
       });
 
-      await channelsListCommand({ usage: false, all: true }, runtime);
+      await channelsListCommand({ all: true }, runtime);
 
       const output = stripAnsi(runtime.log.mock.calls[0]?.[0] as string);
       expect(output).toContain("WeCom");
@@ -357,7 +349,7 @@ describe("channels list", () => {
       // JSON side: origin should be "available" (installed, but user has
       // not written a config entry for it).
       runtime.log.mockClear();
-      await channelsListCommand({ json: true, usage: false, all: true }, runtime);
+      await channelsListCommand({ json: true, all: true }, runtime);
       const payload = JSON.parse(runtime.log.mock.calls[0]?.[0] as string) as {
         chat: Record<string, { origin: string; installed: boolean }>;
       };

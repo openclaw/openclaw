@@ -5,9 +5,6 @@ import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
-import { withProgress } from "../../cli/progress.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatUsageReportLines, loadProviderUsageSummary } from "../../infra/provider-usage.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
@@ -17,7 +14,6 @@ import { formatChannelAccountLabel, requireValidConfig } from "./shared.js";
 
 export type ChannelsListOptions = {
   json?: boolean;
-  usage?: boolean;
   all?: boolean;
 };
 
@@ -114,22 +110,6 @@ function formatCatalogOnlyLine(params: {
   ];
   return `- ${channelText}: ${bits.join(", ")}`;
 }
-async function loadUsageWithProgress(
-  runtime: RuntimeEnv,
-  progress = true,
-): Promise<Awaited<ReturnType<typeof loadProviderUsageSummary>> | null> {
-  try {
-    return await withProgress(
-      { label: "Fetching usage snapshot…", indeterminate: true, enabled: progress },
-      async () => await loadProviderUsageSummary({ skipPluginAuthWithoutCredentialSource: true }),
-    );
-  } catch (err) {
-    if (progress) {
-      runtime.error(String(err));
-    }
-    return null;
-  }
-}
 
 export async function channelsListCommand(
   opts: ChannelsListOptions,
@@ -139,7 +119,6 @@ export async function channelsListCommand(
   if (!cfg) {
     return;
   }
-  const includeUsage = opts.usage !== false;
   const showAll = opts.all === true;
 
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
@@ -229,7 +208,6 @@ export async function channelsListCommand(
     : [];
 
   if (opts.json) {
-    const usage = includeUsage ? await loadUsageWithProgress(runtime, false) : undefined;
     type JsonChannelEntry = {
       accounts: string[];
       installed: boolean;
@@ -263,8 +241,7 @@ export async function channelsListCommand(
         };
       }
     }
-    const payload = { chat, ...(usage ? { usage } : {}) };
-    writeRuntimeJson(runtime, payload);
+    writeRuntimeJson(runtime, { chat });
     return;
   }
 
@@ -300,18 +277,11 @@ export async function channelsListCommand(
 
   runtime.log(lines.join("\n"));
 
-  if (includeUsage) {
-    runtime.log("");
-    const usage = await loadUsageWithProgress(runtime);
-    if (usage) {
-      const usageLines = formatUsageReportLines(usage);
-      if (usageLines.length > 0) {
-        usageLines[0] = theme.accent(usageLines[0]);
-        runtime.log(usageLines.join("\n"));
-      }
-    }
-  }
-
   runtime.log("");
+  runtime.log(
+    theme.muted(
+      "Model provider usage moved out of `channels list` — see `openclaw status` or `openclaw models list`.",
+    ),
+  );
   runtime.log(`Docs: ${formatDocsLink("/gateway/configuration", "gateway/configuration")}`);
 }
