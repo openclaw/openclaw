@@ -455,6 +455,8 @@ Docs: https://docs.openclaw.ai
 - Exec approvals: omit generated command highlights for non-POSIX Windows and shell-wrapper approval commands until those command languages have native highlighting support. (#80566) Thanks @jesse-merhi.
 - Telegram: keep verbose tool progress and result drafts separate from the final assistant answer so tool output no longer blends into the final Telegram message. (#80294) Thanks @jalehman.
 - Plugin SDK/Windows: enable the native require fast path for root `openclaw/plugin-sdk` dist aliases instead of forcing Jiti transforms. (#80878) Thanks @medns.
+- Memory-core/Dreaming: write a deterministic fallback `DREAMS.md` diary entry when dream narrative generation times out or returns no assistant text, so successful phase runs no longer leave the Dream Diary stale. Fixes #74639 and #72546. Thanks @a-m-a-r-a.
+
 
 ## 2026.5.9
 
