@@ -1353,7 +1353,7 @@ describe("google-meet plugin", () => {
     const tool = tools[0] as {
       execute: (id: string, params: unknown) => Promise<{ details: { session: { id: string } } }>;
     };
-    await tool.execute("id", {
+    const joined = await tool.execute("id", {
       action: "join",
       url: "https://meet.google.com/abc-defg-hij",
       dialInNumber: "+15551234567",
@@ -1363,7 +1363,7 @@ describe("google-meet plugin", () => {
     expect(voiceCallMocks.joinMeetViaVoiceCallGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: undefined,
-        sessionKey: undefined,
+        sessionKey: `voice:google-meet:${joined.details.session.id}`,
       }),
     );
   });
