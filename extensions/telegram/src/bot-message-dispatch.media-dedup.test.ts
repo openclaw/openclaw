@@ -46,4 +46,22 @@ describe("deduplicateBlockSentMedia", () => {
     const result = deduplicateBlockSentMedia(payload, sent);
     expect(result).toEqual({ text: "see attached", mediaUrls: ["/tmp/b.jpg"] });
   });
+
+  it("clears legacy mediaUrl when all mediaUrls removed but text remains", () => {
+    const payload = { text: "captioned", mediaUrl: "/tmp/a.jpg", mediaUrls: ["/tmp/a.jpg"] };
+    const sent = new Set(["/tmp/a.jpg"]);
+    const result = deduplicateBlockSentMedia(payload, sent);
+    expect(result).toEqual({ text: "captioned", mediaUrl: undefined, mediaUrls: [] });
+  });
+
+  it("preserves legacy mediaUrl when some mediaUrls remain", () => {
+    const payload = {
+      text: "hey",
+      mediaUrl: "/tmp/a.jpg",
+      mediaUrls: ["/tmp/a.jpg", "/tmp/b.jpg"],
+    };
+    const sent = new Set(["/tmp/a.jpg"]);
+    const result = deduplicateBlockSentMedia(payload, sent);
+    expect(result).toEqual({ text: "hey", mediaUrl: "/tmp/a.jpg", mediaUrls: ["/tmp/b.jpg"] });
+  });
 });

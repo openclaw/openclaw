@@ -4,10 +4,9 @@
  * undefined if the payload should be skipped entirely (all media already
  * sent and no text remains).
  */
-export function deduplicateBlockSentMedia<T extends { mediaUrls?: string[]; text?: string }>(
-  payload: T,
-  sentBlockMediaUrls: ReadonlySet<string>,
-): T | undefined {
+export function deduplicateBlockSentMedia<
+  T extends { mediaUrl?: string; mediaUrls?: string[]; text?: string },
+>(payload: T, sentBlockMediaUrls: ReadonlySet<string>): T | undefined {
   if (!payload.mediaUrls?.length || sentBlockMediaUrls.size === 0) {
     return payload;
   }
@@ -18,5 +17,9 @@ export function deduplicateBlockSentMedia<T extends { mediaUrls?: string[]; text
   if (remainingMedia.length === 0 && !payload.text) {
     return undefined;
   }
-  return { ...payload, mediaUrls: remainingMedia };
+  return {
+    ...payload,
+    mediaUrls: remainingMedia,
+    mediaUrl: remainingMedia.length === 0 ? undefined : payload.mediaUrl,
+  };
 }
