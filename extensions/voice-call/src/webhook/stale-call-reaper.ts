@@ -1,7 +1,12 @@
 import type { CallManager } from "../manager.js";
-import { TerminalStates } from "../types.js";
+import { type CallState, TerminalStates } from "../types.js";
 
 const CHECK_INTERVAL_MS = 30_000;
+
+// States that indicate an active two-way conversation — never reap these regardless of age.
+// Calls reach speaking/listening via the media stream before the provider status callback
+// (e.g. Twilio CallStatus=in-progress) arrives, so answeredAt may still be null.
+const ActiveConversationStates = new Set<CallState>(["speaking", "listening"]);
 
 export function startStaleCallReaper(params: {
   manager: CallManager;
@@ -16,7 +21,11 @@ export function startStaleCallReaper(params: {
   const interval = setInterval(() => {
     const now = Date.now();
     for (const call of params.manager.getActiveCalls()) {
-      if (call.answeredAt || TerminalStates.has(call.state)) {
+      if (
+        call.answeredAt ||
+        TerminalStates.has(call.state) ||
+        ActiveConversationStates.has(call.state)
+      ) {
         continue;
       }
 

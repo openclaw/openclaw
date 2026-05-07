@@ -55,6 +55,39 @@ describe("startStaleCallReaper", () => {
     stop?.();
   });
 
+  it("never reaps calls in speaking or listening state even when old and answeredAt is unset", async () => {
+    // Twilio streaming: state reaches speaking/listening via media stream before the
+    // CallStatus=in-progress callback arrives, so answeredAt may be null (#79121).
+    const endCall = vi.fn(async () => {});
+    const manager = {
+      getActiveCalls: vi.fn(() => [
+        {
+          callId: "call-speaking",
+          startedAt: Date.now() - 200_000,
+          state: "speaking",
+          // answeredAt intentionally absent: Twilio status callback not yet received
+        },
+        {
+          callId: "call-listening",
+          startedAt: Date.now() - 200_000,
+          state: "listening",
+        },
+      ]),
+      endCall,
+    };
+
+    const stop = startStaleCallReaper({
+      manager: manager as never,
+      staleCallReaperSeconds: 120,
+    });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(endCall).not.toHaveBeenCalled();
+
+    stop?.();
+  });
+
   it("logs and swallows endCall failures", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const manager = {
