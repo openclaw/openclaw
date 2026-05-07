@@ -325,6 +325,43 @@ function hasExplicitCronDeliveryTarget(plan: CronDeliveryPlan): boolean {
   );
 }
 
+function shouldFailImplicitAnnounceDeliveryBeforeExecution(params: {
+  deliveryPlan: CronDeliveryPlan;
+  deliveryRequested: boolean;
+  resolvedDelivery: ResolvedCronDeliveryTarget;
+}): boolean {
+  return (
+    params.deliveryRequested &&
+    params.deliveryPlan.mode === "announce" &&
+    !hasExplicitCronDeliveryTarget(params.deliveryPlan) &&
+    !params.resolvedDelivery.ok
+  );
+}
+
+function failImplicitAnnounceDeliveryBeforeExecution(
+  prepared: PreparedCronRunContext,
+): RunCronAgentTurnResult {
+  const error = prepared.resolvedDelivery.ok
+    ? "Cron announce delivery target is unresolved."
+    : prepared.resolvedDelivery.error.message;
+  return prepared.withRunSession({
+    status: "error",
+    error,
+    errorKind: "delivery-target",
+    delivered: false,
+    deliveryAttempted: false,
+    delivery: buildCronDeliveryTrace({
+      deliveryPlan: prepared.deliveryPlan,
+      resolvedDelivery: prepared.resolvedDelivery,
+      messagingToolSentTargets: [],
+      matchesMessagingToolDeliveryTarget: () => false,
+      fallbackUsed: false,
+      delivered: false,
+    }),
+    diagnostics: createCronRunDiagnosticsFromError("delivery", error),
+  });
+}
+
 async function resolveCronDeliveryContext(params: {
   cfg: OpenClawConfig;
   job: CronJob;
@@ -1064,6 +1101,15 @@ export async function runCronIsolatedAgentTurn(params: {
   const prepared = await prepareCronRunContext({ input: params, isFastTestEnv });
   if (!prepared.ok) {
     return prepared.result;
+  }
+  if (
+    shouldFailImplicitAnnounceDeliveryBeforeExecution({
+      deliveryPlan: prepared.context.deliveryPlan,
+      deliveryRequested: prepared.context.deliveryRequested,
+      resolvedDelivery: prepared.context.resolvedDelivery,
+    })
+  ) {
+    return failImplicitAnnounceDeliveryBeforeExecution(prepared.context);
   }
   const notifyExecutionStarted = () =>
     params.onExecutionStarted?.({

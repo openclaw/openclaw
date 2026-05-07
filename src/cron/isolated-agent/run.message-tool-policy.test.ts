@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SkillSnapshot } from "../../agents/skills.js";
 import type { CronDeliveryMode } from "../types.js";
 import type { MutableCronSession } from "./run-session-state.js";
@@ -695,16 +695,17 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     resolveCronDeliveryPlanMock.mockReturnValue({
       requested: true,
       mode: "announce",
-      channel: "last",
+      channel: "messagechat",
+      to: "bad-target",
     });
     resolveDeliveryTargetMock.mockResolvedValue({
       ok: false,
-      channel: undefined,
+      channel: "messagechat",
       to: undefined,
       accountId: undefined,
       threadId: undefined,
-      mode: "implicit",
-      error: new Error("sessionKey is required to resolve delivery.channel=last"),
+      mode: "explicit",
+      error: new Error("Invalid delivery target: unknown recipient"),
     });
     runEmbeddedPiAgentMock.mockResolvedValue(
       makeMessageToolRunResult([{ tool: "message", provider: "messagechat", to: "123" }]),
@@ -722,13 +723,62 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     );
     expect(result.delivery).toEqual(
       expect.objectContaining({
+        intended: { channel: "messagechat", to: "bad-target", source: "explicit" },
+        resolved: expect.objectContaining({
+          ok: false,
+          channel: "messagechat",
+          source: "explicit",
+          error: "Invalid delivery target: unknown recipient",
+        }),
+        messageToolSentTo: [{ channel: "messagechat", to: "123" }],
+        fallbackUsed: false,
+        delivered: false,
+      }),
+    );
+  });
+
+  it("fails implicit announce delivery before running the agent when last has no route", async () => {
+    const onExecutionStarted = vi.fn();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "last",
+    });
+    resolveDeliveryTargetMock.mockResolvedValue({
+      ok: false,
+      channel: undefined,
+      to: undefined,
+      accountId: undefined,
+      threadId: undefined,
+      mode: "implicit",
+      error: new Error("Channel is required when delivery.channel=last has no previous channel."),
+    });
+
+    const result = await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      onExecutionStarted,
+    });
+
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
+    expect(onExecutionStarted).not.toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        status: "error",
+        error: "Channel is required when delivery.channel=last has no previous channel.",
+        errorKind: "delivery-target",
+        delivered: false,
+        deliveryAttempted: false,
+      }),
+    );
+    expect(result.delivery).toEqual(
+      expect.objectContaining({
         intended: { channel: "last", to: null, source: "last" },
         resolved: expect.objectContaining({
           ok: false,
           source: "last",
-          error: "sessionKey is required to resolve delivery.channel=last",
+          error: "Channel is required when delivery.channel=last has no previous channel.",
         }),
-        messageToolSentTo: [{ channel: "messagechat", to: "123" }],
         fallbackUsed: false,
         delivered: false,
       }),
