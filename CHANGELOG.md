@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Fixes
+
+- Security/Audit: stop warning about npm plugin and hook install records when an unpinned requested spec is backed by an exact pinned resolved spec and non-empty integrity.
+
 ### Changes
 
 - Plugins/install: add `npm-pack:<path.tgz>` installs so local npm pack artifacts run through the same managed npm-root install, lockfile verification, dependency scan, and install-record path as registry npm plugins.
