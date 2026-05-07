@@ -61,4 +61,37 @@ describe('emitJsonl — render mode', () => {
       OcEmitSentinelError,
     );
   });
+
+  it('throws when a value-leaf EMBEDS the sentinel (prefix/suffix wrap)', () => {
+    // Regression: prior to this fix, render mode used exact-match
+    // (`value.value === SENTINEL`), so `prefix__OPENCLAW_REDACTED__suffix`
+    // slipped through. The contains-check is the right invariant.
+    const ast = parseJsonl('{"a":"ok"}\n').ast;
+    const tampered = {
+      ...ast,
+      lines: [
+        {
+          kind: 'value' as const,
+          line: 1,
+          raw: '{"a":"ok"}',
+          value: {
+            kind: 'object' as const,
+            entries: [
+              {
+                key: 'a',
+                line: 1,
+                value: {
+                  kind: 'string' as const,
+                  value: `wrap-${REDACTED_SENTINEL}-end`,
+                },
+              },
+            ],
+          },
+        },
+      ],
+    };
+    expect(() => emitJsonl(tampered, { mode: 'render' })).toThrow(
+      OcEmitSentinelError,
+    );
+  });
 });

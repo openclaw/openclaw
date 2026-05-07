@@ -63,7 +63,10 @@ function renderValue(value: JsoncValue, guardPath: string, walked: readonly stri
       return `[${parts.join(',')}]`;
     }
     case 'string': {
-      if (value.value === REDACTED_SENTINEL) {
+      // Reject ANY string that contains the sentinel — embedded
+      // (`prefix__OPENCLAW_REDACTED__suffix`) is just as much of a
+      // "literal redacted token landed on disk" leak as exact-match.
+      if (value.value.includes(REDACTED_SENTINEL)) {
         throw new OcEmitSentinelError(`${guardPath}/${walked.join('/')}`);
       }
       return JSON.stringify(value.value);

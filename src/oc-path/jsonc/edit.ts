@@ -6,9 +6,24 @@
  * audit while applying the edit. Plays well with LKG observe (compare
  * pre vs post fingerprints).
  *
- * **Round-trip implications**: editing breaks `ast.raw` byte-fidelity
- * for the edited region. Callers that care about formatting fidelity
- * should pair `setJsoncOcPath` with `emitJsonc(..., { mode: 'render' })`.
+ * # Known limitation: trivia loss after edit (tracked as follow-up)
+ *
+ * `setJsoncOcPath` rebuilds `ast.raw` via `emitJsonc({mode:'render'})`,
+ * which RE-SERIALIZES the structural tree. **Comments, blank lines,
+ * key-order whitespace, and trailing-comma style are dropped** in the
+ * post-edit `raw`. This is the cost of edit-then-emit in the prototype.
+ *
+ * The byte-fidelity guarantee in this PR applies to the **read path**
+ * (`parseJsonc → emitJsonc` round-trip) — that's exercised by the
+ * `jsonc-byte-fidelity` scenario test and holds byte-identical for
+ * arbitrary input. The **write path** (`parseJsonc → setJsoncOcPath →
+ * emitJsonc`) loses trivia.
+ *
+ * Why we ship as-is: a comment-preserving editor needs the parser to
+ * track byte offsets per node, plus splice-aware mutation logic. That
+ * is its own lift. The follow-up adds parser offsets and a byte-splice
+ * editor; existing callers that need post-edit byte fidelity should
+ * patch `raw` directly until then.
  *
  * @module @openclaw/oc-path/jsonc/edit
  */
@@ -97,11 +112,15 @@ function replaceAt(
 }
 
 /**
- * Re-render `ast.raw` from the (possibly mutated) tree. We reuse the
- * render-mode emitter so callers can call `emitJsonc(ast)` after a set
- * and get the new bytes via the round-trip path. Tradeoff: post-edit,
- * comments and original formatting are lost — that's the cost of
- * edit-then-emit.
+ * Re-render `ast.raw` from the (possibly mutated) tree.
+ *
+ * **Trivia is dropped** — see the module-level "Known limitation"
+ * section above. Subsequent `emitJsonc(returnedAst)` returns these
+ * synthesized bytes, NOT the original byte-fidelity input.
+ *
+ * Production-quality fix: parser tracks byte offsets per node;
+ * `setJsoncOcPath` does a `raw.slice(0,start) + newBytes + raw.slice(end)`
+ * splice, leaving trivia untouched. Tracked as PR follow-up.
  */
 function rebuildRaw(ast: JsoncAst): JsoncAst {
   const next: JsoncAst = { kind: 'jsonc', raw: '', root: ast.root };
