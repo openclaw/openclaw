@@ -76,7 +76,6 @@
         {
           "group": "消息平台",
           "pages": [
-            "zh-CN/channels/bluebubbles",
             "zh-CN/channels/discord",
             "zh-CN/channels/feishu",
             "zh-CN/channels/grammy",
