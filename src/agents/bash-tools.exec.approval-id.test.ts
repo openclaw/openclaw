@@ -595,7 +595,7 @@ describe("exec approvals", () => {
     expect(runCwd).toBeUndefined();
   });
 
-  it("routes explicit host=node to node invoke when elevated default is on under auto host", async () => {
+  it("routes configured host=node to node invoke when elevated default is on", async () => {
     const calls: string[] = [];
 
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
@@ -613,7 +613,7 @@ describe("exec approvals", () => {
     });
 
     const tool = createExecTool({
-      host: "auto",
+      host: "node",
       ask: "off",
       security: "full",
       approvalRunningNoticeMs: 0,
@@ -622,7 +622,6 @@ describe("exec approvals", () => {
 
     const result = await tool.execute("call-auto-node-elevated-default", {
       command: "echo gateway-ok",
-      host: "node",
     });
 
     expect(result.details.status).toBe("completed");
@@ -644,7 +643,7 @@ describe("exec approvals", () => {
       elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
     });
 
-    const result = await tool.execute("call3", { command: "echo ok", elevated: true });
+    const result = await tool.execute("call3", { command: "echo ok" });
     expect(result.details.status).toBe("completed");
     expect(calls).not.toContain("exec.approval.request");
   });
@@ -905,7 +904,7 @@ describe("exec approvals", () => {
 
     const tool = createElevatedAllowlistExecTool();
 
-    const result = await tool.execute("call4", { command: "echo ok", elevated: true });
+    const result = await tool.execute("call4", { command: "echo ok" });
     expectPendingApprovalText(result, { command: "echo ok", host: "gateway" });
     await approvalSeen;
     expect(calls).toContain("exec.approval.request");
@@ -1165,11 +1164,9 @@ describe("exec approvals", () => {
 
     const first = await tool.execute("call-seq-1", {
       command: "printf approval-one",
-      elevated: true,
     });
     const second = await tool.execute("call-seq-2", {
       command: "printf approval-two",
-      elevated: true,
     });
 
     expect(first.details.status).toBe("approval-pending");

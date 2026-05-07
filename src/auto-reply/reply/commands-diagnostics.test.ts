@@ -254,10 +254,8 @@ describe("diagnostics command", () => {
     expect(
       String((execCalls[0]?.defaults as { approvalWarningText?: string }).approvalWarningText),
     ).toContain("https://docs.openclaw.ai/gateway/diagnostics");
-    expect(execCalls[0]?.params).toMatchObject({
-      security: "allowlist",
-      ask: "always",
-    });
+    expect(execCalls[0]?.params).not.toHaveProperty("security");
+    expect(execCalls[0]?.params).not.toHaveProperty("ask");
     const command = (execCalls[0]?.params as { command?: string }).command ?? "";
     expect(command).toContain("gateway");
     expect(command).toContain("diagnostics");

@@ -365,7 +365,6 @@ export async function handleBashChatCommand(params: {
       background: shouldBackgroundImmediately,
       yieldMs: shouldBackgroundImmediately ? undefined : foregroundMs,
       timeout: timeoutSec,
-      elevated: true,
     });
 
     if (result.details?.status === "running") {

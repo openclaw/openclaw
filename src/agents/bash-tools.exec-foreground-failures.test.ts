@@ -51,31 +51,28 @@ describe("exec foreground failures", () => {
     expect((result.details as { durationMs?: number }).durationMs).toEqual(expect.any(Number));
   });
 
-  it("rejects invalid host values before launching a command", async () => {
+  it("ignores operator-only policy fields supplied in tool-call args", async () => {
     const tool = createExecTool({
+      host: "gateway",
       security: "full",
       ask: "off",
       allowBackground: false,
     });
-    for (const testCase of [
-      {
-        host: "spark-ff13",
-        message: 'Invalid exec host "spark-ff13". Allowed values: auto, sandbox, gateway, node.',
-      },
-      {
-        host: 42,
-        message:
-          "Invalid exec host value type number. Allowed values: auto, sandbox, gateway, node.",
-      },
-    ]) {
-      const malformedArgs = {
-        command: "echo should-not-run",
-        host: testCase.host,
-      } as unknown as Parameters<typeof tool.execute>[1];
+    const args = {
+      command: "echo policy-ok",
+      host: "spark-ff13",
+      security: "deny",
+      ask: "always",
+      elevated: true,
+      node: "not-a-real-node",
+    } as unknown as Parameters<typeof tool.execute>[1];
 
-      await expect(tool.execute("call-invalid-host", malformedArgs)).rejects.toThrow(
-        testCase.message,
-      );
-    }
+    const result = await tool.execute("call-model-policy-fields", args);
+
+    expect(result.details).toMatchObject({
+      status: "completed",
+      exitCode: 0,
+    });
+    expect((result.content[0] as { text?: string }).text).toContain("policy-ok");
   });
 });
