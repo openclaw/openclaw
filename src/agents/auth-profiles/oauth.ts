@@ -22,6 +22,7 @@ import { formatAuthDoctorHint } from "./doctor.js";
 import { readManagedExternalCliCredential } from "./external-cli-sync.js";
 import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
+import { clearLastGoodProfileWithLock } from "./profiles.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import { loadAuthProfileStoreForSecretsRuntime } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
@@ -361,6 +362,13 @@ export async function resolveApiKeyForProfile(
       error instanceof OAuthManagerRefreshError && error.code === "refresh_contention"
         ? error
         : surfacedCause;
+    if (isRefreshTokenReusedError(surfacedCause)) {
+      await clearLastGoodProfileWithLock({
+        provider: cred.provider,
+        profileId,
+        agentDir: params.agentDir,
+      });
+    }
     const fallbackProfileId = suggestOAuthProfileIdForLegacyDefault({
       cfg,
       store: refreshedStore,
