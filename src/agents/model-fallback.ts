@@ -52,6 +52,8 @@ type FailoverAttribution = {
   lane?: string;
 };
 
+type SessionSuspensionReason = "quota_exhausted" | "manual" | "circuit_open";
+
 /**
  * Structured error thrown when all model fallback candidates have been
  * exhausted. Carries per-attempt details so callers can build informative
@@ -547,6 +549,7 @@ export const __testing = {
   resolveFallbackCandidates,
   resolveImageFallbackCandidates,
   resolveCooldownDecision,
+  resolveSessionSuspensionReason,
 } as const;
 
 function resolveFallbackCandidates(params: {
@@ -824,6 +827,16 @@ function resolveCooldownDecision(params: {
   };
 }
 
+function resolveSessionSuspensionReason(reason: FailoverReason): SessionSuspensionReason {
+  if (reason === "billing") {
+    return "manual";
+  }
+  if (reason === "rate_limit") {
+    return "quota_exhausted";
+  }
+  return "circuit_open";
+}
+
 export async function runWithModelFallback<T>(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -943,7 +956,7 @@ export async function runWithModelFallback<T>(params: {
               agentDir: params.agentDir,
               sessionId: params.sessionId,
               laneId: params.lane,
-              reason: decision.reason === "billing" ? "manual" : "quota_exhausted",
+              reason: resolveSessionSuspensionReason(decision.reason),
               failedProvider: candidate.provider,
               failedModel: candidate.model,
             });

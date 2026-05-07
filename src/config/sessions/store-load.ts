@@ -12,7 +12,6 @@ import {
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
-  pruneQuotaSuspensions,
   pruneStaleEntries,
   shouldRunSessionEntryMaintenance,
   type ResolvedSessionMaintenanceConfig,
@@ -154,14 +153,6 @@ export function loadSessionStore(
   if (opts.runMaintenance) {
     const maintenance = opts.maintenanceConfig ?? resolveMaintenanceConfig();
     const beforeCount = Object.keys(store).length;
-    // TTL-based quota-suspension maintenance is independent of capacity and runs
-    // unconditionally: an oversize check would let suspensions linger forever in
-    // a well-sized store, leaving lanes in the "suspended" state past their TTL.
-    const suspensionResult = pruneQuotaSuspensions({
-      store,
-      now: Date.now(),
-      log: false,
-    });
     let pruned = 0;
     let capped = 0;
     if (maintenance.mode === "enforce" && beforeCount > maintenance.maxEntries) {
@@ -175,8 +166,7 @@ export function loadSessionStore(
         : 0;
     }
     const afterCount = Object.keys(store).length;
-    const suspensionsTouched = suspensionResult.resumed.length + suspensionResult.cleared;
-    if (pruned > 0 || capped > 0 || suspensionsTouched > 0) {
+    if (pruned > 0 || capped > 0) {
       serializedFromDisk = undefined;
       log.info("applied load-time maintenance to session store", {
         storePath,
@@ -184,8 +174,6 @@ export function loadSessionStore(
         after: afterCount,
         pruned,
         capped,
-        suspensionsResumed: suspensionResult.resumed.length,
-        suspensionsCleared: suspensionResult.cleared,
         maxEntries: maintenance.maxEntries,
       });
     }

@@ -12,7 +12,11 @@ import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
-import { loadSessionStore, updateSessionStoreEntry } from "../../../config/sessions/store.js";
+import {
+  loadSessionStore,
+  runQuotaSuspensionMaintenance,
+  updateSessionStoreEntry,
+} from "../../../config/sessions/store.js";
 import type { AssembleResult } from "../../../context-engine/types.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
@@ -2226,7 +2230,8 @@ export async function runEmbeddedAttempt(
             const storePath = resolveStorePath(params.config?.session?.store, {
               agentId: sessionAgentId,
             });
-            const store = loadSessionStore(storePath);
+            await runQuotaSuspensionMaintenance({ storePath });
+            const store = loadSessionStore(storePath, { skipCache: true });
             const sessionEntry = store[params.sessionKey];
             const suspension = sessionEntry?.quotaSuspension;
             if (suspension?.state === "resuming") {

@@ -228,7 +228,7 @@ export function pruneQuotaSuspensions(params: {
   log?: boolean;
 }): QuotaSuspensionMaintenanceResult {
   const ttlMs = params.ttlMs ?? DEFAULT_QUOTA_SUSPENSION_TTL_MS;
-  const cleanupAfterMs = ttlMs * QUOTA_SUSPENSION_CLEANUP_FACTOR;
+  const cleanupAfterResumeMs = ttlMs * (QUOTA_SUSPENSION_CLEANUP_FACTOR - 1);
   const resumed: Array<{ sessionKey: string; laneId?: string }> = [];
   let cleared = 0;
   for (const [sessionKey, entry] of Object.entries(params.store)) {
@@ -236,13 +236,14 @@ export function pruneQuotaSuspensions(params: {
     if (!suspension) {
       continue;
     }
-    const ageMs = params.now - suspension.suspendedAt;
-    if (ageMs > cleanupAfterMs) {
+    const resumeAtMs = suspension.expectedResumeBy ?? suspension.suspendedAt + ttlMs;
+    const cleanupAtMs = resumeAtMs + cleanupAfterResumeMs;
+    if (params.now >= cleanupAtMs) {
       delete entry.quotaSuspension;
       cleared++;
       continue;
     }
-    if (suspension.state === "suspended" && ageMs > ttlMs) {
+    if (suspension.state === "suspended" && params.now >= resumeAtMs) {
       entry.quotaSuspension = { ...suspension, state: "resuming" };
       resumed.push({ sessionKey, laneId: suspension.laneId });
     }

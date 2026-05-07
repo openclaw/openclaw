@@ -1,26 +1,48 @@
 import path from "node:path";
+import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import { updateSessionStoreEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
+import { CommandLane } from "../process/lanes.js";
 import { resolveStoredSessionKeyForSessionId } from "./command/session.js";
 
 const log = createSubsystemLogger("session-suspension");
 
-const DEFAULT_LANE_RESUME_CONCURRENCY = 1;
+const DEFAULT_CUSTOM_LANE_RESUME_CONCURRENCY = 1;
 export const DEFAULT_QUOTA_SUSPENSION_RESUME_MS = 30 * 60 * 1000; // 30 min
 
 const laneResumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-function scheduleLaneAutoResume(laneId: string, delayMs: number) {
+function resolveLaneResumeConcurrency(cfg: OpenClawConfig | undefined, laneId: string): number {
+  switch (laneId) {
+    case CommandLane.Main:
+      return resolveAgentMaxConcurrent(cfg);
+    case CommandLane.Subagent:
+      return resolveSubagentMaxConcurrent(cfg);
+    case CommandLane.Cron:
+    case CommandLane.CronNested: {
+      const raw = cfg?.cron?.maxConcurrentRuns;
+      return typeof raw === "number" && Number.isFinite(raw) ? Math.max(1, Math.floor(raw)) : 1;
+    }
+    default:
+      return DEFAULT_CUSTOM_LANE_RESUME_CONCURRENCY;
+  }
+}
+
+function scheduleLaneAutoResume(laneId: string, delayMs: number, resumeConcurrency: number) {
   const existing = laneResumeTimers.get(laneId);
   if (existing) {
     clearTimeout(existing);
   }
   const timer = setTimeout(() => {
     laneResumeTimers.delete(laneId);
-    setCommandLaneConcurrency(laneId, DEFAULT_LANE_RESUME_CONCURRENCY);
-    log.info("auto-resumed lane after suspension TTL", { laneId, delayMs });
+    setCommandLaneConcurrency(laneId, resumeConcurrency);
+    log.info("auto-resumed lane after suspension TTL", {
+      laneId,
+      delayMs,
+      resumeConcurrency,
+    });
   }, delayMs);
   if (typeof timer.unref === "function") {
     timer.unref();
@@ -93,6 +115,14 @@ export async function suspendSession(params: {
 
   if (params.laneId) {
     setCommandLaneConcurrency(params.laneId, 0);
-    scheduleLaneAutoResume(params.laneId, ttlMs);
+    scheduleLaneAutoResume(
+      params.laneId,
+      ttlMs,
+      resolveLaneResumeConcurrency(params.cfg, params.laneId),
+    );
   }
 }
+
+export const __testing = {
+  resolveLaneResumeConcurrency,
+} as const;
