@@ -185,19 +185,20 @@ export function buildOpenAIWebSocketResponseCreatePayload(params: {
     extraParams.text = { ...existingText, verbosity: textVerbosity };
   }
 
-  const supportsResponsesStoreField = resolveProviderRequestPolicyConfig({
-    provider: readStringValue(params.model.provider),
-    api: readStringValue(params.model.api),
-    baseUrl: readStringValue(params.model.baseUrl),
-    compat: (params.model as { compat?: { supportsStore?: boolean } }).compat,
-    capability: "llm",
-    transport: "websocket",
-  }).capabilities.supportsResponsesStoreField;
+  const { supportsResponsesStoreField, usesExplicitProxyLikeEndpoint } =
+    resolveProviderRequestPolicyConfig({
+      provider: readStringValue(params.model.provider),
+      api: readStringValue(params.model.api),
+      baseUrl: readStringValue(params.model.baseUrl),
+      compat: (params.model as { compat?: { supportsStore?: boolean } }).compat,
+      capability: "llm",
+      transport: "websocket",
+    }).capabilities;
 
   return {
     type: "response.create",
     model: params.model.id,
-    ...(supportsResponsesStoreField ? { store: false } : {}),
+    ...(supportsResponsesStoreField && !usesExplicitProxyLikeEndpoint ? { store: false } : {}),
     input: params.turnInput.inputItems,
     instructions: params.context.systemPrompt
       ? stripSystemPromptCacheBoundary(params.context.systemPrompt)
