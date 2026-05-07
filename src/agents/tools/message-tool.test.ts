@@ -1972,6 +1972,62 @@ describe("message tool reasoning tag sanitization", () => {
       ],
     });
   });
+
+  it("strips internal runtime context from visible presentation fields before sending (#53732)", async () => {
+    mockSendResult({ channel: "slack", to: "slack:C123" });
+
+    const internalContext =
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+    const call = await executeSend({
+      action: {
+        target: "slack:C123",
+        presentation: {
+          title: `Deploy ready\n${internalContext}`,
+          blocks: [
+            { type: "text", text: `Ship it\n${internalContext}` },
+            {
+              type: "input",
+              placeholder: `Pick a lane\n${internalContext}`,
+            },
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: `Approve\n${internalContext}`,
+                  value: "approve",
+                },
+              ],
+            },
+            {
+              type: "select",
+              options: [
+                {
+                  label: `Main\n${internalContext}`,
+                  value: "main",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(call?.params?.presentation).toEqual({
+      title: "Deploy ready",
+      blocks: [
+        { type: "text", text: "Ship it" },
+        { type: "input", placeholder: "Pick a lane" },
+        {
+          type: "buttons",
+          buttons: [{ label: "Approve", value: "approve" }],
+        },
+        {
+          type: "select",
+          options: [{ label: "Main", value: "main" }],
+        },
+      ],
+    });
+  });
 });
 
 describe("message tool boot-echo guard", () => {
@@ -2042,6 +2098,51 @@ describe("message tool boot-echo guard", () => {
       toolOptions: { agentSessionKey: "agent:main" },
     });
     expect(call?.params?.text).toBe("Any message goes through unchanged.");
+  });
+
+  it("collapses presentation fields that echo a substantial chunk of the registered boot prompt (#53732)", async () => {
+    setBootEchoContextForSession("agent:main", longBootPrompt);
+    mockSendResult({ channel: "slack", to: "slack:C123" });
+
+    const echoedBootText =
+      "When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
+    const call = await executeSend({
+      action: {
+        target: "slack:C123",
+        presentation: {
+          title: echoedBootText,
+          blocks: [
+            { type: "text", text: echoedBootText },
+            {
+              type: "buttons",
+              buttons: [{ label: echoedBootText, value: "approve" }],
+            },
+            {
+              type: "select",
+              placeholder: echoedBootText,
+              options: [{ label: echoedBootText, value: "main" }],
+            },
+          ],
+        },
+      },
+      toolOptions: { agentSessionKey: "agent:main" },
+    });
+
+    expect(call?.params?.presentation).toEqual({
+      title: "",
+      blocks: [
+        { type: "text", text: "" },
+        {
+          type: "buttons",
+          buttons: [{ label: "", value: "approve" }],
+        },
+        {
+          type: "select",
+          placeholder: "",
+          options: [{ label: "", value: "main" }],
+        },
+      ],
+    });
   });
 });
 
