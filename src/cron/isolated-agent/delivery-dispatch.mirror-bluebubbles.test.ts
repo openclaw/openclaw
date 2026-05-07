@@ -86,6 +86,16 @@ vi.mock("./subagent-followup-hints.js", () => ({
   isLikelyInterimCronMessage: vi.fn().mockReturnValue(false),
 }));
 
+// `normalizeTargetForProvider` triggers bundled-channel plugin loading for
+// non-test channels (e.g. telegram), which can take 40+ seconds and exceed
+// the CI test timeout. Stub it to a fast pass-through; the test suite covers
+// route normalization through the dedicated BlueBubbles route plugin above.
+vi.mock("../../infra/outbound/target-normalization.js", () => ({
+  normalizeTargetForProvider: vi.fn(
+    (_channel: string, target: string) => target.trim() || undefined,
+  ),
+}));
+
 vi.mock("./subagent-followup.runtime.js", () => ({
   readDescendantSubagentFallbackReply: vi.fn().mockResolvedValue(undefined),
   waitForDescendantSubagentSummary: vi.fn().mockResolvedValue(undefined),
