@@ -691,6 +691,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 }
                 return;
               }
+              if (getRuntime(channelId, id).terminalDisconnect) {
+                log.info?.(`[${id}] auto-restart skipped, terminal disconnect`);
+                return;
+              }
               const attempt = (restartAttempts.get(rKey) ?? 0) + 1;
               restartAttempts.set(rKey, attempt);
               if (attempt > MAX_RESTART_ATTEMPTS) {

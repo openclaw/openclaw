@@ -212,6 +212,7 @@ export type ChannelAccountSnapshot = {
   lastTransportActivityAt?: number | null;
   lastError?: string | null;
   healthState?: string;
+  terminalDisconnect?: boolean;
   lastStartAt?: number | null;
   lastStopAt?: number | null;
   lastInboundAt?: number | null;

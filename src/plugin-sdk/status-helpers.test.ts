@@ -349,6 +349,24 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
         probe: undefined,
       },
     },
+    {
+      name: "projects terminalDisconnect when set",
+      input: {
+        runtime: {
+          running: false,
+          healthState: "logged-out",
+          terminalDisconnect: true,
+        },
+      },
+      extra: undefined,
+      expected: {
+        ...defaultRuntimeState,
+        running: false,
+        healthState: "logged-out",
+        terminalDisconnect: true,
+        probe: undefined,
+      },
+    },
   ])("$name", ({ input, extra, expected }) => {
     expect(buildRuntimeAccountStatusSnapshot(input, extra)).toEqual(expected);
   });
