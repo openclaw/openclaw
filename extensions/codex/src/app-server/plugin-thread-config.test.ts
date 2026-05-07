@@ -167,7 +167,8 @@ describe("Codex plugin thread config", () => {
       }),
     });
     let enabled = false;
-    const request = vi.fn(async (method: string) => {
+    const appListParams: v2.AppsListParams[] = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "plugin/list") {
         return pluginList([pluginSummary("google-calendar", { installed: true, enabled })]);
       }
@@ -188,6 +189,7 @@ describe("Codex plugin thread config", () => {
         return {};
       }
       if (method === "app/list") {
+        appListParams.push(params as v2.AppsListParams);
         return {
           data: [appInfo("google-calendar-app", true, enabled)],
           nextCursor: null,
@@ -230,6 +232,7 @@ describe("Codex plugin thread config", () => {
     expect(request.mock.calls.filter(([method]) => method === "app/list").length).toBeGreaterThan(
       0,
     );
+    expect(appListParams.some((params) => params.forceRefetch)).toBe(true);
   });
 
   it("fails closed when the initial app inventory refresh fails", async () => {

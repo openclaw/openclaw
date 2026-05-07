@@ -98,9 +98,12 @@ describe("Codex app inventory cache", () => {
     expect(staleRead.refreshScheduled).toBe(true);
 
     cache.invalidate(key, "plugin installed", 1);
-    const forced = cache.refreshNow({ key, request, nowMs: 1, forceRefetch: true });
+    const forcedRead = cache.read({ key, request, nowMs: 1, forceRefetch: true });
+    expect(forcedRead.state).toBe("missing");
+    expect(forcedRead.refreshScheduled).toBe(true);
     expect(request).toHaveBeenCalledTimes(2);
 
+    const forced = cache.refreshNow({ key, request, nowMs: 1 });
     resolveFresh?.({ data: [app("fresh-app")], nextCursor: null });
     await expect(forced).resolves.toMatchObject({
       apps: [expect.objectContaining({ id: "fresh-app" })],

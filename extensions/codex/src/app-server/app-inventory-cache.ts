@@ -81,7 +81,8 @@ export class CodexAppInventoryCache {
 
     const state: CodexAppInventoryReadState =
       entry.invalidated || entry.expiresAtMs <= nowMs ? "stale" : "fresh";
-    const refreshScheduled = state === "fresh" ? false : this.scheduleRefresh(params);
+    const refreshScheduled =
+      state === "fresh" && !params.forceRefetch ? false : this.scheduleRefresh(params);
     return {
       state,
       key: params.key,
@@ -123,7 +124,7 @@ export class CodexAppInventoryCache {
   }
 
   private scheduleRefresh(params: RefreshParams): boolean {
-    if (this.inFlight.has(params.key)) {
+    if (this.inFlight.has(params.key) && !params.forceRefetch) {
       return true;
     }
     const promise = this.refresh(params);

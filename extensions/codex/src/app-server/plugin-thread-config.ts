@@ -135,7 +135,7 @@ export async function buildCodexPluginThreadConfig(
     }
   }
   if (activationResults.some((activation) => activation.ok && activation.installAttempted)) {
-    await refreshAppInventoryNow(params, appCache);
+    await refreshAppInventoryNow(params, appCache, { forceRefetch: true });
     inventory = await readCodexPluginInventory({
       pluginConfig: params.pluginConfig,
       policy,
@@ -297,6 +297,7 @@ function shouldWaitForInitialAppInventory(
 async function refreshAppInventoryNow(
   params: BuildCodexPluginThreadConfigParams,
   appCache: CodexAppInventoryCache,
+  options: { forceRefetch?: boolean } = {},
 ): Promise<void> {
   const appCacheKey = params.appCacheKey;
   if (!appCacheKey) {
@@ -309,6 +310,7 @@ async function refreshAppInventoryNow(
       key: appCacheKey,
       request,
       nowMs: params.nowMs,
+      forceRefetch: options.forceRefetch,
     });
   } catch {
     // Keep the thread fail-closed if app/list refresh is unavailable.

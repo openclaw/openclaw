@@ -107,6 +107,7 @@ describe("Codex plugin activation", () => {
           return {};
         }
         if (method === "app/list") {
+          expect(params).toMatchObject({ forceRefetch: true });
           return { data: [], nextCursor: null } satisfies v2.AppsListResponse;
         }
         throw new Error(`unexpected request ${method}`);
