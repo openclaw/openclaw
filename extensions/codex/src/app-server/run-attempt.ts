@@ -372,7 +372,31 @@ function resolveCodexPluginAppCacheEndpoint(appServer: CodexAppServerRuntimeOpti
     command: appServer.start.command,
     args: appServer.start.args,
     url: appServer.start.url ?? null,
+    credentialFingerprint: fingerprintCodexPluginAppCacheCredentials(appServer.start),
   });
+}
+
+function fingerprintCodexPluginAppCacheCredentials(
+  startOptions: CodexAppServerRuntimeOptions["start"],
+): string | null {
+  const authToken = startOptions.authToken ?? "";
+  const headers = Object.entries(startOptions.headers)
+    .map(([key, value]) => [key.toLowerCase(), value] as const)
+    .toSorted(([left], [right]) => left.localeCompare(right));
+  if (!authToken && headers.length === 0) {
+    return null;
+  }
+  const hash = createHash("sha256");
+  hash.update("openclaw:codex:plugin-app-cache-credentials:v1");
+  hash.update("\0");
+  hash.update(authToken);
+  for (const [key, value] of headers) {
+    hash.update("\0");
+    hash.update(key);
+    hash.update("\0");
+    hash.update(value);
+  }
+  return `sha256:${hash.digest("hex")}`;
 }
 
 function resolveCodexPluginAppCacheCodexHome(
@@ -2197,6 +2221,7 @@ export const __testing = {
   filterCodexDynamicToolsForAllowlist,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
+  resolveCodexPluginAppCacheEndpoint,
   resolveOpenClawCodingToolsSessionKeys,
   shouldForceMessageTool,
   setOpenClawCodingToolsFactoryForTests(factory: OpenClawCodingToolsFactory): void {

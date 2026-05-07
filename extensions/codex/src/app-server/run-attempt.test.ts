@@ -2452,12 +2452,7 @@ describe("runCodexAppServerAttempt", () => {
     await defaultCodexAppInventoryCache.refreshNow({
       key: buildCodexAppInventoryCacheKey({
         codexHome: resolveCodexAppServerHomeDir(agentDir),
-        endpoint: JSON.stringify({
-          transport: appServer.start.transport,
-          command: appServer.start.command,
-          args: appServer.start.args,
-          url: appServer.start.url ?? null,
-        }),
+        endpoint: __testing.resolveCodexPluginAppCacheEndpoint(appServer),
       }),
       request: async () => ({
         data: [
@@ -3306,6 +3301,43 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnRequest?.params).toEqual(
       expect.not.objectContaining({ serviceTier: expect.anything() }),
     );
+  });
+
+  it("keys plugin app inventory by websocket credentials without exposing them", () => {
+    const first = __testing.resolveCodexPluginAppCacheEndpoint({
+      start: {
+        transport: "websocket",
+        command: "codex",
+        args: [],
+        url: "ws://127.0.0.1:39175",
+        authToken: "token-first",
+        headers: { Authorization: "Bearer first" },
+      },
+      requestTimeoutMs: 60_000,
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
+      sandbox: "workspace-write",
+    });
+    const second = __testing.resolveCodexPluginAppCacheEndpoint({
+      start: {
+        transport: "websocket",
+        command: "codex",
+        args: [],
+        url: "ws://127.0.0.1:39175",
+        authToken: "token-second",
+        headers: { Authorization: "Bearer second" },
+      },
+      requestTimeoutMs: 60_000,
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
+      sandbox: "workspace-write",
+    });
+
+    expect(first).not.toEqual(second);
+    expect(first).not.toContain("token-first");
+    expect(first).not.toContain("Bearer first");
+    expect(second).not.toContain("token-second");
+    expect(second).not.toContain("Bearer second");
   });
 
   it("builds resume and turn params from the currently selected OpenClaw model", () => {
