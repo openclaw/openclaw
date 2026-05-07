@@ -362,6 +362,21 @@ const INSUFFICIENT_QUOTA_PAYLOAD =
   '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}';
 
 describe("runWithModelFallback", () => {
+  it("normalizes anthropic-cli refs to the Claude CLI provider before execution", async () => {
+    const run = vi.fn().mockResolvedValue("ok");
+
+    const result = await runWithModelFallback({
+      cfg: {} as OpenClawConfig,
+      provider: "anthropic-cli",
+      model: "claude-opus-4-7",
+      run,
+    });
+
+    expect(run).toHaveBeenCalledWith("claude-cli", "claude-opus-4-7");
+    expect(result.provider).toBe("claude-cli");
+    expect(result.model).toBe("claude-opus-4-7");
+  });
+
   it("skips auth store bootstrap when no auth profile sources exist", async () => {
     authSourceCheckMock.hasAnyAuthProfileStoreSource.mockReturnValue(false);
     const run = vi.fn().mockResolvedValueOnce("ok");
