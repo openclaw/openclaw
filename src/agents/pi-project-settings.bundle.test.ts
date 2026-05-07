@@ -328,7 +328,6 @@ describe("loadEnabledBundlePiSettingsSnapshot", () => {
   it("does not reuse an unscoped current snapshot when plugin load paths change", async () => {
     const workspaceDir = await tempDirs.make("openclaw-workspace-");
     const pluginRoot = await createWorkspaceBundle({ workspaceDir });
-    const resolvedPluginRoot = await fs.realpath(pluginRoot);
     await fs.writeFile(
       path.join(pluginRoot, "settings.json"),
       JSON.stringify({ hideThinkingBlock: true }),
