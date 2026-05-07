@@ -981,7 +981,9 @@ export function renderApp(state: AppViewState) {
       "config",
       {
         tab: state.tab,
+        formMode: overrides.formMode,
         activeSection: overrides.activeSection,
+        activeSubsection: overrides.activeSubsection,
         schemaSectionCount: countTopLevelSchemaProperties(commonConfigProps.schema),
         hasSearch: Boolean(overrides.searchQuery?.trim()),
       },

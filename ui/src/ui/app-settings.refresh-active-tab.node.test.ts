@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   loadAgentIdentityMock: vi.fn(async () => {}),
   loadAgentSkillsMock: vi.fn(async () => {}),
   loadAgentsMock: vi.fn(async () => {}),
-  loadChannelsMock: vi.fn(async () => {}),
+  loadChannelsMock: vi.fn<(_host: unknown, _probe: boolean) => Promise<void>>(async () => {}),
   loadConfigMock: vi.fn(async () => {}),
   loadConfigSchemaMock: vi.fn(async () => {}),
   loadCronStatusMock: vi.fn(async () => {}),
@@ -239,6 +239,43 @@ describe("refreshActiveTab", () => {
     expect(mocks.loadChannelsMock).toHaveBeenCalled();
     expect(mocks.loadSessionsMock).toHaveBeenCalled();
     expect(mocks.loadUsageMock).toHaveBeenCalled();
+  });
+
+  it("does not wait for config schema before resolving config tab refresh", async () => {
+    const host = createHost();
+    host.tab = "config";
+    mocks.loadConfigSchemaMock.mockReturnValueOnce(new Promise<void>(() => undefined));
+
+    const refresh = refreshActiveTab(host as never);
+    const outcome = await Promise.race([
+      refresh.then(() => "resolved" as const),
+      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
+    ]);
+
+    expect(outcome).toBe("resolved");
+    expect(mocks.loadConfigSchemaMock).toHaveBeenCalledOnce();
+    expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
+  });
+
+  it("renders channels from the cheap snapshot before starting slow probes", async () => {
+    const host = createHost();
+    host.tab = "channels";
+    mocks.loadConfigSchemaMock.mockReturnValueOnce(new Promise<void>(() => undefined));
+    mocks.loadChannelsMock.mockImplementation(async (_host, probe) => {
+      if (probe) {
+        await new Promise<void>(() => undefined);
+      }
+    });
+
+    const refresh = refreshActiveTab(host as never);
+    const outcome = await Promise.race([
+      refresh.then(() => "resolved" as const),
+      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
+    ]);
+
+    expect(outcome).toBe("resolved");
+    expect(mocks.loadChannelsMock.mock.calls.map(([, probe]) => probe)).toEqual([false, true]);
+    expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
   });
 
   it("records overview secondary refresh duration and aggregate status", async () => {

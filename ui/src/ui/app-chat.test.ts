@@ -142,6 +142,43 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+describe("refreshChat", () => {
+  beforeAll(async () => {
+    await loadChatHelpers();
+  });
+
+  it("dispatches chat refresh work without waiting for slow history or secondary RPCs", async () => {
+    const request = vi.fn(() => new Promise<unknown>(() => undefined));
+    const requestUpdate = vi.fn();
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      requestUpdate,
+    });
+
+    const refresh = refreshChat(host);
+    const outcome = await Promise.race([
+      refresh.then(() => "resolved" as const),
+      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
+    ]);
+
+    expect(outcome).toBe("resolved");
+    expect(host.chatLoading).toBe(true);
+    expect(request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "main",
+      limit: 100,
+      maxChars: 4000,
+    });
+    expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
+    expect(request).toHaveBeenCalledWith("commands.list", {
+      agentId: "main",
+      includeArgs: true,
+      scope: "text",
+    });
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+});
+
 describe("refreshChatAvatar", () => {
   beforeAll(async () => {
     await loadChatHelpers();
