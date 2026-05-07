@@ -558,7 +558,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         credential: {
           type: "aws-sdk",
           provider: "openai-codex",
-        },
+        } as never,
       });
 
       await expect(
