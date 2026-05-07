@@ -457,7 +457,7 @@ export function resolveEffectiveToolPolicy(params: {
       );
       const uncoveredEntries = implicitGrants.entries
         .map((entry) => ({
-          ...entry,
+          section: entry.section,
           grants: entry.grants.filter(
             (toolName) => !isToolAllowedByPolicyName(toolName, profilePolicy),
           ),
