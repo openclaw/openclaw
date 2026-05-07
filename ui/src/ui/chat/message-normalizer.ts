@@ -158,6 +158,22 @@ function mergeAdjacentTextItems(items: MessageContentItem[]): MessageContentItem
   return merged.filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
 }
 
+function shouldStripDisplayMetadata(role: string): boolean {
+  const normalizedRole = role.trim().toLowerCase();
+  return normalizedRole === "user" || normalizedRole === "system" || normalizedRole === "unknown";
+}
+
+function stripDisplayMetadataFromContent(items: MessageContentItem[]): MessageContentItem[] {
+  return items
+    .map((item) => {
+      if (item.type !== "text" || typeof item.text !== "string") {
+        return item;
+      }
+      return { ...item, text: stripInboundMetadata(item.text) };
+    })
+    .filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
+}
+
 function expandTextContent(text: string): {
   content: MessageContentItem[];
   audioAsVoice: boolean;
@@ -370,14 +386,9 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const senderLabel =
     typeof m.senderLabel === "string" && m.senderLabel.trim() ? m.senderLabel.trim() : null;
 
-  // Strip AI-injected metadata prefix blocks from user messages before display.
-  if (role === "user" || role === "User") {
-    content = content.map((item) => {
-      if (item.type === "text" && typeof item.text === "string") {
-        return { ...item, text: stripInboundMetadata(item.text) };
-      }
-      return item;
-    });
+  // Strip AI-injected metadata blocks from non-assistant display messages.
+  if (shouldStripDisplayMetadata(role)) {
+    content = stripDisplayMetadataFromContent(content);
   }
 
   return {

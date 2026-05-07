@@ -29,6 +29,26 @@ describe("message-normalizer", () => {
       });
     });
 
+    it("strips sender metadata blocks from user messages before display", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content:
+          'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n```\n\nhello',
+      });
+
+      expect(result.content).toEqual([{ type: "text", text: "hello" }]);
+    });
+
+    it("drops standalone sender metadata system messages before display", () => {
+      const result = normalizeMessage({
+        role: "system",
+        content:
+          'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n```',
+      });
+
+      expect(result.content).toEqual([]);
+    });
+
     it("does not reinterpret directive-like user string content", () => {
       const result = normalizeMessage({
         role: "user",
