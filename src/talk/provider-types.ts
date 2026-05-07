@@ -94,12 +94,25 @@ export type RealtimeVoiceProviderConfiguredContext = {
   providerConfig: RealtimeVoiceProviderConfig;
 };
 
+export type RealtimeVoiceVideoFrameMimeType = "image/jpeg" | "image/png" | "image/webp";
+
+export type RealtimeVoiceVideoFrameOptions = {
+  mimeType?: RealtimeVoiceVideoFrameMimeType;
+  captureTimestampMs?: number;
+};
+
+export type RealtimeVoiceVideoConfig = {
+  mimeType?: RealtimeVoiceVideoFrameMimeType;
+  fps?: number;
+};
+
 export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
   providerConfig: RealtimeVoiceProviderConfig;
   audioFormat?: RealtimeVoiceAudioFormat;
   instructions?: string;
   autoRespondToAudio?: boolean;
   tools?: RealtimeVoiceTool[];
+  videoConfig?: RealtimeVoiceVideoConfig;
 };
 
 export type RealtimeVoiceBrowserSessionCreateRequest = {
@@ -171,6 +184,7 @@ export type RealtimeVoiceBridge = {
   supportsToolResultContinuation?: boolean;
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
+  sendVideoFrame?(frame: Buffer, options?: RealtimeVoiceVideoFrameOptions): void;
   setMediaTimestamp(ts: number): void;
   sendUserMessage?(text: string): void;
   triggerGreeting?(instructions?: string): void;

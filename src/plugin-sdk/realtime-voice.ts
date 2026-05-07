@@ -18,6 +18,9 @@ export type {
   RealtimeVoiceTool,
   RealtimeVoiceToolCallEvent,
   RealtimeVoiceToolResultOptions,
+  RealtimeVoiceVideoConfig,
+  RealtimeVoiceVideoFrameMimeType,
+  RealtimeVoiceVideoFrameOptions,
 } from "../talk/provider-types.js";
 export {
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
