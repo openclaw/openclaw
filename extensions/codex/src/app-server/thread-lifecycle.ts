@@ -86,7 +86,6 @@ export async function startOrResumeThread(params: {
           error,
           threadId: binding.threadId,
         });
-        pluginBindingStale = true;
       }
     }
     if (pluginBindingStale) {
