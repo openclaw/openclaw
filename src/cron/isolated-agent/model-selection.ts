@@ -45,7 +45,7 @@ export type ResolveCronModelSelectionResult =
 function formatAllowedModelRefs(params: { cfg: OpenClawConfig }): string {
   const configured = params.cfg.agents?.defaults?.models;
   if (configured && typeof configured === "object" && Object.keys(configured).length > 0) {
-    return Object.keys(configured).sort().join(", ");
+    return Object.keys(configured).toSorted().join(", ");
   }
   return "(none configured)";
 }
