@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
-import { resolveAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
+import {
+  resolveAgentRuntimeMetadata,
+  resolveSessionAgentRuntimeMetadata,
+} from "../../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
@@ -1601,7 +1604,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       provider: resolved.provider,
       model: resolved.model,
     });
-    const agentRuntime = resolveAgentRuntimeMetadata(cfg, agentId);
+    const agentRuntime = resolveSessionAgentRuntimeMetadata(cfg, agentId, applied.entry);
     const result: SessionsPatchResult = {
       ok: true,
       path: storePath,
@@ -1944,7 +1947,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         config: cfg,
         provider: resolvedModel.provider,
         model: resolvedModel.model,
-        agentHarnessId: entry?.sessionId === sessionId ? entry.agentHarnessId : undefined,
+        agentHarnessId:
+          entry?.sessionId === sessionId
+            ? (entry.agentRuntimeOverride ?? entry.agentHarnessId)
+            : undefined,
         thinkLevel: normalizeThinkLevel(entry?.thinkingLevel),
         reasoningLevel: normalizeReasoningLevel(entry?.reasoningLevel),
         bashElevated: {

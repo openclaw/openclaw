@@ -143,7 +143,8 @@ async function resolveStatusHarnessId(params: {
       config: params.cfg,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
-      agentHarnessId: params.sessionEntry?.agentHarnessId,
+      agentHarnessId:
+        params.sessionEntry?.agentRuntimeOverride ?? params.sessionEntry?.agentHarnessId,
     });
     const id = normalizeOptionalLowercaseString(selected.id);
     return id && id !== "pi" ? id : undefined;

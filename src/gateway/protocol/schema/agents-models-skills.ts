@@ -45,6 +45,7 @@ export const AgentSummarySchema = Type.Object(
           id: NonEmptyString,
           fallback: Type.Optional(Type.Union([Type.Literal("pi"), Type.Literal("none")])),
           source: Type.Union([
+            Type.Literal("session"),
             Type.Literal("env"),
             Type.Literal("agent"),
             Type.Literal("defaults"),

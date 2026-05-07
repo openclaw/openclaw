@@ -735,6 +735,55 @@ describe("trigger handling", () => {
     });
   });
 
+  it("keeps native runtime model changes isolated to one Telegram forum topic", async () => {
+    await withTempHome(async (home) => {
+      const cfg = makeCfg(home);
+      cfg.session = {
+        ...cfg.session,
+        store: join(home, "native-model-runtime-topic.sessions.json"),
+      };
+      const storePath = requireSessionStorePath(cfg);
+      const slashSessionKey = "agent:main:telegram:slash:7595562691";
+      const topicOneSessionKey = "agent:main:telegram:group:-100123:topic:11";
+      const topicTwoSessionKey = "agent:main:telegram:group:-100123:topic:22";
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [topicOneSessionKey]: {
+            sessionId: "session-topic-one",
+            updatedAt: Date.now(),
+          },
+          [topicTwoSessionKey]: {
+            sessionId: "session-topic-two",
+            updatedAt: Date.now(),
+          },
+        }),
+      );
+
+      const res = await getReplyFromConfig(
+        makeNativeTelegramCommandMessage({
+          body: "/model openai/gpt-5.5 --runtime codex",
+          slashSessionKey,
+          targetSessionKey: topicOneSessionKey,
+        }),
+        {},
+        cfg,
+      );
+
+      expect(maybeReplyText(res)).toContain("Model set to openai/gpt-5.5");
+
+      const store = loadSessionStore(storePath);
+      expect(store[topicOneSessionKey]?.providerOverride).toBe("openai");
+      expect(store[topicOneSessionKey]?.modelOverride).toBe("gpt-5.5");
+      expect(store[topicOneSessionKey]?.agentRuntimeOverride).toBe("codex");
+      expect(store[topicTwoSessionKey]?.providerOverride).toBeUndefined();
+      expect(store[topicTwoSessionKey]?.modelOverride).toBeUndefined();
+      expect(store[topicTwoSessionKey]?.agentRuntimeOverride).toBeUndefined();
+      expect(store[slashSessionKey]).toBeUndefined();
+    });
+  });
+
   it("applies native model auth profile overrides to the target session", async () => {
     await withTempHome(async (home) => {
       const cfg = makeCfg(home);

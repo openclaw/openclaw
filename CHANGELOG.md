@@ -141,6 +141,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Telegram/model: report and reuse `/model --runtime` as a session-scoped override so one forum topic can use the Codex runtime without making sibling topics appear to switch runtimes.
 - fix(auto-reply): gate inline skill tool dispatch [AI]. (#78517) Thanks @pgondhi987.
 - Canvas plugin: keep legacy root `canvasHost` configs valid until `openclaw doctor --fix` migrates them into `plugins.entries.canvas.config.host`, move Canvas/A2UI clients to gateway protocol v4 plugin surfaces, and refresh the generated A2UI bundle hash so normal builds stay clean.
 - feishu: honor config write policy for dynamic agents [AI]. (#78520) Thanks @pgondhi987.

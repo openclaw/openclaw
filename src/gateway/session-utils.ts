@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import {
+  resolveAgentRuntimeMetadata,
+  resolveSessionAgentRuntimeMetadata,
+} from "../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
   resolveAgentConfig,
@@ -1711,7 +1714,7 @@ export function buildGatewaySessionRow(params: {
   const latestCompactionCheckpoint = buildCompactionCheckpointPreview(
     resolveLatestCompactionCheckpoint(entry),
   );
-  const agentRuntime = resolveAgentRuntimeMetadata(cfg, sessionAgentId);
+  const agentRuntime = resolveSessionAgentRuntimeMetadata(cfg, sessionAgentId, entry);
   const selectedOrRuntimeModelProvider = selectedModel?.provider ?? modelProvider;
   const selectedOrRuntimeModel = selectedModel?.model ?? model;
   const rowModelIdentity = lightweight

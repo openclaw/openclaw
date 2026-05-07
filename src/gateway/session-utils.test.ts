@@ -1438,6 +1438,44 @@ describe("listSessionsFromStore selected model display", () => {
     });
   });
 
+  test("keeps session runtime overrides isolated between Telegram topics", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "openai/gpt-5.5",
+      agentRuntime: { id: "pi" },
+    });
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:telegram:group:-100123:topic:11": {
+          sessionId: "topic-11",
+          updatedAt: Date.now(),
+          providerOverride: "openai",
+          modelOverride: "gpt-5.5",
+          agentRuntimeOverride: "codex",
+        } as SessionEntry,
+        "agent:main:telegram:group:-100123:topic:22": {
+          sessionId: "topic-22",
+          updatedAt: Date.now(),
+          providerOverride: "openai",
+          modelOverride: "gpt-5.5",
+        } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    const byKey = new Map(result.sessions.map((session) => [session.key, session]));
+    expect(byKey.get("agent:main:telegram:group:-100123:topic:11")?.agentRuntime).toEqual({
+      id: "codex",
+      source: "session",
+    });
+    expect(byKey.get("agent:main:telegram:group:-100123:topic:22")?.agentRuntime).toEqual({
+      id: "pi",
+      source: "defaults",
+    });
+  });
+
   test("infers canonical provider for bare CLI models before default-provider fallback", () => {
     const cfg = createModelDefaultsConfig({
       primary: "openai/gpt-5.4",

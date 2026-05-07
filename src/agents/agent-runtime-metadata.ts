@@ -1,3 +1,4 @@
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -10,7 +11,7 @@ import {
 
 type AgentRuntimeMetadata = {
   id: string;
-  source: "env" | "agent" | "defaults" | "implicit";
+  source: "session" | "env" | "agent" | "defaults" | "implicit";
 };
 
 function normalizeRuntimeValue(value: unknown): EmbeddedAgentRuntime | undefined {
@@ -58,4 +59,20 @@ export function resolveAgentRuntimeMetadata(
     id: "pi",
     source: "implicit",
   };
+}
+
+export function resolveSessionAgentRuntimeMetadata(
+  cfg: OpenClawConfig,
+  agentId: string,
+  sessionEntry?: Pick<SessionEntry, "agentRuntimeOverride">,
+  env: NodeJS.ProcessEnv = process.env,
+): AgentRuntimeMetadata {
+  const sessionRuntime = normalizeRuntimeValue(sessionEntry?.agentRuntimeOverride);
+  if (sessionRuntime && sessionRuntime !== "auto") {
+    return {
+      id: sessionRuntime,
+      source: "session",
+    };
+  }
+  return resolveAgentRuntimeMetadata(cfg, agentId, env);
 }
