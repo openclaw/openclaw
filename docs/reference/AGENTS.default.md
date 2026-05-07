@@ -195,11 +195,11 @@ Usage notes (使用说明):
 -->
 <!--
 Note to maintainers:
-If this addition is found useful, there is a follow-up plan to integrate
-an optional wizard prompt that asks Chinese users whether they want these
-annotations applied during setup. See the related PR for details.
+If the maintainers find this useful, the original author is willing to
+submit a follow-up PR that adds an optional wizard prompt asking Chinese
+users whether they want these annotations during setup.
 
 致维护者：
-如果您认为此内容有价值，后续计划在安装向导中增加一个可选项，
-询问中国用户是否需要应用这些中文注释。详情请参阅关联 PR。
+如果创作团队觉得有用，原作者愿意再提交一个 PR，
+在安装过程中增加选项，询问中国用户是否需要添加中文注释。
 -->
