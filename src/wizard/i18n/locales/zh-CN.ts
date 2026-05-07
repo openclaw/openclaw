@@ -119,4 +119,9 @@ export const zhCN: LocaleMap = {
   // ===== setup.gateway-config.ts (secret mode options) =====
   "Default": "默认",
   "Store a reference instead of plaintext": "存储引用而非明文",
+
+  // ===== ClawSweeper P2 fixes =====
+  "Configure details later via": "后续可通过",
+  "Enter the gateway password now": "立即输入网关密码",
+
 };

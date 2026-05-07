@@ -4,7 +4,8 @@ import { zhTW } from "./locales/zh-TW.js";
 function detectLocale(): string {
   try {
     const locale = Intl.DateTimeFormat().resolvedOptions().locale;
-    if (locale === "zh-TW" || locale === "zh-HK" || locale === "zh-MO") return "zh-TW";
+    if (locale.startsWith("zh-Hant") || locale === "zh-TW" || locale === "zh-HK" || locale === "zh-MO") return "zh-TW";
+    if (locale.startsWith("zh-Hans")) return "zh-CN";
     if (locale.startsWith("zh")) return "zh-CN";
   } catch {
     // Ignore errors from locale detection

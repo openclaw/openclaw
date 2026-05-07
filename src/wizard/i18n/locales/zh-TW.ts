@@ -119,4 +119,9 @@ export const zhTW: LocaleMap = {
   // ===== setup.gateway-config.ts (secret mode options) =====
   "Default": "預設",
   "Store a reference instead of plaintext": "儲存參照而非明文",
+
+  // ===== ClawSweeper P2 fixes =====
+  "Configure details later via": "後續可透過",
+  "Enter the gateway password now": "立即輸入閘道密碼",
+
 };

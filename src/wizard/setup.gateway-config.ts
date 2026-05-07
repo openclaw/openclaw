@@ -247,7 +247,7 @@ export async function configureGatewayForSetup(
         explicitMode: opts.secretInputMode,
         copy: {
           modeMessage: t("How do you want to provide the gateway password?"),
-          plaintextLabel: "Enter password now",
+          plaintextLabel: t("Enter password now"),
           plaintextHint: "Stores the password directly in OpenClaw config",
         },
       });

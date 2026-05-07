@@ -234,7 +234,7 @@ export async function runSetupWizard(
     );
   }
 
-  const quickstartHint = t(`Configure details later via ${formatCliCommand("openclaw configure")}.`);
+  const quickstartHint = `${t("Configure details later via")} ${formatCliCommand("openclaw configure")}.`;
   const manualHint = t("Configure port, network, Tailscale, and auth options.");
   const migrationDetections = await detectSetupMigrationSources({ config: baseConfig, runtime });
   const firstMigrationDetection = migrationDetections[0];
