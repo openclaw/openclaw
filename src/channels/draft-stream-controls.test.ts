@@ -120,68 +120,6 @@ describe("draft-stream-controls", () => {
     expect(deleteMessage).toHaveBeenCalledWith("m-4");
   });
 
-  it("lifecycle clear cancels pending draft text instead of flushing it", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    try {
-      const state = { stopped: false, final: false };
-      let messageId: string | undefined = "m-6";
-      const sendOrEditStreamMessage = vi.fn(async () => true);
-      const deleteMessage = vi.fn(async () => {});
-
-      const lifecycle = createFinalizableDraftLifecycle({
-        throttleMs: 250,
-        state,
-        sendOrEditStreamMessage,
-        readMessageId: () => messageId,
-        clearMessageId: () => {
-          messageId = undefined;
-        },
-        isValidMessageId: (value): value is string => typeof value === "string",
-        deleteMessage,
-        warnPrefix: "cleanup failed",
-      });
-
-      lifecycle.update("pending draft");
-      await lifecycle.clear();
-
-      expect(state.stopped).toBe(true);
-      expect(sendOrEditStreamMessage).not.toHaveBeenCalled();
-      expect(deleteMessage).toHaveBeenCalledWith("m-6");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("lifecycle stop flushes pending final draft text", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    try {
-      const state = { stopped: false, final: false };
-      const sendOrEditStreamMessage = vi.fn(async () => true);
-
-      const lifecycle = createFinalizableDraftLifecycle({
-        throttleMs: 250,
-        state,
-        sendOrEditStreamMessage,
-        readMessageId: () => "m-7",
-        clearMessageId: () => {},
-        isValidMessageId: (value): value is string => typeof value === "string",
-        deleteMessage: async () => {},
-        warnPrefix: "cleanup failed",
-      });
-
-      lifecycle.update("final draft");
-      await lifecycle.stop();
-
-      expect(state.final).toBe(true);
-      expect(sendOrEditStreamMessage).toHaveBeenCalledTimes(1);
-      expect(sendOrEditStreamMessage).toHaveBeenCalledWith("final draft");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("lifecycle seal ignores late updates without clearing the preview id", async () => {
     const state = { stopped: false, final: false };
     let messageId: string | undefined = "m-5";

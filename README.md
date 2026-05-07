@@ -246,17 +246,12 @@ Note: `pnpm openclaw ...` runs TypeScript directly (via `tsx`). `pnpm build` pro
 
 ## Development channels
 
-- **stable**: tagged releases (`vYYYY.M.D` today), npm dist-tag `latest`.
+- **stable**: tagged releases (`vYYYY.M.D` or `vYYYY.M.D-<patch>`), npm dist-tag `latest`.
 - **beta**: prerelease tags (`vYYYY.M.D-beta.N`), npm dist-tag `beta` (macOS app may be missing).
 - **dev**: moving head of `main`, npm dist-tag `dev` (when published).
 
 Switch channels (git + npm): `openclaw update --channel stable|beta|dev`.
 Details: [Development channels](https://docs.openclaw.ai/install/development-channels).
-
-We are planning SemVer-compatible monthly support lines using `YYYY.M.PATCH`
-versions, but they are not available yet. Legacy `vYYYY.M.D-<patch>` correction
-tags may still be recognized for older releases; new release work should not use
-that format as the long-term support model.
 
 ## Agent workspace + skills
 

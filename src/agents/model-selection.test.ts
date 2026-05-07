@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
+import { migrateLegacyRuntimeModelRef } from "./model-runtime-aliases.js";
 import {
   buildAllowedModelSet,
   inferUniqueProviderFromConfiguredModels,
@@ -220,6 +221,7 @@ describe("model-selection", () => {
       expect(normalizeProviderId("qwen")).toBe("qwen");
       expect(normalizeProviderId("kimi-code")).toBe("kimi");
       expect(normalizeProviderId("kimi-coding")).toBe("kimi");
+      expect(normalizeProviderId("anthropic-cli")).toBe("claude-cli");
       expect(normalizeProviderId("bedrock")).toBe("amazon-bedrock");
       expect(normalizeProviderId("aws-bedrock")).toBe("amazon-bedrock");
       expect(normalizeProviderId("amazon-bedrock")).toBe("amazon-bedrock");
@@ -390,12 +392,29 @@ describe("model-selection", () => {
         defaultProvider: "google-vertex",
         expected: { provider: "google-vertex", model: "gemini-3.1-flash-lite-preview" },
       },
+      {
+        name: "normalizes anthropic-cli refs to the Claude CLI provider alias",
+        variants: ["anthropic-cli/claude-opus-4-7"],
+        defaultProvider: "openai",
+        expected: { provider: "claude-cli", model: "claude-opus-4-7" },
+      },
     ];
 
     it("parses and normalizes provider/model refs", () => {
       for (const { variants, defaultProvider, expected } of parseModelRefCases) {
         expectParsedModelVariants(variants, defaultProvider, expected);
       }
+    });
+
+    it("migrates anthropic-cli legacy runtime refs to canonical Anthropic refs", () => {
+      expect(migrateLegacyRuntimeModelRef("anthropic-cli/claude-opus-4-7")).toEqual({
+        ref: "anthropic/claude-opus-4-7",
+        legacyProvider: "claude-cli",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        runtime: "claude-cli",
+        cli: true,
+      });
     });
 
     it("round-trips normalized refs through modelKey", () => {
