@@ -180,13 +180,12 @@ export async function installSkill(
   skillKey: string,
   name: string,
   installId: string,
-  dangerouslyForceUnsafeInstall = false,
+  _dangerouslyForceUnsafeInstall = false,
 ) {
   await runSkillMutation(state, skillKey, async (client) => {
     const result = await client.request<{ message?: string }>("skills.install", {
       name,
       installId,
-      dangerouslyForceUnsafeInstall,
       timeoutMs: 120000,
     });
     return {
