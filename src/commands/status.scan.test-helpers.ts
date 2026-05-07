@@ -443,6 +443,8 @@ export function applyStatusScanDefaults(
 
   if (options.memoryManager) {
     mocks.getMemorySearchManager.mockResolvedValue(options.memoryManager);
+  } else {
+    mocks.getMemorySearchManager.mockResolvedValue({ manager: null });
   }
 }
 

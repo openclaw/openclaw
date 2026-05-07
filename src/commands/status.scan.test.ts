@@ -253,12 +253,17 @@ describe("scanStatus", () => {
     expect(mocks.probeGateway).not.toHaveBeenCalled();
   });
 
-  it("skips memory backend inspection for default memory-core with no existing store", async () => {
+  it("inspects default memory-core even when the store has not been created yet", async () => {
     configureScanStatus();
+    mocks.getMemorySearchManager.mockResolvedValue(createStatusMemorySearchManager());
 
     await scanStatus({ json: true }, {} as never);
 
-    expect(mocks.getMemorySearchManager).not.toHaveBeenCalled();
+    expect(mocks.getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      agentId: "main",
+      purpose: "status",
+    });
   });
 
   it("keeps default text status off plugin compatibility and memory scans", async () => {

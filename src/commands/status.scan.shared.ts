@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import type { OpenClawConfig } from "../config/types.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
@@ -310,11 +309,6 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   }
   const resolvedMemory = params.resolveMemoryConfig(cfg, agentId);
   if (!resolvedMemory) {
-    return null;
-  }
-  const shouldInspectStore =
-    hasExplicitMemorySearchConfig(cfg, agentId) || existsSync(resolvedMemory.store.path);
-  if (!shouldInspectStore) {
     return null;
   }
   return await resolveMemoryManagerStatusSnapshot(params, agentId);
