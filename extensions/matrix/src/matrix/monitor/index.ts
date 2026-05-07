@@ -23,6 +23,7 @@ import type {
 import { resolveMatrixAccountConfig } from "../account-config.js";
 import { resolveConfiguredMatrixBotUserIds } from "../accounts.js";
 import { setActiveMatrixClient } from "../active-client.js";
+import { isBeeperHomeserver } from "../beeper-stream.js";
 import {
   backfillMatrixAuthDeviceIdAfterStartup,
   isBunRuntime,
@@ -301,6 +302,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const mediaMaxMb = opts.mediaMaxMb ?? accountConfig.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
   const mediaMaxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
   const streaming = resolveMatrixStreamingMode(accountConfig.streaming);
+  const beeperNativeStreaming = isBeeperHomeserver(auth.homeserver) && streaming !== "off";
   const previewToolProgressEnabled = resolveMatrixPreviewToolProgressEnabled(
     accountConfig.streaming,
   );
@@ -395,6 +397,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       dmThreadReplies,
       dmSessionScope,
       streaming,
+      beeperNativeStreaming,
       previewToolProgressEnabled,
       blockStreamingEnabled,
       dmEnabled,

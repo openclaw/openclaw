@@ -31,6 +31,7 @@ export type MatrixClientEventMap = {
   "room.encrypted_event": [roomId: string, event: MatrixRawEvent];
   "room.decrypted_event": [roomId: string, event: MatrixRawEvent];
   "room.failed_decryption": [roomId: string, event: MatrixRawEvent, error: Error];
+  "to_device.event": [event: MatrixRawEvent];
   "room.invite": [roomId: string, event: MatrixRawEvent];
   "room.join": [roomId: string, event: MatrixRawEvent];
   "sync.state": [state: MatrixSyncState, prevState: string | null, error?: unknown];

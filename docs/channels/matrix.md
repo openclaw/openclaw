@@ -181,6 +181,8 @@ A practical baseline with DM pairing, room allowlist, and E2EE:
 
 Matrix reply streaming is opt-in. `streaming` controls how OpenClaw delivers the in-flight assistant reply; `blockStreaming` controls whether each completed block is preserved as its own Matrix message.
 
+On Beeper homeservers (`beeper.com`, `beeper-staging.com`, `beeper-dev.com`, and subdomains), the Matrix plugin uses Beeper-native AI stream events when Matrix streaming is enabled. Beeper clients receive live structured parts for assistant text, thinking, tool progress, plans, command output, patches, and approval state, then OpenClaw finalizes the original Matrix message with `com.beeper.ai` content. Non-Beeper homeservers keep the standard Matrix preview/edit behavior described below.
+
 ```json5
 {
   channels: {

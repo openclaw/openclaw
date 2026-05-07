@@ -551,6 +551,7 @@ export async function editMessageMatrix(
     msgtype?: MatrixTextMsgType;
     includeMentions?: boolean;
     extraContent?: MatrixExtraContentFields;
+    topLevelExtraContent?: MatrixExtraContentFields;
     /** When true, marks the edit as a live/streaming update (MSC4357). */
     live?: boolean;
   },
@@ -615,6 +616,7 @@ export async function editMessageMatrix(
         ...(typeof newContent.formatted_body === "string"
           ? { formatted_body: `* ${newContent.formatted_body}` }
           : {}),
+        ...opts.topLevelExtraContent,
         "m.new_content": newContent,
         "m.relates_to": replaceRelation,
       };

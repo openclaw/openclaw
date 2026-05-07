@@ -33,6 +33,7 @@ import type {
   ReplyToMode,
 } from "../../types.js";
 import { resolveMatrixAccountAllowlistConfig } from "../account-config.js";
+import { createMatrixBeeperStreamController } from "../beeper-stream.js";
 import { formatMatrixErrorMessage } from "../errors.js";
 import { isMatrixMediaSizeLimitError } from "../media-errors.js";
 import {
@@ -191,6 +192,7 @@ export type MatrixMonitorHandlerParams = {
   /** DM session grouping behavior. */
   dmSessionScope?: "per-user" | "per-room";
   streaming: MatrixStreamingMode;
+  beeperNativeStreaming?: boolean;
   previewToolProgressEnabled: boolean;
   blockStreamingEnabled: boolean;
   dmEnabled: boolean;
@@ -1446,10 +1448,22 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           });
         },
       });
-      const draftStreamingEnabled = streaming !== "off";
+      const beeperNativeStreaming = params.beeperNativeStreaming === true;
+      const draftStreamingEnabled = streaming !== "off" && !beeperNativeStreaming;
       const quietDraftStreaming = streaming === "quiet" || streaming === "progress";
       const progressDraftStreaming = streaming === "progress";
       const draftReplyToId = replyToMode !== "off" && !threadTarget ? messageId : undefined;
+      const beeperStream = beeperNativeStreaming
+        ? createMatrixBeeperStreamController({
+            roomId,
+            client,
+            cfg,
+            threadId: threadTarget,
+            replyToId: draftReplyToId,
+            accountId: _route.accountId,
+            log: logVerboseMessage,
+          })
+        : undefined;
       const draftStream: MatrixDraftStreamHandle | undefined = draftStreamingEnabled
         ? await loadMatrixDraftStream().then(({ createMatrixDraftStream }) =>
             createMatrixDraftStream({
@@ -1742,6 +1756,57 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           ...prefixOptions,
           humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, _route.agentId),
           deliver: async (payload: ReplyPayload, info: { kind: string }) => {
+            const beeperPayloadHasMedia =
+              Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+            if (
+              beeperStream &&
+              info.kind !== "tool" &&
+              !payload.isCompactionNotice &&
+              !beeperPayloadHasMedia
+            ) {
+              try {
+                if (await beeperStream.finalize(payload)) {
+                  return;
+                }
+              } catch (err) {
+                logVerboseMessage(
+                  `matrix: Beeper native stream finalization failed: ${String(err)}`,
+                );
+                beeperStream.dispose();
+              }
+            }
+            if (
+              beeperStream &&
+              info.kind !== "tool" &&
+              !payload.isCompactionNotice &&
+              beeperPayloadHasMedia
+            ) {
+              try {
+                await beeperStream.finalize({
+                  ...payload,
+                  mediaUrl: undefined,
+                  mediaUrls: undefined,
+                });
+              } catch (err) {
+                logVerboseMessage(
+                  `matrix: Beeper native media stream finalization failed: ${String(err)}`,
+                );
+              }
+              await deliverMatrixReplies({
+                cfg,
+                replies: [{ ...payload, text: undefined }],
+                roomId,
+                client,
+                runtime,
+                textLimit,
+                replyToMode,
+                threadId: threadTarget,
+                accountId: _route.accountId,
+                mediaLocalRoots,
+                tableMode,
+              });
+              return;
+            }
             if (draftStream && info.kind !== "tool" && !payload.isCompactionNotice) {
               const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
 
@@ -2102,40 +2167,59 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                         // with draft previews on. The draft remains the live preview
                         // for the current assistant block, while block deliveries
                         // finalize completed blocks into their own preserved events.
-                        disableBlockStreaming: !blockStreamingEnabled,
-                        onPartialReply: draftStream
-                          ? (payload) => {
-                              if (progressDraftStreaming) {
-                                return;
+                        disableBlockStreaming: beeperStream ? true : !blockStreamingEnabled,
+                        ...(beeperStream ? { suppressDefaultToolProgressMessages: true } : {}),
+                        onPartialReply: beeperStream
+                          ? beeperStream.onPartialReply
+                          : draftStream
+                            ? (payload) => {
+                                if (progressDraftStreaming) {
+                                  return;
+                                }
+                                latestDraftFullText = payload.text ?? "";
+                                suppressPreviewToolProgressForAnswerText(latestDraftFullText);
+                                updateDraftFromLatestFullText();
                               }
-                              latestDraftFullText = payload.text ?? "";
-                              suppressPreviewToolProgressForAnswerText(latestDraftFullText);
-                              updateDraftFromLatestFullText();
-                            }
-                          : undefined,
-                        onBlockReplyQueued: draftStream
-                          ? (payload, context) => {
-                              if (payload.isCompactionNotice === true) {
-                                return;
+                            : undefined,
+                        onReasoningStream: beeperStream?.onReasoningStream,
+                        onReasoningEnd: beeperStream?.onReasoningEnd,
+                        onBlockReplyQueued: beeperStream
+                          ? beeperStream.onBlockReplyQueued
+                          : draftStream
+                            ? (payload, context) => {
+                                if (payload.isCompactionNotice === true) {
+                                  return;
+                                }
+                                queueDraftBlockBoundary(payload, context);
                               }
-                              queueDraftBlockBoundary(payload, context);
-                            }
-                          : undefined,
+                            : undefined,
                         // Reset draft boundary bookkeeping on assistant message
                         // boundaries so post-tool blocks stream from a fresh
                         // cumulative payload (payload.text resets upstream).
-                        onAssistantMessageStart: draftStream
-                          ? () => {
-                              resetDraftBlockOffsets();
-                              resetPreviewToolProgress();
+                        onAssistantMessageStart: beeperStream
+                          ? beeperStream.onAssistantMessageStart
+                          : draftStream
+                            ? () => {
+                                resetDraftBlockOffsets();
+                                resetPreviewToolProgress();
+                              }
+                            : undefined,
+                        ...(beeperStream
+                          ? {
+                              onToolStart: beeperStream.onToolStart,
+                              onItemEvent: beeperStream.onItemEvent,
+                              onPlanUpdate: beeperStream.onPlanUpdate,
+                              onApprovalEvent: beeperStream.onApprovalEvent,
+                              onCommandOutput: beeperStream.onCommandOutput,
+                              onPatchSummary: beeperStream.onPatchSummary,
                             }
-                          : undefined,
-                        ...buildPreviewToolProgressReplyOptions(),
+                          : buildPreviewToolProgressReplyOptions()),
                         onModelSelected,
                       },
                     });
                   } finally {
                     progressDraftGate.cancel();
+                    beeperStream?.dispose();
                     markRunComplete();
                   }
                 },

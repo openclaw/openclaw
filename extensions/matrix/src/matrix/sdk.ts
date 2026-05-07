@@ -924,6 +924,17 @@ export class MatrixClient {
     });
   }
 
+  getDeviceId(): string | null {
+    return this.client.getDeviceId() ?? null;
+  }
+
+  async sendToDevice(
+    eventType: string,
+    messages: Record<string, Record<string, Record<string, unknown>>>,
+  ): Promise<void> {
+    await this.client.sendToDevice(eventType as never, messages as never);
+  }
+
   // Keep outbound room events ordered when multiple plugin paths emit
   // messages/reactions/polls into the same Matrix room concurrently.
   private async runSerializedRoomSend<T>(roomId: string, task: () => Promise<T>): Promise<T> {
@@ -2062,6 +2073,10 @@ export class MatrixClient {
       if (isEncryptedEvent) {
         decryptBridge.attachEncryptedEvent(event, roomId);
       }
+    });
+
+    this.client.on(ClientEvent.ToDeviceEvent, (event: MatrixEvent) => {
+      this.emitter.emit("to_device.event", matrixEventToRaw(event, { contentMode: "original" }));
     });
 
     // Some SDK invite transitions are surfaced as room lifecycle events instead of raw timeline events.
