@@ -171,7 +171,7 @@ describe("plugin approval forwarding", () => {
         | { payloads?: Array<{ text?: string; interactive?: unknown }> }
         | undefined;
       const payload = deliveryArgs?.payloads?.[0];
-      expect(payload?.text).toContain("Reply with: /approve <id> allow-once|deny");
+      expect(payload?.text).toContain("Reply with: /approve plugin-req-1 allow-once|deny");
       expect(payload?.text).not.toContain("allow-always");
       expect(payload?.interactive).toEqual({
         blocks: [
