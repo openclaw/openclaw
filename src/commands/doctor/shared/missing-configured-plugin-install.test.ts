@@ -930,6 +930,59 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
   });
 
+  it("repairs missing external payload during post-core convergence even with OPENCLAW_UPDATE_IN_PROGRESS=1", async () => {
+    const records = {
+      discord: {
+        source: "npm",
+        spec: "@openclaw/discord",
+        installPath: "/missing/discord",
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "discord",
+        pluginId: "discord",
+        meta: { label: "Discord" },
+        install: { npmSpec: "@openclaw/discord" },
+      },
+    ]);
+    mocks.updateNpmInstalledPlugins.mockResolvedValue({
+      config: {
+        plugins: {
+          installs: { discord: { source: "npm", installPath: "/repaired/discord" } },
+        },
+      },
+      changed: true,
+      outcomes: [{ pluginId: "discord", status: "updated", message: "ok" }],
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        plugins: {
+          entries: { discord: { enabled: true } },
+        },
+        channels: {
+          discord: { enabled: true },
+        },
+      },
+      env: {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+      },
+    });
+
+    expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('Repaired missing configured plugin "discord"'),
+      ]),
+    );
+  });
+
   it("defers channel-selected external payload repair during the package update doctor pass", async () => {
     const records = {
       discord: {

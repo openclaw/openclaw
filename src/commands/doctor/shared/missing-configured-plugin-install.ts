@@ -44,6 +44,7 @@ import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.
 import { resolveUserPath } from "../../../utils.js";
 import { VERSION } from "../../../version.js";
 import { asObjectRecord } from "./object.js";
+import { isUpdatePackageSwapInProgress } from "./update-phase.js";
 
 type DownloadableInstallCandidate = {
   pluginId: string;
@@ -460,10 +461,6 @@ function isInstalledRecordMissingOnDisk(
   return !existsSync(path.join(resolved, "package.json"));
 }
 
-function isUpdatePackageDoctorPass(env: NodeJS.ProcessEnv): boolean {
-  return env[UPDATE_IN_PROGRESS_ENV] === "1";
-}
-
 function recordMatchesBundledPackage(
   record: PluginInstallRecord,
   bundled: BundledPluginPackageDescriptor,
@@ -722,7 +719,7 @@ async function repairMissingPluginInstalls(params: {
     changes.push(`Removed stale managed install record for bundled plugin "${pluginId}".`);
   }
 
-  if (isUpdatePackageDoctorPass(env)) {
+  if (isUpdatePackageSwapInProgress(env)) {
     const updateDeferredPluginIds = collectUpdateDeferredPluginIds({
       cfg: params.cfg,
       env,
@@ -846,9 +843,3 @@ async function repairMissingPluginInstalls(params: {
   }
   return { changes, warnings };
 }
-
-export const __testing = {
-  collectConfiguredChannelIds,
-  collectConfiguredPluginIds,
-  collectDownloadableInstallCandidates,
-};
