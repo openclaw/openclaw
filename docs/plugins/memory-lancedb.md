@@ -210,6 +210,58 @@ out of the embedding request.
 `captureMaxChars` controls whether a response is short enough to be considered
 for automatic capture. It does not cap recall query embeddings.
 
+## Custom capture triggers
+
+By default, auto-capture uses a set of built-in regex patterns to decide whether
+a message is worth storing. You can extend this with your own patterns via
+`triggers`:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "memory-lancedb": {
+        "config": {
+          "triggers": ["remember|keep in mind", "we decided|we will use"]
+        }
+      }
+    }
+  }
+}
+```
+
+Each entry is a regex string (case-insensitive). Custom triggers are **additive** —
+the built-in patterns still apply. A message is captured if it matches any
+trigger, built-in or custom.
+
+## Custom category rules
+
+Auto-capture classifies each stored memory into one of five categories:
+`preference`, `fact`, `decision`, `entity`, `other`. You can override the
+detection logic with `categoryRules`:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "memory-lancedb": {
+        "config": {
+          "categoryRules": {
+            "entity": "my boss|the client|is called",
+            "decision": "we decided|we will use|we need to",
+            "preference": "i like|i prefer|i hate"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Each key must be one of the five valid categories; the value is a regex string.
+Custom rules are evaluated **before** built-in logic — first match wins. Categories
+not listed fall through to the built-in classifier.
+
 ## Commands
 
 When `memory-lancedb` is the active memory plugin, it registers the `ltm` CLI

@@ -297,12 +297,12 @@ export const memoryConfigSchema = {
     categoryRules: {
       label: "Category Rules",
       advanced: true,
-      help: 'Custom detection rules applied before built-in logic. Example: [{ "pattern": "mi jefe", "category": "entity" }]',
+      help: 'Object mapping category name to a regex string. Example: { "entity": "my boss|the client", "decision": "we decided|we will use" }. Valid categories: preference, fact, decision, entity, other.',
     },
     triggers: {
       label: "Custom Capture Triggers",
       advanced: true,
-      help: 'Additional regex patterns (as strings) that trigger auto-capture. Example: ["remember this", "mi \\\\w+ es"]',
+      help: 'Additional regex patterns (as strings) that trigger auto-capture. Example: ["remember this", "we decided|we will use"]',
     },
     storageOptions: {
       label: "Storage Options",
