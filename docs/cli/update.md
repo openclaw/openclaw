@@ -96,6 +96,11 @@ install method aligned:
 - `beta` → prefers npm dist-tag `beta`, but falls back to `latest` when beta is
   missing or older than the current stable release.
 
+OpenClaw does not yet have an LTS or monthly support channel. We are working
+toward monthly support lines, but `--channel` currently accepts only
+`stable`, `beta`, and `dev`. Use `--tag <version-or-dist-tag>` for a one-off
+target when you need a specific package artifact.
+
 The Gateway core auto-updater (when enabled via config) launches the CLI update path
 outside the live Gateway request handler. Control-plane `update.run` package-manager
 updates force a non-deferred, no-cooldown update restart after the package swap,
