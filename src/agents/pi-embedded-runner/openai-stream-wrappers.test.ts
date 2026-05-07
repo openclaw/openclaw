@@ -1,5 +1,5 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
@@ -22,17 +22,37 @@ function createPayloadCapture(opts?: { initialReasoning?: unknown }) {
   return { baseStreamFn, payloads };
 }
 
-const codexModel = {
+type TestModelInit<TApi extends Api> = Pick<Model<TApi>, "api" | "provider" | "id"> &
+  Partial<Omit<Model<TApi>, "api" | "provider" | "id" | "compat">> & {
+    compat?: Record<string, unknown>;
+  };
+
+function createTestModel<TApi extends Api>(init: TestModelInit<TApi>): Model<TApi> {
+  return {
+    name: init.id,
+    baseUrl: "",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 4096,
+    ...init,
+  } as unknown as Model<TApi>;
+}
+
+const codexModel = createTestModel({
   api: "openai-codex-responses",
   provider: "openai-codex",
   id: "gpt-5.1-codex",
-} as Model<"openai-codex-responses">;
+  reasoning: true,
+});
 
-const openaiModel = {
+const openaiModel = createTestModel({
   api: "openai-responses",
   provider: "openai",
   id: "gpt-5.2",
-} as Model<"openai-responses">;
+  reasoning: true,
+});
 
 describe("createOpenAICompletionsToolsCompatWrapper", () => {
   it("strips tools fields when OpenAI-compatible models disable tool support", () => {
@@ -51,13 +71,12 @@ describe("createOpenAICompletionsToolsCompatWrapper", () => {
 
     const wrapped = createOpenAICompletionsToolsCompatWrapper(baseStreamFn);
     void wrapped(
-      {
+      createTestModel({
         api: "openai-completions",
         provider: "venice",
         id: "chat-only-model",
-        baseUrl: "https://example.invalid/v1",
         compat: { supportsTools: false },
-      } as Model<"openai-completions">,
+      }),
       { messages: [] },
       {},
     );
@@ -81,12 +100,11 @@ describe("createOpenAICompletionsToolsCompatWrapper", () => {
 
     const wrapped = createOpenAICompletionsToolsCompatWrapper(baseStreamFn);
     void wrapped(
-      {
+      createTestModel({
         api: "openai-completions",
         provider: "venice",
         id: "tool-capable-model",
-        baseUrl: "https://example.invalid/v1",
-      } as Model<"openai-completions">,
+      }),
       { messages: [] },
       {},
     );

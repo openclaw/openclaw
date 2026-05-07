@@ -2760,6 +2760,7 @@ describe("openai transport stream", () => {
         api: "openai-completions",
         provider: "fireworks",
         baseUrl: "https://api.fireworks.ai/inference/v1",
+        reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 256000,
@@ -2767,7 +2768,7 @@ describe("openai transport stream", () => {
         compat: {
           unsupportedToolSchemaKeywords: ["not"],
         },
-      } satisfies Model<"openai-completions">,
+      } satisfies Parameters<typeof buildOpenAICompletionsParams>[0],
       {
         systemPrompt: "system",
         messages: [],
