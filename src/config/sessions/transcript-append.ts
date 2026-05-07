@@ -22,6 +22,7 @@ async function loadCurrentSessionVersion(): Promise<number> {
 
 type TranscriptLeafInfo = {
   leafId?: string;
+  leafConversationalId?: string;
   hasParentLinkedEntries: boolean;
   nonSessionEntryCount: number;
 };
@@ -30,19 +31,53 @@ async function yieldTranscriptAppendScan(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
-function lineParentLinkedEntryId(line: string): string | undefined {
+type ParentLinkedEntryInfo = {
+  id: string;
+  /**
+   * The `role` field of the embedded message, when present. Used to discriminate
+   * tool-result intermediates from conversational messages so that incoming user
+   * messages can attach to the most-recent assistant/user turn rather than to a
+   * tool-result intermediate. See appendSessionTranscriptMessageLocked.
+   */
+  role?: string;
+};
+
+function lineParentLinkedEntryInfo(line: string): ParentLinkedEntryInfo | undefined {
   if (!line.trim()) {
     return undefined;
   }
   try {
-    const parsed = JSON.parse(line) as { type?: unknown; id?: unknown; parentId?: unknown };
-    return parsed.type !== "session" && typeof parsed.id === "string" && "parentId" in parsed
-      ? parsed.id
+    const parsed = JSON.parse(line) as {
+      type?: unknown;
+      id?: unknown;
+      parentId?: unknown;
+      message?: { role?: unknown } | null;
+    };
+    if (parsed.type === "session" || typeof parsed.id !== "string" || !("parentId" in parsed)) {
+      return undefined;
+    }
+    const role = parsed.message && typeof parsed.message === "object"
+      ? (parsed.message as { role?: unknown }).role
       : undefined;
+    return {
+      id: parsed.id,
+      ...(typeof role === "string" ? { role } : {}),
+    };
   } catch {
     return undefined;
   }
 }
+
+function lineParentLinkedEntryId(line: string): string | undefined {
+  return lineParentLinkedEntryInfo(line)?.id;
+}
+
+/**
+ * Roles whose entries represent intermediate tool exchange records rather than
+ * conversational turns. When choosing the parent for an incoming `user` message
+ * we walk past these to find the most-recent assistant/user message instead.
+ */
+const TOOL_INTERMEDIATE_ROLES: ReadonlySet<string> = new Set(["toolResult", "tool_result"]);
 
 function normalizeEntryId(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
@@ -68,8 +103,22 @@ async function readTranscriptLeafInfo(transcriptPath: string): Promise<Transcrip
     const buffer = Buffer.allocUnsafe(TRANSCRIPT_APPEND_SCAN_CHUNK_BYTES);
     let carry = "";
     let leafId: string | undefined;
+    let leafConversationalId: string | undefined;
     let hasParentLinkedEntries = false;
     let nonSessionEntryCount = 0;
+    const consumeLine = (line: string): void => {
+      if (lineHasNonSessionEntry(line)) {
+        nonSessionEntryCount += 1;
+      }
+      const info = lineParentLinkedEntryInfo(line);
+      if (info) {
+        leafId = info.id;
+        hasParentLinkedEntries = true;
+        if (!info.role || !TOOL_INTERMEDIATE_ROLES.has(info.role)) {
+          leafConversationalId = info.id;
+        }
+      }
+    };
     while (true) {
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
       if (bytesRead <= 0) {
@@ -79,34 +128,51 @@ async function readTranscriptLeafInfo(transcriptPath: string): Promise<Transcrip
       const lines = text.split(/\r?\n/);
       carry = lines.pop() ?? "";
       for (const line of lines) {
-        if (lineHasNonSessionEntry(line)) {
-          nonSessionEntryCount += 1;
-        }
-        const id = lineParentLinkedEntryId(line);
-        if (id) {
-          leafId = id;
-          hasParentLinkedEntries = true;
-        }
+        consumeLine(line);
       }
       await yieldTranscriptAppendScan();
     }
     const tail = carry + decoder.end();
-    if (lineHasNonSessionEntry(tail)) {
-      nonSessionEntryCount += 1;
-    }
-    const id = lineParentLinkedEntryId(tail);
-    if (id) {
-      leafId = id;
-      hasParentLinkedEntries = true;
-    }
+    consumeLine(tail);
     return {
       ...(leafId ? { leafId } : {}),
+      ...(leafConversationalId ? { leafConversationalId } : {}),
       hasParentLinkedEntries,
       nonSessionEntryCount,
     };
   } finally {
     await handle.close();
   }
+}
+
+function extractIncomingMessageRole(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const role = (message as { role?: unknown }).role;
+  return typeof role === "string" ? role : undefined;
+}
+
+/**
+ * Choose the parentId for a freshly-appended entry. For incoming `user` messages
+ * we prefer the most-recent conversational entry (assistant/user) over any
+ * trailing tool-result intermediate, so an inbound user message after a turn
+ * that ended with `assistant{toolCall} → toolResult → assistant{text}` does not
+ * become a sibling of the toolResult and orphan the assistant text on the next
+ * normalisation pass.
+ *
+ * If the incoming role is not `user`, or the leaf is already conversational, we
+ * fall through to the historical behaviour (use the trailing entry).
+ */
+function resolveParentIdForIncomingMessage(
+  leafInfo: TranscriptLeafInfo,
+  incomingMessage: unknown,
+): string | null {
+  const incomingRole = extractIncomingMessageRole(incomingMessage);
+  if (incomingRole === "user" && leafInfo.leafConversationalId) {
+    return leafInfo.leafConversationalId;
+  }
+  return leafInfo.leafId ?? null;
 }
 
 function lineHasNonSessionEntry(line: string): boolean {
@@ -288,7 +354,9 @@ async function appendSessionTranscriptMessageLocked(params: {
     const entry = {
       type: "message",
       id: messageId,
-      ...(shouldRawAppend ? {} : { parentId: leafInfo.leafId ?? null }),
+      ...(shouldRawAppend
+        ? {}
+        : { parentId: resolveParentIdForIncomingMessage(leafInfo, params.message) }),
       timestamp: new Date(now).toISOString(),
       message: params.message,
     };
