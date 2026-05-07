@@ -7,16 +7,20 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Auto-reply/plugins: preserve explicitly allowlisted plugin tools in embedded direct-lane runs so configs like `tools.allow: ["second_nature_ops"]` keep the registered plugin tool callable through profile filtering instead of failing with no callable tools. Fixes #78907. (#79028) Thanks @Haaaiawd.
+- Telegram: preserve the channel-specific 10-option poll cap in the unified outbound adapter so over-limit polls are rejected before send. (#78762) Thanks @obviyus.
+- Runtime/install: raise the supported Node 22 floor to `22.16+` so native SQLite query handling can rely on the `node:sqlite` statement metadata API while continuing to recommend Node 24. (#78921)
 - Discord/voice: stream ElevenLabs TTS directly into Discord playback and send ElevenLabs latency optimization as the documented query parameter so spoken replies can start sooner.
 - Discord/voice: keep TTS playback running when another user starts speaking, ignore new capture during playback to avoid feedback loops, and downgrade expected receive-stream aborts to verbose diagnostics.
 - Telegram: treat successful same-chat `message` tool outbound sends during an inbound telegram turn as delivered when deciding whether to emit the rewritten silent reply fallback (#78685). Thanks @neeravmakwana.
 - Gateway/tasks: reconcile stale CLI run-context tasks whose live run context disappeared even when a child session row remains, and apply the default bounded reload deferral timeout to channel hot reloads so stale task records cannot block Discord/Slack/Telegram reloads forever.
+- Gateway/sessions: keep session-store index writes atomic while skipping durable fsync inside the writer lock, reducing cron and channel-turn starvation on slow filesystems and addressing the session-store strand of #73655. Thanks @mmartoccia.
 - Discord/voice: make `openclaw channels capabilities --channel discord --target channel:<id>` and `channels status --probe` audit voice-channel permissions, including auto-join targets, so missing Connect/Speak/Read Message History permissions show up before `/vc join`.
-- Channels CLI: make `openclaw channels list` channel-only — drop the `Auth providers (OAuth + API keys)` block (use `openclaw models auth list`), drop the per-provider usage/quota fetch and the `--no-usage` flag (use `openclaw status` or `openclaw models list`), add `--all` to surface bundled-unconfigured, catalog-not-installed, and catalog-installed-but-unconfigured channels, and render explicit `installed` / `configured` / `enabled` tags per row plus an `origin` + `installed` field in JSON. Fixes WeCom-class catalog channels disappearing from `--all` when installed on disk but not yet configured. (#78456)
+- Channels CLI: make `openclaw channels list` channel-only — drop the `Auth providers (OAuth + API keys)` block (use `openclaw models auth list`), drop the per-provider usage/quota fetch and the `--no-usage` flag (use `openclaw status` or `openclaw models list`), add `--all` to surface bundled-unconfigured, catalog-not-installed, and catalog-installed-but-unconfigured channels, and render explicit `installed` / `configured` / `enabled` tags per row plus an `origin` + `installed` field in JSON. Fixes WeCom-class catalog channels disappearing from `--all` when installed on disk but not yet configured. (#78456) Thanks @sliverp.
 - CLI/cron: add computed `status` field to `cron list --json` and `cron show <id> --json` output, mirroring the human-readable status column (disabled/running/ok/error/skipped/idle) so external tooling can determine job state without re-deriving it from raw state fields. (#78701) Thanks @aweiker.
 - Docs/iMessage: deprecate BlueBubbles for new OpenClaw setups, document the upstream server-release rationale, and point new iMessage deployments toward the native `imsg` path while keeping BlueBubbles as a supported legacy fallback.
 - Discord/voice: make voice capture less choppy by extending the default post-speech silence grace to 2.5s, add `voice.captureSilenceGraceMs` for noisy Discord sessions, and tighten the spoken-output prompt around live STT fragments. Thanks @vincentkoc.
 - Discord/streaming: default Discord replies to progress draft previews so tool/work activity appears in one edited Discord message unless `channels.discord.streaming.mode` is set to `off`.
+- OpenAI: support `openai/chat-latest` as an explicit direct API-key model override for trying the moving ChatGPT Instant API alias without changing the stable default model.
 - Plugins/install: add `npm-pack:<path.tgz>` installs so local npm pack artifacts run through the same managed npm-root install, lockfile verification, dependency scan, and install-record path as registry npm plugins.
 - Codex app-server: disarm the short post-tool completion watchdog after current-turn activity, expose `appServer.turnCompletionIdleTimeoutMs`, and include raw assistant item context in idle-timeout diagnostics so status-only post-tool stalls stop failing as idle. Fixes #77984. Thanks @roseware-dev and @rubencu.
 - Plugin skills/Windows: publish plugin-provided skill directories as junctions on Windows so standard users without Developer Mode can register plugin skills without symlink EPERM failures. Fixes #77958. (#77971) Thanks @hclsys and @jarro.
@@ -92,6 +96,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/update: repair stale managed npm-root `openclaw` peer packages before plugin installs, so beta-channel official plugin updates are not downgraded by old core package-lock state. Thanks @vincentkoc.
 - Plugins/install: run managed npm-root install, rollback, repair, and uninstall mutations with legacy peer resolution so removing one plugin cannot rehydrate a stale registry `openclaw` package into the shared root. Thanks @vincentkoc.
 - Plugins/install: reassert managed npm plugin `openclaw` peer links after shared-root npm installs, updates, and uninstalls, so mutating one plugin does not leave previously installed SDK-using plugins unable to resolve `openclaw/plugin-sdk/*`.
+- Plugins/install: use the same absolute POSIX npm lifecycle shell for managed plugin install, rollback, repair, and uninstall npm operations as staged package updates, preventing restricted PATH shells from breaking cleanup. Thanks @vincentkoc.
 - Plugins/update: make package upgrades swap pnpm/npm-prefix installs cleanly, keep legacy plugin install runtime chunks working, and on the beta channel fall back default-line npm plugins to default/latest when plugin beta releases are missing or fail install validation. Thanks @vincentkoc and @joshavant.
 - Plugins/active-memory: skip session-store channel entries that contain `:` when resolving the recall subagent's channel, so QQ c2c agent IDs (e.g. `c2c:10D4F7C2…`) and other scoped conversation IDs do not reach bundled-plugin `dirName` validation and crash the recall run. The same guard already applied to explicit `channelId` params (#76704); this extends it to store-derived channels. (#77396) Thanks @hclsys.
 - Sandbox/Windows: accept drive-absolute Docker bind sources while keeping sandbox blocked-path and allowed-root policy comparisons Windows-case-insensitive. (#42174) Thanks @6607changchun.
@@ -144,6 +149,10 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Compute plugin callback authorization dynamically [AI]. (#78866) Thanks @pgondhi987.
+- fix(active-memory): require admin scope for global toggles [AI]. (#78863) Thanks @pgondhi987.
+- Honor owner enforcement for native commands [AI]. (#78864) Thanks @pgondhi987.
+- Config/BlueBubbles: remove the duplicate core-owned BlueBubbles config schema while preserving plugin-owned `dmPolicy` allowFrom validation for channel and account configs. Fixes #69238. Thanks @omarshahine.
 - Tavily: resolve dedicated `tavily_search` and `tavily_extract` tool credentials from the active runtime config snapshot, so `exec` SecretRef-backed API keys do not reach the tools unresolved. (#78610) Thanks @VACInc.
 - Gateway/sessions: clear cached skills snapshots during `/new` and `sessions.reset` so long-lived channel sessions rebuild the visible skill list after skills change. (#78873) Thanks @Evizero.
 - fix(auto-reply): gate inline skill tool dispatch [AI]. (#78517) Thanks @pgondhi987.
@@ -157,6 +166,10 @@ Docs: https://docs.openclaw.ai
 - Agents/tools: avoid warning messaging-only agents about inherited global `tools.exec` or `tools.fs` sections when the agent profile did not configure those tool sections itself. Thanks @BunsDev.
 - Codex dynamic tools: normalize runtime `toolsAllow` entries the same way as Pi tool policy, so aliases like `bash` and `apply-patch` still expose the intended OpenClaw tools. Thanks @BunsDev.
 - Memory/dreaming: read OpenAI-style `output_text` assistant parts from narrative subagent transcripts, so light-phase Dream Diary entries are not dropped as empty. Thanks @BunsDev.
+- OpenAI-compatible providers: honor `compat.supportsTools=false` by stripping tool payload fields before dispatch to chat-only endpoints. Fixes #74664.
+- OpenAI-compatible providers: apply model-declared unsupported tool-schema keyword stripping to native OpenAI transport payloads and mark Fireworks Kimi K2.5 as rejecting `not` schemas. Fixes #75467.
+- OpenAI-compatible gateway: sanitize images supplied through request content even when the prompt text contains no image file references, preventing oversized attachment payloads from bypassing the resize/drop pipeline. Fixes #59913.
+- Auth profiles: normalize inline API keys and tokens loaded from `auth-profiles.json` so masked or rich-text credential artifacts fail as auth errors instead of crashing HTTP header construction. Fixes #77624.
 - llm-task: resolve configured model aliases before embedded dispatch so `model="gemini-flash"` and other aliases route to the intended provider instead of the agent default. Fixes #54166.
 - Media generation: resolve slash-containing model-only overrides like `fal-ai/flux/dev` through registered provider model metadata so FAL image/video models do not get misparsed as provider `fal-ai`. Fixes #77444.
 - Commands/BTW: show the `/btw` missing-question usage placeholder with brackets so outbound channel sanitization keeps it visible. Fixes #62877. Thanks @RajvardhanPatil07.
@@ -168,18 +181,20 @@ Docs: https://docs.openclaw.ai
 - Anthropic: reject uppercase provider-prefixed forward-compat model ids locally instead of sending malformed dynamic ids upstream. Fixes #73715.
 - OpenAI/embeddings: pass configured output dimensionality through single and batched embedding requests so memory embedding indexes can request smaller vectors. Fixes #55126.
 - CLI/infer: normalize HEIC/HEIF image files to JPEG before model-run requests, avoiding providers that reject Apple image container formats. Fixes #50081.
+- CLI/infer: fall back to macOS `sips` when optional image tooling cannot decode HEIC/HEIF input files before model-run requests. Refs #50081.
 - OpenRouter: keep the default `openrouter/auto` model ref canonical while preventing TUI and Control UI catalog pickers from displaying or submitting `openrouter/openrouter/auto`. Fixes #62655.
 - Status/Claude CLI: show `oauth (claude-cli)` for working Claude CLI OAuth runtime sessions instead of `unknown` when no local auth profile exists. Fixes #78632. Thanks @gorkem2020.
 - Memory search: preserve keyword-only hybrid FTS matches when vector scoring is unavailable or below the configured minimum score, so exact lexical hits are not dropped by weighted min-score filtering.
 - Exec approvals/node: let trusted backend node invokes complete no-device Control UI approvals after the original request connection changes, while keeping node, command, cwd, env, and allow-once replay bindings enforced. Fixes #78569. Thanks @naturedogdog.
 - Agents/subagents: keep background completion delivery on the requester-agent handoff/queue-retry path instead of raw-sending child results directly, and strip child-result wrapper or OpenClaw runtime-context scaffolding from queued outbound retries. Fixes #78531. Thanks @EthanSK.
+- Sandbox: recreate cached browser bridges when JavaScript-evaluation permission changes, keep failed prune removals tracked for retry, and make cross-device directory moves copy-then-commit without partially emptying the source on failure.
 - CLI/completion: guard the shell-profile source line written by `openclaw completion --install` with a file existence check (`[ -f ... ] && source ...` for bash/zsh, `test -f ...; and source ...` for fish) so uninstalling OpenClaw no longer makes new login shells error on a missing completion cache. (#78659) Thanks @sjf.
 - Cron/doctor: repair persisted cron jobs whose `payload.model` was stored as `"default"`, `"null"`, blank, or JSON `null` by removing the bad override during `openclaw doctor --fix` while keeping cron runtime model validation strict. Fixes #78549. Thanks @bizzle12368239.
 - Telegram: honor `accessGroup:*` sender allowlists for DMs, groups, native commands, and callback authorization before applying Telegram's numeric sender-ID checks. Fixes #78660. Thanks @manugc.
 - Agent delivery: report `deliverySucceeded=false` when outbound delivery returns no adapter result, so claimed/empty delivery paths no longer masquerade as successful sends. Fixes #78532. Thanks @joeyfrasier.
 - Cron/isolated runs: fail implicit announce delivery before model execution when `delivery.channel=last` has no previous route, so recurring jobs do not spend tokens before hitting a permanent delivery-target error. Fixes #78608. Thanks @sallyom.
 - Gateway/sessions: persist a new generated transcript file when daily gateway-agent session rollover changes the session id, while preserving custom transcript paths. Fixes #78607. Thanks @nailujac, @zerone0x, and @sallyom.
-- Doctor/OpenAI Codex: revert the 2026.5.5 `doctor --fix` repair that rewrote valid `openai-codex/*` ChatGPT/Codex OAuth routes to `openai/*`, which could break OAuth-only GPT-5.5 setups or accidentally move users onto the OpenAI API-key route. If 2026.5.5 already changed your default model, run `openclaw models set openai-codex/gpt-5.5 && openclaw config validate` to switch the default agent back to the Codex OAuth PI route. Fixes #78407.
+- Doctor/OpenAI Codex: repair legacy `openai-codex/*` agent model refs and stale OpenAI PI session pins to `openai/*` with the Codex runtime, preserving existing `openai-codex` auth profiles so ChatGPT/Codex OAuth users do not fall back to OpenAI API-key routing. Fixes #78407.
 - Telegram: keep the polling watchdog tied to `getUpdates` liveness so unrelated outbound Bot API calls cannot mask a wedged inbound poller. Fixes #78422. Thanks @ai-hpc.
 - Discord/groups: instruct group-chat agents to stay silent when a message is addressed to someone else, replying only when invited or correcting key facts. (#78615)
 - Discord/groups: tell Discord-channel agents to wrap bare URLs as `<https://example.com>` so link previews do not expand into uninvited embeds. (#78614)
@@ -536,6 +551,7 @@ Docs: https://docs.openclaw.ai
 - WhatsApp: route proactive phone-number sends through Baileys LID forward mappings when available, so LID-addressed contacts receive agent messages instead of creating sender-only ghost chats. Fixes #67378. (#74925) Thanks @edenfunf.
 - WhatsApp: send captioned `MEDIA:` directive auto-replies once instead of emitting an empty media message before the captioned media reply. (#78770) Thanks @ai-hpc.
 - Hooks/cron: log returned `/hooks/agent` isolated-run errors and failed cron jobs with cron diagnostic summaries, so rejected `payload.model` values are visible instead of looking like accepted-but-missing runs. Fixes #78597. (#78655) Thanks @kevinslin.
+- Managed proxy/security: classify raw socket callsites and proxy runtime mutations in boundary checks so new direct egress or unmanaged proxy-state changes cannot land without explicit review. (#77126) Thanks @jesse-merhi.
 
 ## 2026.5.3-1
 
@@ -561,6 +577,7 @@ Docs: https://docs.openclaw.ai
 - Tools/BTW: add `/side` as a text and native slash-command alias for `/btw` side questions.
 - Doctor/config: `doctor --fix` now commits safe legacy migrations even when unrelated validation issues (e.g. a missing plugin) prevent full validation from passing, so `agents.defaults.llm` and other known-legacy keys are always cleaned up by `doctor --fix` regardless of other config problems. Fixes #76798. (#76800) Thanks @hclsys.
 - Agents/tools: skip optional media and PDF tool factories when the effective tool denylist already blocks them, avoiding unnecessary hot-path setup for tools that will be filtered out before model use. (#76773) Thanks @dorukardahan.
+- Agents/compaction: ignore pre-usage transcript metadata bytes when stale token snapshots estimate preflight compaction pressure, while still counting post-usage transcript tail pressure. Fixes #78604. Thanks @amknight.
 - Discord/status: let explicit reaction tool calls opt into tracking subsequent tool progress on the reacted message with `trackToolCalls: true`, and use the shared tool display emoji table for status reactions.
 - Gateway/config: stop Gateway startup and hot reload from auto-restoring invalid config; invalid config now fails closed and `openclaw doctor --fix` owns last-known-good repair.
 - Gateway/performance: lazy-load early runtime discovery and shutdown-hook helpers, defer maintenance timers until after readiness, and trim duplicate plugin auto-enable work during Gateway startup.
