@@ -19,6 +19,13 @@ function makeListener() {
     sendMessage: vi.fn(async () => ({ messageId: "msg-1" })),
     sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
     sendReaction: vi.fn(async () => {}),
+    sendLocation: vi.fn(async () => ({
+      kind: "location",
+      messageId: "loc-1",
+      messageIds: ["loc-1"],
+      keys: [{ id: "loc-1" }],
+      providerAccepted: true,
+    })),
     sendComposingTo: vi.fn(async () => {}),
   };
 }

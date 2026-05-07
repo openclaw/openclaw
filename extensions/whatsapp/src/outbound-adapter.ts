@@ -18,19 +18,42 @@ function normalizeOutboundText(text: string | undefined): string {
   return normalizeWhatsAppPayloadText(text);
 }
 
-export const whatsappOutbound: ChannelOutboundAdapter = createWhatsAppOutboundBase({
-  chunker: chunkText,
-  sendMessageWhatsApp: async (to, text, options) =>
+export const whatsappOutbound: ChannelOutboundAdapter = {
+  ...createWhatsAppOutboundBase({
+    chunker: chunkText,
+    sendMessageWhatsApp: async (to, text, options) =>
+      await (
+        await loadWhatsAppSendModule()
+      ).sendMessageWhatsApp(to, normalizeOutboundText(text), {
+        ...options,
+      }),
+    sendPollWhatsApp: async (to, poll, options) =>
+      await (await loadWhatsAppSendModule()).sendPollWhatsApp(to, poll, options),
+    shouldLogVerbose: () => shouldLogVerbose(),
+    resolveTarget: ({ to, allowFrom, mode }) =>
+      resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
+    normalizeText: normalizeOutboundText,
+    skipEmptyText: true,
+  }),
+  sendLocation: async ({
+    cfg,
+    to,
+    latitude,
+    longitude,
+    locationName,
+    locationAddress,
+    accuracyInMeters,
+    accountId,
+  }) =>
     await (
       await loadWhatsAppSendModule()
-    ).sendMessageWhatsApp(to, normalizeOutboundText(text), {
-      ...options,
-    }),
-  sendPollWhatsApp: async (to, poll, options) =>
-    await (await loadWhatsAppSendModule()).sendPollWhatsApp(to, poll, options),
-  shouldLogVerbose: () => shouldLogVerbose(),
-  resolveTarget: ({ to, allowFrom, mode }) =>
-    resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
-  normalizeText: normalizeOutboundText,
-  skipEmptyText: true,
-});
+    ).sendLocationWhatsApp(
+      to,
+      { latitude, longitude, locationName, locationAddress, accuracyInMeters },
+      {
+        verbose: shouldLogVerbose(),
+        accountId: accountId ?? undefined,
+        cfg,
+      },
+    ),
+};

@@ -39,6 +39,12 @@ export type ActiveWebListener = {
     fromMe: boolean,
     participant?: string,
   ) => Promise<WhatsAppSendResult>;
+  sendLocation: (
+    to: string,
+    latitude: number,
+    longitude: number,
+    options?: { locationName?: string; locationAddress?: string; accuracyInMeters?: number },
+  ) => Promise<WhatsAppSendResult>;
   sendComposingTo: (to: string) => Promise<void>;
   close?: () => Promise<void>;
 };

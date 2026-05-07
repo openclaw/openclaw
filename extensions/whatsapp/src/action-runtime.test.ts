@@ -5,6 +5,10 @@ import { handleWhatsAppAction, whatsAppActionRuntime } from "./action-runtime.js
 
 const originalWhatsAppActionRuntime = { ...whatsAppActionRuntime };
 const sendReactionWhatsApp = vi.fn(async () => undefined);
+const sendLocationWhatsApp = vi.fn(async () => ({
+  messageId: "loc-1",
+  toJid: "123@s.whatsapp.net",
+}));
 
 const enabledConfig = {
   channels: { whatsapp: { actions: { reactions: true } } },
@@ -21,6 +25,7 @@ describe("handleWhatsAppAction", () => {
     vi.clearAllMocks();
     Object.assign(whatsAppActionRuntime, originalWhatsAppActionRuntime, {
       sendReactionWhatsApp,
+      sendLocationWhatsApp,
     });
   });
 
@@ -188,6 +193,60 @@ describe("handleWhatsAppAction", () => {
         accountId: DEFAULT_ACCOUNT_ID,
       }),
     );
+  });
+
+  it("sends native locations", async () => {
+    const result = await handleWhatsAppAction(
+      {
+        action: "location",
+        to: "+123",
+        latitude: 18.4861,
+        longitude: -69.9312,
+        locationName: "Santo Domingo",
+        locationAddress: "Distrito Nacional",
+      },
+      enabledConfig,
+    );
+
+    expect(sendLocationWhatsApp).toHaveBeenCalledWith(
+      "+123",
+      {
+        latitude: 18.4861,
+        longitude: -69.9312,
+        locationName: "Santo Domingo",
+        locationAddress: "Distrito Nacional",
+        accuracyInMeters: undefined,
+      },
+      expect.objectContaining({
+        verbose: false,
+        accountId: DEFAULT_ACCOUNT_ID,
+      }),
+    );
+    expect(result).toEqual(
+      expect.objectContaining({
+        details: expect.objectContaining({
+          ok: true,
+          messageId: "loc-1",
+          toJid: "123@s.whatsapp.net",
+        }),
+      }),
+    );
+  });
+
+  it("rejects negative accuracy for native locations", async () => {
+    await expect(
+      handleWhatsAppAction(
+        {
+          action: "location",
+          to: "+123",
+          latitude: 18.4861,
+          longitude: -69.9312,
+          accuracyInMeters: -5,
+        },
+        enabledConfig,
+      ),
+    ).rejects.toThrow(/accuracyInMeters must be a non-negative number/);
+    expect(sendLocationWhatsApp).not.toHaveBeenCalled();
   });
 
   it("respects reaction gating", async () => {

@@ -7,7 +7,7 @@ import {
   type MessageReceiptSourceResult,
 } from "openclaw/plugin-sdk/channel-message";
 
-export type WhatsAppSendKind = "media" | "poll" | "reaction" | "text";
+export type WhatsAppSendKind = "media" | "poll" | "reaction" | "text" | "location";
 
 type WhatsAppSendKey = Omit<
   Pick<WAMessageKey, "fromMe" | "id" | "participant" | "remoteJid">,

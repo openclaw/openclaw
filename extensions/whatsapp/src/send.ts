@@ -248,6 +248,62 @@ export async function sendReactionWhatsApp(
   }
 }
 
+export async function sendLocationWhatsApp(
+  to: string,
+  location: {
+    latitude: number;
+    longitude: number;
+    locationName?: string;
+    locationAddress?: string;
+    accuracyInMeters?: number;
+  },
+  options: { verbose: boolean; accountId?: string; cfg: OpenClawConfig },
+): Promise<{ messageId: string; toJid: string }> {
+  const correlationId = generateSecureUuid();
+  const startedAt = Date.now();
+  const cfg = requireRuntimeConfig(options.cfg, "WhatsApp location");
+  const { listener: active } = requireOutboundActiveWebListener({
+    cfg,
+    accountId: options.accountId,
+  });
+  const redactedTo = redactIdentifier(to);
+  const logger = getChildLogger({
+    module: "web-outbound",
+    correlationId,
+    to: redactedTo,
+  });
+  try {
+    const jid = toWhatsappJid(to);
+    const redactedJid = redactIdentifier(jid);
+    outboundLog.info(`Sending location -> ${redactedJid}`);
+    logger.info(
+      {
+        jid: redactedJid,
+        hasName: Boolean(location.locationName),
+        hasAddress: Boolean(location.locationAddress),
+        hasAccuracy: typeof location.accuracyInMeters === "number",
+      },
+      "sending location",
+    );
+    if (!isWhatsAppNewsletterJid(jid)) {
+      await active.sendComposingTo(to);
+    }
+    const result = await active.sendLocation(to, location.latitude, location.longitude, {
+      locationName: location.locationName,
+      locationAddress: location.locationAddress,
+      accuracyInMeters: location.accuracyInMeters,
+    });
+    const messageId = result?.messageId ?? "unknown";
+    const durationMs = Date.now() - startedAt;
+    outboundLog.info(`Sent location ${messageId} -> ${redactedJid} (${durationMs}ms)`);
+    logger.info({ jid: redactedJid, messageId }, "sent location");
+    return { messageId, toJid: jid };
+  } catch (err) {
+    logger.error({ err: String(err), to: redactedTo }, "failed to send location via web session");
+    throw err;
+  }
+}
+
 export async function sendPollWhatsApp(
   to: string,
   poll: PollInput,

@@ -11,6 +11,7 @@ const getDefaultMediaLocalRootsMock = vi.hoisted(() => vi.fn(() => []));
 const dispatchChannelMessageActionMock = vi.hoisted(() => vi.fn());
 const sendMessageMock = vi.hoisted(() => vi.fn());
 const sendPollMock = vi.hoisted(() => vi.fn());
+const sendLocationMock = vi.hoisted(() => vi.fn());
 const getAgentScopedMediaLocalRootsForSourcesMock = vi.hoisted(() =>
   vi.fn<(params: { cfg: unknown; agentId?: string; mediaSources?: readonly string[] }) => string[]>(
     () => ["/tmp/agent-roots"],
@@ -57,6 +58,7 @@ const mocks = {
   dispatchChannelMessageAction: dispatchChannelMessageActionMock,
   sendMessage: sendMessageMock,
   sendPoll: sendPollMock,
+  sendLocation: sendLocationMock,
   getAgentScopedMediaLocalRootsForSources: getAgentScopedMediaLocalRootsForSourcesMock,
   createAgentScopedHostMediaReadFile: createAgentScopedHostMediaReadFileMock,
   resolveAgentScopedOutboundMediaAccess: resolveAgentScopedOutboundMediaAccessMock,
@@ -70,6 +72,7 @@ vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
 vi.mock("./message.js", () => ({
   sendMessage: mocks.sendMessage,
   sendPoll: mocks.sendPoll,
+  sendLocation: mocks.sendLocation,
 }));
 
 vi.mock("../../media/read-capability.js", () => ({
@@ -95,9 +98,11 @@ vi.mock("../../config/sessions.js", () => ({
 type OutboundSendServiceModule = typeof import("./outbound-send-service.js");
 type ExecuteSendInput = Parameters<OutboundSendServiceModule["executeSendAction"]>[0];
 type ExecuteSendContext = ExecuteSendInput["ctx"];
+type ExecuteLocationInput = Parameters<OutboundSendServiceModule["executeLocationAction"]>[0];
 
 let executePollAction: OutboundSendServiceModule["executePollAction"];
 let executeSendAction: OutboundSendServiceModule["executeSendAction"];
+let executeLocationAction: OutboundSendServiceModule["executeLocationAction"];
 
 describe("executeSendAction", () => {
   function pluginActionResult(messageId: string) {
@@ -177,7 +182,8 @@ describe("executeSendAction", () => {
   }
 
   beforeAll(async () => {
-    ({ executePollAction, executeSendAction } = await import("./outbound-send-service.js"));
+    ({ executePollAction, executeSendAction, executeLocationAction } =
+      await import("./outbound-send-service.js"));
   });
 
   beforeEach(() => {
@@ -185,11 +191,50 @@ describe("executeSendAction", () => {
     mocks.dispatchChannelMessageAction.mockClear();
     mocks.sendMessage.mockClear();
     mocks.sendPoll.mockClear();
+    mocks.sendLocation.mockClear();
     mocks.getDefaultMediaLocalRoots.mockClear();
     mocks.getAgentScopedMediaLocalRootsForSources.mockClear();
     mocks.createAgentScopedHostMediaReadFile.mockClear();
     mocks.resolveAgentScopedOutboundMediaAccess.mockClear();
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
+  });
+
+  it("forwards accuracyInMeters on core location sends", async () => {
+    mocks.sendLocation.mockResolvedValue({
+      channel: "demo-outbound",
+      to: "channel:123",
+      latitude: 40.7128,
+      longitude: -74.006,
+      via: "gateway",
+      result: { messageId: "loc-1" },
+    });
+
+    await executeLocationAction({
+      ctx: {
+        cfg: {},
+        channel: "demo-outbound",
+        params: {},
+        dryRun: false,
+      } as ExecuteLocationInput["ctx"],
+      to: "channel:123",
+      latitude: 40.7128,
+      longitude: -74.006,
+      locationName: "NYC",
+      locationAddress: "New York, NY",
+      accuracyInMeters: 12,
+    });
+
+    expect(mocks.sendLocation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "demo-outbound",
+        to: "channel:123",
+        latitude: 40.7128,
+        longitude: -74.006,
+        locationName: "NYC",
+        locationAddress: "New York, NY",
+        accuracyInMeters: 12,
+      }),
+    );
   });
 
   it("forwards ctx.agentId to sendMessage on core outbound path", async () => {
