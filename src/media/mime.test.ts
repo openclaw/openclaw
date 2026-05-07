@@ -122,7 +122,7 @@ describe("mime detection", () => {
     // CAF files start with the four-byte ASCII tag "caff". `file-type` v22 has
     // no native CAF detector, so without the manual magic-byte fallback the
     // host-local-media validator drops `afconvert`-produced voice-memo CAFs as
-    // unknown binary blobs. Regression guard for the BlueBubbles voice-memo
+    // unknown binary blobs. Regression guard for the iMessage voice-memo
     // pre-transcode path.
     const buf = Buffer.concat([Buffer.from("caff", "ascii"), Buffer.alloc(60)]);
     const mime = await detectMime({ buffer: buf });
