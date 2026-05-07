@@ -63,6 +63,8 @@ read_when:
     [processes]
       app = "node dist/index.js gateway --allow-unconfigured --port 3000 --bind lan"
 
+    **Note:** The OpenClaw Docker image includes `tini` as an entrypoint wrapper. Fly.io processes automatically inherit this, so the app runs as a child of `tini` (handling signal reaping and preventing zombie process accumulation).
+
     [http_service]
       internal_port = 3000
       force_https = true
