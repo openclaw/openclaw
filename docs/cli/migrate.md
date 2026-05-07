@@ -151,7 +151,9 @@ openclaw migrate apply codex --yes --plugin google-calendar
 - Source-installed `openai-curated` Codex plugins discovered through Codex
   app-server `plugin/list`. Apply calls app-server `plugin/install` for each
   selected plugin, even if the target app-server already reports that plugin as
-  installed and enabled.
+  installed and enabled. Migrated Codex plugins are usable only in sessions that
+  select the native Codex harness; they are not exposed to Pi, normal OpenAI
+  provider runs, ACP conversation bindings, or other harnesses.
 
 ### Manual-review Codex state
 

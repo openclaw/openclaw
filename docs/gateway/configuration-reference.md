@@ -207,6 +207,10 @@ The bundled `codex` plugin owns native Codex app-server harness settings under
 `plugins.entries.codex.config`. See [Codex harness](/plugins/codex-harness) for
 the full runtime model.
 
+`codexPlugins` applies only to sessions that select the native Codex harness.
+It does not enable Codex plugins for Pi, normal OpenAI provider runs, ACP
+conversation bindings, or any non-Codex harness.
+
 ```json5
 {
   plugins: {

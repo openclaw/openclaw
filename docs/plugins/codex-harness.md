@@ -695,6 +695,11 @@ does not translate Codex plugins into synthetic `codex_plugin_*` OpenClaw
 dynamic tools. That keeps plugin calls in the native Codex transcript and avoids
 starting a second ephemeral Codex thread for each plugin invocation.
 
+Codex plugins only work when the selected OpenClaw agent runtime is the native
+Codex harness. The `codexPlugins` config has no effect on Pi runs, normal
+OpenAI provider runs, ACP conversation bindings, or other harnesses, because
+those paths do not create Codex app-server threads with native `apps` config.
+
 V1 support is intentionally narrow:
 
 - Only `openai-curated` plugins that were already installed in the source Codex
