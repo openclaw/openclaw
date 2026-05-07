@@ -61,7 +61,7 @@ function computeStatus(job: CronJob): string {
   if (!job.enabled) return "disabled";
   const state = job.state ?? {};
   if (state.runningAtMs) return "running";
-  return state.lastRunStatus ?? "idle";
+  return state.lastRunStatus ?? state.lastStatus ?? "idle";
 }
 
 export function handleCronCliError(err: unknown) {
