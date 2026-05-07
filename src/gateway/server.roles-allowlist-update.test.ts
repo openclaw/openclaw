@@ -1,13 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { approveDevicePairing, listDevicePairing } from "../infra/device-pairing.js";
 import { approveNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { resolveRestartSentinelPath } from "../infra/restart-sentinel.js";
+import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
 
@@ -37,6 +38,38 @@ const FAST_WAIT_OPTS = { timeout: 1_000, interval: 2 } as const;
 
 let ws: WebSocket;
 let port: number;
+
+function installCanvasNodePolicyForTest() {
+  const registry = getActiveRuntimePluginRegistry();
+  if (!registry) {
+    throw new Error("active plugin registry is required for canvas node command tests");
+  }
+  if (
+    (registry.nodeInvokePolicies ?? []).some((entry) =>
+      entry.policy.commands.includes("canvas.snapshot"),
+    )
+  ) {
+    return;
+  }
+  registry.nodeInvokePolicies ??= [];
+  registry.nodeInvokePolicies.push({
+    pluginId: "canvas",
+    pluginName: "Canvas",
+    source: "test",
+    rootDir: "extensions/canvas",
+    pluginConfig: {},
+    policy: {
+      commands: ["canvas.snapshot"],
+      defaultPlatforms: ["ios", "android", "macos", "windows", "unknown"],
+      foregroundRestrictedOnIos: true,
+      handle: (ctx) => ctx.invokeNode(),
+    },
+  });
+}
+
+beforeEach(() => {
+  installCanvasNodePolicyForTest();
+});
 
 installConnectedControlUiServerSuite((started) => {
   ws = started.ws;
