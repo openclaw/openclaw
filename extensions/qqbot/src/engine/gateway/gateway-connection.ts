@@ -59,6 +59,8 @@ export class GatewayConnection {
   private isConnecting = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private shouldRefreshToken = false;
+  /** When true, the close event was triggered by a RECONNECT(7) and should not clear the session. */
+  private isReconnectInitiated = false;
 
   private readonly reconnect: ReconnectState;
   private readonly msgQueue;
@@ -263,6 +265,7 @@ export class GatewayConnection {
               break;
 
             case GatewayOp.RECONNECT:
+              this.isReconnectInitiated = true;
               this.cleanup();
               this.scheduleReconnect();
               break;
@@ -289,6 +292,13 @@ export class GatewayConnection {
       ws.on("close", (code, reason) => {
         log?.info(`WebSocket closed: ${code} ${reason.toString()}`);
         this.isConnecting = false;
+        // When RECONNECT(7) triggers cleanup(), the server responds with 4009.
+        // We must not clear the session so we can RESUME on the next connection.
+        if (this.isReconnectInitiated) {
+          this.isReconnectInitiated = false;
+          log?.debug?.(`Close from RECONNECT(7), preserving session for RESUME`);
+          return;
+        }
         this.handleClose(code);
       });
 
