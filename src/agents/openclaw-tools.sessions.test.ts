@@ -981,7 +981,6 @@ describe("sessions tools", () => {
     const replyByRunId = new Map<string, string>();
     const requesterKey = "discord:group:req";
     const targetKey = "discord:group:target";
-    let sendParams: { to?: string; channel?: string; message?: string } = {};
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
@@ -1027,14 +1026,6 @@ describe("sessions tools", () => {
         };
       }
       if (request.method === "send") {
-        const params = request.params as
-          | { to?: string; channel?: string; message?: string }
-          | undefined;
-        sendParams = {
-          to: params?.to,
-          channel: params?.channel,
-          message: params?.message,
-        };
         return { messageId: "m-announce" };
       }
       return {};
@@ -1067,17 +1058,16 @@ describe("sessions tools", () => {
     });
     await vi.waitFor(
       () => {
-        expect(calls.filter((call) => call.method === "agent")).toHaveLength(3);
+        expect(calls.filter((call) => call.method === "agent")).toHaveLength(4);
       },
       { timeout: 2_000, interval: 5 },
     );
 
     const agentCalls = calls.filter((call) => call.method === "agent");
-    expect(agentCalls).toHaveLength(3);
+    expect(agentCalls).toHaveLength(4);
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
         lane: expect.stringMatching(/^nested(?::|$)/),
-        channel: "webchat",
         inputProvenance: { kind: "inter_session" },
       });
     }
@@ -1091,11 +1081,16 @@ describe("sessions tools", () => {
         ),
     );
     expect(replySteps).toHaveLength(2);
-    expect(sendParams).toMatchObject({
-      to: "group:target",
-      channel: "discord",
-      message: "announce now",
-    });
+
+    // The announce should now be delivered back to the requester session
+    const announceCall = calls.find(
+      (call) =>
+        call.method === "agent" &&
+        (call.params as { sessionKey?: string })?.sessionKey === requesterKey &&
+        (call.params as { deliver?: boolean })?.deliver === true,
+    );
+    expect(announceCall).toBeDefined();
+    expect((announceCall?.params as { message?: string })?.message).toBe("announce now");
   });
 
   it("sessions_send keeps delayed requester replies alive after a wait timeout", async () => {
@@ -1352,13 +1347,6 @@ describe("sessions tools", () => {
     const replyByRunId = new Map<string, string>();
     const requesterKey = "discord:group:req";
     const targetKey = "agent:main:worker";
-    let sendParams: {
-      to?: string;
-      channel?: string;
-      accountId?: string;
-      message?: string;
-      threadId?: string;
-    } = {};
 
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
@@ -1419,22 +1407,6 @@ describe("sessions tools", () => {
         };
       }
       if (request.method === "send") {
-        const params = request.params as
-          | {
-              to?: string;
-              channel?: string;
-              accountId?: string;
-              message?: string;
-              threadId?: string;
-            }
-          | undefined;
-        sendParams = {
-          to: params?.to,
-          channel: params?.channel,
-          accountId: params?.accountId,
-          message: params?.message,
-          threadId: params?.threadId,
-        };
         return { messageId: "m-threaded-announce" };
       }
       return {};
@@ -1467,17 +1439,19 @@ describe("sessions tools", () => {
     });
     await vi.waitFor(
       () => {
-        expect(calls.filter((call) => call.method === "send")).toHaveLength(1);
+        expect(calls.filter((call) => call.method === "agent")).toHaveLength(4);
       },
       { timeout: 2_000, interval: 5 },
     );
 
-    expect(sendParams).toMatchObject({
-      to: "123@g.us",
-      channel: "whatsapp",
-      accountId: "work",
-      message: "announce now",
-      threadId: "99",
-    });
+    // The announce should now be delivered back to the requester session, not to the target channel
+    const announceCall = calls.find(
+      (call) =>
+        call.method === "agent" &&
+        (call.params as { sessionKey?: string })?.sessionKey === requesterKey &&
+        (call.params as { deliver?: boolean })?.deliver === true,
+    );
+    expect(announceCall).toBeDefined();
+    expect((announceCall?.params as { message?: string })?.message).toBe("announce now");
   });
 });

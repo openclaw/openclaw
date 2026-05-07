@@ -59,6 +59,43 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     vi.restoreAllMocks();
   });
 
+  it("delivers announce reply back to requester session for A2A communication", async () => {
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:director1:main",
+      displayKey: "agent:director1:main",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 0,
+      requesterSessionKey: "agent:main:main",
+      requesterChannel: "webchat",
+      roundOneReply: "Worker completed successfully",
+    });
+
+    const agentCall = gatewayCalls.find((call) => call.method === "agent");
+    expect(agentCall).toBeDefined();
+    const agentParams = agentCall?.params as Record<string, unknown>;
+    expect(agentParams.sessionKey).toBe("agent:main:main");
+    expect(agentParams.channel).toBe("webchat");
+    expect(agentParams.deliver).toBe(true);
+    expect(typeof agentParams.message).toBe("string");
+  });
+
+  it("falls back to target channel delivery when no requester session", async () => {
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:main:discord:group:dev",
+      displayKey: "agent:main:discord:group:dev",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 0,
+      roundOneReply: "Worker completed successfully",
+    });
+
+    const sendCall = gatewayCalls.find((call) => call.method === "send");
+    expect(sendCall).toBeDefined();
+    const sendParams = sendCall?.params as Record<string, unknown>;
+    expect(sendParams.channel).toBe("discord");
+  });
+
   it("passes threadId through to gateway send for Telegram forum topics", async () => {
     await runSessionsSendA2AFlow({
       targetSessionKey: "agent:main:telegram:group:-100123:topic:554",
@@ -77,7 +114,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(sendParams.threadId).toBe("554");
   });
 
-  it("omits threadId for non-topic sessions", async () => {
+  it("omits threadId for non-topic sessions when no requester", async () => {
     await runSessionsSendA2AFlow({
       targetSessionKey: "agent:main:discord:group:dev",
       displayKey: "agent:main:discord:group:dev",
@@ -121,27 +158,30 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
         lastAccountId: "scout",
       } satisfies SessionListRow,
     },
-  ])("uses Discord session $source for announce accountId", async ({ accountId, session }) => {
-    sessionListRows = [session];
+  ])(
+    "uses Discord session $source for announce accountId when no requester",
+    async ({ accountId, session }) => {
+      sessionListRows = [session];
 
-    await runSessionsSendA2AFlow({
-      targetSessionKey: session.key,
-      displayKey: session.key,
-      message: "Test message",
-      announceTimeoutMs: 10_000,
-      maxPingPongTurns: 0,
-      roundOneReply: "Worker completed successfully",
-    });
+      await runSessionsSendA2AFlow({
+        targetSessionKey: session.key,
+        displayKey: session.key,
+        message: "Test message",
+        announceTimeoutMs: 10_000,
+        maxPingPongTurns: 0,
+        roundOneReply: "Worker completed successfully",
+      });
 
-    expect(gatewayCalls.some((call) => call.method === "sessions.list")).toBe(true);
-    const sendCall = gatewayCalls.find((call) => call.method === "send");
-    expect(sendCall).toBeDefined();
-    expect(sendCall?.params).toMatchObject({
-      channel: "discord",
-      to: "channel:target-room",
-      accountId,
-    });
-  });
+      expect(gatewayCalls.some((call) => call.method === "sessions.list")).toBe(true);
+      const sendCall = gatewayCalls.find((call) => call.method === "send");
+      expect(sendCall).toBeDefined();
+      expect(sendCall?.params).toMatchObject({
+        channel: "discord",
+        to: "channel:target-room",
+        accountId,
+      });
+    },
+  );
 
   it.each(["NO_REPLY", "HEARTBEAT_OK", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
     "does not re-inject exact control reply %s into agent-to-agent flow",
@@ -198,7 +238,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
   });
 
   it.each(["NO_REPLY", "HEARTBEAT_OK"])(
-    "suppresses exact announce control reply %s before channel delivery",
+    "suppresses exact announce control reply %s before delivery",
     async (announceReply) => {
       vi.mocked(runAgentStep).mockResolvedValueOnce(announceReply);
 
@@ -218,6 +258,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
         }),
       );
       expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+      expect(gatewayCalls.find((call) => call.method === "agent")).toBeUndefined();
     },
   );
 });
