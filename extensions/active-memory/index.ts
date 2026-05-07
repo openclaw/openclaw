@@ -2868,10 +2868,10 @@ export default definePluginEntry({
           return { text: "Active Memory: off for this session." };
         }
         if (action === "status") {
+          refreshLiveConfigFromRuntime();
           const disabled = await isSessionActiveMemoryDisabled({ api, sessionKey });
           const agentId = resolveStatusUpdateAgentId({ sessionKey });
-          const liveConfig = api.runtime.config.current() as OpenClawConfig;
-          const agentEligible = isEnabledForAgent(liveConfig, agentId);
+          const agentEligible = isEnabledForAgent(config, agentId);
           return {
             text: `Active Memory: ${disabled || !agentEligible ? "off" : "on"} for this session.`,
           };

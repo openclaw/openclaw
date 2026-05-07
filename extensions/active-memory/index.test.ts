@@ -371,6 +371,31 @@ describe("active-memory plugin", () => {
     expect(statusResult.text).toBe("Active Memory: off for this session.");
   });
 
+  it("reports on for agents in config.agents when /active-memory status is run (#78986)", async () => {
+    const command = registeredCommands["active-memory"];
+    // "main" agent IS in the default test config agents list
+    const sessionKey = "agent:main:active-memory-scope-check-targeted";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-scope-check-targeted",
+      updatedAt: 0,
+    };
+
+    const statusResult = await command.handler({
+      channel: "webchat",
+      isAuthorizedSender: true,
+      sessionKey,
+      args: "status",
+      commandBody: "/active-memory status",
+      config: {},
+      requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
+      detachConversationBinding: async () => ({ removed: false }),
+      getCurrentConversationBinding: async () => null,
+    });
+
+    // Agent in config.agents — must report "on"
+    expect(statusResult.text).toBe("Active Memory: on for this session.");
+  });
+
   it("supports an explicit global active-memory config toggle", async () => {
     const command = registeredCommands["active-memory"];
 
