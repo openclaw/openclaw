@@ -13,13 +13,12 @@ type TlsCert = ConnectionOptions["cert"];
 type TlsKey = ConnectionOptions["key"];
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type GoogleAuthModule = typeof import("google-auth-library");
-type GaxiosModule = typeof import("gaxios");
 type GoogleAuthRuntime = {
-  Gaxios: GaxiosModule["Gaxios"];
+  Gaxios: GoogleAuthModule["gaxios"]["Gaxios"];
   GoogleAuth: GoogleAuthModule["GoogleAuth"];
   OAuth2Client: GoogleAuthModule["OAuth2Client"];
 };
-type GoogleAuthTransport = InstanceType<GaxiosModule["Gaxios"]>;
+type GoogleAuthTransport = InstanceType<GoogleAuthModule["gaxios"]["Gaxios"]>;
 type GoogleAuthRequestWithUnknownHeaders = RequestInit & {
   headers?: unknown;
 };
@@ -30,6 +29,7 @@ type GuardedGoogleAuthRequestInit = RequestInit & {
   agent?: unknown;
   cert?: unknown;
   dispatcher?: unknown;
+  duplex?: "half" | "full";
   fetchImplementation?: unknown;
   key?: unknown;
   noProxy?: unknown;
@@ -74,11 +74,78 @@ let googleAuthRuntimePromise: Promise<GoogleAuthRuntime> | null = null;
 
 function normalizeGoogleAuthPreparedRequestHeaders<T extends GoogleAuthRequestWithUnknownHeaders>(
   config: T,
-): T & { headers: Headers } {
-  if (!(config.headers instanceof Headers)) {
-    config.headers = new Headers(config.headers as HeadersInit | undefined);
+): T {
+  if (config.headers && !(config.headers instanceof Headers)) {
+    const headers = config.headers as Record<string, unknown> & {
+      get?: unknown;
+      set?: unknown;
+      has?: unknown;
+      delete?: unknown;
+    };
+
+    const setHeader = (name: string, value: string): void => {
+      const lowerName = name.toLowerCase();
+      for (const key of Object.keys(headers)) {
+        if (key.toLowerCase() === lowerName) {
+          delete headers[key];
+        }
+      }
+      headers[name] = value;
+    };
+
+    const getHeader = (name: string): string | null => {
+      const lowerName = name.toLowerCase();
+      for (const key of Object.keys(headers)) {
+        if (key.toLowerCase() === lowerName) {
+          return String(headers[key]);
+        }
+      }
+      return null;
+    };
+
+    const hasHeader = (name: string): boolean => {
+      return getHeader(name) !== null;
+    };
+
+    const deleteHeader = (name: string): void => {
+      const lowerName = name.toLowerCase();
+      for (const key of Object.keys(headers)) {
+        if (key.toLowerCase() === lowerName) {
+          delete headers[key];
+        }
+      }
+    };
+
+    if (typeof headers.get !== "function") {
+      Object.defineProperty(headers, "get", {
+        value: getHeader,
+        enumerable: false,
+        configurable: true,
+      });
+    }
+    if (typeof headers.set !== "function") {
+      Object.defineProperty(headers, "set", {
+        value: setHeader,
+        enumerable: false,
+        configurable: true,
+      });
+    }
+    if (typeof headers.has !== "function") {
+      Object.defineProperty(headers, "has", {
+        value: hasHeader,
+        enumerable: false,
+        configurable: true,
+      });
+    }
+    if (typeof headers.delete !== "function") {
+      Object.defineProperty(headers, "delete", {
+        value: deleteHeader,
+        enumerable: false,
+        configurable: true,
+      });
+    }
   }
-  return config as T & { headers: Headers };
+  return config;
 }
 
 function normalizeGoogleAuthResponseHeaders<T extends GoogleAuthResponseWithUnknownHeaders>(
@@ -436,8 +503,24 @@ function resolveGoogleAuthDispatcherPolicy(
 
 export function createGoogleAuthFetch(baseFetch?: FetchLike): FetchLike {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const url = input instanceof Request ? input.url : String(input);
-    const guardedOptions = resolveGoogleAuthDispatcherPolicy(input, init);
+    let url: string;
+    let nextInit: GuardedGoogleAuthRequestInit;
+
+    if (input instanceof Request) {
+      url = input.url;
+      nextInit = {
+        method: input.method,
+        headers: new Headers(input.headers),
+        body: input.body,
+        ...(input.body && !("duplex" in (init ?? {})) ? { duplex: "half" } : {}),
+        ...init,
+      };
+    } else {
+      url = String(input);
+      nextInit = init ?? {};
+    }
+
+    const guardedOptions = resolveGoogleAuthDispatcherPolicy(url, nextInit);
     const { response, release } = await fetchWithSsrFGuard({
       auditContext: GOOGLE_AUTH_AUDIT_CONTEXT,
       dispatcherPolicy: guardedOptions.dispatcherPolicy,
@@ -516,12 +599,9 @@ export async function loadGoogleAuthRuntime(): Promise<GoogleAuthRuntime> {
   if (!googleAuthRuntimePromise) {
     googleAuthRuntimePromise = (async () => {
       try {
-        const [googleAuthModule, gaxiosModule] = await Promise.all([
-          import("google-auth-library"),
-          import("gaxios"),
-        ]);
+        const googleAuthModule = await import("google-auth-library");
         return {
-          Gaxios: gaxiosModule.Gaxios,
+          Gaxios: googleAuthModule.gaxios.Gaxios,
           GoogleAuth: googleAuthModule.GoogleAuth,
           OAuth2Client: googleAuthModule.OAuth2Client,
         };
