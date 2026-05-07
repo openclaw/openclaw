@@ -181,6 +181,27 @@ describe("media-generation runtime shared candidates", () => {
 
     expect(candidates).toEqual([{ provider: "openai", model: "gpt-image-2" }]);
   });
+
+  it("resolves slash-containing provider model IDs from registered provider models", () => {
+    const candidates = resolveCapabilityModelCandidates({
+      cfg: {} as OpenClawConfig,
+      modelConfig: {
+        primary: "openai/gpt-image-2",
+      },
+      modelOverride: "fal-ai/flux/dev",
+      parseModelRef,
+      listProviders: () => [
+        {
+          id: "fal",
+          defaultModel: "fal-ai/flux/dev",
+          models: ["fal-ai/flux/dev", "fal-ai/flux/dev/image-to-image"],
+          isConfigured: () => true,
+        },
+      ],
+    });
+
+    expect(candidates).toEqual([{ provider: "fal", model: "fal-ai/flux/dev" }]);
+  });
 });
 
 describe("media-generation runtime shared normalization", () => {
