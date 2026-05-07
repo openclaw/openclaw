@@ -30,6 +30,7 @@ function createQmdManagerMock() {
   return {
     search: vi.fn(),
     sync: vi.fn(async () => undefined),
+    prewarmEmbedder: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
   };
 }
@@ -98,6 +99,34 @@ describe("startGatewayMemoryBackend", () => {
       'qmd memory startup initialization deferred for 1 agent: "lazy"',
     );
     expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("calls prewarmEmbedder once per qmd-enabled agent right after sync", async () => {
+    const cfg = createQmdConfig({
+      list: [
+        { id: "ops", default: true },
+        { id: "main", memorySearch: { enabled: true } },
+      ],
+    });
+    const log = createGatewayLogMock();
+    const opsManager = createQmdManagerMock();
+    const mainManager = createQmdManagerMock();
+    getMemorySearchManagerMock
+      .mockResolvedValueOnce({ manager: opsManager })
+      .mockResolvedValueOnce({ manager: mainManager });
+
+    await startGatewayMemoryBackend({ cfg, log });
+
+    expect(opsManager.sync).toHaveBeenCalledTimes(1);
+    expect(opsManager.prewarmEmbedder).toHaveBeenCalledTimes(1);
+    expect(mainManager.sync).toHaveBeenCalledTimes(1);
+    expect(mainManager.prewarmEmbedder).toHaveBeenCalledTimes(1);
+    // prewarmEmbedder must run after sync — sync writes the index it
+    // will then mmap, and a hard order avoids racing the embedder
+    // load against an in-flight index write.
+    expect(opsManager.sync.mock.invocationCallOrder[0]).toBeLessThan(
+      opsManager.prewarmEmbedder.mock.invocationCallOrder[0],
+    );
   });
 
   it("initializes all qmd agents when memory search is explicitly enabled in defaults", async () => {

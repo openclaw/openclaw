@@ -106,5 +106,17 @@ export interface MemorySearchManager {
   probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult>;
   probeVectorStoreAvailability?(): Promise<boolean>;
   probeVectorAvailability(): Promise<boolean>;
+  /**
+   * Optional: force the search backend to load any heavy artefacts
+   * (embedding models, vector indexes) it would otherwise lazy-load on
+   * the first user query. Best-effort — implementations should swallow
+   * failures so the next real query can fall back to default behaviour.
+   *
+   * Called by the gateway boot path right after `sync(...)` so the cold
+   * mmap + first-inference cost is paid off the user-facing path. The
+   * QMD backend's first `vsearch` can exceed the per-query 4s timeout
+   * on cold pods (the embedder GGUF is mmap'd from disk on first use).
+   */
+  prewarmEmbedder?(): Promise<void>;
   close?(): Promise<void>;
 }

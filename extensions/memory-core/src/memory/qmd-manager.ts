@@ -1272,6 +1272,31 @@ export class QmdMemoryManager implements MemorySearchManager {
     return this.clampResultsByInjectedChars(this.diversifyResultsBySource(ranked, resultLimit));
   }
 
+  /**
+   * Pay the embedder cold-start cost off the user-facing path. The
+   * GGUF embedding model is mmap'd from disk on first use and the
+   * first inference takes longer than the per-query timeout on
+   * resource-constrained pods, surfacing as `qmd query … timed out
+   * after 4000ms` and a fallback to the builtin index.
+   *
+   * Best-effort. Failures are swallowed — if QMD is genuinely
+   * unhealthy the next real query falls through to the existing
+   * fallback path, same as before. The 30s ceiling is generous enough
+   * to cover model load on slow disks without blocking gateway-ready
+   * indefinitely.
+   */
+  async prewarmEmbedder(): Promise<void> {
+    if (!qmdUsesVectors(this.qmd.searchMode)) return;
+    try {
+      await this.runQmd(["vsearch", "warmup", "--json", "-n", "1"], {
+        timeoutMs: 30_000,
+        discardOutput: true,
+      });
+    } catch (err) {
+      log.debug(`qmd prewarmEmbedder failed (non-fatal): ${String(err)}`);
+    }
+  }
+
   async sync(params?: {
     reason?: string;
     force?: boolean;

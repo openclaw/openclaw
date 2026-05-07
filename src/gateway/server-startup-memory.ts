@@ -80,6 +80,11 @@ export async function startGatewayMemoryBackend(params: {
     }
     try {
       await manager.sync?.({ reason: "boot", force: true });
+      // Pay the embedder cold-start cost here so the first user query
+      // doesn't time out against the per-query limit waiting for the
+      // GGUF mmap + first inference. Best-effort; failures are logged
+      // by the manager and do not block the boot sequence.
+      await manager.prewarmEmbedder?.();
     } catch (err) {
       params.log.warn(`qmd memory startup boot sync failed for agent "${agentId}": ${String(err)}`);
       continue;
