@@ -545,9 +545,11 @@ function resolveRecallRunChannelContext(params: {
   // A channelId that contains ":" is a scoped conversation id (e.g. Telegram
   // forum-topic "-100123:topic:77"), not a runnable channel name. Using it as
   // the embedded recall run's channel causes bundled-plugin dirName validation
-  // to throw because ":" is not allowed in directory names (#76704).
+  // to throw because ":" and "/" are not allowed in directory names (#76704, #78918).
   const runnableExplicitChannel =
-    explicitChannel && !explicitChannel.includes(":") ? explicitChannel : undefined;
+    explicitChannel && !explicitChannel.includes(":") && !explicitChannel.includes("/")
+      ? explicitChannel
+      : undefined;
   const trustedExplicitChannel =
     runnableExplicitChannel && runnableExplicitChannel !== explicitProvider
       ? runnableExplicitChannel
@@ -599,12 +601,14 @@ function resolveRecallRunChannelContext(params: {
     const rawStrongEntryChannel =
       normalizeOptionalString(sessionEntry?.lastChannel) ??
       normalizeOptionalString(sessionEntry?.channel);
-    // Channel IDs containing ":" are scoped conversation IDs (e.g. QQ c2c
-    // "c2c:10D4F7C2..."), not runnable channel names. The same guard that
-    // applies to explicit channelId (#76704) must also apply to channels
-    // read from the session store (#77396).
+    // Channel IDs containing ":" or "/" are scoped conversation IDs (e.g. QQ c2c
+    // "c2c:10D4F7C2...", Google Chat "spaces/khfx4yaaaae"), not runnable channel
+    // names. The same guard that applies to explicit channelId (#76704) must also
+    // apply to channels read from the session store (#77396, #78918).
     const strongEntryChannel =
-      rawStrongEntryChannel && !rawStrongEntryChannel.includes(":")
+      rawStrongEntryChannel &&
+      !rawStrongEntryChannel.includes(":") &&
+      !rawStrongEntryChannel.includes("/")
         ? rawStrongEntryChannel
         : undefined;
     const weakEntryChannel = normalizeOptionalString(sessionEntry?.origin?.provider);
