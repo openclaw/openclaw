@@ -124,111 +124,46 @@ Permission model (client debug mode):
 ## Protocol smoke testing
 
 For protocol-level debugging, start a Gateway with isolated state and drive
-`openclaw acp` over stdio with an ACP JSON-RPC client. A useful smoke should
-exercise:
+`openclaw acp` over stdio with an ACP JSON-RPC client. Cover `initialize`,
+`session/new`, `session/list` with an absolute `cwd`, `session/resume`,
+`session/close`, duplicate close, and missing resume.
 
-- `initialize`
-- `session/new`
-- `session/list` with an absolute `cwd`
-- `session/resume` for an existing Gateway session key
-- `session/close`
-- duplicate close and missing resume error handling
-
-The request stream should look like normal ACP JSON-RPC frames:
-
-```json
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false},"clientInfo":{"name":"acp-smoke","version":"1.0.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/path/to/workspace","mcpServers":[]}}
-{"jsonrpc":"2.0","id":3,"method":"session/list","params":{"cwd":"/path/to/workspace","_meta":{"limit":5}}}
-{"jsonrpc":"2.0","id":4,"method":"session/resume","params":{"sessionId":"agent:main:acp-smoke","cwd":"/path/to/workspace","mcpServers":[]}}
-{"jsonrpc":"2.0","id":5,"method":"session/close","params":{"sessionId":"agent:main:acp-smoke"}}
-```
-
-Expected `initialize` response:
+The proof should include the advertised lifecycle capabilities, a Gateway-backed
+session row, update notifications, and the Gateway `sessions.list` log:
 
 ```json
 {
-  "protocolVersion": 1,
-  "agentCapabilities": {
-    "loadSession": true,
-    "promptCapabilities": {
-      "image": true,
-      "audio": false,
-      "embeddedContext": true
-    },
-    "mcpCapabilities": {
-      "http": false,
-      "sse": false
-    },
-    "sessionCapabilities": {
-      "list": {},
-      "resume": {},
-      "close": {}
-    }
-  },
-  "agentInfo": {
-    "name": "openclaw-acp",
-    "title": "OpenClaw ACP Gateway"
-  },
-  "authMethods": []
-}
-```
-
-Expected `session/list` response for a Gateway session with workspace metadata:
-
-```json
-{
-  "sessions": [
-    {
-      "sessionId": "agent:main:acp-smoke",
-      "cwd": "/path/to/workspace",
-      "title": "ACP seeded gateway session",
-      "updatedAt": "2026-05-07T00:00:00.000Z",
-      "_meta": {
-        "sessionKey": "agent:main:acp-smoke",
-        "kind": "direct"
+  "initialize": {
+    "protocolVersion": 1,
+    "agentCapabilities": {
+      "sessionCapabilities": {
+        "list": {},
+        "resume": {},
+        "close": {}
       }
     }
-  ],
-  "nextCursor": null
-}
-```
-
-Expected notifications around `session/new` and `session/resume` include
-`session_info_update`, `available_commands_update`, and, when Gateway token
-totals are fresh, `usage_update`:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "method": "session/update",
-  "params": {
-    "sessionId": "agent:main:acp-smoke",
-    "update": {
-      "sessionUpdate": "usage_update",
-      "used": 1234,
-      "size": 200000,
-      "_meta": {
-        "source": "gateway-session-store",
-        "approximate": true
+  },
+  "listSessions": {
+    "sessions": [
+      {
+        "sessionId": "agent:main:acp-smoke",
+        "cwd": "/path/to/workspace",
+        "_meta": {
+          "sessionKey": "agent:main:acp-smoke",
+          "kind": "direct"
+        }
       }
-    }
-  }
+    ],
+    "nextCursor": null
+  },
+  "notifications": ["session_info_update", "available_commands_update", "usage_update"],
+  "gatewayLogTail": ["[gateway] ready", "[ws] ⇄ res ✓ sessions.list 305ms"]
 }
 ```
 
-In Gateway logs, a successful lifecycle smoke should include a `sessions.list`
-response from the ACP bridge connection:
-
-```text
-[gateway] ready
-[ws] ⇄ res ✓ sessions.list 305ms
-```
-
-Avoid using `openclaw gateway call sessions.list` as the only proof for ACP.
-That CLI path may request a fresh-token operator scope upgrade, while ACP
-bridge correctness is proven by the ACP stdio frames plus the Gateway
-`sessions.list` log entry.
+Avoid using `openclaw gateway call sessions.list` as the only ACP proof. That
+CLI path may request a fresh-token operator scope upgrade; ACP bridge
+correctness is proven by ACP stdio frames plus the Gateway `sessions.list` log.
 
 ## How to use this
 
