@@ -16,6 +16,7 @@ vi.mock("../../agents/bootstrap-files.js", () => ({
     bootstrapFiles: [],
     contextFiles: [],
   })),
+  makeBootstrapWarn: vi.fn(() => vi.fn()),
 }));
 
 vi.mock("../../agents/sandbox.js", () => ({
