@@ -599,8 +599,9 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     ]);
   });
 
-  it("records ACPX process leases and injects lease env during wrapper launch", async () => {
+  it("records ACPX process leases without persisting lease-specific agent commands", async () => {
     const savedRecords: Record<string, unknown>[] = [];
+    const launchCommands: string[] = [];
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
       save: vi.fn(async (record) => {
@@ -622,6 +623,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       const command = (
         runtime as unknown as { scopedAgentRegistry: { resolve(agent: string): string } }
       ).scopedAgentRegistry.resolve("codex");
+      launchCommands.push(command);
       await wrappedStore.save({
         name: input.sessionKey,
         agentCommand: command,
@@ -650,12 +652,60 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       state: "open",
       wrapperPath: "/tmp/openclaw/acpx/codex-acp-wrapper.mjs",
     });
-    expect(savedRecords[0]?.agentCommand).toContain("OPENCLAW_ACPX_LEASE_ID=");
-    expect(savedRecords[0]?.agentCommand).toContain("OPENCLAW_GATEWAY_INSTANCE_ID=gateway-test");
+    expect(launchCommands[0]).toContain("OPENCLAW_ACPX_LEASE_ID=");
+    expect(launchCommands[0]).toContain("OPENCLAW_GATEWAY_INSTANCE_ID=gateway-test");
+    expect(savedRecords[0]?.agentCommand).toBe(CODEX_ACP_WRAPPER_COMMAND);
     expect(savedRecords[0]).toMatchObject({
       openclawGatewayInstanceId: "gateway-test",
       openclawLeaseId: leases[0]?.leaseId,
     });
+  });
+
+  it("keeps reusable persistent ACP launch commands stable across ensures", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        name: "agent:codex:acp:binding:test",
+        acpxRecordId: "record-1",
+        acpSessionId: "session-1",
+        agentCommand: CODEX_ACP_WRAPPER_COMMAND,
+        cwd: "/tmp",
+        closed: false,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const leaseStore = makeLeaseStore();
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      openclawGatewayInstanceId: "gateway-test",
+      openclawProcessLeaseStore: leaseStore.store,
+      openclawWrapperRoot: "/tmp/openclaw/acpx",
+      agentRegistry: {
+        resolve: (agentName: string) =>
+          agentName === "codex" ? CODEX_ACP_WRAPPER_COMMAND : agentName,
+        list: () => ["codex"],
+      },
+    });
+    const resolvedCommands: string[] = [];
+    vi.spyOn(delegate, "ensureSession").mockImplementation(async (input) => {
+      resolvedCommands.push(
+        (
+          runtime as unknown as { scopedAgentRegistry: { resolve(agent: string): string } }
+        ).scopedAgentRegistry.resolve("codex"),
+      );
+      return {
+        sessionKey: input.sessionKey,
+        backend: "acpx",
+        runtimeSessionName: input.sessionKey,
+      };
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:binding:test",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    expect(resolvedCommands).toEqual([CODEX_ACP_WRAPPER_COMMAND]);
+    expect(leaseStore.store.save).not.toHaveBeenCalled();
   });
 
   it("merges sidecar lease ids into loaded ACPX session records", async () => {
