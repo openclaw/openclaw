@@ -243,10 +243,15 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 
-  it("does not add synthetic completion text when the run still has a tool error", () => {
-    expectNoPayloads({
+  it("surfaces a tool error instead of synthetic completion text when the run still has a tool error", () => {
+    const payloads = buildPayloads({
       toolMetas: [{ toolName: "browser", meta: "open https://example.com" }],
       lastToolError: { toolName: "browser", error: "url required" },
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Browser",
+      absentDetail: "url required",
     });
   });
 
@@ -304,10 +309,15 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it.each(["url required", "url missing", "invalid parameter: url"])(
-    "suppresses recoverable non-mutating tool error: %s",
+    "surfaces recoverable non-mutating tool error when no assistant reply exists: %s",
     (error) => {
-      expectNoPayloads({
+      const payloads = buildPayloads({
         lastToolError: { toolName: "browser", error },
+      });
+
+      expectSingleToolErrorPayload(payloads, {
+        title: "Browser",
+        absentDetail: error,
       });
     },
   );

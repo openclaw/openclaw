@@ -38,16 +38,6 @@ type ToolErrorWarningPolicy = {
   includeDetails: boolean;
 };
 
-const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
-  "required",
-  "missing",
-  "invalid",
-  "must be",
-  "must have",
-  "needs",
-  "requires",
-] as const;
-
 const MUTATING_FAILURE_ACTION_PATTERN =
   "(?:write|edit|update|save|create|delete|remove|modify|change|apply|patch|move|rename|send|reply|message|tool|action|operation)";
 
@@ -69,11 +59,6 @@ const MUTATING_FAILURE_ERROR_WHILE_ACTION_PATTERN = new RegExp(
 );
 const DID_NOT_FAIL_PATTERN = /\b(?:did not|didn't)\s+fail\b/u;
 const NEGATED_FAILURE_PATTERN = /\b(?:no|not|without)\s+(?:failures?|errors?)\b/u;
-
-function isRecoverableToolError(error: string | undefined): boolean {
-  const errorLower = normalizeOptionalLowercaseString(error) ?? "";
-  return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
-}
 
 function hasExplicitMutatingToolFailureAcknowledgement(text: string): boolean {
   const normalizedText = normalizeTextForComparison(text);
@@ -165,7 +150,7 @@ function resolveToolErrorWarningPolicy(params: {
     return { showWarning: false, includeDetails };
   }
   return {
-    showWarning: !params.hasUserFacingReply && !isRecoverableToolError(params.lastToolError.error),
+    showWarning: !params.hasUserFacingReply,
     includeDetails,
   };
 }
@@ -416,7 +401,7 @@ export function buildEmbeddedRunPayloads(params: {
     });
 
     // Surface mutating failures unless the assistant explicitly acknowledged the failed action.
-    // Otherwise, keep the previous behavior and only surface non-recoverable failures when no reply exists.
+    // For non-mutating tool errors, surface the failure when the model produced no user-facing reply.
     if (warningPolicy.showWarning) {
       const toolSummary = formatToolAggregate(
         params.lastToolError.toolName,

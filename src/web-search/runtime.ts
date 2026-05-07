@@ -348,6 +348,14 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
   let sawUnavailableProvider = false;
 
   for (const candidate of candidates) {
+    if (
+      allowFallback &&
+      providerRequiresCredential(candidate) &&
+      !hasEntryCredential(candidate, config, search)
+    ) {
+      sawUnavailableProvider = true;
+      continue;
+    }
     try {
       const definition = candidate.createTool({
         config,

@@ -335,6 +335,7 @@ describe("web search runtime", () => {
         id: "alpha",
         credentialPath: "tools.web.search.alpha.apiKey",
         autoDetectOrder: 1,
+        getConfiguredCredentialValue: () => "alpha-configured",
         getCredentialValue: () => "alpha-configured",
         createTool: ({ runtimeMetadata }) => ({
           description: "alpha",
@@ -351,6 +352,7 @@ describe("web search runtime", () => {
         id: "beta",
         credentialPath: "tools.web.search.beta.apiKey",
         autoDetectOrder: 2,
+        getConfiguredCredentialValue: () => "beta-configured",
         getCredentialValue: () => "beta-configured",
         createTool: ({ runtimeMetadata }) => ({
           description: "beta",
@@ -479,7 +481,9 @@ describe("web search runtime", () => {
 
   it("does not prebuild fallback provider tools before attempting the selected provider", async () => {
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createGoogleSearchProvider(),
+      createGoogleSearchProvider({
+        getConfiguredCredentialValue: () => "google-key",
+      }),
       createWebSearchTestProvider({
         pluginId: "broken-fallback",
         id: "broken-fallback",
@@ -655,6 +659,44 @@ describe("web search runtime", () => {
     ).resolves.toEqual({
       provider: "google",
       result: { query: "prefer-config", provider: "google" },
+    });
+  });
+
+  it("skips unconfigured credential-backed providers during auto fallback", async () => {
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createGoogleSearchProvider({
+        createTool: () => ({
+          description: "google",
+          parameters: {},
+          execute: async () => {
+            throw new Error("google should not run without credentials");
+          },
+        }),
+      }),
+      createDuckDuckGoSearchProvider(),
+      createCustomSearchProvider({
+        id: "searxng",
+        pluginId: "searxng",
+        credentialPath: "plugins.entries.searxng.config.webSearch.baseUrl",
+        autoDetectOrder: 200,
+        createTool: () => ({
+          description: "searxng",
+          parameters: {},
+          execute: async () => {
+            throw new Error("SearXNG base URL is not configured");
+          },
+        }),
+      }),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {},
+        args: { query: "skip-unconfigured" },
+      }),
+    ).resolves.toEqual({
+      provider: "duckduckgo",
+      result: { query: "skip-unconfigured", provider: "duckduckgo" },
     });
   });
 
