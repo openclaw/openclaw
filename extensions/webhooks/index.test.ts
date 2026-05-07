@@ -143,28 +143,27 @@ describe("webhooks plugin registration", () => {
   it("scopes run_task child session keys to the route session tree", async () => {
     const registerHttpRoute = vi.fn();
 
-    plugin.register(
-      createApi({
-        pluginConfig: {
-          routes: {
-            zapier: {
-              sessionKey: "agent:main:main",
-              secret: "shared-secret",
-            },
+    const api = createApi({
+      pluginConfig: {
+        routes: {
+          zapier: {
+            sessionKey: "agent:main:main",
+            secret: "shared-secret",
           },
         },
-        registerHttpRoute,
-        sessionStores: {
-          worker: {
-            "agent:worker:acp:child": {
-              sessionId: "child-session",
-              updatedAt: 1,
-              spawnedBy: "agent:main:main",
-            },
+      },
+      registerHttpRoute,
+      sessionStores: {
+        worker: {
+          "agent:worker:acp:child": {
+            sessionId: "child-session",
+            updatedAt: 1,
+            spawnedBy: "agent:main:main",
           },
         },
-      }),
-    );
+      },
+    });
+    plugin.register(api);
 
     const handler = registerHttpRoute.mock.calls[0]?.[0]?.handler as (
       req: IncomingMessage,
@@ -194,6 +193,9 @@ describe("webhooks plugin registration", () => {
       },
     });
     expect(denied.statusCode).toBe(403);
+    expect(api.runtime.agent.session.loadSessionStore).toHaveBeenCalledWith("victim", {
+      clone: false,
+    });
     expect(parseJsonBody(denied)).toMatchObject({
       ok: false,
       code: "child_session_forbidden",
@@ -212,6 +214,9 @@ describe("webhooks plugin registration", () => {
       },
     });
     expect(allowed.statusCode).toBe(200);
+    expect(api.runtime.agent.session.loadSessionStore).toHaveBeenCalledWith("worker", {
+      clone: false,
+    });
     expect(parseJsonBody(allowed)).toMatchObject({
       ok: true,
       result: {

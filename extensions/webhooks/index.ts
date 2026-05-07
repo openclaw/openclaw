@@ -26,7 +26,9 @@ function createChildSessionKeyGuard(api: OpenClawPluginApi, requesterSessionKey:
     const storePath = api.runtime.agent.session.resolveStorePath(api.config.session?.store, {
       agentId,
     });
-    const entry = api.runtime.agent.session.loadSessionStore(storePath)[normalizedChildSessionKey];
+    const entry = api.runtime.agent.session.loadSessionStore(storePath, { clone: false })[
+      normalizedChildSessionKey
+    ];
     return checker.check({
       key: normalizedChildSessionKey,
       agentId,
