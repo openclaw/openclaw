@@ -165,6 +165,31 @@ imsg send <handle> "test"
     Runtime fallback: if `groupAllowFrom` is unset, iMessage group sender checks fall back to `allowFrom` when available.
     Runtime note: if `channels.imessage` is completely missing, runtime falls back to `groupPolicy="allowlist"` and logs a warning (even if `channels.defaults.groupPolicy` is set).
 
+    <Warning>
+    Group routing has **two** allowlist gates running back-to-back, and both must pass:
+
+    1. **Sender / chat-target allowlist** (`channels.imessage.groupAllowFrom`) — handle, `chat_guid`, `chat_identifier`, or `chat_id`.
+    2. **Group registry** (`channels.imessage.groups`) — with `groupPolicy: "allowlist"`, this gate requires either a `groups: { "*": { ... } }` wildcard entry (sets `allowAll = true`), or an explicit per-`chat_id` entry under `groups`.
+
+    If gate 2 has nothing in it, every group message is dropped — and the rejection logs only at `verbose`/`debug` level, so the drops are silent at the default `info` log level. DMs continue to work because they take a different code path.
+
+    Minimum config to keep groups flowing under `groupPolicy: "allowlist"`:
+
+    ```json5
+    {
+      channels: {
+        imessage: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15555550123"],
+          groups: { "*": { "requireMention": true } },
+        },
+      },
+    }
+    ```
+
+    To debug a suspected silent drop, run `OPENCLAW_LOG_LEVEL=debug openclaw gateway` and look for `imessage: skipping group message (<chat_id>) not in allowlist`. If that line appears, gate 2 is dropping — add the `groups` block.
+    </Warning>
+
     Mention gating for groups:
 
     - iMessage has no native mention metadata

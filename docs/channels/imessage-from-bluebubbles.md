@@ -51,30 +51,71 @@ This guide is opt-in. BlueBubbles still works and remains the right choice if yo
 
 iMessage and BlueBubbles share a lot of channel-level config. The keys that change are mostly transport (REST server vs local CLI). Behavior keys (`dmPolicy`, `groupPolicy`, `allowFrom`, etc.) keep the same meaning.
 
-| BlueBubbles                                                | bundled iMessage                          | Notes                                                                                                                                                                               |
-| ---------------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `channels.bluebubbles.enabled`                             | `channels.imessage.enabled`               | Same semantics.                                                                                                                                                                     |
-| `channels.bluebubbles.serverUrl`                           | _(removed)_                               | No REST server — the plugin spawns `imsg rpc` over stdio.                                                                                                                           |
-| `channels.bluebubbles.password`                            | _(removed)_                               | No webhook authentication needed.                                                                                                                                                   |
-| _(implicit)_                                               | `channels.imessage.cliPath`               | Path to `imsg` (default `imsg`); use a wrapper script for SSH.                                                                                                                      |
-| _(implicit)_                                               | `channels.imessage.dbPath`                | Optional Messages.app `chat.db` override; auto-detected when omitted.                                                                                                               |
-| _(implicit)_                                               | `channels.imessage.remoteHost`            | `host` or `user@host` — only needed when `cliPath` is an SSH wrapper and you want SCP attachment fetches.                                                                           |
-| `channels.bluebubbles.dmPolicy`                            | `channels.imessage.dmPolicy`              | Same values (`pairing` / `allowlist` / `open` / `disabled`).                                                                                                                        |
-| `channels.bluebubbles.allowFrom`                           | `channels.imessage.allowFrom`             | Pairing approvals carry over by handle, not by token.                                                                                                                               |
-| `channels.bluebubbles.groupPolicy`                         | `channels.imessage.groupPolicy`           | Same values (`allowlist` / `open` / `disabled`).                                                                                                                                    |
-| `channels.bluebubbles.groupAllowFrom`                      | `channels.imessage.groupAllowFrom`        | Same.                                                                                                                                                                               |
-| `channels.bluebubbles.groups`                              | `channels.imessage.groups`                | Per-group `requireMention`, `tools`, `toolsBySender` carry over verbatim.                                                                                                           |
-| `channels.bluebubbles.sendReadReceipts`                    | `channels.imessage.sendReadReceipts`      | Default `true`. With the bundled plugin this only fires when the private API probe is up.                                                                                           |
-| `channels.bluebubbles.includeAttachments`                  | `channels.imessage.includeAttachments`    | Same.                                                                                                                                                                               |
-| `channels.bluebubbles.attachmentRoots`                     | `channels.imessage.attachmentRoots`       | Local roots; same wildcard rules.                                                                                                                                                   |
-| _(N/A)_                                                    | `channels.imessage.remoteAttachmentRoots` | Only used when `remoteHost` is set for SCP fetches.                                                                                                                                 |
-| `channels.bluebubbles.mediaMaxMb`                          | `channels.imessage.mediaMaxMb`            | Default 16 MB on iMessage (BlueBubbles default was 8 MB). Set explicitly if you want to keep the lower cap.                                                                         |
-| `channels.bluebubbles.textChunkLimit`                      | `channels.imessage.textChunkLimit`        | Default 4000 on both.                                                                                                                                                               |
-| `channels.bluebubbles.coalesceSameSenderDms`               | _(not yet)_                               | Same-sender DM coalescing is BlueBubbles-only at time of writing.                                                                                                                   |
-| `channels.bluebubbles.enrichGroupParticipantsFromContacts` | _(N/A)_                                   | iMessage already reads sender display names from `chat.db`.                                                                                                                         |
-| `channels.bluebubbles.actions.*`                           | `channels.imessage.actions.*`             | Per-action toggles: `reactions`, `edit`, `unsend`, `reply`, `sendWithEffect`, `renameGroup`, `setGroupIcon`, `addParticipant`, `removeParticipant`, `leaveGroup`, `sendAttachment`. |
+| BlueBubbles                                                | bundled iMessage                          | Notes                                                                                                                                                                                                                                                                                          |
+| ---------------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `channels.bluebubbles.enabled`                             | `channels.imessage.enabled`               | Same semantics.                                                                                                                                                                                                                                                                                |
+| `channels.bluebubbles.serverUrl`                           | _(removed)_                               | No REST server — the plugin spawns `imsg rpc` over stdio.                                                                                                                                                                                                                                      |
+| `channels.bluebubbles.password`                            | _(removed)_                               | No webhook authentication needed.                                                                                                                                                                                                                                                              |
+| _(implicit)_                                               | `channels.imessage.cliPath`               | Path to `imsg` (default `imsg`); use a wrapper script for SSH.                                                                                                                                                                                                                                 |
+| _(implicit)_                                               | `channels.imessage.dbPath`                | Optional Messages.app `chat.db` override; auto-detected when omitted.                                                                                                                                                                                                                          |
+| _(implicit)_                                               | `channels.imessage.remoteHost`            | `host` or `user@host` — only needed when `cliPath` is an SSH wrapper and you want SCP attachment fetches.                                                                                                                                                                                      |
+| `channels.bluebubbles.dmPolicy`                            | `channels.imessage.dmPolicy`              | Same values (`pairing` / `allowlist` / `open` / `disabled`).                                                                                                                                                                                                                                   |
+| `channels.bluebubbles.allowFrom`                           | `channels.imessage.allowFrom`             | Pairing approvals carry over by handle, not by token.                                                                                                                                                                                                                                          |
+| `channels.bluebubbles.groupPolicy`                         | `channels.imessage.groupPolicy`           | Same values (`allowlist` / `open` / `disabled`).                                                                                                                                                                                                                                               |
+| `channels.bluebubbles.groupAllowFrom`                      | `channels.imessage.groupAllowFrom`        | Same.                                                                                                                                                                                                                                                                                          |
+| `channels.bluebubbles.groups`                              | `channels.imessage.groups`                | **Copy this verbatim, including any `groups: { "*": { ... } }` wildcard entry.** Per-group `requireMention`, `tools`, `toolsBySender` carry over. With `groupPolicy: "allowlist"`, an empty or missing `groups` block silently drops every group message — see "Group registry footgun" below. |
+| `channels.bluebubbles.sendReadReceipts`                    | `channels.imessage.sendReadReceipts`      | Default `true`. With the bundled plugin this only fires when the private API probe is up.                                                                                                                                                                                                      |
+| `channels.bluebubbles.includeAttachments`                  | `channels.imessage.includeAttachments`    | Same.                                                                                                                                                                                                                                                                                          |
+| `channels.bluebubbles.attachmentRoots`                     | `channels.imessage.attachmentRoots`       | Local roots; same wildcard rules.                                                                                                                                                                                                                                                              |
+| _(N/A)_                                                    | `channels.imessage.remoteAttachmentRoots` | Only used when `remoteHost` is set for SCP fetches.                                                                                                                                                                                                                                            |
+| `channels.bluebubbles.mediaMaxMb`                          | `channels.imessage.mediaMaxMb`            | Default 16 MB on iMessage (BlueBubbles default was 8 MB). Set explicitly if you want to keep the lower cap.                                                                                                                                                                                    |
+| `channels.bluebubbles.textChunkLimit`                      | `channels.imessage.textChunkLimit`        | Default 4000 on both.                                                                                                                                                                                                                                                                          |
+| `channels.bluebubbles.coalesceSameSenderDms`               | _(not yet)_                               | Same-sender DM coalescing is BlueBubbles-only at time of writing.                                                                                                                                                                                                                              |
+| `channels.bluebubbles.enrichGroupParticipantsFromContacts` | _(N/A)_                                   | iMessage already reads sender display names from `chat.db`.                                                                                                                                                                                                                                    |
+| `channels.bluebubbles.actions.*`                           | `channels.imessage.actions.*`             | Per-action toggles: `reactions`, `edit`, `unsend`, `reply`, `sendWithEffect`, `renameGroup`, `setGroupIcon`, `addParticipant`, `removeParticipant`, `leaveGroup`, `sendAttachment`.                                                                                                            |
 
 Multi-account configs (`channels.bluebubbles.accounts.*`) translate one-to-one to `channels.imessage.accounts.*`.
+
+## Group registry footgun
+
+The bundled iMessage plugin runs **two** separate group allowlist gates back-to-back. Both must pass for a group message to reach the agent:
+
+1. **Sender / chat-target allowlist** (`channels.imessage.groupAllowFrom`) — checked by `isAllowedIMessageSender`. Matches inbound messages by sender handle, `chat_guid`, `chat_identifier`, or `chat_id`. Same shape as BlueBubbles.
+2. **Group registry** (`channels.imessage.groups`) — checked by `resolveChannelGroupPolicy` from `inbound-processing.ts:199`. With `groupPolicy: "allowlist"`, this gate requires either:
+   - a `groups: { "*": { ... } }` wildcard entry (sets `allowAll = true`), or
+   - an explicit per-`chat_id` entry under `groups`.
+
+If gate 1 passes but gate 2 fails, the message is dropped and the rejection logs **only at `verbose`/`debug` level** (`inbound-processing.ts:337`). At the default `info` log level every group message vanishes silently — DMs continue to work because they take a different code path.
+
+This is the most common BlueBubbles → bundled-iMessage migration failure mode: operators copy `groupAllowFrom` and `groupPolicy` but skip the `groups` block, because BlueBubbles' `groups: { "*": { "requireMention": true } }` looks like an unrelated mention setting. It's actually load-bearing for the registry gate.
+
+The minimum config to keep group messages flowing after `groupPolicy: "allowlist"`:
+
+```json5
+{
+  channels: {
+    imessage: {
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["+15555550123", "chat_guid:any;-;..."],
+      groups: {
+        "*": { requireMention: true },
+      },
+    },
+  },
+}
+```
+
+`requireMention: true` under `*` is harmless when no mention patterns are configured: the runtime sets `canDetectMention = false` and short-circuits the mention drop at `inbound-processing.ts:512`. With mention patterns configured (`agents.list[].groupChat.mentionPatterns`), it works as expected.
+
+To debug a suspected silent drop, raise log level temporarily:
+
+```bash
+OPENCLAW_LOG_LEVEL=debug openclaw gateway
+```
+
+Then look for `imessage: skipping group message (<chat_id>) not in allowlist`. If you see that line, gate 2 is dropping — add the `groups` block.
+
+Tracker for raising the drop's log severity so this is no longer silent at `info`: [openclaw#78749](https://github.com/openclaw/openclaw/issues/78749).
 
 ## Step-by-step
 
@@ -94,6 +135,7 @@ Multi-account configs (`channels.bluebubbles.accounts.*`) translate one-to-one t
          allowFrom: ["+15555550123"], // copy from bluebubbles.allowFrom
          groupPolicy: "allowlist",
          groupAllowFrom: [], // copy from bluebubbles.groupAllowFrom
+         groups: { "*": { requireMention: true } }, // copy from bluebubbles.groups — silently drops groups if missing, see "Group registry footgun" above
          actions: {
            reactions: true,
            edit: true,
@@ -130,9 +172,13 @@ Multi-account configs (`channels.bluebubbles.accounts.*`) translate one-to-one t
 
    Restart the gateway. Inbound iMessage traffic now flows through the bundled plugin.
 
-4. **Verify the action surface** — from a paired DM, ask the agent to react, edit, unsend, reply, send a photo, and (in a group) rename the group / add or remove a participant. Each action should land natively in Messages.app. If any throws "iMessage `<action>` requires the imsg private API bridge", run `imsg launch` again and refresh `channels status --probe`.
+4. **Verify DMs.** Send the agent a direct message; confirm the reply lands.
 
-5. **Stop the BlueBubbles server** once you have run on iMessage for at least a few hours of normal traffic. Remove the BlueBubbles block from config and restart the gateway.
+5. **Verify groups separately.** DMs and groups take different code paths — DM success does not prove groups are routing. Send the agent a message in a paired group chat and confirm the reply lands. If the group goes silent (no agent reply, no error), restart the gateway with `OPENCLAW_LOG_LEVEL=debug openclaw gateway` and look for `imessage: skipping group message (...) not in allowlist`. If that line appears, your `groups` block is missing or empty — see "Group registry footgun" above.
+
+6. **Verify the action surface** — from a paired DM, ask the agent to react, edit, unsend, reply, send a photo, and (in a group) rename the group / add or remove a participant. Each action should land natively in Messages.app. If any throws "iMessage `<action>` requires the imsg private API bridge", run `imsg launch` again and refresh `channels status --probe`.
+
+7. **Stop the BlueBubbles server** once you have run on iMessage for at least a few hours of normal traffic. Remove the BlueBubbles block from config and restart the gateway.
 
 ## Action parity at a glance
 
