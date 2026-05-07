@@ -113,6 +113,14 @@ export function applyFinalEffectiveToolPolicy(
     providerProfilePolicy,
     providerProfileAlsoAllow,
   );
+  const preservePluginAllowlist = [
+    ...(globalPolicy?.allow ?? []),
+    ...(globalProviderPolicy?.allow ?? []),
+    ...(agentPolicy?.allow ?? []),
+    ...(agentProviderPolicy?.allow ?? []),
+    ...(groupPolicy?.allow ?? []),
+    ...(params.sandboxToolPolicy?.allow ?? []),
+  ];
   const subagentStore = resolveSubagentCapabilityStore(params.sessionKey, {
     cfg: params.config,
   });
@@ -145,9 +153,11 @@ export function applyFinalEffectiveToolPolicy(
     ...buildDefaultToolPolicyPipelineSteps({
       profilePolicy: profilePolicyWithAlsoAllow,
       profile,
+      profilePreservePluginAllowlist: preservePluginAllowlist,
       profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
       providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
       providerProfile,
+      providerProfilePreservePluginAllowlist: preservePluginAllowlist,
       providerProfileUnavailableCoreWarningAllowlist: providerProfilePolicy?.allow,
       globalPolicy,
       globalProviderPolicy,

@@ -153,6 +153,19 @@ describe("applyFinalEffectiveToolPolicy", () => {
     expect(filtered.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
   });
 
+  it("preserves explicitly allowlisted plugin tools through the coding profile", () => {
+    const pluginTool = makeTool("second_nature_ops");
+    setPluginToolMeta(pluginTool, { pluginId: "second-nature", optional: false });
+
+    const filtered = applyFinalEffectiveToolPolicy({
+      bundledTools: [pluginTool],
+      config: { tools: { profile: "coding", allow: ["second_nature_ops"] } },
+      warn: () => {},
+    });
+
+    expect(filtered.map((tool) => tool.name)).toEqual(["second_nature_ops"]);
+  });
+
   it("lets explicit deny entries override the profile bundle MCP allowlist", () => {
     const mcpTool = makeTool("bundleProbe__bundle_probe");
     setPluginToolMeta(mcpTool, { pluginId: "bundle-mcp", optional: false });

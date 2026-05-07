@@ -57,6 +57,23 @@ describe("tool-policy-pipeline", () => {
     expect(names).toEqual(["plugin_tool"]);
   });
 
+  test("preserves runtime plugin allowlists through restrictive profile steps", () => {
+    const tools = [{ name: "exec" }, { name: "plugin_tool" }] as unknown as DummyTool[];
+    const filtered = applyToolPolicyPipeline({
+      tools: tools as any,
+      toolMeta: (t: any) => (t.name === "plugin_tool" ? { pluginId: "foo" } : undefined),
+      warn: () => {},
+      steps: buildDefaultToolPolicyPipelineSteps({
+        profile: "coding",
+        profilePolicy: { allow: ["exec"] },
+        profilePreservePluginAllowlist: ["plugin_tool"],
+        globalPolicy: { allow: ["plugin_tool"] },
+      }),
+    });
+    const names = filtered.map((t) => (t as unknown as DummyTool).name).toSorted();
+    expect(names).toEqual(["plugin_tool"]);
+  });
+
   test("warns about unknown allowlist entries", () => {
     const warnings: string[] = [];
     const tools = [{ name: "exec" }] as unknown as DummyTool[];
