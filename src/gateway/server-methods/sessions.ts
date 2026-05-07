@@ -708,6 +708,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           enforce: params.enforce,
           activeKey: params.activeKey,
           fixMissing: params.fixMissing,
+          fixDmScope: params.fixDmScope,
         },
       });
       const result = serializeSessionCleanupResult({

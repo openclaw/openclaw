@@ -231,12 +231,13 @@ fallbacks after its dedicated web-search config and `GEMINI_API_KEY`. See the
 provider pages for examples.
 
 `tools.web.search.provider` is validated against the web-search provider ids
-declared by bundled and installed plugin manifests. A typo such as `"brvae"`
-fails config validation instead of silently falling back to auto-detection. If a
-configured provider only has stale plugin evidence, such as a leftover
-`plugins.entries.<plugin>` block after uninstalling a third-party plugin,
-OpenClaw keeps startup resilient and reports a warning so you can reinstall the
-plugin or run `openclaw doctor --fix` to clean up the stale config.
+declared by bundled and installed plugin manifests, plus known installable
+provider plugins. A typo such as `"brvae"` fails config validation instead of
+silently falling back to auto-detection. If the configured provider is known but
+the owning plugin is unavailable, OpenClaw keeps startup resilient and reports a
+warning so you can run `openclaw doctor --fix` to install or enable the plugin.
+The same warning behavior applies to stale plugin evidence, such as a leftover
+`plugins.entries.<plugin>` block after uninstalling a third-party plugin.
 
 `web_fetch` fallback provider selection is separate:
 

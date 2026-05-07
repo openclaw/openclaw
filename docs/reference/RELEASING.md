@@ -1,10 +1,11 @@
 ---
-summary: "Release lanes, operator checklist, validation boxes, version naming, and cadence"
+summary: "Release lanes, operator checklist, validation boxes, version naming, planned monthly support lines, and cadence"
 title: "Release policy"
 read_when:
   - Looking for public release channel definitions
   - Running release validation or package acceptance
   - Looking for version naming and cadence
+  - Planning monthly support or LTS release lines
 ---
 
 OpenClaw has three public release lanes:
@@ -17,17 +18,37 @@ OpenClaw has three public release lanes:
 
 - Stable release version: `YYYY.M.D`
   - Git tag: `vYYYY.M.D`
-- Stable correction release version: `YYYY.M.D-N`
+- Legacy stable correction release version: `YYYY.M.D-N`
   - Git tag: `vYYYY.M.D-N`
 - Beta prerelease version: `YYYY.M.D-beta.N`
   - Git tag: `vYYYY.M.D-beta.N`
 - Do not zero-pad month or day
 - `latest` means the current promoted stable npm release
 - `beta` means the current beta install target
-- Stable and stable correction releases publish to npm `beta` by default; release operators can target `latest` explicitly, or promote a vetted beta build later
+- Stable and legacy correction releases publish to npm `beta` by default; release operators can target `latest` explicitly, or promote a vetted beta build later
 - Every stable OpenClaw release ships the npm package and macOS app together;
   beta releases normally validate and publish the npm/package path first, with
   mac app build/sign/notarize reserved for stable unless explicitly requested
+
+### Planned monthly support versioning
+
+OpenClaw does not yet have an LTS or monthly support channel. Maintainers are
+working toward SemVer-compatible monthly support lines, but the shipped update
+channels today are still `stable`, `beta`, and `dev`.
+
+The planned version shape is `YYYY.M.PATCH`:
+
+- `YYYY` is the year.
+- `M` is the monthly release line, without a leading zero.
+- `PATCH` increments within that monthly line and can grow as high as needed.
+
+For example, `2026.6.0`, `2026.6.1`, and `2026.6.2` would all be on the June
+2026 line. A future monthly support dist-tag such as `stable-2026-6` or
+`lts-2026-6` may point at that line, while `latest` continues to move quickly.
+
+This future model replaces the need for new `YYYY.M.D-N` correction releases.
+Existing legacy correction versions remain recognized so older packages and
+upgrade paths keep working.
 
 ## Release cadence
 
@@ -239,7 +260,7 @@ Validation` or from the `main`/release workflow ref so workflow logic and
     `preflight_run_id` and `validate_run_id`
   - the real publish paths promote prepared artifacts instead of rebuilding
     them again
-- For stable correction releases like `YYYY.M.D-N`, the post-publish verifier
+- For legacy stable correction releases like `YYYY.M.D-N`, the post-publish verifier
   also checks the same temp-prefix upgrade path from `YYYY.M.D` to `YYYY.M.D-N`
   so release corrections cannot silently leave older global installs on the
   base stable payload

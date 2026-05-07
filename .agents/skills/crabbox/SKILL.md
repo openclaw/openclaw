@@ -229,6 +229,21 @@ Raw Blacksmith footguns:
 - Treat `blacksmith testbox list` as cleanup diagnostics, not a shared reusable
   queue.
 
+Blacksmith queue/outage mode:
+
+```sh
+blacksmith --version
+blacksmith testbox list --all
+blacksmith testbox status --id <tbx_id>
+```
+
+If the CLI can list/status boxes but new warmups stay `queued` with no IP or
+Actions run URL after a couple of minutes, treat it as Blacksmith provider,
+org-limit, billing, or queue pressure. Stop the queued ids you created and do
+not warm more boxes into the same stalled queue. Check the Blacksmith dashboard,
+billing, and org limits out-of-band, then use Owned Cloud Fallback below for
+maintainer proof.
+
 Escalate to owned AWS/Hetzner only when Blacksmith is down, quota-limited,
 missing the needed environment, or owned capacity is the explicit goal. Use the
 Owned Cloud Fallback section below.
@@ -262,6 +277,9 @@ Important Blacksmith footguns:
 
 - Always run from repo root. The CLI syncs the current directory.
 - Raw commit SHAs are not reliable `warmup --ref` refs; use a branch or tag.
+- If `blacksmith testbox list --all` works but warmups stay `queued`, this is
+  not a Crabbox bug. Stop the queued ids and switch to owned AWS/Hetzner instead
+  of retrying.
 - If auth is missing and browser auth is acceptable:
 
 ```sh
@@ -273,8 +291,45 @@ blacksmith auth login --non-interactive --organization openclaw
 Use AWS/Hetzner only when Blacksmith is down, quota-limited, missing the needed
 environment, or owned capacity is explicitly the goal.
 
+When AWS capacity is under pressure, do not start with `class=beast`.
+`beast` begins at 48xlarge instances and can burn 192 vCPU quota per request.
+OpenClaw's owned-cloud default is `standard`; escalate to `fast`, then `large`,
+and only use `beast` when the work is explicitly CPU-bound and the smaller class
+already failed the goal.
+Keep capacity hints enabled so brokered AWS leases print selected region/market,
+quota pressure, Spot fallback, and high-pressure class warnings. The OpenClaw
+repo config sets `capacity.hints: true`; use `CRABBOX_CAPACITY_HINTS=0` only
+when debugging hint rendering itself.
+
+Use `beast` only for exceptional lanes:
+
+- full-suite or all-plugin Docker matrices where wall time is dominated by CPU,
+  not dependency install or network;
+- release/blocker validation where a maintainer explicitly asks for the largest
+  owned AWS class;
+- performance profiling where the point is to compare high-core behavior.
+
+Do not use `beast` for `pnpm check:changed`, focused tests, docs-only work,
+ordinary lint/typecheck, small E2E repros, or Blacksmith outage triage. Those
+should use `standard` first and `fast` only when the extra cores materially help.
+
+Preferred AWS pressure-relief flow:
+
 ```sh
-pnpm crabbox:warmup -- --provider aws --class beast --market on-demand --idle-timeout 90m
+CRABBOX_CAPACITY_REGIONS=eu-west-1,eu-west-2,eu-central-1,us-east-1,us-west-2 \
+  pnpm crabbox:warmup -- --provider aws --class standard --market on-demand --idle-timeout 90m
+pnpm crabbox:hydrate -- --id <cbx_id-or-slug>
+pnpm crabbox:run -- --id <cbx_id-or-slug> --timing-json --shell -- "env NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm check:changed"
+pnpm crabbox:stop -- <cbx_id-or-slug>
+```
+
+Use `--market spot` only when testing Spot behavior or saving cost matters more
+than launch reliability. Use `--market on-demand` when diagnosing quota/capacity
+because it removes Spot market churn from the failure.
+
+```sh
+CRABBOX_CAPACITY_REGIONS=eu-west-1,eu-west-2,eu-central-1,us-east-1,us-west-2 \
+  pnpm crabbox:warmup -- --provider aws --class fast --market on-demand --idle-timeout 90m
 pnpm crabbox:hydrate -- --id <cbx_id-or-slug>
 pnpm crabbox:run -- --id <cbx_id-or-slug> --timing-json --shell -- "env NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test:changed"
 pnpm crabbox:stop -- <cbx_id-or-slug>

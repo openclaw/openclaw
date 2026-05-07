@@ -23,6 +23,28 @@ changing the version number. Maintainers can also publish a stable release
 directly to `latest` when needed. Dist-tags are the source of truth for npm
 installs.
 
+## Planned monthly support lines
+
+OpenClaw does not yet ship an LTS or monthly support channel. We are working
+toward SemVer-compatible monthly support lines so users can stay on a quieter
+line while `latest` keeps moving quickly.
+
+The planned version shape is `YYYY.M.PATCH`:
+
+- `YYYY` is the year.
+- `M` is the monthly release line, without a leading zero.
+- `PATCH` increments within that monthly line and can grow past 100 if needed.
+
+Example future tags:
+
+- `v2026.6.0`, `v2026.6.1`, `v2026.6.2` for the June line.
+- `v2026.6.3-beta.1` for a prerelease on the fast/latest train.
+- A future support-line dist-tag such as `stable-2026-6` or `lts-2026-6` may
+  point at a monthly line, but no such channel is available today.
+
+Until that migration lands, the public update channels remain `stable`, `beta`,
+and `dev`.
+
 ## Switching channels
 
 ```bash
@@ -112,10 +134,12 @@ source (config, git tag, git branch, or default).
 
 ## Tagging best practices
 
-- Tag releases you want git checkouts to land on (`vYYYY.M.D` for stable,
-  `vYYYY.M.D-beta.N` for beta).
+- Tag releases you want git checkouts to land on (`vYYYY.M.D` for current
+  stable releases, `vYYYY.M.D-beta.N` for current beta releases).
 - `vYYYY.M.D.beta.N` is also recognized for compatibility, but prefer `-beta.N`.
-- Legacy `vYYYY.M.D-<patch>` tags are still recognized as stable (non-beta).
+- Legacy `vYYYY.M.D-<patch>` tags are still recognized as stable (non-beta),
+  but the planned monthly support model will use normal patch numbers
+  (`vYYYY.M.PATCH`) instead of a hyphen correction suffix.
 - Keep tags immutable: never move or reuse a tag.
 - npm dist-tags remain the source of truth for npm installs:
   - `latest` -> stable

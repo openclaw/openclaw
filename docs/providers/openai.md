@@ -256,6 +256,45 @@ Choose your preferred auth method and follow the setup steps.
     Onboarding no longer imports OAuth material from `~/.codex`. Sign in with browser OAuth (default) or the device-code flow above — OpenClaw manages the resulting credentials in its own agent auth store.
     </Note>
 
+    ### Check and recover Codex OAuth routing
+
+    Use these commands to see which model, runtime, and auth route your default
+    agent is using:
+
+    ```bash
+    openclaw models status
+    openclaw models auth list --provider openai-codex
+    openclaw config get agents.defaults.model --json
+    openclaw config get agents.defaults.agentRuntime --json
+    ```
+
+    For a specific agent, add `--agent <id>`:
+
+    ```bash
+    openclaw models status --agent <id>
+    openclaw models auth list --agent <id> --provider openai-codex
+    ```
+
+    If a 2026.5.5 `doctor --fix` run changed a GPT-5.5 subscription setup from
+    `openai-codex/gpt-5.5` to `openai/gpt-5.5`, switch the default agent back
+    to the Codex OAuth PI route:
+
+    ```bash
+    openclaw models set openai-codex/gpt-5.5
+    openclaw config validate
+    ```
+
+    If `models auth list --provider openai-codex` shows no usable profile, sign
+    in again:
+
+    ```bash
+    openclaw models auth login --provider openai-codex
+    openclaw models status --probe --probe-provider openai-codex
+    ```
+
+    `openai-codex/*` means ChatGPT/Codex OAuth through PI. `openai/*` with
+    `agentRuntime.id: "codex"` means native Codex app-server execution.
+
     ### Status indicator
 
     Chat `/status` shows which model runtime is active for the current session.

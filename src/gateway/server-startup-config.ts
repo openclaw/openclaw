@@ -79,6 +79,11 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   if (configSnapshot.exists) {
     assertValidGatewayStartupConfigSnapshot(configSnapshot, { includeDoctorHint: true });
   }
+  if (configSnapshot.warnings.length > 0) {
+    params.log.warn(
+      `gateway: config warnings:\n${formatConfigIssueLines(configSnapshot.warnings, "-").join("\n")}`,
+    );
+  }
 
   const autoEnable = params.minimalTestGateway
     ? { config: configSnapshot.config, changes: [] as string[] }
