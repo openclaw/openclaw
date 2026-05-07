@@ -99,7 +99,7 @@ export async function buildCodexPluginThreadConfig(
     nowMs: params.nowMs,
   });
   if (shouldWaitForInitialAppInventory(params, policy, inventory)) {
-    await refreshInitialAppInventory(params, appCache);
+    await refreshAppInventoryNow(params, appCache);
     inventory = await readCodexPluginInventory({
       pluginConfig: params.pluginConfig,
       policy,
@@ -113,7 +113,7 @@ export async function buildCodexPluginThreadConfig(
       appCacheKey: params.appCacheKey,
     });
   }
-  const diagnostics: CodexPluginThreadConfigDiagnostic[] = [...inventory.diagnostics];
+  const activationDiagnostics: CodexPluginThreadConfigDiagnostic[] = [];
   const activationResults: CodexPluginActivationResult[] = [];
   for (const record of inventory.records) {
     if (!record.activationRequired) {
@@ -127,14 +127,33 @@ export async function buildCodexPluginThreadConfig(
     });
     activationResults.push(activation);
     if (!activation.ok) {
-      diagnostics.push({
+      activationDiagnostics.push({
         code: "plugin_activation_failed",
         plugin: record.policy,
         message: activation.diagnostics.map((item) => item.message).join(" ") || activation.reason,
       });
     }
   }
+  if (activationResults.some((activation) => activation.ok && activation.installAttempted)) {
+    await refreshAppInventoryNow(params, appCache);
+    inventory = await readCodexPluginInventory({
+      pluginConfig: params.pluginConfig,
+      policy,
+      request: params.request,
+      appCache,
+      appCacheKey: params.appCacheKey,
+      nowMs: params.nowMs,
+    });
+    inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
+      pluginConfig: params.pluginConfig,
+      appCacheKey: params.appCacheKey,
+    });
+  }
 
+  const diagnostics: CodexPluginThreadConfigDiagnostic[] = [
+    ...inventory.diagnostics,
+    ...activationDiagnostics,
+  ];
   const apps: JsonObject = {
     _default: {
       enabled: false,
@@ -275,7 +294,7 @@ function shouldWaitForInitialAppInventory(
   );
 }
 
-async function refreshInitialAppInventory(
+async function refreshAppInventoryNow(
   params: BuildCodexPluginThreadConfigParams,
   appCache: CodexAppInventoryCache,
 ): Promise<void> {
@@ -292,7 +311,7 @@ async function refreshInitialAppInventory(
       nowMs: params.nowMs,
     });
   } catch {
-    // Keep the thread fail-closed if the initial app/list refresh is unavailable.
+    // Keep the thread fail-closed if app/list refresh is unavailable.
   }
 }
 
