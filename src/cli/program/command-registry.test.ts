@@ -38,6 +38,13 @@ vi.mock("./register.status-health-sessions.js", () => ({
   },
 }));
 
+vi.mock("./register.worker.js", () => ({
+  registerWorkerCommands: (program: Command) => {
+    const worker = program.command("worker");
+    worker.command("trigger").command("loop");
+  },
+}));
+
 vi.mock("./register.crestodian.js", () => ({
   registerCrestodianCommand: (program: Command) => {
     program.command("crestodian");
@@ -78,6 +85,7 @@ describe("command-registry", () => {
     expect(names).toContain("mcp");
     expect(names).toContain("agent");
     expect(names).toContain("agents");
+    expect(names).toContain("worker");
   });
 
   it("returns only commands that support subcommands", () => {
@@ -89,6 +97,7 @@ describe("command-registry", () => {
     expect(names).toContain("sessions");
     expect(names).toContain("commitments");
     expect(names).toContain("tasks");
+    expect(names).toContain("worker");
     expect(names).not.toContain("agent");
     expect(names).not.toContain("crestodian");
     expect(names).not.toContain("status");
@@ -168,13 +177,14 @@ describe("command-registry", () => {
   it("can eagerly register the status/session command group repeatedly for completion", async () => {
     const program = createProgram();
 
-    for (const name of ["status", "health", "sessions", "commitments", "tasks"]) {
+    for (const name of ["status", "health", "sessions", "commitments", "tasks", "worker"]) {
       await expect(registerCoreCliByName(program, testProgramContext, name)).resolves.toBe(true);
     }
 
     const names = namesOf(program);
     expect(names.filter((name) => name === "commitments")).toHaveLength(1);
     expect(names.filter((name) => name === "tasks")).toHaveLength(1);
+    expect(names.filter((name) => name === "worker")).toHaveLength(1);
   });
 
   it("replaces placeholders when loading a grouped entry by secondary command name", async () => {
