@@ -453,6 +453,8 @@ export async function runCodexAppServerAttempt(
   const toolBridge = createCodexDynamicToolBridge({
     tools,
     signal: runAbortController.signal,
+    loading: pluginConfig.codexDynamicToolsLoading ?? "searchable",
+    directToolNames: shouldForceMessageTool(params) ? ["message"] : [],
     hookContext: {
       agentId: sessionAgentId,
       config: params.config,

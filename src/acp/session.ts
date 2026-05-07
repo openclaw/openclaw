@@ -9,6 +9,7 @@ export type AcpSessionStore = {
   setActiveRun: (sessionId: string, runId: string, abortController: AbortController) => void;
   clearActiveRun: (sessionId: string) => void;
   cancelActiveRun: (sessionId: string) => boolean;
+  deleteSession: (sessionId: string) => boolean;
   clearAllSessionsForTest: () => void;
 };
 
@@ -167,6 +168,8 @@ export function createInMemorySessionStore(options: AcpSessionStoreOptions = {})
     return true;
   };
 
+  const deleteSession: AcpSessionStore["deleteSession"] = (sessionId) => removeSession(sessionId);
+
   const clearAllSessionsForTest: AcpSessionStore["clearAllSessionsForTest"] = () => {
     for (const session of sessions.values()) {
       session.abortController?.abort();
@@ -183,6 +186,7 @@ export function createInMemorySessionStore(options: AcpSessionStoreOptions = {})
     setActiveRun,
     clearActiveRun,
     cancelActiveRun,
+    deleteSession,
     clearAllSessionsForTest,
   };
 }

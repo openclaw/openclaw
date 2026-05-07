@@ -143,8 +143,16 @@ describe("watch-node script", () => {
             OPENCLAW_WATCH_MODE: "1",
             OPENCLAW_WATCH_SESSION: "1700000000000-4242",
             OPENCLAW_NO_RESPAWN: "1",
-            OPENCLAW_TRACE_SYNC_IO: "1",
             OPENCLAW_WATCH_COMMAND: "gateway --force",
+          }),
+        }),
+      );
+      expect(spawn).toHaveBeenCalledWith(
+        "/usr/local/bin/node",
+        ["scripts/run-node.mjs", "gateway", "--force"],
+        expect.objectContaining({
+          env: expect.not.objectContaining({
+            OPENCLAW_TRACE_SYNC_IO: expect.any(String),
           }),
         }),
       );

@@ -114,7 +114,7 @@ describe("config footprint guardrails", () => {
   });
 
   it("keeps bundled channel private-network config canonical in generated metadata", () => {
-    const pluginIds = ["bluebubbles", "matrix", "nextcloud-talk", "tlon"];
+    const pluginIds = ["matrix", "nextcloud-talk", "tlon"];
 
     for (const pluginId of pluginIds) {
       const metadata = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
