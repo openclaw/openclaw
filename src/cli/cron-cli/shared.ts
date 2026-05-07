@@ -35,7 +35,9 @@ export function printCronJson(value: unknown) {
  * This mirrors the human-readable status shown by `cron list` / `cron show`.
  */
 export function enrichCronJsonWithStatus(value: unknown): unknown {
-  if (!value || typeof value !== "object") return value;
+  if (!value || typeof value !== "object") {
+    return value;
+  }
   const obj = value as Record<string, unknown>;
 
   // Single job object (has 'state' and 'enabled')
@@ -45,22 +47,24 @@ export function enrichCronJsonWithStatus(value: unknown): unknown {
 
   // List response (has 'jobs' array)
   if ("jobs" in obj && Array.isArray(obj.jobs)) {
-    return {
-      ...obj,
-      jobs: (obj.jobs as CronJob[]).map((job) => ({
-        ...job,
-        status: computeStatus(job),
-      })),
-    };
+    const enrichedJobs = (obj.jobs as CronJob[]).map((job) => {
+      const status = computeStatus(job);
+      return Object.assign({}, job, { status });
+    });
+    return { ...obj, jobs: enrichedJobs };
   }
 
   return value;
 }
 
 function computeStatus(job: CronJob): string {
-  if (!job.enabled) return "disabled";
+  if (!job.enabled) {
+    return "disabled";
+  }
   const state = job.state ?? {};
-  if (state.runningAtMs) return "running";
+  if (state.runningAtMs) {
+    return "running";
+  }
   return state.lastRunStatus ?? state.lastStatus ?? "idle";
 }
 
