@@ -84,6 +84,144 @@ describe("probeGatewayStatus", () => {
     });
   });
 
+  it("uses a bounded local status RPC fallback when the default probe times out", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: false,
+      error: "timeout",
+      close: null,
+      auth: {
+        role: null,
+        scopes: [],
+        capability: "unknown",
+      },
+    });
+    callGatewayMock.mockResolvedValueOnce({ status: "ok" });
+    const config = { gateway: { mode: "local" } } as const;
+
+    const result = await probeGatewayStatus({
+      url: "wss://127.0.0.1:19191",
+      token: "temp-token",
+      config,
+      tlsFingerprint: "abc123",
+      timeoutMs: 5_000,
+      json: true,
+      configPath: "/tmp/openclaw-daemon/openclaw.json",
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      kind: "connect",
+      capability: "read_only",
+      auth: {
+        role: null,
+        scopes: [],
+        capability: "read_only",
+      },
+    });
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      url: "wss://127.0.0.1:19191",
+      token: "temp-token",
+      password: undefined,
+      tlsFingerprint: "abc123",
+      config,
+      method: "status",
+      timeoutMs: 1000,
+      mode: "backend",
+      clientName: "gateway-client",
+      configPath: "/tmp/openclaw-daemon/openclaw.json",
+    });
+  });
+
+  it("uses shared credentials for local loopback status RPC fallback", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: false,
+      error: "timeout",
+      close: null,
+      auth: {
+        role: null,
+        scopes: [],
+        capability: "unknown",
+      },
+    });
+    callGatewayMock.mockResolvedValueOnce({ status: "ok" });
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      token: "temp-token",
+      timeoutMs: 5_000,
+      json: true,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      kind: "connect",
+      capability: "read_only",
+      auth: {
+        role: null,
+        scopes: [],
+        capability: "read_only",
+      },
+    });
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      url: "ws://127.0.0.1:19191",
+      token: "temp-token",
+      password: undefined,
+      tlsFingerprint: undefined,
+      method: "status",
+      timeoutMs: 1000,
+      mode: "backend",
+      clientName: "gateway-client",
+    });
+  });
+
+  it("uses paired-device auth for authenticated local loopback status RPC fallback", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: false,
+      error: "timeout",
+      close: null,
+      auth: {
+        role: "operator",
+        scopes: ["operator.read"],
+        capability: "read_only",
+      },
+    });
+    callGatewayMock.mockResolvedValueOnce({ status: "ok" });
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      timeoutMs: 5_000,
+      json: true,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      kind: "connect",
+      capability: "read_only",
+      auth: {
+        role: "operator",
+        scopes: ["operator.read"],
+        capability: "read_only",
+      },
+    });
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      url: "ws://127.0.0.1:19191",
+      token: undefined,
+      password: undefined,
+      tlsFingerprint: undefined,
+      method: "status",
+      timeoutMs: 1000,
+      mode: "backend",
+      clientName: "gateway-client",
+      allowDeviceIdentityLoopbackUrlOverride: true,
+    });
+  });
+
   it("uses a real status RPC when requireRpc is enabled", async () => {
     callGatewayMock.mockReset();
     probeGatewayMock.mockReset();

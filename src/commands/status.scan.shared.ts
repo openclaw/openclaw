@@ -2,13 +2,13 @@ import { existsSync } from "node:fs";
 import type { OpenClawConfig } from "../config/types.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
+import { applyLocalStatusRpcFallback } from "../gateway/local-status-rpc-fallback.js";
 import { resolveGatewayProbeTarget } from "../gateway/probe-target.js";
-import type { GatewayProbeResult, probeGateway as probeGatewayFn } from "../gateway/probe.js";
+import type { probeGateway as probeGatewayFn } from "../gateway/probe.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { isLoopbackIpAddress } from "../shared/net/ip.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -77,88 +77,7 @@ type StatusMemorySearchManagerResolver = (params: {
   manager: StatusMemorySearchManager | null;
 }>;
 
-function isLoopbackGatewayUrl(rawUrl: string): boolean {
-  try {
-    const hostname = new URL(rawUrl).hostname.toLowerCase();
-    const unbracketed =
-      hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
-    return unbracketed === "localhost" || isLoopbackIpAddress(unbracketed);
-  } catch {
-    return false;
-  }
-}
-
-function shouldTryLocalStatusRpcFallback(params: {
-  gatewayMode: "local" | "remote";
-  gatewayUrl: string;
-  gatewayProbe: GatewayProbeResult | null;
-}): params is {
-  gatewayMode: "local";
-  gatewayUrl: string;
-  gatewayProbe: GatewayProbeResult;
-} {
-  if (
-    params.gatewayMode !== "local" ||
-    !params.gatewayProbe ||
-    params.gatewayProbe.ok ||
-    !isLoopbackGatewayUrl(params.gatewayUrl)
-  ) {
-    return false;
-  }
-  const error = params.gatewayProbe.error?.toLowerCase() ?? "";
-  return error.includes("timeout") || params.gatewayProbe.auth?.capability === "unknown";
-}
-
-async function applyLocalStatusRpcFallback(params: {
-  cfg: OpenClawConfig;
-  gatewayMode: "local" | "remote";
-  gatewayUrl: string;
-  gatewayProbe: GatewayProbeResult | null;
-  gatewayProbeAuth: {
-    token?: string;
-    password?: string;
-  };
-  timeoutMs: number;
-  timeoutMsExplicit: boolean;
-}): Promise<GatewayProbeResult | null> {
-  if (!shouldTryLocalStatusRpcFallback(params)) {
-    return params.gatewayProbe;
-  }
-  const boundedFallbackTimeoutMs = Math.min(2000, Math.max(1000, params.timeoutMs));
-  const status = await loadGatewayCallModule()
-    .then(({ callGateway }) =>
-      callGateway({
-        config: params.cfg,
-        method: "status",
-        token: params.gatewayProbeAuth.token,
-        password: params.gatewayProbeAuth.password,
-        timeoutMs: params.timeoutMsExplicit
-          ? boundedFallbackTimeoutMs
-          : Math.max(params.cfg.gateway?.handshakeTimeoutMs ?? 0, boundedFallbackTimeoutMs),
-        mode: GATEWAY_CLIENT_MODES.BACKEND,
-        clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      }),
-    )
-    .catch(() => null);
-  if (!status) {
-    return params.gatewayProbe;
-  }
-  const auth = params.gatewayProbe.auth;
-  return {
-    ...params.gatewayProbe,
-    ok: true,
-    status,
-    auth:
-      auth.capability === "unknown"
-        ? {
-            ...auth,
-            capability: "read_only",
-          }
-        : auth,
-  };
-}
-
-function hasExplicitMemorySearchConfig(cfg: OpenClawConfig, agentId: string): boolean {
+export function hasExplicitMemorySearchConfig(cfg: OpenClawConfig, agentId: string): boolean {
   if (
     cfg.agents?.defaults &&
     Object.prototype.hasOwnProperty.call(cfg.agents.defaults, "memorySearch")
@@ -229,13 +148,28 @@ export async function resolveGatewayProbeSnapshot(params: {
         .catch(() => null)
     : null;
   const gatewayProbe = await applyLocalStatusRpcFallback({
-    cfg: params.cfg,
     gatewayMode,
     gatewayUrl: gatewayConnection.url,
     gatewayProbe: initialGatewayProbe,
-    gatewayProbeAuth: gatewayProbeAuthResolution.auth,
-    timeoutMs: probeTimeoutMs,
-    timeoutMsExplicit,
+    hasSharedCredentials: Boolean(
+      gatewayProbeAuthResolution.auth.token || gatewayProbeAuthResolution.auth.password,
+    ),
+    allowSharedCredentials: true,
+    callStatus: async () => {
+      const { callGateway } = await loadGatewayCallModule();
+      const boundedFallbackTimeoutMs = Math.min(2000, Math.max(1000, probeTimeoutMs));
+      return await callGateway({
+        config: params.cfg,
+        method: "status",
+        token: gatewayProbeAuthResolution.auth.token,
+        password: gatewayProbeAuthResolution.auth.password,
+        timeoutMs: timeoutMsExplicit
+          ? boundedFallbackTimeoutMs
+          : Math.max(params.cfg.gateway?.handshakeTimeoutMs ?? 0, boundedFallbackTimeoutMs),
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+        clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      });
+    },
   });
   if (
     (params.opts.mergeAuthWarningIntoProbeError ?? true) &&

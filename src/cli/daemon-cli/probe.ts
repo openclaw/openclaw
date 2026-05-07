@@ -1,4 +1,8 @@
 import type { OpenClawConfig } from "../../config/types.js";
+import {
+  applyLocalStatusRpcFallback,
+  shouldUseDeviceIdentityForLocalStatusRpcFallback,
+} from "../../gateway/local-status-rpc-fallback.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { withProgress } from "../progress.js";
@@ -74,7 +78,41 @@ export async function probeGatewayStatus(opts: {
           const authProbe = await probeGateway(probeOpts).catch(() => null);
           return { ok: true as const, authProbe };
         }
-        return await probeGateway(probeOpts);
+        const initialProbe = await probeGateway(probeOpts);
+        const hasSharedCredentials = Boolean(opts.token || opts.password);
+        const useDeviceIdentityFallback =
+          !hasSharedCredentials && shouldUseDeviceIdentityForLocalStatusRpcFallback(initialProbe);
+        const fallbackProbe = await applyLocalStatusRpcFallback({
+          gatewayMode: "local",
+          gatewayUrl: opts.url,
+          gatewayProbe: initialProbe,
+          hasSharedCredentials,
+          allowSharedCredentials: hasSharedCredentials,
+          callStatus: async () => {
+            const { callGateway } = await import("../../gateway/call.js");
+            return await callGateway({
+              url: opts.url,
+              token: opts.token,
+              password: opts.password,
+              tlsFingerprint: opts.tlsFingerprint,
+              ...(opts.config ? { config: opts.config } : {}),
+              method: "status",
+              timeoutMs: Math.min(1000, opts.timeoutMs),
+              mode: "backend",
+              clientName: "gateway-client",
+              ...(useDeviceIdentityFallback
+                ? { allowDeviceIdentityLoopbackUrlOverride: true }
+                : hasSharedCredentials
+                  ? {}
+                  : {
+                      deviceIdentity: null,
+                      allowUnauthenticatedLoopbackUrlOverride: true,
+                    }),
+              ...(opts.configPath ? { configPath: opts.configPath } : {}),
+            });
+          },
+        });
+        return fallbackProbe ?? initialProbe;
       },
     );
     const auth = "auth" in result ? result.auth : result.authProbe?.auth;
