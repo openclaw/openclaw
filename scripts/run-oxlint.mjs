@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   acquireLocalHeavyCheckLockSync,
   applyLocalOxlintPolicy,
+  getLocalNativeTypecheckRefusalError,
   resolveLocalHeavyCheckEnv,
   shouldAcquireLocalHeavyCheckLockForOxlint,
 } from "./lib/local-heavy-check-runtime.mjs";
@@ -43,6 +44,10 @@ const OXLINT_VALUE_FLAGS = new Set([
 
 export function shouldPrepareExtensionPackageBoundaryArtifacts(args) {
   return !args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg));
+}
+
+export function shouldRunNativeTypeAwareOxlint(args) {
+  return args.includes("--type-aware") && shouldPrepareExtensionPackageBoundaryArtifacts(args);
 }
 
 export function filterSparseMissingOxlintTargets(
@@ -220,21 +225,32 @@ export async function main(argv = process.argv.slice(2), runtimeEnv = process.en
     return;
   }
 
+  const shouldRunHeavyCheck = shouldAcquireLocalHeavyCheckLockForOxlint(finalArgs, {
+    cwd: process.cwd(),
+    env,
+  });
+  const nativeTypecheckRefusalError = getLocalNativeTypecheckRefusalError({
+    args: finalArgs,
+    env,
+    shouldRunHeavyCheck: shouldRunHeavyCheck || shouldRunNativeTypeAwareOxlint(finalArgs),
+    toolName: "type-aware oxlint",
+  });
   const releaseLock =
-    env.OPENCLAW_OXLINT_SKIP_LOCK === "1"
+    env.OPENCLAW_OXLINT_SKIP_LOCK === "1" || nativeTypecheckRefusalError || !shouldRunHeavyCheck
       ? () => {}
-      : shouldAcquireLocalHeavyCheckLockForOxlint(finalArgs, {
-            cwd: process.cwd(),
-            env,
-          })
-        ? acquireLocalHeavyCheckLockSync({
-            cwd: process.cwd(),
-            env,
-            toolName: "oxlint",
-          })
-        : () => {};
+      : acquireLocalHeavyCheckLockSync({
+          cwd: process.cwd(),
+          env,
+          toolName: "oxlint",
+        });
 
   try {
+    if (nativeTypecheckRefusalError) {
+      console.error(nativeTypecheckRefusalError);
+      process.exitCode = 1;
+      return;
+    }
+
     if (
       env.OPENCLAW_OXLINT_SKIP_PREPARE !== "1" &&
       shouldPrepareExtensionPackageBoundaryArtifacts(finalArgs)

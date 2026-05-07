@@ -6,6 +6,7 @@ import {
   acquireLocalHeavyCheckLockSync,
   applyLocalTsgoPolicy,
   getLocalHeavyCheckPressureError,
+  getLocalNativeTypecheckRefusalError,
   prepareLocalHeavyCheckEnvironment,
   resolveLocalHeavyCheckEnv,
   shouldAcquireLocalHeavyCheckLockForTsgo,
@@ -29,8 +30,19 @@ if (tsBuildInfoFile) {
 }
 const sparseGuardError = getSparseTsgoGuardError(finalArgs, { cwd: process.cwd() });
 const shouldRunHeavyCheck = shouldAcquireLocalHeavyCheckLockForTsgo(finalArgs, env);
+const nativeTypecheckRefusalError = sparseGuardError
+  ? null
+  : getLocalNativeTypecheckRefusalError({
+      args: finalArgs,
+      env,
+      shouldRunHeavyCheck,
+      toolName: "tsgo",
+    });
 const releaseLock =
-  sparseGuardError || env.OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD === "1" || !shouldRunHeavyCheck
+  sparseGuardError ||
+  nativeTypecheckRefusalError ||
+  env.OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD === "1" ||
+  !shouldRunHeavyCheck
     ? () => {}
     : acquireLocalHeavyCheckLockSync({
         cwd: process.cwd(),
@@ -38,7 +50,7 @@ const releaseLock =
         toolName: "tsgo",
       });
 const pressureGuardError =
-  sparseGuardError || !shouldRunHeavyCheck
+  sparseGuardError || nativeTypecheckRefusalError || !shouldRunHeavyCheck
     ? null
     : getLocalHeavyCheckPressureError({ cwd: process.cwd(), env });
 
@@ -53,6 +65,9 @@ try {
     }
   } else if (pressureGuardError) {
     console.error(pressureGuardError);
+    process.exitCode = 1;
+  } else if (nativeTypecheckRefusalError) {
+    console.error(nativeTypecheckRefusalError);
     process.exitCode = 1;
   } else {
     const tsgo = createManagedCommandInvocation({

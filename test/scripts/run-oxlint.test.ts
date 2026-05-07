@@ -20,6 +20,7 @@ import {
 import {
   filterSparseMissingOxlintTargets,
   shouldPrepareExtensionPackageBoundaryArtifacts,
+  shouldRunNativeTypeAwareOxlint,
 } from "../../scripts/run-oxlint.mjs";
 
 describe("run-oxlint", () => {
@@ -27,6 +28,12 @@ describe("run-oxlint", () => {
     expect(shouldPrepareExtensionPackageBoundaryArtifacts([])).toBe(true);
     expect(shouldPrepareExtensionPackageBoundaryArtifacts(["src/index.ts"])).toBe(true);
     expect(shouldPrepareExtensionPackageBoundaryArtifacts(["--type-aware"])).toBe(true);
+  });
+
+  it("treats type-aware oxlint as native type-aware work even with explicit file targets", () => {
+    expect(shouldRunNativeTypeAwareOxlint(["--type-aware", "--", "src/index.ts"])).toBe(true);
+    expect(shouldRunNativeTypeAwareOxlint(["src/index.ts"])).toBe(false);
+    expect(shouldRunNativeTypeAwareOxlint(["--help", "--type-aware"])).toBe(false);
   });
 
   it("skips artifact preparation for metadata-only oxlint commands", () => {

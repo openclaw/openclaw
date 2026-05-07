@@ -4,9 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import {
   acquireLocalHeavyCheckLockSync,
+  getLocalNativeTypecheckRefusalError,
+  prepareLocalHeavyCheckEnvironment,
   resolveLocalHeavyCheckEnv,
   shouldAcquireLocalHeavyCheckLockForOxlint,
 } from "./lib/local-heavy-check-runtime.mjs";
+import { shouldPrepareExtensionPackageBoundaryArtifacts } from "./run-oxlint.mjs";
 
 const DEFAULT_WINDOWS_EXTENSION_CHUNK_SIZE = 8;
 const DEFAULT_SHARD_HEARTBEAT_MS = 30_000;
@@ -202,26 +205,67 @@ function listSourceRootTargetGroups({ cwd, readDir }) {
 export async function main(extraArgs = process.argv.slice(2), runtimeEnv = process.env) {
   const runner = path.resolve("scripts", "run-oxlint.mjs");
   const shardArgs = parseShardRunnerArgs(extraArgs);
-  const env = resolveLocalHeavyCheckEnv(runtimeEnv);
-  const hasMetadataOnlyFlag = shardArgs.oxlintArgs.some((arg) =>
-    ["--help", "-h", "--version", "-V", "--rules", "--print-config", "--init"].includes(arg),
-  );
-  const shouldAcquireParentLock =
-    !hasMetadataOnlyFlag ||
-    shouldAcquireLocalHeavyCheckLockForOxlint(shardArgs.oxlintArgs, {
-      cwd: process.cwd(),
-      env,
+
+  const baseEnv = resolveLocalHeavyCheckEnv(runtimeEnv);
+
+  if (!shouldPrepareExtensionPackageBoundaryArtifacts(shardArgs.oxlintArgs)) {
+    const result = spawnSync(process.execPath, [runner, ...shardArgs.oxlintArgs], {
+      stdio: "inherit",
+      env: baseEnv,
     });
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    process.exitCode = result.status ?? 1;
+    return;
+  }
+
+  const shouldAcquireParentLock = shouldAcquireLocalHeavyCheckLockForOxlint(shardArgs.oxlintArgs, {
+    cwd: process.cwd(),
+    env: baseEnv,
+  });
+  if (!shouldAcquireParentLock) {
+    const result = spawnSync(process.execPath, [runner, ...shardArgs.oxlintArgs], {
+      stdio: "inherit",
+      env: baseEnv,
+    });
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    process.exitCode = result.status ?? 1;
+    return;
+  }
+
+  const policyEnv = resolveLocalHeavyCheckEnv(baseEnv);
+  const nativeTypecheckRefusalError = getLocalNativeTypecheckRefusalError({
+    args: shardArgs.oxlintArgs,
+    env: policyEnv,
+    shouldRunHeavyCheck: shouldAcquireParentLock,
+    toolName: "sharded type-aware oxlint",
+  });
+
+  if (nativeTypecheckRefusalError) {
+    console.error(nativeTypecheckRefusalError);
+    process.exitCode = 1;
+    return;
+  }
+
+  const env = prepareLocalHeavyCheckEnvironment({
+    cwd: process.cwd(),
+    env: baseEnv,
+  });
   const releaseLock =
-    env.OPENCLAW_OXLINT_SKIP_LOCK === "1"
+    env.OPENCLAW_OXLINT_SKIP_LOCK === "1" || !shouldAcquireParentLock
       ? () => {}
-      : shouldAcquireParentLock
-        ? acquireLocalHeavyCheckLockSync({
-            cwd: process.cwd(),
-            env,
-            toolName: "oxlint shards",
-          })
-        : () => {};
+      : acquireLocalHeavyCheckLockSync({
+          cwd: process.cwd(),
+          env,
+          toolName: "oxlint shards",
+        });
 
   const shards = createOxlintShards({
     cwd: process.cwd(),

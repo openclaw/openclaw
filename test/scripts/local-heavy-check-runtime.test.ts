@@ -6,6 +6,7 @@ import {
   acquireLocalHeavyCheckLockSync,
   applyLocalOxlintPolicy,
   applyLocalTsgoPolicy,
+  getLocalNativeTypecheckRefusalError,
   resolveLocalHeavyCheckEnv,
   shouldAcquireLocalHeavyCheckLockForOxlint,
   shouldAcquireLocalHeavyCheckLockForTsgo,
@@ -224,6 +225,55 @@ describe("local-heavy-check-runtime", () => {
         makeEnv({ OPENCLAW_TSGO_FORCE_LOCK: "1" }),
       ),
     ).toBe(true);
+  });
+
+  it("refuses local native type-aware checks by default", () => {
+    const error = getLocalNativeTypecheckRefusalError({
+      args: ["--extendedDiagnostics"],
+      env: makeEnv(),
+      shouldRunHeavyCheck: true,
+      toolName: "tsgo",
+    });
+
+    expect(error).toContain("Refusing to start tsgo on this local host");
+    expect(error).toContain("GitHub CI");
+  });
+
+  it("allows local native type-aware checks in CI, full mode, or explicit break-glass mode", () => {
+    expect(
+      getLocalNativeTypecheckRefusalError({
+        env: makeEnv({ CI: "true" }),
+        shouldRunHeavyCheck: true,
+      }),
+    ).toBeNull();
+    expect(
+      getLocalNativeTypecheckRefusalError({
+        env: makeEnv({ OPENCLAW_LOCAL_CHECK_MODE: "full" }),
+        shouldRunHeavyCheck: true,
+      }),
+    ).toBeNull();
+    expect(
+      getLocalNativeTypecheckRefusalError({
+        env: makeEnv({ OPENCLAW_HEAVY_CHECK_FORCE: "1" }),
+        shouldRunHeavyCheck: true,
+      }),
+    ).toBeNull();
+    expect(
+      getLocalNativeTypecheckRefusalError({
+        env: makeEnv({ OPENCLAW_ALLOW_LOCAL_NATIVE_TYPECHECK: "1" }),
+        shouldRunHeavyCheck: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("does not refuse metadata-only native tool commands", () => {
+    expect(
+      getLocalNativeTypecheckRefusalError({
+        args: ["--help"],
+        env: makeEnv(),
+        shouldRunHeavyCheck: false,
+      }),
+    ).toBeNull();
   });
 
   it("serializes local oxlint runs onto one thread on constrained hosts", () => {

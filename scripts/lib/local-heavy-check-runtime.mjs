@@ -254,6 +254,36 @@ export function getLocalHeavyCheckPressureError({
   ].join("\n");
 }
 
+export function getLocalNativeTypecheckRefusalError({
+  args = [],
+  env = process.env,
+  shouldRunHeavyCheck = true,
+  toolName = "native type-aware check",
+} = {}) {
+  if (
+    !shouldRunHeavyCheck ||
+    !isLocalCheckEnabled(env) ||
+    isCiLikeEnv(env) ||
+    env.OPENCLAW_HEAVY_CHECK_FORCE === "1" ||
+    env.OPENCLAW_ALLOW_LOCAL_NATIVE_TYPECHECK === "1" ||
+    env.OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD === "1" ||
+    env.OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD === "1"
+  ) {
+    return null;
+  }
+
+  if (readLocalCheckMode(env, "throttled") === "full") {
+    return null;
+  }
+
+  return [
+    `Refusing to start ${toolName} on this local host.`,
+    "Native type-aware checks can exhaust constrained developer/agent machines; run them in GitHub CI, Blacksmith/Testbox, or another remote worker instead.",
+    `Arguments: ${args.length > 0 ? args.join(" ") : "<default project run>"}`,
+    "If you really mean to run this locally, rerun with OPENCLAW_HEAVY_CHECK_FORCE=1 or OPENCLAW_ALLOW_LOCAL_NATIVE_TYPECHECK=1.",
+  ].join("\n");
+}
+
 export function shouldThrottleLocalHeavyChecks(env, hostResources, defaultMode = "throttled") {
   if (!isLocalCheckEnabled(env)) {
     return false;
