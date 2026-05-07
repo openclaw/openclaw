@@ -33,6 +33,17 @@ function sanitizePromptBody(value: unknown): string | undefined {
   return sanitized || undefined;
 }
 
+function normalizePromptMetadataStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized = value
+    .map((entry) => normalizePromptMetadataString(entry))
+    .filter((entry): entry is string => Boolean(entry));
+  const unique = [...new Set(normalized)];
+  return unique.length > 0 ? unique : undefined;
+}
+
 function neutralizeMarkdownFences(value: string): string {
   return value.replaceAll("```", "`\u200b``");
 }
@@ -227,6 +238,12 @@ export function buildInboundUserContextPrefix(
     is_forum: ctx.IsForum === true ? true : undefined,
     is_group_chat: !isDirect ? true : undefined,
     was_mentioned: ctx.WasMentioned === true ? true : undefined,
+    explicitly_mentioned_bot:
+      typeof ctx.ExplicitlyMentionedBot === "boolean" ? ctx.ExplicitlyMentionedBot : undefined,
+    mentioned_user_ids: normalizePromptMetadataStringArray(ctx.MentionedUserIds),
+    mentioned_subteam_ids: normalizePromptMetadataStringArray(ctx.MentionedSubteamIds),
+    implicit_mention_kinds: normalizePromptMetadataStringArray(ctx.ImplicitMentionKinds),
+    mention_source: normalizePromptMetadataString(ctx.MentionSource),
     has_reply_context: sanitizePromptBody(ctx.ReplyToBody) ? true : undefined,
     has_forwarded_context: normalizePromptMetadataString(ctx.ForwardedFrom) ? true : undefined,
     has_thread_starter: sanitizePromptBody(ctx.ThreadStarterBody) ? true : undefined,

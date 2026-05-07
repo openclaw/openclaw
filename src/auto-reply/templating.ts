@@ -188,6 +188,17 @@ export type MsgContext = {
   /** Platform bot username when command mentions should be normalized. */
   BotUsername?: string;
   WasMentioned?: boolean;
+  ExplicitlyMentionedBot?: boolean;
+  MentionedUserIds?: string[];
+  MentionedSubteamIds?: string[];
+  ImplicitMentionKinds?: Array<"reply_to_bot" | "bot_thread_participant" | "native">;
+  MentionSource?:
+    | "explicit_bot"
+    | "mention_pattern"
+    | "subteam"
+    | "implicit_thread"
+    | "command_bypass"
+    | "none";
   CommandAuthorized?: boolean;
   CommandSource?: "text" | "native";
   CommandTargetSessionKey?: string;

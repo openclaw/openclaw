@@ -112,6 +112,16 @@ export type AccessFacts = {
     wasMentioned: boolean;
     hasAnyMention?: boolean;
     implicitMentionKinds?: Array<"reply_to_bot" | "bot_thread_participant" | "native">;
+    explicitlyMentionedBot?: boolean;
+    mentionedUserIds?: string[];
+    mentionedSubteamIds?: string[];
+    mentionSource?:
+      | "explicit_bot"
+      | "mention_pattern"
+      | "subteam"
+      | "implicit_thread"
+      | "command_bypass"
+      | "none";
   };
 };
 
