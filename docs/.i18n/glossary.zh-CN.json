@@ -8,16 +8,16 @@
     "target": "/cli/gateway"
   },
   {
+    "source": "/gateway#multiple-gateways-same-host",
+    "target": "/gateway#multiple-gateways-same-host"
+  },
+  {
     "source": "/gateway/configuration#config-hot-reload",
     "target": "/gateway/configuration#config-hot-reload"
   },
   {
     "source": "/gateway/configuration#strict-validation",
     "target": "/gateway/configuration#strict-validation"
-  },
-  {
-    "source": "/gateway#multiple-gateways-same-host",
-    "target": "/gateway#multiple-gateways-same-host"
   },
   {
     "source": "ACP lifecycle refactor",
