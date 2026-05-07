@@ -359,11 +359,9 @@ export async function buildReplyPayloads(params: {
         })
       : contentSuppressedPayloads;
   const replyPayloads: ReplyPayload[] = [];
-  if (!messagingToolPayloadDedupe.suppressReplies) {
-    for (const payload of filteredPayloads) {
-      if (isRenderablePayload(payload)) {
-        replyPayloads.push(payload);
-      }
+  for (const payload of filteredPayloads) {
+    if (isRenderablePayload(payload)) {
+      replyPayloads.push(payload);
     }
   }
 
