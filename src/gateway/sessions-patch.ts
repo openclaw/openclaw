@@ -95,13 +95,10 @@ async function applyCodexRuntimeForSessionModelSelection(params: {
     params.ensurePluginInstall &&
     modelSelectionShouldEnsureCodexPlugin({ model: modelRef, config: params.cfg })
   ) {
-    const repaired = await params.ensurePluginInstall({
+    await params.ensurePluginInstall({
       cfg: params.cfg,
       model: modelRef,
     });
-    if (repaired.warnings.length > 0) {
-      return invalid(`Codex plugin install failed: ${repaired.warnings[0]}`);
-    }
   }
   return { ok: true };
 }

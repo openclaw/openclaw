@@ -445,10 +445,40 @@ describe("gateway sessions patch", () => {
     expect(entry.providerOverride).toBe("openai");
     expect(entry.modelOverride).toBe("custom-gpt");
     expect(entry.agentRuntimeOverride).toBeUndefined();
-    expect(ensureCodexRuntimePluginInstall).toHaveBeenCalledWith({
-      cfg: expect.any(Object),
-      model: "openai/custom-gpt",
-    });
+    expect(ensureCodexRuntimePluginInstall).not.toHaveBeenCalled();
+  });
+
+  test("does not reject OpenAI session picks when Codex plugin install repair fails", async () => {
+    const ensureCodexRuntimePluginInstall = vi.fn(async () => ({
+      warnings: ['Failed to install missing configured plugin "codex" from @openclaw/codex.'],
+    }));
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          models: {
+            "anthropic/claude-sonnet-4-6": {},
+            "openai/gpt-5.5": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg,
+        patch: { key: MAIN_SESSION_KEY, model: "openai/gpt-5.5" },
+        loadGatewayModelCatalog: async () => [
+          { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+        ],
+        ensureCodexRuntimePluginInstall,
+      }),
+    );
+
+    expect(entry.providerOverride).toBe("openai");
+    expect(entry.modelOverride).toBe("gpt-5.5");
+    expect(entry.agentRuntimeOverride).toBeUndefined();
+    expect(ensureCodexRuntimePluginInstall).toHaveBeenCalledTimes(1);
   });
 
   test("sets spawnDepth for subagent sessions", async () => {

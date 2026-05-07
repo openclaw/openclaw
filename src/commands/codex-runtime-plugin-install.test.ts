@@ -39,7 +39,7 @@ describe("codex runtime plugin install", () => {
     ).toBe(true);
   });
 
-  it("does not special-case OpenAI-compatible base URLs when deciding plugin setup", () => {
+  it("skips Codex plugin setup for custom OpenAI-compatible base URLs", () => {
     const cfg = {
       models: {
         providers: {
@@ -53,7 +53,7 @@ describe("codex runtime plugin install", () => {
     } as OpenClawConfig;
 
     expect(selectedModelShouldEnsureCodexRuntimePlugin({ cfg, model: "openai/custom-gpt" })).toBe(
-      true,
+      false,
     );
     expect(selectedModelShouldEnsureCodexRuntimePlugin({ cfg, model: "local/custom-gpt" })).toBe(
       false,
@@ -97,7 +97,7 @@ describe("codex runtime plugin install", () => {
     );
   });
 
-  it("does not skip installer work solely because OpenAI uses a custom base URL", async () => {
+  it("does not run installer work when OpenAI uses a custom base URL", async () => {
     const cfg = {
       models: {
         providers: {
@@ -119,8 +119,8 @@ describe("codex runtime plugin install", () => {
       runtime,
     });
 
-    expect(result).toEqual({ cfg, required: true, installed: false, status: "skipped" });
-    expect(mocks.ensureOnboardingPluginInstalled).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ cfg, required: false, installed: false });
+    expect(mocks.ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
   });
 
   it("repairs the missing Codex install for non-interactive model selection paths", async () => {

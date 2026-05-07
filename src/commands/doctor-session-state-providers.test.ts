@@ -154,6 +154,36 @@ describe("doctor session state provider routes", () => {
     });
   });
 
+  it("keeps Codex OAuth route state for canonical OpenAI routes", () => {
+    const sessionKey = "agent:main:telegram:direct:1";
+    const scan = scanSessionRouteStateOwners({
+      owners: [codexOwner],
+      store: {
+        [sessionKey]: {
+          sessionId: "sess-codex-openai",
+          updatedAt: 1,
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: "codex",
+          authProfileOverride: "openai-codex:default",
+          authProfileOverrideSource: "auto",
+          cliSessionBindings: {
+            "codex-cli": { sessionId: "codex-session-1" },
+          },
+        },
+      },
+      routes: {
+        [sessionKey]: {
+          defaultProvider: "openai",
+          configuredModelRefs: ["openai/gpt-5.5"],
+          runtime: "pi",
+        },
+      },
+    });
+
+    expect(scan).toEqual({ repairs: [], manualReview: [] });
+  });
+
   it("clears auto-created route state when current route no longer uses the owner", () => {
     const sessionKey = "agent:main:telegram:direct:1";
     const entry: Record<string, unknown> = {

@@ -2,6 +2,19 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 const OPENAI_PROVIDER_ID = "openai";
+const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+
+function isOfficialOpenAIBaseUrl(baseUrl: unknown): boolean {
+  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
+    return true;
+  }
+  return /^https?:\/\/api\.openai\.com(?:\/v1)?\/?$/iu.test(baseUrl.trim());
+}
+
+function openAIProviderUsesCustomBaseUrl(config: OpenClawConfig | undefined): boolean {
+  const providerConfig = config?.models?.providers?.openai;
+  return !isOfficialOpenAIBaseUrl(providerConfig?.baseUrl);
+}
 
 export function isOpenAIProvider(provider: string | undefined): boolean {
   return normalizeProviderId(provider ?? "") === OPENAI_PROVIDER_ID;
@@ -11,7 +24,7 @@ export function openAIRouteRequiresCodexRuntime(params: {
   provider?: string;
   config?: OpenClawConfig;
 }): boolean {
-  return normalizeProviderId(params.provider ?? "") === "openai-codex";
+  return normalizeProviderId(params.provider ?? "") === OPENAI_CODEX_PROVIDER_ID;
 }
 
 export function modelSelectionRequiresCodexRuntime(params: {
@@ -43,7 +56,10 @@ export function modelSelectionShouldEnsureCodexPlugin(params: {
     return false;
   }
   const provider = normalizeProviderId(model.slice(0, slashIndex));
-  return provider === "openai" || provider === "openai-codex";
+  if (provider === OPENAI_CODEX_PROVIDER_ID) {
+    return true;
+  }
+  return provider === OPENAI_PROVIDER_ID && !openAIProviderUsesCustomBaseUrl(params.config);
 }
 
 export function hasOpenAICodexAuthProfileOverride(value: unknown): boolean {
