@@ -86,6 +86,49 @@ describe("createChannelOutboundRuntimeSend", () => {
     );
   });
 
+  it("routes block sends through payload delivery", async () => {
+    const sendPayload = vi.fn(async () => ({ channel: "slack", messageId: "slack-blocks" }));
+    const sendText = vi.fn();
+    mocks.loadChannelOutboundAdapter.mockResolvedValue({
+      sendText,
+      sendPayload,
+    });
+
+    const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
+    const runtimeSend = createChannelOutboundRuntimeSend({
+      channelId: "slack" as never,
+      unavailableMessage: "unavailable",
+    });
+    const blocks = [
+      {
+        type: "actions",
+        elements: [{ type: "button", text: { type: "plain_text", text: "OK" }, value: "ok" }],
+      },
+    ];
+
+    await runtimeSend.sendMessage("C123", "fallback", {
+      cfg: {},
+      accountId: "default",
+      blocks,
+    });
+
+    expect(sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: {},
+        to: "C123",
+        text: "fallback",
+        accountId: "default",
+        payload: {
+          text: "fallback",
+          channelData: {
+            slack: { blocks },
+          },
+        },
+      }),
+    );
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
   it("accepts plugin outbound thread and reply aliases", async () => {
     const sendText = vi.fn(async () => ({ channel: "matrix", messageId: "$reply" }));
     mocks.loadChannelOutboundAdapter.mockResolvedValue({

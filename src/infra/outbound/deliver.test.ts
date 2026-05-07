@@ -1537,6 +1537,56 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("passes delivery config and account context to adapter payload normalization", async () => {
+    const normalizePayload = vi.fn(({ payload }) => ({
+      ...payload,
+      channelData: { normalized: true },
+    }));
+    const sendPayload = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "context",
+      roomId: "!room",
+    });
+    const cfg = { channels: { matrix: { enabled: true } } } as unknown as OpenClawConfig;
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              normalizePayload,
+              sendText: vi.fn(),
+              sendMedia: vi.fn(),
+              sendPayload,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "matrix",
+      to: "!room",
+      accountId: "workspace-a",
+      payloads: [{ text: "visible" }],
+    });
+
+    expect(normalizePayload).toHaveBeenCalledWith({
+      payload: expect.objectContaining({ text: "visible" }),
+      cfg,
+      accountId: "workspace-a",
+    });
+    expect(sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ channelData: { normalized: true } }),
+      }),
+    );
+  });
+
   it("strips internal runtime scaffolding copied into rendered and normalized nested payloads", async () => {
     const sendPayload = vi.fn().mockResolvedValue({
       channel: "matrix" as const,
