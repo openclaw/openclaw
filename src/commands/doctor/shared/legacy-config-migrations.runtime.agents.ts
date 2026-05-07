@@ -240,6 +240,24 @@ function removeAgentRuntimeFallback(
   changes.push(`Removed ${pathLabel}.agentRuntime.fallback.`);
 }
 
+function getFiniteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function formatConfiguredProvidersHint(raw: Record<string, unknown>): string {
+  const providers = getRecord(getRecord(raw.models)?.providers);
+  if (!providers) {
+    return "";
+  }
+  const providerIds = Object.keys(providers)
+    .filter((providerId) => !isBlockedObjectKey(providerId))
+    .toSorted();
+  if (providerIds.length === 0) {
+    return "";
+  }
+  return ` Configured providers: ${providerIds.join(", ")}.`;
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "agents.defaults.llm->models.providers.timeoutSeconds",
@@ -247,10 +265,20 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     legacyRules: LEGACY_AGENT_LLM_TIMEOUT_RULES,
     apply: (raw, changes) => {
       const defaults = getRecord(getRecord(raw.agents)?.defaults);
-      if (!defaults || getRecord(defaults.llm) === null) {
+      const legacyLlm = getRecord(defaults?.llm);
+      if (!defaults || legacyLlm === null) {
         return;
       }
+      const idleTimeoutSeconds = getFiniteNumber(legacyLlm.idleTimeoutSeconds);
       delete defaults.llm;
+      if (idleTimeoutSeconds !== null) {
+        changes.push(
+          `Removed agents.defaults.llm.idleTimeoutSeconds: ${idleTimeoutSeconds}; ` +
+            `to preserve this behavior, set models.providers.<id>.timeoutSeconds: ${idleTimeoutSeconds} for slow providers.` +
+            formatConfiguredProvidersHint(raw),
+        );
+        return;
+      }
       changes.push(
         "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds.",
       );

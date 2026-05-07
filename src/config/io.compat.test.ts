@@ -109,6 +109,57 @@ describe("config io paths", () => {
     });
   });
 
+  it("logs legacy agents.defaults.llm timeout warnings at config load time", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            agents: {
+              defaults: {
+                model: { primary: "mlx/slow-local" },
+                llm: { idleTimeoutSeconds: 180 },
+              },
+            },
+            models: {
+              providers: {
+                mlx: {
+                  baseUrl: "http://127.0.0.1:8080/v1",
+                  api: "openai-completions",
+                  models: [{ id: "slow-local", name: "mlx/slow-local" }],
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+      );
+      const logger = {
+        error: vi.fn(),
+        warn: vi.fn(),
+      };
+      const io = createConfigIO({
+        configPath,
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger,
+      });
+
+      expect(() => io.loadConfig()).toThrow('Unrecognized key: "llm"');
+      expect(() => io.loadConfig()).toThrow('Unrecognized key: "llm"');
+
+      const legacyWarnings = logger.warn.mock.calls
+        .map(([message]) => String(message))
+        .filter((message) => message.includes("agents.defaults.llm.idleTimeoutSeconds"));
+      expect(legacyWarnings).toEqual([
+        expect.stringContaining("models.providers.<id>.timeoutSeconds: 180"),
+      ]);
+    });
+  });
+
   it("normalizes safe-bin config entries at config load time", async () => {
     const cfg = {
       tools: {

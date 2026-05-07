@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Config/doctor: preserve legacy `agents.defaults.llm.idleTimeoutSeconds` values in `doctor --fix` output and emit a config-load warning that points users to `models.providers.<id>.timeoutSeconds`. Fixes #74910. (#74940) Thanks @chiyouYCH.
 - Telegram: treat successful same-chat `message` tool outbound sends during an inbound telegram turn as delivered when deciding whether to emit the rewritten silent reply fallback (#78685). Thanks @neeravmakwana.
 - Discord/voice: make `openclaw channels capabilities --channel discord --target channel:<id>` and `channels status --probe` audit voice-channel permissions, including auto-join targets, so missing Connect/Speak/Read Message History permissions show up before `/vc join`.
 - Docs/iMessage: deprecate BlueBubbles for new OpenClaw setups, document the upstream server-release rationale, and point new iMessage deployments toward the native `imsg` path while keeping BlueBubbles as a supported legacy fallback.
