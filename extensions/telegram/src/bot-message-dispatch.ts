@@ -396,7 +396,7 @@ export const dispatchTelegramMessage = async ({
     // third arm — GatewayClientScopes.includes("operator.admin") — is not
     // included here because gateway scopes flow via direct clients, not bot
     // polling, so that path is unreachable on Telegram inbound.
-    canUseReasoningState: Boolean(ctxPayload.CommandAuthorized),
+    canUseReasoningState: ctxPayload.CommandAuthorized,
   });
   const forceBlockStreamingForReasoning = resolvedReasoningLevel === "on";
   const streamReasoningDraft = resolvedReasoningLevel === "stream";

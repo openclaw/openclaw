@@ -45,7 +45,7 @@ const buildModelsProviderData = vi.hoisted(() =>
   })),
 );
 const listSkillCommandsForAgents = vi.hoisted(() => vi.fn(() => []));
-const createChannelReplyPipeline = vi.hoisted(() =>
+const createChannelMessageReplyPipeline = vi.hoisted(() =>
   vi.fn(() => ({
     responsePrefix: undefined,
     responsePrefixContextProvider: () => ({ identityName: undefined }),
@@ -146,8 +146,8 @@ const telegramDepsForTest: TelegramBotDeps = {
   buildModelsProviderData: buildModelsProviderData as TelegramBotDeps["buildModelsProviderData"],
   listSkillCommandsForAgents:
     listSkillCommandsForAgents as TelegramBotDeps["listSkillCommandsForAgents"],
-  createChannelReplyPipeline:
-    createChannelReplyPipeline as TelegramBotDeps["createChannelReplyPipeline"],
+  createChannelMessageReplyPipeline:
+    createChannelMessageReplyPipeline as TelegramBotDeps["createChannelMessageReplyPipeline"],
   wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
   createTelegramDraftStream:
     createTelegramDraftStream as TelegramBotDeps["createTelegramDraftStream"],
@@ -188,7 +188,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     enqueueSystemEvent.mockReset();
     buildModelsProviderData.mockReset();
     listSkillCommandsForAgents.mockReset();
-    createChannelReplyPipeline.mockReset();
+    createChannelMessageReplyPipeline.mockReset();
     wasSentByBot.mockReset();
     loadSessionStore.mockReset();
     resolveStorePath.mockReset();
@@ -231,7 +231,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       modelNames: new Map<string, string>(),
     });
     listSkillCommandsForAgents.mockReturnValue([]);
-    createChannelReplyPipeline.mockReturnValue({
+    createChannelMessageReplyPipeline.mockReturnValue({
       responsePrefix: undefined,
       responsePrefixContextProvider: () => ({ identityName: undefined }),
       onModelSelected: () => undefined,
