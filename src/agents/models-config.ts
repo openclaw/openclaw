@@ -22,12 +22,14 @@ import {
 } from "./agent-scope.js";
 import { MODELS_JSON_STATE, type ContentHashOutcome } from "./models-config-state.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
+import { normalizeProviderSpecificConfig } from "./models-config.providers.policy.js";
 import {
   normalizeHeaderValues,
   resolveAwsSdkApiKeyVarName,
   resolveEnvApiKeyVarName,
   type SecretDefaults,
 } from "./models-config.providers.secret-helpers.js";
+import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 export { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
 
@@ -533,7 +535,18 @@ async function withModelsJsonWriteLock<T>(targetPath: string, run: () => Promise
 export type EnsureOpenClawModelsJsonOptions = {
   /** Provider id the caller intends to use (e.g. "anthropic", "openai"). */
   targetProvider?: string;
-  /** Model id the caller intends to use. Reserved for future refinements. */
+  /**
+   * Model id the caller intends to use.  When provided alongside
+   * `targetProvider`, the implicit-only short-circuit branch (where
+   * `models.providers[targetProvider].models` is empty/omitted)
+   * additionally requires this model id to appear on disk before
+   * blessing the fast path (Codex P2 round-9 on PR #73261).  Without
+   * this hint, implicit-discovery setups with stale `models.json`
+   * could short-circuit and then fail in `resolveModelAsync` with
+   * `Unknown model`.  Omit when the caller doesn't yet know which
+   * model it will resolve; the prior provider-shape-only contract
+   * still applies in that case.
+   */
   targetModel?: string;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
   workspaceDir?: string;
@@ -769,11 +782,12 @@ const PER_MODEL_TRANSPORT_FIELDS: ReadonlySet<string> = new Set(["baseUrl", "api
 async function readExistingProviderMatchesConfig(
   targetPath: string,
   targetProvider: string,
-  configuredProvider: unknown,
+  configuredProviderRaw: unknown,
   env: NodeJS.ProcessEnv,
   secretDefaults: SecretDefaults | undefined,
+  targetModelId: string | undefined,
 ): Promise<boolean> {
-  if (!isRecord(configuredProvider)) {
+  if (!isRecord(configuredProviderRaw)) {
     return false;
   }
   // Reject prototype-chain key collisions for targetProvider (Aisle
@@ -784,6 +798,32 @@ async function readExistingProviderMatchesConfig(
     targetProvider === "constructor" ||
     targetProvider === "prototype"
   ) {
+    return false;
+  }
+  // Apply the same provider-policy normalization that
+  // `normalizeProviders` runs before `planOpenClawModelsJson` writes
+  // the file (Codex P2 round-9 on PR #73261, models-config.ts:1282).
+  // Some providers inject defaults at normalization time (e.g.
+  // `extensions/ollama/provider-policy-api.ts` defaults `baseUrl` to
+  // the local Ollama host when config omits it).  Without this
+  // pre-pass, the structural compare runs config-as-authored vs
+  // disk-as-normalized, so any provider with policy-injected defaults
+  // would always miss the short-circuit even when disk is already
+  // correct.  Falling back through to full planning in that case
+  // disables the perf path on every targeted call.  The policy hook
+  // returns the input unchanged when it has no opinion, so this is a
+  // no-op for providers without a normalize-config policy.
+  //
+  // Cast: `configuredProviderRaw` is the user's `models.providers[X]`
+  // entry, typed `unknown` for defensive parsing of disk content via
+  // the same surface; the in-memory `cfg` value matches
+  // `ProviderConfig`'s shape and is what `normalizeProviders` itself
+  // accepts.
+  const configuredProvider = normalizeProviderSpecificConfig(
+    targetProvider,
+    configuredProviderRaw as ProviderConfig,
+  ) as Record<string, unknown>;
+  if (!isRecord(configuredProvider)) {
     return false;
   }
   // Reuse the fingerprint-cache safe-read primitive (#73260):
@@ -993,15 +1033,54 @@ async function readExistingProviderMatchesConfig(
   if (configuredIds === null) {
     return false;
   }
+  // We only need diskIds when either explicit-mode subset check fires
+  // or implicit-mode `targetModelId` is provided (Codex P2 round-9 on
+  // PR #73261, models-config.ts:997).  Compute lazily so adversarial
+  // disk model rows still fail closed in both branches without
+  // duplicating the parse.
+  let diskIds: Set<string> | null | undefined;
+  const ensureDiskIds = (): Set<string> | null => {
+    if (diskIds === undefined) {
+      diskIds = collectShortCircuitModelIds(diskProvider.models);
+    }
+    return diskIds;
+  };
   if (configuredIds.size > 0) {
-    const diskIds = collectShortCircuitModelIds(diskProvider.models);
-    if (diskIds === null) {
+    const ids = ensureDiskIds();
+    if (ids === null) {
       return false;
     }
     for (const id of configuredIds) {
-      if (!diskIds.has(id)) {
+      if (!ids.has(id)) {
         return false;
       }
+    }
+  } else if (typeof targetModelId === "string" && targetModelId.length > 0) {
+    // Implicit-only mode (`configuredProvider.models` empty/omitted)
+    // means `models.json` reflects discovery, not config.  The prior
+    // contract skipped *all* model-id validation in this branch and
+    // returned a structural "match" even when the caller's requested
+    // model wasn't on disk yet (Codex P2 round-9: "Check requested
+    // model on implicit-only short-circuit hits", models-config.ts:997).
+    // Cold-start / stale-disk implicit-discovery setups can then
+    // bypass `resolveImplicitProviders`, leaving `resolveModelAsync`
+    // to fail with `Unknown model` until another path forces a full
+    // reconcile.
+    //
+    // Closing that hole: when the embedded caller passes
+    // `targetModelId`, require the requested id to be present on
+    // disk before short-circuiting.  Anything else (malformed disk
+    // models, missing id) falls through to full planning, which will
+    // run discovery and rewrite the file.  Implicit callers that
+    // don't know which model they're about to use (`targetModelId`
+    // omitted) keep the prior provider-shape-only contract — they
+    // never had per-model assertions to begin with.
+    const ids = ensureDiskIds();
+    if (ids === null) {
+      return false;
+    }
+    if (!ids.has(targetModelId)) {
+      return false;
     }
   }
 
@@ -1071,8 +1150,18 @@ function modelsJsonScopedShortCircuitCacheKey(
   targetPath: string,
   fingerprint: string,
   targetProvider: string,
+  targetModelId: string | undefined,
 ): string {
-  return `${targetPath}\0${fingerprint}\0sc:${targetProvider}`;
+  // Fold `targetModelId` into the scoped key (Codex P2 round-9 on PR
+  // #73261, models-config.ts:997 follow-on).  In implicit-only mode
+  // we now require the requested model to be on disk before blessing
+  // the short-circuit; the cache must reflect that scope so a hit
+  // cached for model X can't be reused for model Y under the same
+  // (provider, fingerprint, models.json content) tuple when Y isn't
+  // on disk.  The empty-suffix arm preserves the prior key shape for
+  // callers that don't pass `targetModel`.
+  const modelSuffix = targetModelId ? `\0m:${targetModelId}` : "";
+  return `${targetPath}\0${fingerprint}\0sc:${targetProvider}${modelSuffix}`;
 }
 
 export async function ensureOpenClawModelsJson(
@@ -1258,7 +1347,13 @@ export async function ensureOpenClawModelsJson(
   // on `uncacheable`).
   const targetProvider = options?.targetProvider?.trim();
   if (targetProvider) {
-    const scopedKey = modelsJsonScopedShortCircuitCacheKey(targetPath, fingerprint, targetProvider);
+    const scopedTargetModelId = options?.targetModel?.trim() || undefined;
+    const scopedKey = modelsJsonScopedShortCircuitCacheKey(
+      targetPath,
+      fingerprint,
+      targetProvider,
+      scopedTargetModelId,
+    );
     const scopedCached = MODELS_JSON_STATE.readyCache.get(scopedKey);
     if (scopedCached) {
       const settled = await scopedCached;
@@ -1288,6 +1383,7 @@ export async function ensureOpenClawModelsJson(
         configuredProvider,
         env,
         cfg.secrets?.defaults,
+        scopedTargetModelId,
       );
       if (matches) {
         await ensureModelsFileModeForModelsJson(targetPath);

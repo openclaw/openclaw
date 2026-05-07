@@ -976,4 +976,153 @@ describe("ensureOpenClawModelsJson targetProvider short-circuit", () => {
     await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
     expect(resolveImplicitProvidersCallCount).toBe(1);
   });
+
+  it("hit-on-policy-injected-default-baseUrl: implicit-only ollama config with baseUrl omitted still short-circuits because policy normalization injects the default disk-side too (Codex P2 round-9 #1)", async () => {
+    // Reproduces the round-9 finding at models-config.ts:1282.  An
+    // ollama provider config without `baseUrl` gets the default
+    // `http://localhost:11434` injected by the bundled provider
+    // policy hook (see extensions/ollama/provider-policy-api.ts).
+    // `planOpenClawModelsJson` writes that normalized shape to disk.
+    // Without the round-9 normalize-before-compare pass, the
+    // structural compare runs config-as-authored (no baseUrl) vs
+    // disk-as-normalized (baseUrl: "http://localhost:11434") and
+    // always falls through to a full plan, disabling the perf path
+    // for every ollama-targeted call.  The fix normalizes
+    // configuredProvider with the same provider-policy hook before
+    // comparison, so this test must short-circuit on the second pass.
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          ollama: {
+            // baseUrl deliberately omitted so policy normalization
+            // injects the default both at write time and at
+            // compare time.
+            api: "ollama-chat" as const,
+            models: [],
+          } as unknown as import("../config/types.models.js").ModelProviderConfig,
+        },
+      },
+    };
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "ollama" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    // Second pass with the same baseUrl-omitting config: structural
+    // compare on the normalized shape matches disk (default baseUrl
+    // on both sides), so the short-circuit must skip planning.
+    resetModelsJsonReadyCacheForTest();
+    resolveImplicitProvidersCallCount = 0;
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "ollama" });
+    expect(resolveImplicitProvidersCallCount).toBe(0);
+  });
+
+  it("miss-on-implicit-only-target-model-not-on-disk: empty configured.models with targetModel id missing from disk falls through to full planning (Codex P2 round-9 #2)", async () => {
+    // Reproduces the round-9 finding at models-config.ts:997.  In
+    // implicit-only mode (`models: []`), the prior contract skipped
+    // ALL model-id validation and could short-circuit a stale disk
+    // catalog — then `resolveModelAsync` would fail with `Unknown
+    // model` because discovery never ran.  With the round-9 fix,
+    // when the embedded caller passes `targetModel` and that id is
+    // not present on disk, the short-circuit refuses and the
+    // planner gets a chance to rediscover.
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg = createOpenAiConfig(); // models: [] (implicit)
+    // Cold start populates models.json with implicit discovery (the
+    // mocked `resolveImplicitProviders` returns `{}`, so disk ends
+    // up with no openai model rows).
+    await ensureOpenClawModelsJson(cfg, agentDir, {
+      targetProvider: "openai",
+      targetModel: "gpt-5",
+    });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    // Second pass with same config + same targetModel.  Without the
+    // fix this would short-circuit (config matches disk transport,
+    // implicit mode skips per-model checks) and silently bless a
+    // disk catalog that doesn't have `gpt-5`.  With the fix, the
+    // implicit-mode branch checks `targetModel` against disk model
+    // ids and refuses because gpt-5 is missing, so we re-plan.
+    resetModelsJsonReadyCacheForTest();
+    resolveImplicitProvidersCallCount = 0;
+    await ensureOpenClawModelsJson(cfg, agentDir, {
+      targetProvider: "openai",
+      targetModel: "gpt-5",
+    });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+  });
+
+  it("hit-on-implicit-only-target-model-on-disk: empty configured.models with targetModel id present on disk still short-circuits (Codex P2 round-9 #2 hit-arm)", async () => {
+    // Symmetric companion to the miss-arm above: implicit-only mode
+    // with a `targetModel` hint MUST still short-circuit when the
+    // requested model is already on disk, otherwise the perf path
+    // collapses for every implicit-discovery setup that wires a
+    // model id through the embedded runner.
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg = createOpenAiConfig();
+    // Cold start: planner runs, writes a baseline disk file.
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    // Hand-inject a `gpt-5` model row on disk to simulate the case
+    // where prior implicit discovery (in production, not the mocked
+    // suite) had populated the model catalog.  Then re-run with the
+    // targetModel hint pointing at that id.
+    const targetPath = path.join(agentDir, "models.json");
+    const raw = await fs.readFile(targetPath, "utf8");
+    const parsed = JSON.parse(raw);
+    parsed.providers.openai.models = [{ id: "gpt-5" }];
+    await fs.writeFile(targetPath, JSON.stringify(parsed));
+
+    resetModelsJsonReadyCacheForTest();
+    resolveImplicitProvidersCallCount = 0;
+    await ensureOpenClawModelsJson(cfg, agentDir, {
+      targetProvider: "openai",
+      targetModel: "gpt-5",
+    });
+    expect(resolveImplicitProvidersCallCount).toBe(0);
+  });
+
+  it("scoped-cache-per-target-model: implicit-only short-circuit cached for one targetModel does not bless a different targetModel under the same fingerprint (Codex P2 round-9 #2 cache-key follow-on)", async () => {
+    // The round-9 implicit-only `targetModel` check is also folded
+    // into the scoped readyCache key, so a hit cached for model X
+    // cannot be reused as a structural "match" for model Y under the
+    // same (provider, fingerprint, models.json content) tuple when Y
+    // isn't on disk.  Without that cache-key isolation, call A would
+    // bless model X (correctly), and call B asking for model Y would
+    // ride A's cache entry and return `wrote: false` while disk is
+    // missing Y — the very regression the round-9 finding pins.
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg = createOpenAiConfig();
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    // Place only `gpt-5` on disk so the catalog has X but not Y.
+    const targetPath = path.join(agentDir, "models.json");
+    const raw = await fs.readFile(targetPath, "utf8");
+    const parsed = JSON.parse(raw);
+    parsed.providers.openai.models = [{ id: "gpt-5" }];
+    await fs.writeFile(targetPath, JSON.stringify(parsed));
+
+    // Warm the scoped cache for targetModel=gpt-5 (must hit).
+    resetModelsJsonReadyCacheForTest();
+    resolveImplicitProvidersCallCount = 0;
+    await ensureOpenClawModelsJson(cfg, agentDir, {
+      targetProvider: "openai",
+      targetModel: "gpt-5",
+    });
+    expect(resolveImplicitProvidersCallCount).toBe(0);
+
+    // Now ask for targetModel=gpt-7 — not on disk.  If gpt-5's
+    // scoped cache entry leaked, this would also hit with
+    // resolveImplicitProvidersCallCount staying at 0.  The
+    // per-target-model cache key forces a fresh structural check
+    // which then refuses (gpt-7 missing) and falls through to the
+    // planner.
+    resolveImplicitProvidersCallCount = 0;
+    await ensureOpenClawModelsJson(cfg, agentDir, {
+      targetProvider: "openai",
+      targetModel: "gpt-7",
+    });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+  });
 });
