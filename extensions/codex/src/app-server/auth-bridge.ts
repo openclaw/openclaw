@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -116,6 +117,32 @@ export function resolveCodexAppServerAuthAccountCacheKey(params: {
     return undefined;
   }
   return resolveChatgptAccountId(profileId, credential);
+}
+
+export function resolveCodexAppServerEnvApiKeyCacheKey(params: {
+  startOptions: Pick<CodexAppServerStartOptions, "transport" | "env" | "clearEnv">;
+  baseEnv?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+}): string | undefined {
+  if (params.startOptions.transport !== "stdio") {
+    return undefined;
+  }
+  const env = resolveCodexAppServerSpawnEnv(
+    params.startOptions,
+    params.baseEnv ?? process.env,
+    params.platform ?? process.platform,
+  );
+  const apiKey = readFirstNonEmptyEnvEntry(env, CODEX_APP_SERVER_API_KEY_ENV_VARS);
+  if (!apiKey) {
+    return undefined;
+  }
+  const hash = createHash("sha256");
+  hash.update("openclaw:codex:app-server-env-api-key:v1");
+  hash.update("\0");
+  hash.update(apiKey.key);
+  hash.update("\0");
+  hash.update(apiKey.value);
+  return `${apiKey.key}:sha256:${hash.digest("hex")}`;
 }
 
 export function resolveCodexAppServerHomeDir(agentDir: string): string {
@@ -392,10 +419,17 @@ function withClearedEnvironmentVariables(
 }
 
 function readFirstNonEmptyEnv(env: NodeJS.ProcessEnv, keys: readonly string[]): string | undefined {
+  return readFirstNonEmptyEnvEntry(env, keys)?.value;
+}
+
+function readFirstNonEmptyEnvEntry(
+  env: NodeJS.ProcessEnv,
+  keys: readonly string[],
+): { key: string; value: string } | undefined {
   for (const key of keys) {
     const value = env[key]?.trim();
     if (value) {
-      return value;
+      return { key, value };
     }
   }
   return undefined;

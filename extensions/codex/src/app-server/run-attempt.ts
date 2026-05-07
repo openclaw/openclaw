@@ -49,6 +49,7 @@ import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import {
   refreshCodexAppServerAuthTokens,
   resolveCodexAppServerAuthAccountCacheKey,
+  resolveCodexAppServerEnvApiKeyCacheKey,
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileIdForAgent,
@@ -495,6 +496,11 @@ export async function runCodexAppServerAttempt(
     agentDir,
     config: params.config,
   });
+  const startupEnvApiKeyCacheKey = startupAuthProfileId
+    ? undefined
+    : resolveCodexAppServerEnvApiKeyCacheKey({
+        startOptions: appServer.start,
+      });
   const activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
     : undefined;
@@ -672,6 +678,7 @@ export async function runCodexAppServerAttempt(
       endpoint: resolveCodexPluginAppCacheEndpoint(appServer),
       authProfileId: startupAuthProfileId,
       accountId: startupAuthAccountCacheKey,
+      envApiKeyFingerprint: startupEnvApiKeyCacheKey,
     });
     const pluginThreadConfigInputFingerprint = pluginThreadConfigEnabled
       ? buildCodexPluginThreadConfigInputFingerprint({

@@ -12,6 +12,7 @@ export type CodexAppInventoryCacheKeyInput = {
   endpoint?: string;
   authProfileId?: string;
   accountId?: string;
+  envApiKeyFingerprint?: string;
   appServerVersion?: string;
 };
 
@@ -195,6 +196,7 @@ export function buildCodexAppInventoryCacheKey(input: CodexAppInventoryCacheKeyI
     endpoint: input.endpoint ?? null,
     authProfileId: input.authProfileId ?? null,
     accountId: input.accountId ?? null,
+    envApiKeyFingerprint: input.envApiKeyFingerprint ?? null,
     appServerVersion: input.appServerVersion ?? null,
   });
 }

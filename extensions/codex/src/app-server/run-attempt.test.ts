@@ -23,7 +23,10 @@ import {
   buildCodexAppInventoryCacheKey,
   defaultCodexAppInventoryCache,
 } from "./app-inventory-cache.js";
-import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
+import {
+  resolveCodexAppServerEnvApiKeyCacheKey,
+  resolveCodexAppServerHomeDir,
+} from "./auth-bridge.js";
 import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
@@ -530,6 +533,8 @@ describe("runCodexAppServerAttempt", () => {
   beforeEach(async () => {
     resetAgentEventsForTest();
     vi.stubEnv("OPENCLAW_TRAJECTORY", "0");
+    vi.stubEnv("CODEX_API_KEY", "");
+    vi.stubEnv("OPENAI_API_KEY", "");
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-run-"));
   });
 
@@ -2843,6 +2848,164 @@ describe("runCodexAppServerAttempt", () => {
       ]),
     );
     expect(requests.map((entry) => entry.method)).not.toContain("app/list");
+  });
+
+  it("keys plugin app inventory by inherited API key fallback credentials", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const agentDir = path.join(tempDir, "agent");
+    const pluginConfig = {
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          "google-calendar": {
+            marketplaceName: "openai-curated",
+            pluginName: "google-calendar",
+          },
+        },
+      },
+    };
+    const appServer = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: readCodexPluginConfig(pluginConfig),
+    });
+    defaultCodexAppInventoryCache.clear();
+    await defaultCodexAppInventoryCache.refreshNow({
+      key: buildCodexAppInventoryCacheKey({
+        codexHome: resolveCodexAppServerHomeDir(agentDir),
+        endpoint: __testing.resolveCodexPluginAppCacheEndpoint(appServer),
+        envApiKeyFingerprint: resolveCodexAppServerEnvApiKeyCacheKey({
+          startOptions: appServer.start,
+          baseEnv: { CODEX_API_KEY: "old-codex-env-key" },
+        }),
+      }),
+      request: async () => ({
+        data: [
+          {
+            id: "google-calendar-app",
+            name: "Google Calendar",
+            description: null,
+            logoUrl: null,
+            logoUrlDark: null,
+            distributionChannel: null,
+            branding: null,
+            appMetadata: null,
+            labels: null,
+            installUrl: null,
+            isAccessible: true,
+            isEnabled: true,
+            pluginDisplayNames: [],
+          },
+        ],
+        nextCursor: null,
+      }),
+    });
+    vi.stubEnv("CODEX_API_KEY", "new-codex-env-key");
+    vi.stubEnv("OPENAI_API_KEY", "");
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(async (method) => {
+      if (method === "app/list") {
+        return {
+          data: [
+            {
+              id: "google-calendar-app",
+              name: "Google Calendar",
+              description: null,
+              logoUrl: null,
+              logoUrlDark: null,
+              distributionChannel: null,
+              branding: null,
+              appMetadata: null,
+              labels: null,
+              installUrl: null,
+              isAccessible: true,
+              isEnabled: true,
+              pluginDisplayNames: [],
+            },
+          ],
+          nextCursor: null,
+        };
+      }
+      if (method === "plugin/list") {
+        return {
+          marketplaces: [
+            {
+              name: "openai-curated",
+              path: "/marketplaces/openai-curated",
+              interface: null,
+              plugins: [
+                {
+                  id: "google-calendar",
+                  name: "google-calendar",
+                  source: { type: "remote" },
+                  installed: true,
+                  enabled: true,
+                  installPolicy: "AVAILABLE",
+                  authPolicy: "ON_USE",
+                  availability: "AVAILABLE",
+                  interface: null,
+                },
+              ],
+            },
+          ],
+          marketplaceLoadErrors: [],
+          featuredPluginIds: [],
+        };
+      }
+      if (method === "plugin/read") {
+        return {
+          plugin: {
+            marketplaceName: "openai-curated",
+            marketplacePath: "/marketplaces/openai-curated",
+            summary: {
+              id: "google-calendar",
+              name: "google-calendar",
+              source: { type: "remote" },
+              installed: true,
+              enabled: true,
+              installPolicy: "AVAILABLE",
+              authPolicy: "ON_USE",
+              availability: "AVAILABLE",
+              interface: null,
+            },
+            description: null,
+            skills: [],
+            apps: [
+              {
+                id: "google-calendar-app",
+                name: "Google Calendar",
+                description: null,
+                installUrl: null,
+                needsAuth: false,
+              },
+            ],
+            mcpServers: ["google-calendar"],
+          },
+        };
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = agentDir;
+
+    const run = runCodexAppServerAttempt(params, { pluginConfig });
+    await waitForMethod("turn/start");
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(requests.map((entry) => entry.method)).toContain("app/list");
+    expect(requests).toEqual(
+      expect.arrayContaining([
+        {
+          method: "thread/start",
+          params: expect.objectContaining({
+            config: expect.objectContaining({
+              apps: expect.objectContaining({
+                "google-calendar-app": expect.objectContaining({ enabled: true }),
+              }),
+            }),
+          }),
+        },
+      ]),
+    );
   });
 
   it("times out app-server startup before thread setup can hang forever", async () => {
