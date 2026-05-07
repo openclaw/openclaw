@@ -167,4 +167,59 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(updatedEntry?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(updatedEntry?.claudeCliSessionId).toBeUndefined();
   });
+
+  it("initializes built-in context engines before resolving CLI compaction engine", async () => {
+    const sessionKey = "agent:main:cli";
+    const sessionId = "session-cli";
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    await writeSessionFile({ sessionFile, sessionId });
+
+    const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
+    const initializeContextEngines = vi.fn();
+    const resolveContextEngine = vi.fn(async () => buildContextEngine({ compactCalls }));
+    setCliCompactionTestDeps({
+      ensureContextEnginesInitialized: initializeContextEngines,
+      resolveContextEngine,
+      createPreparedEmbeddedPiSettingsManager: async () => ({
+        getCompactionReserveTokens: () => 200,
+        getCompactionKeepRecentTokens: () => 0,
+        applyOverrides: () => {},
+      }),
+      shouldPreemptivelyCompactBeforePrompt: () => ({
+        route: "fits",
+        shouldCompact: false,
+        estimatedPromptTokens: 100,
+        promptBudgetBeforeReserve: 800,
+        overflowTokens: 0,
+        toolResultReducibleChars: 0,
+        effectiveReserveTokens: 200,
+      }),
+      resolveLiveToolResultMaxChars: () => 20_000,
+    });
+
+    await runCliTurnCompactionLifecycle({
+      cfg: {} as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry: {
+        sessionId,
+        updatedAt: Date.now(),
+        sessionFile,
+        contextTokens: 1_000,
+        totalTokens: 100,
+        totalTokensFresh: true,
+      },
+      sessionAgentId: "main",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "claude-cli",
+      model: "opus",
+    });
+
+    expect(initializeContextEngines).toHaveBeenCalledTimes(1);
+    expect(resolveContextEngine).toHaveBeenCalledTimes(1);
+    expect(initializeContextEngines.mock.invocationCallOrder[0]).toBeLessThan(
+      resolveContextEngine.mock.invocationCallOrder[0],
+    );
+  });
 });
