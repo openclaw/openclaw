@@ -746,7 +746,10 @@ function injectCommandResult(host: ChatHost, content: string) {
   ];
 }
 
-export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: boolean }) {
+export async function refreshChat(
+  host: ChatHost,
+  opts?: { scheduleScroll?: boolean; awaitHistory?: boolean },
+) {
   const requestUpdate = () => host.requestUpdate?.();
   const historyRefresh = loadChatHistory(host as unknown as ChatState).finally(() => {
     if (opts?.scheduleScroll !== false) {
@@ -767,6 +770,10 @@ export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: bool
   ]).finally(requestUpdate);
   void historyRefresh;
   void secondaryRefresh;
+  if (opts?.awaitHistory === true) {
+    await historyRefresh;
+    return;
+  }
   await Promise.resolve();
 }
 

@@ -2458,7 +2458,7 @@ export function renderApp(state: AppViewState) {
                   onRefresh: () => {
                     state.chatSideResult = null;
                     state.resetToolStream();
-                    return refreshChat(state, { scheduleScroll: false });
+                    return refreshChat(state, { awaitHistory: true, scheduleScroll: false });
                   },
                   onToggleFocusMode: () => {
                     if (state.onboarding) {
