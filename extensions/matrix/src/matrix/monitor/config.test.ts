@@ -258,6 +258,18 @@ describe("resolveMatrixMonitorConfig", () => {
         inputs: ["#ops:example.org"],
       }),
     );
+    expect(runtime.log).toHaveBeenCalledWith("matrix dm allowlist unresolved: Alice");
+    expect(runtime.log).toHaveBeenCalledWith(
+      "matrix dm allowlist entries must be full Matrix IDs (example: @user:server). Unresolved entries are ignored. To match Matrix display names, set channels.matrix.dangerouslyAllowNameMatching=true.",
+    );
+    expect(runtime.log).toHaveBeenCalledWith("matrix group allowlist unresolved: Carol");
+    expect(runtime.log).toHaveBeenCalledWith(
+      "matrix group allowlist entries must be full Matrix IDs (example: @user:server). Unresolved entries are ignored. To match Matrix display names, set channels.matrix.dangerouslyAllowNameMatching=true.",
+    );
+    expect(runtime.log).toHaveBeenCalledWith("matrix room users unresolved: Frank");
+    expect(runtime.log).toHaveBeenCalledWith(
+      "matrix room users entries must be full Matrix IDs (example: @user:server). Unresolved entries are ignored. To match Matrix display names, set channels.matrix.dangerouslyAllowNameMatching=true.",
+    );
   });
 
   it("does not resolve mutable live allowlist entries by default", async () => {

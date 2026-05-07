@@ -163,11 +163,35 @@ function resolveStableMatrixMonitorUserEntries(entries: Array<string | number>) 
   return buildAllowlistResolutionSummary(directMatches);
 }
 
-function resolveStableMatrixMonitorUserAllowlist(allowList: string[]): MatrixResolvedUserAllowlist {
+function logStableMatrixAllowlistUnresolved(params: {
+  label: string;
+  unresolved: string[];
+  runtime: RuntimeEnv;
+}): void {
+  if (params.unresolved.length === 0) {
+    return;
+  }
+  summarizeMapping(params.label, [], params.unresolved, params.runtime);
+  params.runtime.log?.(
+    `${params.label} entries must be full Matrix IDs (example: @user:server). Unresolved entries are ignored. To match Matrix display names, set channels.matrix.dangerouslyAllowNameMatching=true.`,
+  );
+}
+
+function resolveStableMatrixMonitorUserAllowlist(params: {
+  allowList: string[];
+  label: string;
+  runtime: RuntimeEnv;
+}): MatrixResolvedUserAllowlist {
+  const allowList = params.allowList;
   const resolution = resolveStableMatrixMonitorUserEntries(allowList);
   const canonicalized = canonicalizeAllowlistWithResolvedIds({
     existing: allowList,
     resolvedMap: resolution.resolvedMap,
+  });
+  logStableMatrixAllowlistUnresolved({
+    label: params.label,
+    unresolved: resolution.unresolved,
+    runtime: params.runtime,
   });
 
   return {
@@ -253,7 +277,11 @@ async function resolveMatrixMonitorUserAllowlist(params: {
       accountId: params.accountId,
     })
   ) {
-    return resolveStableMatrixMonitorUserAllowlist(allowList);
+    return resolveStableMatrixMonitorUserAllowlist({
+      allowList,
+      label: params.label,
+      runtime: params.runtime,
+    });
   }
 
   const resolution = await resolveMatrixMonitorUserEntries({
@@ -448,6 +476,11 @@ async function resolveMatrixMonitorRoomsConfig(params: {
   }
   if (!allowNameMatching) {
     const resolution = resolveStableMatrixMonitorUserEntries(Array.from(roomUsers));
+    logStableMatrixAllowlistUnresolved({
+      label: "matrix room users",
+      unresolved: resolution.unresolved,
+      runtime: params.runtime,
+    });
     const patched = patchAllowlistUsersInConfigEntries({
       entries: nextRooms,
       resolvedMap: resolution.resolvedMap,
