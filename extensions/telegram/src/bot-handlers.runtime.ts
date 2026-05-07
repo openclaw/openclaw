@@ -717,8 +717,8 @@ export const registerTelegramHandlers = ({
     const groupAllowContext =
       params.groupAllowContext ??
       (await resolveTelegramGroupAllowFromContext({
-        chatId: params.chatId,
         cfg,
+        chatId: params.chatId,
         accountId,
         senderId: params.senderId,
         isGroup: params.isGroup,

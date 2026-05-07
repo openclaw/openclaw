@@ -16,11 +16,28 @@ function hasNodeCapabilityRoute(route: PluginHttpRouteEntry): route is PluginNod
   return Boolean(route.nodeCapability?.surface?.trim());
 }
 
+function resolvePluginNodeCapabilityRouteSurface(
+  route: PluginNodeCapabilityRoute,
+): PluginNodeCapabilitySurface {
+  const surface = route.nodeCapability.surface.trim();
+  const owner = route.pluginId?.trim() || route.source?.trim();
+  return {
+    ...route.nodeCapability,
+    surface,
+    ...(owner ? { scopeKey: `${owner}:${surface}` } : {}),
+  };
+}
+
 export function findMatchingPluginNodeCapabilityRoutes(
   registry: PluginRegistry,
   context: PluginRoutePathContext,
 ): PluginNodeCapabilityRoute[] {
-  return findMatchingPluginHttpRoutes(registry, context).filter(hasNodeCapabilityRoute);
+  return findMatchingPluginHttpRoutes(registry, context)
+    .filter(hasNodeCapabilityRoute)
+    .map((route) => ({
+      ...route,
+      nodeCapability: resolvePluginNodeCapabilityRouteSurface(route),
+    }));
 }
 
 export function findMatchingPluginNodeCapabilityRoute(
@@ -41,7 +58,7 @@ export function listPluginNodeCapabilities(
   for (const route of registry.httpRoutes ?? []) {
     const surface = route.nodeCapability?.surface?.trim();
     if (surface) {
-      const next = { ...route.nodeCapability, surface };
+      const next = resolvePluginNodeCapabilityRouteSurface(route as PluginNodeCapabilityRoute);
       const existing = surfaces.get(surface);
       if (!existing || resolveTtlMs(next) < resolveTtlMs(existing)) {
         surfaces.set(surface, next);

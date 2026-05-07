@@ -177,6 +177,36 @@ describe("loadWebMedia", () => {
     expect(result.buffer.length).toBeGreaterThan(0);
   });
 
+  it("keeps trying hosted media resolvers after one throws", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.hostedMediaResolvers = [
+      {
+        pluginId: "broken",
+        resolver: () => {
+          throw new Error("resolver failed");
+        },
+        source: "test",
+      },
+      {
+        pluginId: "canvas",
+        resolver: (mediaUrl) =>
+          mediaUrl === `${CANVAS_HOST_PATH}/documents/cv_test/collection.media/tiny.png`
+            ? canvasPngFile
+            : null,
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    const result = await loadWebMedia(
+      `${CANVAS_HOST_PATH}/documents/cv_test/collection.media/tiny.png`,
+      { maxBytes: 1024 * 1024 },
+    );
+
+    expect(result.kind).toBe("image");
+    expect(result.buffer.length).toBeGreaterThan(0);
+  });
+
   it("includes resize failure details when image optimization cannot produce a JPEG", async () => {
     await expect(optimizeImageToJpeg(Buffer.from("not an image"), 8)).rejects.toThrow(
       /Failed to optimize image: .+/,

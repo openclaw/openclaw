@@ -48,6 +48,11 @@ function createPluginRouteRuntimeClient(
   };
 }
 
+function writeUpgradeUnauthorized(socket: Duplex) {
+  socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+  socket.destroy();
+}
+
 export type PluginRouteDispatchContext = {
   gatewayAuthSatisfied?: boolean;
   gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
@@ -189,7 +194,8 @@ export function createGatewayPluginUpgradeHandler(params: {
     const requiresGatewayAuth = matchedPluginRoutesRequireGatewayAuth(matchedRoutes);
     if (requiresGatewayAuth && dispatchContext?.gatewayAuthSatisfied !== true) {
       log.warn(`plugin http upgrade blocked without gateway auth (${pathContext.canonicalPath})`);
-      return false;
+      writeUpgradeUnauthorized(socket);
+      return true;
     }
     const gatewayRequestAuth = dispatchContext?.gatewayRequestAuth;
     const gatewayRequestOperatorScopes = dispatchContext?.gatewayRequestOperatorScopes;
@@ -203,7 +209,8 @@ export function createGatewayPluginUpgradeHandler(params: {
           log.warn(
             `plugin http upgrade blocked without caller auth context (${pathContext.canonicalPath})`,
           );
-          return false;
+          writeUpgradeUnauthorized(socket);
+          return true;
         }
         continue;
       }
@@ -211,7 +218,8 @@ export function createGatewayPluginUpgradeHandler(params: {
         log.warn(
           `plugin http upgrade blocked without caller scope context (${pathContext.canonicalPath})`,
         );
-        return false;
+        writeUpgradeUnauthorized(socket);
+        return true;
       }
     }
 

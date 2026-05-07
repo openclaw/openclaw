@@ -107,6 +107,10 @@ function expectedBuildSpawn() {
   return [process.execPath, "scripts/tsdown-build.mjs", "--no-clean"];
 }
 
+function expectedBundledPluginAssetBuildSpawn() {
+  return [process.execPath, "scripts/bundled-plugin-assets.mjs", "--phase", "build"];
+}
+
 function statusCommandSpawn() {
   return [process.execPath, "openclaw.mjs", "status"];
 }
@@ -341,6 +345,7 @@ describe("run-node script", () => {
         );
         await expect(fs.readFile(indexPath, "utf-8")).resolves.toContain("sentinel");
         expect(nodeCalls).toEqual([
+          [process.execPath, "scripts/bundled-plugin-assets.mjs", "--phase", "build"],
           [process.execPath, "scripts/tsdown-build.mjs", "--no-clean"],
           [process.execPath, "openclaw.mjs", "--version"],
         ]);
@@ -379,7 +384,11 @@ describe("run-node script", () => {
       });
 
       expect(exitCode).toBe(0);
-      expect(spawnCalls).toEqual([expectedBuildSpawn(), statusCommandSpawn()]);
+      expect(spawnCalls).toEqual([
+        expectedBundledPluginAssetBuildSpawn(),
+        expectedBuildSpawn(),
+        statusCommandSpawn(),
+      ]);
 
       await expect(
         fs.readFile(resolvePath(tmp, "dist/plugin-sdk/root-alias.cjs"), "utf-8"),
@@ -736,6 +745,7 @@ describe("run-node script", () => {
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([
+        expectedBundledPluginAssetBuildSpawn(),
         expectedBuildSpawn(),
         [
           process.execPath,
@@ -1223,7 +1233,11 @@ describe("run-node script", () => {
       const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
 
       expect(exitCode).toBe(0);
-      expect(spawnCalls).toEqual([expectedBuildSpawn(), statusCommandSpawn()]);
+      expect(spawnCalls).toEqual([
+        expectedBundledPluginAssetBuildSpawn(),
+        expectedBuildSpawn(),
+        statusCommandSpawn(),
+      ]);
     });
   });
 
@@ -1244,7 +1258,11 @@ describe("run-node script", () => {
       const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
 
       expect(exitCode).toBe(0);
-      expect(spawnCalls).toEqual([expectedBuildSpawn(), statusCommandSpawn()]);
+      expect(spawnCalls).toEqual([
+        expectedBundledPluginAssetBuildSpawn(),
+        expectedBuildSpawn(),
+        statusCommandSpawn(),
+      ]);
     });
   });
 
@@ -1609,7 +1627,11 @@ describe("run-node script", () => {
       const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
 
       expect(exitCode).toBe(0);
-      expect(spawnCalls).toEqual([expectedBuildSpawn(), statusCommandSpawn()]);
+      expect(spawnCalls).toEqual([
+        expectedBundledPluginAssetBuildSpawn(),
+        expectedBuildSpawn(),
+        statusCommandSpawn(),
+      ]);
     });
   });
 

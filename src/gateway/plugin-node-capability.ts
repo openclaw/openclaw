@@ -9,6 +9,7 @@ export const DEFAULT_PLUGIN_NODE_CAPABILITY_TTL_MS = 10 * 60_000;
 export type PluginNodeCapabilitySurface = {
   surface: string;
   ttlMs?: number;
+  scopeKey?: string;
 };
 
 export type PluginNodeCapabilityClient = {
@@ -54,6 +55,15 @@ function normalizeCapability(raw: string | null | undefined) {
 function normalizeSurface(raw: string | undefined) {
   const trimmed = raw?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function resolvePluginNodeCapabilityStorageKey(surface: PluginNodeCapabilitySurface) {
+  const normalizedSurface = normalizeSurface(surface.surface);
+  if (!normalizedSurface) {
+    return undefined;
+  }
+  const scopeKey = surface.scopeKey?.trim();
+  return scopeKey ? `${normalizedSurface}\0${scopeKey}` : normalizedSurface;
 }
 
 export function resolvePluginNodeCapabilityTtlMs(surface: PluginNodeCapabilitySurface) {
@@ -175,11 +185,12 @@ export function setClientPluginNodeCapability(params: {
   expiresAtMs: number;
 }) {
   const surface = normalizeSurface(params.surface.surface);
-  if (!surface) {
+  const storageKey = resolvePluginNodeCapabilityStorageKey(params.surface);
+  if (!surface || !storageKey) {
     return;
   }
   params.client.pluginNodeCapabilities ??= {};
-  params.client.pluginNodeCapabilities[surface] = {
+  params.client.pluginNodeCapabilities[storageKey] = {
     capability: params.capability,
     expiresAtMs: params.expiresAtMs,
   };
@@ -236,13 +247,14 @@ export function hasAuthorizedPluginNodeCapability(params: {
   nowMs?: number;
 }) {
   const surface = normalizeSurface(params.surface.surface);
-  if (!surface) {
+  const storageKey = resolvePluginNodeCapabilityStorageKey(params.surface);
+  if (!surface || !storageKey) {
     return false;
   }
   const nowMs = params.nowMs ?? Date.now();
   const ttlMs = resolvePluginNodeCapabilityTtlMs(params.surface);
   for (const client of params.clients) {
-    const entry = client.pluginNodeCapabilities?.[surface];
+    const entry = client.pluginNodeCapabilities?.[storageKey];
     if (!entry || entry.expiresAtMs <= nowMs) {
       continue;
     }

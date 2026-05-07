@@ -805,6 +805,7 @@ export function attachGatewayUpgradeHandler(opts: {
   httpServer: HttpServer;
   wss: WebSocketServer;
   handlePluginUpgrade?: PluginHttpUpgradeHandler;
+  shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
   resolvePluginNodeCapabilityRoute?: ResolvePluginNodeCapabilityRoute;
   clients: Set<GatewayWsClient>;
   preauthConnectionBudget: PreauthConnectionBudget;
@@ -819,6 +820,7 @@ export function attachGatewayUpgradeHandler(opts: {
     httpServer,
     wss,
     handlePluginUpgrade,
+    shouldEnforcePluginGatewayAuth,
     resolvePluginNodeCapabilityRoute,
     clients,
     preauthConnectionBudget,
@@ -865,9 +867,44 @@ export function attachGatewayUpgradeHandler(opts: {
         }
       }
       if (handlePluginUpgrade) {
+        let pluginGatewayAuthSatisfied = false;
+        let pluginGatewayRequestAuth: AuthorizedGatewayHttpRequest | undefined;
+        let pluginGatewayRequestOperatorScopes: string[] | undefined;
+        const enforcePluginGatewayAuth = (
+          shouldEnforcePluginGatewayAuth ?? shouldEnforceDefaultPluginGatewayAuth
+        )(pathContext);
+        if (
+          enforcePluginGatewayAuth &&
+          !(await getCachedPluginGatewayAuthBypassPaths(configSnapshot)).has(url.pathname)
+        ) {
+          const { checkGatewayHttpRequestAuth } = await getHttpAuthUtilsModule();
+          const authCheck = await checkGatewayHttpRequestAuth({
+            req,
+            auth: resolvedAuth,
+            trustedProxies,
+            allowRealIpFallback,
+            rateLimiter,
+            cfg: configSnapshot,
+          });
+          if (!authCheck.ok) {
+            writeUpgradeAuthFailure(socket, authCheck.authResult);
+            socket.destroy();
+            return;
+          }
+          pluginGatewayAuthSatisfied = true;
+          pluginGatewayRequestAuth = authCheck.requestAuth;
+          const { resolvePluginRouteRuntimeOperatorScopes } =
+            await getPluginRouteRuntimeScopesModule();
+          pluginGatewayRequestOperatorScopes = resolvePluginRouteRuntimeOperatorScopes(
+            req,
+            authCheck.requestAuth,
+          );
+        }
         if (
           await handlePluginUpgrade(req, socket, head, pathContext, {
-            gatewayAuthSatisfied: false,
+            gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
+            gatewayRequestAuth: pluginGatewayRequestAuth,
+            gatewayRequestOperatorScopes: pluginGatewayRequestOperatorScopes,
           })
         ) {
           return;
