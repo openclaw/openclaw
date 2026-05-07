@@ -67,6 +67,19 @@ describe("active-memory plugin", () => {
       },
     };
   };
+  const setMemorySlot = (memory: string) => {
+    const plugins = configFile.plugins as Record<string, unknown> | undefined;
+    configFile = {
+      ...configFile,
+      plugins: {
+        ...plugins,
+        slots: {
+          ...((plugins?.slots as Record<string, unknown> | undefined) ?? {}),
+          memory,
+        },
+      },
+    };
+  };
   const api: any = {
     get pluginConfig() {
       return pluginConfig;
@@ -1348,6 +1361,52 @@ describe("active-memory plugin", () => {
     expect(runParams?.prompt).not.toContain("If memory_recall is unavailable");
   });
 
+  it("uses memory_recall by default when the memory slot selects LanceDB", async () => {
+    setMemorySlot("memory-lancedb");
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "What did we decide about active memory?",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const runParams = runEmbeddedPiAgent.mock.calls.at(-1)?.[0];
+    expect(runParams?.toolsAllow).toEqual(["memory_recall"]);
+    expect(runParams?.prompt).toContain("Configured memory tools: memory_recall.");
+  });
+
+  it("keeps explicit custom memory tools authoritative when the memory slot selects LanceDB", async () => {
+    setMemorySlot("memory-lancedb");
+    api.pluginConfig = {
+      agents: ["main"],
+      toolsAllow: ["lcm_grep"],
+    };
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "What did we decide about active memory?",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const runParams = runEmbeddedPiAgent.mock.calls.at(-1)?.[0];
+    expect(runParams?.toolsAllow).toEqual(["lcm_grep"]);
+    expect(runParams?.prompt).toContain("Configured memory tools: lcm_grep.");
+  });
+
   it("drops wildcard group and core tools from custom memory tools", async () => {
     api.pluginConfig = {
       agents: ["main"],
@@ -1405,6 +1464,31 @@ describe("active-memory plugin", () => {
     const runParams = runEmbeddedPiAgent.mock.calls.at(-1)?.[0];
     expect(runParams?.toolsAllow).toEqual(["memory_search", "memory_get"]);
     expect(runParams?.prompt).toContain("Configured memory tools: memory_search, memory_get.");
+  });
+
+  it("falls back to LanceDB compat tools when custom memory tools only contain reserved entries", async () => {
+    setMemorySlot("memory-lancedb");
+    api.pluginConfig = {
+      agents: ["main"],
+      toolsAllow: ["*", "group:plugins", "read", "exec", "message", "web_search"],
+    };
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "What did we decide about active memory?",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const runParams = runEmbeddedPiAgent.mock.calls.at(-1)?.[0];
+    expect(runParams?.toolsAllow).toEqual(["memory_recall"]);
+    expect(runParams?.prompt).toContain("Configured memory tools: memory_recall.");
   });
 
   it("defaults prompt style by query mode when no promptStyle is configured", async () => {

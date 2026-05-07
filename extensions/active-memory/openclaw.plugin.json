@@ -139,7 +139,7 @@
     },
     "toolsAllow": {
       "label": "Allowed Memory Tools",
-      "help": "Advanced: tool names the blocking memory sub-agent may use. Defaults to memory_search and memory_get; configure this for non-core memory providers. Wildcards, group entries, and core agent tools are ignored."
+      "help": "Advanced: tool names the blocking memory sub-agent may use. Defaults to memory_search and memory_get, or memory_recall when plugins.slots.memory selects memory-lancedb; configure this for other non-core memory providers. Wildcards, group entries, and core agent tools are ignored."
     },
     "thinking": {
       "label": "Thinking Override",

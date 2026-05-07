@@ -43,6 +43,7 @@ const DEFAULT_TRANSCRIPT_DIR = "active-memory";
 const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
 const DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_search", "memory_get"] as const;
+const LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_recall"] as const;
 const MAX_ACTIVE_MEMORY_TOOLS_ALLOW = 32;
 const ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW = new Set([
   "*",
@@ -415,9 +416,9 @@ function normalizeChatIdList(value: unknown): string[] {
   return out;
 }
 
-function normalizeToolsAllow(value: unknown): string[] {
+function normalizeConfiguredToolsAllow(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
-    return [...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW];
+    return undefined;
   }
   const seen = new Set<string>();
   const out: string[] = [];
@@ -435,12 +436,24 @@ function normalizeToolsAllow(value: unknown): string[] {
       break;
     }
   }
-  return out.length > 0 ? out : [...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW];
+  return out.length > 0 ? out : undefined;
 }
 
 function isReservedActiveMemoryToolsAllowEntry(value: string): boolean {
   const normalized = value.trim().toLowerCase();
   return normalized.startsWith("group:") || ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW.has(normalized);
+}
+
+function resolveDefaultToolsAllow(cfg: OpenClawConfig | undefined): string[] {
+  return cfg?.plugins?.slots?.memory === "memory-lancedb"
+    ? [...LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW]
+    : [...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW];
+}
+
+function resolveToolsAllow(params: { pluginToolsAllow: unknown; cfg?: OpenClawConfig }): string[] {
+  return (
+    normalizeConfiguredToolsAllow(params.pluginToolsAllow) ?? resolveDefaultToolsAllow(params.cfg)
+  );
 }
 
 function normalizePromptConfigText(value: unknown): string | undefined {
@@ -830,7 +843,10 @@ function requiresAdminToMutateActiveMemoryGlobal(gatewayClientScopes?: readonly 
 const ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT =
   "⚠️ /active-memory global enable/disable changes require operator.admin for gateway clients.";
 
-function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPluginConfig {
+function normalizePluginConfig(
+  pluginConfig: unknown,
+  cfg?: OpenClawConfig,
+): ResolvedActiveRecallPluginConfig {
   const raw = (
     pluginConfig && typeof pluginConfig === "object" ? pluginConfig : {}
   ) as ActiveRecallPluginConfig;
@@ -858,7 +874,7 @@ function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPlugi
     deniedChatIds: normalizeChatIdList(raw.deniedChatIds),
     thinking: resolveThinkingLevel(raw.thinking),
     promptStyle: resolvePromptStyle(raw.promptStyle, raw.queryMode),
-    toolsAllow: normalizeToolsAllow(raw.toolsAllow),
+    toolsAllow: resolveToolsAllow({ pluginToolsAllow: raw.toolsAllow, cfg }),
     promptOverride: normalizePromptConfigText(raw.promptOverride),
     promptAppend: normalizePromptConfigText(raw.promptAppend),
     timeoutMs: clampInt(
@@ -2827,7 +2843,17 @@ export default definePluginEntry({
   name: "Active Memory",
   description: "Proactively surfaces relevant memory before eligible conversational replies.",
   register(api: OpenClawPluginApi) {
-    let config = normalizePluginConfig(api.pluginConfig);
+    const readCurrentConfig = (): OpenClawConfig | undefined => {
+      try {
+        return (
+          (api.runtime.config?.current?.() as OpenClawConfig | undefined) ??
+          (api.config as OpenClawConfig | undefined)
+        );
+      } catch {
+        return api.config as OpenClawConfig | undefined;
+      }
+    };
+    let config = normalizePluginConfig(api.pluginConfig, readCurrentConfig());
     const warnDeprecatedModelFallbackPolicy = (pluginConfig: unknown) => {
       if (hasDeprecatedModelFallbackPolicy(pluginConfig)) {
         // Wording matters here: the previous text ("set config.modelFallback
@@ -2855,7 +2881,7 @@ export default definePluginEntry({
         "active-memory",
         api.pluginConfig as Record<string, unknown>,
       );
-      config = normalizePluginConfig(livePluginConfig ?? { enabled: false });
+      config = normalizePluginConfig(livePluginConfig ?? { enabled: false }, readCurrentConfig());
       if (livePluginConfig) {
         warnDeprecatedModelFallbackPolicy(livePluginConfig);
       }
