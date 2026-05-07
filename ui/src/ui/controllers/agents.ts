@@ -68,7 +68,22 @@ export async function loadAgents(state: AgentsState) {
     if (res) {
       state.agentsList = res;
       const selected = state.agentsSelectedId;
-      if (!selected || !res.agents.some((entry) => entry.id === selected)) {
+      const known = res.agents.some((entry) => entry.id === selected);
+      if (selected && known) {
+        // 已有有效选中助手，保持不变
+        return;
+      }
+      // 尝试从 sessionKey 中恢复助手 ID
+      const sessionAgentId = state.sessionKey
+        ? resolveAgentIdFromSessionKey(state.sessionKey)
+        : null;
+      const sessionAgentKnown =
+        sessionAgentId && res.agents.some((entry) => entry.id === sessionAgentId);
+      if (sessionAgentKnown) {
+        // sessionKey 中的助手在列表中存在，恢复该助手选择
+        state.agentsSelectedId = sessionAgentId;
+      } else {
+        // 默认选择：defaultId 或第一个助手
         state.agentsSelectedId = res.defaultId ?? res.agents[0]?.id ?? null;
       }
     }
