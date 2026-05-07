@@ -157,7 +157,7 @@ Prefer sandboxed runs for untrusted inputs and risky tools. See
 </Warning>
 
 - Workspace and extra-dir skill discovery only accepts skill roots and `SKILL.md` files whose resolved realpath stays inside the configured root.
-- Gateway-backed skill dependency installs (`skills.install`, onboarding, and the Skills settings UI) run the built-in dangerous-code scanner before executing installer metadata. `critical` findings block by default unless the caller explicitly sets the dangerous override; suspicious findings still warn only.
+- Gateway-backed skill dependency installs (`skills.install`, onboarding, and the Skills settings UI) run the built-in dangerous-code scanner before executing installer metadata. `critical` findings block installation, and suspicious findings warn. This scanning cannot be bypassed over the gateway.
 - `openclaw skills install <slug>` is different — it downloads a ClawHub skill folder into the workspace and does not use the installer-metadata path above.
 - `skills.entries.*.env` and `skills.entries.*.apiKey` inject secrets into the **host** process for that agent turn (not the sandbox). Keep secrets out of prompts and logs.
 
