@@ -1,14 +1,17 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedMattermostAccount } from "./mattermost/accounts.js";
 
 /**
  * Resolve the trusted per-group `systemPrompt` for a Mattermost channel.
  *
- * Looks up `account.config.groups[<channelId>].systemPrompt` first, then falls
- * back to the wildcard `groups["*"].systemPrompt`. Returns `undefined` when no
- * prompt is configured or the value is empty / whitespace.
+ * Looks up `account.config.groups[<channelId>].systemPrompt` first; if the
+ * channel-id key is present at all (even with an empty / whitespace-only
+ * value), it suppresses the wildcard — operators can deliberately opt a
+ * specific channel out of any prompt by setting it to `""`. Otherwise falls
+ * back to `groups["*"].systemPrompt`.
  *
- * Mirrors the reference pattern used by IRC, Telegram, Slack, and WhatsApp.
+ * Mirrors the established WhatsApp / BlueBubbles convention
+ * (`extensions/whatsapp/src/system-prompt.ts`): `specific.systemPrompt != null`
+ * suppresses the wildcard, then `trim() || undefined` normalizes the value.
  */
 export function resolveMattermostGroupSystemPrompt(params: {
   account: ResolvedMattermostAccount;
@@ -18,9 +21,10 @@ export function resolveMattermostGroupSystemPrompt(params: {
   if (!groups) {
     return undefined;
   }
-  const exact = normalizeOptionalString(groups[params.channelId]?.systemPrompt);
-  if (exact) {
-    return exact;
+  const specific = groups[params.channelId];
+  if (specific != null && specific.systemPrompt != null) {
+    return specific.systemPrompt.trim() || undefined;
   }
-  return normalizeOptionalString(groups["*"]?.systemPrompt);
+  const wildcard = groups["*"]?.systemPrompt;
+  return wildcard != null ? wildcard.trim() || undefined : undefined;
 }

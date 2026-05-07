@@ -63,6 +63,17 @@ export type MattermostAccountConfig = {
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /** Per-channel configuration keyed by Mattermost channel id (or "*" wildcard default). */
+  groups?: Record<
+    string,
+    | {
+        /** Whether mentions are required to trigger the bot in this channel. */
+        requireMention?: boolean;
+        /** Trusted system prompt addition injected on every turn that handles a message in this channel. */
+        systemPrompt?: string;
+      }
+    | undefined
+  >;
   /**
    * Controls whether channel and group replies are sent as thread replies.
    * - "off" (default): only thread-reply when incoming message is already a thread reply

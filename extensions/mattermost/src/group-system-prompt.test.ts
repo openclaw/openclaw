@@ -67,8 +67,11 @@ describe("resolveMattermostGroupSystemPrompt", () => {
     ).toBeUndefined();
   });
 
-  it("treats whitespace-only systemPrompt values as unset", () => {
+  it("treats whitespace-only systemPrompt values as unset (no fallback)", () => {
+    // Matches WhatsApp/BlueBubbles convention: a per-channel key set to a
+    // whitespace-only string suppresses the wildcard rather than falling through.
     const account = buildAccount({
+      "*": { systemPrompt: "wildcard" },
       "channel-blank": { systemPrompt: "   " },
     });
     expect(
@@ -76,13 +79,16 @@ describe("resolveMattermostGroupSystemPrompt", () => {
     ).toBeUndefined();
   });
 
-  it("falls through to wildcard when the per-channel prompt is empty", () => {
+  it("treats explicit empty string as deliberate suppression of the wildcard", () => {
+    // Operator opted this channel out of any prompt by setting `""`; do NOT fall
+    // through to the wildcard. Mirrors WhatsApp's resolveWhatsAppGroupSystemPrompt
+    // behavior (specific.systemPrompt != null guard before normalize).
     const account = buildAccount({
-      "*": { systemPrompt: "wildcard fallback" },
-      "channel-empty": { systemPrompt: "" },
+      "*": { systemPrompt: "wildcard" },
+      "channel-suppressed": { systemPrompt: "" },
     });
-    expect(resolveMattermostGroupSystemPrompt({ account, channelId: "channel-empty" })).toBe(
-      "wildcard fallback",
-    );
+    expect(
+      resolveMattermostGroupSystemPrompt({ account, channelId: "channel-suppressed" }),
+    ).toBeUndefined();
   });
 });
