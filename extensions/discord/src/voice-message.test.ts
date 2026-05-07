@@ -72,7 +72,8 @@ describe("ensureOggOpus", () => {
 
   it("re-encodes .ogg opus when sample rate is not 48kHz", async () => {
     runFfprobeMock.mockResolvedValueOnce("opus,24000\n");
-    runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
+    runFfmpegMock.mockImplementationOnce(async (...callArgs: unknown[]) => {
+      const args = callArgs[0] as string[];
       const outputPath = args.at(-1);
       if (typeof outputPath !== "string") {
         throw new Error("missing ffmpeg output path");
@@ -95,7 +96,8 @@ describe("ensureOggOpus", () => {
   });
 
   it("re-encodes non-ogg input with bounded ffmpeg execution", async () => {
-    runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
+    runFfmpegMock.mockImplementationOnce(async (...callArgs: unknown[]) => {
+      const args = callArgs[0] as string[];
       const outputPath = args.at(-1);
       if (typeof outputPath !== "string") {
         throw new Error("missing ffmpeg output path");
