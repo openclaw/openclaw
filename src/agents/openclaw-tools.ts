@@ -26,7 +26,6 @@ import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
-import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
@@ -324,7 +323,6 @@ export function createOpenClawTools(
     ...(embedded
       ? []
       : [
-          createCanvasTool({ config: options?.config }),
           nodesTool,
           createCronTool({
             agentSessionKey: options?.agentSessionKey,
@@ -420,10 +418,14 @@ export function createOpenClawTools(
     return tools;
   }
 
+  const existingToolNames = new Set<string>();
+  for (const tool of tools) {
+    existingToolNames.add(tool.name);
+  }
   const wrappedPluginTools = resolveOpenClawPluginToolsForOptions({
     options,
     resolvedConfig,
-    existingToolNames: new Set(tools.map((tool) => tool.name)),
+    existingToolNames,
   });
   options?.recordToolPrepStage?.("openclaw-tools:plugin-tools");
 

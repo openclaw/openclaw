@@ -9,6 +9,7 @@ import {
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "../../plugins/config-policy.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { hasKind } from "../../plugins/slots.js";
 import { isPathInsideWithRealpath } from "../../security/scan-paths.js";
@@ -26,13 +27,23 @@ export function resolvePluginSkillDirs(params: {
 }): string[] {
   const workspaceDir = (params.workspaceDir ?? "").trim();
   if (!workspaceDir) {
+    publishPluginSkills([], {
+      pluginSkillsDir: params.pluginSkillsDir,
+    });
     return [];
   }
-  const metadataSnapshot = loadPluginMetadataSnapshot({
-    workspaceDir,
-    config: params.config ?? {},
-    env: process.env,
-  });
+  const config = params.config ?? {};
+  const metadataSnapshot =
+    getCurrentPluginMetadataSnapshot({
+      config,
+      env: process.env,
+      workspaceDir,
+    }) ??
+    loadPluginMetadataSnapshot({
+      workspaceDir,
+      config,
+      env: process.env,
+    });
   const registry = metadataSnapshot.manifestRegistry;
   if (registry.plugins.length === 0) {
     publishPluginSkills([], {
@@ -41,10 +52,10 @@ export function resolvePluginSkillDirs(params: {
     return [];
   }
   const normalizedPlugins = normalizePluginsConfigWithResolver(
-    params.config?.plugins,
+    config.plugins,
     metadataSnapshot.normalizePluginId,
   );
-  const acpRuntimeAvailable = isAcpRuntimeSpawnAvailable({ config: params.config });
+  const acpRuntimeAvailable = isAcpRuntimeSpawnAvailable({ config });
   const memorySlot = normalizedPlugins.slots.memory;
   let selectedMemoryPluginId: string | null = null;
   const seen = new Set<string>();
@@ -58,7 +69,7 @@ export function resolvePluginSkillDirs(params: {
       id: record.id,
       origin: record.origin,
       config: normalizedPlugins,
-      rootConfig: params.config,
+      rootConfig: config,
       enabledByDefault: record.enabledByDefault,
     });
     if (!activationState.activated) {
