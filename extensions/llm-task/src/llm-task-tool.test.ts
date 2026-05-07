@@ -87,6 +87,7 @@ function fakeApi(overrides: any = {}) {
     runtime: {
       version: "test",
       agent: {
+        defaults: { provider: "openai-codex", model: "gpt-5.2" },
         runEmbeddedPiAgent,
         resolveThinkingPolicy,
         normalizeThinkingLevel,
@@ -189,6 +190,31 @@ describe("llm-task tool (json-only)", () => {
     });
     expect(call.provider).toBe("anthropic");
     expect(call.model).toBe("claude-4-sonnet");
+  });
+
+  it("resolves configured model aliases before dispatching the embedded run", async () => {
+    mockEmbeddedRunJson({ ok: true });
+    const tool = createLlmTaskTool(
+      fakeApi({
+        config: {
+          agents: {
+            defaults: {
+              workspace: "/tmp",
+              model: { primary: "anthropic/claude-sonnet-4-6" },
+              models: {
+                "google/gemini-3-flash-preview": { alias: "gemini-flash" },
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    await tool.execute("id", { prompt: "x", model: "gemini-flash" });
+
+    const call = (runEmbeddedPiAgent as any).mock.calls[0]?.[0];
+    expect(call.provider).toBe("google");
+    expect(call.model).toBe("gemini-3-flash-preview");
   });
 
   it("passes thinking override to embedded runner", async () => {
