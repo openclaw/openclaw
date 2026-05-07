@@ -559,12 +559,13 @@ function createCachedDescriptorPluginTool(params: {
       if (!candidates || candidates.length === 0) {
         throw new Error(`plugin tool runtime unavailable (${pluginId}): ${toolName}`);
       }
-      // First try to narrow candidates using names/declaredNames when available
+      // First try named candidates, then fall back to all candidates if no match
       const namedCandidates = candidates.filter(
         (candidate) => candidate.names.length > 0,
       );
-      const candidatesToTry = namedCandidates.length > 0 ? namedCandidates : candidates;
-      for (const candidate of candidatesToTry) {
+      // Try named candidates first
+      let matchedTool: AnyAgentTool | undefined;
+      for (const candidate of namedCandidates) {
         try {
           const resolved = candidate.factory(params.ctx);
           const listRaw: unknown[] = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];
@@ -575,14 +576,43 @@ function createCachedDescriptorPluginTool(params: {
             }
             const runtimeTool = toolRaw as AnyAgentTool;
             if (normalizeToolName(runtimeTool.name) === normalizeToolName(toolName)) {
-              return runtimeTool.execute(toolCallId, executeParams, signal, onUpdate);
+              matchedTool = runtimeTool;
+              break;
             }
           }
+          if (matchedTool) break;
         } catch {
-          // Continue to next candidate if this one fails
-          // This preserves the uncached path behavior where factory failures are isolated
+          // Continue to next candidate if factory/materialization fails
           continue;
         }
+      }
+      // If no match in named candidates, try all candidates (including unnamed)
+      if (!matchedTool) {
+        for (const candidate of candidates) {
+          try {
+            const resolved = candidate.factory(params.ctx);
+            const listRaw: unknown[] = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];
+            for (const toolRaw of listRaw) {
+              const malformedReason = describeMalformedPluginTool(toolRaw);
+              if (malformedReason) {
+                throw new Error(`plugin tool is malformed (${pluginId}): ${malformedReason}`);
+              }
+              const runtimeTool = toolRaw as AnyAgentTool;
+              if (normalizeToolName(runtimeTool.name) === normalizeToolName(toolName)) {
+                matchedTool = runtimeTool;
+                break;
+              }
+            }
+            if (matchedTool) break;
+          } catch {
+            // Continue to next candidate if factory/materialization fails
+            continue;
+          }
+        }
+      }
+      if (matchedTool) {
+        // Return outside try blocks to preserve tool execution errors
+        return matchedTool.execute(toolCallId, executeParams, signal, onUpdate);
       }
       throw new Error(`plugin tool runtime missing (${pluginId}): ${toolName}`);
     },
@@ -905,7 +935,7 @@ export function resolvePluginTools(params: {
   if (currentRuntimeConfigForDescriptorCache === undefined && params.context.getRuntimeConfig) {
     try {
       currentRuntimeConfigForDescriptorCache = params.context.getRuntimeConfig();
-    } catch {
+    } catch (error) {
       currentRuntimeConfigForDescriptorCache = null;
     }
   }
@@ -953,7 +983,7 @@ export function resolvePluginTools(params: {
         requiredPluginIds: runtimePluginIds,
         loadOptions,
       });
-    } catch {
+    } catch (error) {
       context.logger.error(
         `failed to cold-load plugin tool registry for plugin ids [${runtimePluginIds.join(", ")}]: ${error instanceof Error ? error.message : String(error)
         }`,
@@ -1254,3 +1284,5 @@ export function resolvePluginTools(params: {
 
   return tools;
 }
+
+
