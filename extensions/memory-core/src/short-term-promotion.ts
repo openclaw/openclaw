@@ -147,6 +147,7 @@ type ShortTermAuditIssue = {
     | "recall-store-invalid"
     | "recall-lock-stale"
     | "recall-lock-unreadable"
+    | "recall-temp-files-stale"
     | "qmd-index-missing"
     | "qmd-index-empty"
     | "qmd-collections-empty";
@@ -861,24 +862,25 @@ async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Pr
 
 function isShortTermStoreTempFile(fileName: string): boolean {
   return (
+    /^\.tmp-\d+-\d+-[0-9a-f]{12}$/i.test(fileName) ||
     /^short-term-recall\.json\.\d+\.\d+\.[0-9a-f-]+\.tmp$/i.test(fileName) ||
     /^phase-signals\.json\.\d+\.\d+\.[0-9a-f-]+\.tmp$/i.test(fileName)
   );
 }
 
-async function cleanupOrphanedShortTermStoreTempFiles(params: {
+async function listStaleShortTermStoreTempFiles(params: {
   workspaceDir: string;
   nowMs?: number;
-}): Promise<number> {
+}): Promise<string[]> {
   const artifactsDir = resolveShortTermArtifactsDir(params.workspaceDir);
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  let removed = 0;
+  const staleTempPaths: string[] = [];
   let entries: Dirent[];
   try {
     entries = await fs.readdir(artifactsDir, { withFileTypes: true });
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return 0;
+      return [];
     }
     throw err;
   }
@@ -897,6 +899,17 @@ async function cleanupOrphanedShortTermStoreTempFiles(params: {
     if (!stat || nowMs - stat.mtimeMs <= SHORT_TERM_STORE_TMP_STALE_MS) {
       continue;
     }
+    staleTempPaths.push(tempPath);
+  }
+  return staleTempPaths;
+}
+
+async function cleanupOrphanedShortTermStoreTempFiles(params: {
+  workspaceDir: string;
+  nowMs?: number;
+}): Promise<number> {
+  let removed = 0;
+  for (const tempPath of await listStaleShortTermStoreTempFiles(params)) {
     const removedFile = await fs
       .unlink(tempPath)
       .then(() => true)
@@ -1847,6 +1860,16 @@ export async function auditShortTermPromotionArtifacts(params: {
         fixable: false,
       });
     }
+  }
+
+  const staleTempFileCount = (await listStaleShortTermStoreTempFiles({ workspaceDir })).length;
+  if (staleTempFileCount > 0) {
+    issues.push({
+      severity: "warn",
+      code: "recall-temp-files-stale",
+      message: `Short-term recall artifacts include ${staleTempFileCount} stale orphaned temp file${staleTempFileCount === 1 ? "" : "s"}.`,
+      fixable: true,
+    });
   }
 
   let qmd: ShortTermAuditSummary["qmd"];

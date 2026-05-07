@@ -250,7 +250,8 @@ export async function maybeRepairMemoryRecallHealth(params: {
     const hasFixableRecallIssue = audit.issues.some((issue) => issue.fixable);
     if (hasFixableRecallIssue) {
       const approved = await params.prompter.confirmRuntimeRepair({
-        message: "Normalize memory recall artifacts and remove stale promotion locks?",
+        message:
+          "Normalize memory recall artifacts, remove stale promotion locks, and clean orphaned temp files?",
         initialValue: true,
       });
       if (approved) {

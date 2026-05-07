@@ -54,6 +54,7 @@ export type ShortTermAuditIssue = {
     | "recall-store-invalid"
     | "recall-lock-stale"
     | "recall-lock-unreadable"
+    | "recall-temp-files-stale"
     | "qmd-index-missing"
     | "qmd-index-empty"
     | "qmd-collections-empty";
