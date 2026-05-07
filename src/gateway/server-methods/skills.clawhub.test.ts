@@ -90,7 +90,7 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(result?.version).toBe("1.2.3");
   });
 
-  it("does not forward dangerous override via gateway (enforced false)", async () => {
+  it("tolerates legacy false-valued dangerous override via gateway", async () => {
     installSkillMock.mockResolvedValue({
       ok: true,
       message: "Installed",
@@ -105,7 +105,7 @@ describe("skills gateway handlers (clawhub)", () => {
       params: {
         name: "calendar",
         installId: "deps",
-        dangerouslyForceUnsafeInstall: true,
+        dangerouslyForceUnsafeInstall: false,
         timeoutMs: 120_000,
       },
       req: {} as never,
@@ -118,9 +118,40 @@ describe("skills gateway handlers (clawhub)", () => {
       },
     });
 
+    expect(installSkillMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/workspace",
+      skillName: "calendar",
+      installId: "deps",
+      dangerouslyForceUnsafeInstall: false,
+      timeoutMs: 120_000,
+      config: {},
+    });
+    expect(ok).toBe(true);
+    expect(error).toBeUndefined();
+
+    let trueOk: boolean | null = null;
+    let trueError: { code?: string; message?: string } | undefined;
+    installSkillMock.mockClear();
+    await skillsHandlers["skills.install"]({
+      params: {
+        name: "calendar",
+        installId: "deps",
+        dangerouslyForceUnsafeInstall: true,
+        timeoutMs: 120_000,
+      },
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: makeContext() as never,
+      respond: (success, _result, err) => {
+        trueOk = success;
+        trueError = err as { code?: string; message?: string } | undefined;
+      },
+    });
+
+    expect(trueOk).toBe(false);
     expect(installSkillMock).not.toHaveBeenCalled();
-    expect(ok).toBe(false);
-    expect((error as { message?: string })?.message).toContain("invalid skills.install params");
+    expect(trueError?.message).toContain("dangerouslyForceUnsafeInstall=true is not supported");
   });
 
   it("updates ClawHub skills through skills.update", async () => {
