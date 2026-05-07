@@ -17,3 +17,8 @@ export {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
 } from "../infra/outbound/payloads.js";
+export {
+  beginTelegramInboundTurnDeliveryCorrelation,
+  notifyTelegramInboundTurnOutboundSuccess,
+  type TelegramInboundTurnDeliveryEnd,
+} from "../infra/outbound/telegram-inbound-turn-delivery.js";

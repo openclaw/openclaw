@@ -28,6 +28,7 @@ import type {
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import {
+  beginTelegramInboundTurnDeliveryCorrelation,
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/outbound-runtime";
@@ -684,6 +685,14 @@ export const dispatchTelegramMessage = async ({
     ? ctxPayload.ReplyToQuoteEntities
     : undefined;
   const deliveryState = createLaneDeliveryStateTracker();
+  const endTelegramInboundTurnDeliveryCorrelation = beginTelegramInboundTurnDeliveryCorrelation(
+    ctxPayload.SessionKey,
+    {
+      outboundTo: String(chatId),
+      outboundAccountId: route.accountId,
+      markInboundTurnDelivered: () => deliveryState.markDelivered(),
+    },
+  );
   const clearGroupHistory = () => {
     if (isGroup && historyKey) {
       clearHistoryEntriesIfEnabled({
@@ -1354,6 +1363,7 @@ export const dispatchTelegramMessage = async ({
   } finally {
     dispatchWasSuperseded = isDispatchSuperseded();
     releaseReplyFence();
+    endTelegramInboundTurnDeliveryCorrelation();
   }
   if (dispatchWasSuperseded) {
     if (statusReactionController) {
