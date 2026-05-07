@@ -6,7 +6,8 @@ import { normalizeAssistantPhase } from "../shared/chat-message-content.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export const CODEX_CLI_PROVIDER = "codex-cli";
-const CODEX_SESSIONS_RELATIVE_DIR = path.join(".codex", "sessions");
+const DEFAULT_CODEX_HOME_RELATIVE_DIR = ".codex";
+const CODEX_SESSIONS_DIR = "sessions";
 const codexCliSessionPathCache = new Map<string, string>();
 const DEFAULT_MAX_CODEX_CLI_SESSION_PATH_CACHE_ENTRIES = 256;
 let maxCodexCliSessionPathCacheEntries = DEFAULT_MAX_CODEX_CLI_SESSION_PATH_CACHE_ENTRIES;
@@ -37,8 +38,26 @@ function resolveHistoryHomeDir(homeDir?: string): string {
   return normalizeOptionalString(homeDir) || process.env.HOME || os.homedir();
 }
 
+function resolveMaybeHomeRelativePath(value: string, homeDir?: string): string {
+  if (value === "~") {
+    return resolveHistoryHomeDir(homeDir);
+  }
+  if (value.startsWith("~/")) {
+    return path.join(resolveHistoryHomeDir(homeDir), value.slice(2));
+  }
+  return path.resolve(value);
+}
+
+function resolveCodexHomeDir(homeDir?: string): string {
+  const configuredCodexHome = normalizeOptionalString(process.env.CODEX_HOME);
+  if (configuredCodexHome) {
+    return resolveMaybeHomeRelativePath(configuredCodexHome, homeDir);
+  }
+  return path.join(resolveHistoryHomeDir(homeDir), DEFAULT_CODEX_HOME_RELATIVE_DIR);
+}
+
 function resolveCodexSessionsDir(homeDir?: string): string {
-  return path.join(resolveHistoryHomeDir(homeDir), CODEX_SESSIONS_RELATIVE_DIR);
+  return path.join(resolveCodexHomeDir(homeDir), CODEX_SESSIONS_DIR);
 }
 
 export function resolveCodexCliBindingSessionId(
