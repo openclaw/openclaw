@@ -63,7 +63,7 @@ describe("Codex plugin thread config", () => {
         "google-calendar-app": {
           enabled: true,
           destructive_enabled: true,
-          open_world_enabled: false,
+          open_world_enabled: true,
           default_tools_approval_mode: "prompt",
         },
       },
@@ -99,6 +99,7 @@ describe("Codex plugin thread config", () => {
     expect(disabledApps?.["google-calendar-app"]).toMatchObject({
       enabled: true,
       destructive_enabled: false,
+      open_world_enabled: true,
     });
     expect(disabledApps?.["google-calendar-app"]).not.toHaveProperty("default_tools_enabled");
     expect(disabledApps?.["google-calendar-app"]).not.toHaveProperty("tools");
@@ -251,7 +252,7 @@ describe("Codex plugin thread config", () => {
         "google-calendar-app": {
           enabled: true,
           destructive_enabled: false,
-          open_world_enabled: false,
+          open_world_enabled: true,
           default_tools_approval_mode: "prompt",
         },
       },
@@ -382,7 +383,7 @@ describe("Codex plugin thread config", () => {
       "google-calendar-app": {
         enabled: true,
         destructive_enabled: false,
-        open_world_enabled: false,
+        open_world_enabled: true,
       },
     });
     expect(config.policyContext.apps["google-calendar-app"]).toMatchObject({
@@ -569,7 +570,7 @@ describe("Codex plugin thread config", () => {
     expect(apps?.["github-app"]).toEqual({
       enabled: true,
       destructive_enabled: false,
-      open_world_enabled: false,
+      open_world_enabled: true,
       default_tools_approval_mode: "prompt",
     });
     expect(apps?.["github-app"]).not.toHaveProperty("tools");

@@ -395,7 +395,7 @@ function createPluginAppConfigPatch() {
       "google-calendar-app": {
         enabled: true,
         destructive_enabled: true,
-        open_world_enabled: false,
+        open_world_enabled: true,
         default_tools_approval_mode: "prompt",
       },
     },
@@ -427,7 +427,7 @@ function createTwoPluginAppConfigPatch() {
       "gmail-app": {
         enabled: true,
         destructive_enabled: true,
-        open_world_enabled: false,
+        open_world_enabled: true,
         default_tools_approval_mode: "prompt",
       },
     },
@@ -461,7 +461,7 @@ function createTwoCalendarAppConfigPatch() {
       "google-calendar-secondary-app": {
         enabled: true,
         destructive_enabled: true,
-        open_world_enabled: false,
+        open_world_enabled: true,
         default_tools_approval_mode: "prompt",
       },
     },
