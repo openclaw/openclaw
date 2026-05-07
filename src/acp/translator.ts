@@ -944,7 +944,6 @@ export class AcpGatewayAgent implements Agent {
       }
 
       const sendWithProvenanceFallback = async () => {
-        void this.recordUserPrompt(session, runId, params.prompt);
         try {
           await this.gateway.request(
             "chat.send",
@@ -955,6 +954,7 @@ export class AcpGatewayAgent implements Agent {
             },
             { timeoutMs: null },
           );
+          void this.recordUserPrompt(session, runId, params.prompt);
           const pending = this.getPendingPrompt(params.sessionId, runId);
           if (pending) {
             pending.sendAccepted = true;
@@ -965,6 +965,7 @@ export class AcpGatewayAgent implements Agent {
             isAdminScopeProvenanceRejection(err)
           ) {
             await this.gateway.request("chat.send", requestParams, { timeoutMs: null });
+            void this.recordUserPrompt(session, runId, params.prompt);
             const pending = this.getPendingPrompt(params.sessionId, runId);
             if (pending) {
               pending.sendAccepted = true;

@@ -206,4 +206,65 @@ describe("ACP translator event ledger replay", () => {
 
     firstSessionStore.clearAllSessionsForTest();
   });
+
+  it("does not replay prompts that Gateway rejected before accepting the send", async () => {
+    const eventLedger = createInMemoryAcpEventLedger();
+    const sessionStore = createInMemorySessionStore();
+    const connection = createAcpConnection();
+    const requestMock = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        throw new Error("send failed before acceptance");
+      }
+      return { ok: true };
+    });
+    const agent = new AcpGatewayAgent(
+      connection,
+      createAcpGateway(requestMock as GatewayClient["request"]),
+      {
+        eventLedger,
+        sessionStore,
+      },
+    );
+
+    const created = await agent.newSession(createNewSessionRequest());
+    const session = sessionStore.getSession(created.sessionId);
+    if (!session) {
+      throw new Error("Expected new ACP session to be stored");
+    }
+
+    await expect(
+      agent.prompt(createPromptRequest(created.sessionId, "Never accepted")),
+    ).rejects.toThrow("send failed before acceptance");
+
+    const replay = await eventLedger.readReplay({
+      sessionId: created.sessionId,
+      sessionKey: session.sessionKey,
+    });
+    expect(replay.events.map((event) => event.update.sessionUpdate)).not.toContain(
+      "user_message_chunk",
+    );
+
+    const loadConnection = createAcpConnection();
+    const loadRequestMock = vi.fn(async (method: string) => {
+      if (method === "sessions.get") {
+        throw new Error("ledger replay should not call sessions.get");
+      }
+      return { ok: true };
+    });
+    const loadAgent = new AcpGatewayAgent(
+      loadConnection,
+      createAcpGateway(loadRequestMock as GatewayClient["request"]),
+      {
+        eventLedger,
+        sessionStore: createInMemorySessionStore(),
+      },
+    );
+
+    await loadAgent.loadSession(createLoadSessionRequest(created.sessionId));
+
+    const replayedUpdates = loadConnection.__sessionUpdateMock.mock.calls.map(
+      (call) => call[0]?.update?.sessionUpdate,
+    );
+    expect(replayedUpdates).not.toContain("user_message_chunk");
+  });
 });
