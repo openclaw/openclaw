@@ -7,6 +7,7 @@ import {
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { CodexAppServerApprovalPolicy, CodexAppServerSandboxMode } from "./config.js";
+import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
 import type { CodexServiceTier } from "./protocol.js";
 
 const CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER = "openai-codex";
@@ -34,6 +35,9 @@ export type CodexAppServerThreadBinding = {
   sandbox?: CodexAppServerSandboxMode;
   serviceTier?: CodexServiceTier;
   dynamicToolsFingerprint?: string;
+  pluginAppsFingerprint?: string;
+  pluginAppsInputFingerprint?: string;
+  pluginAppPolicyContext?: PluginAppPolicyContext;
   createdAt: string;
   updatedAt: string;
 };
@@ -83,6 +87,13 @@ export async function readCodexAppServerBinding(
         typeof parsed.dynamicToolsFingerprint === "string"
           ? parsed.dynamicToolsFingerprint
           : undefined,
+      pluginAppsFingerprint:
+        typeof parsed.pluginAppsFingerprint === "string" ? parsed.pluginAppsFingerprint : undefined,
+      pluginAppsInputFingerprint:
+        typeof parsed.pluginAppsInputFingerprint === "string"
+          ? parsed.pluginAppsInputFingerprint
+          : undefined,
+      pluginAppPolicyContext: readPluginAppPolicyContext(parsed.pluginAppPolicyContext),
       createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : new Date().toISOString(),
       updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
     };
@@ -119,6 +130,9 @@ export async function writeCodexAppServerBinding(
     sandbox: binding.sandbox,
     serviceTier: binding.serviceTier,
     dynamicToolsFingerprint: binding.dynamicToolsFingerprint,
+    pluginAppsFingerprint: binding.pluginAppsFingerprint,
+    pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
+    pluginAppPolicyContext: binding.pluginAppPolicyContext,
     createdAt: binding.createdAt ?? now,
     updatedAt: now,
   };
@@ -126,6 +140,50 @@ export async function writeCodexAppServerBinding(
     resolveCodexAppServerBindingPath(sessionFile),
     `${JSON.stringify(payload, null, 2)}\n`,
   );
+}
+
+function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.fingerprint !== "string") {
+    return undefined;
+  }
+  const apps = record.apps;
+  if (!apps || typeof apps !== "object" || Array.isArray(apps)) {
+    return undefined;
+  }
+  const parsedApps: PluginAppPolicyContext["apps"] = {};
+  for (const [appId, rawEntry] of Object.entries(apps)) {
+    if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+      return undefined;
+    }
+    const entry = rawEntry as Record<string, unknown>;
+    if (
+      typeof entry.appId !== "string" ||
+      typeof entry.configKey !== "string" ||
+      typeof entry.marketplaceName !== "string" ||
+      typeof entry.pluginName !== "string" ||
+      typeof entry.allowDestructiveActions !== "boolean" ||
+      !Array.isArray(entry.mcpServerNames) ||
+      entry.mcpServerNames.some((serverName) => typeof serverName !== "string")
+    ) {
+      return undefined;
+    }
+    parsedApps[appId] = {
+      appId: entry.appId,
+      configKey: entry.configKey,
+      marketplaceName: entry.marketplaceName,
+      pluginName: entry.pluginName,
+      allowDestructiveActions: entry.allowDestructiveActions,
+      mcpServerNames: entry.mcpServerNames,
+    };
+  }
+  return {
+    fingerprint: record.fingerprint,
+    apps: parsedApps,
+  };
 }
 
 export async function clearCodexAppServerBinding(sessionFile: string): Promise<void> {

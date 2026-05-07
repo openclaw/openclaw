@@ -10,6 +10,11 @@ import { isModernCodexModel } from "../../provider.js";
 import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
 import {
+  isCodexPluginThreadBindingStale,
+  mergeCodexThreadConfigs,
+  type CodexPluginThreadConfig,
+} from "./plugin-thread-config.js";
+import {
   assertCodexThreadResumeResponse,
   assertCodexThreadStartResponse,
 } from "./protocol-validators.js";
@@ -32,6 +37,12 @@ import {
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
 
+export type CodexPluginThreadConfigProvider = {
+  enabled: boolean;
+  inputFingerprint?: string;
+  build: () => Promise<CodexPluginThreadConfig>;
+};
+
 export async function startOrResumeThread(params: {
   client: CodexAppServerClient;
   params: EmbeddedRunAttemptParams;
@@ -40,14 +51,32 @@ export async function startOrResumeThread(params: {
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
   config?: JsonObject;
+  pluginThreadConfig?: CodexPluginThreadConfigProvider;
 }): Promise<CodexAppServerThreadBinding> {
   const dynamicToolsFingerprint = fingerprintDynamicTools(params.dynamicTools);
-  const binding = await readCodexAppServerBinding(params.params.sessionFile, {
+  let binding = await readCodexAppServerBinding(params.params.sessionFile, {
     authProfileStore: params.params.authProfileStore,
     agentDir: params.params.agentDir,
     config: params.params.config,
   });
   let preserveExistingBinding = false;
+  if (binding?.threadId) {
+    if (
+      isCodexPluginThreadBindingStale({
+        codexPluginsEnabled: params.pluginThreadConfig?.enabled ?? false,
+        bindingFingerprint: binding.pluginAppsFingerprint,
+        bindingInputFingerprint: binding.pluginAppsInputFingerprint,
+        currentInputFingerprint: params.pluginThreadConfig?.inputFingerprint,
+        hasBindingPolicyContext: Boolean(binding.pluginAppPolicyContext),
+      })
+    ) {
+      embeddedAgentLog.debug("codex app-server plugin app config changed; starting a new thread", {
+        threadId: binding.threadId,
+      });
+      await clearCodexAppServerBinding(params.params.sessionFile);
+      binding = undefined;
+    }
+  }
   if (binding?.threadId) {
     // `/codex resume <thread>` writes a binding before the next turn can know
     // the dynamic tool catalog, so only invalidate fingerprints we actually have.
@@ -110,6 +139,9 @@ export async function startOrResumeThread(params: {
             model: params.params.modelId,
             modelProvider: response.modelProvider ?? fallbackModelProvider,
             dynamicToolsFingerprint,
+            pluginAppsFingerprint: binding.pluginAppsFingerprint,
+            pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
+            pluginAppPolicyContext: binding.pluginAppPolicyContext,
             createdAt: binding.createdAt,
           },
           {
@@ -126,6 +158,9 @@ export async function startOrResumeThread(params: {
           model: params.params.modelId,
           modelProvider: response.modelProvider ?? fallbackModelProvider,
           dynamicToolsFingerprint,
+          pluginAppsFingerprint: binding.pluginAppsFingerprint,
+          pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
+          pluginAppPolicyContext: binding.pluginAppPolicyContext,
         };
       } catch (error) {
         if (isCodexAppServerConnectionClosedError(error)) {
@@ -139,6 +174,10 @@ export async function startOrResumeThread(params: {
     }
   }
 
+  const pluginThreadConfig = params.pluginThreadConfig?.enabled
+    ? await params.pluginThreadConfig.build()
+    : undefined;
+  const config = mergeCodexThreadConfigs(params.config, pluginThreadConfig?.configPatch);
   const response = assertCodexThreadStartResponse(
     await params.client.request(
       "thread/start",
@@ -147,7 +186,7 @@ export async function startOrResumeThread(params: {
         dynamicTools: params.dynamicTools,
         appServer: params.appServer,
         developerInstructions: params.developerInstructions,
-        config: params.config,
+        config,
       }),
     ),
   );
@@ -169,6 +208,9 @@ export async function startOrResumeThread(params: {
         model: response.model ?? params.params.modelId,
         modelProvider: response.modelProvider ?? modelProvider,
         dynamicToolsFingerprint,
+        pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
+        pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
+        pluginAppPolicyContext: pluginThreadConfig?.policyContext,
         createdAt,
       },
       {
@@ -187,6 +229,9 @@ export async function startOrResumeThread(params: {
     model: response.model ?? params.params.modelId,
     modelProvider: response.modelProvider ?? modelProvider,
     dynamicToolsFingerprint,
+    pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
+    pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
+    pluginAppPolicyContext: pluginThreadConfig?.policyContext,
     createdAt,
     updatedAt: createdAt,
   };

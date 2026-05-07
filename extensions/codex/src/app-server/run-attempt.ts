@@ -41,9 +41,14 @@ import {
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import {
+  buildCodexAppInventoryCacheKey,
+  defaultCodexAppInventoryCache,
+} from "./app-inventory-cache.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import {
   refreshCodexAppServerAuthTokens,
+  resolveCodexAppServerHomeDir,
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileIdForAgent,
 } from "./auth-bridge.js";
@@ -76,6 +81,11 @@ import {
   buildCodexNativeHookRelayConfig,
   CODEX_NATIVE_HOOK_RELAY_EVENTS,
 } from "./native-hook-relay.js";
+import {
+  buildCodexPluginThreadConfig,
+  buildCodexPluginThreadConfigInputFingerprint,
+  shouldBuildCodexPluginThreadConfig,
+} from "./plugin-thread-config.js";
 import {
   assertCodexTurnStartResponse,
   readCodexDynamicToolCallParams,
@@ -356,6 +366,26 @@ function toCodexTextInput(text: string): CodexUserInput {
   return { type: "text", text, text_elements: [] };
 }
 
+function resolveCodexPluginAppCacheEndpoint(appServer: CodexAppServerRuntimeOptions): string {
+  return JSON.stringify({
+    transport: appServer.start.transport,
+    command: appServer.start.command,
+    args: appServer.start.args,
+    url: appServer.start.url ?? null,
+  });
+}
+
+function resolveCodexPluginAppCacheCodexHome(
+  appServer: CodexAppServerRuntimeOptions,
+  agentDir: string,
+): string | undefined {
+  const configuredCodexHome = appServer.start.env?.CODEX_HOME?.trim();
+  if (configuredCodexHome) {
+    return configuredCodexHome;
+  }
+  return appServer.start.transport === "stdio" ? resolveCodexAppServerHomeDir(agentDir) : undefined;
+}
+
 export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: {
@@ -604,6 +634,19 @@ export async function runCodexAppServerAttempt(
         ? buildCodexNativeHookRelayDisabledConfig()
         : undefined;
     const threadConfig = nativeHookRelayConfig;
+    const pluginThreadConfigEnabled = shouldBuildCodexPluginThreadConfig(pluginConfig);
+    const pluginAppCacheKey = buildCodexAppInventoryCacheKey({
+      codexHome: resolveCodexPluginAppCacheCodexHome(appServer, agentDir),
+      endpoint: resolveCodexPluginAppCacheEndpoint(appServer),
+      authProfileId: startupAuthProfileId,
+    });
+    const pluginThreadConfigInputFingerprint = pluginThreadConfigEnabled
+      ? buildCodexPluginThreadConfigInputFingerprint({
+          pluginConfig,
+          appCache: defaultCodexAppInventoryCache,
+          appCacheKey: pluginAppCacheKey,
+        })
+      : undefined;
     ({ client, thread } = await withCodexStartupTimeout({
       timeoutMs: params.timeoutMs,
       timeoutFloorMs: options.startupTimeoutFloorMs,
@@ -633,6 +676,23 @@ export async function runCodexAppServerAttempt(
             appServer,
             developerInstructions: promptBuild.developerInstructions,
             config: threadConfig,
+            pluginThreadConfig: pluginThreadConfigEnabled
+              ? {
+                  enabled: true,
+                  inputFingerprint: pluginThreadConfigInputFingerprint,
+                  build: () =>
+                    buildCodexPluginThreadConfig({
+                      pluginConfig,
+                      request: (method, requestParams) =>
+                        startupClient.request(method, requestParams, {
+                          timeoutMs: appServer.requestTimeoutMs,
+                          signal: runAbortController.signal,
+                        }),
+                      appCache: defaultCodexAppInventoryCache,
+                      appCacheKey: pluginAppCacheKey,
+                    }),
+                }
+              : undefined,
           });
           return { client: startupClient, thread: startupThread };
         };

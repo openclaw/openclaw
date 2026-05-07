@@ -375,6 +375,42 @@ function createRuntimeDynamicTool(name: string) {
   } as never;
 }
 
+function createPluginAppConfigPatch() {
+  return {
+    apps: {
+      _default: {
+        enabled: false,
+        destructive_enabled: false,
+        open_world_enabled: false,
+      },
+      "google-calendar-app": {
+        enabled: true,
+        destructive_enabled: true,
+        open_world_enabled: false,
+        default_tools_enabled: true,
+        default_tools_approval_mode: "prompt",
+        tools: null,
+      },
+    },
+  };
+}
+
+function createPluginAppPolicyContext() {
+  return {
+    fingerprint: "plugin-policy-1",
+    apps: {
+      "google-calendar-app": {
+        appId: "google-calendar-app",
+        configKey: "google-calendar",
+        marketplaceName: "openai-curated",
+        pluginName: "google-calendar",
+        allowDestructiveActions: false,
+        mcpServerNames: ["google-calendar"],
+      },
+    },
+  };
+}
+
 type AppServerRequestHandler = (request: {
   id: string | number;
   method: string;
@@ -2786,6 +2822,182 @@ describe("runCodexAppServerAttempt", () => {
         }),
       ],
     ]);
+  });
+
+  it("merges native hook relay config with plugin app config when starting a thread", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-plugins");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const pluginAppPolicyContext = createPluginAppPolicyContext();
+    const buildPluginThreadConfig = vi.fn(async () => ({
+      enabled: true,
+      configPatch: createPluginAppConfigPatch(),
+      fingerprint: "plugin-apps-config-1",
+      inputFingerprint: "plugin-apps-input-1",
+      policyContext: pluginAppPolicyContext,
+      diagnostics: [],
+    }));
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      config: { "features.codex_hooks": true, hooks: { PreToolUse: [] } },
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-apps-input-1",
+        build: buildPluginThreadConfig,
+      },
+    });
+
+    expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls).toEqual([
+      [
+        "thread/start",
+        expect.objectContaining({
+          config: {
+            "features.codex_hooks": true,
+            hooks: { PreToolUse: [] },
+            ...createPluginAppConfigPatch(),
+          },
+        }),
+      ],
+    ]);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-plugins",
+      pluginAppsFingerprint: "plugin-apps-config-1",
+      pluginAppsInputFingerprint: "plugin-apps-input-1",
+      pluginAppPolicyContext,
+    });
+  });
+
+  it("reuses compatible plugin app bindings without rebuilding or resending app config", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult("thread-plugins");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const pluginAppPolicyContext = createPluginAppPolicyContext();
+    const buildPluginThreadConfig = vi.fn(async () => ({
+      enabled: true,
+      configPatch: createPluginAppConfigPatch(),
+      fingerprint: "plugin-apps-config-1",
+      inputFingerprint: "plugin-apps-input-1",
+      policyContext: pluginAppPolicyContext,
+      diagnostics: [],
+    }));
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      config: { "features.codex_hooks": true },
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-apps-input-1",
+        build: buildPluginThreadConfig,
+      },
+    });
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      config: { "features.codex_hooks": true },
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-apps-input-1",
+        build: async () => {
+          throw new Error("plugin thread config should not rebuild for compatible bindings");
+        },
+      },
+    });
+
+    expect(binding.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
+    expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls).toEqual([
+      [
+        "thread/start",
+        expect.objectContaining({
+          config: {
+            "features.codex_hooks": true,
+            ...createPluginAppConfigPatch(),
+          },
+        }),
+      ],
+      [
+        "thread/resume",
+        expect.objectContaining({
+          config: { "features.codex_hooks": true },
+        }),
+      ],
+    ]);
+  });
+
+  it("starts a new configured thread for legacy bindings missing plugin app metadata", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-plugins");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const pluginAppPolicyContext = createPluginAppPolicyContext();
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-apps-input-1",
+        build: async () => ({
+          enabled: true,
+          configPatch: createPluginAppConfigPatch(),
+          fingerprint: "plugin-apps-config-1",
+          inputFingerprint: "plugin-apps-input-1",
+          policyContext: pluginAppPolicyContext,
+          diagnostics: [],
+        }),
+      },
+    });
+
+    expect(request.mock.calls).toEqual([
+      [
+        "thread/start",
+        expect.objectContaining({
+          config: createPluginAppConfigPatch(),
+        }),
+      ],
+    ]);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-plugins",
+      pluginAppsFingerprint: "plugin-apps-config-1",
+      pluginAppPolicyContext,
+    });
   });
 
   it("starts a new Codex thread when dynamic tool schemas change", async () => {
