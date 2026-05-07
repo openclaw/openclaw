@@ -749,7 +749,7 @@ export function createAgentEventHandler({
 
     if (lifecyclePhase === "error") {
       clearBufferedChatState(clientRunId);
-      const skipChatErrorFinal = isChatSendRunActive(evt.runId) && !chatLink;
+      const skipChatErrorFinal = isChatSendRunActive(evt.runId);
       if (isAborted || lifecycleErrorRetryGraceMs <= 0) {
         finalizeLifecycleEvent(evt, { skipChatErrorFinal });
       } else {

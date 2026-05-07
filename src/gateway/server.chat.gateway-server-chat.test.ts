@@ -928,9 +928,17 @@ describe("gateway server chat", () => {
             };
           },
         ];
-        params.replyOptions?.onAgentRunStart?.(
-          params.replyOptions.runId ?? "idem-offline-thomas-auth-started",
-        );
+        const runId = params.replyOptions?.runId ?? "idem-offline-thomas-auth-started";
+        params.replyOptions?.onAgentRunStart?.(runId);
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          ts: Date.now(),
+          data: {
+            phase: "error",
+            error: "Your authentication token has been invalidated. Please try signing in again.",
+          },
+        });
         params.dispatcher.sendFinalReply({
           text: "Your authentication token has been invalidated. Please try signing in again.",
         });
@@ -951,6 +959,15 @@ describe("gateway server chat", () => {
           o.payload?.runId === "idem-offline-thomas-auth-started",
         8000,
       );
+      const errorPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "error" &&
+          o.payload?.runId === "idem-offline-thomas-auth-started",
+        1000,
+      ).catch(() => undefined);
 
       const res = await rpcReq(ws, "chat.send", {
         sessionKey: "main",
@@ -960,7 +977,9 @@ describe("gateway server chat", () => {
 
       expect(res.ok).toBe(true);
       const final = await finalPromise;
+      const error = await errorPromise;
       const text = extractFirstTextBlock(final.payload?.message);
+      expect(error).toBeUndefined();
       expect(text).toContain("free local Thomas mode");
       expect(text).toContain("Can we still talk?");
       expect(text).not.toContain("authentication token");
