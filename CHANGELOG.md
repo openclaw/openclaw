@@ -148,6 +148,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Feishu/Lark: keep topic-session replies, direct-message topic replies, typing reactions, message-tool sends, and subagent completion notices anchored to the active topic while preserving thread delivery for text, cards, and media.
 - Compute plugin callback authorization dynamically [AI]. (#78866) Thanks @pgondhi987.
 - fix(active-memory): require admin scope for global toggles [AI]. (#78863) Thanks @pgondhi987.
 - Honor owner enforcement for native commands [AI]. (#78864) Thanks @pgondhi987.

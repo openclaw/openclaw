@@ -44,6 +44,7 @@ export type FeishuMessageContext = {
   hasAnyMention?: boolean;
   rootId?: string;
   parentId?: string;
+  upperMessageId?: string;
   threadId?: string;
   content: string;
   contentType: string;

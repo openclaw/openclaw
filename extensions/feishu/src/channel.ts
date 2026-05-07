@@ -351,6 +351,52 @@ function areAnyFeishuReactionActionsEnabled(cfg: ClawdbotConfig): boolean {
   return false;
 }
 
+function normalizeFeishuToolContextMessageId(messageId: unknown): string | undefined {
+  if (typeof messageId === "number" && Number.isFinite(messageId)) {
+    return String(messageId);
+  }
+  if (typeof messageId === "string") {
+    const trimmed = messageId.trim();
+    return trimmed || undefined;
+  }
+  return undefined;
+}
+
+function isFeishuGroupTopicSessionKey(sessionKey: string | null | undefined): boolean {
+  if (typeof sessionKey !== "string" || !sessionKey.trim()) {
+    return false;
+  }
+  const parsed = parseFeishuConversationId({ conversationId: sessionKey });
+  return parsed?.scope === "group_topic" || parsed?.scope === "group_topic_sender";
+}
+
+function resolveFeishuReactionMessageId(ctx: {
+  params: Record<string, unknown>;
+  sessionKey?: string | null;
+  toolContext?: {
+    currentMessageId?: string | number | null;
+    currentThreadTs?: string | null;
+  } | null;
+}): string | undefined {
+  const explicitMessageId = resolveFeishuMessageId(ctx.params);
+  const currentMessageId = normalizeFeishuToolContextMessageId(ctx.toolContext?.currentMessageId);
+  if (!currentMessageId) {
+    return explicitMessageId;
+  }
+  if (!explicitMessageId) {
+    return currentMessageId;
+  }
+  if (!isFeishuGroupTopicSessionKey(ctx.sessionKey)) {
+    return explicitMessageId;
+  }
+
+  const currentThreadId = ctx.toolContext?.currentThreadTs?.trim();
+  if (explicitMessageId === currentThreadId || explicitMessageId.toLowerCase().startsWith("omt_")) {
+    return currentMessageId;
+  }
+  return explicitMessageId;
+}
+
 function isSupportedFeishuDirectConversationId(conversationId: string): boolean {
   const trimmed = conversationId.trim();
   if (!trimmed || trimmed.includes(":")) {
@@ -754,11 +800,22 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             if (!to) {
               throw new Error(`Feishu ${ctx.action} requires a target (to).`);
             }
+            const explicitReplyToMessageId = resolveFeishuMessageId(ctx.params);
+            const isGroupTopicSession = isFeishuGroupTopicSessionKey(ctx.sessionKey);
+            const topicAutoReplyToMessageId =
+              ctx.action === "send" && isGroupTopicSession
+                ? normalizeFeishuToolContextMessageId(ctx.toolContext?.currentMessageId)
+                : undefined;
             const replyToMessageId =
-              ctx.action === "thread-reply" ? resolveFeishuMessageId(ctx.params) : undefined;
+              ctx.action === "thread-reply"
+                ? explicitReplyToMessageId
+                : (explicitReplyToMessageId ?? topicAutoReplyToMessageId);
             if (ctx.action === "thread-reply" && !replyToMessageId) {
               throw new Error("Feishu thread-reply requires messageId.");
             }
+            const replyInThread =
+              ctx.action === "thread-reply" ||
+              (ctx.action === "send" && isGroupTopicSession && replyToMessageId !== undefined);
             const presentation = normalizeMessagePresentation(ctx.params.presentation);
             const text = readFirstString(ctx.params, ["text", "message"]);
             const mediaUrl = readFeishuMediaParam(ctx.params);
@@ -791,7 +848,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 card,
                 accountId: ctx.accountId ?? undefined,
                 replyToMessageId,
-                replyInThread: ctx.action === "thread-reply",
+                replyInThread,
               });
             } else if (mediaUrl) {
               result = await sendMedia!({
@@ -801,7 +858,8 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 mediaUrl,
                 accountId: ctx.accountId ?? undefined,
                 mediaLocalRoots: ctx.mediaLocalRoots,
-                replyToId: replyToMessageId,
+                replyToId: replyInThread ? undefined : replyToMessageId,
+                threadId: replyInThread ? replyToMessageId : undefined,
                 ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
               });
             } else {
@@ -811,7 +869,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 text: text!,
                 accountId: ctx.accountId ?? undefined,
                 replyToMessageId,
-                replyInThread: ctx.action === "thread-reply",
+                replyInThread,
               });
             }
             return jsonActionResult({
@@ -1075,7 +1133,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           }
 
           if (ctx.action === "react") {
-            const messageId = resolveFeishuMessageId(ctx.params);
+            const messageId = resolveFeishuReactionMessageId(ctx);
             if (!messageId) {
               throw new Error("Feishu reaction requires messageId.");
             }
@@ -1142,7 +1200,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           }
 
           if (ctx.action === "reactions") {
-            const messageId = resolveFeishuMessageId(ctx.params);
+            const messageId = resolveFeishuReactionMessageId(ctx);
             if (!messageId) {
               throw new Error("Feishu reactions lookup requires messageId.");
             }
