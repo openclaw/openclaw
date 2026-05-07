@@ -5,16 +5,25 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { buildModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  prepareImageModelFallbacks,
+  resolveModelSupportsVision,
+} from "../../auto-reply/reply/image-model-helpers.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../../config/model-input.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { streamSessionTranscriptLines } from "../../config/sessions/transcript-stream.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -2132,7 +2141,78 @@ export const chatHandlers: GatewayRequestHandlers = {
     const explicitOriginTargetsPlugin = explicitOriginTargetsPluginBinding(
       explicitOriginResult.value,
     );
+    let modelOverride: string | undefined;
+    let modelOverrideFallbacks: string[] | undefined;
+
     if (normalizedAttachments.length > 0) {
+      const modelRef = resolveSessionModelRef(cfg, entry, agentId);
+
+      // Image model override: switch to vision-capable model when images are attached
+      const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: modelRef.provider });
+      const imageModelConfig = cfg.agents?.defaults?.imageModel;
+      const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
+      const imageModelFallbacks = resolveAgentModelFallbackValues(imageModelConfig);
+      let parseProvider = modelRef.provider;
+      let parseModel = modelRef.model;
+      let imageModelProvider: string | undefined;
+
+      if (imageModelPrimary) {
+        modelOverride = imageModelPrimary;
+      } else if (imageModelFallbacks.length > 0) {
+        modelOverride = imageModelFallbacks[0];
+      }
+
+      if (modelOverride) {
+        const overrideRef = resolveModelRefFromString({
+          raw: modelOverride,
+          defaultProvider: modelRef.provider,
+          aliasIndex,
+        });
+        if (overrideRef) {
+          parseProvider = overrideRef.ref.provider;
+          parseModel = overrideRef.ref.model;
+          imageModelProvider = overrideRef.ref.provider;
+        } else {
+          // Alias resolution failed; use the raw modelOverride string as parseModel
+          // so that resolveModelSupportsVision can still match it against imageModelConfig.
+          parseModel = modelOverride;
+        }
+      }
+
+      if (imageModelFallbacks.length > 0) {
+        modelOverrideFallbacks = prepareImageModelFallbacks({
+          fallbacks: imageModelFallbacks,
+          cfg,
+          agentId,
+          aliasIndex,
+          defaultProvider: modelRef.provider,
+          defaultModel: modelRef.model,
+          imageModelProvider,
+        });
+      }
+
+      const imageModelSupportsImages =
+        modelOverride || imageModelFallbacks.length > 0
+          ? await resolveModelSupportsVision({
+              provider: parseProvider,
+              model: parseModel,
+              imageModelConfig,
+              defaultProvider: modelRef.provider,
+              cfg,
+              loadModelCatalog: () => context.loadGatewayModelCatalog(),
+            })
+          : await resolveGatewayModelSupportsImages({
+              loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+              provider: modelRef.provider,
+              model: modelRef.model,
+            });
+      // Bound plugin sessions own the real recipient model, so keep image
+      // attachments even when the parent OpenClaw session model is text-only.
+      const supportsImages =
+        imageModelSupportsImages ||
+        explicitOriginTargetsAcpSession(explicitOriginResult.value) ||
+        explicitOriginTargetsPlugin;
+      const routeImageOffloadsAsMediaPaths = !supportsImages;
       try {
         await measureDiagnosticsTimelineSpan(
           "gateway.chat_send.prepare_attachments",
@@ -2194,6 +2274,10 @@ export const chatHandlers: GatewayRequestHandlers = {
             },
           },
         );
+        if (parsedImages.length === 0 && offloadedRefs.length === 0) {
+          modelOverride = undefined;
+          modelOverrideFallbacks = undefined;
+        }
       } catch (err) {
         logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
         respond(
@@ -2548,6 +2632,8 @@ export const chatHandlers: GatewayRequestHandlers = {
               imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
               thinkingLevelOverride: p.thinking,
               fastModeOverride: p.fastMode,
+              modelOverride,
+              modelOverrideFallbacks,
               onAgentRunStart: (runId) => {
                 agentRunStarted = true;
                 if (!hasBeforeAgentRunGate) {

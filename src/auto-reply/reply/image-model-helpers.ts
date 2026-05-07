@@ -278,17 +278,6 @@ export function prepareImageModelFallbacks(params: PrepareImageModelFallbacksPar
     .filter((fb): fb is string => fb !== null);
 }
 
-/**
- * Parameters for resolving channel model vision support.
- */
-export type ResolveChannelModelSupportsVisionParams = {
-  channelModelOverride: { model: string } | undefined;
-  imageModelConfig: AgentModelConfig | undefined;
-  defaultProvider: string;
-  cfg: OpenClawConfig;
-  hasAppliedImageModelOverride: boolean;
-};
-
 export type ResolveModelSupportsVisionParams = {
   provider: string;
   model: string;
@@ -297,101 +286,6 @@ export type ResolveModelSupportsVisionParams = {
   cfg: OpenClawConfig;
   loadModelCatalog?: (params: { config: OpenClawConfig }) => Promise<ModelCatalogEntry[]>;
 };
-
-/**
- * Result of checking if channel model supports vision.
- */
-export type ResolveChannelModelSupportsVisionResult = {
-  channelModelIsVisionModel: boolean;
-  channelResolved?: {
-    provider: string;
-    model: string;
-  };
-};
-
-/**
- * Check if the channel model override is already a vision model.
- * This prevents unnecessary model switching when the channel model
- * already supports image input.
- *
- * Returns channelModelIsVisionModel=true if:
- * 1. The channel model matches the configured imageModel or fallbacks, OR
- * 2. The catalog indicates the channel model supports vision
- */
-export async function resolveChannelModelSupportsVision(
-  params: ResolveChannelModelSupportsVisionParams,
-): Promise<ResolveChannelModelSupportsVisionResult> {
-  const {
-    channelModelOverride,
-    imageModelConfig,
-    defaultProvider,
-    cfg,
-    hasAppliedImageModelOverride,
-  } = params;
-
-  if (!channelModelOverride || !hasAppliedImageModelOverride) {
-    return { channelModelIsVisionModel: false };
-  }
-
-  const {
-    findModelInCatalog,
-    modelSupportsVision,
-    loadModelCatalog: loadCatalogFn,
-  } = await import("../../agents/model-catalog.js");
-  const { resolveAgentModelFallbackValues, resolveAgentModelPrimaryValue } =
-    await import("../../config/model-input.js");
-
-  // Use the active default provider when building the alias index so that
-  // aliases defined on providerless model keys resolve correctly.
-  const channelAliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
-
-  // Resolve the channel model to get provider/model
-  const channelResolved = resolveModelRefFromString({
-    raw: channelModelOverride.model,
-    defaultProvider,
-    aliasIndex: channelAliasIndex,
-  });
-
-  if (!channelResolved) {
-    return { channelModelIsVisionModel: false };
-  }
-
-  // First, check if the channel model matches the configured imageModel or its fallbacks
-  const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
-  const fallbacks = resolveAgentModelFallbackValues(imageModelConfig);
-
-  // Process if either primary or fallbacks are configured (handles fallback-only configs)
-  if (imageModelPrimary || fallbacks.length > 0) {
-    const { keys: imageModelKeys } = collectImageModelKeys({
-      imageModelConfig,
-      aliasIndex: channelAliasIndex,
-      defaultProvider,
-    });
-
-    const channelKey = modelKey(channelResolved.ref.provider, channelResolved.ref.model);
-
-    if (imageModelKeys.has(channelKey)) {
-      return { channelModelIsVisionModel: true, channelResolved: channelResolved.ref };
-    }
-  }
-
-  // If not found in imageModel list, check catalog for vision capabilities
-  try {
-    const catalog = await loadCatalogFn({ config: cfg });
-    const catalogEntry = findModelInCatalog(
-      catalog,
-      channelResolved.ref.provider,
-      channelResolved.ref.model,
-    );
-    if (modelSupportsVision(catalogEntry)) {
-      return { channelModelIsVisionModel: true, channelResolved: channelResolved.ref };
-    }
-  } catch {
-    // Catalog lookup failed; fall back to text-only assumption
-  }
-
-  return { channelModelIsVisionModel: false, channelResolved: channelResolved.ref };
-}
 
 export async function resolveModelSupportsVision(
   params: ResolveModelSupportsVisionParams,
