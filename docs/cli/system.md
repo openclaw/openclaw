@@ -31,14 +31,20 @@ openclaw system presence
 
 ## `system event`
 
-Enqueue a system event on the **main** session. The next heartbeat will inject
-it as a `System:` line in the prompt. Use `--mode now` to trigger the heartbeat
-immediately; `next-heartbeat` waits for the next scheduled tick.
+Enqueue a system event on the **main** session by default. The next heartbeat
+will inject it as a `System:` line in the prompt. Use `--mode now` to trigger
+the heartbeat immediately; `next-heartbeat` waits for the next scheduled tick.
+
+Pass `--session-key` to target a specific session (for example to relay an
+async-task completion back to the channel that started it).
 
 Flags:
 
 - `--text <text>`: required system event text.
 - `--mode <mode>`: `now` or `next-heartbeat` (default).
+- `--session-key <sessionKey>`: optional; target a specific agent session
+  instead of the agent's main session. Keys that do not belong to the
+  resolved agent fall back to the agent's main session.
 - `--json`: machine-readable output.
 - `--url`, `--token`, `--timeout`, `--expect-final`: shared Gateway RPC flags.
 

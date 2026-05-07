@@ -77,6 +77,7 @@ function createCronContext(currentJob?: CronJob) {
       update: vi.fn(async () => ({ id: "cron-1" })),
       getDefaultAgentId: vi.fn(() => "main"),
       getJob: vi.fn(() => currentJob),
+      wake: vi.fn(() => ({ ok: true }) as const),
     },
     logGateway: {
       info: vi.fn(),
@@ -646,5 +647,67 @@ describe("cron method validation", () => {
       }),
     ).rejects.toThrow("DB write failed");
     expect(respond).not.toHaveBeenCalled();
+  });
+
+  describe("wake", () => {
+    async function invokeWake(params: Record<string, unknown>) {
+      const context = createCronContext();
+      const respond = vi.fn();
+      await cronHandlers.wake({
+        req: {} as never,
+        params: params as never,
+        respond: respond as never,
+        context: context as never,
+        client: null,
+        isWebchatConnect: () => false,
+      });
+      return { context, respond };
+    }
+
+    it("forwards sessionKey to context.cron.wake when provided", async () => {
+      const { context, respond } = await invokeWake({
+        mode: "now",
+        text: "ping",
+        sessionKey: "agent:main:telegram:dm:42",
+      });
+      expect(context.cron.wake).toHaveBeenCalledWith({
+        mode: "now",
+        text: "ping",
+        sessionKey: "agent:main:telegram:dm:42",
+      });
+      expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    });
+
+    it("omits sessionKey when not provided", async () => {
+      const { context, respond } = await invokeWake({
+        mode: "next-heartbeat",
+        text: "ping",
+      });
+      expect(context.cron.wake).toHaveBeenCalledWith({
+        mode: "next-heartbeat",
+        text: "ping",
+      });
+      expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    });
+
+    it("omits sessionKey when explicitly empty string", async () => {
+      const { context } = await invokeWake({
+        mode: "now",
+        text: "ping",
+        sessionKey: "",
+      });
+      // empty-string sessionKey is rejected at schema (NonEmptyString)
+      expect(context.cron.wake).not.toHaveBeenCalled();
+    });
+
+    it("rejects non-string sessionKey at schema", async () => {
+      const { context, respond } = await invokeWake({
+        mode: "now",
+        text: "ping",
+        sessionKey: 42,
+      });
+      expect(context.cron.wake).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+    });
   });
 });

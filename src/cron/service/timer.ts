@@ -1781,15 +1781,21 @@ function emitJobFinished(
 
 export function wake(
   state: CronServiceState,
-  opts: { mode: "now" | "next-heartbeat"; text: string },
+  opts: { mode: "now" | "next-heartbeat"; text: string; sessionKey?: string },
 ) {
   const text = opts.text.trim();
   if (!text) {
     return { ok: false } as const;
   }
-  state.deps.enqueueSystemEvent(text);
+  const sessionKey = opts.sessionKey?.trim() || undefined;
+  state.deps.enqueueSystemEvent(text, sessionKey ? { sessionKey } : undefined);
   if (opts.mode === "now") {
-    state.deps.requestHeartbeat({ source: "manual", intent: "immediate", reason: "wake" });
+    state.deps.requestHeartbeat({
+      source: "manual",
+      intent: "immediate",
+      reason: "wake",
+      ...(sessionKey ? { sessionKey } : {}),
+    });
   }
   return { ok: true } as const;
 }

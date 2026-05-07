@@ -218,6 +218,7 @@ export const WakeParamsSchema = Type.Object(
   {
     mode: Type.Union([Type.Literal("now"), Type.Literal("next-heartbeat")]),
     text: NonEmptyString,
+    sessionKey: Type.Optional(NonEmptyString),
   },
   { additionalProperties: true }, // external wake senders may attach opaque metadata
 );

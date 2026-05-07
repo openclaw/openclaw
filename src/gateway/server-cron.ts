@@ -279,7 +279,13 @@ export function buildGatewayCronService(params: {
     resolveSessionStorePath,
     sessionStorePath,
     enqueueSystemEvent: (text, opts) => {
-      const { agentId, cfg: runtimeConfig } = resolveCronAgent(opts?.agentId);
+      // When the caller passes only a sessionKey (e.g. `system event --session-key`),
+      // derive agentId from that key so a non-default agent's session is not silently
+      // rejected as foreign by resolveCronSessionKey and rerouted to the default agent.
+      const derivedAgentId =
+        opts?.agentId ??
+        (opts?.sessionKey ? resolveAgentIdFromSessionKey(opts.sessionKey) : undefined);
+      const { agentId, cfg: runtimeConfig } = resolveCronAgent(derivedAgentId);
       const sessionKey = resolveCronSessionKey({
         runtimeConfig,
         agentId,

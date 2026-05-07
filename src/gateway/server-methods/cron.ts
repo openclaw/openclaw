@@ -175,8 +175,13 @@ export const cronHandlers: GatewayRequestHandlers = {
     const p = params as {
       mode: "now" | "next-heartbeat";
       text: string;
+      sessionKey?: string;
     };
-    const result = context.cron.wake({ mode: p.mode, text: p.text });
+    const result = context.cron.wake({
+      mode: p.mode,
+      text: p.text,
+      ...(p.sessionKey ? { sessionKey: p.sessionKey } : {}),
+    });
     respond(true, result, undefined);
   },
   "cron.list": async ({ params, respond, context }) => {
