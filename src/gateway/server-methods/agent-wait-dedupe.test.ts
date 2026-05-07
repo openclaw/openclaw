@@ -70,6 +70,45 @@ describe("agent wait dedupe helper", () => {
     expect(__testing.getWaiterCount(runId)).toBe(0);
   });
 
+  it("preserves structured yield metadata from terminal agent results", () => {
+    const dedupe = new Map();
+    const runId = "run-yielded";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      payload: {
+        runId,
+        status: "ok",
+        startedAt: 100,
+        endedAt: 200,
+        result: {
+          meta: {
+            stopReason: "end_turn",
+            livenessState: "paused",
+            yielded: true,
+          },
+        },
+      },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "ok",
+      startedAt: 100,
+      endedAt: 200,
+      error: undefined,
+      stopReason: "end_turn",
+      livenessState: "paused",
+      yielded: true,
+    });
+  });
+
   it("keeps stale chat dedupe blocked while agent dedupe is in-flight", async () => {
     const dedupe = new Map();
     const runId = "run-stale-chat";
@@ -255,6 +294,71 @@ describe("agent wait dedupe helper", () => {
       startedAt: 3,
       endedAt: 4,
       error: "still running",
+    });
+  });
+
+  it("preserves an RPC cancel snapshot when late completion writes the same key", () => {
+    const dedupe = new Map();
+    const runId = "run-cancel-wins";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      ts: 100,
+      payload: { runId, status: "timeout", stopReason: "rpc", endedAt: 100 },
+    });
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      ts: 200,
+      payload: { runId, status: "ok", endedAt: 200 },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "timeout",
+      endedAt: 100,
+      error: undefined,
+      stopReason: "rpc",
+    });
+  });
+
+  it("preserves an RPC cancel snapshot when late rejection writes the same chat key", () => {
+    const dedupe = new Map();
+    const runId = "run-cancel-chat-error";
+
+    setRunEntry({
+      dedupe,
+      kind: "chat",
+      runId,
+      ts: 100,
+      payload: { runId, status: "timeout", stopReason: "rpc", endedAt: 100 },
+    });
+    setRunEntry({
+      dedupe,
+      kind: "chat",
+      runId,
+      ts: 200,
+      ok: false,
+      payload: { runId, status: "error", summary: "late failure", endedAt: 200 },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "timeout",
+      endedAt: 100,
+      error: undefined,
+      stopReason: "rpc",
     });
   });
 

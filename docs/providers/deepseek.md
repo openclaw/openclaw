@@ -79,22 +79,24 @@ is available to that process (for example, in `~/.openclaw/.env` or via
 V4 models support DeepSeek's `thinking` control. OpenClaw also replays
 DeepSeek `reasoning_content` on follow-up turns so thinking sessions with tool
 calls can continue.
+Use `/think xhigh` or `/think max` with DeepSeek V4 models to request DeepSeek's
+maximum `reasoning_effort`.
 </Tip>
 
 ## Thinking and tools
 
 DeepSeek V4 thinking sessions have a stricter replay contract than most
-OpenAI-compatible providers: when a thinking-enabled assistant message includes
-tool calls, DeepSeek expects the prior assistant `reasoning_content` to be sent
-back on the follow-up request. OpenClaw handles this inside the DeepSeek plugin,
-so normal multi-turn tool use works with `deepseek/deepseek-v4-flash` and
-`deepseek/deepseek-v4-pro`.
+OpenAI-compatible providers: after a thinking-enabled turn uses tools, DeepSeek
+expects replayed assistant messages from that turn to include
+`reasoning_content` on follow-up requests. OpenClaw handles this inside the
+DeepSeek plugin, so normal multi-turn tool use works with
+`deepseek/deepseek-v4-flash` and `deepseek/deepseek-v4-pro`.
 
 If you switch an existing session from another OpenAI-compatible provider to a
 DeepSeek V4 model, older assistant tool-call turns may not have native
-DeepSeek `reasoning_content`. OpenClaw fills that missing field for DeepSeek V4
-thinking requests so the provider can accept the replayed tool-call history
-without requiring `/new`.
+DeepSeek `reasoning_content`. OpenClaw fills that missing field on replayed
+assistant messages for DeepSeek V4 thinking requests so the provider can accept
+the history without requiring `/new`.
 
 When thinking is disabled in OpenClaw (including the UI **None** selection),
 OpenClaw sends DeepSeek `thinking: { type: "disabled" }` and strips replayed

@@ -166,7 +166,7 @@ export function getTestTailscaleBinaryOverride(
   return null;
 }
 
-export async function getTailscaleBinary(): Promise<string> {
+async function getTailscaleBinary(): Promise<string> {
   const forcedBinary = getTestTailscaleBinaryOverride();
   if (forcedBinary) {
     cachedTailscaleBinary = forcedBinary;
@@ -177,18 +177,6 @@ export async function getTailscaleBinary(): Promise<string> {
   }
   cachedTailscaleBinary = await findTailscaleBinary();
   return cachedTailscaleBinary ?? "tailscale";
-}
-
-export async function readTailscaleStatusJson(
-  exec: typeof runExec = runExec,
-  opts?: { timeoutMs?: number },
-): Promise<Record<string, unknown>> {
-  const tailscaleBin = await getTailscaleBinary();
-  const { stdout } = await exec(tailscaleBin, ["status", "--json"], {
-    timeoutMs: opts?.timeoutMs ?? 5000,
-    maxBuffer: 400_000,
-  });
-  return stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
 }
 
 export async function ensureGoInstalled(

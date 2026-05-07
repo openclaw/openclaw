@@ -54,6 +54,27 @@ describe("gateway codex harness live helpers", () => {
     expect(isExpectedCodexStatusCommandText(text)).toBe(true);
   });
 
+  it("accepts compact session status prose emitted by current codex", () => {
+    const text =
+      "Session status: running on `openai/gpt-5.5`, context at 24k/272k (9%), no compactions, execution mode `direct`, reasoning `low`, text `low`.";
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts running-session status prose emitted by current codex", () => {
+    const text =
+      "Session is running on `codex/gpt-5.5` with low reasoning, direct execution, and about `24k/272k` context used. Cache hit is `99%`; no compactions so far.";
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts natural running-session status prose with the session id", () => {
+    const text =
+      "Session is running on `codex/gpt-5.5` with low thinking. Context is about 9% used, no compactions, and the current session is `agent:dev:live-codex-harness`.";
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
   it("accepts the current status card emitted by OpenAI Codex", () => {
     const text = [
       "Current session status:",
@@ -69,6 +90,30 @@ describe("gateway codex harness live helpers", () => {
     ].join("\n");
 
     expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts the OpenAI Codex status card emitted by the GPT-5.5 Docker harness", () => {
+    const text = [
+      "OpenClaw 2026.4.30-beta.1 is running on `openai/gpt-5.5`.",
+      "",
+      "Session is healthy:",
+      "- Context: `21k/272k` used, `8%`",
+      "- Cache: `19%` hit",
+      "- Runtime: `OpenAI Codex`",
+      "- Execution: `direct`",
+      "- Active tasks: `1` (`/codex status`)",
+      "- Queue: `steer`, depth `0`",
+    ].join("\n");
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts the compact status-card pointer emitted by current codex", () => {
+    const text = "OpenClaw status shown above.";
+
+    expect(
+      EXPECTED_CODEX_STATUS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
   });
 
   it("rejects status prose for a different codex session", () => {
@@ -140,6 +185,22 @@ describe("gateway codex harness live helpers", () => {
     expect(isExpectedCodexModelsCommandText(text)).toBe(true);
   });
 
+  it("accepts the singular Codex agent model list from the live harness", () => {
+    const text = [
+      "Available Codex agent model:",
+      "",
+      "- `dev`: `openai/gpt-5.5`",
+      "- Runtime: `codex`",
+      "- Fallback: `none`",
+      "- Configured override: `false`",
+    ].join("\n");
+
+    expect(
+      EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+    expect(isExpectedCodexModelsCommandText(text)).toBe(true);
+  });
+
   it("accepts sandbox namespace failures with current-session model fallback", () => {
     const text = [
       "I can’t enumerate `/codex models` from this sandbox because the local `codex` CLI fails to start here with a user-namespace restriction (`bwrap: No permissions to create a new namespace`).",
@@ -147,6 +208,23 @@ describe("gateway codex harness live helpers", () => {
       "What I can confirm from the current session is that it’s running on `codex/gpt-5.4`.",
     ].join("\n");
 
+    expect(isExpectedCodexModelsCommandText(text)).toBe(true);
+  });
+
+  it("accepts the GPT-5.5 Docker harness shell fallback", () => {
+    const text = [
+      "I couldn’t get `/codex models` from the shell here.",
+      "",
+      "What happened:",
+      "- In the sandbox, `codex models` failed because the kernel disallows unprivileged user namespaces.",
+      "- Outside the sandbox, `codex` is not on `PATH`.",
+      "",
+      "Current session model from OpenClaw status is `openai/gpt-5.5`.",
+    ].join("\n");
+
+    expect(
+      EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
     expect(isExpectedCodexModelsCommandText(text)).toBe(true);
   });
 
@@ -206,6 +284,7 @@ describe("gateway codex harness live helpers", () => {
       ].join("\n"),
       ["Available model overrides here:", "", "- `gpt-5.4`"].join("\n"),
       ["Available model overrides:", "", "- `gpt-5.4`"].join("\n"),
+      ["Available model overrides listed for this session:", "", "- `gpt-5.5`"].join("\n"),
       ["Available models:", "", "- `gpt-5.4`", "- `gpt-5.4-mini`"].join("\n"),
       [
         "Available model overrides exposed in this session are:",

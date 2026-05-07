@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtraGatewayService } from "../daemon/inspect.js";
 import * as launchd from "../daemon/launchd.js";
+import type { GatewayRestartHandoff } from "../infra/restart-handoff.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 import { EXTERNAL_SERVICE_REPAIR_NOTE } from "./doctor-service-repair-policy.js";
@@ -18,6 +19,9 @@ const sleep = vi.hoisted(() => vi.fn(async () => {}));
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const inspectPortUsage = vi.hoisted(() => vi.fn());
 const readLastGatewayErrorLine = vi.hoisted(() => vi.fn(async () => null));
+const readGatewayRestartHandoffSync = vi.hoisted(() =>
+  vi.fn<() => GatewayRestartHandoff | null>(() => null),
+);
 const findSystemGatewayServices = vi.hoisted(() =>
   vi.fn<() => Promise<ExtraGatewayService[]>>(async () => []),
 );
@@ -82,6 +86,16 @@ vi.mock("../infra/ports.js", () => ({
   formatPortDiagnostics: vi.fn(() => []),
 }));
 
+vi.mock("../infra/restart-handoff.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/restart-handoff.js")>(
+    "../infra/restart-handoff.js",
+  );
+  return {
+    ...actual,
+    readGatewayRestartHandoffSync,
+  };
+});
+
 vi.mock("../infra/wsl.js", () => ({
   isWSL: vi.fn(async () => false),
 }));
@@ -133,7 +147,9 @@ describe("maybeRepairGatewayDaemon", () => {
     vi.clearAllMocks();
     service.isLoaded.mockResolvedValue(true);
     service.readRuntime.mockResolvedValue({ status: "running" });
+    service.readCommand.mockResolvedValue(null);
     service.restart.mockResolvedValue({ outcome: "completed" });
+    readGatewayRestartHandoffSync.mockReturnValue(null);
     findSystemGatewayServices.mockResolvedValue([]);
     inspectPortUsage.mockResolvedValue({
       port: 18789,
@@ -185,6 +201,10 @@ describe("maybeRepairGatewayDaemon", () => {
 
   async function runNonInteractiveUpdateRepair() {
     process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+    await runNonInteractiveRepair();
+  }
+
+  async function runNonInteractiveRepair() {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     await maybeRepairGatewayDaemon({
       cfg: { gateway: {} },
@@ -241,6 +261,64 @@ describe("maybeRepairGatewayDaemon", () => {
     await runScheduledGatewayRepair("Restart gateway service now?");
   });
 
+  it("reports recent restart handoffs during deep doctor", async () => {
+    setPlatform("linux");
+    service.readCommand.mockResolvedValueOnce({
+      programArguments: ["/bin/node", "cli", "gateway"],
+      environment: {
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-service",
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-service/openclaw.json",
+      },
+    });
+    readGatewayRestartHandoffSync.mockReturnValueOnce({
+      kind: "gateway-supervisor-restart-handoff",
+      version: 1,
+      intentId: "intent-1",
+      pid: 12_345,
+      createdAt: 10_000,
+      expiresAt: 70_000,
+      reason: "plugin source changed",
+      source: "plugin-change",
+      restartKind: "full-process",
+      supervisorMode: "systemd",
+    });
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: {} },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter: createDoctorPrompter({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        options: { deep: true, nonInteractive: true },
+      }),
+      options: { deep: true, nonInteractive: true },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+    });
+
+    expect(readGatewayRestartHandoffSync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-service",
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-service/openclaw.json",
+      }),
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Recent restart handoff: full-process via systemd"),
+      "Gateway",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("reason=plugin source changed"),
+      "Gateway",
+    );
+  });
+
+  it("does not read restart handoffs during normal doctor", async () => {
+    setPlatform("linux");
+
+    await runNonInteractiveRepair();
+
+    expect(readGatewayRestartHandoffSync).not.toHaveBeenCalled();
+  });
+
   it("skips start verification when a stopped service start is only scheduled", async () => {
     service.readRuntime.mockResolvedValue({ status: "stopped" });
     await runScheduledGatewayRepair("Start gateway service now?");
@@ -254,6 +332,20 @@ describe("maybeRepairGatewayDaemon", () => {
 
     expect(service.install).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("skips gateway install during non-interactive doctor repairs", async () => {
+    setPlatform("linux");
+    service.isLoaded.mockResolvedValue(false);
+
+    await runNonInteractiveRepair();
+
+    expect(service.install).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("openclaw gateway install"),
+      "Gateway",
+    );
   });
 
   it("skips gateway restart during non-interactive update repairs", async () => {

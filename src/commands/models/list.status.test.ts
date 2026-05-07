@@ -35,9 +35,9 @@ const mocks = vi.hoisted(() => {
 
   return {
     store,
-    resolveOpenClawAgentDir: vi.fn().mockReturnValue("/tmp/openclaw-agent"),
     resolveAgentDir: vi.fn().mockReturnValue("/tmp/openclaw-agent"),
     resolveAgentWorkspaceDir: vi.fn().mockReturnValue("/tmp/openclaw-agent/workspace"),
+    resolveDefaultAgentId: vi.fn().mockReturnValue("main"),
     resolveAgentExplicitModelPrimary: vi.fn().mockReturnValue(undefined),
     resolveAgentEffectiveModelPrimary: vi.fn().mockReturnValue(undefined),
     resolveAgentModelFallbacksOverride: vi.fn().mockReturnValue(undefined),
@@ -48,10 +48,11 @@ const mocks = vi.hoisted(() => {
         .filter(([, cred]) => cred.provider === provider)
         .map(([id]) => id);
     }),
+    loadPersistedAuthProfileStore: vi.fn().mockReturnValue(store),
     resolveAuthProfileDisplayLabel: vi.fn(({ profileId }: { profileId: string }) => profileId),
-    resolveAuthStorePathForDisplay: vi
-      .fn()
-      .mockReturnValue("/tmp/openclaw-agent/auth-profiles.json"),
+    resolveAuthStorePathForDisplay: vi.fn(
+      (agentDir?: string) => `${agentDir ?? "/tmp/openclaw-agent"}/auth-profiles.json`,
+    ),
     resolveProfileUnusableUntilForDisplay: vi.fn().mockReturnValue(undefined),
     resolveEnvApiKey: vi.fn((provider: string) => {
       if (provider === "openai") {
@@ -89,6 +90,18 @@ const mocks = vi.hoisted(() => {
       "openai-codex": ["OPENAI_OAUTH_TOKEN"],
       fal: ["FAL_KEY"],
     }),
+    resolveProviderEnvAuthEvidence: vi.fn().mockReturnValue({}),
+    listProviderEnvAuthLookupKeys: vi
+      .fn()
+      .mockImplementation(() => [
+        "anthropic",
+        "google",
+        "minimax",
+        "minimax-portal",
+        "openai",
+        "openai-codex",
+        "fal",
+      ]),
     listKnownProviderEnvApiKeyNames: vi
       .fn()
       .mockReturnValue([
@@ -125,22 +138,26 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../agents/agent-paths.js", () => ({
-  resolveOpenClawAgentDir: mocks.resolveOpenClawAgentDir,
-}));
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentDir: mocks.resolveAgentDir,
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
+  resolveDefaultAgentId: mocks.resolveDefaultAgentId,
   resolveAgentExplicitModelPrimary: mocks.resolveAgentExplicitModelPrimary,
   resolveAgentEffectiveModelPrimary: mocks.resolveAgentEffectiveModelPrimary,
   resolveAgentModelFallbacksOverride: mocks.resolveAgentModelFallbacksOverride,
   listAgentIds: mocks.listAgentIds,
+}));
+vi.mock("../../agents/workspace.js", () => ({
+  resolveDefaultAgentWorkspaceDir: vi.fn().mockReturnValue("/tmp/openclaw-agent/workspace"),
 }));
 vi.mock("../../agents/auth-profiles/display.js", () => ({
   resolveAuthProfileDisplayLabel: mocks.resolveAuthProfileDisplayLabel,
 }));
 vi.mock("../../agents/auth-profiles/paths.js", () => ({
   resolveAuthStorePathForDisplay: mocks.resolveAuthStorePathForDisplay,
+}));
+vi.mock("../../agents/auth-profiles/persisted.js", () => ({
+  loadPersistedAuthProfileStore: mocks.loadPersistedAuthProfileStore,
 }));
 vi.mock("../../agents/auth-profiles/profiles.js", () => ({
   listProfilesForProvider: mocks.listProfilesForProvider,
@@ -185,7 +202,9 @@ vi.mock("../../agents/model-auth.js", () => ({
   getCustomProviderApiKey: mocks.getCustomProviderApiKey,
 }));
 vi.mock("../../agents/model-auth-env-vars.js", () => ({
+  listProviderEnvAuthLookupKeys: mocks.listProviderEnvAuthLookupKeys,
   resolveProviderEnvApiKeyCandidates: mocks.resolveProviderEnvApiKeyCandidates,
+  resolveProviderEnvAuthEvidence: mocks.resolveProviderEnvAuthEvidence,
   listKnownProviderEnvApiKeyNames: mocks.listKnownProviderEnvApiKeyNames,
 }));
 vi.mock("../../agents/model-selection-cli.js", () => ({
@@ -287,7 +306,7 @@ describe("modelsStatusCommand auth overview", () => {
     await modelsStatusCommand({ json: true }, runtime as never);
     const payload = JSON.parse(String((runtime.log as Mock).mock.calls[0]?.[0]));
 
-    expect(mocks.resolveOpenClawAgentDir).toHaveBeenCalled();
+    expect(mocks.resolveAgentDir).toHaveBeenCalledWith(expect.anything(), "main");
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalled();
     expect(payload.defaultModel).toBe("anthropic/claude-opus-4-6");
     expect(payload.configPath).toBe("/tmp/openclaw-dev/openclaw.json");
@@ -339,6 +358,28 @@ describe("modelsStatusCommand auth overview", () => {
     ).toBe(true);
   });
 
+  it("honors OPENCLAW_AGENT_DIR when no --agent override is provided", async () => {
+    const localRuntime = createRuntime();
+    const previous = process.env.OPENCLAW_AGENT_DIR;
+    process.env.OPENCLAW_AGENT_DIR = "/tmp/openclaw-isolated-agent";
+    mocks.resolveAgentDir.mockClear();
+    try {
+      await modelsStatusCommand({ json: true }, localRuntime as never);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_AGENT_DIR;
+      } else {
+        process.env.OPENCLAW_AGENT_DIR = previous;
+      }
+    }
+
+    expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-isolated-agent");
+    const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+    expect(payload.agentDir).toBe("/tmp/openclaw-isolated-agent");
+    expect(payload.auth.storePath).toBe("/tmp/openclaw-isolated-agent/auth-profiles.json");
+  });
+
   it("uses agent overrides and reports sources", async () => {
     const localRuntime = createRuntime();
     await withAgentScopeOverrides(
@@ -359,8 +400,45 @@ describe("modelsStatusCommand auth overview", () => {
           defaultSource: "agent",
           fallbacksSource: "agent",
         });
+        const openAiCodex = (
+          payload.auth.providers as Array<{
+            provider: string;
+            effective?: { kind: string; detail?: string };
+          }>
+        ).find((provider) => provider.provider === "openai-codex");
+        expect(openAiCodex?.effective).toEqual({
+          kind: "profiles",
+          detail: "/tmp/openclaw-agent-custom/auth-profiles.json",
+        });
       },
     );
+  });
+
+  it("does not double-prefix provider-qualified resolved default models", async () => {
+    const localRuntime = createRuntime();
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: { primary: "openrouter/auto", fallbacks: [] },
+          models: { "openrouter/auto": {} },
+        },
+      },
+      models: { providers: {} },
+      env: { shellEnv: { enabled: true } },
+    });
+
+    try {
+      await modelsStatusCommand({ json: true }, localRuntime as never);
+      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+
+      expect(payload.defaultModel).toBe("openrouter/auto");
+      expect(payload.resolvedDefault).toBe("openrouter/auto");
+    } finally {
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+    }
   });
 
   it("handles cli backend and aliased provider auth summaries", async () => {
@@ -504,6 +582,61 @@ describe("modelsStatusCommand auth overview", () => {
         );
       } else {
         mocks.resolveProviderSyntheticAuthWithPlugin.mockReturnValue(undefined);
+      }
+    }
+  });
+
+  it("includes auth-evidence-only providers in the auth overview", async () => {
+    const localRuntime = createRuntime();
+    const originalKeysImpl = mocks.listProviderEnvAuthLookupKeys.getMockImplementation();
+    const originalEvidenceImpl = mocks.resolveProviderEnvAuthEvidence.getMockImplementation();
+    const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
+
+    mocks.listProviderEnvAuthLookupKeys.mockReturnValue(["workspace-cloud"]);
+    mocks.resolveProviderEnvAuthEvidence.mockReturnValue({
+      "workspace-cloud": [
+        {
+          type: "local-file-with-env",
+          credentialMarker: "workspace-cloud-local-credentials",
+          source: "workspace cloud credentials",
+        },
+      ],
+    });
+    mocks.resolveEnvApiKey.mockImplementation(
+      (provider: string, _env?: NodeJS.ProcessEnv, options?: { workspaceDir?: string }) =>
+        provider === "workspace-cloud" && options?.workspaceDir === "/tmp/openclaw-agent/workspace"
+          ? {
+              apiKey: "workspace-cloud-local-credentials",
+              source: "workspace cloud credentials",
+            }
+          : null,
+    );
+
+    try {
+      await modelsStatusCommand({ json: true }, localRuntime as never);
+      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+      expect(payload.auth.providers).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            provider: "workspace-cloud",
+            effective: expect.objectContaining({ kind: "env" }),
+            env: expect.objectContaining({ source: "workspace cloud credentials" }),
+          }),
+        ]),
+      );
+    } finally {
+      if (originalKeysImpl) {
+        mocks.listProviderEnvAuthLookupKeys.mockImplementation(originalKeysImpl);
+      }
+      if (originalEvidenceImpl) {
+        mocks.resolveProviderEnvAuthEvidence.mockImplementation(originalEvidenceImpl);
+      }
+      if (originalEnvImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(originalEnvImpl);
+      } else if (defaultResolveEnvApiKeyImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(defaultResolveEnvApiKeyImpl);
+      } else {
+        mocks.resolveEnvApiKey.mockImplementation(() => null);
       }
     }
   });

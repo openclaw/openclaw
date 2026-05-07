@@ -1,3 +1,4 @@
+import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import type { GatewayClient, GatewayReconnectPausedInfo } from "../gateway/client.js";
 import { createOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
 import { readConnectErrorDetailCode } from "../gateway/protocol/connect-error-details.js";
@@ -358,7 +359,18 @@ export function createExecApprovalChannelRuntime<
         await adapter.beforeGatewayClientStart?.();
         gatewayClient = client;
         try {
-          client.start();
+          const readiness = await startGatewayClientWhenEventLoopReady(client, {
+            clientOptions: {
+              preauthHandshakeTimeoutMs: adapter.cfg.gateway?.handshakeTimeoutMs,
+            },
+          });
+          if (!readiness.ready) {
+            throw new Error(
+              readiness.aborted
+                ? "gateway approval runtime start aborted before readiness"
+                : "gateway readiness unavailable before exec approval runtime start",
+            );
+          }
           await ready;
           if (stopClientIfInactive(client)) {
             return;

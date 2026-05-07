@@ -80,7 +80,7 @@ function isProfileConfigCompatible(params: {
   cfg?: OpenClawConfig;
   profileId: string;
   provider: string;
-  mode: "api_key" | "token" | "oauth";
+  mode: "api_key" | "aws-sdk" | "token" | "oauth";
   allowOAuthTokenCompatibility?: boolean;
 }): boolean {
   const profileConfig = params.cfg?.auth?.profiles?.[params.profileId];
@@ -93,9 +93,14 @@ function isProfileConfigCompatible(params: {
   return true;
 }
 
-async function buildOAuthApiKey(provider: string, credentials: OAuthCredential): Promise<string> {
+async function buildOAuthApiKey(
+  provider: string,
+  credentials: OAuthCredential,
+  context: { cfg?: OpenClawConfig },
+): Promise<string> {
   const formatted = await formatProviderAuthProfileApiKeyWithPlugin({
     provider,
+    config: context.cfg,
     context: credentials,
   });
   return typeof formatted === "string" && formatted.length > 0 ? formatted : credentials.access;
@@ -195,6 +200,7 @@ async function tryResolveOAuthProfile(
     profileId,
     credential: cred,
     agentDir: params.agentDir,
+    cfg,
   });
   if (!resolved) {
     return null;
@@ -305,6 +311,9 @@ export async function resolveApiKeyForProfile(
     }
     return buildApiKeyProfileResult({ apiKey: key, provider: cred.provider, email: cred.email });
   }
+  if (cred.type === "aws-sdk") {
+    return null;
+  }
   if (cred.type === "token") {
     const expiryState = resolveTokenExpiryState(cred.expires);
     if (expiryState === "expired" || expiryState === "invalid_expires") {
@@ -333,6 +342,7 @@ export async function resolveApiKeyForProfile(
       agentDir: params.agentDir,
       profileId,
       credential: cred,
+      cfg,
     });
     if (!resolved) {
       return null;

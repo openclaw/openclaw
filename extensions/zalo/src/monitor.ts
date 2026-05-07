@@ -1,7 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
   resolveDirectDmAuthorizationOutcome,
   resolveSenderCommandAuthorizationWithRuntime,
@@ -41,6 +40,10 @@ import {
 import { resolveZaloProxyFetch } from "./proxy.js";
 import { getZaloRuntime } from "./runtime.js";
 export type { ZaloRuntimeEnv } from "./monitor.types.js";
+import {
+  prepareZaloDurableReplyPayload,
+  resolveZaloDurableReplyOptions,
+} from "./monitor-durable.js";
 import type { ZaloRuntimeEnv } from "./monitor.types.js";
 import {
   prepareHostedZaloMediaUrl,
@@ -108,7 +111,6 @@ function registerSharedHostedMediaRoute(params: {
     auth: "plugin",
     match: "prefix",
     path: params.path,
-    replaceExisting: true,
     pluginId: "zalo",
     source: "zalo-hosted-media",
     accountId: params.accountId,
@@ -470,6 +472,8 @@ async function authorizeZaloMessage(
       configuredGroupAllowFrom: groupAllowFrom,
       senderId,
       isSenderAllowed: isZaloSenderAllowed,
+      channel: "zalo",
+      accountId: account.accountId,
       readAllowFromStore: pairing.readAllowFromStore,
       runtime: core.channel.commands,
     });
@@ -583,36 +587,54 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     body: rawBody,
   });
 
-  const ctxPayload = core.channel.reply.finalizeInboundContext({
-    Body: body,
-    BodyForAgent: rawBody,
-    RawBody: rawBody,
-    CommandBody: rawBody,
-    From: isGroup ? `zalo:group:${chatId}` : `zalo:${senderId}`,
-    To: `zalo:${chatId}`,
-    SessionKey: route.sessionKey,
-    AccountId: route.accountId,
-    ChatType: isGroup ? "group" : "direct",
-    ConversationLabel: fromLabel,
-    SenderName: senderName || undefined,
-    SenderId: senderId,
-    CommandAuthorized: commandAuthorized,
-    Provider: "zalo",
-    Surface: "zalo",
-    MessageSid: message_id,
-    MediaPath: mediaPath,
-    MediaType: mediaType,
-    MediaUrl: mediaPath,
-    OriginatingChannel: "zalo",
-    OriginatingTo: `zalo:${chatId}`,
-  });
-
-  await core.channel.session.recordInboundSession({
-    storePath,
-    sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-    ctx: ctxPayload,
-    onRecordError: (err) => {
-      runtime.error?.(`zalo: failed updating session meta: ${String(err)}`);
+  const ctxPayload = core.channel.turn.buildContext({
+    channel: "zalo",
+    accountId: route.accountId,
+    messageId: message_id,
+    timestamp: date ? date * 1000 : undefined,
+    from: isGroup ? `zalo:group:${chatId}` : `zalo:${senderId}`,
+    sender: {
+      id: senderId,
+      name: senderName || undefined,
+    },
+    conversation: {
+      kind: isGroup ? "group" : "direct",
+      id: chatId,
+      label: fromLabel,
+      routePeer: {
+        kind: isGroup ? "group" : "direct",
+        id: chatId,
+      },
+    },
+    route: {
+      agentId: route.agentId,
+      accountId: route.accountId,
+      routeSessionKey: route.sessionKey,
+    },
+    reply: {
+      to: `zalo:${chatId}`,
+      originatingTo: `zalo:${chatId}`,
+    },
+    message: {
+      body,
+      bodyForAgent: rawBody,
+      rawBody,
+      commandBody: rawBody,
+      envelopeFrom: fromLabel,
+    },
+    media:
+      mediaPath || mediaType
+        ? [
+            {
+              path: mediaPath,
+              url: mediaPath,
+              contentType: mediaType,
+            },
+          ]
+        : undefined,
+    extra: {
+      CommandAuthorized: commandAuthorized,
+      GroupSubject: undefined,
     },
   });
 
@@ -621,11 +643,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     channel: "zalo",
     accountId: account.accountId,
   });
-  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
-    cfg: config,
-    agentId: route.agentId,
-    channel: "zalo",
-    accountId: account.accountId,
+  const replyPipeline = {
     typing: {
       start: async () => {
         await sendChatAction(
@@ -638,7 +656,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
           ZALO_TYPING_TIMEOUT_MS,
         );
       },
-      onStartError: (err) => {
+      onStartError: (err: unknown) => {
         logTypingFailure({
           log: (message) => logVerbose(core, runtime, message),
           channel: "zalo",
@@ -648,38 +666,80 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
         });
       },
     },
-  });
+  };
 
-  await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-    ctx: ctxPayload,
-    cfg: config,
-    dispatcherOptions: {
-      ...replyPipeline,
-      deliver: async (payload) => {
-        await deliverZaloReply({
-          payload,
-          token,
-          chatId,
-          runtime,
-          core,
-          config,
-          webhookUrl: params.webhookUrl,
-          webhookPath: params.webhookPath,
-          proxyUrl: account.config.proxy,
-          mediaMaxBytes: params.mediaMaxMb * 1024 * 1024,
-          canHostMedia: params.canHostMedia,
-          accountId: account.accountId,
-          statusSink,
-          fetcher,
-          tableMode,
-        });
-      },
-      onError: (err, info) => {
-        runtime.error?.(`[${account.accountId}] Zalo ${info.kind} reply failed: ${String(err)}`);
-      },
-    },
-    replyOptions: {
-      onModelSelected,
+  await core.channel.turn.run({
+    channel: "zalo",
+    accountId: account.accountId,
+    raw: message,
+    adapter: {
+      ingest: () => ({
+        id: message_id,
+        timestamp: date ? date * 1000 : undefined,
+        rawText: rawBody,
+        textForAgent: rawBody,
+        textForCommands: rawBody,
+        raw: message,
+      }),
+      resolveTurn: () => ({
+        cfg: config,
+        channel: "zalo",
+        accountId: account.accountId,
+        agentId: route.agentId,
+        routeSessionKey: route.sessionKey,
+        storePath,
+        ctxPayload,
+        recordInboundSession: core.channel.session.recordInboundSession,
+        dispatchReplyWithBufferedBlockDispatcher:
+          core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+        delivery: {
+          preparePayload: (payload) =>
+            prepareZaloDurableReplyPayload({
+              payload,
+              tableMode,
+              convertMarkdownTables: core.channel.text.convertMarkdownTables,
+            }),
+          durable: (payload, info) =>
+            resolveZaloDurableReplyOptions({
+              payload,
+              infoKind: info.kind,
+              chatId,
+            }),
+          deliver: async (payload) => {
+            await deliverZaloReply({
+              payload,
+              token,
+              chatId,
+              runtime,
+              core,
+              config,
+              webhookUrl: params.webhookUrl,
+              webhookPath: params.webhookPath,
+              proxyUrl: account.config.proxy,
+              mediaMaxBytes: params.mediaMaxMb * 1024 * 1024,
+              canHostMedia: params.canHostMedia,
+              accountId: account.accountId,
+              statusSink,
+              fetcher,
+              tableMode: "off",
+            });
+          },
+          onDelivered: () => {
+            statusSink?.({ lastOutboundAt: Date.now() });
+          },
+          onError: (err, info) => {
+            runtime.error?.(
+              `[${account.accountId}] Zalo ${info.kind} reply failed: ${String(err)}`,
+            );
+          },
+        },
+        replyPipeline,
+        record: {
+          onRecordError: (err) => {
+            runtime.error?.(`zalo: failed updating session meta: ${String(err)}`);
+          },
+        },
+      }),
     },
   });
 }

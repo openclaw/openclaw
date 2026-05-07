@@ -19,6 +19,7 @@ env:
 
 jobs:
   build-artifacts:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     permissions:
       contents: read
     name: "build-artifacts"
@@ -26,7 +27,7 @@ jobs:
     timeout-minutes: 35
     steps:
       - name: Begin Testbox
-        uses: useblacksmith/begin-testbox@v2
+        uses: useblacksmith/begin-testbox@d0e04585c26905fdd92c94a09c159544c7ee1b67
         with:
           testbox_id: ${{ inputs.testbox_id }}
 
@@ -218,7 +219,7 @@ jobs:
         run: bash scripts/ci-hydrate-testbox-env.sh
 
       - name: Run Testbox
-        uses: useblacksmith/run-testbox@v2
+        uses: useblacksmith/run-testbox@5ca05834db1d3813554d1dd109e5f2087a8d7cbc
         if: always()
         env:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"

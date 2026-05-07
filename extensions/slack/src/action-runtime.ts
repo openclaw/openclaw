@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import {
   createActionGate,
@@ -11,7 +12,6 @@ import {
   type OpenClawConfig,
   withNormalizedTimestamp,
 } from "./runtime-api.js";
-import { recordSlackThreadParticipation } from "./sent-thread-cache.js";
 import { parseSlackTarget, resolveSlackChannelId } from "./targets.js";
 
 const messagingActions = new Set([
@@ -25,6 +25,19 @@ const messagingActions = new Set([
 
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
+
+function sameSlackChannelTarget(targetChannel: string, currentChannelId: string): boolean {
+  const parsedTarget = parseSlackTarget(targetChannel, {
+    defaultKind: "channel",
+  });
+  if (!parsedTarget || parsedTarget.kind !== "channel") {
+    return false;
+  }
+  return (
+    normalizeLowercaseStringOrEmpty(parsedTarget.id) ===
+    normalizeLowercaseStringOrEmpty(currentChannelId)
+  );
+}
 
 type SlackActionsRuntimeModule = typeof import("./actions.runtime.js");
 type SlackAccountsRuntimeModule = typeof import("./accounts.runtime.js");
@@ -64,7 +77,6 @@ export const slackActionRuntime = {
   pinSlackMessage: createLazySlackAction("pinSlackMessage"),
   reactSlackMessage: createLazySlackAction("reactSlackMessage"),
   readSlackMessages: createLazySlackAction("readSlackMessages"),
-  recordSlackThreadParticipation,
   removeOwnSlackReactions: createLazySlackAction("removeOwnSlackReactions"),
   removeSlackReaction: createLazySlackAction("removeSlackReaction"),
   sendSlackMessage: createLazySlackAction("sendSlackMessage"),
@@ -105,16 +117,8 @@ function resolveThreadTsFromContext(
     return undefined;
   }
 
-  const parsedTarget = parseSlackTarget(targetChannel, {
-    defaultKind: "channel",
-  });
-  if (!parsedTarget || parsedTarget.kind !== "channel") {
-    return undefined;
-  }
-  const normalizedTarget = parsedTarget.id;
-
   // Different channel - don't inject
-  if (normalizedTarget !== context.currentChannelId) {
+  if (!sameSlackChannelTarget(targetChannel, context.currentChannelId)) {
     return undefined;
   }
 
@@ -238,37 +242,40 @@ export async function handleSlackAction(
         if (!content && !mediaUrl && !blocks) {
           throw new Error("Slack sendMessage requires content, blocks, or mediaUrl.");
         }
-        if (mediaUrl && blocks) {
-          throw new Error("Slack sendMessage does not support blocks with mediaUrl.");
-        }
         const threadTs = resolveThreadTsFromContext(
           readStringParam(params, "threadTs"),
           to,
           context,
         );
-        const result = await slackActionRuntime.sendSlackMessage(to, content ?? "", {
+        const sendOpts = {
           ...writeOpts,
-          mediaUrl: mediaUrl ?? undefined,
           mediaLocalRoots: context?.mediaLocalRoots,
           mediaReadFile: context?.mediaReadFile,
           threadTs: threadTs ?? undefined,
-          blocks,
-        });
-
-        if (threadTs && result.channelId && account.accountId) {
-          slackActionRuntime.recordSlackThreadParticipation(
-            account.accountId,
-            result.channelId,
-            threadTs,
-          );
-        }
+        };
+        const result =
+          mediaUrl && blocks
+            ? await (async () => {
+                await slackActionRuntime.sendSlackMessage(to, "", {
+                  ...sendOpts,
+                  mediaUrl,
+                });
+                return await slackActionRuntime.sendSlackMessage(to, content ?? "", {
+                  ...sendOpts,
+                  blocks,
+                });
+              })()
+            : await slackActionRuntime.sendSlackMessage(to, content ?? "", {
+                ...sendOpts,
+                mediaUrl: mediaUrl ?? undefined,
+                blocks,
+              });
 
         // Keep "first" mode consistent even when the agent explicitly provided
         // threadTs: once we send a message to the current channel, consider the
         // first reply "used" so later tool calls don't auto-thread again.
         if (context?.hasRepliedRef && context.currentChannelId) {
-          const parsedTarget = parseSlackTarget(to, { defaultKind: "channel" });
-          if (parsedTarget?.kind === "channel" && parsedTarget.id === context.currentChannelId) {
+          if (sameSlackChannelTarget(to, context.currentChannelId)) {
             context.hasRepliedRef.value = true;
           }
         }
@@ -301,17 +308,8 @@ export async function handleSlackAction(
           ...(title ? { uploadTitle: title } : {}),
         });
 
-        if (threadTs && result.channelId && account.accountId) {
-          slackActionRuntime.recordSlackThreadParticipation(
-            account.accountId,
-            result.channelId,
-            threadTs,
-          );
-        }
-
         if (context?.hasRepliedRef && context.currentChannelId) {
-          const parsedTarget = parseSlackTarget(to, { defaultKind: "channel" });
-          if (parsedTarget?.kind === "channel" && parsedTarget.id === context.currentChannelId) {
+          if (sameSlackChannelTarget(to, context.currentChannelId)) {
             context.hasRepliedRef.value = true;
           }
         }
@@ -362,12 +360,14 @@ export async function handleSlackAction(
         const before = readStringParam(params, "before");
         const after = readStringParam(params, "after");
         const threadId = readStringParam(params, "threadId");
+        const messageId = readStringParam(params, "messageId");
         const result = await slackActionRuntime.readSlackMessages(channelId, {
           ...readOpts,
           limit,
           before: before ?? undefined,
           after: after ?? undefined,
           threadId: threadId ?? undefined,
+          messageId: messageId ?? undefined,
         });
         const messages = result.messages.map((message) =>
           withNormalizedTimestamp(

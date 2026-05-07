@@ -168,6 +168,27 @@ describe("createOpenClawTools TTS config wiring", () => {
     }
   });
 
+  it("keeps direct TTS tool guidance explicit even when the tool is available", async () => {
+    const { __testing, createOpenClawTools } = await import("./openclaw-tools.js");
+    __testing.setDepsForTest({ config: {} });
+
+    try {
+      const tool = createOpenClawTools({
+        disableMessageTool: true,
+        disablePluginTools: true,
+      }).find((candidate) => candidate.name === "tts");
+
+      if (!tool) {
+        throw new Error("missing tts tool");
+      }
+
+      expect(tool.description).toContain("Use only for explicit audio intent");
+      expect(tool.description).toContain("Never use for ordinary text replies");
+    } finally {
+      __testing.setDepsForTest();
+    }
+  });
+
   it("passes the resolved session agent id into the tts tool", async () => {
     const injectedConfig = {
       agents: {
@@ -300,6 +321,28 @@ describe("createOpenClawTools cron context wiring", () => {
         accountId: "bot-a",
         threadId: "$FallbackThread:Example.Org",
       },
+    });
+  });
+
+  it("passes self-remove scope into the cron tool", async () => {
+    const { createOpenClawTools } = await import("./openclaw-tools.js");
+
+    createOpenClawTools({
+      agentSessionKey: "agent:main:cron:job-current",
+      cronSelfRemoveOnlyJobId: "job-current",
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createCronToolOptions).toHaveBeenCalledWith({
+      agentSessionKey: "agent:main:cron:job-current",
+      currentDeliveryContext: {
+        channel: undefined,
+        to: undefined,
+        accountId: undefined,
+        threadId: undefined,
+      },
+      selfRemoveOnlyJobId: "job-current",
     });
   });
 });

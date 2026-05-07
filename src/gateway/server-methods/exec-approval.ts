@@ -1,6 +1,8 @@
+import { resolveCommandAnalysisSummaryForDisplay } from "../../infra/command-analysis/explain.js";
 import {
   resolveExecApprovalCommandDisplay,
   sanitizeExecApprovalDisplayText,
+  sanitizeExecApprovalWarningText,
 } from "../../infra/exec-approval-command-display.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
@@ -131,6 +133,7 @@ export function createExecApprovalHandlers(
         host?: string;
         security?: string;
         ask?: string;
+        warningText?: string | null;
         agentId?: string;
         resolvedPath?: string;
         sessionKey?: string;
@@ -204,6 +207,14 @@ export function createExecApprovalHandlers(
         return;
       }
       const envBinding = buildSystemRunApprovalEnvBinding(p.env);
+      const warningText = normalizeOptionalString(p.warningText);
+      const commandAnalysis = resolveCommandAnalysisSummaryForDisplay({
+        host,
+        commandText: effectiveCommandText,
+        commandArgv: effectiveCommandArgv,
+        cwd: effectiveCwd,
+        sanitizeText: sanitizeExecApprovalWarningText,
+      });
       const systemRunBinding =
         host === "node"
           ? buildSystemRunApprovalBinding({
@@ -237,6 +248,8 @@ export function createExecApprovalHandlers(
         host: host || null,
         security: p.security ?? null,
         ask: p.ask ?? null,
+        warningText: warningText ? sanitizeExecApprovalWarningText(warningText) : null,
+        commandAnalysis,
         allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: p.ask ?? null }),
         agentId: effectiveAgentId ?? null,
         resolvedPath: p.resolvedPath ?? null,
@@ -250,6 +263,7 @@ export function createExecApprovalHandlers(
       record.requestedByConnId = client?.connId ?? null;
       record.requestedByDeviceId = client?.connect?.device?.id ?? null;
       record.requestedByClientId = client?.connect?.client?.id ?? null;
+      record.requestedByDeviceTokenAuth = client?.isDeviceTokenAuth === true;
       // Use register() to synchronously add to pending map before sending any response.
       // This ensures the approval ID is valid immediately after the "accepted" response.
       let decisionPromise: Promise<

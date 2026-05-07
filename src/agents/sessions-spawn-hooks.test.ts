@@ -65,6 +65,7 @@ async function spawn(params?: {
   runTimeoutSeconds?: number;
   thread?: boolean;
   mode?: "run" | "session";
+  context?: "isolated" | "fork";
   agentSessionKey?: string;
   agentChannel?: string;
   agentAccountId?: string;
@@ -80,6 +81,7 @@ async function spawn(params?: {
         : {}),
       ...(params?.thread ? { thread: true } : {}),
       ...(params?.mode ? { mode: params.mode } : {}),
+      context: params?.context ?? "isolated",
     },
     {
       agentSessionKey: params?.agentSessionKey ?? "main",
@@ -168,6 +170,9 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       session: {
         mainKey: "main",
         scope: "per-sender",
+        threadBindings: {
+          defaultSpawnContext: "isolated",
+        },
       },
     });
     const store: Record<string, Record<string, unknown>> = {};
@@ -207,6 +212,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       agentAccountId: "work",
       agentTo: "channel:123",
       agentThreadId: 456,
+      context: "isolated",
     });
 
     expect(result).toMatchObject({ status: "accepted", runId: "run-1" });
@@ -285,6 +291,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       thread: true,
       mode: "run",
       agentTo: "channel:123",
+      context: "isolated",
     });
 
     expect(result).toMatchObject({ status: "accepted", runId: "run-1", mode: "run" });
@@ -308,6 +315,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       mode: "session",
       agentAccountId: "work",
       agentTo: "channel:123",
+      context: "isolated",
     });
 
     expectThreadBindFailureCleanup(result, /thread/i);
@@ -325,6 +333,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       mode: "session",
       agentAccountId: "work",
       agentTo: "channel:123",
+      context: "isolated",
     });
 
     expectThreadBindFailureCleanup(result, /unable to create or bind a thread/i);
@@ -348,6 +357,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       mode: "session",
       agentChannel: "signal",
       agentTo: "+123",
+      context: "isolated",
     });
 
     expectErrorResultMessage(result, /only discord/i);
@@ -364,6 +374,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       agentAccountId: "work",
       agentTo: "channel:123",
       agentThreadId: "456",
+      context: "isolated",
     });
 
     expect(result).toMatchObject({ status: "error" });
@@ -397,6 +408,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       agentAccountId: "work",
       agentTo: "channel:123",
       agentThreadId: "456",
+      context: "isolated",
     });
 
     expect(result).toMatchObject({ status: "error" });
@@ -441,6 +453,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       agentAccountId: "work",
       agentTo: "channel:123",
       agentThreadId: "456",
+      context: "isolated",
     });
 
     expect(result.status).toBe("error");

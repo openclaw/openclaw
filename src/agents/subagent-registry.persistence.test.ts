@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
 import {
   clearSessionStoreCacheForTest,
-  drainSessionStoreLockQueuesForTest,
+  drainSessionStoreWriterQueuesForTest,
 } from "../config/sessions/store.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
@@ -207,7 +207,7 @@ describe("subagent registry persistence", () => {
     announceSpy.mockClear();
     __testing.setDepsForTest();
     resetSubagentRegistryForTests({ persist: false });
-    await drainSessionStoreLockQueuesForTest();
+    await drainSessionStoreWriterQueuesForTest();
     clearSessionStoreCacheForTest();
     if (tempStateDir) {
       await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
@@ -326,6 +326,84 @@ describe("subagent registry persistence", () => {
 
     const after = JSON.parse(await fs.readFile(registryPath, "utf8")) as { version?: number };
     expect(after.version).toBe(2);
+  });
+
+  it("returns isolated clones for unchanged persisted registry snapshots", async () => {
+    const registryPath = await writePersistedRegistry(
+      {
+        version: 2,
+        runs: {
+          "run-cached": {
+            runId: "run-cached",
+            childSessionKey: "agent:main:subagent:cached",
+            requesterSessionKey: "agent:main:main",
+            requesterOrigin: { channel: "telegram", accountId: "cached-account" },
+            requesterDisplayKey: "main",
+            task: "cached persisted run",
+            cleanup: "keep",
+            createdAt: 1,
+            startedAt: 1,
+            outcome: { status: "ok" },
+          },
+        },
+      },
+      { seedChildSessions: false },
+    );
+    const first = loadSubagentRegistryFromDisk();
+    first.clear();
+    const cachedEntry = loadSubagentRegistryFromDisk().get("run-cached");
+    if (!cachedEntry) {
+      throw new Error("expected cached run");
+    }
+    cachedEntry.endedAt = 999;
+    cachedEntry.cleanupHandled = true;
+    if (cachedEntry.requesterOrigin) {
+      cachedEntry.requesterOrigin.accountId = "mutated-account";
+    }
+    if (cachedEntry.outcome) {
+      cachedEntry.outcome.status = "error";
+    }
+    const second = loadSubagentRegistryFromDisk();
+
+    expect(second.get("run-cached")).toMatchObject({
+      requesterOrigin: { accountId: "cached-account" },
+      outcome: { status: "ok" },
+    });
+    expect(second.get("run-cached")?.endedAt).toBeUndefined();
+    expect(second.get("run-cached")?.cleanupHandled).toBeUndefined();
+
+    await fs.writeFile(
+      registryPath,
+      `${JSON.stringify({
+        version: 2,
+        runs: {
+          "run-updated": {
+            runId: "run-updated",
+            childSessionKey: "agent:main:subagent:updated",
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            task: "updated persisted run with a longer payload",
+            cleanup: "keep",
+            createdAt: 2,
+            startedAt: 2,
+          },
+        },
+      })}\n`,
+      "utf8",
+    );
+
+    expect(loadSubagentRegistryFromDisk().has("run-updated")).toBe(true);
+  });
+
+  it("returns empty maps for unchanged invalid persisted registry snapshots", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    const registryPath = path.join(tempStateDir, "subagents", "runs.json");
+    await fs.mkdir(path.dirname(registryPath), { recursive: true });
+    await fs.writeFile(registryPath, "{invalid", "utf8");
+
+    expect(loadSubagentRegistryFromDisk()).toEqual(new Map());
+    expect(loadSubagentRegistryFromDisk()).toEqual(new Map());
   });
 
   it("normalizes persisted and newly registered session keys to canonical trimmed values", async () => {

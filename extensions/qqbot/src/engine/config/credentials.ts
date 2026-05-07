@@ -12,7 +12,7 @@ import { DEFAULT_ACCOUNT_ID } from "./resolve.js";
 
 // ---- Logout: clear all credential fields for an account ----
 
-export interface ClearCredentialsResult {
+interface ClearCredentialsResult {
   nextCfg: Record<string, unknown>;
   cleared: boolean;
   changed: boolean;
@@ -73,48 +73,4 @@ export function clearAccountCredentials(
   }
 
   return { nextCfg, cleared, changed };
-}
-
-// ---- Setup: clear a single credential field ----
-
-export type CredentialField = "appId" | "clientSecret";
-
-/**
- * Clear a single credential field from a QQBot account config.
- *
- * Used by setup flows when switching to env-backed credential resolution.
- * Returns a new config with the specified field removed.
- */
-export function clearCredentialField(
-  cfg: Record<string, unknown>,
-  accountId: string,
-  field: CredentialField,
-): Record<string, unknown> {
-  const next = { ...cfg };
-  const channels = asRecord(cfg.channels);
-  const qqbot = { ...asRecord(channels?.qqbot) };
-
-  const clearField = (entry: Record<string, unknown>) => {
-    if (field === "appId") {
-      delete entry.appId;
-      return;
-    }
-    delete entry.clientSecret;
-    delete entry.clientSecretFile;
-  };
-
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    clearField(qqbot);
-  } else {
-    const accounts = { ...(qqbot.accounts as Record<string, Record<string, unknown>> | undefined) };
-    if (accounts[accountId]) {
-      const entry = { ...accounts[accountId] };
-      clearField(entry);
-      accounts[accountId] = entry;
-      qqbot.accounts = accounts;
-    }
-  }
-
-  next.channels = { ...channels, qqbot };
-  return next;
 }

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { maybeRepairLegacyCronStore } from "./doctor-cron.js";
+import { maybeRepairLegacyCronStore, noteLegacyWhatsAppCrontabHealthCheck } from "./doctor-cron.js";
 
 type TerminalNote = (message: string, title?: string) => void;
 
@@ -156,6 +156,67 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(noteMock).toHaveBeenCalledWith(
       expect.stringContaining("missing a canonical string `id`"),
       "Cron",
+    );
+  });
+
+  it("repairs invalid persisted cron payload model sentinels", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [
+      {
+        id: "bad-model-default",
+        name: "Bad model default",
+        enabled: true,
+        createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
+        updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: {
+          kind: "agentTurn",
+          message: "Status",
+          model: "default",
+        },
+        delivery: { mode: "announce" },
+        state: {},
+      },
+      {
+        id: "bad-model-null",
+        name: "Bad model null",
+        enabled: true,
+        createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
+        updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: {
+          kind: "agentTurn",
+          message: "Status",
+          model: "null",
+        },
+        delivery: { mode: "announce" },
+        state: {},
+      },
+    ]);
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    for (const job of persisted.jobs) {
+      expect((job.payload as Record<string, unknown>).model).toBeUndefined();
+    }
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("2 jobs store an invalid cron payload model inheritance sentinel"),
+      "Cron",
+    );
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("Cron store normalized"),
+      "Doctor changes",
     );
   });
 
@@ -383,5 +444,48 @@ describe("maybeRepairLegacyCronStore", () => {
       expect.stringContaining("Rewrote 1 managed dreaming job"),
       "Doctor changes",
     );
+  });
+});
+
+describe("noteLegacyWhatsAppCrontabHealthCheck", () => {
+  it("warns about legacy ensure-whatsapp crontab entries on Linux", async () => {
+    await noteLegacyWhatsAppCrontabHealthCheck({
+      platform: "linux",
+      readCrontab: async () => ({
+        stdout: [
+          "# keep comments ignored",
+          "*/5 * * * * ~/.openclaw/bin/ensure-whatsapp.sh >> ~/.openclaw/logs/whatsapp-health.log 2>&1",
+          "0 9 * * * /usr/bin/true",
+          "",
+        ].join("\n"),
+      }),
+    });
+
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("Legacy WhatsApp crontab health check detected"),
+      "Cron",
+    );
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("systemd user bus environment is missing"),
+      "Cron",
+    );
+    expect(noteMock).toHaveBeenCalledWith(expect.stringContaining("Matched 1 entry"), "Cron");
+  });
+
+  it("ignores missing crontab support and non-Linux hosts", async () => {
+    await noteLegacyWhatsAppCrontabHealthCheck({
+      platform: "darwin",
+      readCrontab: async () => {
+        throw new Error("should not read crontab on non-Linux");
+      },
+    });
+    await noteLegacyWhatsAppCrontabHealthCheck({
+      platform: "linux",
+      readCrontab: async () => {
+        throw Object.assign(new Error("crontab missing"), { code: "ENOENT" });
+      },
+    });
+
+    expect(noteMock).not.toHaveBeenCalled();
   });
 });

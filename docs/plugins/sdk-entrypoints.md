@@ -28,9 +28,12 @@ JavaScript when available:
 `extensions` and `setupEntry` remain valid source entries for workspace and git
 checkout development. `runtimeExtensions` and `runtimeSetupEntry` are preferred
 when OpenClaw loads an installed package and let npm packages avoid runtime
-TypeScript compilation. If an installed package only declares a TypeScript
-source entry, OpenClaw will use a matching built `dist/*.js` peer when one
-exists, then fall back to the TypeScript source.
+TypeScript compilation. Explicit runtime entries are required: `runtimeSetupEntry`
+requires `setupEntry`, and missing `runtimeExtensions` or `runtimeSetupEntry`
+artifacts fail install/discovery instead of silently falling back to source. If
+an installed package only declares a TypeScript source entry, OpenClaw will use a
+matching built `dist/*.js` peer when one exists, then fall back to the TypeScript
+source.
 
 All entry paths must stay inside the plugin package directory. Runtime entries
 and inferred built JavaScript peers do not make an escaping `extensions` or
@@ -68,12 +71,12 @@ export default definePluginEntry({
 
 | Field          | Type                                                             | Required | Default             |
 | -------------- | ---------------------------------------------------------------- | -------- | ------------------- |
-| `id`           | `string`                                                         | Yes      | —                   |
-| `name`         | `string`                                                         | Yes      | —                   |
-| `description`  | `string`                                                         | Yes      | —                   |
-| `kind`         | `string`                                                         | No       | —                   |
+| `id`           | `string`                                                         | Yes      | -                   |
+| `name`         | `string`                                                         | Yes      | -                   |
+| `description`  | `string`                                                         | Yes      | -                   |
+| `kind`         | `string`                                                         | No       | -                   |
 | `configSchema` | `OpenClawPluginConfigSchema \| () => OpenClawPluginConfigSchema` | No       | Empty object schema |
-| `register`     | `(api: OpenClawPluginApi) => void`                               | Yes      | —                   |
+| `register`     | `(api: OpenClawPluginApi) => void`                               | Yes      | -                   |
 
 - `id` must match your `openclaw.plugin.json` manifest.
 - `kind` is for exclusive slots: `"memory"` or `"context-engine"`.
@@ -109,14 +112,14 @@ export default defineChannelPluginEntry({
 
 | Field                 | Type                                                             | Required | Default             |
 | --------------------- | ---------------------------------------------------------------- | -------- | ------------------- |
-| `id`                  | `string`                                                         | Yes      | —                   |
-| `name`                | `string`                                                         | Yes      | —                   |
-| `description`         | `string`                                                         | Yes      | —                   |
-| `plugin`              | `ChannelPlugin`                                                  | Yes      | —                   |
+| `id`                  | `string`                                                         | Yes      | -                   |
+| `name`                | `string`                                                         | Yes      | -                   |
+| `description`         | `string`                                                         | Yes      | -                   |
+| `plugin`              | `ChannelPlugin`                                                  | Yes      | -                   |
 | `configSchema`        | `OpenClawPluginConfigSchema \| () => OpenClawPluginConfigSchema` | No       | Empty object schema |
-| `setRuntime`          | `(runtime: PluginRuntime) => void`                               | No       | —                   |
-| `registerCliMetadata` | `(api: OpenClawPluginApi) => void`                               | No       | —                   |
-| `registerFull`        | `(api: OpenClawPluginApi) => void`                               | No       | —                   |
+| `setRuntime`          | `(runtime: PluginRuntime) => void`                               | No       | -                   |
+| `registerCliMetadata` | `(api: OpenClawPluginApi) => void`                               | No       | -                   |
+| `registerFull`        | `(api: OpenClawPluginApi) => void`                               | No       | -                   |
 
 - `setRuntime` is called during registration so you can store the runtime reference
   (typically via `createPluginRuntimeStore`). It is skipped during CLI metadata
@@ -272,8 +275,8 @@ Use `openclaw plugins inspect <id>` to see a plugin's shape.
 
 ## Related
 
-- [SDK Overview](/plugins/sdk-overview) — registration API and subpath reference
-- [Runtime Helpers](/plugins/sdk-runtime) — `api.runtime` and `createPluginRuntimeStore`
-- [Setup and Config](/plugins/sdk-setup) — manifest, setup entry, deferred loading
-- [Channel Plugins](/plugins/sdk-channel-plugins) — building the `ChannelPlugin` object
-- [Provider Plugins](/plugins/sdk-provider-plugins) — provider registration and hooks
+- [SDK Overview](/plugins/sdk-overview) - registration API and subpath reference
+- [Runtime Helpers](/plugins/sdk-runtime) - `api.runtime` and `createPluginRuntimeStore`
+- [Setup and Config](/plugins/sdk-setup) - manifest, setup entry, deferred loading
+- [Channel Plugins](/plugins/sdk-channel-plugins) - building the `ChannelPlugin` object
+- [Provider Plugins](/plugins/sdk-provider-plugins) - provider registration and hooks

@@ -28,7 +28,7 @@ export async function fetchHealthUrl(url: string): Promise<{ ok: boolean }> {
   }
 }
 
-export function describeError(error: unknown) {
+function describeError(error: unknown) {
   if (error instanceof Error) {
     return error.message;
   }
@@ -273,8 +273,3 @@ export async function resolveComposeServiceUrl(
   }
   return (await isHealthy(`${baseUrl}healthz`, fetchImpl)) ? baseUrl : null;
 }
-
-export const __testing = {
-  fetchHealthUrl,
-  normalizeDockerServiceStatus,
-};

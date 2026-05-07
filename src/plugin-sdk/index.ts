@@ -95,7 +95,10 @@ export type { RuntimeEnv } from "../runtime.js";
 export type { HookEntry } from "../hooks/types.js";
 export type { ReplyPayload } from "./reply-payload.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
-export type { ContextEngineFactory } from "../context-engine/registry.js";
+export type {
+  ContextEngineFactory,
+  ContextEngineFactoryContext,
+} from "../context-engine/registry.js";
 export type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
 export type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 export type {
@@ -122,3 +125,4 @@ export {
   delegateCompactionToRuntime,
 } from "../context-engine/delegate.js";
 export { onDiagnosticEvent } from "../infra/diagnostic-events.js";
+export { optionalStringEnum, stringEnum } from "../agents/schema/typebox.js";

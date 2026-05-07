@@ -26,6 +26,10 @@ const mocks = vi.hoisted(() => {
     waitForGatewayReachable: vi.fn(),
     resolveControlUiLinks: vi.fn(),
     summarizeExistingConfig: vi.fn(),
+    promptRemoteGatewayConfig: vi.fn(async (cfg: OpenClawConfig) => ({
+      ...cfg,
+      gateway: { mode: "remote", remote: { url: "wss://gateway.example.test" } },
+    })),
     isCodexNativeWebSearchRelevant: vi.fn(({ config }: { config: OpenClawConfig }) =>
       Boolean(config.auth?.profiles?.["openai-codex:default"]),
     ),
@@ -98,7 +102,7 @@ vi.mock("./configure.daemon.js", () => ({
 }));
 
 vi.mock("./onboard-remote.js", () => ({
-  promptRemoteGatewayConfig: vi.fn(),
+  promptRemoteGatewayConfig: mocks.promptRemoteGatewayConfig,
 }));
 
 vi.mock("./onboard-skills.js", () => ({
@@ -247,7 +251,6 @@ describe("runConfigureWizard", () => {
       }),
     );
   });
-
   it("keeps startup gateway hint probes bounded", async () => {
     setupBaseWizardState({
       gateway: {

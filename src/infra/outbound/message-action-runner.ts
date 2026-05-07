@@ -5,7 +5,9 @@ import {
   readStringArrayParam,
   readStringParam,
 } from "../../agents/tools/common.js";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
@@ -18,15 +20,16 @@ import {
   hasInteractiveReplyBlocks,
   hasMessagePresentationBlocks,
   hasReplyPayloadContent,
+  normalizeInteractiveReply,
   normalizeMessagePresentation,
+  type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
-import { buildChannelAccountBindings } from "../../routing/bindings.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -72,6 +75,7 @@ import {
 } from "./outbound-policy.js";
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
+import { normalizeTargetForProvider } from "./target-normalization.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import { extractToolPayload } from "./tool-payload.js";
 
@@ -171,8 +175,13 @@ export function getToolResult(
 }
 
 function resolveGatewayActionOptions(gateway?: MessageActionRunnerGateway) {
+  const url =
+    gateway?.mode === GATEWAY_CLIENT_MODES.BACKEND ||
+    gateway?.clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
+      ? undefined
+      : gateway?.url;
   return {
-    url: gateway?.url,
+    url,
     token: gateway?.token,
     timeoutMs:
       typeof gateway?.timeoutMs === "number" && Number.isFinite(gateway.timeoutMs)
@@ -284,6 +293,80 @@ async function resolveChannel(
     params.channel = selection.channel;
   }
   return selection.channel;
+}
+
+function addCandidateAndUnprefixedAlias(candidates: Set<string>, value?: string | null) {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
+    return;
+  }
+  candidates.add(normalized);
+  const unprefixed = normalized.replace(/^(channel|group|user):/i, "").trim();
+  if (unprefixed && unprefixed !== normalized) {
+    candidates.add(unprefixed);
+  }
+}
+
+function normalizeTargetForAccountBinding(channel: ChannelId, target: string): string | undefined {
+  try {
+    return normalizeTargetForProvider(channel, target);
+  } catch {
+    return undefined;
+  }
+}
+
+function inferPeerKindForAccountBinding(channel: ChannelId, target: string): ChatType | undefined {
+  const inferred = normalizeChatType(
+    getChannelPlugin(channel)?.messaging?.inferTargetChatType?.({ to: target }),
+  );
+  if (inferred) {
+    return inferred;
+  }
+  const normalized = normalizeTargetForAccountBinding(channel, target);
+  const candidates = [target, normalized].filter((value): value is string => Boolean(value));
+  if (candidates.some((value) => /^user:/i.test(value))) {
+    return "direct";
+  }
+  if (candidates.some((value) => /^(channel|group):/i.test(value))) {
+    return "channel";
+  }
+  return undefined;
+}
+
+function resolveTargetBoundAccountId(params: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  args: Record<string, unknown>;
+  agentId?: string;
+}): string | undefined {
+  if (!params.agentId) {
+    return undefined;
+  }
+  const target =
+    normalizeOptionalString(params.args.to) ?? normalizeOptionalString(params.args.channelId) ?? "";
+  if (!target) {
+    return resolveFirstBoundAccountId({
+      cfg: params.cfg,
+      channelId: params.channel,
+      agentId: params.agentId,
+    });
+  }
+
+  const candidates = new Set<string>();
+  addCandidateAndUnprefixedAlias(candidates, target);
+  addCandidateAndUnprefixedAlias(
+    candidates,
+    normalizeTargetForAccountBinding(params.channel, target),
+  );
+  const [peerId, ...exactPeerIdAliases] = Array.from(candidates);
+  return resolveFirstBoundAccountId({
+    cfg: params.cfg,
+    channelId: params.channel,
+    agentId: params.agentId,
+    peerId,
+    exactPeerIdAliases,
+    peerKind: inferPeerKindForAccountBinding(params.channel, target),
+  });
 }
 
 async function resolveActionTarget(params: {
@@ -610,6 +693,11 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const gifPlayback = readBooleanParam(params, "gifPlayback") ?? false;
   const forceDocument =
     readBooleanParam(params, "forceDocument") ?? readBooleanParam(params, "asDocument") ?? false;
+  const asVoice =
+    readBooleanParam(params, "asVoice") ??
+    readBooleanParam(params, "audioAsVoice") ??
+    parsed.audioAsVoice ??
+    false;
   const bestEffort = readBooleanParam(params, "bestEffort");
   const silent = readBooleanParam(params, "silent");
 
@@ -634,6 +722,28 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   });
   const mirrorMediaUrls =
     mergedMediaUrls.length > 0 ? mergedMediaUrls : mediaUrl ? [mediaUrl] : undefined;
+  const rawDelivery = params.delivery;
+  const delivery =
+    rawDelivery && typeof rawDelivery === "object" && !Array.isArray(rawDelivery)
+      ? (rawDelivery as ReplyPayloadDelivery)
+      : undefined;
+  const rawChannelData = params.channelData;
+  const channelData =
+    rawChannelData && typeof rawChannelData === "object" && !Array.isArray(rawChannelData)
+      ? (rawChannelData as Record<string, unknown>)
+      : undefined;
+  const presentation = normalizeMessagePresentation(params.presentation);
+  const interactive = normalizeInteractiveReply(params.interactive);
+  const payload: ReplyPayload = {
+    text: message,
+    ...(mediaUrl ? { mediaUrl } : {}),
+    ...(mergedMediaUrls.length ? { mediaUrls: mergedMediaUrls } : {}),
+    ...(asVoice ? { audioAsVoice: true } : {}),
+    ...(presentation ? { presentation } : {}),
+    ...(interactive ? { interactive } : {}),
+    ...(delivery ? { delivery } : {}),
+    ...(channelData ? { channelData } : {}),
+  };
   throwIfAborted(abortSignal);
 
   const gatewayPluginAction = await runGatewayPluginMessageActionOrNull({
@@ -694,8 +804,10 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     },
     to,
     message,
+    payload,
     mediaUrl: mediaUrl || undefined,
     mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
+    asVoice,
     gifPlayback,
     forceDocument,
     bestEffort: bestEffort ?? undefined,
@@ -935,11 +1047,12 @@ export async function runMessageAction(
   const channel = await resolveChannel(cfg, params, input.toolContext);
   let accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
   if (!accountId && resolvedAgentId) {
-    const byAgent = buildChannelAccountBindings(cfg).get(channel);
-    const boundAccountIds = byAgent?.get(normalizeAgentId(resolvedAgentId));
-    if (boundAccountIds && boundAccountIds.length > 0) {
-      accountId = boundAccountIds[0];
-    }
+    accountId = resolveTargetBoundAccountId({
+      cfg,
+      channel,
+      args: params,
+      agentId: resolvedAgentId,
+    });
   }
   if (accountId) {
     params.accountId = accountId;

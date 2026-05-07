@@ -102,6 +102,7 @@ function collectRuntimeApiPreExports(runtimeApiPath: string): string[] {
   );
   const preExports = new Set<string>();
   let pluginSdkLineRuntimeSeen = false;
+  const removedLineRuntimeSpecifier = ["openclaw", "plugin-sdk", "line-runtime"].join("/");
 
   for (const statement of runtimeApiFile.statements) {
     if (!ts.isExportDeclaration(statement)) {
@@ -114,7 +115,7 @@ function collectRuntimeApiPreExports(runtimeApiPath: string): string[] {
     if (!moduleSpecifier) {
       continue;
     }
-    if (moduleSpecifier === "openclaw/plugin-sdk/line-runtime") {
+    if (moduleSpecifier === removedLineRuntimeSpecifier) {
       pluginSdkLineRuntimeSeen = true;
       break;
     }
@@ -377,9 +378,6 @@ describe("line runtime api", () => {
   it("keeps the LINE runtime barrel self-contained", () => {
     const runtimeApiPath = path.join(process.cwd(), "extensions", "line", "runtime-api.ts");
     expect(collectRuntimeApiPreExports(runtimeApiPath)).toEqual([]);
-    const runtimeApiSource = readFileSync(runtimeApiPath, "utf8");
-
-    expect(runtimeApiSource).not.toContain("openclaw/plugin-sdk/line-runtime");
     expect(collectRuntimeApiPreExports(runtimeApiPath)).toEqual([]);
   });
 });

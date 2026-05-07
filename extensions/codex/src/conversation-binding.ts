@@ -5,12 +5,16 @@ import type {
   PluginHookInboundClaimEvent,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import {
   codexSandboxPolicyForTurn,
   resolveCodexAppServerRuntimeOptions,
+  type CodexAppServerApprovalPolicy,
+  type CodexAppServerSandboxMode,
 } from "./app-server/config.js";
 import {
+  type CodexServiceTier,
   type CodexThreadResumeResponse,
   type CodexThreadStartResponse,
   type CodexTurnStartResponse,
@@ -18,10 +22,14 @@ import {
 } from "./app-server/protocol.js";
 import {
   clearCodexAppServerBinding,
+  isCodexAppServerNativeAuthProfile,
+  normalizeCodexAppServerBindingModelProvider,
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
+  type CodexAppServerAuthProfileLookup,
 } from "./app-server/session-binding.js";
 import { getSharedCodexAppServerClient } from "./app-server/shared-client.js";
+import { formatCodexDisplayText } from "./command-formatters.js";
 import {
   createCodexConversationBindingData,
   readCodexConversationBindingData,
@@ -36,11 +44,8 @@ import { buildCodexConversationTurnInput } from "./conversation-turn-input.js";
 const DEFAULT_BOUND_TURN_TIMEOUT_MS = 20 * 60_000;
 
 export {
-  createCodexConversationBindingData,
   readCodexConversationBindingData,
-  readCodexConversationBindingDataRecord,
   resolveCodexDefaultWorkspaceDir,
-  type CodexConversationBindingData,
 } from "./conversation-binding-data.js";
 
 type CodexConversationRunOptions = {
@@ -50,11 +55,16 @@ type CodexConversationRunOptions = {
 
 type CodexConversationStartParams = {
   pluginConfig?: unknown;
+  config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   sessionFile: string;
   workspaceDir?: string;
   threadId?: string;
   model?: string;
   modelProvider?: string;
+  authProfileId?: string;
+  approvalPolicy?: CodexAppServerApprovalPolicy;
+  sandbox?: CodexAppServerSandboxMode;
+  serviceTier?: CodexServiceTier;
 };
 
 type BoundTurnResult = {
@@ -80,6 +90,13 @@ export async function startCodexConversationThread(
 ): Promise<CodexConversationBindingData> {
   const workspaceDir =
     params.workspaceDir?.trim() || resolveCodexDefaultWorkspaceDir(params.pluginConfig);
+  const existingBinding = await readCodexAppServerBinding(params.sessionFile, {
+    config: params.config,
+  });
+  const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
+    authProfileId: params.authProfileId ?? existingBinding?.authProfileId,
+    config: params.config,
+  });
   if (params.threadId?.trim()) {
     await attachExistingThread({
       pluginConfig: params.pluginConfig,
@@ -88,6 +105,11 @@ export async function startCodexConversationThread(
       workspaceDir,
       model: params.model,
       modelProvider: params.modelProvider,
+      authProfileId,
+      approvalPolicy: params.approvalPolicy,
+      sandbox: params.sandbox,
+      serviceTier: params.serviceTier,
+      config: params.config,
     });
   } else {
     await createThread({
@@ -96,6 +118,11 @@ export async function startCodexConversationThread(
       workspaceDir,
       model: params.model,
       modelProvider: params.modelProvider,
+      authProfileId,
+      approvalPolicy: params.approvalPolicy,
+      sandbox: params.sandbox,
+      serviceTier: params.serviceTier,
+      config: params.config,
     });
   }
   return createCodexConversationBindingData({
@@ -116,13 +143,13 @@ export async function handleCodexConversationInboundClaim(
   if (event.commandAuthorized !== true) {
     return { handled: true };
   }
-  const prompt = (event.bodyForAgent ?? event.content ?? "").trim();
+  const prompt = event.bodyForAgent?.trim() || event.content?.trim() || "";
   if (!prompt) {
     return { handled: true };
   }
   try {
     const result = await enqueueBoundTurn(data.sessionFile, () =>
-      runBoundTurn({
+      runBoundTurnWithMissingThreadRecovery({
         data,
         prompt,
         event,
@@ -135,7 +162,7 @@ export async function handleCodexConversationInboundClaim(
     return {
       handled: true,
       reply: {
-        text: `Codex app-server turn failed: ${formatErrorMessage(error)}`,
+        text: `Codex app-server turn failed: ${formatCodexDisplayText(formatErrorMessage(error))}`,
       },
     };
   }
@@ -161,36 +188,62 @@ async function attachExistingThread(params: {
   workspaceDir: string;
   model?: string;
   modelProvider?: string;
+  authProfileId?: string;
+  approvalPolicy?: CodexAppServerApprovalPolicy;
+  sandbox?: CodexAppServerSandboxMode;
+  serviceTier?: CodexServiceTier;
+  config?: CodexAppServerAuthProfileLookup["config"];
 }): Promise<void> {
-  const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig: params.pluginConfig });
+  const runtime = resolveCodexAppServerRuntimeOptions({
+    pluginConfig: params.pluginConfig,
+  });
+  const modelProvider = resolveThreadRequestModelProvider({
+    authProfileId: params.authProfileId,
+    modelProvider: params.modelProvider,
+    config: params.config,
+  });
   const client = await getSharedCodexAppServerClient({
     startOptions: runtime.start,
     timeoutMs: runtime.requestTimeoutMs,
+    authProfileId: params.authProfileId,
   });
   const response: CodexThreadResumeResponse = await client.request(
     CODEX_CONTROL_METHODS.resumeThread,
     {
       threadId: params.threadId,
       ...(params.model ? { model: params.model } : {}),
-      ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
-      approvalPolicy: runtime.approvalPolicy,
+      ...(modelProvider ? { modelProvider } : {}),
+      approvalPolicy: params.approvalPolicy ?? runtime.approvalPolicy,
       approvalsReviewer: runtime.approvalsReviewer,
-      sandbox: runtime.sandbox,
-      ...(runtime.serviceTier ? { serviceTier: runtime.serviceTier } : {}),
+      sandbox: params.sandbox ?? runtime.sandbox,
+      ...((params.serviceTier ?? runtime.serviceTier)
+        ? { serviceTier: params.serviceTier ?? runtime.serviceTier }
+        : {}),
       persistExtendedHistory: true,
     },
     { timeoutMs: runtime.requestTimeoutMs },
   );
   const thread = response.thread;
-  await writeCodexAppServerBinding(params.sessionFile, {
-    threadId: thread.id,
-    cwd: thread.cwd ?? params.workspaceDir,
-    model: response.model ?? params.model,
-    modelProvider: response.modelProvider ?? params.modelProvider,
-    approvalPolicy: runtime.approvalPolicy,
-    sandbox: runtime.sandbox,
-    serviceTier: runtime.serviceTier,
-  });
+  await writeCodexAppServerBinding(
+    params.sessionFile,
+    {
+      threadId: thread.id,
+      cwd: thread.cwd ?? params.workspaceDir,
+      authProfileId: params.authProfileId,
+      model: response.model ?? params.model,
+      modelProvider: normalizeCodexAppServerBindingModelProvider({
+        config: params.config,
+        authProfileId: params.authProfileId,
+        modelProvider: response.modelProvider ?? params.modelProvider,
+      }),
+      approvalPolicy: params.approvalPolicy ?? runtime.approvalPolicy,
+      sandbox: params.sandbox ?? runtime.sandbox,
+      serviceTier: params.serviceTier ?? runtime.serviceTier,
+    },
+    {
+      config: params.config,
+    },
+  );
 }
 
 async function createThread(params: {
@@ -199,22 +252,37 @@ async function createThread(params: {
   workspaceDir: string;
   model?: string;
   modelProvider?: string;
+  authProfileId?: string;
+  approvalPolicy?: CodexAppServerApprovalPolicy;
+  sandbox?: CodexAppServerSandboxMode;
+  serviceTier?: CodexServiceTier;
+  config?: CodexAppServerAuthProfileLookup["config"];
 }): Promise<void> {
-  const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig: params.pluginConfig });
+  const runtime = resolveCodexAppServerRuntimeOptions({
+    pluginConfig: params.pluginConfig,
+  });
+  const modelProvider = resolveThreadRequestModelProvider({
+    authProfileId: params.authProfileId,
+    modelProvider: params.modelProvider,
+    config: params.config,
+  });
   const client = await getSharedCodexAppServerClient({
     startOptions: runtime.start,
     timeoutMs: runtime.requestTimeoutMs,
+    authProfileId: params.authProfileId,
   });
   const response: CodexThreadStartResponse = await client.request(
     "thread/start",
     {
       cwd: params.workspaceDir,
       ...(params.model ? { model: params.model } : {}),
-      ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
-      approvalPolicy: runtime.approvalPolicy,
+      ...(modelProvider ? { modelProvider } : {}),
+      approvalPolicy: params.approvalPolicy ?? runtime.approvalPolicy,
       approvalsReviewer: runtime.approvalsReviewer,
-      sandbox: runtime.sandbox,
-      ...(runtime.serviceTier ? { serviceTier: runtime.serviceTier } : {}),
+      sandbox: params.sandbox ?? runtime.sandbox,
+      ...((params.serviceTier ?? runtime.serviceTier)
+        ? { serviceTier: params.serviceTier ?? runtime.serviceTier }
+        : {}),
       developerInstructions:
         "This Codex thread is bound to an OpenClaw conversation. Answer normally; OpenClaw will deliver your final response back to the conversation.",
       experimentalRawEvents: true,
@@ -222,15 +290,26 @@ async function createThread(params: {
     },
     { timeoutMs: runtime.requestTimeoutMs },
   );
-  await writeCodexAppServerBinding(params.sessionFile, {
-    threadId: response.thread.id,
-    cwd: response.thread.cwd ?? params.workspaceDir,
-    model: response.model ?? params.model,
-    modelProvider: response.modelProvider ?? params.modelProvider,
-    approvalPolicy: runtime.approvalPolicy,
-    sandbox: runtime.sandbox,
-    serviceTier: runtime.serviceTier,
-  });
+  await writeCodexAppServerBinding(
+    params.sessionFile,
+    {
+      threadId: response.thread.id,
+      cwd: response.thread.cwd ?? params.workspaceDir,
+      authProfileId: params.authProfileId,
+      model: response.model ?? params.model,
+      modelProvider: normalizeCodexAppServerBindingModelProvider({
+        config: params.config,
+        authProfileId: params.authProfileId,
+        modelProvider: response.modelProvider ?? params.modelProvider,
+      }),
+      approvalPolicy: params.approvalPolicy ?? runtime.approvalPolicy,
+      sandbox: params.sandbox ?? runtime.sandbox,
+      serviceTier: params.serviceTier ?? runtime.serviceTier,
+    },
+    {
+      config: params.config,
+    },
+  );
 }
 
 async function runBoundTurn(params: {
@@ -240,7 +319,9 @@ async function runBoundTurn(params: {
   pluginConfig?: unknown;
   timeoutMs?: number;
 }): Promise<BoundTurnResult> {
-  const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig: params.pluginConfig });
+  const runtime = resolveCodexAppServerRuntimeOptions({
+    pluginConfig: params.pluginConfig,
+  });
   const binding = await readCodexAppServerBinding(params.data.sessionFile);
   const threadId = binding?.threadId;
   if (!threadId) {
@@ -297,7 +378,10 @@ async function runBoundTurn(params: {
       "turn/start",
       {
         threadId,
-        input: buildCodexConversationTurnInput({ prompt: params.prompt, event: params.event }),
+        input: buildCodexConversationTurnInput({
+          prompt: params.prompt,
+          event: params.event,
+        }),
         cwd: binding.cwd || params.data.workspaceDir,
         approvalPolicy: binding.approvalPolicy ?? runtime.approvalPolicy,
         approvalsReviewer: runtime.approvalsReviewer,
@@ -336,6 +420,39 @@ async function runBoundTurn(params: {
   }
 }
 
+async function runBoundTurnWithMissingThreadRecovery(params: {
+  data: CodexConversationBindingData;
+  prompt: string;
+  event: PluginHookInboundClaimEvent;
+  pluginConfig?: unknown;
+  timeoutMs?: number;
+}): Promise<BoundTurnResult> {
+  try {
+    return await runBoundTurn(params);
+  } catch (error) {
+    if (!isCodexThreadNotFoundError(error)) {
+      throw error;
+    }
+    const binding = await readCodexAppServerBinding(params.data.sessionFile);
+    await startCodexConversationThread({
+      pluginConfig: params.pluginConfig,
+      sessionFile: params.data.sessionFile,
+      workspaceDir: binding?.cwd || params.data.workspaceDir,
+      model: binding?.model,
+      modelProvider: binding?.modelProvider,
+      authProfileId: binding?.authProfileId,
+      approvalPolicy: binding?.approvalPolicy,
+      sandbox: binding?.sandbox,
+      serviceTier: binding?.serviceTier,
+    });
+    return await runBoundTurn(params);
+  }
+}
+
+function isCodexThreadNotFoundError(error: unknown): boolean {
+  return /\bthread not found:/iu.test(formatErrorMessage(error));
+}
+
 function enqueueBoundTurn<T>(key: string, run: () => Promise<T>): Promise<T> {
   const state = getGlobalState();
   const previous = state.queues.get(key) ?? Promise.resolve();
@@ -345,16 +462,30 @@ function enqueueBoundTurn<T>(key: string, run: () => Promise<T>): Promise<T> {
     () => undefined,
   );
   state.queues.set(key, queued);
-  void next.finally(() => {
-    if (state.queues.get(key) === queued) {
-      state.queues.delete(key);
-    }
-  });
+  void next
+    .finally(() => {
+      if (state.queues.get(key) === queued) {
+        state.queues.delete(key);
+      }
+    })
+    .catch(() => undefined);
   return next;
 }
 
-export const __testing = {
-  resetQueues() {
-    getGlobalState().queues.clear();
-  },
-};
+function resolveThreadRequestModelProvider(params: {
+  authProfileId?: string;
+  modelProvider?: string;
+  config?: CodexAppServerAuthProfileLookup["config"];
+}): string | undefined {
+  const modelProvider = params.modelProvider?.trim();
+  if (!modelProvider || modelProvider.toLowerCase() === "codex") {
+    return undefined;
+  }
+  if (
+    isCodexAppServerNativeAuthProfile(params) &&
+    (modelProvider.toLowerCase() === "openai" || modelProvider.toLowerCase() === "openai-codex")
+  ) {
+    return undefined;
+  }
+  return modelProvider.toLowerCase() === "openai-codex" ? "openai" : modelProvider;
+}

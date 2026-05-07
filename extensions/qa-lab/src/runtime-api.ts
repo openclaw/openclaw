@@ -39,4 +39,4 @@ export type {
   QaBusStateSnapshot,
   QaBusThread,
   QaBusWaitForInput,
-} from "openclaw/plugin-sdk/qa-channel";
+} from "./protocol.js";

@@ -49,11 +49,16 @@ function writeRuntimeEntry(rootDir: string) {
   );
 }
 
+function writeManifestlessClaudeBundle(rootDir: string, entries: readonly string[] = ["skills"]) {
+  for (const entry of entries) {
+    fs.mkdirSync(path.join(rootDir, entry), { recursive: true });
+    fs.writeFileSync(path.join(rootDir, entry, "README.md"), `# ${entry}\n`, "utf-8");
+  }
+}
+
 function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-    OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-    OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
     OPENCLAW_VERSION: "2026.4.25",
     VITEST: "true",
     ...overrides,
@@ -85,15 +90,16 @@ function createPluginCandidate(params: {
   };
 }
 
-function createRichPluginFixture(params: { packageVersion?: string } = {}) {
+function createRichPluginFixture(params: { id?: string; packageVersion?: string } = {}) {
   const rootDir = makeTempDir();
+  const id = params.id ?? "demo";
   writeRuntimeEntry(rootDir);
   writePackageJson(rootDir, {
-    name: "@vendor/demo-plugin",
+    name: `@vendor/${id}`,
     version: params.packageVersion ?? "1.2.3",
   });
   writePluginManifest(rootDir, {
-    id: "demo",
+    id,
     name: "Demo",
     configSchema: { type: "object" },
     providers: ["demo"],
@@ -265,7 +271,7 @@ describe("installed plugin index", () => {
     });
   });
 
-  it("tags deprecated implicit startup sidecars for legacy plugins", () => {
+  it("does not classify legacy plugins as startup sidecars", () => {
     const rootDir = makeTempDir();
     writeRuntimeEntry(rootDir);
     writePluginManifest(rootDir, {
@@ -285,9 +291,9 @@ describe("installed plugin index", () => {
     expect(index.plugins[0]).toMatchObject({
       pluginId: "legacy-sidecar",
       startup: {
-        sidecar: true,
+        sidecar: false,
       },
-      compat: ["legacy-implicit-startup-sidecar"],
+      compat: [],
     });
   });
 
@@ -321,13 +327,75 @@ describe("installed plugin index", () => {
     expect(records[0]).toMatchObject({
       pluginId: "stale-record",
       startup: {
-        sidecar: true,
+        sidecar: false,
       },
-      compat: ["legacy-implicit-startup-sidecar"],
+      compat: [],
     });
   });
 
-  it("does not classify or tag explicit startup opt-outs as deprecated implicit sidecars", () => {
+  it("indexes manifestless Claude bundles without missing-manifest diagnostics", () => {
+    const rootDir = path.join(makeTempDir(), "workspace");
+    writeManifestlessClaudeBundle(rootDir);
+
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+          idHint: "workspace",
+          format: "bundle",
+          bundleFormat: "claude",
+          origin: "config",
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    expect(index.diagnostics).toEqual([]);
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "workspace",
+      manifestPath: path.join(rootDir, ".claude-plugin", "plugin.json"),
+      manifestHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      source: rootDir,
+      format: "bundle",
+      bundleFormat: "claude",
+    });
+  });
+
+  it("changes manifestless Claude bundle hashes when derived metadata changes", () => {
+    const rootDir = path.join(makeTempDir(), "workspace");
+    writeManifestlessClaudeBundle(rootDir, ["skills"]);
+
+    const first = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+          idHint: "workspace",
+          format: "bundle",
+          bundleFormat: "claude",
+          origin: "config",
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    writeManifestlessClaudeBundle(rootDir, ["commands"]);
+    const second = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+          idHint: "workspace",
+          format: "bundle",
+          bundleFormat: "claude",
+          origin: "config",
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    expect(second.plugins[0]?.manifestHash).not.toBe(first.plugins[0]?.manifestHash);
+  });
+
+  it("keeps explicit startup opt-outs out of startup sidecars", () => {
     const rootDir = makeTempDir();
     writeRuntimeEntry(rootDir);
     writePluginManifest(rootDir, {
@@ -497,6 +565,39 @@ describe("installed plugin index", () => {
       enabled: false,
     });
     expect(isInstalledPluginEnabled(index, "demo", config)).toBe(false);
+  });
+
+  it("keeps an index-disabled plugin disabled when config only enables another plugin", () => {
+    const enabledFixture = createRichPluginFixture({ id: "enabled-demo" });
+    const disabledFixture = createRichPluginFixture({ id: "disabled-demo" });
+    const index = loadInstalledPluginIndex({
+      candidates: [enabledFixture.candidate, disabledFixture.candidate],
+      config: {
+        plugins: {
+          entries: {
+            "disabled-demo": {
+              enabled: false,
+            },
+          },
+        },
+      },
+      env: hermeticEnv(),
+    });
+
+    expect(index.plugins.find((plugin) => plugin.pluginId === "disabled-demo")?.enabled).toBe(
+      false,
+    );
+    expect(
+      isInstalledPluginEnabled(index, "disabled-demo", {
+        plugins: {
+          entries: {
+            "enabled-demo": {
+              enabled: true,
+            },
+          },
+        },
+      }),
+    ).toBe(false);
   });
 
   it("uses runtime plugin id normalization for legacy enablement aliases", () => {
@@ -720,6 +821,45 @@ describe("installed plugin index", () => {
         resolvedName: "@vendor/demo-plugin",
         resolvedVersion: "1.2.3",
         integrity: "sha512-installed",
+      },
+    });
+  });
+
+  it("discovers installed plugin packages from persisted install records", async () => {
+    const fixture = createRichPluginFixture();
+    const stateDir = makeTempDir();
+    await writePersistedInstalledPluginIndexInstallRecords(
+      {
+        demo: {
+          source: "git",
+          spec: "git:file:///tmp/demo.git@abc123",
+          installPath: fixture.rootDir,
+          gitUrl: "file:///tmp/demo.git",
+          gitCommit: "abc123",
+        },
+      },
+      { stateDir },
+    );
+
+    const index = loadInstalledPluginIndex({
+      env: hermeticEnv({
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_STATE_DIR: stateDir,
+      }),
+    });
+
+    expect(index.plugins).toHaveLength(1);
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "demo",
+      origin: "global",
+      rootDir: fs.realpathSync.native(fixture.rootDir),
+      installRecordHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+    expect(index.installRecords).toMatchObject({
+      demo: {
+        source: "git",
+        installPath: fixture.rootDir,
+        gitCommit: "abc123",
       },
     });
   });

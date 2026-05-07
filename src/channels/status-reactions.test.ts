@@ -78,18 +78,19 @@ function expectObjectHasKeys(value: Record<string, unknown>, keys: readonly stri
 
 describe("resolveToolEmoji", () => {
   it.each([
-    { name: "returns coding emoji for exec tool", tool: "exec", expected: DEFAULT_EMOJIS.coding },
+    { name: "returns display emoji for exec tool", tool: "exec", expected: "🛠️" },
     {
-      name: "returns coding emoji for process tool",
+      name: "returns display emoji for process tool",
       tool: "process",
-      expected: DEFAULT_EMOJIS.coding,
+      expected: "🧰",
     },
     {
-      name: "returns web emoji for web_search tool",
+      name: "returns display emoji for web_search tool",
       tool: "web_search",
-      expected: DEFAULT_EMOJIS.web,
+      expected: "🔎",
     },
-    { name: "returns web emoji for browser tool", tool: "browser", expected: DEFAULT_EMOJIS.web },
+    { name: "returns display emoji for browser tool", tool: "browser", expected: "🌐" },
+    { name: "returns display emoji for message tool", tool: "message", expected: "✉️" },
     {
       name: "returns tool emoji for unknown tool",
       tool: "unknown_tool",
@@ -97,7 +98,7 @@ describe("resolveToolEmoji", () => {
     },
     { name: "returns tool emoji for empty string", tool: "", expected: DEFAULT_EMOJIS.tool },
     { name: "returns tool emoji for undefined", tool: undefined, expected: DEFAULT_EMOJIS.tool },
-    { name: "is case-insensitive", tool: "EXEC", expected: DEFAULT_EMOJIS.coding },
+    { name: "is case-insensitive", tool: "EXEC", expected: "🛠️" },
     {
       name: "matches tokens within tool names",
       tool: "my_exec_wrapper",
@@ -109,6 +110,24 @@ describe("resolveToolEmoji", () => {
       expect(resolveToolEmoji(tool, DEFAULT_EMOJIS)).toBe(expected);
     },
   );
+
+  it("preserves explicit status emoji overrides before exact tool display emojis", () => {
+    const emojis = {
+      ...DEFAULT_EMOJIS,
+      coding: "🧪",
+      web: "🛰️",
+      tool: "🔧",
+    };
+    const overrides = {
+      coding: "🧪",
+      web: "🛰️",
+      tool: "🔧",
+    };
+
+    expect(resolveToolEmoji("exec", emojis, overrides)).toBe("🧪");
+    expect(resolveToolEmoji("web_search", emojis, overrides)).toBe("🛰️");
+    expect(resolveToolEmoji("message", emojis, overrides)).toBe("🔧");
+  });
 });
 
 describe("createStatusReactionController", () => {
@@ -174,7 +193,7 @@ describe("createStatusReactionController", () => {
     void controller.setTool("exec");
     await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
 
-    expectSetEmojiCall(calls, DEFAULT_EMOJIS.coding);
+    expectSetEmojiCall(calls, "🛠️");
   });
 
   const immediateTerminalCases = [
@@ -244,9 +263,9 @@ describe("createStatusReactionController", () => {
     void controller.setTool("exec");
     await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
 
-    // Should only have the last one (exec → coding)
+    // Should only have the last one (exec → display emoji)
     const setEmojis = calls.filter((c) => c.method === "set").map((c) => c.emoji);
-    expect(setEmojis).toEqual([DEFAULT_EMOJIS.coding]);
+    expect(setEmojis).toEqual(["🛠️"]);
   });
 
   it("should deduplicate same emoji calls", async () => {
@@ -277,7 +296,7 @@ describe("createStatusReactionController", () => {
     expect(setEmojis).toEqual([DEFAULT_EMOJIS.thinking]);
   });
 
-  it("should call removeReaction when adapter supports it and emoji changes", async () => {
+  it("should defer removing previous emojis until clear", async () => {
     const { calls, controller } = createEnabledController();
 
     void controller.setQueued();
@@ -286,9 +305,60 @@ describe("createStatusReactionController", () => {
     void controller.setThinking();
     await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
 
-    // Should set thinking, then remove queued
     expectSetEmojiCall(calls, DEFAULT_EMOJIS.thinking);
+    expect(calls).not.toContainEqual({ method: "remove", emoji: "👀" });
+
+    await controller.clear();
     expect(calls).toContainEqual({ method: "remove", emoji: "👀" });
+    expect(calls).toContainEqual({ method: "remove", emoji: DEFAULT_EMOJIS.thinking });
+  });
+
+  it("should remove tracked non-terminal emojis when setting done", async () => {
+    const { calls, controller } = createEnabledController();
+
+    void controller.setQueued();
+    await vi.runAllTimersAsync();
+    void controller.setThinking();
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+    void controller.setTool("exec");
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+
+    await controller.setDone();
+
+    const removeEmojis = calls.filter((call) => call.method === "remove").map((call) => call.emoji);
+    expect(removeEmojis).toEqual(expect.arrayContaining(["👀", DEFAULT_EMOJIS.thinking, "🛠️"]));
+    expect(removeEmojis).not.toContain(DEFAULT_EMOJIS.done);
+  });
+
+  it("should not remove reactions on terminal state when adapter lacks removeReaction", async () => {
+    const { calls, controller } = createSetOnlyController();
+
+    void controller.setThinking();
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+
+    await controller.setDone();
+
+    expect(calls).toEqual([
+      { method: "set", emoji: DEFAULT_EMOJIS.thinking },
+      { method: "set", emoji: DEFAULT_EMOJIS.done },
+    ]);
+  });
+
+  it("should not re-add an already active reaction when returning to it", async () => {
+    const { calls, controller } = createEnabledController();
+
+    void controller.setThinking();
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+    void controller.setTool("web_search");
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+    void controller.setThinking();
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+
+    const thinkingSets = calls.filter(
+      (call) => call.method === "set" && call.emoji === DEFAULT_EMOJIS.thinking,
+    );
+    expect(thinkingSets).toHaveLength(1);
+    expect(calls).not.toContainEqual({ method: "remove", emoji: DEFAULT_EMOJIS.thinking });
   });
 
   it("should only call setReaction when adapter lacks removeReaction", async () => {

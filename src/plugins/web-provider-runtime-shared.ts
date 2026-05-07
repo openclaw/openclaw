@@ -1,16 +1,6 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withActivatedPluginIds } from "./activation-context.js";
-import {
-  buildPluginSnapshotCacheEnvKey,
-  resolvePluginSnapshotCacheTtlMs,
-  shouldUsePluginSnapshotCache,
-} from "./cache-controls.js";
-import {
-  isPluginRegistryLoadInFlight,
-  loadOpenClawPlugins,
-  resolveCompatibleRuntimePluginRegistry,
-  resolveRuntimePluginRegistry,
-} from "./loader.js";
+import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
+import { isPluginRegistryLoadInFlight, loadOpenClawPlugins } from "./loader.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { hasExplicitPluginIdScope, normalizePluginIdScope } from "./plugin-scope.js";
@@ -20,17 +10,6 @@ import {
   buildPluginRuntimeLoadOptionsFromValues,
   createPluginRuntimeLoaderLogger,
 } from "./runtime/load-context.js";
-import { buildWebProviderSnapshotCacheKey } from "./web-provider-resolution-shared.js";
-
-type WebProviderSnapshotCacheEntry<TEntry> = {
-  expiresAt: number;
-  providers: TEntry[];
-};
-
-export type WebProviderSnapshotCache<TEntry> = WeakMap<
-  OpenClawConfig,
-  WeakMap<NodeJS.ProcessEnv, Map<string, WebProviderSnapshotCacheEntry<TEntry>>>
->;
 
 export type ResolvePluginWebProvidersParams = {
   config?: PluginLoadOptions["config"];
@@ -45,7 +24,6 @@ export type ResolvePluginWebProvidersParams = {
 };
 
 type ResolveWebProviderRuntimeDeps<TEntry> = {
-  snapshotCache: WebProviderSnapshotCache<TEntry>;
   resolveBundledResolutionConfig: (params: {
     config?: PluginLoadOptions["config"];
     workspaceDir?: string;
@@ -76,26 +54,39 @@ type ResolveWebProviderRuntimeDeps<TEntry> = {
   }) => TEntry[] | null;
 };
 
-export function createWebProviderSnapshotCache<TEntry>(): WebProviderSnapshotCache<TEntry> {
-  return new WeakMap<
-    OpenClawConfig,
-    WeakMap<NodeJS.ProcessEnv, Map<string, WebProviderSnapshotCacheEntry<TEntry>>>
-  >();
-}
+type WebProviderRuntimeContext = {
+  env: NonNullable<PluginLoadOptions["env"]>;
+  workspaceDir?: string;
+  config: PluginLoadOptions["config"];
+  activationSourceConfig?: PluginLoadOptions["config"];
+  autoEnabledReasons: Record<string, string[]>;
+  loadPluginIds?: string[];
+  onlyPluginIds?: string[];
+};
 
-function resolveWebProviderLoadOptions<TEntry>(
+type RuntimeRegistryWebProviderResolution<TEntry> = {
+  providers: TEntry[];
+  shouldReturn: boolean;
+};
+
+function resolveWebProviderRuntimeContext<TEntry>(
   params: ResolvePluginWebProvidersParams,
   deps: ResolveWebProviderRuntimeDeps<TEntry>,
-) {
+): WebProviderRuntimeContext {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
+  const shouldFilterProviders =
+    params.config !== undefined ||
+    params.onlyPluginIds !== undefined ||
+    params.origin !== undefined ||
+    params.bundledAllowlistCompat === true;
   const { config, activationSourceConfig, autoEnabledReasons } =
     deps.resolveBundledResolutionConfig({
       ...params,
       workspaceDir,
       env,
     });
-  const onlyPluginIds = normalizePluginIdScope(
+  const candidatePluginIds = normalizePluginIdScope(
     deps.resolveCandidatePluginIds({
       config,
       workspaceDir,
@@ -104,21 +95,58 @@ function resolveWebProviderLoadOptions<TEntry>(
       origin: params.origin,
     }),
   );
+  const onlyPluginIds = shouldFilterProviders ? candidatePluginIds : undefined;
+  return {
+    activationSourceConfig,
+    autoEnabledReasons,
+    config,
+    env,
+    loadPluginIds: candidatePluginIds,
+    onlyPluginIds,
+    workspaceDir,
+  };
+}
+
+function resolveWebProviderLoadOptions(
+  context: WebProviderRuntimeContext,
+  params: ResolvePluginWebProvidersParams,
+) {
   return buildPluginRuntimeLoadOptionsFromValues(
     {
-      env,
-      config,
-      activationSourceConfig,
-      autoEnabledReasons,
-      workspaceDir,
+      env: context.env,
+      config: context.config,
+      activationSourceConfig: context.activationSourceConfig,
+      autoEnabledReasons: context.autoEnabledReasons,
+      workspaceDir: context.workspaceDir,
       logger: createPluginRuntimeLoaderLogger(),
     },
     {
-      cache: params.cache ?? false,
+      cache: params.cache ?? true,
       activate: params.activate ?? false,
-      ...(hasExplicitPluginIdScope(onlyPluginIds) ? { onlyPluginIds } : {}),
+      ...(hasExplicitPluginIdScope(context.loadPluginIds)
+        ? { onlyPluginIds: context.loadPluginIds }
+        : {}),
     },
   );
+}
+
+function resolveRuntimeRegistryWebProviders<TEntry>(params: {
+  hasExplicitEmptyScope: boolean;
+  mapRegistryProviders: ResolveWebProviderRuntimeDeps<TEntry>["mapRegistryProviders"];
+  onlyPluginIds?: readonly string[];
+  registry: PluginRegistry | undefined;
+}): RuntimeRegistryWebProviderResolution<TEntry> | undefined {
+  if (!params.registry) {
+    return undefined;
+  }
+  const providers = params.mapRegistryProviders({
+    registry: params.registry,
+    onlyPluginIds: params.onlyPluginIds,
+  });
+  return {
+    providers,
+    shouldReturn: providers.length > 0 || params.hasExplicitEmptyScope,
+  };
 }
 
 export function resolvePluginWebProviders<TEntry>(
@@ -166,7 +194,7 @@ export function resolvePluginWebProviders<TEntry>(
         },
         {
           onlyPluginIds: pluginIds,
-          cache: params.cache ?? false,
+          cache: params.cache ?? true,
           activate: params.activate ?? false,
         },
       ),
@@ -174,82 +202,65 @@ export function resolvePluginWebProviders<TEntry>(
     return deps.mapRegistryProviders({ registry, onlyPluginIds: pluginIds });
   }
 
-  const cacheOwnerConfig = params.config;
-  const shouldMemoizeSnapshot =
-    params.activate !== true && params.cache !== true && shouldUsePluginSnapshotCache(env);
-  const cacheKey = buildWebProviderSnapshotCacheKey({
-    config: cacheOwnerConfig,
-    workspaceDir,
-    bundledAllowlistCompat: params.bundledAllowlistCompat,
-    onlyPluginIds: params.onlyPluginIds,
-    origin: params.origin,
-    envKey: buildPluginSnapshotCacheEnvKey(env),
+  const context = resolveWebProviderRuntimeContext(params, deps);
+  const loadOptions = resolveWebProviderLoadOptions(context, params);
+  const compatible = getLoadedRuntimePluginRegistry({
+    env: context.env,
+    loadOptions,
+    workspaceDir: context.workspaceDir,
+    requiredPluginIds: context.loadPluginIds,
   });
-  if (cacheOwnerConfig && shouldMemoizeSnapshot) {
-    const configCache = deps.snapshotCache.get(cacheOwnerConfig);
-    const envCache = configCache?.get(env);
-    const cached = envCache?.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.providers;
-    }
+  const scopedPluginIds = context.onlyPluginIds;
+  const hasExplicitEmptyScope = scopedPluginIds !== undefined && scopedPluginIds.length === 0;
+  const compatibleProviders = resolveRuntimeRegistryWebProviders({
+    hasExplicitEmptyScope,
+    mapRegistryProviders: deps.mapRegistryProviders,
+    onlyPluginIds: context.onlyPluginIds,
+    registry: compatible,
+  });
+  if (compatibleProviders?.shouldReturn) {
+    return compatibleProviders.providers;
   }
-  const memoizeSnapshot = (providers: TEntry[]) => {
-    if (!cacheOwnerConfig || !shouldMemoizeSnapshot) {
-      return;
-    }
-    const ttlMs = resolvePluginSnapshotCacheTtlMs(env);
-    let configCache = deps.snapshotCache.get(cacheOwnerConfig);
-    if (!configCache) {
-      configCache = new WeakMap<
-        NodeJS.ProcessEnv,
-        Map<string, WebProviderSnapshotCacheEntry<TEntry>>
-      >();
-      deps.snapshotCache.set(cacheOwnerConfig, configCache);
-    }
-    let envCache = configCache.get(env);
-    if (!envCache) {
-      envCache = new Map<string, WebProviderSnapshotCacheEntry<TEntry>>();
-      configCache.set(env, envCache);
-    }
-    envCache.set(cacheKey, {
-      expiresAt: Date.now() + ttlMs,
-      providers,
-    });
-  };
-
-  const loadOptions = resolveWebProviderLoadOptions(params, deps);
-  const compatible = resolveCompatibleRuntimePluginRegistry(loadOptions);
-  if (compatible) {
-    const resolved = deps.mapRegistryProviders({
-      registry: compatible,
-      onlyPluginIds: params.onlyPluginIds,
-    });
-    memoizeSnapshot(resolved);
-    return resolved;
+  if (compatibleProviders) {
+    // The active gateway plugin registry may be otherwise compatible with this
+    // config while contributing zero web providers (for example when channels,
+    // memory, harnesses, and sidecars are loaded but Brave/web providers are
+    // not). Do not treat that empty active registry as authoritative: fall
+    // through to a scoped provider load below so first-class assistant tools
+    // still see the configured provider.
   }
   if (isPluginRegistryLoadInFlight(loadOptions)) {
     return [];
   }
-  const resolved = deps.mapRegistryProviders({
-    registry: loadOpenClawPlugins(loadOptions),
-    onlyPluginIds: params.onlyPluginIds,
+  if (hasExplicitEmptyScope) {
+    return [];
+  }
+  const registry = loadOpenClawPlugins(loadOptions);
+  return deps.mapRegistryProviders({
+    registry,
+    onlyPluginIds: context.onlyPluginIds,
   });
-  memoizeSnapshot(resolved);
-  return resolved;
 }
 
 export function resolveRuntimeWebProviders<TEntry>(
   params: Omit<ResolvePluginWebProvidersParams, "activate" | "cache" | "mode">,
   deps: ResolveWebProviderRuntimeDeps<TEntry>,
 ): TEntry[] {
-  const loadOptions =
-    params.config === undefined ? undefined : resolveWebProviderLoadOptions(params, deps);
-  const runtimeRegistry = resolveRuntimePluginRegistry(loadOptions);
-  if (runtimeRegistry) {
-    return deps.mapRegistryProviders({
-      registry: runtimeRegistry,
-      onlyPluginIds: params.onlyPluginIds,
-    });
+  const runtimeRegistry = getLoadedRuntimePluginRegistry({
+    env: params.env,
+    workspaceDir: params.workspaceDir,
+    requiredPluginIds: params.onlyPluginIds,
+  });
+  const hasExplicitEmptyScope =
+    params.onlyPluginIds !== undefined && params.onlyPluginIds.length === 0;
+  const runtimeProviders = resolveRuntimeRegistryWebProviders({
+    hasExplicitEmptyScope,
+    mapRegistryProviders: deps.mapRegistryProviders,
+    onlyPluginIds: params.onlyPluginIds,
+    registry: runtimeRegistry,
+  });
+  if (runtimeProviders?.shouldReturn) {
+    return runtimeProviders.providers;
   }
   return resolvePluginWebProviders(params, deps);
 }

@@ -2,12 +2,12 @@ import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core";
 import {
   clearMemoryEmbeddingProviders as clearRegistry,
   listRegisteredMemoryEmbeddingProviderAdapters as listRegisteredAdapters,
   registerMemoryEmbeddingProvider as registerAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
@@ -172,6 +172,7 @@ describe("memory index", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
+    await Promise.all(Array.from(managersForCleanup).map((manager) => manager.close()));
     await closeAllMemorySearchManagers();
     clearRegistry();
     managersForCleanup.clear();
@@ -406,7 +407,27 @@ describe("memory index", () => {
     const status = manager.status();
     expect(status.vector?.enabled).toBe(true);
     expect(typeof status.vector?.available).toBe("boolean");
+    expect(status.vector?.storeAvailable).toBe(available);
+    expect(status.vector?.semanticAvailable).toBe(available);
     expect(status.vector?.available).toBe(available);
+  });
+
+  it("probes sqlite vector store availability without initializing embeddings", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-vector-store-only.sqlite"),
+      vectorEnabled: true,
+    });
+    const manager = await getPersistentManager(cfg);
+
+    const available = await manager.probeVectorStoreAvailability?.();
+    const status = manager.status();
+
+    expect(providerCalls).toEqual([]);
+    expect(typeof status.vector?.storeAvailable).toBe("boolean");
+    expect(status.vector?.storeAvailable).toBe(available);
+    expect(status.vector?.semanticAvailable).toBeUndefined();
+    expect(status.vector?.available).toBeUndefined();
   });
 
   it("caches embedding probe readiness across transient status managers", async () => {

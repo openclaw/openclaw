@@ -147,6 +147,7 @@ async function runAuthContractAttempt(params: {
 
   await runAgentAttempt({
     providerOverride: params.providerOverride,
+    originalProvider: params.providerOverride,
     modelOverride: "gpt-5.4",
     cfg,
     sessionEntry,
@@ -302,7 +303,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       cfg: {
         agents: {
           defaults: {
-            agentRuntime: { id: "codex", fallback: "none" },
+            agentRuntime: { id: "codex" },
           },
         },
       } as OpenClawConfig,
@@ -385,7 +386,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       cfg: {
         agents: {
           defaults: {
-            agentRuntime: { id: "codex", fallback: "none" },
+            agentRuntime: { id: "codex" },
           },
         },
       } as OpenClawConfig,
@@ -408,7 +409,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       cfg: {
         agents: {
           defaults: {
-            agentRuntime: { id: "codex", fallback: "none" },
+            agentRuntime: { id: "codex" },
           },
         },
       } as OpenClawConfig,
@@ -434,7 +435,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
           list: [
             {
               id: "main",
-              agentRuntime: { id: "codex", fallback: "none" },
+              agentRuntime: { id: "codex" },
             },
           ],
         },

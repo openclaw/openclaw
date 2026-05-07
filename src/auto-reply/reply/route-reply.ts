@@ -17,6 +17,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -29,13 +30,12 @@ import {
   shouldSuppressReasoningPayload,
 } from "./reply-payloads.js";
 
-let deliverRuntimePromise: Promise<
-  typeof import("../../infra/outbound/deliver-runtime.js")
-> | null = null;
+const deliverRuntimeLoader = createLazyImportLoader(
+  () => import("../../infra/outbound/deliver-runtime.js"),
+);
 
 function loadDeliverRuntime() {
-  deliverRuntimePromise ??= import("../../infra/outbound/deliver-runtime.js");
-  return deliverRuntimePromise;
+  return deliverRuntimeLoader.load();
 }
 
 export type RouteReplyParams = {
@@ -155,11 +155,15 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   };
 
   let text = externalPayload.text ?? "";
-  let mediaUrls = (externalPayload.mediaUrls?.filter(Boolean) ?? []).length
-    ? (externalPayload.mediaUrls?.filter(Boolean) as string[])
-    : externalPayload.mediaUrl
-      ? [externalPayload.mediaUrl]
-      : [];
+  let mediaUrls: string[] = [];
+  for (const url of externalPayload.mediaUrls ?? []) {
+    if (url) {
+      mediaUrls.push(url);
+    }
+  }
+  if (mediaUrls.length === 0 && externalPayload.mediaUrl) {
+    mediaUrls = [externalPayload.mediaUrl];
+  }
   const replyToId = externalPayload.replyToId;
   const hasChannelData = messaging?.hasStructuredReplyPayload?.({
     payload: externalPayload,

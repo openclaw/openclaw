@@ -146,10 +146,9 @@ vi.mock("./browser/session-tab-registry.js", () => sessionTabRegistryMocks);
 const toolCommonMocks = vi.hoisted(() => ({
   imageResultFromFile: vi.fn(),
 }));
-vi.mock("openclaw/plugin-sdk/browser-setup-tools", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/browser-setup-tools")>(
-    "openclaw/plugin-sdk/browser-setup-tools",
-  );
+vi.mock("./sdk-setup-tools.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./sdk-setup-tools.js")>("./sdk-setup-tools.js");
   return {
     ...actual,
     callGatewayTool: gatewayMocks.callGatewayTool,

@@ -5,14 +5,14 @@ read_when:
 title: "OpenAI chat completions"
 ---
 
-OpenClaw’s Gateway can serve a small OpenAI-compatible Chat Completions endpoint.
+OpenClaw's Gateway can serve a small OpenAI-compatible Chat Completions endpoint.
 
 This endpoint is **disabled by default**. Enable it in config first.
 
 - `POST /v1/chat/completions`
 - Same port as the Gateway (WS + HTTP multiplex): `http://<gateway-host>:<port>/v1/chat/completions`
 
-When the Gateway’s OpenAI-compatible HTTP surface is enabled, it also serves:
+When the Gateway's OpenAI-compatible HTTP surface is enabled, it also serves:
 
 - `GET /v1/models`
 - `GET /v1/models/{id}`
@@ -40,8 +40,8 @@ Notes:
 - When `gateway.auth.mode="token"`, use `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`).
 - When `gateway.auth.mode="password"`, use `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`).
 - When `gateway.auth.mode="trusted-proxy"`, the HTTP request must come from a
-  configured non-loopback trusted proxy source; same-host loopback proxies do
-  not satisfy this mode.
+  configured trusted proxy source; same-host loopback proxies require explicit
+  `gateway.auth.trustedProxy.allowLoopback = true`.
 - If `gateway.auth.rateLimit` is configured and too many auth failures occur, the endpoint returns `429` with `Retry-After`.
 
 ## Security boundary (important)

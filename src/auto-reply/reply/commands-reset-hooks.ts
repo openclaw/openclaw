@@ -4,13 +4,13 @@ import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
+const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
 
 function loadRouteReplyRuntime() {
-  routeReplyRuntimePromise ??= import("./route-reply.runtime.js");
-  return routeReplyRuntimePromise;
+  return routeReplyRuntimeLoader.load();
 }
 
 export type ResetCommandAction = "new" | "reset";
@@ -104,7 +104,7 @@ export async function emitResetCommandHooks(params: {
   sessionEntry?: HandleCommandsParams["sessionEntry"];
   previousSessionEntry?: HandleCommandsParams["previousSessionEntry"];
   workspaceDir: string;
-}): Promise<void> {
+}): Promise<{ routedReply: boolean }> {
   const hookEvent = createInternalHookEvent("command", params.action, params.sessionKey ?? "", {
     sessionEntry: params.sessionEntry,
     previousSessionEntry: params.previousSessionEntry,
@@ -116,6 +116,7 @@ export async function emitResetCommandHooks(params: {
   await triggerInternalHook(hookEvent);
   params.command.resetHookTriggered = true;
 
+  let routedReply = false;
   if (hookEvent.messages.length > 0) {
     const channel = params.ctx.OriginatingChannel || params.command.channel;
     const to = params.ctx.OriginatingTo || params.command.from || params.command.to;
@@ -134,6 +135,7 @@ export async function emitResetCommandHooks(params: {
         threadId: params.ctx.MessageThreadId,
         cfg: params.cfg,
       });
+      routedReply = true;
     }
   }
 
@@ -160,4 +162,5 @@ export async function emitResetCommandHooks(params: {
       }
     })();
   }
+  return { routedReply };
 }

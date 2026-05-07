@@ -56,6 +56,7 @@ export const resolveAuthLabel = async (
   modelsPath: string,
   agentDir?: string,
   mode: ModelAuthDetailMode = "compact",
+  workspaceDir?: string,
 ): Promise<{ label: string; source: string }> => {
   const formatPath = (value: string) => shortenHomePath(value);
   const store = ensureAuthProfileStore(agentDir, {
@@ -109,6 +110,12 @@ export const resolveAuthLabel = async (
         const exp = formatExpirationLabel(profile.expires, now, formatUntil);
         return {
           label: `${profileId} token ${tokenLabel}${exp}${more}`,
+          source: "",
+        };
+      }
+      if (profile.type === "aws-sdk") {
+        return {
+          label: `${profileId} aws-sdk${more}`,
           source: "",
         };
       }
@@ -168,6 +175,10 @@ export const resolveAuthLabel = async (
         const suffix = formatFlagsSuffix(flags);
         return `${profileId}=token:${tokenLabel}${suffix}`;
       }
+      if (profile.type === "aws-sdk") {
+        const suffix = formatFlagsSuffix(flags);
+        return `${profileId}=aws-sdk${suffix}`;
+      }
       const display = resolveAuthProfileDisplayLabel({
         cfg,
         store,
@@ -193,7 +204,7 @@ export const resolveAuthLabel = async (
     };
   }
 
-  const envKey = resolveEnvApiKey(provider);
+  const envKey = resolveEnvApiKey(provider, process.env, { config: cfg, workspaceDir });
   if (envKey) {
     const isOAuthEnv =
       envKey.source.includes("ANTHROPIC_OAUTH_TOKEN") ||
@@ -217,5 +228,3 @@ export const formatAuthLabel = (auth: { label: string; source: string }) => {
   }
   return `${auth.label} (${auth.source})`;
 };
-
-export { resolveProfileOverride } from "./directive-handling.auth-profile.js";

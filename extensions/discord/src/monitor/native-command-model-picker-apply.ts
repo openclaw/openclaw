@@ -1,4 +1,3 @@
-import type { ButtonInteraction, StringSelectMenuInteraction } from "@buape/carbon";
 import type { ChatCommandDefinition, CommandArgs } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
@@ -6,6 +5,7 @@ import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStorePath, updateSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-runtime";
+import type { ButtonInteraction, StringSelectMenuInteraction } from "../internal/discord.js";
 import {
   recordDiscordModelPickerRecentModel,
   type DiscordModelPickerPreferenceScope,
@@ -15,13 +15,13 @@ import type { ThreadBindingManager } from "./thread-bindings.js";
 
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
 
-export type DiscordModelPickerSelectionCommand = {
+type DiscordModelPickerSelectionCommand = {
   prompt: string;
   command: ChatCommandDefinition;
   args?: CommandArgs;
 };
 
-export type DiscordModelPickerApplyResult =
+type DiscordModelPickerApplyResult =
   | { status: "success"; effectiveModelRef: string; noticeMessage: string }
   | { status: "mismatch"; effectiveModelRef: string; noticeMessage: string }
   | { status: "rejected"; noticeMessage: string }

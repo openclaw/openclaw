@@ -13,11 +13,14 @@ Microsoft Teams ships as a bundled plugin in current OpenClaw releases, so no
 separate install is required in the normal packaged build.
 
 If you are on an older build or a custom install that excludes bundled Teams,
-install it manually:
+install the npm package directly:
 
 ```bash
 openclaw plugins install @openclaw/msteams
 ```
+
+Use the bare package to follow the current official release tag. Pin an exact
+version only when you need a reproducible install.
 
 Local checkout (when running from a git repo):
 
@@ -76,9 +79,9 @@ This single command:
 - Creates an Entra ID (Azure AD) application
 - Generates a client secret
 - Builds and uploads a Teams app manifest (with icons)
-- Registers the bot (Teams-managed by default — no Azure subscription needed)
+- Registers the bot (Teams-managed by default - no Azure subscription needed)
 
-The output will show `CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID`, and a **Teams App ID** — note these for the next steps. It also offers to install the app in Teams directly.
+The output will show `CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID`, and a **Teams App ID** - note these for the next steps. It also offers to install the app in Teams directly.
 
 **4. Configure OpenClaw** using the credentials from the output:
 
@@ -100,7 +103,7 @@ Or use environment variables directly: `MSTEAMS_APP_ID`, `MSTEAMS_APP_PASSWORD`,
 
 **5. Install the app in Teams**
 
-`teams app create` will prompt you to install the app — select "Install in Teams". If you skipped it, you can get the link later:
+`teams app create` will prompt you to install the app - select "Install in Teams". If you skipped it, you can get the link later:
 
 ```bash
 teams app get <teamsAppId> --install-link
@@ -144,14 +147,14 @@ Disable with:
 
 - Default: `channels.msteams.dmPolicy = "pairing"`. Unknown senders are ignored until approved.
 - `channels.msteams.allowFrom` should use stable AAD object IDs.
-- Do not rely on UPN/display-name matching for allowlists — they can change. OpenClaw disables direct name matching by default; opt in explicitly with `channels.msteams.dangerouslyAllowNameMatching: true`.
+- Do not rely on UPN/display-name matching for allowlists - they can change. OpenClaw disables direct name matching by default; opt in explicitly with `channels.msteams.dangerouslyAllowNameMatching: true`.
 - The wizard can resolve names to IDs via Microsoft Graph when credentials allow.
 
 **Group access**
 
 - Default: `channels.msteams.groupPolicy = "allowlist"` (blocked unless you add `groupAllowFrom`). Use `channels.defaults.groupPolicy` to override the default when unset.
 - `channels.msteams.groupAllowFrom` controls which senders can trigger in group chats/channels (falls back to `channels.msteams.allowFrom`).
-- Set `groupPolicy: "open"` to allow any member (still mention‑gated by default).
+- Set `groupPolicy: "open"` to allow any member (still mention-gated by default).
 - To allow **no channels**, set `channels.msteams.groupPolicy: "disabled"`.
 
 Example:
@@ -170,8 +173,8 @@ Example:
 **Teams + channel allowlist**
 
 - Scope group/channel replies by listing teams and channels under `channels.msteams.teams`.
-- Keys should use stable team IDs and channel conversation IDs.
-- When `groupPolicy="allowlist"` and a teams allowlist is present, only listed teams/channels are accepted (mention‑gated).
+- Keys should use stable Teams conversation IDs from Teams links, not mutable display names.
+- When `groupPolicy="allowlist"` and a teams allowlist is present, only listed teams/channels are accepted (mention-gated).
 - The configure wizard accepts `Team/Channel` entries and stores them for you.
 - On startup, OpenClaw resolves team/channel and user allowlist names to IDs (when Graph permissions allow)
   and logs the mapping; unresolved team/channel names are kept as typed but ignored for routing by default unless `channels.msteams.dangerouslyAllowNameMatching: true` is enabled.
@@ -285,7 +288,7 @@ The Teams channel starts automatically when the plugin is available and `msteams
 
 ## Federated authentication (certificate plus managed identity)
 
-> Added in 2026.3.24
+> Added in 2026.4.11
 
 For production deployments, OpenClaw supports **federated authentication** as a more secure alternative to client secrets. Two methods are available:
 
@@ -413,7 +416,7 @@ For AKS deployments using workload identity:
        azure.workload.identity/use: "true"
    ```
 
-5. **Ensure network access** to IMDS (`169.254.169.254`) — if using NetworkPolicy, add an egress rule allowing traffic to `169.254.169.254/32` on port 80.
+5. **Ensure network access** to IMDS (`169.254.169.254`) - if using NetworkPolicy, add an egress rule allowing traffic to `169.254.169.254/32` on port 80.
 
 ### Auth type comparison
 
@@ -699,14 +702,14 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 - `toolsBySender` keys should use explicit prefixes:
   `id:`, `e164:`, `username:`, `name:` (legacy unprefixed keys still map to `id:` only).
 - `channels.msteams.actions.memberInfo`: enable or disable the Graph-backed member info action (default: enabled when Graph credentials are available).
-- `channels.msteams.authType`: authentication type — `"secret"` (default) or `"federated"`.
+- `channels.msteams.authType`: authentication type - `"secret"` (default) or `"federated"`.
 - `channels.msteams.certificatePath`: path to PEM certificate file (federated + certificate auth).
 - `channels.msteams.certificateThumbprint`: certificate thumbprint (optional, not required for auth).
 - `channels.msteams.useManagedIdentity`: enable managed identity auth (federated mode).
 - `channels.msteams.managedIdentityClientId`: client ID for user-assigned managed identity.
 - `channels.msteams.sharePointSiteId`: SharePoint site ID for file uploads in group chats/channels (see [Sending files in group chats](#sending-files-in-group-chats)).
 
-## Routing & Sessions
+## Routing and sessions
 
 - Session keys follow the standard agent format (see [/concepts/session](/concepts/session)):
   - Direct messages share the main session (`agent:<agentId>:<mainKey>`).
@@ -749,7 +752,7 @@ Teams recently introduced two channel UI styles over the same underlying data mo
 }
 ```
 
-## Attachments & Images
+## Attachments and images
 
 **Current limitations:**
 
@@ -940,7 +943,7 @@ The `groupId` query parameter in Teams URLs is **NOT** the team ID used for conf
 ```
 https://teams.microsoft.com/l/team/19%3ABk4j...%40thread.tacv2/conversations?groupId=...
                                     └────────────────────────────┘
-                                    Team ID (URL-decode this)
+                                    Team conversation ID (URL-decode this)
 ```
 
 **Channel URL:**
@@ -953,9 +956,9 @@ https://teams.microsoft.com/l/channel/19%3A15bc...%40thread.tacv2/ChannelName?gr
 
 **For config:**
 
-- Team ID = path segment after `/team/` (URL-decoded, e.g., `19:Bk4j...@thread.tacv2`)
-- Channel ID = path segment after `/channel/` (URL-decoded)
-- **Ignore** the `groupId` query parameter
+- Team key = path segment after `/team/` (URL-decoded, e.g., `19:Bk4j...@thread.tacv2`; older tenants may show `@thread.skype`, which is also valid)
+- Channel key = path segment after `/channel/` (URL-decoded)
+- **Ignore** the `groupId` query parameter for OpenClaw routing. It is the Microsoft Entra group ID, not the Bot Framework conversation ID used in incoming Teams activities.
 
 ## Private channels
 
@@ -1011,8 +1014,8 @@ Bots have limited support in private channels:
 
 ## Related
 
-- [Channels Overview](/channels) — all supported channels
-- [Pairing](/channels/pairing) — DM authentication and pairing flow
-- [Groups](/channels/groups) — group chat behavior and mention gating
-- [Channel Routing](/channels/channel-routing) — session routing for messages
-- [Security](/gateway/security) — access model and hardening
+- [Channels Overview](/channels) - all supported channels
+- [Pairing](/channels/pairing) - DM authentication and pairing flow
+- [Groups](/channels/groups) - group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) - session routing for messages
+- [Security](/gateway/security) - access model and hardening

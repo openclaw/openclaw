@@ -33,8 +33,7 @@ private final class FakeWebSocketTask: WebSocketTasking, @unchecked Sendable {
                 self.respondedRequestIds.insert(request.id)
                 if request.method == "connect" {
                     return .string("""
-                    {"type":"res","id":"\(request
-                        .id)","ok":true,"payload":{"type":"hello","protocol":3,"server":{},"features":{},"snapshot":{"presence":[],"health":{},"stateVersion":{"presence":0,"health":0},"uptimeMs":0},"auth":{},"policy":{}}}
+                    {"type":"res","id":"\(request.id)","ok":true,"payload":{"type":"hello","protocol":3,"server":{},"features":{},"snapshot":{"presence":[],"health":{},"stateVersion":{"presence":0,"health":0},"uptimeMs":0},"auth":{},"policy":{}}}
                     """)
                 }
                 return .string("""

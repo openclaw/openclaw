@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	workflowVersion          = 15
+	workflowVersion          = 16
 	docsI18nEngineName       = "codex"
 	envDocsI18nProvider      = "OPENCLAW_DOCS_I18N_PROVIDER"
 	envDocsI18nModel         = "OPENCLAW_DOCS_I18N_MODEL"
@@ -101,6 +101,11 @@ func isWhitespace(b byte) bool {
 
 func validateNoTranslationTranscriptArtifacts(source, translated string) error {
 	sourceLower := strings.ToLower(source)
+	for _, token := range []string{"<openclaw_docs_i18n_input>", "</openclaw_docs_i18n_input>"} {
+		if strings.Contains(strings.ToLower(translated), token) && !strings.Contains(sourceLower, token) {
+			return fmt.Errorf("agent transcript artifact leaked into translation: %q", token)
+		}
+	}
 	for _, match := range translationTranscriptArtifactRE.FindAllString(translated, -1) {
 		match = strings.TrimSpace(match)
 		if match == "" {

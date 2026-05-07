@@ -15,6 +15,7 @@ export function createInboundSlackTestContext(params: {
   replyToMode?: "off" | "all" | "first" | "batched";
   channelsConfig?: SlackChannelConfigEntries;
   threadRequireExplicitMention?: boolean;
+  dmHistoryLimit?: number;
 }) {
   return createSlackMonitorContext({
     cfg: params.cfg,
@@ -27,11 +28,12 @@ export function createInboundSlackTestContext(params: {
     teamId: "T1",
     apiAppId: "A1",
     historyLimit: 0,
+    dmHistoryLimit: params.dmHistoryLimit,
     sessionScope: "per-sender",
     mainKey: "main",
     dmEnabled: true,
     dmPolicy: "open",
-    allowFrom: [],
+    allowFrom: ["*"],
     allowNameMatching: false,
     groupDmEnabled: true,
     groupDmChannels: [],

@@ -13,6 +13,7 @@ import type { ConnectParams, ErrorShape, RequestFrame } from "../protocol/index.
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { DedupeEntry } from "../server-shared.js";
+import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -44,7 +45,7 @@ export type GatewayRequestContext = {
   getRuntimeConfig: () => OpenClawConfig;
   execApprovalManager?: ExecApprovalManager;
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
-  loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
+  loadGatewayModelCatalog: (params?: { readOnly?: boolean }) => Promise<ModelCatalogEntry[]>;
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: {
     probe?: boolean;
@@ -61,7 +62,7 @@ export type GatewayRequestContext = {
   nodeSubscribe: (nodeId: string, sessionKey: string) => void;
   nodeUnsubscribe: (nodeId: string, sessionKey: string) => void;
   nodeUnsubscribeAll: (nodeId: string) => void;
-  hasConnectedMobileNode: () => boolean;
+  hasConnectedTalkNode: () => boolean;
   hasExecApprovalClients?: (excludeConnId?: string) => boolean;
   disconnectClientsForDevice?: (deviceId: string, opts?: { role?: string }) => void;
   disconnectClientsUsingSharedGatewayAuth?: () => void;
@@ -91,6 +92,7 @@ export type GatewayRequestContext = {
   findRunningWizard: () => string | null;
   purgeWizardSession: (id: string) => void;
   getRuntimeSnapshot: () => ChannelRuntimeSnapshot;
+  getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   startChannel: (
     channel: import("../../channels/plugins/types.public.js").ChannelId,
     accountId?: string,

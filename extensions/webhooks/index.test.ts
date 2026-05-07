@@ -14,8 +14,10 @@ function createApi(params?: {
     source: "test",
     pluginConfig: params?.pluginConfig ?? {},
     runtime: {
-      taskFlow: {
-        bindSession: vi.fn(({ sessionKey }: { sessionKey: string }) => ({ sessionKey })),
+      tasks: {
+        managedFlows: {
+          bindSession: vi.fn(({ sessionKey }: { sessionKey: string }) => ({ sessionKey })),
+        },
       },
     } as unknown as OpenClawPluginApi["runtime"],
     registerHttpRoute: params?.registerHttpRoute ?? vi.fn(),

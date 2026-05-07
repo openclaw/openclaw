@@ -1,11 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { tryReadJsonSync } from "../../../infra/json-files.js";
 import {
   normalizeBundledPluginStringList,
   resolveBundledPluginScanDir,
 } from "../../bundled-plugin-scan.js";
-import { PLUGIN_MANIFEST_FILENAME, type PluginManifest } from "../../manifest.js";
+import {
+  getPackageManifestMetadata,
+  PLUGIN_MANIFEST_FILENAME,
+  type PackageManifest,
+  type PluginManifest,
+} from "../../manifest.js";
 import { resolveLoaderPackageRoot } from "../../sdk-alias.js";
 import { uniqueStrings } from "../shared.js";
 
@@ -54,23 +60,16 @@ export type BundledCapabilityManifest = Pick<
 >;
 
 function readJsonRecord(filePath: string): Record<string, unknown> | undefined {
-  try {
-    const raw = JSON.parse(fs.readFileSync(filePath, "utf-8")) as unknown;
-    return raw && typeof raw === "object" && !Array.isArray(raw)
-      ? (raw as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  const raw = tryReadJsonSync(filePath);
+  return raw && typeof raw === "object" && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : undefined;
 }
 
 function readBundledCapabilityManifest(pluginDir: string): BundledCapabilityManifest | undefined {
   const packageJson = readJsonRecord(path.join(pluginDir, "package.json"));
-  const extensions = normalizeBundledPluginStringList(
-    packageJson?.openclaw && typeof packageJson.openclaw === "object"
-      ? (packageJson.openclaw as { extensions?: unknown }).extensions
-      : undefined,
-  );
+  const packageManifest = getPackageManifestMetadata(packageJson as PackageManifest);
+  const extensions = normalizeBundledPluginStringList(packageManifest?.extensions);
   if (extensions.length === 0) {
     return undefined;
   }

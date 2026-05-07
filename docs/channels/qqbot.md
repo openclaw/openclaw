@@ -11,13 +11,16 @@ QQ Bot connects to OpenClaw via the official QQ Bot API (WebSocket gateway). The
 plugin supports C2C private chat, group @messages, and guild channel messages with
 rich media (images, voice, video, files).
 
-Status: bundled plugin. Direct messages, group chats, guild channels, and
+Status: downloadable plugin. Direct messages, group chats, guild channels, and
 media are supported. Reactions and threads are not supported.
 
-## Bundled plugin
+## Install
 
-Current OpenClaw releases bundle QQ Bot, so normal packaged builds do not need
-a separate `openclaw plugins install` step.
+Install QQ Bot before setup:
+
+```bash
+openclaw plugins install @openclaw/qqbot
+```
 
 ## Setup
 
@@ -79,12 +82,28 @@ File-backed AppSecret:
 }
 ```
 
+Env SecretRef AppSecret:
+
+```json5
+{
+  channels: {
+    qqbot: {
+      enabled: true,
+      appId: "YOUR_APP_ID",
+      clientSecret: { source: "env", provider: "default", id: "QQBOT_CLIENT_SECRET" },
+    },
+  },
+}
+```
+
 Notes:
 
 - Env fallback applies to the default QQ Bot account only.
 - `openclaw channels add --channel qqbot --token-file ...` provides the
   AppSecret only; the AppID must already be set in config or `QQBOT_APP_ID`.
 - `clientSecret` also accepts SecretRef input, not just a plaintext string.
+- Legacy `secretref:/...` marker strings are not valid `clientSecret` values;
+  use structured SecretRef objects like the example above.
 
 ### Multi-account setup
 
@@ -190,7 +209,7 @@ STT and TTS support two-level configuration with priority fallback:
         voice: "your-voice",
       },
       accounts: {
-        qq-main: {
+        "qq-main": {
           tts: {
             providers: {
               openai: { voice: "shimmer" },
@@ -239,11 +258,14 @@ Built-in commands intercepted before the AI queue:
 | `/bot-ping`    | Latency test                                                                                             |
 | `/bot-version` | Show the OpenClaw framework version                                                                      |
 | `/bot-help`    | List all commands                                                                                        |
+| `/bot-me`      | Show the sender's QQ user ID (openid) for `allowFrom`/`groupAllowFrom` setup                             |
 | `/bot-upgrade` | Show the QQBot upgrade guide link                                                                        |
 | `/bot-logs`    | Export recent gateway logs as a file                                                                     |
 | `/bot-approve` | Approve a pending QQ Bot action (for example, confirming a C2C or group upload) through the native flow. |
 
 Append `?` to any command for usage help (for example `/bot-upgrade ?`).
+
+Admin commands (`/bot-me`, `/bot-upgrade`, `/bot-logs`, `/bot-clear-storage`, `/bot-streaming`, `/bot-approve`) are direct-message-only and require the sender's openid in an explicit non-wildcard `allowFrom` list. A wildcard `allowFrom: ["*"]` permits chat but does not grant admin command access. Group messages match against `groupAllowFrom` first and fall back to `allowFrom`. Running an admin command in a group returns a hint rather than silently dropping.
 
 ## Engine architecture
 

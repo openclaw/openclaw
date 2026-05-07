@@ -6,6 +6,7 @@ import {
   shouldEnsureCliPath,
   shouldStartCrestodianForBareRoot,
   shouldStartCrestodianForModernOnboard,
+  shouldStartProxyForCli,
   shouldUseBrowserHelpFastPath,
   shouldUseRootHelpFastPath,
 } from "./run-main-policy.js";
@@ -15,6 +16,7 @@ const memoryWikiCommandAliasRegistry: PluginManifestCommandAliasRegistry = {
   plugins: [
     {
       id: "memory-wiki",
+      enabledByDefault: true,
       commandAliases: [{ name: "wiki" }],
     },
   ],
@@ -98,6 +100,7 @@ describe("shouldEnsureCliPath", () => {
     expect(shouldEnsureCliPath(["node", "openclaw", "sessions", "--json"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "config", "get", "update"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "models", "status", "--json"])).toBe(false);
+    expect(shouldEnsureCliPath(["node", "openclaw", "tools", "effective"])).toBe(false);
   });
 
   it("keeps path bootstrap for mutating or unknown commands", () => {
@@ -143,11 +146,19 @@ describe("shouldStartCrestodianForModernOnboard", () => {
   });
 });
 
+describe("shouldStartProxyForCli", () => {
+  it("starts managed proxy routing for the --update shorthand", () => {
+    expect(shouldStartProxyForCli(["node", "openclaw", "--update"])).toBe(true);
+    expect(shouldStartProxyForCli(["node", "openclaw", "--profile", "p", "--update"])).toBe(true);
+  });
+});
+
 describe("shouldUseRootHelpFastPath", () => {
   it("uses the fast path for root help only", () => {
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "--help"])).toBe(true);
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "--profile", "work", "-h"])).toBe(true);
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "help", "--help"])).toBe(true);
+    expect(shouldUseRootHelpFastPath(["node", "openclaw", "tools", "--help"])).toBe(true);
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "status", "--help"])).toBe(false);
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "--help", "status"])).toBe(false);
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "help", "gateway"])).toBe(false);
@@ -203,6 +214,17 @@ describe("resolveMissingPluginCommandMessage", () => {
     ).toBeNull();
   });
 
+  it("does not classify reserved non-plugin command roots as plugin allowlist misses", () => {
+    for (const root of ["auth", "tool"]) {
+      const message = resolveMissingPluginCommandMessage(root, {
+        plugins: {
+          allow: ["browser"],
+        },
+      });
+      expect(message).toBeNull();
+    }
+  });
+
   it("explains that dreaming is a runtime slash command, not a CLI command", () => {
     const message = resolveMissingPluginCommandMessage(
       "dreaming",
@@ -248,6 +270,54 @@ describe("resolveMissingPluginCommandMessage", () => {
     expect(message).toContain('"dreaming" is not a plugin');
     expect(message).toContain('"memory-core"');
     expect(message).toContain("plugins.allow");
+  });
+
+  it("explains disabled-by-default parent plugins for CLI command aliases", () => {
+    const message = resolveMissingPluginCommandMessage(
+      "voicecall",
+      {},
+      {
+        registry: {
+          plugins: [
+            {
+              id: "voice-call",
+              commandAliases: [{ name: "voicecall" }],
+            },
+          ],
+        },
+      },
+    );
+
+    expect(message).toContain('"voice-call" plugin');
+    expect(message).toContain("disabled by default");
+    expect(message).toContain("openclaw plugins enable voice-call");
+  });
+
+  it("returns null for CLI command aliases when disabled-by-default parent plugins are enabled", () => {
+    const message = resolveMissingPluginCommandMessage(
+      "voicecall",
+      {
+        plugins: {
+          entries: {
+            "voice-call": {
+              enabled: true,
+            },
+          },
+        },
+      },
+      {
+        registry: {
+          plugins: [
+            {
+              id: "voice-call",
+              commandAliases: [{ name: "voicecall" }],
+            },
+          ],
+        },
+      },
+    );
+
+    expect(message).toBeNull();
   });
 
   it("explains parent plugin disablement for runtime command aliases", () => {

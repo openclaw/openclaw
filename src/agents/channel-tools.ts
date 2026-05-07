@@ -6,6 +6,10 @@ import {
   resolveCurrentChannelMessageToolDiscoveryAdapter,
   __testing as messageActionTesting,
 } from "../channels/plugins/message-action-discovery.js";
+import {
+  channelPluginHasNativeApprovalPromptUi,
+  NATIVE_APPROVAL_PROMPT_RUNTIME_CAPABILITY,
+} from "../channels/plugins/native-approval-prompt.js";
 import type {
   ChannelAgentTool,
   ChannelMessageActionName,
@@ -130,7 +134,7 @@ export function resolveChannelMessageToolHints(params: {
     .filter(Boolean);
 }
 
-export function resolveChannelMessageToolCapabilities(params: {
+export function resolveChannelPromptCapabilities(params: {
   cfg?: OpenClawConfig;
   channel?: string | null;
   accountId?: string | null;
@@ -139,14 +143,19 @@ export function resolveChannelMessageToolCapabilities(params: {
   if (!channelId) {
     return [];
   }
-  const resolve = getChannelPlugin(channelId)?.agentPrompt?.messageToolCapabilities;
-  if (!resolve) {
-    return [];
-  }
+  const plugin = getChannelPlugin(channelId);
   const cfg = params.cfg ?? ({} as OpenClawConfig);
-  return (resolve({ cfg, accountId: params.accountId }) ?? [])
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  const capabilities = normalizePromptCapabilities(
+    plugin?.agentPrompt?.messageToolCapabilities?.({ cfg, accountId: params.accountId }),
+  );
+  if (channelPluginHasNativeApprovalPromptUi(plugin)) {
+    capabilities.push(NATIVE_APPROVAL_PROMPT_RUNTIME_CAPABILITY);
+  }
+  return capabilities;
+}
+
+function normalizePromptCapabilities(capabilities?: readonly string[] | null): string[] {
+  return (capabilities ?? []).map((entry) => entry.trim()).filter(Boolean);
 }
 
 export function resolveChannelReactionGuidance(params: {

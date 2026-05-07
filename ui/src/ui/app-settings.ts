@@ -8,6 +8,14 @@ import {
   stopDebugPolling,
 } from "./app-polling.ts";
 import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
+import {
+  beginControlUiRefresh,
+  controlUiNowMs,
+  finishControlUiRefresh,
+  recordControlUiPerformanceEvent,
+  roundedControlUiDurationMs,
+  scheduleControlUiTabVisibleTiming,
+} from "./control-ui-performance.ts";
 import { loadAgentFiles, type AgentFilesState } from "./controllers/agent-files.ts";
 import {
   loadAgentIdentities,
@@ -92,6 +100,12 @@ type SettingsHost = {
   pendingGatewayUrl?: string | null;
   systemThemeCleanup?: (() => void) | null;
   pendingGatewayToken?: string | null;
+  requestUpdate?: () => void;
+  updateComplete?: Promise<unknown>;
+  controlUiRefreshSeq?: number;
+  controlUiTabPaintSeq?: number;
+  controlUiOverviewRefreshSeq?: number;
+  controlUiCronRefreshSeq?: number;
   dreamingStatusLoading: boolean;
   dreamingStatusError: string | null;
   dreamingStatus: import("./controllers/dreaming.js").DreamingStatus | null;
@@ -334,71 +348,76 @@ async function refreshAgentsTab(host: SettingsHost, app: SettingsAppHost) {
 
 export async function refreshActiveTab(host: SettingsHost) {
   const app = host as unknown as SettingsAppHost;
-  switch (host.tab) {
-    case "config":
-    case "communications":
-    case "appearance":
-    case "automation":
-    case "infrastructure":
-    case "aiAgents":
-      await loadConfigSchema(app);
-      await loadConfig(app);
-      return;
-    case "overview":
-      await loadOverview(host);
-      return;
-    case "channels":
-      await loadChannelsTab(host);
-      return;
-    case "instances":
-      await loadPresence(app);
-      return;
-    case "usage":
-      await loadUsage(app);
-      return;
-    case "sessions":
-      await loadSessions(app);
-      return;
-    case "cron":
-      await loadCron(host);
-      return;
-    case "skills":
-      await loadSkills(app);
-      return;
-    case "agents":
-      await refreshAgentsTab(host, app);
-      return;
-    case "nodes":
-      await loadNodes(app);
-      await loadDevices(app);
-      await loadConfig(app);
-      await loadExecApprovals(app);
-      return;
-    case "dreams":
-      await loadConfig(app);
-      await Promise.all([
-        loadDreamingStatus(app),
-        loadDreamDiary(app),
-        loadWikiImportInsights(app),
-        loadWikiMemoryPalace(app),
-      ]);
-      return;
-    case "chat":
-      await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
-      scheduleChatScroll(
-        host as unknown as Parameters<typeof scheduleChatScroll>[0],
-        !host.chatHasAutoScrolled,
-      );
-      return;
-    case "debug":
-      await loadDebug(app);
-      host.eventLog = host.eventLogBuffer;
-      return;
-    case "logs":
-      host.logsAtBottom = true;
-      await loadLogs(app, { reset: true });
-      scheduleLogsScroll(host as unknown as Parameters<typeof scheduleLogsScroll>[0], true);
-      return;
+  const refreshRun = beginControlUiRefresh(host, host.tab);
+  try {
+    switch (host.tab) {
+      case "config":
+      case "communications":
+      case "appearance":
+      case "automation":
+      case "infrastructure":
+      case "aiAgents":
+        await loadConfigSchema(app);
+        await loadConfig(app);
+        break;
+      case "overview":
+        await loadOverview(host);
+        break;
+      case "channels":
+        await loadChannelsTab(host);
+        break;
+      case "instances":
+        await loadPresence(app);
+        break;
+      case "usage":
+        await loadUsage(app);
+        break;
+      case "sessions":
+        await loadSessions(app);
+        break;
+      case "cron":
+        await loadCron(host);
+        break;
+      case "skills":
+        await loadSkills(app);
+        break;
+      case "agents":
+        await refreshAgentsTab(host, app);
+        break;
+      case "nodes":
+        await loadNodes(app);
+        await Promise.allSettled([loadDevices(app), loadConfig(app), loadExecApprovals(app)]);
+        break;
+      case "dreams":
+        await loadConfig(app);
+        await Promise.all([
+          loadDreamingStatus(app),
+          loadDreamDiary(app),
+          loadWikiImportInsights(app),
+          loadWikiMemoryPalace(app),
+        ]);
+        break;
+      case "chat":
+        await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
+        scheduleChatScroll(
+          host as unknown as Parameters<typeof scheduleChatScroll>[0],
+          !host.chatHasAutoScrolled,
+        );
+        break;
+      case "debug":
+        await loadDebug(app);
+        host.eventLog = host.eventLogBuffer;
+        break;
+      case "logs":
+        host.logsAtBottom = true;
+        await loadLogs(app, { reset: true });
+        scheduleLogsScroll(host as unknown as Parameters<typeof scheduleLogsScroll>[0], true);
+        break;
+    }
+    finishControlUiRefresh(host, refreshRun, "ok");
+  } catch (err) {
+    finishControlUiRefresh(host, refreshRun, "error");
+    throw err;
   }
 }
 
@@ -531,10 +550,14 @@ export function setTabFromRoute(host: SettingsHost, next: Tab) {
 }
 
 function updateBrowserHistory(url: URL, replace: boolean) {
-  if (replace) {
-    return window.history.replaceState({}, "", url.toString());
+  const history = typeof window === "undefined" ? undefined : window.history;
+  if (!history) {
+    return;
   }
-  return window.history.pushState({}, "", url.toString());
+  if (replace) {
+    return history.replaceState({}, "", url.toString());
+  }
+  return history.pushState({}, "", url.toString());
 }
 
 function applyTabSelection(
@@ -544,6 +567,9 @@ function applyTabSelection(
 ) {
   const prev = host.tab;
   host.tab = next;
+  if (prev !== next) {
+    scheduleControlUiTabVisibleTiming(host, prev, next);
+  }
 
   // Cleanup chat module state when navigating away from chat
   if (prev === "chat" && next !== "chat") {
@@ -570,12 +596,14 @@ function applyTabSelection(
 }
 
 export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
-  if (typeof window === "undefined") {
+  const href = typeof window === "undefined" ? undefined : window.location?.href;
+  const pathname = typeof window === "undefined" ? undefined : window.location?.pathname;
+  if (!href || !pathname) {
     return;
   }
   const targetPath = normalizePath(pathForTab(tab, host.basePath));
-  const currentPath = normalizePath(window.location.pathname);
-  const url = new URL(window.location.href);
+  const currentPath = normalizePath(pathname);
+  const url = new URL(href);
 
   if (tab === "chat" && host.sessionKey) {
     url.searchParams.set("session", host.sessionKey);
@@ -591,22 +619,35 @@ export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
 }
 
 export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, replace: boolean) {
-  if (typeof window === "undefined") {
+  const href = typeof window === "undefined" ? undefined : window.location?.href;
+  if (!href) {
     return;
   }
-  const url = new URL(window.location.href);
+  const url = new URL(href);
   url.searchParams.set("session", sessionKey);
   updateBrowserHistory(url, replace);
 }
 
 export async function loadOverview(host: SettingsHost, opts?: { refresh?: boolean }) {
   const app = host as SettingsAppHost;
+  const overviewSeq = (host.controlUiOverviewRefreshSeq ?? 0) + 1;
+  host.controlUiOverviewRefreshSeq = overviewSeq;
+  const isCurrentOverviewRefresh = () =>
+    host.controlUiOverviewRefreshSeq === overviewSeq && host.tab === "overview";
+
   await Promise.allSettled([
     loadChannels(app, false),
     loadPresence(app),
     loadSessions(app),
     loadCronStatus(app),
     loadCronJobsPage(app),
+  ]);
+  if (isCurrentOverviewRefresh()) {
+    buildAttentionItems(app);
+  }
+
+  const secondaryStartedAtMs = controlUiNowMs();
+  void Promise.allSettled([
     loadDebug(app),
     loadSkills(app),
     loadUsage(app),
@@ -614,8 +655,23 @@ export async function loadOverview(host: SettingsHost, opts?: { refresh?: boolea
     // `refresh: true` bypasses the gateway's 60s auth-status cache so a
     // user-initiated refresh surfaces post-re-auth state immediately.
     loadModelAuthStatusState(app, { refresh: opts?.refresh }),
-  ]);
-  buildAttentionItems(app);
+  ]).then((results) => {
+    if (!isCurrentOverviewRefresh()) {
+      return;
+    }
+    const status = results.some((result) => result.status === "rejected") ? "error" : "ok";
+    buildAttentionItems(app);
+    recordControlUiPerformanceEvent(
+      app,
+      "control-ui.overview.secondary",
+      {
+        phase: "end",
+        status,
+        durationMs: roundedControlUiDurationMs(controlUiNowMs() - secondaryStartedAtMs),
+      },
+      { console: false },
+    );
+  });
 }
 
 export function hasOperatorReadAccess(
@@ -781,16 +837,38 @@ function buildAttentionItems(host: SettingsAppHost) {
 
 export async function loadChannelsTab(host: SettingsHost) {
   const app = host as unknown as SettingsAppHost;
-  await Promise.all([loadChannels(app, true), loadConfigSchema(app), loadConfig(app)]);
+  await Promise.all([
+    loadChannels(app, true, { softTimeoutMs: 750 }),
+    loadConfigSchema(app),
+    loadConfig(app),
+  ]);
 }
 
 export async function loadCron(host: SettingsHost) {
   const app = host as unknown as SettingsAppHost;
   const activeCronJobId = app.cronRunsScope === "job" ? app.cronRunsJobId : null;
-  await Promise.all([
-    loadChannels(app, false),
-    loadCronStatus(app),
-    loadCronJobsPage(app),
-    loadCronRuns(app, activeCronJobId),
-  ]);
+  const cronSeq = (host.controlUiCronRefreshSeq ?? 0) + 1;
+  host.controlUiCronRefreshSeq = cronSeq;
+  const isCurrentCronRefresh = () =>
+    host.controlUiCronRefreshSeq === cronSeq && host.tab === "cron";
+  const runsStartedAtMs = controlUiNowMs();
+  const runsRefresh = loadCronRuns(app, activeCronJobId)
+    .catch(() => "error" as const)
+    .then((status) => {
+      if (!isCurrentCronRefresh()) {
+        return;
+      }
+      recordControlUiPerformanceEvent(
+        app,
+        "control-ui.cron.runs",
+        {
+          phase: "end",
+          status,
+          durationMs: roundedControlUiDurationMs(controlUiNowMs() - runsStartedAtMs),
+        },
+        { console: false },
+      );
+    });
+  void runsRefresh;
+  await Promise.all([loadChannels(app, false), loadCronStatus(app), loadCronJobsPage(app)]);
 }

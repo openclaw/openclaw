@@ -51,6 +51,7 @@ type MatrixQaGatewayChild = {
 
 const DEFAULT_MATRIX_QA_RUN_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_MATRIX_QA_CLEANUP_TIMEOUT_MS = 90_000;
+const DEFAULT_MATRIX_QA_CANARY_TIMEOUT_MS = 45_000;
 
 type MatrixQaLiveLaneGatewayHarness = {
   gateway: MatrixQaGatewayChild;
@@ -192,6 +193,13 @@ function createMatrixQaRunDeadline() {
   };
 }
 
+function resolveMatrixQaCanaryTimeoutMs() {
+  return parsePositiveMatrixQaEnvMs(
+    "OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS",
+    DEFAULT_MATRIX_QA_CANARY_TIMEOUT_MS,
+  );
+}
+
 function remainingMatrixQaRunMs(deadline: { deadlineMs: number }) {
   return Math.max(1, deadline.deadlineMs - Date.now());
 }
@@ -259,8 +267,10 @@ function formatMatrixQaScenarioDetails(params: { details: string; configSummary?
 
 function buildMatrixQaScenarioConfigEntry(params: {
   gatewayConfigParams: {
+    driverAccessToken?: string;
     driverUserId: string;
     homeserver: string;
+    observerAccessToken?: string;
     observerUserId: string;
     sutAccessToken: string;
     sutAccountId: string;
@@ -342,7 +352,7 @@ function getMatrixQaScenarioRestartReadyTimeoutMs(scenario: { timeoutMs: number 
   return scenario.timeoutMs;
 }
 
-export type MatrixQaRunResult = {
+type MatrixQaRunResult = {
   observedEventsPath: string;
   outputDir: string;
   reportPath: string;
@@ -628,8 +638,10 @@ export async function runMatrixQaLive(params: {
   let scenarioTransportInterruptMs = 0;
   const scenarioTimings: MatrixQaScenarioTiming[] = [];
   const gatewayConfigParams = {
+    driverAccessToken: provisioning.driver.accessToken,
     driverUserId: provisioning.driver.userId,
     homeserver: harness.baseUrl,
+    observerAccessToken: provisioning.observer.accessToken,
     observerUserId: provisioning.observer.userId,
     sutAccessToken: provisioning.sut.accessToken,
     sutAccountId,
@@ -716,7 +728,7 @@ export async function runMatrixQaLive(params: {
             syncState,
             syncStreams,
             sutUserId: provisioning.sut.userId,
-            timeoutMs: 45_000,
+            timeoutMs: resolveMatrixQaCanaryTimeoutMs(),
           }),
         ),
       );
@@ -931,9 +943,8 @@ export async function runMatrixQaLive(params: {
   } finally {
     if (gatewayHarness) {
       try {
-        const shouldPreserveGatewayDebugArtifacts = scenarioResults.some(
-          (scenario) => scenario?.status === "fail",
-        );
+        const shouldPreserveGatewayDebugArtifacts =
+          scenarioResults.some((scenario) => scenario?.status === "fail") || canaryFailed;
         preservedGatewayDebugDirPath = shouldPreserveGatewayDebugArtifacts
           ? path.join(outputDir, "gateway-debug")
           : undefined;
@@ -1124,6 +1135,7 @@ export const __testing = {
   findMatrixQaScenarios,
   isMatrixAccountReady,
   patchMatrixQaGatewayConfig,
+  resolveMatrixQaCanaryTimeoutMs,
   resolveMatrixQaModels,
   shouldWriteMatrixQaProgress,
   summarizeMatrixQaConfigSnapshot,

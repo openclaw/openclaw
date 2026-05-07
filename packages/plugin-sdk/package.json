@@ -12,9 +12,17 @@
       "types": "./dist/src/plugin-sdk/acp-runtime.d.ts",
       "default": "./src/acp-runtime.ts"
     },
+    "./acp-runtime-backend": {
+      "types": "./dist/src/plugin-sdk/acp-runtime-backend.d.ts",
+      "default": "./src/acp-runtime-backend.ts"
+    },
     "./async-lock-runtime": {
       "types": "./dist/src/plugin-sdk/async-lock-runtime.d.ts",
       "default": "./src/async-lock-runtime.ts"
+    },
+    "./browser-config": {
+      "types": "./dist/src/plugin-sdk/browser-config.d.ts",
+      "default": "./src/browser-config.ts"
     },
     "./channel-activity-runtime": {
       "types": "./dist/src/plugin-sdk/channel-activity-runtime.d.ts",
@@ -52,21 +60,17 @@
       "types": "./dist/src/plugin-sdk/system-event-runtime.d.ts",
       "default": "./src/system-event-runtime.ts"
     },
+    "./time-runtime": {
+      "types": "./dist/src/plugin-sdk/time-runtime.d.ts",
+      "default": "./src/time-runtime.ts"
+    },
     "./transport-ready-runtime": {
       "types": "./dist/src/plugin-sdk/transport-ready-runtime.d.ts",
       "default": "./src/transport-ready-runtime.ts"
     },
-    "./browser-config-runtime": {
-      "types": "./dist/src/plugin-sdk/browser-config-runtime.d.ts",
-      "default": "./src/browser-config-runtime.ts"
-    },
     "./core": {
       "types": "./dist/src/plugin-sdk/core.d.ts",
       "default": "./src/core.ts"
-    },
-    "./browser-node-runtime": {
-      "types": "./dist/src/plugin-sdk/browser-node-runtime.d.ts",
-      "default": "./src/browser-node-runtime.ts"
     },
     "./config-runtime": {
       "types": "./dist/src/plugin-sdk/config-runtime.d.ts",
@@ -87,14 +91,6 @@
     "./cron-store-runtime": {
       "types": "./dist/src/plugin-sdk/cron-store-runtime.d.ts",
       "default": "./src/cron-store-runtime.ts"
-    },
-    "./browser-setup-tools": {
-      "types": "./dist/src/plugin-sdk/browser-setup-tools.d.ts",
-      "default": "./src/browser-setup-tools.ts"
-    },
-    "./browser-security-runtime": {
-      "types": "./dist/src/plugin-sdk/browser-security-runtime.d.ts",
-      "default": "./src/browser-security-runtime.ts"
     },
     "./channel-secret-runtime": {
       "types": "./dist/src/plugin-sdk/channel-secret-runtime.d.ts",

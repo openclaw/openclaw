@@ -7,7 +7,7 @@ type QaGatewayRpcRequestOptions = {
   timeoutMs?: number;
 };
 
-export type QaGatewayRpcClient = {
+type QaGatewayRpcClient = {
   request(method: string, rpcParams?: unknown, opts?: QaGatewayRpcRequestOptions): Promise<unknown>;
   stop(): Promise<void>;
 };
@@ -55,8 +55,12 @@ export async function startQaGatewayRpcClient(params: {
               },
               rpcParams ?? {},
               {
+                clientName: "gateway-client",
+                deviceIdentity: null,
                 expectFinal: opts?.expectFinal,
+                mode: "backend",
                 progress: false,
+                scopes: ["operator.admin"],
               },
             ),
         );

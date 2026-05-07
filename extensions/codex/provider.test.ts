@@ -300,6 +300,24 @@ describe("codex provider", () => {
     });
   });
 
+  it("exposes a setup auth choice for installing Codex as an external provider", async () => {
+    const provider = buildCodexProvider();
+
+    expect(provider.auth[0]).toMatchObject({
+      id: "app-server",
+      kind: "custom",
+      wizard: {
+        choiceId: "codex",
+        choiceLabel: "Codex app-server",
+        onboardingScopes: ["text-inference"],
+      },
+    });
+    await expect(provider.auth[0].run({} as never)).resolves.toMatchObject({
+      profiles: [],
+      defaultModel: "codex/gpt-5.5",
+    });
+  });
+
   it("exposes a lightweight provider-discovery entry for model list/status", async () => {
     expect(codexProviderDiscovery.id).toBe("codex");
     expect(codexProviderDiscovery.resolveSyntheticAuth?.({ provider: "codex" })).toEqual({
@@ -330,11 +348,15 @@ describe("codex provider", () => {
     ).toEqual({
       stablePrefix: CODEX_GPT5_BEHAVIOR_CONTRACT,
       sectionOverrides: {
-        interaction_style: expect.stringContaining(
-          "Quiet monitoring does not satisfy an explicit ongoing-work instruction.",
-        ),
+        interaction_style: expect.stringContaining("This is a live chat, not a memo."),
       },
     });
+    expect(
+      provider.resolveSystemPromptContribution?.({
+        provider: "codex",
+        modelId: "gpt-5.4",
+      } as never)?.sectionOverrides?.interaction_style,
+    ).not.toContain("The purpose of heartbeats is to make you feel magical and proactive.");
   });
 
   it("does not add the GPT-5 prompt overlay to non-GPT-5 Codex provider runs", () => {

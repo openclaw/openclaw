@@ -18,7 +18,7 @@ const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
           legacyConfigRules: [],
         };
       }
-      if (dirName === "telegram" && artifactBasename === "contract-api.js") {
+      if (dirName === "telegram" && artifactBasename === "doctor-contract-api.js") {
         return {
           legacyConfigRules: [
             {
@@ -71,7 +71,7 @@ describe("channel doctor contract api fast path", () => {
     });
   });
 
-  it("falls back to the generic contract artifact when the doctor artifact is absent", () => {
+  it("uses the explicit Telegram doctor contract artifact", () => {
     const api = loadBundledChannelDoctorContractApi("telegram");
 
     expect(api?.legacyConfigRules).toEqual([
@@ -84,7 +84,7 @@ describe("channel doctor contract api fast path", () => {
       dirName: "telegram",
       artifactBasename: "doctor-contract-api.js",
     });
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalledWith({
       dirName: "telegram",
       artifactBasename: "contract-api.js",
     });

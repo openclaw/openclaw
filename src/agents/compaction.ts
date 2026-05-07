@@ -177,7 +177,12 @@ export function splitMessagesByTokenShare(
       const stopReason = (message as { stopReason?: unknown }).stopReason;
       const keepsPending =
         stopReason !== "aborted" && stopReason !== "error" && toolCalls.length > 0;
-      pendingToolCallIds = keepsPending ? new Set(toolCalls.map((t) => t.id)) : new Set();
+      pendingToolCallIds = new Set();
+      if (keepsPending) {
+        for (const toolCall of toolCalls) {
+          pendingToolCallIds.add(toolCall.id);
+        }
+      }
       pendingChunkStartIndex = keepsPending ? current.length - 1 : null;
     } else if (message.role === "toolResult" && pendingToolCallIds.size > 0) {
       const resultId = extractToolResultId(message);
@@ -314,13 +319,22 @@ async function summarizeChunks(params: {
     params.customInstructions,
     params.summarizationInstructions,
   );
+
+  // Clamp reserveTokens to the model's maxTokens output cap.
+  // generateSummary() uses Math.floor(0.8 * reserveTokens) as max_tokens for the API call.
+  // With large context windows (1M tokens), reserveTokensFloor can be 300K+, producing
+  // max_tokens of 240K+ which exceeds model output limits (e.g. 128K for Anthropic).
+  // By clamping reserveTokens here, we ensure the downstream max_tokens stays within bounds.
+  const modelMaxTokens = params.model.maxTokens ?? 128_000;
+  const clampedReserveTokens = Math.min(params.reserveTokens, Math.floor(modelMaxTokens / 0.8));
+
   for (const chunk of chunks) {
     summary = await retryAsync(
       () =>
         generateSummary(
           chunk,
           params.model,
-          params.reserveTokens,
+          clampedReserveTokens,
           params.apiKey,
           params.headers,
           params.signal,

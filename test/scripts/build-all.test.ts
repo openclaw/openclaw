@@ -134,6 +134,7 @@ describe("resolveBuildAllSteps", () => {
       "check-cli-bootstrap-imports",
       "runtime-postbuild",
       "build-stamp",
+      "runtime-postbuild-stamp",
       "build:plugin-sdk:dts",
       "write-plugin-sdk-entry-dts",
       "check-plugin-sdk-exports",
@@ -152,7 +153,18 @@ describe("resolveBuildAllSteps", () => {
       "check-cli-bootstrap-imports",
       "runtime-postbuild",
       "build-stamp",
+      "runtime-postbuild-stamp",
     ]);
+  });
+
+  it("writes the runtime postbuild stamp after the build stamp", () => {
+    expect(resolveBuildAllSteps("full").map((step) => step.label)).toEqual(
+      expect.arrayContaining(["runtime-postbuild", "build-stamp", "runtime-postbuild-stamp"]),
+    );
+    const labels = resolveBuildAllSteps("full").map((step) => step.label);
+    expect(labels.indexOf("runtime-postbuild-stamp")).toBeGreaterThan(
+      labels.indexOf("build-stamp"),
+    );
   });
 
   it("does not cache plugin-sdk entry shims over compiled JS", () => {

@@ -4,6 +4,8 @@ import {
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
+import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
 import type { NodeSession } from "./node-registry.js";
 
@@ -47,6 +49,8 @@ const PHOTOS_COMMANDS = ["photos.latest"];
 const MOTION_COMMANDS = ["motion.activity", "motion.pedometer"];
 
 const SMS_DANGEROUS_COMMANDS = ["sms.send", "sms.search"];
+
+const TALK_PTT_COMMANDS = ["talk.ptt.start", "talk.ptt.stop", "talk.ptt.cancel", "talk.ptt.once"];
 
 // iOS nodes don't implement system.run/which, but they do support notifications.
 const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];
@@ -115,7 +119,14 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...SCREEN_COMMANDS,
   ],
   linux: [...SYSTEM_COMMANDS],
-  windows: [...SYSTEM_COMMANDS],
+  windows: [
+    ...CANVAS_COMMANDS,
+    ...CAMERA_COMMANDS,
+    ...LOCATION_COMMANDS,
+    ...DEVICE_COMMANDS,
+    ...SYSTEM_COMMANDS,
+    ...SCREEN_COMMANDS,
+  ],
   // Fail-safe: unknown metadata should not receive host exec defaults.
   unknown: [...UNKNOWN_PLATFORM_COMMANDS],
 };
@@ -175,15 +186,58 @@ function normalizePlatformId(platform?: string, deviceFamily?: string): Platform
   return byFamily ?? "unknown";
 }
 
+export function listDangerousPluginNodeCommands(): string[] {
+  const registry = getActiveRuntimePluginRegistry();
+  if (!registry) {
+    return [];
+  }
+  const commands = [
+    ...(registry.nodeHostCommands ?? [])
+      .filter((entry) => entry.command.dangerous === true)
+      .map((entry) => entry.command.command),
+    ...(registry.nodeInvokePolicies ?? []).flatMap((entry) => entry.policy.commands),
+  ];
+  return [...new Set(commands.map((command) => command.trim()).filter(Boolean))];
+}
+
+type NodeCommandPolicyNode = Pick<NodeSession, "platform" | "deviceFamily"> &
+  Partial<Pick<NodeSession, "caps" | "commands">>;
+
+function hasTalkSurface(node?: NodeCommandPolicyNode): boolean {
+  if (!node) {
+    return false;
+  }
+  return (
+    (node.caps ?? []).some(
+      (capability) => normalizeOptionalLowercaseString(capability) === "talk",
+    ) ||
+    (node.commands ?? []).some((command) =>
+      normalizeOptionalLowercaseString(command)?.startsWith("talk."),
+    )
+  );
+}
+
 export function resolveNodeCommandAllowlist(
   cfg: OpenClawConfig,
-  node?: Pick<NodeSession, "platform" | "deviceFamily">,
+  node?: NodeCommandPolicyNode,
 ): Set<string> {
   const platformId = normalizePlatformId(node?.platform, node?.deviceFamily);
   const base = PLATFORM_DEFAULTS[platformId] ?? PLATFORM_DEFAULTS.unknown;
+  const talkCommands = hasTalkSurface(node) ? TALK_PTT_COMMANDS : [];
   const extra = cfg.gateway?.nodes?.allowCommands ?? [];
   const deny = new Set(cfg.gateway?.nodes?.denyCommands ?? []);
-  const allow = new Set([...base, ...extra].map((cmd) => cmd.trim()).filter(Boolean));
+  const dangerousPluginCommands = new Set(listDangerousPluginNodeCommands());
+  const allow = new Set(
+    [...base, ...talkCommands, ...extra]
+      .map((cmd) => cmd.trim())
+      .filter((cmd) => cmd && !dangerousPluginCommands.has(cmd)),
+  );
+  for (const cmd of extra) {
+    const trimmed = cmd.trim();
+    if (trimmed) {
+      allow.add(trimmed);
+    }
+  }
   for (const blocked of deny) {
     const trimmed = blocked.trim();
     if (trimmed) {

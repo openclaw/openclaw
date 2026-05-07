@@ -56,6 +56,14 @@ func TestDocsI18nPromptTimeoutUsesEnvOverride(t *testing.T) {
 	}
 }
 
+func TestDocsI18nCommandWaitDelayUsesEnvOverride(t *testing.T) {
+	t.Setenv(envDocsI18nCommandWaitDelay, "50ms")
+
+	if got := docsI18nCommandWaitDelay(); got != 50*time.Millisecond {
+		t.Fatalf("expected 50ms wait delay, got %s", got)
+	}
+}
+
 func TestIsRetryableTranslateErrorRejectsDeadlineExceeded(t *testing.T) {
 	t.Parallel()
 
@@ -119,6 +127,26 @@ func TestCodexTranslatorRetriesTransientFailure(t *testing.T) {
 	}
 }
 
+func TestCodexTranslatorStripsInputWrapperEcho(t *testing.T) {
+	t.Parallel()
+
+	translator := &CodexTranslator{
+		systemPrompt: "Translate from English to German.",
+		thinking:     "high",
+		runPrompt: func(context.Context, codexPromptRequest) (string, error) {
+			return "<openclaw_docs_i18n_input>\nÜbersetzt\n</openclaw_docs_i18n_input>", nil
+		},
+	}
+
+	got, err := translator.TranslateRaw(context.Background(), "Translate me", "en", "de")
+	if err != nil {
+		t.Fatalf("TranslateRaw returned error: %v", err)
+	}
+	if got != "Übersetzt" {
+		t.Fatalf("unexpected translation %q", got)
+	}
+}
+
 func TestBuildCodexTranslationPromptIncludesGuardrailsAndInput(t *testing.T) {
 	prompt := buildCodexTranslationPrompt("System prompt.", "Hello\nworld")
 
@@ -141,19 +169,65 @@ func TestRunCodexExecPromptUsesOutputLastMessage(t *testing.T) {
 	if err := os.WriteFile(fakeCodex, []byte(`#!/bin/sh
 set -eu
 out=""
+saw_effort=0
+saw_service=0
 while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--output-last-message" ]; then
-    shift
-    out="$1"
-  fi
+  case "$1" in
+    --output-last-message)
+      shift
+      out="$1"
+      ;;
+    -c|--config)
+      shift
+      case "$1" in
+        model_reasoning_effort=\"high\")
+          saw_effort=1
+          ;;
+        service_tier=\"fast\")
+          saw_service=1
+          ;;
+      esac
+      ;;
+  esac
   shift || true
 done
 cat >/dev/null
+if [ "$saw_effort" != "1" ]; then
+  echo "missing high reasoning effort config" >&2
+  exit 1
+fi
+if [ "$saw_service" != "1" ]; then
+  echo "missing fast service tier config" >&2
+  exit 1
+fi
+if [ -z "${CODEX_HOME:-}" ]; then
+  echo "missing CODEX_HOME" >&2
+  exit 1
+fi
+if [ ! -f "$CODEX_HOME/auth.json" ]; then
+  echo "missing auth.json" >&2
+  exit 1
+fi
+if ! grep -q '"auth_mode":"apikey"' "$CODEX_HOME/auth.json"; then
+  echo "auth.json missing apikey mode" >&2
+  exit 1
+fi
+if ! grep -q '"OPENAI_API_KEY":"test-openai-key"' "$CODEX_HOME/auth.json"; then
+  echo "auth.json missing API key" >&2
+  exit 1
+fi
+case "$CODEX_HOME" in
+  /tmp/*)
+    echo "CODEX_HOME must not be under /tmp" >&2
+    exit 1
+    ;;
+esac
 printf 'translated from codex\n' > "$out"
 `), 0o755); err != nil {
 		t.Fatalf("write fake codex: %v", err)
 	}
 	t.Setenv(envDocsI18nCodexExecutable, fakeCodex)
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
 
 	got, err := runCodexExecPrompt(context.Background(), codexPromptRequest{
 		SystemPrompt: "Translate.",
@@ -166,6 +240,37 @@ printf 'translated from codex\n' > "$out"
 	}
 	if got != "translated from codex" {
 		t.Fatalf("unexpected output %q", got)
+	}
+}
+
+func TestRunCodexExecPromptDoesNotHangOnInheritedPipesAfterTimeout(t *testing.T) {
+	dir := t.TempDir()
+	fakeCodex := filepath.Join(dir, "codex")
+	if err := os.WriteFile(fakeCodex, []byte(`#!/bin/sh
+set -eu
+(sleep 10) &
+sleep 10
+`), 0o755); err != nil {
+		t.Fatalf("write fake codex: %v", err)
+	}
+	t.Setenv(envDocsI18nCodexExecutable, fakeCodex)
+	t.Setenv(envDocsI18nCommandWaitDelay, "20ms")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err := runCodexExecPrompt(ctx, codexPromptRequest{
+		SystemPrompt: "Translate.",
+		Message:      "Hello",
+		Model:        "gpt-5.5",
+		Thinking:     "high",
+	})
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("expected bounded timeout, took %s", elapsed)
 	}
 }
 

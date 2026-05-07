@@ -1,5 +1,7 @@
 import type { OpenClawConfig } from "../config/types.js";
 
+export { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
+
 export function requireRuntimeConfig(config: OpenClawConfig, context: string): OpenClawConfig {
   if (config) {
     return config;

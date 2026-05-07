@@ -163,4 +163,108 @@ describe("channelsHandlers channels.status", () => {
       }),
     );
   });
+
+  it("returns a partial snapshot when a channel probe exceeds the status budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const autoEnabledConfig = { autoEnabled: true };
+      const probeAccount = vi.fn(() => new Promise(() => undefined));
+      mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+      mocks.listChannelPlugins.mockReturnValue([
+        {
+          id: "whatsapp",
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+            isEnabled: () => true,
+            isConfigured: async () => true,
+          },
+          status: {
+            probeAccount,
+          },
+        },
+      ]);
+      const respond = vi.fn();
+      const run = channelsHandlers["channels.status"](
+        createOptions({ probe: true, timeoutMs: 1000 }, { respond }),
+      );
+
+      await vi.advanceTimersByTimeAsync(1000);
+      await run;
+
+      expect(mocks.buildChannelAccountSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          probe: expect.objectContaining({
+            timedOut: true,
+          }),
+        }),
+      );
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          partial: true,
+          warnings: [expect.stringContaining("whatsapp:default probe timed out after 1000ms")],
+        }),
+        undefined,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("annotates unhealthy channel snapshots and includes event-loop health", async () => {
+    const now = Date.now();
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });
+    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      running: true,
+      connected: true,
+      lastStartAt: now - 60 * 60_000,
+      lastTransportActivityAt: now - 40 * 60_000,
+    });
+    const eventLoop = {
+      degraded: true,
+      reasons: ["event_loop_delay"],
+      intervalMs: 62_000,
+      delayP99Ms: 62_000,
+      delayMaxMs: 62_000,
+      utilization: 1,
+      cpuCoreRatio: 1,
+    };
+    const respond = vi.fn();
+
+    await channelsHandlers["channels.status"](
+      createOptions(
+        { probe: false, timeoutMs: 2000 },
+        {
+          respond,
+          context: {
+            getRuntimeConfig: mocks.getRuntimeConfig,
+            getRuntimeSnapshot: () => ({
+              channels: {},
+              channelAccounts: {},
+            }),
+            getEventLoopHealth: () => eventLoop,
+          } as never,
+        },
+      ),
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        eventLoop,
+        channelAccounts: {
+          whatsapp: [
+            expect.objectContaining({
+              healthState: "stale-socket",
+            }),
+          ],
+        },
+      }),
+      undefined,
+    );
+  });
 });

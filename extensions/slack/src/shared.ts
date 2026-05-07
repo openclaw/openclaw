@@ -7,8 +7,10 @@ import {
 import { inspectSlackAccount } from "./account-inspect.js";
 import {
   listSlackAccountIds,
+  resolveSlackConfigAccessorAccount,
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
+  type SlackConfigAccessorAccount,
   type ResolvedSlackAccount,
 } from "./accounts.js";
 import { getChatChannelMeta, type ChannelPlugin } from "./channel-api.js";
@@ -19,12 +21,7 @@ import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./
 import { slackSecurityAdapter } from "./security.js";
 import { SLACK_CHANNEL } from "./setup-shared.js";
 
-export {
-  buildSlackSetupLines,
-  isSlackSetupAccountConfigured,
-  setSlackChannelAllowlist,
-  SLACK_CHANNEL,
-} from "./setup-shared.js";
+export { setSlackChannelAllowlist, SLACK_CHANNEL } from "./setup-shared.js";
 
 export function isSlackPluginAccountConfigured(account: ResolvedSlackAccount): boolean {
   const mode = account.config.mode ?? "socket";
@@ -38,16 +35,20 @@ export function isSlackPluginAccountConfigured(account: ResolvedSlackAccount): b
   return Boolean(account.appToken?.trim());
 }
 
-export const slackConfigAdapter = createScopedChannelConfigAdapter<ResolvedSlackAccount>({
+export const slackConfigAdapter = createScopedChannelConfigAdapter<
+  ResolvedSlackAccount,
+  SlackConfigAccessorAccount
+>({
   sectionKey: SLACK_CHANNEL,
   listAccountIds: listSlackAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveSlackAccount),
+  resolveAccessorAccount: resolveSlackConfigAccessorAccount,
   inspectAccount: adaptScopedAccountAccessor(inspectSlackAccount),
   defaultAccountId: resolveDefaultSlackAccountId,
   clearBaseFields: ["botToken", "appToken", "name"],
-  resolveAllowFrom: (account: ResolvedSlackAccount) => account.dm?.allowFrom,
+  resolveAllowFrom: (account) => account.allowFrom,
   formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
-  resolveDefaultTo: (account: ResolvedSlackAccount) => account.config.defaultTo,
+  resolveDefaultTo: (account) => account.defaultTo,
 });
 
 export function createSlackPluginBase(params: {

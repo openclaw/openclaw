@@ -6,6 +6,14 @@ import { buildOpenAIProvider } from "./openai-provider.js";
 const manifest = JSON.parse(
   readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
 ) as {
+  mediaUnderstandingProviderMetadata?: Record<
+    string,
+    {
+      capabilities?: string[];
+      defaultModels?: Record<string, string>;
+      autoPriority?: Record<string, number>;
+    }
+  >;
   providerAuthChoices?: Array<{
     provider?: string;
     method?: string;
@@ -15,6 +23,12 @@ const manifest = JSON.parse(
     deprecatedChoiceIds?: string[];
     groupHint?: string;
   }>;
+};
+
+const packageJson = JSON.parse(
+  readFileSync(new URL("./package.json", import.meta.url), "utf8"),
+) as {
+  dependencies?: Record<string, string>;
 };
 
 function manifestComparableWizardFields(choice: {
@@ -53,12 +67,31 @@ function providerWizardByKey() {
 }
 
 describe("OpenAI plugin manifest", () => {
+  it("keeps runtime dependencies in the package manifest", () => {
+    expect(packageJson.dependencies?.["@mariozechner/pi-ai"]).toBe("0.73.0");
+    expect(packageJson.dependencies?.ws).toBe("^8.20.0");
+  });
+
   it("keeps removed Codex CLI import auth choice as a deprecated browser-login alias", () => {
     const codexBrowserLogin = manifest.providerAuthChoices?.find(
       (choice) => choice.choiceId === "openai-codex",
     );
 
     expect(codexBrowserLogin?.deprecatedChoiceIds).toContain("openai-codex-import");
+  });
+
+  it("keeps Codex media-understanding manifest metadata aligned with runtime audio support", () => {
+    expect(manifest.mediaUnderstandingProviderMetadata?.["openai-codex"]).toMatchObject({
+      capabilities: ["image", "audio"],
+      defaultModels: {
+        image: "gpt-5.5",
+        audio: "gpt-4o-transcribe",
+      },
+      autoPriority: {
+        image: 20,
+        audio: 20,
+      },
+    });
   });
 
   it("labels OpenAI API key and Codex auth choices without stale mixed OAuth wording", () => {

@@ -36,7 +36,7 @@ const BUNDLED_EXTENSION_CONFIG_IMPORT_GUARDS = [
     allowedSpecifier: "../runtime-api.js",
   },
   // Teams keeps a package-local config barrel so production code does not
-  // self-import via openclaw/plugin-sdk/msteams from inside the same extension.
+  // reach through a public plugin-sdk helper seam from inside the same extension.
   {
     path: "extensions/msteams/src/config-schema.ts",
     allowedSpecifier: "../config-api.js",

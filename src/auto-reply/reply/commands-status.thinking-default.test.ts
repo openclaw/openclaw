@@ -113,7 +113,33 @@ describe("buildStatusReply", () => {
     expect(reply?.text).not.toContain("Fallbacks: anthropic/claude-sonnet-4-6");
   });
 
-  it("keeps default fallback config when the agent has no explicit fallback override", async () => {
+  it("keeps default fallback config when the agent has no explicit model", async () => {
+    const cfg = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+        list: [
+          {
+            id: "kira",
+          },
+        ],
+      },
+      channels: {
+        whatsapp: { allowFrom: ["*"] },
+      },
+    } as OpenClawConfig;
+
+    const reply = await buildKiraStatusReply(cfg);
+
+    expect(reply?.text).toContain("Fallbacks: anthropic/claude-sonnet-4-6");
+  });
+
+  it("keeps agent primary strict when the agent has no explicit fallback override", async () => {
     const cfg = {
       session: { mainKey: "main", scope: "per-sender" },
       agents: {
@@ -139,7 +165,7 @@ describe("buildStatusReply", () => {
 
     const reply = await buildKiraStatusReply(cfg);
 
-    expect(reply?.text).toContain("Fallbacks: anthropic/claude-sonnet-4-6");
+    expect(reply?.text).not.toContain("Fallbacks:");
   });
 
   it("treats an explicit empty per-agent fallback override as disabling inherited fallbacks", async () => {

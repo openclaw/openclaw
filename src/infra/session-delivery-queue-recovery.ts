@@ -8,14 +8,14 @@ import {
   type QueuedSessionDelivery,
 } from "./session-delivery-queue-storage.js";
 
-export type SessionDeliveryRecoverySummary = {
+type SessionDeliveryRecoverySummary = {
   recovered: number;
   failed: number;
   skippedMaxRetries: number;
   deferredBackoff: number;
 };
 
-export type DeliverSessionDeliveryFn = (entry: QueuedSessionDelivery) => Promise<void>;
+type DeliverSessionDeliveryFn = (entry: QueuedSessionDelivery) => Promise<void>;
 
 export interface SessionDeliveryRecoveryLogger {
   info(msg: string): void;
@@ -23,12 +23,12 @@ export interface SessionDeliveryRecoveryLogger {
   error(msg: string): void;
 }
 
-export interface PendingSessionDeliveryDrainDecision {
+interface PendingSessionDeliveryDrainDecision {
   match: boolean;
   bypassBackoff?: boolean;
 }
 
-export const MAX_SESSION_DELIVERY_RETRIES = 5;
+const MAX_SESSION_DELIVERY_RETRIES = 5;
 
 const BACKOFF_MS: readonly number[] = [5_000, 25_000, 120_000, 600_000];
 const drainInProgress = new Map<string, boolean>();
@@ -61,7 +61,7 @@ function releaseRecoveryEntry(entryId: string): void {
   entriesInProgress.delete(entryId);
 }
 
-export function computeSessionDeliveryBackoffMs(retryCount: number): number {
+function computeSessionDeliveryBackoffMs(retryCount: number): number {
   if (retryCount <= 0) {
     return 0;
   }

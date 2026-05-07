@@ -201,7 +201,7 @@ function listConfiguredModelProviderIds(config: OpenClawConfig): Set<string> {
   );
 }
 
-export function listMigrationRelevantPluginRecords(params: {
+function listMigrationRelevantPluginRecords(params: {
   index: InstalledPluginIndex;
   config: OpenClawConfig;
   installRecords: Record<string, unknown>;
@@ -299,7 +299,6 @@ export async function migratePluginRegistryForInstall(
   const inspection = await inspectPersistedInstalledPluginIndex(migrationParams);
   const candidateIndex = loadInstalledPluginIndex({
     ...migrationParams,
-    cache: false,
   });
   const current: InstalledPluginIndex = {
     ...candidateIndex,

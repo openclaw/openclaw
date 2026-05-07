@@ -146,6 +146,63 @@ describe("normalizeCompatibilityConfigValues", () => {
     fs.rmSync(tempOauthDir, { recursive: true, force: true });
   });
 
+  it("sets the group visible reply default for configured channels", () => {
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        discord: {},
+      },
+      messages: {
+        groupChat: {
+          mentionPatterns: ["@openclaw"],
+        },
+      },
+    });
+
+    expect(res.config.messages?.groupChat).toEqual({
+      mentionPatterns: ["@openclaw"],
+      visibleReplies: "message_tool",
+    });
+    expect(res.changes).toContain(
+      'Set messages.groupChat.visibleReplies to "message_tool" so group/channel replies use the message tool by default.',
+    );
+  });
+
+  it("does not set group visible replies without channels or when already explicit", () => {
+    expect(
+      normalizeCompatibilityConfigValues({
+        messages: {
+          groupChat: {
+            mentionPatterns: ["@openclaw"],
+          },
+        },
+      }).changes,
+    ).toEqual([]);
+
+    expect(
+      normalizeCompatibilityConfigValues({
+        channels: {
+          discord: {},
+        },
+        messages: {
+          visibleReplies: "automatic",
+        },
+      }).config.messages?.groupChat?.visibleReplies,
+    ).toBeUndefined();
+
+    expect(
+      normalizeCompatibilityConfigValues({
+        channels: {
+          discord: {},
+        },
+        messages: {
+          groupChat: {
+            visibleReplies: "automatic",
+          },
+        },
+      }).config.messages?.groupChat?.visibleReplies,
+    ).toBe("automatic");
+  });
+
   it("does not add whatsapp config when missing and no auth exists", () => {
     const res = normalizeCompatibilityConfigValues({
       messages: { ackReaction: "👀" },
@@ -214,8 +271,13 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
-  it("leaves invalid legacy secretref-env markers for validation to reject", () => {
+  it("leaves invalid legacy secretref-env markers unchanged", () => {
     const res = normalizeCompatibilityConfigValues({
+      messages: {
+        groupChat: {
+          visibleReplies: "message_tool",
+        },
+      },
       channels: {
         discord: {
           token: "secretref-env:not-valid",
@@ -468,7 +530,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {
         defaults: {
-          agentRuntime: { id: "auto", fallback: "pi" },
+          agentRuntime: { id: "auto" },
           model: {
             primary: "codex/gpt-5.5",
             fallbacks: ["anthropic/claude-sonnet-4-6", "codex/gpt-5.4-mini"],
@@ -494,10 +556,11 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
     expect(res.config.agents?.defaults?.agentRuntime).toEqual({
       id: "codex",
-      fallback: "pi",
     });
     expect(res.config.agents?.defaults?.models).toEqual({
+      "codex/gpt-5.5": { alias: "legacy-codex" },
       "openai/gpt-5.5": { alias: "gpt", params: { temperature: 0.2 } },
+      "codex/gpt-5.4-mini": {},
       "openai/gpt-5.4-mini": {},
     });
     expect(res.config.agents?.list?.[0]).toMatchObject({
@@ -557,6 +620,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
     expect(res.config.agents?.defaults?.agentRuntime).toEqual({ id: "claude-cli" });
     expect(res.config.agents?.defaults?.models).toEqual({
+      "claude-cli/claude-opus-4-7": { alias: "Opus" },
       "anthropic/claude-opus-4-7": { alias: "Anthropic Opus" },
     });
   });
@@ -583,6 +647,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
     expect(res.config.agents?.defaults?.agentRuntime).toEqual({ id: "codex-cli" });
     expect(res.config.agents?.defaults?.models).toEqual({
+      "codex-cli/gpt-5.5": { alias: "Codex CLI" },
       "openai/gpt-5.5": { alias: "OpenAI GPT" },
     });
   });
@@ -611,6 +676,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       id: "google-gemini-cli",
     });
     expect(res.config.agents?.defaults?.models).toEqual({
+      "google-gemini-cli/gemini-3.1-pro-preview": { alias: "Gemini CLI" },
       "google/gemini-3.1-pro-preview": { alias: "Gemini API" },
     });
   });

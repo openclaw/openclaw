@@ -10,10 +10,11 @@ import { sanitizeDiagnosticPayload } from "./payload-redaction.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
 import { buildAgentTraceBase } from "./trace-base.js";
 
-export type CacheTraceStage =
+type CacheTraceStage =
   | "cache:result"
   | "cache:state"
   | "session:loaded"
+  | "session:raw-model-run"
   | "session:sanitized"
   | "session:limited"
   | "prompt:before"
@@ -21,7 +22,7 @@ export type CacheTraceStage =
   | "stream:context"
   | "session:after";
 
-export type CacheTraceEvent = {
+type CacheTraceEvent = {
   ts: string;
   seq: number;
   stage: CacheTraceStage;
@@ -46,7 +47,7 @@ export type CacheTraceEvent = {
   error?: string;
 };
 
-export type CacheTrace = {
+type CacheTrace = {
   enabled: true;
   filePath: string;
   recordStage: (stage: CacheTraceStage, payload?: Partial<CacheTraceEvent>) => void;

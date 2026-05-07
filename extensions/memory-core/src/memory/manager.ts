@@ -120,6 +120,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected readonly vector: {
     enabled: boolean;
     available: boolean | null;
+    semanticAvailable?: boolean;
     extensionPath?: string;
     loadError?: string;
     dims?: number;
@@ -380,7 +381,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           boostFallbackRanking: true,
         },
         sourceFilterList,
-      ).catch(() => []);
+      ).catch((err) => {
+        log.warn(`memory search: FTS keyword query failed: ${formatErrorMessage(err)}`);
+        return [];
+      });
       const resultSets =
         fullQueryResults.length > 0
           ? [fullQueryResults]
@@ -398,7 +402,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
                     candidates,
                     { boostFallbackRanking: true },
                     sourceFilterList,
-                  ).catch(() => []),
+                  ).catch((err) => {
+                    log.warn(
+                      `memory search: FTS per-keyword query failed for "${term}": ${formatErrorMessage(err)}`,
+                    );
+                    return [];
+                  }),
                 );
               })(),
             );
@@ -427,13 +436,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     // If FTS isn't available, hybrid mode cannot use keyword search; degrade to vector-only.
     const keywordResults =
       hybrid.enabled && this.fts.enabled && this.fts.available
-        ? await this.searchKeyword(cleaned, candidates, undefined, sourceFilterList).catch(() => [])
+        ? await this.searchKeyword(cleaned, candidates, undefined, sourceFilterList).catch(
+            (err) => {
+              log.warn(
+                `memory search: FTS hybrid keyword query failed: ${formatErrorMessage(err)}`,
+              );
+              return [];
+            },
+          )
         : [];
 
     const queryVec = await this.embedQueryWithTimeout(cleaned);
     const hasVector = queryVec.some((v) => v !== 0);
     const vectorResults = hasVector
-      ? await this.searchVector(queryVec, candidates, sourceFilterList).catch(() => [])
+      ? await this.searchVector(queryVec, candidates, sourceFilterList).catch((err) => {
+          log.warn(`memory search: vector query failed: ${formatErrorMessage(err)}`);
+          return [];
+        })
       : [];
 
     if (!hybrid.enabled || !this.fts.enabled || !this.fts.available) {
@@ -788,7 +807,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         : undefined,
       vector: {
         enabled: this.vector.enabled,
-        available: this.vector.available ?? undefined,
+        storeAvailable: this.vector.available ?? undefined,
+        semanticAvailable: this.vector.semanticAvailable,
+        available: this.vector.semanticAvailable,
         extensionPath: this.vector.extensionPath,
         loadError: this.vector.loadError,
         dims: this.vector.dims,
@@ -819,14 +840,26 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
   async probeVectorAvailability(): Promise<boolean> {
     if (!this.vector.enabled) {
+      this.vector.semanticAvailable = false;
       return false;
     }
     await this.ensureProviderInitialized();
     // FTS-only mode: vector search not available
     if (!this.provider) {
+      this.vector.semanticAvailable = false;
       return false;
     }
-    return this.ensureVectorReady();
+    const ready = await this.probeVectorStoreAvailability();
+    this.vector.semanticAvailable = ready;
+    return ready;
+  }
+
+  async probeVectorStoreAvailability(): Promise<boolean> {
+    if (!this.vector.enabled) {
+      this.vector.available = false;
+      return false;
+    }
+    return await this.ensureVectorReady();
   }
 
   private cacheProbeResult(result: MemoryEmbeddingProbeResult): MemoryEmbeddingProbeResult {

@@ -210,9 +210,15 @@ async function assertMatrixQaPeerDeviceTrusted(params: {
   client: MatrixQaE2eeScenarioClient;
   deviceId: string;
   label: string;
+  timeoutMs: number;
   userId: string;
 }) {
-  const status = await params.client.getDeviceVerificationStatus(params.userId, params.deviceId);
+  const startedAt = Date.now();
+  let status = await params.client.getDeviceVerificationStatus(params.userId, params.deviceId);
+  while (!status.verified && Date.now() - startedAt < params.timeoutMs) {
+    await sleep(Math.min(250, Math.max(25, params.timeoutMs - (Date.now() - startedAt))));
+    status = await params.client.getDeviceVerificationStatus(params.userId, params.deviceId);
+  }
   if (!status.verified) {
     throw new Error(
       `${params.label} did not trust ${params.userId}/${params.deviceId} after verification`,
@@ -702,28 +708,19 @@ async function createMatrixQaCliGatewayRuntime(params: {
   context: MatrixQaScenarioContext;
 }) {
   const outputDir = requireMatrixQaE2eeOutputDir(params.context);
-  const rootDir = await mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-matrix-gateway-cli-qa-"),
-  );
   const artifactDir = path.join(
     outputDir,
     params.artifactLabel,
     randomUUID().replaceAll("-", "").slice(0, 12),
   );
-  const pluginStageDir = path.join(rootDir, "plugin-stage");
-  await chmod(rootDir, 0o700).catch(() => undefined);
-  await assertMatrixQaPrivatePathMode(rootDir, "Matrix QA CLI temp directory");
   await mkdir(artifactDir, { mode: 0o700, recursive: true });
   await chmod(artifactDir, 0o700).catch(() => undefined);
   await assertMatrixQaPrivatePathMode(artifactDir, "Matrix QA CLI artifact directory");
-  await mkdir(pluginStageDir, { mode: 0o700, recursive: true });
-  await chmod(pluginStageDir, 0o700).catch(() => undefined);
   const env = {
     ...requireMatrixQaCliRuntimeEnv(params.context),
     FORCE_COLOR: "0",
     NO_COLOR: "1",
     OPENCLAW_DISABLE_AUTO_UPDATE: "1",
-    OPENCLAW_PLUGIN_STAGE_DIR: pluginStageDir,
   };
   const run = async (args: string[], timeoutMs = params.context.timeoutMs) =>
     await runMatrixQaOpenClawCli({
@@ -732,9 +729,7 @@ async function createMatrixQaCliGatewayRuntime(params: {
       timeoutMs,
     });
   return {
-    dispose: async () => {
-      await rm(rootDir, { force: true, recursive: true });
-    },
+    dispose: async () => undefined,
     rootDir: artifactDir,
     run,
   };
@@ -2980,12 +2975,14 @@ export async function runMatrixQaE2eeDeviceSasVerificationScenario(
         client: driver,
         deviceId: observerDeviceId,
         label: "driver",
+        timeoutMs: context.timeoutMs,
         userId: context.observerUserId,
       });
       const observerTrust = await assertMatrixQaPeerDeviceTrusted({
         client: observer,
         deviceId: driverDeviceId,
         label: "observer",
+        timeoutMs: context.timeoutMs,
         userId: context.driverUserId,
       });
       return {
@@ -3083,14 +3080,20 @@ export async function runMatrixQaE2eeQrVerificationScenario(
           sameMatrixQaVerificationTransaction(summary, completedDriver) && summary.completed,
         timeoutMs: context.timeoutMs,
       });
-      const driverTrust = await driver.getDeviceVerificationStatus(
-        context.observerUserId,
-        observerDeviceId,
-      );
-      const observerTrust = await observer.getDeviceVerificationStatus(
-        context.driverUserId,
-        driverDeviceId,
-      );
+      const driverTrust = await assertMatrixQaPeerDeviceTrusted({
+        client: driver,
+        deviceId: observerDeviceId,
+        label: "driver",
+        timeoutMs: context.timeoutMs,
+        userId: context.observerUserId,
+      });
+      const observerTrust = await assertMatrixQaPeerDeviceTrusted({
+        client: observer,
+        deviceId: driverDeviceId,
+        label: "observer",
+        timeoutMs: context.timeoutMs,
+        userId: context.driverUserId,
+      });
       return {
         artifacts: {
           completedVerificationIds: [completedDriver.id, completedObserver.id],

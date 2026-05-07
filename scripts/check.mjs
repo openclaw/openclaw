@@ -39,8 +39,11 @@ export async function main(argv = process.argv.slice(2)) {
           name: "plugin-sdk wildcard re-exports",
           args: ["lint:extensions:no-plugin-sdk-wildcard-reexports"],
         },
+        { name: "runtime sidecar loader guard", args: ["check:runtime-sidecar-loaders"] },
         { name: "tool display", args: ["tool-display:check"] },
         { name: "host env policy", args: ["check:host-env-policy:swift"] },
+        { name: "opengrep rule metadata", args: ["check:opengrep-rule-metadata"] },
+        { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
       ],
     },
     {

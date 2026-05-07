@@ -210,7 +210,10 @@ Runbook: [iOS connect](https://docs.openclaw.ai/platforms/ios).
 
 ## From source (development)
 
-Prefer `pnpm` for builds from source. Bun is optional for running TypeScript directly.
+Use `pnpm` for source checkouts. The repository is a pnpm workspace, and bundled
+plugins load from `extensions/*` during development so their package-local
+dependencies and your edits are used directly. Plain `npm install` at the repo
+root is not a supported source setup.
 
 For the dev loop:
 
@@ -243,12 +246,17 @@ Note: `pnpm openclaw ...` runs TypeScript directly (via `tsx`). `pnpm build` pro
 
 ## Development channels
 
-- **stable**: tagged releases (`vYYYY.M.D` or `vYYYY.M.D-<patch>`), npm dist-tag `latest`.
+- **stable**: tagged releases (`vYYYY.M.D` today), npm dist-tag `latest`.
 - **beta**: prerelease tags (`vYYYY.M.D-beta.N`), npm dist-tag `beta` (macOS app may be missing).
 - **dev**: moving head of `main`, npm dist-tag `dev` (when published).
 
 Switch channels (git + npm): `openclaw update --channel stable|beta|dev`.
 Details: [Development channels](https://docs.openclaw.ai/install/development-channels).
+
+We are planning SemVer-compatible monthly support lines using `YYYY.M.PATCH`
+versions, but they are not available yet. Legacy `vYYYY.M.D-<patch>` correction
+tags may still be recognized for older releases; new release work should not use
+that format as the long-term support model.
 
 ## Agent workspace + skills
 

@@ -27,7 +27,7 @@ const DEFAULT_QUEUE_SNAPSHOT = {
   senderPending: 0,
 } as const;
 
-export interface BuildFrameworkSlashContextInput {
+interface BuildFrameworkSlashContextInput {
   ctx: PluginCommandContext;
   account: ResolvedQQBotAccount;
   from: QQBotFromParseResult;
@@ -54,7 +54,7 @@ export function buildFrameworkSlashContext({
     accountId: account.accountId,
     appId: account.appId,
     accountConfig: account.config as unknown as Record<string, unknown>,
-    commandAuthorized: true,
+    commandAuthorized: ctx.isAuthorizedSender,
     queueSnapshot: { ...DEFAULT_QUEUE_SNAPSHOT },
   };
 }

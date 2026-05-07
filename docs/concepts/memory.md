@@ -28,6 +28,17 @@ If you want your agent to remember something, just ask it: "Remember that I
 prefer TypeScript." It will write it to the appropriate file.
 </Tip>
 
+## Inferred commitments
+
+Some future follow-ups are not durable facts. If you mention an interview
+tomorrow, the useful memory may be "check in after the interview," not "store
+this forever in `MEMORY.md`."
+
+[Commitments](/concepts/commitments) are opt-in, short-lived follow-up memories
+for that case. OpenClaw infers them in a hidden background pass, scopes them to
+the same agent and channel, and delivers due check-ins through heartbeat.
+Explicit reminders still use [scheduled tasks](/automation/cron-jobs).
+
 ## Memory tools
 
 The agent has two tools for working with memory:
@@ -109,6 +120,26 @@ dashboards, bridge mode, and Obsidian-friendly workflows.
 Before [compaction](/concepts/compaction) summarizes your conversation, OpenClaw
 runs a silent turn that reminds the agent to save important context to memory
 files. This is on by default — you do not need to configure anything.
+
+To keep that housekeeping turn on a local model, set an exact memory-flush model
+override:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "memoryFlush": {
+          "model": "ollama/qwen3:8b"
+        }
+      }
+    }
+  }
+}
+```
+
+The override applies only to the memory-flush turn and does not inherit the
+active session fallback chain.
 
 <Tip>
 The memory flush prevents context loss during compaction. If your agent has
@@ -197,3 +228,4 @@ openclaw memory index --force   # Rebuild the index
 - [Builtin memory engine](/concepts/memory-builtin)
 - [Honcho memory](/concepts/memory-honcho)
 - [Memory LanceDB](/plugins/memory-lancedb)
+- [Commitments](/concepts/commitments)

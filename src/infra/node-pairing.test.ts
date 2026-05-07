@@ -7,6 +7,7 @@ import {
   listNodePairing,
   removePairedNode,
   requestNodePairing,
+  updatePairedNodeMetadata,
   verifyNodeToken,
 } from "./node-pairing.js";
 import { resolvePairingPaths } from "./pairing-files.js";
@@ -130,6 +131,41 @@ describe("node pairing tokens", () => {
     });
   });
 
+  test("recovers when pairing state files were written as arrays", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      const paths = resolvePairingPaths(baseDir, "nodes");
+      await fs.mkdir(paths.dir, { recursive: true });
+      await fs.writeFile(paths.pendingPath, "[]", "utf8");
+      await fs.writeFile(paths.pairedPath, "[]", "utf8");
+
+      const pending = await requestNodePairing(
+        {
+          nodeId: "node-array-state",
+          platform: "darwin",
+          commands: ["system.run"],
+        },
+        baseDir,
+      );
+      const approved = await approveNodePairing(
+        pending.request.requestId,
+        { callerScopes: ["operator.pairing", "operator.admin"] },
+        baseDir,
+      );
+
+      expect(approved).toEqual(
+        expect.objectContaining({
+          node: expect.objectContaining({ nodeId: "node-array-state" }),
+        }),
+      );
+      expect(Array.isArray(JSON.parse(await fs.readFile(paths.pendingPath, "utf8")))).toBe(false);
+      expect(JSON.parse(await fs.readFile(paths.pairedPath, "utf8"))).toEqual(
+        expect.objectContaining({
+          "node-array-state": expect.objectContaining({ nodeId: "node-array-state" }),
+        }),
+      );
+    });
+  });
+
   test("generates base64url node tokens and rejects mismatches", async () => {
     await withNodePairingDir(async (baseDir) => {
       const token = await setupPairedNode(baseDir);
@@ -248,6 +284,33 @@ describe("node pairing tokens", () => {
         ),
       ).rejects.toThrow(/paired\.json/);
       await expect(fs.readFile(pairedPath, "utf8")).resolves.toBe("{not-json}");
+    });
+  });
+
+  test("updates paired node last-seen metadata and reports missing nodes", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+
+      await expect(
+        updatePairedNodeMetadata(
+          "node-1",
+          {
+            lastSeenAtMs: 1234,
+            lastSeenReason: "silent_push",
+          },
+          baseDir,
+        ),
+      ).resolves.toBe(true);
+      await expect(updatePairedNodeMetadata("missing", { lastSeenAtMs: 1 }, baseDir)).resolves.toBe(
+        false,
+      );
+
+      await expect(getPairedNode("node-1", baseDir)).resolves.toEqual(
+        expect.objectContaining({
+          lastSeenAtMs: 1234,
+          lastSeenReason: "silent_push",
+        }),
+      );
     });
   });
 });

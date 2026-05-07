@@ -89,6 +89,8 @@ const finalizeSetupWizard = vi.hoisted(() =>
 const listChannelPlugins = vi.hoisted(() => vi.fn(() => []));
 const logConfigUpdated = vi.hoisted(() => vi.fn(() => {}));
 const setupInternalHooks = vi.hoisted(() => vi.fn(async (cfg) => cfg));
+const detectSetupMigrationSources = vi.hoisted(() => vi.fn(async () => []));
+const runSetupMigrationImport = vi.hoisted(() => vi.fn(async () => {}));
 
 const setupChannels = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 const setupSkills = vi.hoisted(() => vi.fn(async (cfg) => cfg));
@@ -204,6 +206,11 @@ vi.mock("../commands/health.js", () => ({
 
 vi.mock("../commands/onboard-hooks.js", () => ({
   setupInternalHooks,
+}));
+
+vi.mock("./setup.migration-import.js", () => ({
+  detectSetupMigrationSources,
+  runSetupMigrationImport,
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -455,7 +462,6 @@ describe("runSetupWizard", () => {
     expect(healthCommand).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
   });
-
   it("persists skipBootstrap and skips workspace bootstrap creation when requested", async () => {
     ensureWorkspaceAndSessions.mockClear();
     replaceConfigFile.mockClear();
@@ -492,6 +498,7 @@ describe("runSetupWizard", () => {
             }),
           }),
         }),
+        writeOptions: expect.objectContaining({ allowConfigSizeDrop: true }),
       }),
     );
     expect(ensureWorkspaceAndSessions).toHaveBeenCalledWith(

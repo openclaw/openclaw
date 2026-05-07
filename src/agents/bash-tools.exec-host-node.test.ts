@@ -92,7 +92,7 @@ vi.mock("../infra/exec-approvals.js", () => ({
   })),
 }));
 
-vi.mock("../infra/exec-inline-eval.js", () => ({
+vi.mock("../infra/command-analysis/inline-eval.js", () => ({
   describeInterpreterInlineEval: vi.fn(() => "inline-eval"),
   detectInterpreterInlineEvalArgv: detectInterpreterInlineEvalArgvMock,
 }));
@@ -297,6 +297,7 @@ describe("executeNodeHostCommand", () => {
           timeoutMs: 30_000,
         }),
       }),
+      { scopes: ["operator.write", "operator.approvals"] },
     );
   });
 
@@ -355,6 +356,7 @@ describe("executeNodeHostCommand", () => {
             systemRunPlan: expectedPlan,
           }),
         }),
+        { scopes: ["operator.write", "operator.approvals"] },
       );
     });
   });
