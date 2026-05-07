@@ -17,7 +17,10 @@ vi.mock("../../plugins/installed-plugin-index-records.js", () => ({
 }));
 
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { runPostCorePluginConvergence } from "./post-core-plugin-convergence.js";
+import {
+  convergenceWarningsToOutcomes,
+  runPostCorePluginConvergence,
+} from "./post-core-plugin-convergence.js";
 
 describe("runPostCorePluginConvergence", () => {
   beforeEach(() => {
@@ -137,5 +140,43 @@ describe("runPostCorePluginConvergence", () => {
         records: { brave: { source: "npm", installPath: "/p/brave" } },
       }),
     );
+  });
+});
+
+describe("convergenceWarningsToOutcomes", () => {
+  it("emits per-plugin error outcomes for warnings that name a pluginId", () => {
+    const folded = convergenceWarningsToOutcomes({
+      changes: [],
+      warnings: [
+        {
+          pluginId: "brave",
+          reason: "missing-main-entry: …",
+          message: 'Plugin "brave" failed payload smoke check.',
+          guidance: ["Run `openclaw doctor --fix`."],
+        },
+        {
+          reason: "Failed install",
+          message: "Failed install for some plugin.",
+          guidance: ["Run `openclaw doctor --fix`."],
+        },
+      ],
+      errored: true,
+      smokeFailures: [],
+    });
+    expect(folded.errored).toBe(true);
+    expect(folded.outcomes).toEqual([
+      { pluginId: "brave", status: "error", message: 'Plugin "brave" failed payload smoke check.' },
+    ]);
+    expect(folded.warnings).toHaveLength(2);
+  });
+
+  it("returns errored=false and no outcomes for a clean convergence", () => {
+    const folded = convergenceWarningsToOutcomes({
+      changes: ["Repaired."],
+      warnings: [],
+      errored: false,
+      smokeFailures: [],
+    });
+    expect(folded).toEqual({ warnings: [], outcomes: [], errored: false });
   });
 });

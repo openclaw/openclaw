@@ -89,6 +89,10 @@ import {
 import { commitPluginInstallRecordsWithConfig } from "../plugins-install-record-commit.js";
 import { listPersistedBundledPluginLocationBridges } from "../plugins-location-bridges.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../plugins-registry-refresh.js";
+import {
+  convergenceWarningsToOutcomes,
+  runPostCorePluginConvergence,
+} from "./post-core-plugin-convergence.js";
 import { createUpdateProgress, printResult } from "./progress.js";
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 import {
@@ -1290,6 +1294,30 @@ async function updatePluginsAfterCoreUpdate(params: {
       }),
   );
 
+  // Mandatory post-core convergence: repair any configured plugin install
+  // records that are still missing payloads on disk and run a static smoke
+  // check that the repaired payloads are at least loadable. Failures here
+  // escalate `status` to `"error"`, which the caller maps to exit 1 BEFORE
+  // restarting the gateway. See `post-core-plugin-convergence.ts`.
+  const convergence = await runPostCorePluginConvergence({
+    cfg: pluginConfig,
+    env: process.env,
+  });
+  for (const change of convergence.changes) {
+    if (!params.opts.json) {
+      defaultRuntime.log(theme.muted(change));
+    }
+  }
+  const convergenceFolded = convergenceWarningsToOutcomes(convergence);
+  for (const warning of convergenceFolded.warnings) {
+    warnings.push(warning);
+    if (!params.opts.json) {
+      defaultRuntime.log(theme.warn(warning.message));
+    }
+  }
+  pluginUpdateOutcomes.push(...convergenceFolded.outcomes);
+  const convergenceErrored = convergenceFolded.errored;
+
   if (pluginsChanged) {
     const nextInstallRecords = pluginConfig.plugins?.installs ?? {};
     const nextConfig = withoutPluginInstallRecords(pluginConfig);
@@ -1310,7 +1338,7 @@ async function updatePluginsAfterCoreUpdate(params: {
 
   if (params.opts.json) {
     return {
-      status: warnings.length > 0 ? "warning" : "ok",
+      status: convergenceErrored ? "error" : warnings.length > 0 ? "warning" : "ok",
       changed: pluginsChanged,
       warnings,
       sync: {
@@ -1380,7 +1408,7 @@ async function updatePluginsAfterCoreUpdate(params: {
   }
 
   return {
-    status: warnings.length > 0 ? "warning" : "ok",
+    status: convergenceErrored ? "error" : warnings.length > 0 ? "warning" : "ok",
     changed: pluginsChanged,
     warnings,
     sync: {
