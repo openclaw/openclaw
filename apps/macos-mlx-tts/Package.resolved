@@ -15,7 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/Blaizzy/mlx-audio-swift",
       "state" : {
-        "revision" : "fc4fe22dc41c053062e647a4e3db9142193670d2"
+        "revision" : "fcbd04daa1bfebe881932f630af2ba6ce9af3274",
+        "version" : "0.1.2"
       }
     },
     {
