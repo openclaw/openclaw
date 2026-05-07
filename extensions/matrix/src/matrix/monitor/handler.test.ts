@@ -1925,6 +1925,12 @@ describe("matrix monitor handler live allowlist reload", () => {
     );
   };
 
+  const isLiveNameMatchingEnabled = (cfg: unknown): boolean => {
+    const matrix = (cfg as { channels?: { matrix?: { dangerouslyAllowNameMatching?: boolean } } })
+      .channels?.matrix;
+    return matrix?.dangerouslyAllowNameMatching === true;
+  };
+
   it("accepts a DM sender added to live dm.allowFrom", async () => {
     const dispatchReplyFromConfig = createDispatchReplyFromConfig();
     const cfg = {
@@ -2076,6 +2082,7 @@ describe("matrix monitor handler live allowlist reload", () => {
     const cfg = {
       channels: {
         matrix: {
+          dangerouslyAllowNameMatching: true,
           dm: { allowFrom: ["Alice"] },
         },
       },
@@ -2117,6 +2124,7 @@ describe("matrix monitor handler live allowlist reload", () => {
     const cfg = {
       channels: {
         matrix: {
+          dangerouslyAllowNameMatching: true,
           dm: { allowFrom: [] as string[] },
         },
       },
@@ -2151,6 +2159,88 @@ describe("matrix monitor handler live allowlist reload", () => {
         entries: ["Alice"],
       }),
     );
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes cached live display-name allowlists when name matching is disabled", async () => {
+    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const resolveLiveUserAllowlist = vi.fn(async (params: { cfg: unknown }) =>
+      isLiveNameMatchingEnabled(params.cfg) ? ["@alice:example.org"] : [],
+    );
+    const cfg = {
+      channels: {
+        matrix: {
+          dangerouslyAllowNameMatching: true,
+          dm: { allowFrom: ["Alice"] },
+        },
+      },
+    };
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg,
+      dmPolicy: "allowlist",
+      isDirectMessage: true,
+      allowFrom: [],
+      allowFromResolvedEntries: [],
+      dispatchReplyFromConfig,
+      resolveLiveUserAllowlist,
+    });
+
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-live-name-disable-before",
+      sender: "@alice:example.org",
+      body: "hello",
+    });
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+
+    cfg.channels.matrix.dangerouslyAllowNameMatching = false;
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-live-name-disable-after",
+      sender: "@alice:example.org",
+      body: "hello again",
+    });
+
+    expect(resolveLiveUserAllowlist).toHaveBeenCalledTimes(2);
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes cached live display-name allowlists when name matching is enabled", async () => {
+    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const resolveLiveUserAllowlist = vi.fn(async (params: { cfg: unknown }) =>
+      isLiveNameMatchingEnabled(params.cfg) ? ["@alice:example.org"] : [],
+    );
+    const cfg = {
+      channels: {
+        matrix: {
+          dangerouslyAllowNameMatching: false,
+          dm: { allowFrom: ["Alice"] },
+        },
+      },
+    };
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg,
+      dmPolicy: "allowlist",
+      isDirectMessage: true,
+      allowFrom: [],
+      allowFromResolvedEntries: [],
+      dispatchReplyFromConfig,
+      resolveLiveUserAllowlist,
+    });
+
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-live-name-enable-before",
+      sender: "@alice:example.org",
+      body: "hello",
+    });
+    expect(dispatchReplyFromConfig).not.toHaveBeenCalled();
+
+    cfg.channels.matrix.dangerouslyAllowNameMatching = true;
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-live-name-enable-after",
+      sender: "@alice:example.org",
+      body: "hello again",
+    });
+
+    expect(resolveLiveUserAllowlist).toHaveBeenCalledTimes(2);
     expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
