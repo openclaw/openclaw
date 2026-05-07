@@ -419,6 +419,67 @@ function filterManifestToolNamesForAvailability(params: {
   );
 }
 
+function listRegisteredToolNames(entry: PluginToolRegistration): string[] {
+  return entry.names.length > 0 ? entry.names : (entry.declaredNames ?? []);
+}
+
+function addLoadedRuntimePluginIdsForAllowlist(params: {
+  pluginIds: Set<string>;
+  allowlist: Set<string>;
+  denylist: ReturnType<typeof normalizeDenylist>;
+  normalizedPlugins: ReturnType<typeof normalizePluginsConfig>;
+  workspaceDir?: string;
+}) {
+  const registries = [
+    getLoadedRuntimePluginRegistry({
+      workspaceDir: params.workspaceDir,
+      surface: "channel",
+    }),
+    getLoadedRuntimePluginRegistry({
+      workspaceDir: params.workspaceDir,
+      surface: "active",
+    }),
+  ];
+  for (const registry of registries) {
+    if (!registry) {
+      continue;
+    }
+    for (const entry of registry.tools) {
+      if (params.pluginIds.has(entry.pluginId)) {
+        continue;
+      }
+      if (
+        params.normalizedPlugins.entries[entry.pluginId]?.enabled === false ||
+        params.normalizedPlugins.deny.includes(entry.pluginId)
+      ) {
+        continue;
+      }
+      if (
+        denylistBlocksPlugin({ pluginId: entry.pluginId, denylist: params.denylist }) ||
+        listRegisteredToolNames(entry).every((toolName) =>
+          denylistBlocksPluginTool({
+            pluginId: entry.pluginId,
+            toolName,
+            denylist: params.denylist,
+          }),
+        )
+      ) {
+        continue;
+      }
+      if (
+        pluginToolNamesMatchAllowlist({
+          names: listRegisteredToolNames(entry),
+          pluginId: entry.pluginId,
+          optional: entry.optional,
+          allowlist: params.allowlist,
+        })
+      ) {
+        params.pluginIds.add(entry.pluginId);
+      }
+    }
+  }
+}
+
 function resolvePluginToolRuntimePluginIds(params: {
   config: PluginLoadOptions["config"];
   availabilityConfig?: PluginLoadOptions["config"];
@@ -486,6 +547,13 @@ function resolvePluginToolRuntimePluginIds(params: {
       pluginIds.add(plugin.id);
     }
   }
+  addLoadedRuntimePluginIdsForAllowlist({
+    pluginIds,
+    allowlist,
+    denylist,
+    normalizedPlugins,
+    workspaceDir: params.workspaceDir,
+  });
   return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
 }
 

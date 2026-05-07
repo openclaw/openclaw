@@ -2210,6 +2210,35 @@ describe("resolvePluginTools optional tools", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
+  it("selects an already-loaded plugin by allowlisted registered tool name without a manifest snapshot match (#78907)", () => {
+    installToolManifestSnapshots({
+      config: createContext().config,
+      plugins: [],
+    });
+    const registry = createToolRegistry([
+      {
+        pluginId: "optional-demo",
+        names: ["second_nature_ops"],
+        declaredNames: ["second_nature_ops"],
+        optional: false,
+        source: "/tmp/second-nature.js",
+        factory: () => makeTool("second_nature_ops"),
+      },
+    ]);
+    setActivePluginRegistry(registry as never, "gateway-startup", "gateway-bindable", "/tmp");
+    resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        toolAllowlist: ["second_nature_ops"],
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["second_nature_ops"]);
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
   it("loads plugin tools when gateway-bindable tool loads have no active registry", () => {
     setOptionalDemoRegistry();
 
