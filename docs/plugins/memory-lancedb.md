@@ -262,6 +262,10 @@ Each key must be one of the five valid categories; the value is a regex string.
 Custom rules are evaluated **before** built-in logic — first match wins. Categories
 not listed fall through to the built-in classifier.
 
+Rules are evaluated in insertion order (the order keys appear in your config
+object). If patterns overlap across categories, the first matching rule wins, so
+place higher-priority rules earlier in the object.
+
 ## Commands
 
 When `memory-lancedb` is the active memory plugin, it registers the `ltm` CLI
