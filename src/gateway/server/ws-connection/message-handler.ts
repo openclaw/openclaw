@@ -173,7 +173,7 @@ function resolvePinnedClientMetadata(params: {
   };
 }
 
-export function attachGatewayWsMessageHandler(params: {
+export type GatewayWsMessageHandlerParams = {
   socket: WebSocket;
   upgradeReq: IncomingMessage;
   connId: string;
@@ -214,7 +214,9 @@ export function attachGatewayWsMessageHandler(params: {
   logGateway: SubsystemLogger;
   logHealth: SubsystemLogger;
   logWsControl: SubsystemLogger;
-}) {
+};
+
+export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerParams) {
   const {
     socket,
     upgradeReq,
@@ -835,9 +837,11 @@ export function attachGatewayWsMessageHandler(params: {
           rejectUnauthorized(authResult);
           return;
         }
-        if (authMethod === "token" || authMethod === "password") {
-          const sharedGatewaySessionGeneration =
-            resolveSharedGatewaySessionGeneration(resolvedAuth);
+        if (authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy") {
+          const sharedGatewaySessionGeneration = resolveSharedGatewaySessionGeneration(
+            resolvedAuth,
+            trustedProxies,
+          );
           const requiredSharedGatewaySessionGeneration =
             getRequiredSharedGatewaySessionGeneration?.();
           if (
@@ -872,6 +876,7 @@ export function attachGatewayWsMessageHandler(params: {
           resolvedAuth.mode,
           authMethod,
         );
+        let hasServerApprovedDeviceTokenBaseline = false;
         if (device && devicePublicKey) {
           const formatAuditList = (items: string[] | undefined): string => {
             if (!items || items.length === 0) {
@@ -1131,8 +1136,17 @@ export function attachGatewayWsMessageHandler(params: {
               if (!ok) {
                 return;
               }
+              hasServerApprovedDeviceTokenBaseline = true;
+            } else if (trustedProxyAuthOk) {
+              clearUnboundScopes();
+            } else if (
+              skipControlUiPairingForDevice ||
+              (skipLocalBackendSelfPairing && authMethod !== "device-token")
+            ) {
+              hasServerApprovedDeviceTokenBaseline = true;
             }
           } else {
+            hasServerApprovedDeviceTokenBaseline = true;
             const claimedPlatform = connectParams.client.platform;
             const pairedPlatform = paired.platform;
             const claimedDeviceFamily = connectParams.client.deviceFamily;
@@ -1220,9 +1234,10 @@ export function attachGatewayWsMessageHandler(params: {
           }
         }
 
-        const deviceToken = device
-          ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
-          : null;
+        const deviceToken =
+          device && hasServerApprovedDeviceTokenBaseline
+            ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
+            : null;
         const bootstrapDeviceTokens: Array<{
           deviceToken: string;
           role: string;
@@ -1301,9 +1316,10 @@ export function attachGatewayWsMessageHandler(params: {
         const canvasCapabilityExpiresAtMs = canvasCapability
           ? Date.now() + CANVAS_CAPABILITY_TTL_MS
           : undefined;
-        const usesSharedGatewayAuth = authMethod === "token" || authMethod === "password";
+        const usesSharedGatewayAuth =
+          authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy";
         const sharedGatewaySessionGeneration = usesSharedGatewayAuth
-          ? resolveSharedGatewaySessionGeneration(resolvedAuth)
+          ? resolveSharedGatewaySessionGeneration(resolvedAuth, trustedProxies)
           : undefined;
         const scopedCanvasHostUrl =
           canvasHostUrl && canvasCapability

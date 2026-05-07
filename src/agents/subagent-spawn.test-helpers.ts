@@ -121,7 +121,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
   updateSessionStoreMock?: MockFn;
   forkSessionFromParentMock?: MockFn;
   resolveContextEngineMock?: MockFn;
-  resolveParentForkMaxTokensMock?: MockFn;
+  resolveParentForkDecisionMock?: MockFn;
   pruneLegacyStoreKeysMock?: MockFn;
   registerSubagentRunMock?: MockFn;
   emitSessionLifecycleEventMock?: MockFn;
@@ -182,7 +182,30 @@ export async function loadSubagentSpawnModuleForTest(params: {
     ensureContextEnginesInitialized:
       params.ensureContextEnginesInitializedMock ?? (() => undefined),
     resolveContextEngine: params.resolveContextEngineMock ?? (async () => ({})),
-    resolveParentForkMaxTokens: params.resolveParentForkMaxTokensMock ?? (() => 100_000),
+    resolveParentForkDecision:
+      params.resolveParentForkDecisionMock ??
+      (async (forkParams: { parentEntry?: { totalTokens?: unknown } }) => {
+        const maxTokens = 100_000;
+        const parentTokens =
+          typeof forkParams.parentEntry?.totalTokens === "number" &&
+          Number.isFinite(forkParams.parentEntry.totalTokens)
+            ? Math.floor(forkParams.parentEntry.totalTokens)
+            : undefined;
+        if (maxTokens > 0 && typeof parentTokens === "number" && parentTokens > maxTokens) {
+          return {
+            status: "skip",
+            reason: "parent-too-large",
+            maxTokens,
+            parentTokens,
+            message: `Parent context is too large to fork (${parentTokens}/${maxTokens} tokens); starting with isolated context instead.`,
+          };
+        }
+        return {
+          status: "fork",
+          maxTokens,
+          ...(typeof parentTokens === "number" ? { parentTokens } : {}),
+        };
+      }),
     mergeSessionEntry: (
       current: Record<string, unknown> | undefined,
       next: Record<string, unknown>,

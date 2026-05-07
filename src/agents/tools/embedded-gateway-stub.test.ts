@@ -91,10 +91,20 @@ describe("embedded gateway stub", () => {
       maxChars: 100_000,
       maxMessages: 200,
     });
+    expect(runtime.readSessionMessagesAsync).toHaveBeenCalledWith(
+      "sess-main",
+      "/tmp/openclaw-sessions.json",
+      undefined,
+      {
+        mode: "recent",
+        maxMessages: 200,
+        maxBytes: 1024 * 1024,
+      },
+    );
     expect(result.messages).toEqual(projectedMessages);
   });
 
-  it("passes the full raw history to projection before limiting visible messages", async () => {
+  it("passes the requested recent history window to projection", async () => {
     const rawMessages = [
       { role: "user", content: "visible older" },
       { role: "assistant", content: "hidden newer" },
@@ -111,5 +121,15 @@ describe("embedded gateway stub", () => {
       maxChars: 100_000,
       maxMessages: 1,
     });
+    expect(runtime.readSessionMessagesAsync).toHaveBeenCalledWith(
+      "sess-main",
+      "/tmp/openclaw-sessions.json",
+      undefined,
+      {
+        mode: "recent",
+        maxMessages: 1,
+        maxBytes: 1024 * 1024,
+      },
+    );
   });
 });

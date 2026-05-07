@@ -14,7 +14,7 @@ export type IndexedTranscriptEntry = {
   record: ParsedTranscriptRecord;
 };
 
-export type SessionTranscriptIndex = {
+type SessionTranscriptIndex = {
   filePath: string;
   mtimeMs: number;
   size: number;
@@ -38,6 +38,14 @@ type CacheEntry = {
 };
 
 const transcriptIndexCache = new Map<string, CacheEntry>();
+const transcriptIndexBuilds = new Map<
+  string,
+  {
+    mtimeMs: number;
+    size: number;
+    promise: Promise<SessionTranscriptIndex>;
+  }
+>();
 
 function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
@@ -64,12 +72,9 @@ function setCachedIndex(filePath: string, entry: CacheEntry): void {
   }
 }
 
-export function invalidateSessionTranscriptIndex(filePath: string): void {
-  transcriptIndexCache.delete(filePath);
-}
-
 export function clearSessionTranscriptIndexCache(): void {
   transcriptIndexCache.clear();
+  transcriptIndexBuilds.clear();
 }
 
 function isIndexableTranscriptRecord(record: unknown): record is ParsedTranscriptRecord {
@@ -237,7 +242,22 @@ export async function readSessionTranscriptIndex(
   if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
     return touchCachedIndex(filePath, cached);
   }
-  const index = await buildSessionTranscriptIndex(filePath, stat);
+  const inFlight = transcriptIndexBuilds.get(filePath);
+  if (inFlight && inFlight.mtimeMs === stat.mtimeMs && inFlight.size === stat.size) {
+    return await inFlight.promise;
+  }
+  const promise = buildSessionTranscriptIndex(filePath, stat);
+  transcriptIndexBuilds.set(filePath, {
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    promise,
+  });
+  const index = await promise.finally(() => {
+    const current = transcriptIndexBuilds.get(filePath);
+    if (current?.promise === promise) {
+      transcriptIndexBuilds.delete(filePath);
+    }
+  });
   setCachedIndex(filePath, {
     mtimeMs: stat.mtimeMs,
     size: stat.size,

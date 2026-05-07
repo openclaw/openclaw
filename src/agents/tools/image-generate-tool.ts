@@ -33,6 +33,7 @@ import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import { resolveUserPath } from "../../utils.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { optionalStringEnum } from "../schema/string-enum.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
@@ -49,7 +50,11 @@ import {
   resolveMediaToolLocalRoots,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
-import { type ToolModelConfig } from "./model-config.helpers.js";
+import {
+  coerceToolModelConfig,
+  hasToolModelConfig,
+  type ToolModelConfig,
+} from "./model-config.helpers.js";
 import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
@@ -195,13 +200,19 @@ function formatImageGenerationAuthHint(provider: {
 export function resolveImageGenerationModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
+  authStore?: AuthProfileStore;
 }): ToolModelConfig | null {
   return resolveCapabilityModelConfigForTool({
     cfg: params.cfg,
     agentDir: params.agentDir,
+    authStore: params.authStore,
     modelConfig: params.cfg?.agents?.defaults?.imageGenerationModel,
-    providers: listRuntimeImageGenerationProviders({ config: params.cfg }),
+    providers: () => listRuntimeImageGenerationProviders({ config: params.cfg }),
   });
+}
+
+function hasExplicitImageGenerationModelConfig(cfg?: OpenClawConfig): boolean {
+  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.imageGenerationModel));
 }
 
 function resolveAction(args: Record<string, unknown>): "generate" | "list" {
@@ -563,6 +574,7 @@ async function inferResolutionFromInputImages(
 export function createImageGenerateTool(options?: {
   config?: OpenClawConfig;
   agentDir?: string;
+  authProfileStore?: AuthProfileStore;
   workspaceDir?: string;
   sandbox?: ImageGenerateSandboxConfig;
   fsPolicy?: ToolFsPolicy;
@@ -572,8 +584,9 @@ export function createImageGenerateTool(options?: {
     !hasGenerationToolAvailability({
       cfg,
       agentDir: options?.agentDir,
+      workspaceDir: options?.workspaceDir,
+      authStore: options?.authProfileStore,
       modelConfig: cfg.agents?.defaults?.imageGenerationModel,
-      providers: () => listRuntimeImageGenerationProviders({ config: cfg }),
       providerKey: "imageGenerationProviders",
     })
   ) {
@@ -611,6 +624,7 @@ export function createImageGenerateTool(options?: {
                 provider,
                 cfg,
                 agentDir: options?.agentDir,
+                authStore: options?.authProfileStore,
               }),
               authEnvVars: getImageGenerationProviderAuthEnvVars(provider.id),
               capabilities: provider.capabilities,
@@ -662,10 +676,12 @@ export function createImageGenerateTool(options?: {
       const imageGenerationModelConfig = resolveImageGenerationModelConfigForTool({
         cfg,
         agentDir: options?.agentDir,
+        authStore: options?.authProfileStore,
       });
       if (!imageGenerationModelConfig) {
         throw new ToolInputError("No image-generation model configured.");
       }
+      const explicitModelConfig = hasExplicitImageGenerationModelConfig(cfg);
       const effectiveCfg =
         applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg;
       const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
@@ -723,6 +739,7 @@ export function createImageGenerateTool(options?: {
         prompt,
         agentDir: options?.agentDir,
         modelOverride: model,
+        autoProviderFallback: explicitModelConfig ? false : undefined,
         size,
         aspectRatio,
         resolution,

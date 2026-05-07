@@ -8,7 +8,6 @@ import {
 export {
   hasGatewayPasswordEnvCandidate,
   hasGatewayTokenEnvCandidate,
-  trimCredentialToUndefined,
   trimToUndefined,
 } from "./credential-planner.js";
 

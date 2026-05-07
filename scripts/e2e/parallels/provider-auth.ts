@@ -82,8 +82,11 @@ export function resolveParallelsModelTimeoutSeconds(platform?: Platform): number
     platform === undefined
       ? undefined
       : process.env[`OPENCLAW_PARALLELS_${platform.toUpperCase()}_MODEL_TIMEOUT_S`];
-  const raw = Number(platformEnv || process.env.OPENCLAW_PARALLELS_MODEL_TIMEOUT_S || 600);
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 600;
+  const defaultSeconds = platform === "macos" || platform === "windows" ? 1800 : 900;
+  const raw = Number(
+    platformEnv || process.env.OPENCLAW_PARALLELS_MODEL_TIMEOUT_S || defaultSeconds,
+  );
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : defaultSeconds;
 }
 
 export function providerTimeoutConfigJson(modelId: string, platform: Platform): string {

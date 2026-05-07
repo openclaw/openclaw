@@ -119,16 +119,113 @@ function mockLocalPairingFallback(message?: string) {
 }
 
 describe("devices cli approve", () => {
-  it("approves an explicit request id without listing", async () => {
-    callGateway.mockResolvedValueOnce({ device: { deviceId: "device-1" } });
+  it("uses admin scope when approving an admin-scope request", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        pending: [pendingDevice({ requestId: "req-123", scopes: ["operator.admin"] })],
+        paired: [],
+      })
+      .mockResolvedValueOnce({ device: { deviceId: "device-1" } });
 
     await runDevicesApprove(["req-123"]);
 
-    expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(callGateway).toHaveBeenCalledWith(
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    expect(callGateway).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "device.pair.list",
+      }),
+    );
+    expect(callGateway).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         method: "device.pair.approve",
         params: { requestId: "req-123" },
+        scopes: ["operator.admin"],
+      }),
+    );
+  });
+
+  it("keeps pairing scope for non-admin device approvals", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        pending: [
+          pendingDevice({
+            requestId: "req-pairing",
+            scopes: ["operator.pairing"],
+          }),
+        ],
+        paired: [],
+      })
+      .mockResolvedValueOnce({ device: { deviceId: "device-1" } });
+
+    await runDevicesApprove(["req-pairing"]);
+
+    expect(callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "device.pair.approve",
+        params: { requestId: "req-pairing" },
+        scopes: ["operator.pairing"],
+      }),
+    );
+  });
+
+  it("retries explicit approval with admin scope when a paired-device session is ownership-denied", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        pending: [],
+        paired: [],
+      })
+      .mockRejectedValueOnce(new Error("GatewayClientRequestError: device pairing approval denied"))
+      .mockResolvedValueOnce({ device: { deviceId: "device-2" } });
+
+    await runDevicesApprove(["req-cross-device"]);
+
+    expect(callGateway).toHaveBeenCalledTimes(3);
+    expect(callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "device.pair.approve",
+        params: { requestId: "req-cross-device" },
+        scopes: undefined,
+      }),
+    );
+    expect(callGateway).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        method: "device.pair.approve",
+        params: { requestId: "req-cross-device" },
+        scopes: ["operator.admin"],
+      }),
+    );
+  });
+
+  it("uses admin scope when a repair approval would inherit an admin token", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        pending: [
+          pendingDevice({
+            requestId: "req-repair",
+            scopes: [],
+          }),
+        ],
+        paired: [
+          pairedDevice({
+            tokens: [{ role: "operator", scopes: ["operator.admin"] }],
+          }),
+        ],
+      })
+      .mockResolvedValueOnce({ device: { deviceId: "device-1" } });
+
+    await runDevicesApprove(["req-repair"]);
+
+    expect(callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "device.pair.approve",
+        params: { requestId: "req-repair" },
+        scopes: ["operator.admin"],
       }),
     );
   });
@@ -462,6 +559,7 @@ describe("devices cli local fallback", () => {
   });
 
   it("falls back to local approve when gateway returns pairing required on loopback", async () => {
+    mockLocalPairingFallback();
     rejectGatewayForLocalFallback();
     approveDevicePairing.mockResolvedValueOnce({
       requestId: "req-latest",
@@ -484,12 +582,48 @@ describe("devices cli local fallback", () => {
   });
 
   it("falls back to local pairing list when gateway returns a scope upgrade message on loopback", async () => {
-    mockLocalPairingFallback("scope upgrade pending approval (requestId: req-123)");
+    mockLocalPairingFallback("scope upgrade pending approval (requestId: req-1)");
 
     await runDevicesCommand(["list"]);
 
     expect(listDevicePairing).toHaveBeenCalledTimes(1);
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
+  });
+
+  it("refuses local fallback when the gateway request is absent from local pairing state", async () => {
+    rejectGatewayForLocalFallback("scope upgrade pending approval (requestId: req-profile)");
+    listDevicePairing.mockResolvedValueOnce({
+      pending: [{ requestId: "req-default", deviceId: "device-1", publicKey: "pk", ts: 1 }],
+      paired: [],
+    });
+    summarizeDeviceTokens.mockReturnValue(undefined);
+
+    await expect(runDevicesCommand(["list"])).rejects.toThrow(
+      "different OPENCLAW_PROFILE or OPENCLAW_STATE_DIR",
+    );
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
+  });
+
+  it("refuses local approve fallback when the gateway request is absent locally", async () => {
+    rejectGatewayForLocalFallback("device pairing required (requestId: req-profile)");
+    rejectGatewayForLocalFallback("device pairing required (requestId: req-profile)");
+    approveDevicePairing.mockResolvedValueOnce(undefined);
+
+    await expect(runDevicesApprove(["req-profile"])).rejects.toThrow(
+      "local fallback pairing state does not contain the gateway request",
+    );
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
+  });
+
+  it("refuses local approve fallback before approving a different local request", async () => {
+    rejectGatewayForLocalFallback("device pairing required (requestId: req-profile)");
+    rejectGatewayForLocalFallback("device pairing required (requestId: req-profile)");
+
+    await expect(runDevicesApprove(["req-default"])).rejects.toThrow(
+      "local fallback pairing state does not contain the gateway request",
+    );
+    expect(approveDevicePairing).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
   });
 
   it("does not use local fallback when an explicit --url is provided", async () => {

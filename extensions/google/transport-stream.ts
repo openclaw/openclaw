@@ -134,6 +134,7 @@ type GoogleSseChunk = {
 };
 
 let toolCallCounter = 0;
+const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 
 function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -141,6 +142,10 @@ function normalizeOptionalString(value: unknown): string | undefined {
 
 function requiresToolCallId(modelId: string): boolean {
   return modelId.startsWith("claude-") || modelId.startsWith("gpt-oss-");
+}
+
+function requiresToolCallThoughtSignature(modelId: string): boolean {
+  return normalizeLowercaseStringOrEmpty(modelId).includes("gemini-3");
 }
 
 function supportsMultimodalFunctionResponse(modelId: string): boolean {
@@ -300,6 +305,9 @@ function getGoogleThinkingBudget(
   if (modelId.includes("2.5-pro")) {
     return { minimal: 128, low: 2048, medium: 8192, high: 32768 }[normalizedEffort];
   }
+  if (modelId.includes("2.5-flash-lite")) {
+    return { minimal: 512, low: 2048, medium: 8192, high: 24576 }[normalizedEffort];
+  }
   if (modelId.includes("2.5-flash")) {
     return { minimal: 128, low: 2048, medium: 8192, high: 24576 }[normalizedEffort];
   }
@@ -374,8 +382,13 @@ function normalizeGoogleThinkingConfig(
 
 function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
   const contents: Array<Record<string, unknown>> = [];
-  const transformedMessages = transformTransportMessages(context.messages, model, (id) =>
-    requiresToolCallId(model.id) ? normalizeToolCallId(id) : id,
+  const transformedMessages = transformTransportMessages(
+    context.messages,
+    model,
+    (id) => (requiresToolCallId(model.id) ? normalizeToolCallId(id) : id),
+    {
+      preserveCrossModelToolCallThoughtSignature: requiresToolCallThoughtSignature(model.id),
+    },
   );
   for (const msg of transformedMessages) {
     if (msg.role === "user") {
@@ -437,15 +450,18 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
           continue;
         }
         if (block.type === "toolCall") {
+          const thoughtSignature =
+            (isSameProviderAndModel ? block.thoughtSignature : undefined) ??
+            (requiresToolCallThoughtSignature(model.id)
+              ? GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP
+              : undefined);
           parts.push({
             functionCall: {
               name: block.name,
               args: coerceTransportToolCallArguments(block.arguments),
               ...(requiresToolCallId(model.id) ? { id: block.id } : {}),
             },
-            ...(isSameProviderAndModel && block.thoughtSignature
-              ? { thoughtSignature: block.thoughtSignature }
-              : {}),
+            ...(thoughtSignature ? { thoughtSignature } : {}),
           });
         }
       }
@@ -794,8 +810,11 @@ function createGoogleTransportStreamFn(kind: GoogleTransportApi): StreamFn {
           const candidate = chunk.candidates?.[0];
           if (candidate?.content?.parts) {
             for (const part of candidate.content.parts) {
-              if (typeof part.text === "string") {
-                const isThinking = part.thought === true;
+              const hasThoughtSignature =
+                typeof part.thoughtSignature === "string" && part.thoughtSignature.length > 0;
+              const hasText = typeof part.text === "string";
+              if (hasText || (hasThoughtSignature && !part.functionCall)) {
+                const isThinking = part.thought === true || !hasText;
                 const currentBlock = output.content[currentBlockIndex];
                 if (
                   currentBlockIndex < 0 ||
@@ -826,7 +845,8 @@ function createGoogleTransportStreamFn(kind: GoogleTransportApi): StreamFn {
                 }
                 const activeBlock = output.content[currentBlockIndex];
                 if (activeBlock?.type === "thinking") {
-                  activeBlock.thinking += part.text;
+                  const delta = hasText ? part.text : "";
+                  activeBlock.thinking += delta;
                   activeBlock.thinkingSignature = retainThoughtSignature(
                     activeBlock.thinkingSignature,
                     part.thoughtSignature,
@@ -834,7 +854,7 @@ function createGoogleTransportStreamFn(kind: GoogleTransportApi): StreamFn {
                   stream.push({
                     type: "thinking_delta",
                     contentIndex: currentBlockIndex,
-                    delta: part.text,
+                    delta,
                     partial: output as never,
                   });
                 } else if (activeBlock?.type === "text") {

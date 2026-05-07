@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it } from "vitest";
 import {
+  collectDiscordMissingEnvTokenWarnings,
   collectDiscordNumericIdWarnings,
   discordDoctor,
   maybeRepairDiscordNumericIds,
@@ -360,5 +361,45 @@ describe("discord doctor", () => {
 
     expect(warnings[0]).toContain("cannot be auto-repaired");
     expect(warnings[1]).toContain("openclaw doctor --fix");
+  });
+
+  it("warns when default env fallback token is missing after migration", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          allowFrom: ["123"],
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(collectDiscordMissingEnvTokenWarnings({ cfg, env: {} })).toEqual([
+      expect.stringContaining("DISCORD_BOT_TOKEN is absent"),
+    ]);
+    expect(
+      collectDiscordMissingEnvTokenWarnings({ cfg, env: { DISCORD_BOT_TOKEN: "Bot tok" } }),
+    ).toEqual([]);
+    expect(
+      await discordDoctor.collectPreviewWarnings?.({
+        cfg,
+        doctorFixCommand: "openclaw doctor --fix",
+        env: {},
+      }),
+    ).toEqual([expect.stringContaining("DISCORD_BOT_TOKEN is absent")]);
+  });
+
+  it("does not warn about DISCORD_BOT_TOKEN when a non-default account is selected", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            work: {
+              token: "Bot work-token",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(collectDiscordMissingEnvTokenWarnings({ cfg, env: {} })).toEqual([]);
   });
 });

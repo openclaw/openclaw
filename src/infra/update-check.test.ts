@@ -9,6 +9,7 @@ import {
   compareSemverStrings,
   fetchNpmLatestVersion,
   fetchNpmPackageTargetStatus,
+  fetchNpmRegistryVersionForChannel,
   fetchNpmTagVersion,
   formatGitInstallLabel,
   resolveNpmChannelTag,
@@ -26,6 +27,12 @@ describe("compareSemverStrings", () => {
     expect(compareSemverStrings("1.0.0-1", "1.0.0-beta.1")).toBe(-1);
     expect(compareSemverStrings("1.0.0.beta.2", "1.0.0-beta.1")).toBe(1);
     expect(compareSemverStrings("1.0.0", "1.0.0.beta.1")).toBe(1);
+  });
+
+  it("treats OpenClaw stable correction releases as newer than their base release", () => {
+    expect(compareSemverStrings("2026.5.3", "2026.5.3-1")).toBe(-1);
+    expect(compareSemverStrings("2026.5.3-1", "2026.5.3")).toBe(1);
+    expect(compareSemverStrings("2026.5.3-2", "2026.5.3-1")).toBe(1);
   });
 
   it("returns null for invalid inputs", () => {
@@ -116,8 +123,20 @@ describe("resolveNpmChannelTag", () => {
       latestVersion: "1.0.4",
       error: undefined,
     });
+    versionByTag.beta = "1.0.5-beta.1";
+    await expect(
+      fetchNpmRegistryVersionForChannel({ channel: "beta", timeoutMs: 1000 }),
+    ).resolves.toEqual({
+      latestVersion: "1.0.5-beta.1",
+      tag: "beta",
+    });
     await expect(fetchNpmTagVersion({ tag: "beta", timeoutMs: 1000 })).resolves.toEqual({
       tag: "beta",
+      version: "1.0.5-beta.1",
+      error: undefined,
+    });
+    await expect(fetchNpmTagVersion({ tag: "missing", timeoutMs: 1000 })).resolves.toEqual({
+      tag: "missing",
       version: null,
       error: "HTTP 404",
     });

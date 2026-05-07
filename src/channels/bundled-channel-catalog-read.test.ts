@@ -11,6 +11,7 @@ import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "../../test/hel
 // src/plugins/bundled-dir.test.ts and is intentionally not re-tested here.
 vi.mock("../plugins/bundled-dir.js", () => ({
   resolveBundledPluginsDir: vi.fn(),
+  resolveSourceCheckoutDependencyDiagnostic: vi.fn(() => null),
 }));
 
 // The channel-catalog.json fallback still walks package roots via

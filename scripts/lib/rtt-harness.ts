@@ -7,19 +7,7 @@ const execFileAsync = promisify(execFile);
 
 export type RttProviderMode = "mock-openai" | "live-frontier";
 
-export type RttCliOptions = {
-  packageTgz?: string;
-  providerMode: RttProviderMode;
-  runs: number;
-  samples: number;
-  sampleTimeoutMs: number;
-  harnessRoot: string;
-  output: string;
-  scenarios: string[];
-  timeoutMs: number;
-};
-
-export type RttResult = {
+type RttResult = {
   package: {
     spec: string;
     version: string;
@@ -53,7 +41,7 @@ export type RttResult = {
   };
 };
 
-export type TelegramQaSummary = {
+type TelegramQaSummary = {
   scenarios?: Array<{
     id?: string;
     rttMs?: number;
@@ -76,7 +64,7 @@ export type TelegramQaSummary = {
 };
 
 const OPENCLAW_PACKAGE_SPEC_RE =
-  /^openclaw@(main|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-beta\.[1-9][0-9]*)?)$/u;
+  /^openclaw@(main|alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$/u;
 
 const REQUIRED_TELEGRAM_ENV = [
   "OPENCLAW_QA_TELEGRAM_GROUP_ID",
@@ -87,7 +75,7 @@ const REQUIRED_TELEGRAM_ENV = [
 export function validateOpenClawPackageSpec(spec: string) {
   if (!OPENCLAW_PACKAGE_SPEC_RE.test(spec)) {
     throw new Error(
-      `Package spec must be openclaw@main, openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: ${spec}`,
+      `Package spec must be openclaw@main, openclaw@alpha, openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: ${spec}`,
     );
   }
   return spec;
@@ -266,7 +254,3 @@ export function buildRttResult(params: {
     artifacts: params.artifacts,
   };
 }
-
-export const __testing = {
-  REQUIRED_TELEGRAM_ENV,
-};

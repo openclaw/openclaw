@@ -2,11 +2,20 @@ import {
   type ChannelDoctorAdapter,
   type ChannelDoctorEmptyAllowlistAccountContext,
 } from "openclaw/plugin-sdk/channel-contract";
+import {
+  resolveChannelStreamingBlockEnabled,
+  resolveChannelStreamingPreviewToolProgress,
+} from "openclaw/plugin-sdk/channel-streaming";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { inspectTelegramAccount } from "./account-inspect.js";
-import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
+import {
+  listTelegramAccountIds,
+  mergeTelegramAccountConfig,
+  resolveDefaultTelegramAccountId,
+  resolveTelegramAccount,
+} from "./accounts.js";
 import { isNumericTelegramSenderUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
 import { hasTelegramBotEndpointApiRoot, normalizeTelegramApiRoot } from "./api-root.js";
@@ -14,8 +23,10 @@ import {
   legacyConfigRules as TELEGRAM_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig as normalizeTelegramCompatibilityConfig,
 } from "./doctor-contract.js";
+import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
 
 type TelegramAllowFromInvalidHit = { path: string; entry: string };
+type TelegramSelectedQuoteToolProgressHit = { path: string; replyToMode: string };
 type TelegramApiRootBotEndpointHit = {
   path: string;
   pathSegments: string[];
@@ -192,6 +203,58 @@ export function collectTelegramApiRootWarnings(params: {
   ];
 }
 
+function formatTelegramAccountConfigPath(cfg: OpenClawConfig, accountId: string): string {
+  const telegram = asObjectRecord((cfg.channels as Record<string, unknown> | undefined)?.telegram);
+  const accounts = asObjectRecord(telegram?.accounts);
+  if (!accounts || Object.keys(accounts).length === 0) {
+    return "channels.telegram";
+  }
+  return accountId === "default" ? "channels.telegram" : `channels.telegram.accounts.${accountId}`;
+}
+
+export function scanTelegramSelectedQuoteToolProgressWarnings(
+  cfg: OpenClawConfig,
+): TelegramSelectedQuoteToolProgressHit[] {
+  if (!asObjectRecord((cfg.channels as Record<string, unknown> | undefined)?.telegram)) {
+    return [];
+  }
+  return listTelegramAccountIds(cfg).flatMap((accountId) => {
+    const account = mergeTelegramAccountConfig(cfg, accountId);
+    const replyToMode = account.replyToMode ?? "off";
+    if (replyToMode === "off") {
+      return [];
+    }
+    if (resolveTelegramPreviewStreamMode(account) === "off") {
+      return [];
+    }
+    const blockStreamingEnabled =
+      resolveChannelStreamingBlockEnabled(account) ??
+      cfg.agents?.defaults?.blockStreamingDefault === "on";
+    if (blockStreamingEnabled || !resolveChannelStreamingPreviewToolProgress(account)) {
+      return [];
+    }
+    return [
+      {
+        path: formatTelegramAccountConfigPath(cfg, accountId),
+        replyToMode,
+      },
+    ];
+  });
+}
+
+export function collectTelegramSelectedQuoteToolProgressWarnings(params: {
+  hits: TelegramSelectedQuoteToolProgressHit[];
+}): string[] {
+  if (params.hits.length === 0) {
+    return [];
+  }
+  const sample = params.hits[0] ?? { path: "channels.telegram", replyToMode: "first" };
+  return [
+    `- ${sanitizeForLog(sample.path)} has replyToMode: "${sanitizeForLog(sample.replyToMode)}" while Telegram preview tool-progress is enabled. Telegram selected quote replies must send the final answer through the native quote-reply path, so those turns skip the short "Working..." tool-progress preview. Current-message replies without selected quote text still keep preview streaming.`,
+    '- Set replyToMode: "off" when tool-progress preview matters more than native quote replies, or set streaming.preview.toolProgress: false to keep quote replies and silence this warning.',
+  ];
+}
+
 export function maybeRepairTelegramApiRoots(cfg: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
@@ -222,6 +285,26 @@ export function maybeRepairTelegramApiRoots(cfg: OpenClawConfig): {
       (hit) => `- ${sanitizeForLog(hit.path)}: removed trailing /bot<TOKEN> from Telegram apiRoot.`,
     ),
   };
+}
+
+export function collectTelegramMissingEnvTokenWarnings(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): string[] {
+  if (resolveDefaultTelegramAccountId(params.cfg) !== "default") {
+    return [];
+  }
+  const account = inspectTelegramAccount({
+    cfg: params.cfg,
+    accountId: "default",
+    envToken: params.env?.TELEGRAM_BOT_TOKEN ?? "",
+  });
+  if (!account.enabled || account.tokenStatus !== "missing" || account.tokenSource !== "none") {
+    return [];
+  }
+  return [
+    "- channels.telegram: default account has no available bot token, and TELEGRAM_BOT_TOKEN is absent in this doctor environment. After migration, verify TELEGRAM_BOT_TOKEN is present in the state-dir .env or configure channels.telegram.botToken / channels.telegram.accounts.default.botToken as a SecretRef.",
+  ];
 }
 
 async function repairTelegramConfig(params: { cfg: OpenClawConfig }): Promise<{
@@ -472,7 +555,8 @@ export function collectTelegramEmptyAllowlistExtraWarnings(
 export const telegramDoctor: ChannelDoctorAdapter = {
   legacyConfigRules: TELEGRAM_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig: normalizeTelegramCompatibilityConfig,
-  collectPreviewWarnings: ({ cfg, doctorFixCommand }) => [
+  collectPreviewWarnings: ({ cfg, doctorFixCommand, env }) => [
+    ...collectTelegramMissingEnvTokenWarnings({ cfg, env }),
     ...collectTelegramInvalidAllowFromWarnings({
       hits: scanTelegramInvalidAllowFromEntries(cfg),
       doctorFixCommand,
@@ -480,6 +564,9 @@ export const telegramDoctor: ChannelDoctorAdapter = {
     ...collectTelegramApiRootWarnings({
       hits: scanTelegramBotEndpointApiRoots(cfg),
       doctorFixCommand,
+    }),
+    ...collectTelegramSelectedQuoteToolProgressWarnings({
+      hits: scanTelegramSelectedQuoteToolProgressWarnings(cfg),
     }),
   ],
   repairConfig: async ({ cfg }) => await repairTelegramConfig({ cfg }),

@@ -350,11 +350,12 @@ export async function deliverAgentCommandResult(params: {
   }
 
   if (!payloads || payloads.length === 0) {
-    runtime.log("No reply from agent.");
     return { payloads: [], meta: resultMeta };
   }
 
   const deliveryPayloads = projectOutboundPayloadPlanForOutbound(outboundPayloadPlan);
+  let deliverySucceeded = false;
+  let deliveryHadError = false;
   const logPayload = (payload: NormalizedOutboundPayload) => {
     if (opts.json) {
       return;
@@ -369,6 +370,10 @@ export async function deliverAgentCommandResult(params: {
     }
     runtime.log(output);
   };
+  const markDeliveryError = (err: unknown) => {
+    deliveryHadError = true;
+    logDeliveryError(err);
+  };
   if (!deliver) {
     for (const payload of deliveryPayloads) {
       logPayload(payload);
@@ -376,7 +381,7 @@ export async function deliverAgentCommandResult(params: {
   }
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
     if (deliveryTarget) {
-      await deliverOutboundPayloads({
+      const deliveryResults = await deliverOutboundPayloads({
         cfg,
         channel: deliveryChannel,
         to: deliveryTarget,
@@ -386,12 +391,13 @@ export async function deliverAgentCommandResult(params: {
         replyToId: resolvedReplyToId ?? null,
         threadId: resolvedThreadTarget ?? null,
         bestEffort: bestEffortDeliver,
-        onError: (err) => logDeliveryError(err),
+        onError: markDeliveryError,
         onPayload: logPayload,
         deps: createOutboundSendDeps(deps),
       });
+      deliverySucceeded = deliveryResults.length > 0 && !deliveryHadError;
     }
   }
 
-  return { payloads: normalizedPayloads, meta: resultMeta };
+  return { payloads: normalizedPayloads, meta: resultMeta, deliverySucceeded };
 }

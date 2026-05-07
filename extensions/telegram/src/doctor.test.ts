@@ -5,10 +5,13 @@ import {
   collectTelegramApiRootWarnings,
   collectTelegramEmptyAllowlistExtraWarnings,
   collectTelegramGroupPolicyWarnings,
+  collectTelegramMissingEnvTokenWarnings,
+  collectTelegramSelectedQuoteToolProgressWarnings,
   maybeRepairTelegramApiRoots,
   maybeRepairTelegramAllowFromUsernames,
   scanTelegramBotEndpointApiRoots,
   scanTelegramInvalidAllowFromEntries,
+  scanTelegramSelectedQuoteToolProgressWarnings,
   telegramDoctor,
 } from "./doctor.js";
 
@@ -62,7 +65,7 @@ describe("telegram doctor", () => {
       enabled: true,
       token: "tok",
       tokenSource: "config",
-      tokenStatus: "configured",
+      tokenStatus: "available",
     });
     lookupTelegramChatIdMock.mockReset();
   });
@@ -328,6 +331,112 @@ describe("telegram doctor", () => {
     ]);
   });
 
+  it("warns when selected quote replies can suppress Telegram tool-progress preview", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          replyToMode: "first",
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const hits = scanTelegramSelectedQuoteToolProgressWarnings(cfg);
+    expect(hits).toEqual([{ path: "channels.telegram", replyToMode: "first" }]);
+
+    const warnings = collectTelegramSelectedQuoteToolProgressWarnings({ hits });
+    expect(warnings[0]).toContain("selected quote replies");
+    expect(warnings[0]).toContain('"Working..." tool-progress preview');
+    expect(warnings[0]).toContain("Current-message replies without selected quote text");
+    expect(warnings[1]).toContain("streaming.preview.toolProgress: false");
+    expect(
+      await telegramDoctor.collectPreviewWarnings?.({
+        cfg,
+        doctorFixCommand: "openclaw doctor --fix",
+      }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining("selected quote replies")]));
+  });
+
+  it("warns for the implicit default Telegram account when accounts is empty", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          replyToMode: "all",
+          accounts: {},
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(scanTelegramSelectedQuoteToolProgressWarnings(cfg)).toEqual([
+      { path: "channels.telegram", replyToMode: "all" },
+    ]);
+  });
+
+  it("uses merged Telegram account config for selected quote tool-progress warnings", () => {
+    listTelegramAccountIdsMock.mockReturnValue(["work", "quiet"]);
+    const cfg = {
+      channels: {
+        telegram: {
+          replyToMode: "batched",
+          accounts: {
+            work: {},
+            quiet: {
+              replyToMode: "off",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(scanTelegramSelectedQuoteToolProgressWarnings(cfg)).toEqual([
+      { path: "channels.telegram.accounts.work", replyToMode: "batched" },
+    ]);
+  });
+
+  it("skips selected quote tool-progress warning when preview progress is disabled", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          replyToMode: "first",
+          streaming: {
+            preview: {
+              toolProgress: false,
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(scanTelegramSelectedQuoteToolProgressWarnings(cfg)).toEqual([]);
+  });
+
+  it("skips selected quote tool-progress warning when preview streaming is off or block streaming owns delivery", () => {
+    expect(
+      scanTelegramSelectedQuoteToolProgressWarnings({
+        channels: {
+          telegram: {
+            replyToMode: "first",
+            streaming: false,
+          },
+        },
+      } as unknown as OpenClawConfig),
+    ).toEqual([]);
+
+    expect(
+      scanTelegramSelectedQuoteToolProgressWarnings({
+        channels: {
+          telegram: {
+            replyToMode: "first",
+          },
+        },
+        agents: {
+          defaults: {
+            blockStreamingDefault: "on",
+          },
+        },
+      } as unknown as OpenClawConfig),
+    ).toEqual([]);
+  });
+
   it("wires apiRoot preview warnings and repair through the doctor adapter", async () => {
     const cfg = {
       channels: {
@@ -354,5 +463,71 @@ describe("telegram doctor", () => {
     expect(repaired?.changes).toEqual([
       "- channels.telegram.apiRoot: removed trailing /bot<TOKEN> from Telegram apiRoot.",
     ]);
+  });
+
+  it("warns when default env fallback token is missing after migration", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          allowFrom: ["123"],
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    inspectTelegramAccountMock.mockReturnValueOnce({
+      enabled: true,
+      token: "",
+      tokenSource: "none",
+      tokenStatus: "missing",
+      configured: false,
+      config: {},
+    });
+    expect(collectTelegramMissingEnvTokenWarnings({ cfg, env: {} })).toEqual([
+      expect.stringContaining("TELEGRAM_BOT_TOKEN is absent"),
+    ]);
+
+    inspectTelegramAccountMock.mockReturnValueOnce({
+      enabled: true,
+      token: "123:tok",
+      tokenSource: "env",
+      tokenStatus: "available",
+      configured: true,
+      config: {},
+    });
+    expect(
+      collectTelegramMissingEnvTokenWarnings({ cfg, env: { TELEGRAM_BOT_TOKEN: "123:tok" } }),
+    ).toEqual([]);
+
+    inspectTelegramAccountMock.mockReturnValueOnce({
+      enabled: true,
+      token: "",
+      tokenSource: "none",
+      tokenStatus: "missing",
+      configured: false,
+      config: {},
+    });
+    expect(
+      await telegramDoctor.collectPreviewWarnings?.({
+        cfg,
+        doctorFixCommand: "openclaw doctor --fix",
+        env: {},
+      }),
+    ).toContainEqual(expect.stringContaining("TELEGRAM_BOT_TOKEN is absent"));
+  });
+
+  it("does not warn about TELEGRAM_BOT_TOKEN when a non-default account is selected", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            work: {
+              botToken: "123:work",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(collectTelegramMissingEnvTokenWarnings({ cfg, env: {} })).toEqual([]);
   });
 });

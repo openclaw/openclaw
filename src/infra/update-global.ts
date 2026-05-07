@@ -41,6 +41,7 @@ const NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS = [
   "--omit=optional",
   ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
 ] as const;
+const NPM_CONFIG_SCRIPT_SHELL_KEYS = ["NPM_CONFIG_SCRIPT_SHELL", "npm_config_script_shell"];
 const FIRST_PACKAGED_DIST_INVENTORY_VERSION = { major: 2026, minor: 4, patch: 15 };
 const OMITTED_PRIVATE_QA_BUNDLED_PLUGIN_ROOTS = new Set([
   "dist/extensions/qa-channel",
@@ -274,13 +275,11 @@ export function canResolveRegistryVersionForPackageTarget(value: string): boolea
   return !isMainPackageTarget(trimmed) && !isExplicitPackageInstallSpec(trimmed);
 }
 
-async function resolvePortableGitPathPrepend(
-  env: NodeJS.ProcessEnv | undefined,
-): Promise<string[]> {
+async function resolvePortableGitPathPrepend(): Promise<string[]> {
   if (process.platform !== "win32") {
     return [];
   }
-  const localAppData = env?.LOCALAPPDATA?.trim() || process.env.LOCALAPPDATA?.trim();
+  const localAppData = process.env.LOCALAPPDATA?.trim();
   if (!localAppData) {
     return [];
   }
@@ -317,6 +316,31 @@ function applyCorepackDownloadPromptEnv(env: Record<string, string>) {
   }
 }
 
+function hasNpmScriptShellSetting(env: NodeJS.ProcessEnv): boolean {
+  return NPM_CONFIG_SCRIPT_SHELL_KEYS.some((key) => Boolean(env[key]?.trim()));
+}
+
+function resolvePosixNpmScriptShell(env: NodeJS.ProcessEnv): string | null {
+  if (process.platform === "win32") {
+    return null;
+  }
+  if (fsSync.existsSync("/bin/sh")) {
+    return "/bin/sh";
+  }
+  const shell = env.SHELL?.trim();
+  return shell && path.isAbsolute(shell) && fsSync.existsSync(shell) ? shell : null;
+}
+
+function applyPosixNpmScriptShellEnv(env: Record<string, string>) {
+  if (hasNpmScriptShellSetting(env)) {
+    return;
+  }
+  const scriptShell = resolvePosixNpmScriptShell(env);
+  if (scriptShell) {
+    env.NPM_CONFIG_SCRIPT_SHELL = scriptShell;
+  }
+}
+
 export function resolveGlobalInstallSpec(params: {
   packageName: string;
   tag: string;
@@ -341,13 +365,18 @@ export function resolveGlobalInstallSpec(params: {
 export async function createGlobalInstallEnv(
   env?: NodeJS.ProcessEnv,
 ): Promise<NodeJS.ProcessEnv | undefined> {
-  const pathPrepend = await resolvePortableGitPathPrepend(env);
+  const pathPrepend = await resolvePortableGitPathPrepend();
   const sourceEnv = env ?? process.env;
   const hasCorepackDownloadPromptSetting = Boolean(
     sourceEnv.COREPACK_ENABLE_DOWNLOAD_PROMPT?.trim(),
   );
+  const missingPosixScriptShell =
+    Boolean(resolvePosixNpmScriptShell(sourceEnv)) && !hasNpmScriptShellSetting(sourceEnv);
   const requiresMergedEnv =
-    pathPrepend.length > 0 || process.platform === "win32" || !hasCorepackDownloadPromptSetting;
+    pathPrepend.length > 0 ||
+    process.platform === "win32" ||
+    !hasCorepackDownloadPromptSetting ||
+    missingPosixScriptShell;
   if (!requiresMergedEnv) {
     return env;
   }
@@ -359,6 +388,7 @@ export async function createGlobalInstallEnv(
   applyPathPrepend(merged, pathPrepend);
   applyWindowsPackageInstallEnv(merged);
   applyCorepackDownloadPromptEnv(merged);
+  applyPosixNpmScriptShellEnv(merged);
   return merged;
 }
 
@@ -454,6 +484,69 @@ function resolvePreferredNpmCommand(pkgRoot?: string | null): string | null {
   return fsSync.existsSync(candidate) ? candidate : null;
 }
 
+function inferGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null {
+  const trimmed = pkgRoot?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const normalized = path.resolve(trimmed);
+  const globalRoot = path.dirname(normalized);
+  return path.basename(globalRoot) === "node_modules" ? globalRoot : null;
+}
+
+function inferPnpmGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null {
+  const directGlobalRoot = inferGlobalRootFromPackageRoot(pkgRoot);
+  if (resolvePnpmGlobalDirFromGlobalRoot(directGlobalRoot)) {
+    return directGlobalRoot;
+  }
+
+  const trimmed = pkgRoot?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const normalized = path.resolve(trimmed);
+  const parts = normalized.split(path.sep);
+  const pnpmIndex = parts.lastIndexOf(".pnpm");
+  if (pnpmIndex <= 0) {
+    return null;
+  }
+  if (parts[pnpmIndex + 2] !== "node_modules") {
+    return null;
+  }
+  const layoutDir = parts.slice(0, pnpmIndex).join(path.sep) || path.sep;
+  const globalRoot =
+    path.basename(layoutDir) === "node_modules" ? layoutDir : path.join(layoutDir, "node_modules");
+  return resolvePnpmGlobalDirFromGlobalRoot(globalRoot) ? globalRoot : null;
+}
+
+export function resolvePnpmGlobalDirFromGlobalRoot(globalRoot?: string | null): string | null {
+  const trimmed = globalRoot?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const normalized = path.resolve(trimmed);
+  if (path.basename(normalized) !== "node_modules") {
+    return null;
+  }
+  const layoutDir = path.dirname(normalized);
+  return /^\d+$/u.test(path.basename(layoutDir)) ? path.dirname(layoutDir) : null;
+}
+
+async function isPnpmGlobalPackageRoot(pkgRoot?: string | null): Promise<boolean> {
+  const globalRoot = inferPnpmGlobalRootFromPackageRoot(pkgRoot);
+  if (!globalRoot) {
+    return false;
+  }
+  const layoutDir = path.dirname(globalRoot);
+  if (!(await pathExists(path.join(globalRoot, ".modules.yaml")))) {
+    return false;
+  }
+  return (
+    (await pathExists(path.join(layoutDir, "pnpm-lock.yaml"))) ||
+    (await pathExists(path.join(layoutDir, "package.json")))
+  );
+}
+
 function resolvePreferredGlobalManagerCommand(
   manager: GlobalInstallManager,
   pkgRoot?: string | null,
@@ -528,10 +621,15 @@ export async function resolveGlobalInstallTarget(params: {
     params.timeoutMs,
     params.pkgRoot,
   );
+  const pkgRootGlobalRoot =
+    command.manager === "pnpm" && (await isPnpmGlobalPackageRoot(params.pkgRoot))
+      ? inferPnpmGlobalRootFromPackageRoot(params.pkgRoot)
+      : null;
+  const targetGlobalRoot = pkgRootGlobalRoot ?? globalRoot;
   return {
     ...command,
-    globalRoot,
-    packageRoot: globalRoot ? path.join(globalRoot, PRIMARY_PACKAGE_NAME) : null,
+    globalRoot: targetGlobalRoot,
+    packageRoot: targetGlobalRoot ? path.join(targetGlobalRoot, PRIMARY_PACKAGE_NAME) : null,
   };
 }
 
@@ -567,6 +665,10 @@ export async function detectGlobalInstallManagerForRoot(
         return manager;
       }
     }
+  }
+
+  if (await isPnpmGlobalPackageRoot(pkgRoot)) {
+    return "pnpm";
   }
 
   const bunGlobalRoot = resolveBunGlobalRoot();
@@ -619,7 +721,13 @@ export function globalInstallArgs(
 ): string[] {
   const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
   if (resolved.manager === "pnpm") {
-    return [resolved.command, "add", "-g", spec];
+    return [
+      resolved.command,
+      "add",
+      "-g",
+      ...(installPrefix ? ["--global-dir", installPrefix] : []),
+      spec,
+    ];
   }
   if (resolved.manager === "bun") {
     return [resolved.command, "add", "-g", spec];

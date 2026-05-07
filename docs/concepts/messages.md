@@ -166,7 +166,7 @@ OpenClaw can expose or hide model reasoning:
 
 - `/reasoning on|off|stream` controls visibility.
 - Reasoning content still counts toward token usage when produced by the model.
-- Telegram supports reasoning stream into the draft bubble.
+- Telegram supports reasoning stream into a transient draft bubble that is deleted after final delivery; use `/reasoning on` for persistent reasoning output.
 
 Details: [Thinking + reasoning directives](/tools/thinking) and [Token use](/reference/token-use).
 
@@ -181,7 +181,7 @@ Details: [Configuration](/gateway/config-agents#messages) and channel docs.
 
 ## Silent replies
 
-The exact silent token `NO_REPLY` / `no_reply` means “do not deliver a user-visible reply”.
+The exact silent token `NO_REPLY` / `no_reply` means "do not deliver a user-visible reply".
 When a turn also has pending tool media, such as generated TTS audio, OpenClaw
 strips the silent text but still delivers the media attachment.
 OpenClaw resolves that behavior by conversation type:
@@ -206,6 +206,7 @@ parent stays quiet until the child completion event delivers the real reply.
 
 ## Related
 
+- [Message lifecycle refactor](/concepts/message-lifecycle-refactor) - target durable send and receive design
 - [Streaming](/concepts/streaming) — real-time message delivery
 - [Retry](/concepts/retry) — message delivery retry behavior
 - [Queue](/concepts/queue) — message processing queue

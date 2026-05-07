@@ -1,10 +1,17 @@
 import { resolveAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+import { selectAgentHarness } from "../agents/harness/selection.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { loadSessionStore, resolveSessionTotalTokens } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { info } from "../globals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { isCronSessionKey } from "../sessions/session-key-utils.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 import {
@@ -21,21 +28,71 @@ import {
   SESSION_KEY_PAD,
   SESSION_MODEL_PAD,
   type SessionDisplayRow,
-  toSessionDisplayRows,
+  toSessionDisplayRow,
 } from "./sessions-table.js";
 
 type SessionRow = SessionDisplayRow & {
   agentId: string;
-  kind: "direct" | "group" | "global" | "unknown";
+  kind: "cron" | "direct" | "group" | "global" | "unknown";
   agentRuntime: ReturnType<typeof resolveAgentRuntimeMetadata>;
+  runtimeLabel: string;
 };
 
 const AGENT_PAD = 10;
 const KIND_PAD = 6;
+const RUNTIME_PAD = 18;
 const TOKENS_PAD = 20;
-let contextLookupRuntimePromise: Promise<typeof import("../agents/context.js")> | null = null;
+const DEFAULT_SESSIONS_LIMIT = 100;
+const TOP_N_SELECTION_LIMIT = 200;
+const contextLookupRuntimeLoader = createLazyImportLoader(() => import("../agents/context.js"));
 
 const formatKTokens = (value: number) => `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
+
+function compareSessionRowsByUpdatedAt(a: SessionRow, b: SessionRow): number {
+  return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+}
+
+function selectNewestSessionRows(rows: SessionRow[], limit: number | undefined): SessionRow[] {
+  if (limit === undefined) {
+    return rows.toSorted(compareSessionRowsByUpdatedAt);
+  }
+  if (limit > TOP_N_SELECTION_LIMIT) {
+    return rows.toSorted(compareSessionRowsByUpdatedAt).slice(0, limit);
+  }
+  const selected: SessionRow[] = [];
+  for (const row of rows) {
+    const insertAt = selected.findIndex(
+      (candidate) => compareSessionRowsByUpdatedAt(row, candidate) < 0,
+    );
+    if (insertAt >= 0) {
+      selected.splice(insertAt, 0, row);
+      if (selected.length > limit) {
+        selected.pop();
+      }
+    } else if (selected.length < limit) {
+      selected.push(row);
+    }
+  }
+  return selected;
+}
+
+function parseSessionsLimit(value: string | number | undefined): number | undefined | null {
+  if (value === undefined) {
+    return DEFAULT_SESSIONS_LIMIT;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.toLowerCase() === "all") {
+      return undefined;
+    }
+    if (!/^\d+$/.test(trimmed)) {
+      return null;
+    }
+    const parsed = Number.parseInt(trimmed, 10);
+    return parsed > 0 ? parsed : null;
+  }
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
 
 const colorByPct = (label: string, pct: number | null, rich: boolean) => {
   if (!rich || pct === null) {
@@ -72,8 +129,7 @@ const formatTokensCell = (
 };
 
 async function lookupContextTokensForDisplay(model: string): Promise<number | undefined> {
-  contextLookupRuntimePromise ??= import("../agents/context.js");
-  const { lookupContextTokens } = await contextLookupRuntimePromise;
+  const { lookupContextTokens } = await contextLookupRuntimeLoader.load();
   return lookupContextTokens(model, { allowAsyncLoad: false });
 }
 
@@ -83,6 +139,9 @@ function classifySessionKey(key: string, entry?: { chatType?: string | null }): 
   }
   if (key === "unknown") {
     return "unknown";
+  }
+  if (isCronSessionKey(key)) {
+    return "cron";
   }
   if (entry?.chatType === "group" || entry?.chatType === "channel") {
     return "group";
@@ -110,8 +169,73 @@ const formatKindCell = (kind: SessionRow["kind"], rich: boolean) => {
   return theme.muted(label);
 };
 
+function resolveSessionRuntimeLabel(params: {
+  cfg: OpenClawConfig;
+  entry: SessionEntry;
+  agentRuntime: ReturnType<typeof resolveAgentRuntimeMetadata>;
+  modelProvider: string;
+  model: string;
+  agentId: string;
+  sessionKey: string;
+}): string {
+  const explicitRuntime =
+    normalizeOptionalLowercaseString(params.entry.agentRuntimeOverride) ??
+    normalizeOptionalLowercaseString(params.entry.agentHarnessId) ??
+    (params.agentRuntime.source === "implicit"
+      ? undefined
+      : normalizeOptionalLowercaseString(params.agentRuntime.id));
+  if (explicitRuntime && explicitRuntime !== "auto" && explicitRuntime !== "default") {
+    return resolveAgentRuntimeLabel({
+      config: params.cfg,
+      sessionEntry: params.entry,
+      resolvedHarness: explicitRuntime,
+      fallbackProvider: params.modelProvider,
+    });
+  }
+
+  let resolvedHarness: string | undefined;
+  try {
+    const selected = selectAgentHarness({
+      provider: params.modelProvider,
+      modelId: params.model,
+      config: params.cfg,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      agentHarnessId: params.entry.agentHarnessId,
+    });
+    const id = normalizeOptionalLowercaseString(selected.id);
+    resolvedHarness = id && id !== "pi" ? id : undefined;
+  } catch {
+    resolvedHarness = undefined;
+  }
+  return resolveAgentRuntimeLabel({
+    config: params.cfg,
+    sessionEntry: params.entry,
+    resolvedHarness,
+    fallbackProvider: params.modelProvider,
+  });
+}
+
+function formatRuntimeCell(runtimeLabel: string, rich: boolean): string {
+  const label = runtimeLabel.padEnd(RUNTIME_PAD);
+  return rich ? theme.info(label) : label;
+}
+
+function toJsonSessionRow(row: SessionRow): Omit<SessionRow, "runtimeLabel"> {
+  const { runtimeLabel, ...jsonRow } = row;
+  void runtimeLabel;
+  return jsonRow;
+}
+
 export async function sessionsCommand(
-  opts: { json?: boolean; store?: string; active?: string; agent?: string; allAgents?: boolean },
+  opts: {
+    json?: boolean;
+    store?: string;
+    active?: string;
+    agent?: string;
+    allAgents?: boolean;
+    limit?: string | number;
+  },
   runtime: RuntimeEnv,
 ) {
   const aggregateAgents = opts.allAgents === true;
@@ -146,28 +270,47 @@ export async function sessionsCommand(
     activeMinutes = parsed;
   }
 
-  const rows = targets
-    .flatMap((target) => {
-      const store = loadSessionStore(target.storePath);
-      return toSessionDisplayRows(store).map((row) => {
+  const limit = parseSessionsLimit(opts.limit);
+  if (limit === null) {
+    runtime.error('--limit must be a positive integer or "all"');
+    runtime.exit(1);
+    return;
+  }
+
+  const allRows = targets.flatMap((target) => {
+    const store = loadSessionStore(target.storePath);
+    return Object.entries(store)
+      .filter(([, entry]) => {
+        if (activeMinutes === undefined) {
+          return true;
+        }
+        const updatedAt = entry?.updatedAt;
+        return typeof updatedAt === "number" && Date.now() - updatedAt <= activeMinutes * 60_000;
+      })
+      .map(([key, entry]) => {
+        const row = toSessionDisplayRow(key, entry);
         const agentId = parseAgentSessionKey(row.key)?.agentId ?? target.agentId;
+        const modelRef = resolveSessionDisplayModelRef(cfg, row);
+        const agentRuntime = resolveAgentRuntimeMetadata(cfg, agentId);
         return Object.assign({}, row, {
           agentId,
-          agentRuntime: resolveAgentRuntimeMetadata(cfg, agentId),
+          agentRuntime,
           kind: classifySessionKey(row.key, store[row.key]),
+          runtimeLabel: resolveSessionRuntimeLabel({
+            cfg,
+            entry,
+            agentRuntime,
+            modelProvider: modelRef.provider,
+            model: modelRef.model,
+            agentId,
+            sessionKey: row.key,
+          }),
         });
       });
-    })
-    .filter((row) => {
-      if (activeMinutes === undefined) {
-        return true;
-      }
-      if (!row.updatedAt) {
-        return false;
-      }
-      return Date.now() - row.updatedAt <= activeMinutes * 60_000;
-    })
-    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  });
+  const totalCount = allRows.length;
+  const rows = selectNewestSessionRows(allRows, limit);
+  const hasMore = rows.length < totalCount;
 
   if (opts.json) {
     const multi = targets.length > 1;
@@ -182,9 +325,13 @@ export async function sessionsCommand(
         : undefined,
       allAgents: aggregateAgents ? true : undefined,
       count: rows.length,
+      totalCount,
+      limitApplied: limit ?? null,
+      hasMore,
       activeMinutes: activeMinutes ?? null,
       sessions: await Promise.all(
-        rows.map(async (r) => {
+        rows.map(async (row) => {
+          const r = toJsonSessionRow(row);
           const modelRef = resolveSessionDisplayModelRef(cfg, r);
           return {
             ...r,
@@ -213,7 +360,13 @@ export async function sessionsCommand(
       info(`Session stores: ${targets.length} (${targets.map((t) => t.agentId).join(", ")})`),
     );
   }
-  runtime.log(info(`Sessions listed: ${rows.length}`));
+  runtime.log(
+    info(
+      hasMore && limit !== undefined
+        ? `Sessions listed: ${rows.length} of ${totalCount} (limit ${limit})`
+        : `Sessions listed: ${rows.length}`,
+    ),
+  );
   if (activeMinutes) {
     runtime.log(info(`Filtered to last ${activeMinutes} minute(s)`));
   }
@@ -230,6 +383,7 @@ export async function sessionsCommand(
     "Key".padEnd(SESSION_KEY_PAD),
     "Age".padEnd(SESSION_AGE_PAD),
     "Model".padEnd(SESSION_MODEL_PAD),
+    "Runtime".padEnd(RUNTIME_PAD),
     "Tokens (ctx %)".padEnd(TOKENS_PAD),
     "Flags",
   ].join(" ");
@@ -253,6 +407,7 @@ export async function sessionsCommand(
       formatSessionKeyCell(row.key, rich),
       formatSessionAgeCell(row.updatedAt, rich),
       formatSessionModelCell(model, rich),
+      formatRuntimeCell(row.runtimeLabel, rich),
       formatTokensCell(total, contextTokens ?? null, rich),
       formatSessionFlagsCell(row, rich),
     ].join(" ");
@@ -260,3 +415,7 @@ export async function sessionsCommand(
     runtime.log(line.trimEnd());
   }
 }
+
+export const __testing = {
+  parseSessionsLimit,
+} as const;

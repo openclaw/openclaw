@@ -11,11 +11,8 @@ const ensureOpenClawModelsJsonMock = vi.fn<
 const piModelModuleLoadedMock = vi.fn();
 const resolveEmbeddedAgentRuntimeMock = vi.fn(() => "auto");
 
-vi.mock("../agents/agent-paths.js", () => ({
-  resolveOpenClawAgentDir: () => "/tmp/agent",
-}));
-
 vi.mock("../agents/agent-scope.js", () => ({
+  resolveDefaultAgentDir: () => "/tmp/agent",
   resolveAgentWorkspaceDir: () => "/tmp/workspace",
   resolveDefaultAgentId: () => "default",
 }));
@@ -36,14 +33,14 @@ vi.mock("../agents/pi-embedded-runner/runtime.js", () => ({
   resolveEmbeddedAgentRuntime: () => resolveEmbeddedAgentRuntimeMock(),
 }));
 
-let prewarmConfiguredPrimaryModel: typeof import("./server-startup.js").__testing.prewarmConfiguredPrimaryModel;
-let shouldSkipStartupModelPrewarm: typeof import("./server-startup.js").__testing.shouldSkipStartupModelPrewarm;
+let prewarmConfiguredPrimaryModel: typeof import("./server-startup-post-attach.js").__testing.prewarmConfiguredPrimaryModel;
+let shouldSkipStartupModelPrewarm: typeof import("./server-startup-post-attach.js").__testing.shouldSkipStartupModelPrewarm;
 
 describe("gateway startup primary model warmup", () => {
   beforeAll(async () => {
     ({
       __testing: { prewarmConfiguredPrimaryModel, shouldSkipStartupModelPrewarm },
-    } = await import("./server-startup.js"));
+    } = await import("./server-startup-post-attach.js"));
   });
 
   beforeEach(() => {

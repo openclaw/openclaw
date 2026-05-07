@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -55,12 +56,13 @@ let downloadImageFeishu: typeof import("./media.js").downloadImageFeishu;
 let downloadMessageResourceFeishu: typeof import("./media.js").downloadMessageResourceFeishu;
 let sanitizeFileNameForUpload: typeof import("./media.js").sanitizeFileNameForUpload;
 let sendMediaFeishu: typeof import("./media.js").sendMediaFeishu;
+let shouldSuppressFeishuTextForVoiceMedia: typeof import("./media.js").shouldSuppressFeishuTextForVoiceMedia;
 
 function expectPathIsolatedToTmpRoot(pathValue: string, key: string): void {
   expect(pathValue).not.toContain(key);
   expect(pathValue).not.toContain("..");
 
-  const tmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
+  const tmpRoot = realpathSync(resolvePreferredOpenClawTmpDir());
   const resolved = path.resolve(pathValue);
   const rel = path.relative(tmpRoot, resolved);
   expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
@@ -92,6 +94,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       downloadMessageResourceFeishu,
       sanitizeFileNameForUpload,
       sendMediaFeishu,
+      shouldSuppressFeishuTextForVoiceMedia,
     } = await import("./media.js"));
   });
 
@@ -153,6 +156,25 @@ describe("sendMediaFeishu msg_type routing", () => {
       await fs.writeFile(args.at(-1) ?? "", Buffer.from("opus-output"));
       return "";
     });
+  });
+
+  it("suppresses reply text only for voice-intent or native voice media", () => {
+    expect(
+      shouldSuppressFeishuTextForVoiceMedia({
+        mediaUrl: "https://example.com/reply.mp3",
+        audioAsVoice: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSuppressFeishuTextForVoiceMedia({
+        mediaUrl: "https://example.com/reply.ogg?download=1",
+      }),
+    ).toBe(true);
+    expect(
+      shouldSuppressFeishuTextForVoiceMedia({
+        mediaUrl: "https://example.com/song.mp3",
+      }),
+    ).toBe(false);
   });
 
   it("uses msg_type=media for mp4 video", async () => {
@@ -340,7 +362,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       contentType: "audio/mpeg",
     });
 
-    await sendMediaFeishu({
+    const result = await sendMediaFeishu({
       cfg: emptyConfig,
       to: "user:ou_target",
       mediaUrl: "https://example.com/reply.mp3",
@@ -361,6 +383,7 @@ describe("sendMediaFeishu msg_type routing", () => {
         data: expect.objectContaining({ msg_type: "file" }),
       }),
     );
+    expect(result).toEqual(expect.objectContaining({ voiceIntentDegradedToFile: true }));
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining("audioAsVoice transcode failed"),
       expect.any(Error),
@@ -382,6 +405,34 @@ describe("sendMediaFeishu msg_type routing", () => {
         data: expect.objectContaining({ msg_type: "image" }),
       }),
     );
+  });
+
+  it("preserves Feishu diagnostics when media sends reject before response checks", async () => {
+    messageCreateMock.mockRejectedValueOnce(
+      Object.assign(new Error("Request failed with status code 400"), {
+        response: {
+          status: 400,
+          data: {
+            code: 9499,
+            msg: "Bad Request",
+            error: {
+              log_id: "20260429124731MEDIA",
+              troubleshooter: "https://open.feishu.cn/search?log_id=20260429124731MEDIA",
+            },
+          },
+        },
+      }),
+    );
+
+    const send = sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("image"),
+      fileName: "photo.png",
+    });
+
+    await expect(send).rejects.toThrow(/Feishu image send failed: .*"feishu_code":9499/);
+    await expect(send).rejects.toThrow(/"feishu_log_id":"20260429124731MEDIA"/);
   });
 
   it("uses msg_type=media when replying with mp4", async () => {

@@ -1,13 +1,14 @@
-import fs from "node:fs";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import type { ExecToolDetails } from "../../agents/bash-tools.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
+import { pathExists } from "../../infra/fs-safe.js";
 import {
   exportTrajectoryForCommand,
   formatTrajectoryCommandExportSummary,
   resolveTrajectoryCommandOutputDir,
+  type TrajectoryCommandExportSummary,
 } from "../../trajectory/command-export.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -136,13 +137,13 @@ export async function buildExportTrajectoryReply(
   }
   const { entry, sessionFile } = sessionTarget;
 
-  if (!fs.existsSync(sessionFile)) {
+  if (!(await pathExists(sessionFile))) {
     return { text: "❌ Session file not found." };
   }
 
   let outputDir: string;
   try {
-    outputDir = resolveTrajectoryCommandOutputDir({
+    outputDir = await resolveTrajectoryCommandOutputDir({
       outputPath: args.outputPath,
       workspaceDir: params.workspaceDir,
       sessionId: entry.sessionId,
@@ -153,9 +154,9 @@ export async function buildExportTrajectoryReply(
     };
   }
 
-  let summary: ReturnType<typeof exportTrajectoryForCommand>;
+  let summary: TrajectoryCommandExportSummary;
   try {
-    summary = exportTrajectoryForCommand({
+    summary = await exportTrajectoryForCommand({
       outputDir,
       sessionFile,
       sessionId: entry.sessionId,

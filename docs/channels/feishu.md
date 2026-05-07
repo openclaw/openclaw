@@ -6,8 +6,6 @@ read_when:
 title: Feishu
 ---
 
-# Feishu / Lark
-
 Feishu/Lark is an all-in-one collaboration platform where teams chat, share documents, manage calendars, and get work done together.
 
 **Status:** production-ready for bot DMs + group chats. WebSocket is the default mode; webhook mode is optional.
@@ -43,10 +41,10 @@ Requires OpenClaw 2026.4.25 or above. Run `openclaw --version` to check. Upgrade
 
 Configure `dmPolicy` to control who can DM the bot:
 
-- `"pairing"` — unknown users receive a pairing code; approve via CLI
-- `"allowlist"` — only users listed in `allowFrom` can chat (default: bot owner only)
-- `"open"` — allow public DMs only when `allowFrom` includes `"*"`; with restrictive entries, only matching users can chat
-- `"disabled"` — disable all DMs
+- `"pairing"` - unknown users receive a pairing code; approve via CLI
+- `"allowlist"` - only users listed in `allowFrom` can chat (default: bot owner only)
+- `"open"` - allow public DMs only when `allowFrom` includes `"*"`; with restrictive entries, only matching users can chat
+- `"disabled"` - disable all DMs
 
 **Approve a pairing request:**
 
@@ -69,8 +67,8 @@ Default: `allowlist`
 
 **Mention requirement** (`channels.feishu.requireMention`):
 
-- `true` — require @mention (default)
-- `false` — respond without @mention
+- `true` - require @mention (default)
+- `false` - respond without @mention
 - Per-group override: `channels.feishu.groups.<chat_id>.requireMention`
 - Broadcast-only `@all` and `@_all` are not treated as bot mentions. A message that mentions both `@all` and the bot directly still counts as a bot mention.
 
@@ -261,8 +259,8 @@ per account.
 
 ### Message limits
 
-- `textChunkLimit` — outbound text chunk size (default: `2000` chars)
-- `mediaMaxMb` — media upload/download limit (default: `30` MB)
+- `textChunkLimit` - outbound text chunk size (default: `2000` chars)
+- `mediaMaxMb` - media upload/download limit (default: `30` MB)
 
 ### Streaming
 
@@ -273,13 +271,13 @@ Feishu/Lark supports streaming replies via interactive cards. When enabled, the 
   channels: {
     feishu: {
       streaming: true, // enable streaming card output (default: true)
-      blockStreaming: true, // enable block-level streaming (default: true)
+      blockStreaming: true, // opt into completed-block streaming
     },
   },
 }
 ```
 
-Set `streaming: false` to send the complete reply in one message.
+Set `streaming: false` to send the complete reply in one message. `blockStreaming` is off by default; enable it only when you want completed assistant blocks flushed before the final reply.
 
 ### Quota optimization
 
@@ -301,7 +299,7 @@ Reduce the number of Feishu/Lark API calls with two optional flags:
 
 ### ACP sessions
 
-Feishu/Lark supports ACP for DMs and group thread messages. Feishu/Lark ACP is text-command driven — there are no native slash-command menus, so use `/acp ...` messages directly in the conversation.
+Feishu/Lark supports ACP for DMs and group thread messages. Feishu/Lark ACP is text-command driven - there are no native slash-command menus, so use `/acp ...` messages directly in the conversation.
 
 #### Persistent ACP binding
 
@@ -409,26 +407,26 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.domain`                          | API domain (`feishu` or `lark`)                                                  | `feishu`         |
 | `channels.feishu.connectionMode`                  | Event transport (`websocket` or `webhook`)                                       | `websocket`      |
 | `channels.feishu.defaultAccount`                  | Default account for outbound routing                                             | `default`        |
-| `channels.feishu.verificationToken`               | Required for webhook mode                                                        | —                |
-| `channels.feishu.encryptKey`                      | Required for webhook mode                                                        | —                |
+| `channels.feishu.verificationToken`               | Required for webhook mode                                                        | -                |
+| `channels.feishu.encryptKey`                      | Required for webhook mode                                                        | -                |
 | `channels.feishu.webhookPath`                     | Webhook route path                                                               | `/feishu/events` |
 | `channels.feishu.webhookHost`                     | Webhook bind host                                                                | `127.0.0.1`      |
 | `channels.feishu.webhookPort`                     | Webhook bind port                                                                | `3000`           |
-| `channels.feishu.accounts.<id>.appId`             | App ID                                                                           | —                |
-| `channels.feishu.accounts.<id>.appSecret`         | App Secret                                                                       | —                |
+| `channels.feishu.accounts.<id>.appId`             | App ID                                                                           | -                |
+| `channels.feishu.accounts.<id>.appSecret`         | App Secret                                                                       | -                |
 | `channels.feishu.accounts.<id>.domain`            | Per-account domain override                                                      | `feishu`         |
 | `channels.feishu.accounts.<id>.tts`               | Per-account TTS override                                                         | `messages.tts`   |
 | `channels.feishu.dmPolicy`                        | DM policy                                                                        | `allowlist`      |
 | `channels.feishu.allowFrom`                       | DM allowlist (open_id list)                                                      | [BotOwnerId]     |
 | `channels.feishu.groupPolicy`                     | Group policy                                                                     | `allowlist`      |
-| `channels.feishu.groupAllowFrom`                  | Group allowlist                                                                  | —                |
+| `channels.feishu.groupAllowFrom`                  | Group allowlist                                                                  | -                |
 | `channels.feishu.requireMention`                  | Require @mention in groups                                                       | `true`           |
 | `channels.feishu.groups.<chat_id>.requireMention` | Per-group @mention override; explicit IDs also admit the group in allowlist mode | inherited        |
 | `channels.feishu.groups.<chat_id>.enabled`        | Enable/disable a specific group                                                  | `true`           |
 | `channels.feishu.textChunkLimit`                  | Message chunk size                                                               | `2000`           |
 | `channels.feishu.mediaMaxMb`                      | Media size limit                                                                 | `30`             |
 | `channels.feishu.streaming`                       | Streaming card output                                                            | `true`           |
-| `channels.feishu.blockStreaming`                  | Block-level streaming                                                            | `true`           |
+| `channels.feishu.blockStreaming`                  | Completed-block reply streaming                                                  | `false`          |
 | `channels.feishu.typingIndicator`                 | Send typing reactions                                                            | `true`           |
 | `channels.feishu.resolveSenderNames`              | Resolve sender display names                                                     | `true`           |
 
@@ -481,16 +479,17 @@ conversion fails, OpenClaw falls back to a file attachment and logs the reason.
 
 For `groupSessionScope: "group_topic"` and `"group_topic_sender"`, native
 Feishu/Lark topic groups use the event `thread_id` (`omt_*`) as the canonical
-topic session key. Normal group replies that OpenClaw turns into threads keep
-using the reply root message ID (`om_*`) so the first turn and follow-up turn
-stay in the same session.
+topic session key. If a native topic starter event omits `thread_id`, OpenClaw
+hydrates it from Feishu before routing the turn. Normal group replies that
+OpenClaw turns into threads keep using the reply root message ID (`om_*`) so the
+first turn and follow-up turn stay in the same session.
 
 ---
 
 ## Related
 
-- [Channels Overview](/channels) — all supported channels
-- [Pairing](/channels/pairing) — DM authentication and pairing flow
-- [Groups](/channels/groups) — group chat behavior and mention gating
-- [Channel Routing](/channels/channel-routing) — session routing for messages
-- [Security](/gateway/security) — access model and hardening
+- [Channels Overview](/channels) - all supported channels
+- [Pairing](/channels/pairing) - DM authentication and pairing flow
+- [Groups](/channels/groups) - group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) - session routing for messages
+- [Security](/gateway/security) - access model and hardening

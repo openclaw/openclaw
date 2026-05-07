@@ -22,6 +22,7 @@ openclaw channels list
 openclaw channels status
 openclaw channels capabilities
 openclaw channels capabilities --channel discord --target channel:123
+openclaw channels capabilities --channel discord --target channel:<voice-channel-id>
 openclaw channels resolve --channel slack "#general" "@jane"
 openclaw channels logs --channel all
 ```
@@ -38,6 +39,12 @@ openclaw channels logs --channel all
 state plus probe results such as `works`, `probe failed`, `audit ok`, or `audit failed`.
 If the gateway is unreachable, `channels status` falls back to config-only summaries
 instead of live probe output.
+
+Do not use `openclaw sessions`, Gateway `sessions.list`, or the agent
+`sessions_list` tool as a channel socket-health signal. Those surfaces report
+stored conversation rows, not provider runtime state. After a Discord provider
+restart, a connected but quiet account may be healthy while no Discord session
+row appears until the next inbound or outbound conversation event.
 
 ## Add / remove accounts
 
@@ -118,7 +125,7 @@ Notes:
 
 - `--channel` is optional; omit it to list every channel (including extensions).
 - `--account` is only valid with `--channel`.
-- `--target` accepts `channel:<id>` or a raw numeric channel id and only applies to Discord.
+- `--target` accepts `channel:<id>` or a raw numeric channel id and only applies to Discord. For Discord voice channels, the permission check flags missing `ViewChannel`, `Connect`, `Speak`, `SendMessages`, and `ReadMessageHistory`.
 - Probes are provider-specific: Discord intents + optional channel permissions; Slack bot + user scopes; Telegram bot flags + webhook; Signal daemon version; Microsoft Teams app token + Graph roles/scopes (annotated where known). Channels without probes report `Probe: unavailable`.
 
 ## Resolve names to IDs

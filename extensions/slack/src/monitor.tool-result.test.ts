@@ -19,7 +19,8 @@ import {
 const { monitorSlackProvider } = await import("./monitor/provider.js");
 
 const slackTestState = getSlackTestState();
-const { sendMock, replyMock, reactMock, upsertPairingRequestMock } = slackTestState;
+const { sendMock, replyMock, reactMock, reactionAddMock, upsertPairingRequestMock } =
+  slackTestState;
 
 beforeEach(() => {
   resetInboundDedupe();
@@ -275,7 +276,7 @@ describe("monitorSlackProvider tool results", () => {
     endsWith: string;
     includes: string;
   }) {
-    const names = reactMock.mock.calls.map(([args]) => (args as { name: string }).name);
+    const names = reactionAddMock.mock.calls.map(([args]) => (args as { name: string }).name);
     expect(names.slice(0, expected.startsWith.length)).toEqual(expected.startsWith);
     expect(names).toContain(expected.includes);
     expect(names.at(-1)).toBe(expected.endsWith);
@@ -687,6 +688,39 @@ describe("monitorSlackProvider tool results", () => {
 
     expect(sendMock).not.toHaveBeenCalled();
     expect(reactMock).toHaveBeenCalledTimes(1);
+    expect(reactMock).toHaveBeenCalledWith({
+      channel: "C1",
+      timestamp: "456",
+      name: "eyes",
+    });
+  });
+
+  it("keeps status reactions for mentioned message-tool-only channel turns", async () => {
+    replyMock.mockResolvedValue({ text: "quiet default reply" });
+    slackTestState.config = {
+      messages: {
+        responsePrefix: "PFX",
+        ackReaction: "👀",
+        ackReactionScope: "group-mentions",
+        groupChat: { visibleReplies: "message_tool" },
+        statusReactions: {
+          enabled: true,
+          timing: { debounceMs: 0, doneHoldMs: 0, errorHoldMs: 0 },
+        },
+      },
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          groupPolicy: "open",
+        },
+      },
+    };
+    mockGeneralChannelInfo();
+
+    await runMentionGatedChannelMessageAndFlush();
+
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).not.toHaveBeenCalled();
     expect(reactMock).toHaveBeenCalledWith({
       channel: "C1",
       timestamp: "456",

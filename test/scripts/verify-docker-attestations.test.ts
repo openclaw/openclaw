@@ -72,6 +72,37 @@ describe("verify-docker-attestations", () => {
     expect(errors).toEqual([]);
   });
 
+  it("accepts attestation manifests with omitted artifactType", () => {
+    const errors = collectDockerAttestationErrors({
+      imageRef: "ghcr.io/openclaw/openclaw:test",
+      index: createIndex(),
+      requiredPlatforms: [parsePlatform("linux/amd64")],
+      inspectAttestation: () => {
+        const attestation: Record<string, unknown> = createAttestation();
+        delete attestation.artifactType;
+        return attestation;
+      },
+    });
+
+    expect(errors).toEqual([]);
+  });
+
+  it("reports unexpected attestation artifact types", () => {
+    const errors = collectDockerAttestationErrors({
+      imageRef: "ghcr.io/openclaw/openclaw:test",
+      index: createIndex(),
+      requiredPlatforms: [parsePlatform("linux/amd64")],
+      inspectAttestation: () => ({
+        ...createAttestation(),
+        artifactType: "application/vnd.unknown",
+      }),
+    });
+
+    expect(errors).toEqual([
+      `ghcr.io/openclaw/openclaw:test: linux/amd64 attestation ${attestationDigest} has unexpected artifactType "application/vnd.unknown"`,
+    ]);
+  });
+
   it("reports missing attestation manifests", () => {
     const index = createIndex();
     index.manifests = index.manifests.slice(0, 1);

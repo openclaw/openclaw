@@ -296,6 +296,7 @@ describe("diagnostics-otel service", () => {
       type: "webhook.processed",
       channel: "telegram",
       updateType: "telegram-post",
+      chatId: "chat-should-not-export",
       durationMs: 120,
     });
     emitDiagnosticEvent({
@@ -307,7 +308,10 @@ describe("diagnostics-otel service", () => {
     emitDiagnosticEvent({
       type: "message.processed",
       channel: "telegram",
+      chatId: "chat-should-not-export",
+      messageId: "message-should-not-export",
       outcome: "completed",
+      reason: "progress draft / message tool 123",
       durationMs: 55,
     });
     emitDiagnosticEvent({
@@ -348,6 +352,33 @@ describe("diagnostics-otel service", () => {
     expect(spanNames).toContain("openclaw.webhook.processed");
     expect(spanNames).toContain("openclaw.message.processed");
     expect(spanNames).toContain("openclaw.session.stuck");
+    const webhookSpanCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.webhook.processed",
+    );
+    expect(webhookSpanCall?.[1]).toEqual({
+      attributes: expect.not.objectContaining({
+        "openclaw.chatId": expect.anything(),
+      }),
+      startTime: expect.any(Number),
+    });
+    const messageSpanCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.message.processed",
+    );
+    expect(messageSpanCall?.[1]).toEqual({
+      attributes: expect.objectContaining({
+        "openclaw.channel": "telegram",
+        "openclaw.outcome": "completed",
+        "openclaw.reason": "unknown",
+      }),
+      startTime: expect.any(Number),
+    });
+    expect(messageSpanCall?.[1]).toEqual({
+      attributes: expect.not.objectContaining({
+        "openclaw.chatId": expect.anything(),
+        "openclaw.messageId": expect.anything(),
+      }),
+      startTime: expect.any(Number),
+    });
 
     emitDiagnosticEvent({
       type: "log.record",
@@ -611,6 +642,34 @@ describe("diagnostics-otel service", () => {
     expect(
       telemetryState.counters.get("openclaw.telemetry.exporter.events")?.add,
     ).not.toHaveBeenCalled();
+
+    await service.stop?.(ctx);
+  });
+
+  test("records hook-blocked run metrics with safe blocker originator", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "run.completed",
+      runId: "run-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      outcome: "blocked",
+      blockedBy: "policy-plugin",
+      durationMs: 100,
+    });
+    await flushDiagnosticEvents();
+
+    expect(telemetryState.histograms.get("openclaw.run.duration_ms")?.record).toHaveBeenCalledWith(
+      100,
+      expect.objectContaining({
+        "openclaw.outcome": "blocked",
+        "openclaw.blocked_by": "policy-plugin",
+      }),
+    );
+    expect(JSON.stringify(telemetryState)).not.toContain("matched secret prompt");
 
     await service.stop?.(ctx);
   });
@@ -2387,6 +2446,7 @@ describe("diagnostics-otel service", () => {
     for (const call of deliverySpanCalls) {
       expect(call[1]).toEqual({
         attributes: expect.not.objectContaining({
+          "openclaw.chatId": expect.anything(),
           "openclaw.sessionKey": expect.anything(),
           "openclaw.messageId": expect.anything(),
           "openclaw.conversationId": expect.anything(),
@@ -2403,6 +2463,158 @@ describe("diagnostics-otel service", () => {
       code: 2,
       message: "TypeError",
     });
+    await service.stop?.(ctx);
+  });
+
+  test("bounds unsafe message delivery attributes before export", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "message.delivery.completed",
+      channel: "discord/custom",
+      deliveryKind: "progress draft" as never,
+      durationMs: 20,
+      resultCount: 1,
+      sessionKey: "session-secret",
+    });
+    await flushDiagnosticEvents();
+
+    expect(
+      telemetryState.histograms.get("openclaw.message.delivery.duration_ms")?.record,
+    ).toHaveBeenCalledWith(
+      20,
+      expect.objectContaining({
+        "openclaw.channel": "unknown",
+        "openclaw.delivery.kind": "other",
+        "openclaw.outcome": "completed",
+      }),
+    );
+    const deliverySpanCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.message.delivery",
+    );
+    expect(deliverySpanCall?.[1]).toMatchObject({
+      attributes: {
+        "openclaw.channel": "unknown",
+        "openclaw.delivery.kind": "other",
+        "openclaw.outcome": "completed",
+        "openclaw.delivery.result_count": 1,
+      },
+      startTime: expect.any(Number),
+    });
+    await service.stop?.(ctx);
+  });
+
+  test("exports session recovery and talk metrics with bounded attributes", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
+    await service.start(ctx);
+
+    emitTrustedDiagnosticEvent({
+      type: "session.recovery.requested",
+      sessionId: "session-should-not-export",
+      sessionKey: "key-should-not-export",
+      state: "processing",
+      ageMs: 12_000,
+      reason: "startup-sweep",
+      activeWorkKind: "tool_call",
+      allowActiveAbort: true,
+    });
+    emitTrustedDiagnosticEvent({
+      type: "session.recovery.completed",
+      sessionId: "session-should-not-export",
+      sessionKey: "key-should-not-export",
+      state: "processing",
+      ageMs: 13_000,
+      reason: "startup-sweep",
+      activeWorkKind: "tool_call",
+      status: "released",
+      action: "abort-active-run",
+    });
+    emitTrustedDiagnosticEvent({
+      type: "talk.event",
+      sessionId: "talk-session-should-not-export",
+      turnId: "turn-should-not-export",
+      talkEventType: "input.audio.delta",
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+      provider: "openai",
+      byteLength: 320,
+    });
+    emitTrustedDiagnosticEvent({
+      type: "talk.event",
+      sessionId: "talk-session-should-not-export",
+      talkEventType: "latency.metrics",
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+      provider: "openai",
+      durationMs: 45,
+    });
+    await flushDiagnosticEvents();
+
+    expect(
+      telemetryState.counters.get("openclaw.session.recovery.requested")?.add,
+    ).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({
+        "openclaw.state": "processing",
+        "openclaw.action": "abort",
+        "openclaw.active_work_kind": "tool_call",
+      }),
+    );
+    expect(
+      telemetryState.counters.get("openclaw.session.recovery.completed")?.add,
+    ).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({
+        "openclaw.state": "processing",
+        "openclaw.status": "released",
+        "openclaw.action": "abort-active-run",
+      }),
+    );
+    expect(
+      telemetryState.histograms.get("openclaw.session.recovery.age_ms")?.record,
+    ).toHaveBeenCalledWith(
+      13_000,
+      expect.objectContaining({
+        "openclaw.status": "released",
+      }),
+    );
+    expect(telemetryState.counters.get("openclaw.talk.event")?.add).toHaveBeenCalledWith(1, {
+      "openclaw.talk.brain": "agent-consult",
+      "openclaw.talk.event_type": "input.audio.delta",
+      "openclaw.talk.mode": "realtime",
+      "openclaw.talk.provider": "openai",
+      "openclaw.talk.transport": "gateway-relay",
+    });
+    expect(telemetryState.histograms.get("openclaw.talk.audio.bytes")?.record).toHaveBeenCalledWith(
+      320,
+      {
+        "openclaw.talk.brain": "agent-consult",
+        "openclaw.talk.event_type": "input.audio.delta",
+        "openclaw.talk.mode": "realtime",
+        "openclaw.talk.provider": "openai",
+        "openclaw.talk.transport": "gateway-relay",
+      },
+    );
+    expect(
+      telemetryState.histograms.get("openclaw.talk.event.duration_ms")?.record,
+    ).toHaveBeenCalledWith(45, {
+      "openclaw.talk.brain": "agent-consult",
+      "openclaw.talk.event_type": "latency.metrics",
+      "openclaw.talk.mode": "realtime",
+      "openclaw.talk.provider": "openai",
+      "openclaw.talk.transport": "gateway-relay",
+    });
+
+    const talkCounterCalls = JSON.stringify(
+      telemetryState.counters.get("openclaw.talk.event")?.add.mock.calls,
+    );
+    expect(talkCounterCalls).not.toContain("talk-session-should-not-export");
+    expect(talkCounterCalls).not.toContain("turn-should-not-export");
     await service.stop?.(ctx);
   });
 

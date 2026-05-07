@@ -56,6 +56,7 @@ export function buildSlackManifest(botName = "OpenClaw") {
           "pins:write",
           "reactions:read",
           "reactions:write",
+          "usergroups:read",
           "users:read",
         ],
       },

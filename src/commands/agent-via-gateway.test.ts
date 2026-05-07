@@ -101,6 +101,19 @@ function createGatewayTimeoutError() {
   });
 }
 
+function createGatewayClosedError() {
+  const err = new Error("gateway closed before response");
+  err.name = "GatewayTransportError";
+  return Object.assign(err, {
+    kind: "closed",
+    connectionDetails: {
+      url: "ws://127.0.0.1:18789",
+      urlSource: "local loopback",
+      message: "Gateway target: ws://127.0.0.1:18789",
+    },
+  });
+}
+
 vi.mock("../config/config.js", () => ({ getRuntimeConfig: loadConfig, loadConfig }));
 vi.mock("../gateway/call.js", () => ({
   callGateway,
@@ -147,6 +160,42 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("stays silent when the gateway returns an intentional empty reply", async () => {
+    await withTempStore(async () => {
+      callGateway.mockResolvedValue({
+        runId: "idem-1",
+        status: "ok",
+        summary: "completed",
+        result: {
+          payloads: [],
+          meta: { stub: true },
+        },
+      });
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(runtime.log).not.toHaveBeenCalled();
+    });
+  });
+
+  it("logs non-ok gateway summaries when payloads are empty", async () => {
+    await withTempStore(async () => {
+      callGateway.mockResolvedValue({
+        runId: "idem-1",
+        status: "timeout",
+        summary: "aborted",
+        result: {
+          payloads: [],
+          meta: { aborted: true },
+        },
+      });
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(runtime.log).toHaveBeenCalledWith("aborted");
+    });
+  });
+
   it("passes model overrides through gateway requests", async () => {
     await withTempStore(async () => {
       mockGatewaySuccessReply();
@@ -186,7 +235,7 @@ describe("agentCliCommand", () => {
 
   it("falls back to embedded agent when gateway fails", async () => {
     await withTempStore(async () => {
-      callGateway.mockRejectedValue(new Error("gateway not connected"));
+      callGateway.mockRejectedValue(createGatewayClosedError());
       mockLocalAgentReply();
 
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
@@ -203,6 +252,25 @@ describe("agentCliCommand", () => {
         expect.stringContaining("EMBEDDED FALLBACK: Gateway agent failed"),
       );
       expect(runtime.log).toHaveBeenCalledWith("local");
+    });
+  });
+
+  it("does not fall back to embedded agent for gateway request errors", async () => {
+    await withTempStore(async () => {
+      callGateway.mockRejectedValue(
+        Object.assign(new Error("missing scope: operator.admin"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+        }),
+      );
+
+      await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toThrow(
+        "missing scope: operator.admin",
+      );
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("EMBEDDED FALLBACK"));
     });
   });
 
@@ -275,7 +343,7 @@ describe("agentCliCommand", () => {
 
   it("passes fallback metadata into JSON embedded fallback output", async () => {
     await withTempStore(async () => {
-      callGateway.mockRejectedValue(new Error("gateway not connected"));
+      callGateway.mockRejectedValue(createGatewayClosedError());
       agentCommand.mockImplementationOnce(async (opts, rt) => {
         expect(loggingState.forceConsoleToStderr).toBe(true);
         const resultMetaOverrides = (
@@ -363,7 +431,7 @@ describe("agentCliCommand", () => {
 
   it("forces bundle MCP cleanup on embedded fallback", async () => {
     await withTempStore(async () => {
-      callGateway.mockRejectedValue(new Error("gateway not connected"));
+      callGateway.mockRejectedValue(createGatewayClosedError());
       mockLocalAgentReply();
 
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);

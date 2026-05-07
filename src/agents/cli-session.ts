@@ -26,6 +26,7 @@ export function getCliSessionBinding(
   if (bindingSessionId) {
     return {
       sessionId: bindingSessionId,
+      ...(fromBindings?.forceReuse === true ? { forceReuse: true } : {}),
       authProfileId: normalizeOptionalString(fromBindings?.authProfileId),
       authEpoch: normalizeOptionalString(fromBindings?.authEpoch),
       authEpochVersion: fromBindings?.authEpochVersion,
@@ -73,6 +74,7 @@ export function setCliSessionBinding(
     ...entry.cliSessionBindings,
     [normalized]: {
       sessionId: trimmed,
+      ...(binding.forceReuse === true ? { forceReuse: true } : {}),
       ...(normalizeOptionalString(binding.authProfileId)
         ? { authProfileId: normalizeOptionalString(binding.authProfileId) }
         : {}),
@@ -139,16 +141,26 @@ export function resolveCliSessionReuse(params: {
   if (!sessionId) {
     return {};
   }
+  if (binding?.forceReuse === true) {
+    return { sessionId };
+  }
   const currentAuthProfileId = normalizeOptionalString(params.authProfileId);
   const currentAuthEpoch = normalizeOptionalString(params.authEpoch);
   const currentExtraSystemPromptHash = normalizeOptionalString(params.extraSystemPromptHash);
   const currentMcpConfigHash = normalizeOptionalString(params.mcpConfigHash);
   const currentMcpResumeHash = normalizeOptionalString(params.mcpResumeHash);
   const storedAuthProfileId = normalizeOptionalString(binding?.authProfileId);
-  if (storedAuthProfileId !== currentAuthProfileId) {
-    return { invalidatedReason: "auth-profile" };
-  }
   const storedAuthEpoch = normalizeOptionalString(binding?.authEpoch);
+  const hasMatchingVersionedAuthEpoch =
+    binding?.authEpochVersion === params.authEpochVersion &&
+    storedAuthEpoch !== undefined &&
+    currentAuthEpoch !== undefined &&
+    storedAuthEpoch === currentAuthEpoch;
+  if (storedAuthProfileId !== currentAuthProfileId) {
+    if (!hasMatchingVersionedAuthEpoch) {
+      return { invalidatedReason: "auth-profile" };
+    }
+  }
   if (
     binding?.authEpochVersion === params.authEpochVersion &&
     storedAuthEpoch !== currentAuthEpoch

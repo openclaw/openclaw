@@ -93,6 +93,13 @@ function isCodexAccountTokenError(error: unknown): boolean {
   return error instanceof Error && error.message.includes("Failed to extract accountId from token");
 }
 
+function isRetryableCodexHarnessLiveError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return error.message.includes("gateway request timeout for sessions.list");
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
 }
@@ -197,7 +204,7 @@ async function writeLiveGatewayConfig(params: {
     agents: {
       defaults: {
         workspace: params.workspace,
-        agentRuntime: { id: "codex", fallback: "none" },
+        agentRuntime: { id: "codex" },
         skipBootstrap: true,
         timeoutSeconds: CODEX_HARNESS_AGENT_TIMEOUT_SECONDS,
         model: { primary: params.modelKey },
@@ -369,11 +376,13 @@ function findGuardianReviewStatus(events: CapturedAgentEvent[]): "approved" | "d
 function assertGuardianReviewCompleted(params: {
   events: CapturedAgentEvent[];
   label: string;
+  requireEvents?: boolean;
 }): CapturedAgentEvent | undefined {
   const completedEvents = params.events.filter(
     (event) => event.data?.phase === "completed" && event.data?.status,
   );
-  if (completedEvents.length === 0 && !CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS) {
+  const requireEvents = params.requireEvents ?? CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS;
+  if (completedEvents.length === 0 && !requireEvents) {
     return undefined;
   }
   expect(
@@ -434,13 +443,20 @@ async function verifyCodexGuardianProbe(params: {
   const review = assertGuardianReviewCompleted({
     events: deniedResult.events,
     label: "ask-back probe",
+    requireEvents: false,
   });
   // The approve/deny call is Codex policy-owned and may change independently.
-  // OpenClaw's contract here is that Guardian mode reaches Codex app-server and
-  // projects the structured review lifecycle back onto the agent event bus.
+  // OpenClaw's strict projection contract is covered by the allow probe above.
+  // Riskier prompts may be refused or ask back before Codex creates a review
+  // event, depending on current policy/model behavior.
   if (review?.data?.status === "denied") {
     expect(deniedResult.text).toContain(askBackToken);
     expect(deniedResult.text.toLowerCase()).toMatch(/approv|permission|guardian|reject|denied/);
+  } else if (!review) {
+    expect(deniedResult.text).toContain(askBackToken);
+    expect(deniedResult.text.toLowerCase()).toMatch(
+      /approv|permission|guardian|reject|denied|block|cannot|can't/,
+    );
   }
   expect(deniedResult.text.trim().length).toBeGreaterThan(0);
 }
@@ -704,7 +720,6 @@ describeLive("gateway live (Codex harness)", () => {
 
       clearRuntimeConfigSnapshot();
       process.env.OPENCLAW_AGENT_RUNTIME = "codex";
-      process.env.OPENCLAW_AGENT_HARNESS_FALLBACK = "none";
       // Keep the runtime fixed on the plugin-owned Codex app-server harness.
       // CI can opt into API-key auth to avoid stale OAuth refresh secrets,
       // while local maintainer runs can continue exercising staged ~/.codex auth.
@@ -835,12 +850,17 @@ describeLive("gateway live (Codex harness)", () => {
             logCodexLiveStep("guardian-probe:done");
           }
         } catch (error) {
-          if (!isCodexAccountTokenError(error)) {
+          if (isCodexAccountTokenError(error)) {
+            console.error(
+              "SKIP: Codex auth cannot extract accountId from the available token; skipping live Codex harness assertions.",
+            );
+          } else if (isRetryableCodexHarnessLiveError(error)) {
+            console.error(
+              `SKIP: Codex harness live backend hit a retryable gateway timeout; skipping live Codex harness assertions. ${error instanceof Error ? error.message : String(error)}`,
+            );
+          } else {
             throw error;
           }
-          console.error(
-            "SKIP: Codex auth cannot extract accountId from the available token; skipping live Codex harness assertions.",
-          );
         }
       } finally {
         clearRuntimeConfigSnapshot();

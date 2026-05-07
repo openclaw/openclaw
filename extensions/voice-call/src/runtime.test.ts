@@ -20,14 +20,30 @@ const mocks = vi.hoisted(() => ({
   realtimeHandlerRegisterToolHandler: vi.fn(),
   realtimeHandlerSetPublicUrl: vi.fn(),
   resolveConfiguredRealtimeVoiceProvider: vi.fn(),
-  getActiveMemorySearchManager: vi.fn(),
-  memorySearch: vi.fn(),
+  resolveRealtimeFastContextConsult: vi.fn(),
   startTunnel: vi.fn(),
   setupTailscaleExposure: vi.fn(),
   cleanupTailscaleExposure: vi.fn(),
 }));
 
 vi.mock("./config.js", () => ({
+  resolveVoiceCallSessionKey: (params: {
+    config: Pick<VoiceCallConfig, "sessionScope">;
+    callId: string;
+    phone?: string;
+    explicitSessionKey?: string;
+  }) => {
+    const explicit = params.explicitSessionKey?.trim();
+    if (explicit) {
+      return explicit;
+    }
+    if (params.config.sessionScope === "per-call") {
+      return `voice:call:${params.callId}`;
+    }
+    const normalizedPhone = params.phone?.replace(/\D/g, "");
+    return normalizedPhone ? `voice:${normalizedPhone}` : `voice:${params.callId}`;
+  },
+  resolveVoiceCallEffectiveConfig: (config: VoiceCallConfig) => ({ config }),
   resolveVoiceCallConfig: mocks.resolveVoiceCallConfig,
   resolveTwilioAuthToken: mocks.resolveTwilioAuthToken,
   validateProviderConfig: mocks.validateProviderConfig,
@@ -57,6 +73,10 @@ vi.mock("./realtime-voice.runtime.js", () => ({
   resolveConfiguredRealtimeVoiceProvider: mocks.resolveConfiguredRealtimeVoiceProvider,
 }));
 
+vi.mock("./realtime-fast-context.js", () => ({
+  resolveRealtimeFastContextConsult: mocks.resolveRealtimeFastContextConsult,
+}));
+
 vi.mock("./webhook/realtime-handler.js", () => ({
   RealtimeCallHandler: class {
     constructor(...args: unknown[]) {
@@ -65,10 +85,6 @@ vi.mock("./webhook/realtime-handler.js", () => ({
     registerToolHandler = mocks.realtimeHandlerRegisterToolHandler;
     setPublicUrl = mocks.realtimeHandlerSetPublicUrl;
   },
-}));
-
-vi.mock("openclaw/plugin-sdk/memory-host-search", () => ({
-  getActiveMemorySearchManager: mocks.getActiveMemorySearchManager,
 }));
 
 vi.mock("./tunnel.js", () => ({
@@ -138,14 +154,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
       provider: { id: "openai" },
       providerConfig: { model: "gpt-realtime" },
     });
-    mocks.getActiveMemorySearchManager.mockReset();
-    mocks.memorySearch.mockReset();
-    mocks.getActiveMemorySearchManager.mockResolvedValue({
-      manager: {
-        search: mocks.memorySearch,
-      },
-    });
-    mocks.memorySearch.mockResolvedValue([]);
+    mocks.resolveRealtimeFastContextConsult.mockReset();
+    mocks.resolveRealtimeFastContextConsult.mockResolvedValue({ handled: false });
     mocks.startTunnel.mockResolvedValue(null);
     mocks.setupTailscaleExposure.mockResolvedValue(null);
     mocks.cleanupTailscaleExposure.mockResolvedValue(undefined);
@@ -320,6 +330,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
         resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
         loadSessionStore: vi.fn(() => sessionStore),
         saveSessionStore: vi.fn(async () => {}),
+        updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
         resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
       },
       runEmbeddedPiAgent,
@@ -329,6 +340,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       direction: "outbound",
       from: "+15550001234",
       to: "+15550009999",
+      metadata: { requesterSessionKey: "agent:main:discord:channel:general" },
       transcript: [{ speaker: "user", text: "Can you check shipment status?" }],
     });
 
@@ -366,6 +378,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "voice:15550009999",
+        spawnedBy: "agent:main:discord:channel:general",
         messageProvider: "voice",
         lane: "voice",
         provider: "openai",
@@ -378,6 +391,65 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         prompt: expect.stringContaining("Caller: Also check the ETA."),
+      }),
+    );
+  });
+
+  it("uses persisted per-call session keys for realtime consults", async () => {
+    const config = createBaseConfig();
+    config.inboundPolicy = "allowlist";
+    config.realtime.enabled = true;
+    config.sessionScope = "per-call";
+    const runEmbeddedPiAgent = vi.fn(async () => ({
+      payloads: [{ text: "Per-call consult answer." }],
+      meta: {},
+    }));
+    const sessionStore: Record<string, unknown> = {};
+    const agentRuntime = {
+      defaults: { provider: "openai", model: "gpt-5.4" },
+      resolveAgentDir: vi.fn(() => "/tmp/agent"),
+      resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
+      resolveAgentIdentity: vi.fn(),
+      resolveThinkingDefault: vi.fn(() => "high"),
+      resolveAgentTimeoutMs: vi.fn(() => 30_000),
+      ensureAgentWorkspace: vi.fn(async () => {}),
+      session: {
+        resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+        loadSessionStore: vi.fn(() => sessionStore),
+        saveSessionStore: vi.fn(async () => {}),
+        updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
+        resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
+      },
+      runEmbeddedPiAgent,
+    };
+    mocks.managerGetCall.mockReturnValue({
+      callId: "call-1",
+      sessionKey: "voice:call:call-1",
+      direction: "inbound",
+      from: "+15550001234",
+      to: "+15550009999",
+      transcript: [],
+    });
+
+    await createVoiceCallRuntime({
+      config,
+      coreConfig: {} as CoreConfig,
+      agentRuntime: agentRuntime as never,
+    });
+
+    const handler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0]?.[1] as
+      | ((
+          args: unknown,
+          callId: string,
+          context?: { partialUserTranscript?: string },
+        ) => Promise<unknown>)
+      | undefined;
+    await expect(handler?.({ question: "What should I say?" }, "call-1")).resolves.toEqual({
+      text: "Per-call consult answer.",
+    });
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "voice:call:call-1",
       }),
     );
   });
@@ -408,6 +480,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
         resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
         loadSessionStore: vi.fn(() => sessionStore),
         saveSessionStore: vi.fn(async () => {}),
+        updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
         resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
       },
       runEmbeddedPiAgent,
@@ -419,16 +492,12 @@ describe("createVoiceCallRuntime lifecycle", () => {
       to: "+15550009999",
       transcript: [],
     });
-    mocks.memorySearch.mockResolvedValue([
-      {
-        source: "memory",
-        path: "MEMORY.md",
-        startLine: 12,
-        endLine: 14,
-        score: 0.91,
-        snippet: "The caller's basement lights are on.",
+    mocks.resolveRealtimeFastContextConsult.mockResolvedValue({
+      handled: true,
+      result: {
+        text: "Fast OpenClaw memory or session context found.\nThe caller's basement lights are on.",
       },
-    ]);
+    });
 
     await createVoiceCallRuntime({
       config,
@@ -448,10 +517,19 @@ describe("createVoiceCallRuntime lifecycle", () => {
         text: expect.stringContaining("The caller's basement lights are on."),
       },
     );
-    expect(mocks.memorySearch).toHaveBeenCalledWith("Are the basement lights on?", {
-      maxResults: 2,
+    expect(mocks.resolveRealtimeFastContextConsult).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "main",
+      args: { question: "Are the basement lights on?" },
+      config: {
+        enabled: true,
+        fallbackToConsult: false,
+        maxResults: 2,
+        sources: ["memory"],
+        timeoutMs: 800,
+      },
+      logger: expect.any(Object),
       sessionKey: "voice:15550001234",
-      sources: ["memory"],
     });
     expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
   });

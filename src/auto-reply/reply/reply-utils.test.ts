@@ -221,6 +221,15 @@ describe("normalizeReplyPayload", () => {
     expect(result!.text).toBe("Before\n\nAfter");
   });
 
+  it("strips legacy uppercase TOOL_RESULT blocks from normalized replies", () => {
+    const result = normalizeReplyPayload({
+      text: ["Before", '[TOOL_RESULT]{"output":"secret result"}[/TOOL_RESULT]', "After"].join("\n"),
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("Before\n\nAfter");
+  });
+
   it("does not compile Slack directives unless interactive replies are enabled", () => {
     const result = normalizeReplyPayload({
       text: "hello [[slack_buttons: Retry:retry, Ignore:ignore]]",

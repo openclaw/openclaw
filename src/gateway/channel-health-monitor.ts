@@ -163,7 +163,9 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
           try {
             if (status.running) {
-              await channelManager.stopChannel(channelId as ChannelId, accountId);
+              await channelManager.stopChannel(channelId as ChannelId, accountId, {
+                manual: false,
+              });
             }
             channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
             await channelManager.startChannel(channelId as ChannelId, accountId);
@@ -174,6 +176,8 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           }
         }
       }
+    } catch (err) {
+      log.error?.(`health-monitor: check failed: ${String(err)}`);
     } finally {
       checkInFlight = false;
     }

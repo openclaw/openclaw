@@ -12,7 +12,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../../shared/string-coerce.js";
-import { stripLegacyBracketToolCallBlocks } from "../../shared/text/assistant-visible-text.js";
+import {
+  stripLegacyBracketToolCallBlocks,
+  stripMinimaxToolCallXml,
+  stripToolCallXmlTags,
+} from "../../shared/text/assistant-visible-text.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
 import { stableStringify } from "../stable-stringify.js";
@@ -401,10 +405,13 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   }
   const errorContext = opts?.errorContext ?? false;
   const stripped = stripInboundMetadata(stripInternalRuntimeContext(stripFinalTagsFromText(raw)));
+  const withoutToolCallXml = stripToolCallXmlTags(stripMinimaxToolCallXml(stripped), {
+    stripFunctionCallsXmlPayloads: true,
+  });
   // Replay repair may synthesize this placeholder to keep provider transcripts valid.
   // It is internal scaffolding, so drop standalone placeholder lines before delivery
   // while preserving ordinary inline mentions a user may be discussing.
-  const withoutPlaceholder = stripToolCallsOmittedPlaceholderLines(stripped);
+  const withoutPlaceholder = stripToolCallsOmittedPlaceholderLines(withoutToolCallXml);
   const withoutToolCallBlocks = stripLegacyBracketToolCallBlocks(withoutPlaceholder);
   const trimmed = withoutToolCallBlocks.trim();
   if (!trimmed) {

@@ -6,6 +6,7 @@ import type {
   CronJob,
   CronJobCreate,
   CronJobPatch,
+  CronRunDiagnostics,
   CronMessageChannel,
   CronAgentExecutionStarted,
   CronRunOutcome,
@@ -24,12 +25,14 @@ export type CronEvent = {
   status?: CronRunStatus;
   error?: string;
   summary?: string;
+  diagnostics?: CronRunDiagnostics;
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
   deliveryError?: string;
   delivery?: CronDeliveryTrace;
   sessionId?: string;
   sessionKey?: string;
+  runId?: string;
   nextRunAtMs?: number;
 } & CronRunTelemetry;
 
@@ -74,8 +77,10 @@ export type CronServiceDeps = {
     text: string,
     opts?: { agentId?: string; sessionKey?: string; contextKey?: string; trusted?: boolean },
   ) => void;
-  requestHeartbeatNow: (opts?: HeartbeatWakeRequest) => void;
+  requestHeartbeat: (opts: HeartbeatWakeRequest) => void;
   runHeartbeatOnce?: (opts?: {
+    source?: HeartbeatWakeRequest["source"];
+    intent?: HeartbeatWakeRequest["intent"];
     reason?: string;
     agentId?: string;
     sessionKey?: string;
@@ -85,7 +90,7 @@ export type CronServiceDeps = {
   /**
    * WakeMode=now: max time to wait for runHeartbeatOnce to stop returning
    * { status:"skipped", reason:"requests-in-flight" } before falling back to
-   * requestHeartbeatNow.
+   * requestHeartbeat.
    */
   wakeNowHeartbeatBusyMaxWaitMs?: number;
   /** WakeMode=now: delay between runHeartbeatOnce retries while busy. */

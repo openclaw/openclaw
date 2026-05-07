@@ -168,7 +168,10 @@ export async function handleSessionHistoryHttpRequest(
   const rawSnapshot =
     boundedSnapshot?.messages ??
     (entry?.sessionId
-      ? await readSessionMessagesAsync(entry.sessionId, target.storePath, entry.sessionFile)
+      ? await readSessionMessagesAsync(entry.sessionId, target.storePath, entry.sessionFile, {
+          mode: "full",
+          reason: "session history cursor pagination",
+        })
       : []);
   const historySnapshot = buildSessionHistorySnapshot({
     rawMessages: rawSnapshot,

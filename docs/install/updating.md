@@ -25,9 +25,19 @@ openclaw update --tag main
 openclaw update --dry-run   # preview without applying
 ```
 
+`openclaw update` does not accept `--verbose`. For update diagnostics, use
+`--dry-run` to preview the planned actions, `--json` for structured results, or
+`openclaw update status --json` to inspect channel and availability state. The
+installer has its own `--verbose` flag, but that flag is not part of
+`openclaw update`.
+
 `--channel beta` prefers beta, but the runtime falls back to stable/latest when
 the beta tag is missing or older than the latest stable release. Use `--tag beta`
 if you want the raw npm beta dist-tag for a one-off package update.
+
+OpenClaw does not yet expose an LTS or monthly support update channel. We are
+working toward SemVer-compatible monthly support lines, but today the supported
+channels are still `stable`, `beta`, and `dev`.
 
 See [Development channels](/install/development-channels) for channel semantics.
 
@@ -86,6 +96,12 @@ curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method npm --ve
 ```bash
 npm i -g openclaw@latest
 ```
+
+Prefer `openclaw update` for supervised installs because it can coordinate the
+package swap with the running Gateway service. If you update manually while a
+managed Gateway is running, restart the Gateway immediately after the package
+manager finishes so the old process does not keep serving from replaced package
+files.
 
 When `openclaw update` manages a global npm install, it installs the target into
 a temporary npm prefix first, verifies the packaged `dist` inventory, then swaps

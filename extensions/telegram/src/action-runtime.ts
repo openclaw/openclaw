@@ -19,6 +19,7 @@ import {
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { createTelegramActionGate, resolveTelegramPollActionGateState } from "./accounts.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
+import { notifyTelegramInboundTurnOutboundSuccess } from "./inbound-turn-delivery.js";
 import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramTargetChatType,
@@ -228,6 +229,7 @@ export async function handleTelegramAction(
   options?: {
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
+    sessionKey?: string | null;
   },
 ): Promise<AgentToolResult<unknown>> {
   const { action, accountId } = {
@@ -394,6 +396,11 @@ export async function handleTelegramAction(
         readBooleanParam(params, "asDocument") ??
         false,
     });
+    notifyTelegramInboundTurnOutboundSuccess({
+      sessionKey: options?.sessionKey ?? undefined,
+      to,
+      accountId,
+    });
     await maybePinTelegramActionSend({
       args: params,
       cfg,
@@ -494,11 +501,14 @@ export async function handleTelegramAction(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
-    await telegramActionRuntime.deleteMessageTelegram(chatId ?? "", messageId ?? 0, {
+    const result = await telegramActionRuntime.deleteMessageTelegram(chatId ?? "", messageId ?? 0, {
       cfg,
       token,
       accountId: accountId ?? undefined,
     });
+    if (!result.ok) {
+      return jsonResult({ ok: false, deleted: false, warning: result.warning });
+    }
     return jsonResult({ ok: true, deleted: true });
   }
 

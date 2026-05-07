@@ -1,5 +1,5 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
 import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
@@ -15,6 +15,7 @@ import type {
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import type { buildDiscordNativeCommandContext } from "./native-command-context.js";
 import {
+  DISCORD_EMPTY_VISIBLE_REPLY_WARNING,
   deliverDiscordInteractionReply,
   isDiscordUnknownInteraction,
   safeDiscordInteractionCall,
@@ -41,7 +42,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
   suppressReplies?: boolean;
   log: ReturnType<typeof createSubsystemLogger>;
 }): Promise<void> {
-  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+  const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg: params.cfg,
     agentId: params.effectiveRoute.agentId,
     channel: "discord",
@@ -102,6 +103,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
   if (
     params.suppressReplies ||
     didReply ||
+    dispatchResult.queuedFinal ||
     dispatchResult.counts.final !== 0 ||
     dispatchResult.counts.block !== 0 ||
     dispatchResult.counts.tool !== 0
@@ -111,7 +113,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
 
   await safeDiscordInteractionCall("interaction empty fallback", async () => {
     const payload = {
-      content: "✅ Done.",
+      content: DISCORD_EMPTY_VISIBLE_REPLY_WARNING,
       ephemeral: true,
     };
     if (params.preferFollowUp) {

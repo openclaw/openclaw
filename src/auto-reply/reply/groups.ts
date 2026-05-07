@@ -1,6 +1,7 @@
 import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import type { GroupKeyResolution, SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyPolicy } from "../../shared/silent-reply-policy.js";
 import {
   normalizeOptionalLowercaseString,
@@ -12,7 +13,7 @@ import { normalizeGroupActivation } from "../group-activation.js";
 import type { TemplateContext } from "../templating.js";
 import { extractExplicitGroupId } from "./group-id.js";
 
-let groupsRuntimePromise: Promise<typeof import("./groups.runtime.js")> | null = null;
+const groupsRuntimeLoader = createLazyImportLoader(() => import("./groups.runtime.js"));
 
 type DiscordGroupConfig = {
   requireMention?: boolean;
@@ -26,8 +27,7 @@ type DiscordConfigWithGuilds = {
 };
 
 function loadGroupsRuntime() {
-  groupsRuntimePromise ??= import("./groups.runtime.js");
-  return groupsRuntimePromise;
+  return groupsRuntimeLoader.load();
 }
 
 async function resolveRuntimeChannelId(raw?: string | null): Promise<string | null> {
@@ -245,6 +245,10 @@ export function buildGroupChatContext(params: {
   lines.push(
     "Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.",
   );
+  lines.push("If addressed to someone else, stay silent unless invited or correcting key facts.");
+  if (normalizeOptionalLowercaseString(params.sessionCtx.Provider) === "discord") {
+    lines.push("Discord: wrap bare URLs like <https://example.com> to suppress embeds.");
+  }
   lines.push(
     "When subagent or session-spawn tools are available and a directly requested group-chat task will require several tool calls, prefer delegating bounded side investigations early so the channel gets a responsive path forward. Keep the critical path local, avoid subagents for simple one-step work, and only surface concise group-visible updates when they add value.",
   );

@@ -1,6 +1,8 @@
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
+import { isBetaTag } from "../infra/update-channels.js";
 import type { Tone } from "../memory-host-sdk/status.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
+import { VERSION } from "../version.js";
 import type { buildStatusCommandOverviewRows } from "./status-overview-rows.ts";
 import type { StatusOverviewSurface } from "./status-overview-surface.ts";
 import type { AgentLocalStatus } from "./status.agent-local.js";
@@ -29,6 +31,20 @@ export const baseStatusUpdate = {
   },
   registry: { latestVersion: "2026.4.10" },
 } as never;
+
+export const baseStatusExpectedUpdateChannelInfo = isBetaTag(VERSION)
+  ? {
+      channel: "beta",
+      source: "installed-version",
+      label: "beta (installed version)",
+    }
+  : {
+      channel: "stable",
+      source: "config",
+      label: "stable (config)",
+    };
+
+export const baseStatusExpectedUpdateChannelLabel = baseStatusExpectedUpdateChannelInfo.label;
 
 export const baseStatusGatewaySnapshot = {
   gatewayMode: "remote",
@@ -100,6 +116,7 @@ const baseStatusSummary = {
         updatedAt: 1,
         age: 5_000,
         model: "gpt-5.5",
+        runtime: "OpenClaw Pi Default",
         totalTokens: 12_000,
         totalTokensFresh: true,
         remainingTokens: 4_000,

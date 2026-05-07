@@ -12,7 +12,6 @@ import {
   type OpenClawConfig,
   withNormalizedTimestamp,
 } from "./runtime-api.js";
-import { recordSlackThreadParticipation } from "./sent-thread-cache.js";
 import { parseSlackTarget, resolveSlackChannelId } from "./targets.js";
 
 const messagingActions = new Set([
@@ -78,7 +77,6 @@ export const slackActionRuntime = {
   pinSlackMessage: createLazySlackAction("pinSlackMessage"),
   reactSlackMessage: createLazySlackAction("reactSlackMessage"),
   readSlackMessages: createLazySlackAction("readSlackMessages"),
-  recordSlackThreadParticipation,
   removeOwnSlackReactions: createLazySlackAction("removeOwnSlackReactions"),
   removeSlackReaction: createLazySlackAction("removeSlackReaction"),
   sendSlackMessage: createLazySlackAction("sendSlackMessage"),
@@ -244,30 +242,34 @@ export async function handleSlackAction(
         if (!content && !mediaUrl && !blocks) {
           throw new Error("Slack sendMessage requires content, blocks, or mediaUrl.");
         }
-        if (mediaUrl && blocks) {
-          throw new Error("Slack sendMessage does not support blocks with mediaUrl.");
-        }
         const threadTs = resolveThreadTsFromContext(
           readStringParam(params, "threadTs"),
           to,
           context,
         );
-        const result = await slackActionRuntime.sendSlackMessage(to, content ?? "", {
+        const sendOpts = {
           ...writeOpts,
-          mediaUrl: mediaUrl ?? undefined,
           mediaLocalRoots: context?.mediaLocalRoots,
           mediaReadFile: context?.mediaReadFile,
           threadTs: threadTs ?? undefined,
-          blocks,
-        });
-
-        if (threadTs && result.channelId && account.accountId) {
-          slackActionRuntime.recordSlackThreadParticipation(
-            account.accountId,
-            result.channelId,
-            threadTs,
-          );
-        }
+        };
+        const result =
+          mediaUrl && blocks
+            ? await (async () => {
+                await slackActionRuntime.sendSlackMessage(to, "", {
+                  ...sendOpts,
+                  mediaUrl,
+                });
+                return await slackActionRuntime.sendSlackMessage(to, content ?? "", {
+                  ...sendOpts,
+                  blocks,
+                });
+              })()
+            : await slackActionRuntime.sendSlackMessage(to, content ?? "", {
+                ...sendOpts,
+                mediaUrl: mediaUrl ?? undefined,
+                blocks,
+              });
 
         // Keep "first" mode consistent even when the agent explicitly provided
         // threadTs: once we send a message to the current channel, consider the
@@ -305,14 +307,6 @@ export async function handleSlackAction(
           ...(filename ? { uploadFileName: filename } : {}),
           ...(title ? { uploadTitle: title } : {}),
         });
-
-        if (threadTs && result.channelId && account.accountId) {
-          slackActionRuntime.recordSlackThreadParticipation(
-            account.accountId,
-            result.channelId,
-            threadTs,
-          );
-        }
 
         if (context?.hasRepliedRef && context.currentChannelId) {
           if (sameSlackChannelTarget(to, context.currentChannelId)) {
@@ -366,12 +360,14 @@ export async function handleSlackAction(
         const before = readStringParam(params, "before");
         const after = readStringParam(params, "after");
         const threadId = readStringParam(params, "threadId");
+        const messageId = readStringParam(params, "messageId");
         const result = await slackActionRuntime.readSlackMessages(channelId, {
           ...readOpts,
           limit,
           before: before ?? undefined,
           after: after ?? undefined,
           threadId: threadId ?? undefined,
+          messageId: messageId ?? undefined,
         });
         const messages = result.messages.map((message) =>
           withNormalizedTimestamp(

@@ -76,9 +76,9 @@ function resolveChannelPackageStateMetadata(
   }
   const specifier = normalizeOptionalString(metadata.specifier) ?? "";
   const exportName = normalizeOptionalString(metadata.exportName) ?? "";
-  const metadataWithEnv = metadata as ChannelPackageStateMetadata;
-  const allOf = normalizeStringList(metadataWithEnv.env?.allOf);
-  const anyOf = normalizeStringList(metadataWithEnv.env?.anyOf);
+  const envMetadata = "env" in metadata ? metadata.env : undefined;
+  const allOf = normalizeStringList(envMetadata?.allOf);
+  const anyOf = normalizeStringList(envMetadata?.anyOf);
   const env = allOf.length > 0 || anyOf.length > 0 ? { allOf, anyOf } : undefined;
   if ((!specifier || !exportName) && !env) {
     return null;
@@ -137,10 +137,16 @@ function resolveChannelPackageStateChecker(params: {
   }
 }
 
+function resolvePackageStateChannelId(entry: PluginChannelCatalogEntry): string | undefined {
+  return normalizeOptionalString(entry.channel.id);
+}
+
 export function listBundledChannelIdsForPackageState(
   metadataKey: ChannelPackageStateMetadataKey,
 ): string[] {
-  return listChannelPackageStateCatalog(metadataKey).map((entry) => entry.pluginId);
+  return listChannelPackageStateCatalog(metadataKey)
+    .map((entry) => resolvePackageStateChannelId(entry))
+    .filter((channelId): channelId is string => Boolean(channelId));
 }
 
 export function hasBundledChannelPackageState(params: {
@@ -149,8 +155,9 @@ export function hasBundledChannelPackageState(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): boolean {
+  const requestedChannelId = normalizeOptionalString(params.channelId);
   const entry = listChannelPackageStateCatalog(params.metadataKey).find(
-    (candidate) => candidate.pluginId === params.channelId,
+    (candidate) => resolvePackageStateChannelId(candidate) === requestedChannelId,
   );
   if (!entry) {
     return false;

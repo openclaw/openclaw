@@ -1,6 +1,4 @@
 import { z } from "zod";
-import { collectBundledChannelConfigs } from "../plugins/bundled-channel-config-metadata.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 import { ContextVisibilityModeSchema, GroupPolicySchema } from "./zod-schema.core.js";
@@ -12,20 +10,6 @@ export { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 const ChannelModelByChannelSchema = z
   .record(z.string(), z.record(z.string(), z.string()))
   .optional();
-
-function getDirectChannelRuntimeSchema(channelId: string) {
-  return loadPluginManifestRegistryForPluginRegistry({
-    includeDisabled: true,
-    bundledChannelConfigCollector: collectBundledChannelConfigs,
-  }).plugins.find((plugin) => plugin.origin === "bundled" && plugin.channelConfigs?.[channelId])
-    ?.channelConfigs?.[channelId]?.runtime;
-}
-
-function hasPluginOwnedChannelConfig(
-  value: ChannelsConfig,
-): value is ChannelsConfig & Record<string, unknown> {
-  return Object.keys(value).some((key) => key !== "defaults" && key !== "modelByChannel");
-}
 
 function addLegacyChannelAcpBindingIssues(
   value: unknown,
@@ -59,41 +43,6 @@ function addLegacyChannelAcpBindingIssues(
   }
 }
 
-function normalizeBundledChannelConfigs(
-  value: ChannelsConfig | undefined,
-  ctx: z.RefinementCtx,
-): ChannelsConfig | undefined {
-  if (!value || !hasPluginOwnedChannelConfig(value)) {
-    return value;
-  }
-
-  let next: ChannelsConfig | undefined;
-  for (const channelId of Object.keys(value)) {
-    const runtimeSchema = getDirectChannelRuntimeSchema(channelId);
-    if (!runtimeSchema) {
-      continue;
-    }
-    if (!Object.prototype.hasOwnProperty.call(value, channelId)) {
-      continue;
-    }
-    const parsed = runtimeSchema.safeParse(value[channelId]);
-    if (!parsed.success) {
-      for (const issue of parsed.issues) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: issue.message ?? `Invalid channels.${channelId} config.`,
-          path: [channelId, ...(Array.isArray(issue.path) ? issue.path : [])],
-        });
-      }
-      continue;
-    }
-    next ??= { ...value };
-    next[channelId] = parsed.data as ChannelsConfig[string];
-  }
-
-  return next ?? value;
-}
-
 export const ChannelsSchema: z.ZodType<ChannelsConfig | undefined> = z
   .object({
     defaults: z
@@ -110,5 +59,4 @@ export const ChannelsSchema: z.ZodType<ChannelsConfig | undefined> = z
   .superRefine((value, ctx) => {
     addLegacyChannelAcpBindingIssues(value, ctx);
   })
-  .transform((value, ctx) => normalizeBundledChannelConfigs(value as ChannelsConfig, ctx))
   .optional() as z.ZodType<ChannelsConfig | undefined>;

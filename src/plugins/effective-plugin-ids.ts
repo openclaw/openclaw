@@ -7,12 +7,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   listExplicitConfiguredChannelIdsForConfig,
+  loadGatewayStartupPluginPlan,
   resolveConfiguredChannelPluginIds,
-  resolveGatewayStartupPluginIds,
 } from "./channel-plugin-ids.js";
 import { normalizePluginsConfig } from "./config-state.js";
+import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
+import { defaultSlotIdForKey } from "./slots.js";
 
 function collectConfiguredChannelIds(
   config: OpenClawConfig,
@@ -63,14 +64,13 @@ function collectBundledChannelOwnerPluginIds(params: {
           : {}),
       }
     : params.env;
-  const registry = loadPluginManifestRegistryForPluginRegistry({
+  const snapshot = loadManifestMetadataSnapshot({
     config: params.config,
     env,
     workspaceDir: params.workspaceDir,
-    includeDisabled: true,
   });
   const pluginIds = new Set<string>();
-  for (const plugin of registry.plugins) {
+  for (const plugin of snapshot.plugins) {
     if (plugin.origin !== "bundled") {
       continue;
     }
@@ -121,6 +121,24 @@ function collectExplicitEffectivePluginIds(config: OpenClawConfig): string[] {
   return [...ids].toSorted((left, right) => left.localeCompare(right));
 }
 
+function collectSelectedContextEnginePluginIds(config: OpenClawConfig): string[] {
+  const plugins = normalizePluginsConfig(config.plugins);
+  if (!plugins.enabled) {
+    return [];
+  }
+  const pluginId = plugins.slots.contextEngine;
+  if (!pluginId || pluginId === defaultSlotIdForKey("contextEngine")) {
+    return [];
+  }
+  if (plugins.deny.includes(pluginId)) {
+    return [];
+  }
+  if (plugins.entries[pluginId]?.enabled === false) {
+    return [];
+  }
+  return [pluginId];
+}
+
 export function resolveEffectivePluginIds(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -133,6 +151,9 @@ export function resolveEffectivePluginIds(params: {
   });
   const effectiveConfig = autoEnabled.config;
   const ids = new Set(collectExplicitEffectivePluginIds(effectiveConfig));
+  for (const pluginId of collectSelectedContextEnginePluginIds(effectiveConfig)) {
+    ids.add(pluginId);
+  }
   const configuredChannelIds = collectConfiguredChannelIds(
     effectiveConfig,
     params.config,
@@ -155,12 +176,12 @@ export function resolveEffectivePluginIds(params: {
   })) {
     ids.add(pluginId);
   }
-  for (const pluginId of resolveGatewayStartupPluginIds({
+  for (const pluginId of loadGatewayStartupPluginPlan({
     config: effectiveConfig,
     activationSourceConfig: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-  })) {
+  }).pluginIds) {
     ids.add(pluginId);
   }
   return [...ids].toSorted((left, right) => left.localeCompare(right));

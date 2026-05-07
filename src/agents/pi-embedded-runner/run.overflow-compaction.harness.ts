@@ -218,6 +218,8 @@ export const mockedGetApiKeyForModel = vi.fn(
     mode: "api-key" as const,
   }),
 );
+export const mockedEnsureAuthProfileStore = vi.fn(() => ({}));
+export const mockedEnsureAuthProfileStoreWithoutExternalProfiles = vi.fn(() => ({}));
 export const mockedResolveAuthProfileOrder = vi.fn(() => [] as string[]);
 export const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
 
@@ -386,6 +388,10 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
       mode: "api-key",
     }),
   );
+  mockedEnsureAuthProfileStore.mockReset();
+  mockedEnsureAuthProfileStore.mockReturnValue({});
+  mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReset();
+  mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({});
   mockedResolveAuthProfileOrder.mockReset();
   mockedResolveAuthProfileOrder.mockReturnValue([]);
   mockedShouldPreferExplicitConfigApiKeyAuth.mockReset();
@@ -500,7 +506,9 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("../model-auth.js", () => ({
     applyAuthHeaderOverride: vi.fn((model: unknown) => model),
     applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
-    ensureAuthProfileStore: vi.fn(() => ({})),
+    ensureAuthProfileStore: mockedEnsureAuthProfileStore,
+    ensureAuthProfileStoreWithoutExternalProfiles:
+      mockedEnsureAuthProfileStoreWithoutExternalProfiles,
     getApiKeyForModel: mockedGetApiKeyForModel,
     resolveAuthProfileOrder: mockedResolveAuthProfileOrder,
     shouldPreferExplicitConfigApiKeyAuth: mockedShouldPreferExplicitConfigApiKeyAuth,
@@ -525,10 +533,6 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("../../utils/message-channel.js", () => ({
     isMarkdownCapableMessageChannel: vi.fn(() => true),
-  }));
-
-  vi.doMock("../agent-paths.js", () => ({
-    resolveOpenClawAgentDir: vi.fn(() => "/tmp/agent-dir"),
   }));
 
   vi.doMock("../defaults.js", () => ({

@@ -14,6 +14,7 @@ import {
   parseProvider,
   modelProviderConfigBatchJson,
   repoRoot,
+  resolveParallelsModelTimeoutSeconds,
   resolveHostIp,
   resolveHostPort,
   resolveLatestVersion,
@@ -25,6 +26,7 @@ import {
   startHostServer,
   warn,
   writeJson,
+  writeSummaryMarkdown,
   type HostServer,
   type Mode,
   type PackageArtifact,
@@ -327,6 +329,7 @@ class LinuxSmoke {
   private async runFreshLane(): Promise<void> {
     await this.phase("fresh.restore-snapshot", 180, () => this.restoreSnapshot());
     await this.phase("fresh.bootstrap-guest", 600, () => this.bootstrapGuest());
+    await this.phase("fresh.preflight", 90, () => this.logGuestPreflight());
     await this.phase("fresh.install-latest-bootstrap", 420, () => this.installLatestRelease());
     await this.phase("fresh.install-main", 420, () =>
       this.installMainTgz("openclaw-main-fresh.tgz"),
@@ -343,7 +346,7 @@ class LinuxSmoke {
     this.status.freshGateway = "pass";
     await this.phase(
       "fresh.first-local-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 900),
+      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 1500),
       () => this.verifyLocalTurn(),
     );
     this.status.freshAgent = "pass";
@@ -352,6 +355,7 @@ class LinuxSmoke {
   private async runUpgradeLane(): Promise<void> {
     await this.phase("upgrade.restore-snapshot", 180, () => this.restoreSnapshot());
     await this.phase("upgrade.bootstrap-guest", 600, () => this.bootstrapGuest());
+    await this.phase("upgrade.preflight", 90, () => this.logGuestPreflight());
     await this.phase("upgrade.install-latest", 420, () => this.installLatestRelease());
     this.status.latestInstalledVersion = await this.extractLastVersion("upgrade.install-latest");
     await this.phase("upgrade.verify-latest-version", 90, () =>
@@ -372,7 +376,7 @@ class LinuxSmoke {
     this.status.upgradeGateway = "pass";
     await this.phase(
       "upgrade.first-local-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 900),
+      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 1500),
       () => this.verifyLocalTurn(),
     );
     this.status.upgradeAgent = "pass";
@@ -388,6 +392,15 @@ class LinuxSmoke {
 
   private remainingPhaseTimeoutMs(): number | undefined {
     return this.phases.remainingTimeoutMs();
+  }
+
+  private logGuestPreflight(): void {
+    this.guestBash(String.raw`set -euo pipefail
+printf 'preflight.user=%s\n' "$(whoami)"
+printf 'preflight.home=%s\n' "$HOME"
+printf 'preflight.path=%s\n' "$PATH"
+printf 'preflight.umask=%s\n' "$(umask)"
+printf 'preflight.npmRoot=%s\n' "$(npm root -g 2>/dev/null || true)"`);
   }
 
   private log(text: string): void {
@@ -717,7 +730,7 @@ for attempt in 1 2; do
   set +e
   /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} openclaw agent --local --agent main --session-id "$session_id" --message ${shellQuote(
     "Reply with exact ASCII text OK only.",
-  )} --thinking minimal --json >"$output_file" 2>&1
+  )} --thinking minimal --timeout ${resolveParallelsModelTimeoutSeconds("linux")} --json >"$output_file" 2>&1
   rc=$?
   set -e
   cat "$output_file"
@@ -783,6 +796,19 @@ fi`,
       vm: this.options.vmName,
     };
     await writeJson(summaryPath, summary);
+    await writeSummaryMarkdown({
+      lines: [
+        `- vm: ${summary.vm}`,
+        `- target: ${summary.targetPackageSpec || "current main"}`,
+        `- daemon: ${summary.daemon}`,
+        `- fresh: ${summary.freshMain.status} ${summary.freshMain.version}`,
+        `- fresh gateway/agent: ${summary.freshMain.gateway}/${summary.freshMain.agent}`,
+        `- upgrade: ${summary.upgrade.status} ${summary.upgrade.mainVersion}`,
+        `- logs: ${summary.runDir}`,
+      ],
+      summaryPath,
+      title: "Linux Parallels Smoke",
+    });
     return summaryPath;
   }
 

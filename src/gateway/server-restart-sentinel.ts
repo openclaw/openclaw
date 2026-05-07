@@ -8,7 +8,7 @@ import type { CliDeps } from "../cli/deps.types.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "../infra/outbound/delivery-queue.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
@@ -34,8 +34,8 @@ import {
 } from "../infra/session-delivery-queue.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { recordChannelMessageReplyDispatch } from "../plugin-sdk/channel-message.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
-import { recordInboundSessionAndDispatchReply } from "../plugin-sdk/inbound-reply-dispatch.js";
 import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
 import {
   deliveryContextFromSession,
@@ -80,7 +80,7 @@ function enqueueRestartSentinelWake(
     sessionKey,
     ...(deliveryContext ? { deliveryContext } : {}),
   });
-  requestHeartbeatNow({ reason: "wake", sessionKey });
+  requestHeartbeat({ source: "restart-sentinel", intent: "immediate", reason: "wake", sessionKey });
 }
 
 async function waitForOutboundRetry(delayMs: number) {
@@ -235,7 +235,12 @@ async function deliverQueuedSessionDelivery(params: {
           }
         : {}),
     });
-    requestHeartbeatNow({ reason: "wake", sessionKey: canonicalKey });
+    requestHeartbeat({
+      source: "restart-sentinel",
+      intent: "immediate",
+      reason: "wake",
+      sessionKey: canonicalKey,
+    });
     return;
   }
 
@@ -250,7 +255,12 @@ async function deliverQueuedSessionDelivery(params: {
           }
         : {}),
     });
-    requestHeartbeatNow({ reason: "wake", sessionKey: canonicalKey });
+    requestHeartbeat({
+      source: "restart-sentinel",
+      intent: "immediate",
+      reason: "wake",
+      sessionKey: canonicalKey,
+    });
     return;
   }
 
@@ -262,7 +272,7 @@ async function deliverQueuedSessionDelivery(params: {
     config: cfg,
   });
   let dispatchError: unknown;
-  await recordInboundSessionAndDispatchReply({
+  await recordChannelMessageReplyDispatch({
     cfg,
     channel: route.channel,
     accountId: route.accountId,

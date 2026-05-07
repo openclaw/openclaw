@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
+import {
+  buildChannelConfigSchema,
+  buildJsonChannelConfigSchema,
+} from "../channels/plugins/config-schema.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import {
@@ -14,6 +17,7 @@ import type {
   PluginManifestChannelConfig,
 } from "./manifest.js";
 import {
+  createPluginModuleLoaderCache,
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
 } from "./plugin-module-loader-cache.js";
@@ -35,7 +39,7 @@ type ChannelConfigSurface = {
   runtime?: ChannelConfigRuntimeSchema;
 };
 
-const moduleLoaders: PluginModuleLoaderCache = new Map();
+const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
 
 function isBuiltChannelConfigSchema(value: unknown): value is ChannelConfigSurface {
   if (!value || typeof value !== "object") {
@@ -43,6 +47,24 @@ function isBuiltChannelConfigSchema(value: unknown): value is ChannelConfigSurfa
   }
   const candidate = value as { schema?: unknown };
   return Boolean(candidate.schema && typeof candidate.schema === "object");
+}
+
+function isJsonSchemaConfigSurface(value: unknown): value is JsonSchemaObject {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.safeParse === "function" || typeof candidate.toJSONSchema === "function") {
+    return false;
+  }
+  return (
+    typeof candidate.type === "string" ||
+    Array.isArray(candidate.anyOf) ||
+    Array.isArray(candidate.oneOf) ||
+    Array.isArray(candidate.allOf) ||
+    Array.isArray(candidate.enum) ||
+    Object.prototype.hasOwnProperty.call(candidate, "const")
+  );
 }
 
 function resolveConfigSchemaExport(imported: Record<string, unknown>): ChannelConfigSurface | null {
@@ -58,6 +80,9 @@ function resolveConfigSchemaExport(imported: Record<string, unknown>): ChannelCo
     }
     if (isBuiltChannelConfigSchema(value)) {
       return value;
+    }
+    if (isJsonSchemaConfigSurface(value)) {
+      return buildJsonChannelConfigSchema(value);
     }
     if (value && typeof value === "object") {
       return buildChannelConfigSchema(value as never);

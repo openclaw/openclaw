@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   LIVE_TEST_SHARDS,
@@ -73,6 +74,9 @@ describe("scripts/test-live-shard", () => {
     expect(selectLiveShardFiles("native-live-src-gateway-core", allFiles)).not.toEqual(
       expect.arrayContaining(["src/gateway/gateway-cli-backend.live.test.ts"]),
     );
+    expect(selectLiveShardFiles("native-live-src-infra", allFiles)).toEqual(
+      expect.arrayContaining(["src/infra/push-apns-http2.live.test.ts"]),
+    );
     expect(selectLiveShardFiles("native-live-test", allFiles)).toEqual(
       expect.arrayContaining([
         "test/image-generation.infer-cli.live.test.ts",
@@ -98,6 +102,13 @@ describe("scripts/test-live-shard", () => {
     expect(selectLiveShardFiles("native-live-extensions-moonshot", allFiles)).toEqual([
       "extensions/moonshot/moonshot.live.test.ts",
     ]);
+  });
+
+  it("keeps the Codex CLI backend live smoke on a minimal tool profile", () => {
+    const source = readFileSync("src/gateway/gateway-cli-backend.live.test.ts", "utf8");
+
+    expect(source).toContain('providerId === "codex-cli" && !schemaProbePluginPath');
+    expect(source).toContain('profile: "minimal" as const');
   });
 
   it("rejects unknown shard names", () => {

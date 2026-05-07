@@ -49,6 +49,8 @@ type EventHandlerContext = {
 };
 
 const DEFAULT_STREAMING_WATCHDOG_MS = 30_000;
+const STREAMING_WATCHDOG_USER_MESSAGE =
+  "This response is taking longer than expected. Send another message to continue.";
 
 export function createEventHandlers(context: EventHandlerContext) {
   const {
@@ -129,11 +131,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       flushPendingHistoryRefreshIfIdle();
-      chatLog.addSystem(
-        `streaming watchdog: no stream updates for ${Math.round(
-          streamingWatchdogMs / 1000,
-        )}s; resetting status. The backend may have dropped this run silently — send a new message to resync.`,
-      );
+      chatLog.addSystem(STREAMING_WATCHDOG_USER_MESSAGE);
       tui.requestRender();
     }, streamingWatchdogMs);
     const maybeUnref = (streamingWatchdogTimer as { unref?: () => void }).unref;
@@ -175,6 +173,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     streamAssembler = new TuiStreamAssembler();
     pendingHistoryRefresh = false;
     state.pendingOptimisticUserMessage = false;
+    state.pendingChatRunId = null;
     reconnectPendingRunId = null;
     clearLocalRunIds?.();
     clearLocalBtwRunIds?.();
@@ -369,6 +368,9 @@ export function createEventHandlers(context: EventHandlerContext) {
         noteLocalRunId?.(evt.runId);
         state.pendingOptimisticUserMessage = false;
       }
+    }
+    if (state.pendingChatRunId === evt.runId) {
+      state.pendingChatRunId = null;
     }
     if (evt.state === "delta") {
       // Arm watchdog and mark streaming on every delta, even when the visible

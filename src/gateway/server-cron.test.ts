@@ -8,7 +8,7 @@ import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 const {
   enqueueSystemEventMock,
-  requestHeartbeatNowMock,
+  requestHeartbeatMock,
   runHeartbeatOnceMock,
   loadConfigMock,
   fetchWithSsrFGuardMock,
@@ -18,7 +18,7 @@ const {
   runCronChangedMock,
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
-  requestHeartbeatNowMock: vi.fn(),
+  requestHeartbeatMock: vi.fn(),
   runHeartbeatOnceMock: vi.fn<
     (...args: unknown[]) => Promise<{ status: "ran"; durationMs: number }>
   >(async () => ({ status: "ran", durationMs: 1 })),
@@ -37,8 +37,8 @@ function enqueueSystemEvent(...args: unknown[]) {
   return enqueueSystemEventMock(...args);
 }
 
-function requestHeartbeatNow(...args: unknown[]) {
-  return requestHeartbeatNowMock(...args);
+function requestHeartbeat(...args: unknown[]) {
+  return requestHeartbeatMock(...args);
 }
 
 function runHeartbeatOnce(...args: unknown[]) {
@@ -55,7 +55,7 @@ vi.mock("../infra/heartbeat-wake.js", async () => {
       "../infra/heartbeat-wake.js",
     ),
     () => ({
-      requestHeartbeatNow,
+      requestHeartbeat,
     }),
   );
 });
@@ -113,7 +113,7 @@ function createCronConfig(name: string): OpenClawConfig {
 describe("buildGatewayCronService", () => {
   beforeEach(() => {
     enqueueSystemEventMock.mockClear();
-    requestHeartbeatNowMock.mockClear();
+    requestHeartbeatMock.mockClear();
     runHeartbeatOnceMock.mockClear();
     loadConfigMock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
@@ -150,8 +150,10 @@ describe("buildGatewayCronService", () => {
         expect.objectContaining({
           action: "added",
           jobId: job.id,
+          sessionTarget: "main",
           job: expect.objectContaining({
             id: job.id,
+            sessionTarget: "main",
             state: expect.objectContaining({ nextRunAtMs: job.state.nextRunAtMs }),
           }),
         }),
@@ -191,13 +193,56 @@ describe("buildGatewayCronService", () => {
         expect.objectContaining({
           action: "removed",
           jobId: job.id,
+          sessionTarget: "main",
           job: expect.objectContaining({
             id: job.id,
             name: "to-be-removed",
+            sessionTarget: "main",
           }),
         }),
         expect.objectContaining({
           getCron: expect.any(Function),
+        }),
+      );
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("cron_changed hook event includes agentId from the job", async () => {
+    const cfg = createCronConfig("server-cron-hook-agentId");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "agent-scoped-job",
+        enabled: true,
+        agentId: "yinze",
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_000 },
+        sessionTarget: "session:project-alpha",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "agent check" },
+      });
+
+      expect(runCronChangedMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "added",
+          jobId: job.id,
+          sessionTarget: "session:project-alpha",
+          agentId: "yinze",
+          job: expect.objectContaining({
+            id: job.id,
+            agentId: "yinze",
+            sessionTarget: "session:project-alpha",
+          }),
+        }),
+        expect.objectContaining({
+          config: cfg,
         }),
       );
     } finally {
@@ -264,7 +309,7 @@ describe("buildGatewayCronService", () => {
           sessionKey: "agent:main:discord:channel:ops",
         }),
       );
-      expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
+      expect(requestHeartbeatMock).toHaveBeenCalledWith(
         expect.objectContaining({
           sessionKey: "agent:main:discord:channel:ops",
         }),
@@ -288,10 +333,12 @@ describe("buildGatewayCronService", () => {
         state.cron as unknown as {
           state?: {
             deps?: {
-              requestHeartbeatNow?: (opts?: {
+              requestHeartbeat?: (opts?: {
                 agentId?: string;
                 sessionKey?: string | null;
                 reason?: string;
+                source?: string;
+                intent?: string;
                 heartbeat?: { target?: string };
               }) => void;
             };
@@ -299,13 +346,17 @@ describe("buildGatewayCronService", () => {
         }
       ).state?.deps;
 
-      cronDeps?.requestHeartbeatNow?.({
+      cronDeps?.requestHeartbeat?.({
+        source: "cron",
+        intent: "event",
         reason: "cron:test",
         sessionKey: "discord:channel:ops",
         heartbeat: { target: "last" },
       });
 
-      expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      expect(requestHeartbeatMock).toHaveBeenCalledWith({
+        source: "cron",
+        intent: "event",
         reason: "cron:test",
         agentId: "main",
         sessionKey: "agent:main:discord:channel:ops",

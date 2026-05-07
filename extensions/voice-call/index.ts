@@ -22,6 +22,9 @@ import {
 import type { CoreConfig } from "./src/core-bridge.js";
 import { createVoiceCallContinueOperationStore } from "./src/gateway-continue-operation.js";
 
+const VOICE_CALL_WRITE_METHOD_SCOPE = { scope: "operator.write" as const };
+const VOICE_CALL_READ_METHOD_SCOPE = { scope: "operator.read" as const };
+
 const voiceCallConfigSchema = {
   parse(value: unknown): VoiceCallConfig {
     const normalized = normalizeVoiceCallLegacyConfigInput(value);
@@ -42,6 +45,11 @@ const voiceCallConfigSchema = {
     inboundPolicy: { label: "Inbound Policy" },
     allowFrom: { label: "Inbound Allowlist" },
     inboundGreeting: { label: "Inbound Greeting", advanced: true },
+    numbers: {
+      label: "Per-number Routing",
+      help: "Inbound overrides keyed by dialed E.164 number.",
+      advanced: true,
+    },
     "telnyx.apiKey": { label: "Telnyx API Key", sensitive: true },
     "telnyx.connectionId": { label: "Telnyx Connection ID" },
     "telnyx.publicKey": { label: "Telnyx Public Key", sensitive: true },
@@ -89,6 +97,11 @@ const voiceCallConfigSchema = {
       help: "Controls the shared openclaw_agent_consult tool.",
       advanced: true,
     },
+    "realtime.consultPolicy": {
+      label: "Realtime Consult Policy",
+      help: "Guides when the realtime voice model should call openclaw_agent_consult.",
+      advanced: true,
+    },
     "realtime.fastContext.enabled": {
       label: "Enable Fast Realtime Context",
       help: "Searches memory/session context before the full consult agent.",
@@ -108,6 +121,31 @@ const voiceCallConfigSchema = {
     },
     "realtime.fastContext.fallbackToConsult": {
       label: "Fallback To Full Consult",
+      advanced: true,
+    },
+    "realtime.agentContext.enabled": {
+      label: "Enable Agent Voice Context",
+      help: "Injects a compact agent identity, system prompt, and workspace context capsule into realtime voice instructions.",
+      advanced: true,
+    },
+    "realtime.agentContext.maxChars": {
+      label: "Agent Voice Context Limit",
+      advanced: true,
+    },
+    "realtime.agentContext.includeIdentity": {
+      label: "Include Agent Identity",
+      advanced: true,
+    },
+    "realtime.agentContext.includeSystemPrompt": {
+      label: "Include Agent System Prompt",
+      advanced: true,
+    },
+    "realtime.agentContext.includeWorkspaceFiles": {
+      label: "Include Agent Workspace Files",
+      advanced: true,
+    },
+    "realtime.agentContext.files": {
+      label: "Agent Voice Context Files",
       advanced: true,
     },
     "realtime.providers": { label: "Realtime Provider Config", advanced: true },
@@ -144,6 +182,10 @@ const VoiceCallToolSchema = Type.Union([
     to: Type.Optional(Type.String({ description: "Call target" })),
     message: Type.String({ description: "Intro message" }),
     mode: Type.Optional(Type.Union([Type.Literal("notify"), Type.Literal("conversation")])),
+    sessionKey: Type.Optional(Type.String({ description: "OpenClaw session key for the call" })),
+    requesterSessionKey: Type.Optional(
+      Type.String({ description: "OpenClaw session key that initiated the call" }),
+    ),
     dtmfSequence: Type.Optional(Type.String({ description: "DTMF digits to play before connect" })),
   }),
   Type.Object({
@@ -174,6 +216,10 @@ const VoiceCallToolSchema = Type.Union([
     to: Type.Optional(Type.String({ description: "Call target" })),
     sid: Type.Optional(Type.String({ description: "Call SID" })),
     message: Type.Optional(Type.String({ description: "Optional intro message" })),
+    sessionKey: Type.Optional(Type.String({ description: "OpenClaw session key for the call" })),
+    requesterSessionKey: Type.Optional(
+      Type.String({ description: "OpenClaw session key that initiated the call" }),
+    ),
     dtmfSequence: Type.Optional(Type.String({ description: "DTMF digits to play before connect" })),
   }),
 ]);
@@ -297,6 +343,22 @@ export default definePluginEntry({
       respondError(respond, formatErrorMessage(err));
     };
 
+    const describeHistoricalCall = async (rt: VoiceCallRuntime, callId: string) => {
+      const history = await rt.manager.getCallHistory(100);
+      const call = history
+        .toReversed()
+        .find((candidate) => candidate.callId === callId || candidate.providerCallId === callId);
+      if (!call) {
+        return undefined;
+      }
+      const details = [
+        `last state=${call.state}`,
+        call.endReason ? `endReason=${call.endReason}` : undefined,
+        call.endedAt ? `endedAt=${new Date(call.endedAt).toISOString()}` : undefined,
+      ].filter(Boolean);
+      return `call is not active (${details.join(", ")})`;
+    };
+
     const resolveCallMessageRequest = async (params: GatewayRequestHandlerOptions["params"]) => {
       const callId = normalizeOptionalString(params?.callId) ?? "";
       const message = normalizeOptionalString(params?.message) ?? "";
@@ -304,7 +366,11 @@ export default definePluginEntry({
         return { error: "callId and message required" } as const;
       }
       const rt = await ensureRuntime();
-      return { rt, callId, message } as const;
+      const activeCall = rt.manager.getCall(callId) ?? rt.manager.getCallByProviderCallId(callId);
+      if (activeCall) {
+        return { rt, callId: activeCall.callId, message } as const;
+      }
+      return { error: (await describeHistoricalCall(rt, callId)) ?? "Call not found" } as const;
     };
 
     const initiateCallAndRespond = async (params: {
@@ -314,11 +380,14 @@ export default definePluginEntry({
       message?: string;
       mode?: "notify" | "conversation";
       dtmfSequence?: string;
+      sessionKey?: string;
+      requesterSessionKey?: string;
     }) => {
-      const result = await params.rt.manager.initiateCall(params.to, undefined, {
+      const result = await params.rt.manager.initiateCall(params.to, params.sessionKey, {
         message: params.message,
         mode: params.mode,
         dtmfSequence: params.dtmfSequence,
+        ...(params.requesterSessionKey ? { requesterSessionKey: params.requesterSessionKey } : {}),
       });
       if (!result.success) {
         respondError(params.respond, result.error || "initiate failed");
@@ -385,11 +454,14 @@ export default definePluginEntry({
             to,
             message,
             mode,
+            sessionKey: normalizeOptionalString(params?.sessionKey),
+            requesterSessionKey: normalizeOptionalString(params?.requesterSessionKey),
           });
         } catch (err) {
           sendError(respond, err);
         }
       },
+      VOICE_CALL_WRITE_METHOD_SCOPE,
     );
 
     api.registerGatewayMethod(
@@ -407,6 +479,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_WRITE_METHOD_SCOPE,
     );
 
     api.registerGatewayMethod(
@@ -427,6 +500,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_WRITE_METHOD_SCOPE,
     );
 
     api.registerGatewayMethod(
@@ -448,6 +522,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_READ_METHOD_SCOPE,
     );
 
     api.registerGatewayMethod(
@@ -472,6 +547,13 @@ export default definePluginEntry({
               respond(true, { success: true });
               return;
             }
+            if (params?.allowTwimlFallback === false) {
+              respond(true, {
+                success: false,
+                error: realtimeResult.error ?? "Realtime bridge is not active",
+              });
+              return;
+            }
           }
           const result = await request.rt.manager.speak(request.callId, request.message);
           if (!result.success) {
@@ -483,6 +565,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_WRITE_METHOD_SCOPE,
     );
 
     api.registerGatewayMethod(
@@ -506,6 +589,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_WRITE_METHOD_SCOPE,
     );
 
     api.registerGatewayMethod(
@@ -528,6 +612,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_WRITE_METHOD_SCOPE,
     );
 
     api.registerGatewayMethod(
@@ -551,6 +636,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_READ_METHOD_SCOPE,
     );
 
     api.registerGatewayMethod(
@@ -560,13 +646,15 @@ export default definePluginEntry({
           const to = normalizeOptionalString(params?.to) ?? "";
           const message = normalizeOptionalString(params?.message) ?? "";
           const dtmfSequence = normalizeOptionalString(params?.dtmfSequence);
+          const sessionKey = normalizeOptionalString(params?.sessionKey);
+          const requesterSessionKey = normalizeOptionalString(params?.requesterSessionKey);
           if (!to) {
             respondError(respond, "to required", ErrorCodes.INVALID_REQUEST);
             return;
           }
-          const rt = await ensureRuntime();
           const mode =
             params?.mode === "notify" || params?.mode === "conversation" ? params.mode : undefined;
+          const rt = await ensureRuntime();
           await initiateCallAndRespond({
             rt,
             respond,
@@ -574,11 +662,14 @@ export default definePluginEntry({
             message: message || undefined,
             mode,
             dtmfSequence,
+            sessionKey,
+            ...(requesterSessionKey ? { requesterSessionKey } : {}),
           });
         } catch (err) {
           sendError(respond, err);
         }
       },
+      VOICE_CALL_WRITE_METHOD_SCOPE,
     );
 
     api.registerTool({
@@ -693,10 +784,17 @@ export default definePluginEntry({
           if (!to) {
             throw new Error("to required for call");
           }
-          const result = await rt.manager.initiateCall(to, undefined, {
-            dtmfSequence: normalizeOptionalString(rawParams.dtmfSequence),
-            message: normalizeOptionalString(rawParams.message),
-          });
+          const result = await rt.manager.initiateCall(
+            to,
+            normalizeOptionalString(rawParams.sessionKey),
+            {
+              dtmfSequence: normalizeOptionalString(rawParams.dtmfSequence),
+              message: normalizeOptionalString(rawParams.message),
+              ...(normalizeOptionalString(rawParams.requesterSessionKey)
+                ? { requesterSessionKey: normalizeOptionalString(rawParams.requesterSessionKey) }
+                : {}),
+            },
+          );
           if (!result.success) {
             throw new Error(result.error || "initiate failed");
           }

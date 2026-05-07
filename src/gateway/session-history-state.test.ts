@@ -5,7 +5,7 @@ import * as sessionUtils from "./session-utils.js";
 
 describe("SessionHistorySseState", () => {
   test("uses the initial raw snapshot for both first history and seq seeding", () => {
-    const readSpy = vi.spyOn(sessionUtils, "readSessionMessages").mockReturnValue([
+    const readSpy = vi.spyOn(sessionUtils, "readSessionMessagesAsync").mockResolvedValue([
       {
         role: "assistant",
         content: [{ type: "text", text: "stale disk message" }],
@@ -96,21 +96,11 @@ describe("SessionHistorySseState", () => {
     expect(snapshot.rawTranscriptSeq).toBe(99);
   });
 
-  test("refreshes limited SSE history from bounded tail reads", () => {
-    const fullReadSpy = vi.spyOn(sessionUtils, "readSessionMessages").mockReturnValue([]);
+  test("refreshes limited SSE history from bounded async tail reads", async () => {
+    const fullReadSpy = vi.spyOn(sessionUtils, "readSessionMessagesAsync").mockResolvedValue([]);
     const tailReadSpy = vi
-      .spyOn(sessionUtils, "readRecentSessionMessagesWithStats")
-      .mockReturnValueOnce({
-        messages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "tail one" }],
-            __openclaw: { seq: 7 },
-          },
-        ],
-        totalMessages: 7,
-      })
-      .mockReturnValueOnce({
+      .spyOn(sessionUtils, "readRecentSessionMessagesWithStatsAsync")
+      .mockResolvedValueOnce({
         messages: [
           {
             role: "assistant",
@@ -121,18 +111,27 @@ describe("SessionHistorySseState", () => {
         totalMessages: 8,
       });
     try {
-      const state = new SessionHistorySseState({
+      const state = SessionHistorySseState.fromRawSnapshot({
         target: { sessionId: "sess-main" },
+        rawMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "tail one" }],
+            __openclaw: { seq: 7 },
+          },
+        ],
+        rawTranscriptSeq: 7,
+        totalRawMessages: 7,
         limit: 1,
       });
 
       expect(state.snapshot().messages[0]?.__openclaw?.seq).toBe(7);
-      const refreshed = state.refresh();
+      const refreshed = await state.refreshAsync();
 
       expect(refreshed.hasMore).toBe(true);
       expect(refreshed.nextCursor).toBe("8");
       expect(refreshed.messages[0]?.__openclaw?.seq).toBe(8);
-      expect(tailReadSpy).toHaveBeenCalledTimes(2);
+      expect(tailReadSpy).toHaveBeenCalledTimes(1);
       expect(fullReadSpy).not.toHaveBeenCalled();
     } finally {
       fullReadSpy.mockRestore();

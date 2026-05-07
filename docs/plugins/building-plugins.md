@@ -15,8 +15,8 @@ combination.
 
 You do not need to add your plugin to the OpenClaw repository. Publish to
 [ClawHub](/tools/clawhub) and users install with
-`openclaw plugins install <package-name>`. OpenClaw tries ClawHub first and
-falls back to npm automatically for packages that still use npm distribution.
+`openclaw plugins install clawhub:<package-name>`. Bare package specs still
+install from npm during the launch cutover.
 
 ## Prerequisites
 
@@ -36,7 +36,7 @@ falls back to npm automatically for packages that still use npm distribution.
     Add a model provider (LLM, proxy, or custom endpoint)
   </Card>
   <Card title="Tool / hook plugin" icon="wrench" href="/plugins/hooks">
-    Register agent tools, event hooks, or services — continue below
+    Register agent tools, event hooks, or services - continue below
   </Card>
 </CardGroup>
 
@@ -78,6 +78,9 @@ and provider plugins have dedicated guides linked above.
       "id": "my-plugin",
       "name": "My Plugin",
       "description": "Adds a custom tool to OpenClaw",
+      "contracts": {
+        "tools": ["my_tool"]
+      },
       "activation": {
         "onStartup": true
       },
@@ -89,9 +92,10 @@ and provider plugins have dedicated guides linked above.
     ```
     </CodeGroup>
 
-    Every plugin needs a manifest, even with no config, and every plugin should
-    declare `activation.onStartup` intentionally. Runtime-registered tools need
-    startup import, so this example sets it to `true`. See
+    Every plugin needs a manifest, even with no config. Runtime-registered tools
+    must be listed in `contracts.tools` so OpenClaw can discover the owning
+    plugin without loading every plugin runtime. Plugins should also declare
+    `activation.onStartup` intentionally. This example sets it to `true`. See
     [Manifest](/plugins/manifest) for the full schema. The canonical ClawHub
     publish snippets live in `docs/snippets/plugin-publish/`.
 
@@ -122,7 +126,7 @@ and provider plugins have dedicated guides linked above.
     ```
 
     `definePluginEntry` is for non-channel plugins. For channels, use
-    `defineChannelPluginEntry` — see [Channel Plugins](/plugins/sdk-channel-plugins).
+    `defineChannelPluginEntry` - see [Channel Plugins](/plugins/sdk-channel-plugins).
     For full entry point options, see [Entry Points](/plugins/sdk-entrypoints).
 
   </Step>
@@ -137,11 +141,10 @@ and provider plugins have dedicated guides linked above.
     openclaw plugins install clawhub:@myorg/openclaw-my-plugin
     ```
 
-    OpenClaw also checks ClawHub before npm for bare package specs like
-    `@myorg/openclaw-my-plugin`; npm remains a fallback for packages that have
-    not migrated to ClawHub yet.
+    Bare package specs like `@myorg/openclaw-my-plugin` install from npm during
+    the launch cutover. Use `clawhub:` when you want ClawHub resolution.
 
-    **In-repo plugins:** place under the bundled plugin workspace tree — automatically discovered.
+    **In-repo plugins:** place under the bundled plugin workspace tree - automatically discovered.
 
     ```bash
     pnpm test -- <bundled-plugin-root>/my-plugin/
@@ -217,7 +220,7 @@ available) or optional (user opt-in):
 
 ```typescript
 register(api) {
-  // Required tool — always available
+  // Required tool - always available
   api.registerTool({
     name: "my_tool",
     description: "Do a thing",
@@ -227,7 +230,7 @@ register(api) {
     },
   });
 
-  // Optional tool — user must add to allowlist
+  // Optional tool - user must add to allowlist
   api.registerTool(
     {
       name: "workflow_tool",
@@ -241,6 +244,30 @@ register(api) {
   );
 }
 ```
+
+Every tool registered with `api.registerTool(...)` must also be declared in the
+plugin manifest:
+
+```json
+{
+  "contracts": {
+    "tools": ["my_tool", "workflow_tool"]
+  },
+  "toolMetadata": {
+    "workflow_tool": {
+      "optional": true
+    }
+  }
+}
+```
+
+OpenClaw captures and caches the validated descriptor from the registered tool,
+so plugins do not duplicate `description` or schema data in the manifest. The
+manifest contract only declares ownership and discovery; execution still calls
+the live registered tool implementation.
+Set `toolMetadata.<tool>.optional: true` for tools registered with
+`api.registerTool(..., { optional: true })` so OpenClaw can avoid loading that
+plugin runtime until the tool is explicitly allowlisted.
 
 Users enable optional tools in config:
 
@@ -311,7 +338,7 @@ import { ... } from "openclaw/plugin-sdk";
 For the full subpath reference, see [SDK Overview](/plugins/sdk-overview).
 
 Within your plugin, use local barrel files (`api.ts`, `runtime-api.ts`) for
-internal imports — never import your own plugin through its SDK path.
+internal imports - never import your own plugin through its SDK path.
 
 For provider plugins, keep provider-specific helpers in those package-root
 barrels unless the seam is truly generic. Current bundled examples:
@@ -371,8 +398,8 @@ reserved surfaces, not as the default pattern for new third-party plugins.
 
 ## Related
 
-- [Plugin Architecture](/plugins/architecture) — internal architecture deep dive
-- [SDK Overview](/plugins/sdk-overview) — Plugin SDK reference
-- [Manifest](/plugins/manifest) — plugin manifest format
-- [Channel Plugins](/plugins/sdk-channel-plugins) — building channel plugins
-- [Provider Plugins](/plugins/sdk-provider-plugins) — building provider plugins
+- [Plugin Architecture](/plugins/architecture) - internal architecture deep dive
+- [SDK Overview](/plugins/sdk-overview) - Plugin SDK reference
+- [Manifest](/plugins/manifest) - plugin manifest format
+- [Channel Plugins](/plugins/sdk-channel-plugins) - building channel plugins
+- [Provider Plugins](/plugins/sdk-provider-plugins) - building provider plugins

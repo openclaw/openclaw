@@ -58,7 +58,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     Other useful CLI checks: `openclaw status --all`, `openclaw logs --follow`,
     `openclaw gateway status`, `openclaw health --verbose`.
 
-    Quick debug loop: [First 60 seconds if something is broken](#first-60-seconds-if-something-is-broken).
+    Quick debug loop: [First 60 seconds if something is broken](/help/faq#first-60-seconds-if-something-is-broken).
     Install docs: [Install](/install), [Installer flags](/install/installer), [Updating](/install/updating).
 
   </Accordion>
@@ -226,7 +226,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     up **memory + bootstrap files**, but **not** session history or auth. Those live
     under `~/.openclaw/` (for example `~/.openclaw/agents/<agentId>/sessions/`).
 
-    Related: [Migrating](/install/migrating), [Where things live on disk](#where-things-live-on-disk),
+    Related: [Migrating](/install/migrating), [Where things live on disk](/help/faq#where-things-live-on-disk),
     [Agent workspace](/concepts/agent-workspace), [Doctor](/gateway/doctor),
     [Remote mode](/gateway/remote).
 
@@ -594,10 +594,11 @@ and troubleshooting see the main [FAQ](/help/faq).
 
   <Accordion title="How does Codex auth work?">
     OpenClaw supports **OpenAI Code (Codex)** via OAuth (ChatGPT sign-in). Use
-    `openai-codex/gpt-5.5` for Codex OAuth through the default PI runner. Use
-    `openai/gpt-5.5` for direct OpenAI API-key access. GPT-5.5 can also use
-    subscription/OAuth via `openai-codex/gpt-5.5` or native Codex app-server
-    runs with `openai/gpt-5.5` and `agentRuntime.id: "codex"`.
+    `openai/gpt-5.5` with `agentRuntime.id: "codex"` for the common setup:
+    ChatGPT/Codex subscription auth plus native Codex app-server execution. Use
+    `openai-codex/gpt-5.5` only when you want Codex OAuth through the default
+    PI runner. Use `openai/gpt-5.5` without the Codex runtime override for
+    direct OpenAI API-key access.
     See [Model providers](/concepts/model-providers) and [Onboarding (CLI)](/start/wizard).
   </Accordion>
 
@@ -605,15 +606,17 @@ and troubleshooting see the main [FAQ](/help/faq).
     `openai-codex` is the provider and auth-profile id for ChatGPT/Codex OAuth.
     It is also the explicit PI model prefix for Codex OAuth:
 
-    - `openai/gpt-5.5` = current direct OpenAI API-key route in PI
+    - `openai/gpt-5.5` + `agentRuntime.id: "codex"` = ChatGPT/Codex subscription auth with native Codex runtime
     - `openai-codex/gpt-5.5` = Codex OAuth route in PI
-    - `openai/gpt-5.5` + `agentRuntime.id: "codex"` = native Codex app-server route
+    - `openai/gpt-5.5` without a Codex runtime override = direct OpenAI API-key route in PI
     - `openai-codex:...` = auth profile id, not a model ref
 
     If you want the direct OpenAI Platform billing/limit path, set
     `OPENAI_API_KEY`. If you want ChatGPT/Codex subscription auth, sign in with
-    `openclaw models auth login --provider openai-codex` and use
-    `openai-codex/*` model refs for PI runs.
+    `openclaw models auth login --provider openai-codex`. For native Codex
+    runtime, keep the model ref as `openai/gpt-5.5` and set
+    `agentRuntime.id: "codex"`. Use `openai-codex/*` model refs only for PI
+    runs.
 
   </Accordion>
 
@@ -793,7 +796,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method npm
     ```
 
-    Backup tips: see [Backup strategy](#where-things-live-on-disk).
+    Backup tips: see [Backup strategy](/help/faq#where-things-live-on-disk).
 
   </Accordion>
 

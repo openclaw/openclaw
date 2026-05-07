@@ -29,6 +29,7 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "HOMEBREW_BREW_FILE",
   "HOMEBREW_PREFIX",
   "IRC_HOST",
+  "LOCALAPPDATA",
   "MATTERMOST_URL",
   "MATRIX_HOMESERVER",
   "MINIMAX_API_HOST",
@@ -81,11 +82,10 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "PROGRAMFILES",
   "PROGRAMFILES(X86)",
   "PROGRAMW6432",
+  "STATE_DIRECTORY",
   "SYNOLOGY_CHAT_INCOMING_URL",
   "SYNOLOGY_NAS_HOST",
-  "SYSTEMROOT",
   "UV_PYTHON",
-  "WINDIR",
 ]);
 
 // Block endpoint redirection for any service without overfitting per-provider names.

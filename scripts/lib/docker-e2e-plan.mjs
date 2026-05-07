@@ -69,11 +69,13 @@ function sanitizeLaneNameSuffix(value) {
   );
 }
 
-export const UPGRADE_SURVIVOR_SCENARIOS = [
+const UPGRADE_SURVIVOR_SCENARIOS = [
   "base",
   "feishu-channel",
   "bootstrap-persona",
   "plugin-deps-cleanup",
+  "configured-plugin-installs",
+  "stale-source-plugin-shadow",
   "tilde-log-path",
   "versioned-runtime-deps",
 ];
@@ -90,18 +92,20 @@ export function normalizeUpgradeSurvivorBaselineSpec(raw) {
   }
   const spec = value.startsWith("openclaw@") ? value : `openclaw@${value}`;
   if (
-    !/^openclaw@(?:beta|latest|[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:[0-9]+|beta\.[0-9]+))?)$/u.test(spec)
+    !/^openclaw@(?:alpha|beta|latest|[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:[0-9]+|alpha\.[0-9]+|beta\.[0-9]+))?)$/u.test(
+      spec,
+    )
   ) {
     throw new Error(
       `invalid published upgrade survivor baseline: ${JSON.stringify(
         value,
-      )}. Expected openclaw@latest, openclaw@beta, or openclaw@YYYY.M.D.`,
+      )}. Expected openclaw@latest, openclaw@beta, openclaw@alpha, or openclaw@YYYY.M.D.`,
     );
   }
   return spec;
 }
 
-export function parseUpgradeSurvivorBaselineSpecs(raw) {
+function parseUpgradeSurvivorBaselineSpecs(raw) {
   if (!raw) {
     return [];
   }
@@ -115,7 +119,7 @@ export function parseUpgradeSurvivorBaselineSpecs(raw) {
   ];
 }
 
-export function normalizeUpgradeSurvivorScenario(raw) {
+function normalizeUpgradeSurvivorScenario(raw) {
   const value = String(raw ?? "").trim();
   if (!value) {
     return undefined;
@@ -130,7 +134,7 @@ export function normalizeUpgradeSurvivorScenario(raw) {
   return value;
 }
 
-export function parseUpgradeSurvivorScenarios(raw) {
+function parseUpgradeSurvivorScenarios(raw) {
   if (!raw) {
     return [];
   }
@@ -147,7 +151,34 @@ export function parseUpgradeSurvivorScenarios(raw) {
   ];
 }
 
-export function expandUpgradeSurvivorBaselineLanes(poolLanes, rawBaselineSpecs, rawScenarios = "") {
+function parsePublishedReleaseVersion(spec) {
+  const match = /^openclaw@([0-9]{4})\.([0-9]+)\.([0-9]+)/u.exec(String(spec ?? ""));
+  if (!match) {
+    return null;
+  }
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+  };
+}
+
+function comparePublishedReleaseVersion(a, b) {
+  return a.year - b.year || a.month - b.month || a.day - b.day;
+}
+
+function supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec) {
+  if (!baselineSpec) {
+    return true;
+  }
+  const version = parsePublishedReleaseVersion(baselineSpec);
+  if (!version) {
+    return true;
+  }
+  return comparePublishedReleaseVersion(version, { year: 2026, month: 4, day: 23 }) >= 0;
+}
+
+function expandUpgradeSurvivorBaselineLanes(poolLanes, rawBaselineSpecs, rawScenarios = "") {
   const baselineSpecs = parseUpgradeSurvivorBaselineSpecs(rawBaselineSpecs);
   const scenarios = parseUpgradeSurvivorScenarios(rawScenarios);
   if (baselineSpecs.length === 0 && scenarios.length === 0) {
@@ -160,35 +191,43 @@ export function expandUpgradeSurvivorBaselineLanes(poolLanes, rawBaselineSpecs, 
     const matrixBaselines = baselineSpecs.length > 0 ? baselineSpecs : [undefined];
     const matrixScenarios = scenarios.length > 0 ? scenarios : [undefined];
     return matrixBaselines.flatMap((baselineSpec) =>
-      matrixScenarios.map((scenario) => {
-        const suffixParts = [
-          baselineSpec ? sanitizeLaneNameSuffix(baselineSpec) : "",
-          scenario && scenario !== "base" ? sanitizeLaneNameSuffix(scenario) : "",
-        ].filter(Boolean);
-        const suffix = suffixParts.join("-");
-        const name = suffix ? `${poolLane.name}-${suffix}` : poolLane.name;
-        const commandPrefix = [
-          `OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/${name}"`,
-          baselineSpec ? `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${shellQuote(baselineSpec)}` : "",
-          scenario ? `OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${shellQuote(scenario)}` : "",
-        ]
-          .filter(Boolean)
-          .join(" ");
-        return Object.assign({}, poolLane, {
-          cacheKey: poolLane.cacheKey
-            ? suffix
-              ? `${poolLane.cacheKey}-${suffix}`
-              : poolLane.cacheKey
-            : name,
-          command: commandPrefix ? `${commandPrefix} ${poolLane.command}` : poolLane.command,
-          name,
-        });
-      }),
+      matrixScenarios
+        .filter(
+          (scenario) =>
+            scenario !== "plugin-deps-cleanup" ||
+            supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec),
+        )
+        .map((scenario) => {
+          const suffixParts = [
+            baselineSpec ? sanitizeLaneNameSuffix(baselineSpec) : "",
+            scenario && scenario !== "base" ? sanitizeLaneNameSuffix(scenario) : "",
+          ].filter(Boolean);
+          const suffix = suffixParts.join("-");
+          const name = suffix ? `${poolLane.name}-${suffix}` : poolLane.name;
+          const commandPrefix = [
+            `OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/${name}"`,
+            baselineSpec
+              ? `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${shellQuote(baselineSpec)}`
+              : "",
+            scenario ? `OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${shellQuote(scenario)}` : "",
+          ]
+            .filter(Boolean)
+            .join(" ");
+          return Object.assign({}, poolLane, {
+            cacheKey: poolLane.cacheKey
+              ? suffix
+                ? `${poolLane.cacheKey}-${suffix}`
+                : poolLane.cacheKey
+              : name,
+            command: commandPrefix ? `${commandPrefix} ${poolLane.command}` : poolLane.command,
+            name,
+          });
+        }),
     );
   });
 }
 
-export function dedupeLanes(poolLanes) {
+function dedupeLanes(poolLanes) {
   const byName = new Map();
   for (const poolLane of poolLanes) {
     if (!byName.has(poolLane.name)) {
@@ -198,7 +237,7 @@ export function dedupeLanes(poolLanes) {
   return [...byName.values()];
 }
 
-export function selectNamedLanes(poolLanes, selectedNames, label) {
+function selectNamedLanes(poolLanes, selectedNames, label) {
   const byName = new Map(poolLanes.map((poolLane) => [poolLane.name, poolLane]));
   const missing = selectedNames.filter((name) => !byName.has(name));
   if (missing.length > 0) {
@@ -231,14 +270,14 @@ export function parseProfile(raw) {
   );
 }
 
-export function applyLiveMode(poolLanes, mode) {
+function applyLiveMode(poolLanes, mode) {
   if (mode === "all") {
     return poolLanes;
   }
   return poolLanes.filter((poolLane) => (mode === "only" ? poolLane.live : !poolLane.live));
 }
 
-export function applyLiveRetries(poolLanes, retries) {
+function applyLiveRetries(poolLanes, retries) {
   return poolLanes.map((poolLane) => (poolLane.live ? { ...poolLane, retries } : poolLane));
 }
 
@@ -281,7 +320,7 @@ export function findLaneByName(name) {
   ).find((poolLane) => poolLane.name === name);
 }
 
-export function laneCredentialRequirements(poolLane) {
+function laneCredentialRequirements(poolLane) {
   const credentials = [];
   if (poolLane.name === "install-e2e-openai") {
     credentials.push("openai");
@@ -289,7 +328,11 @@ export function laneCredentialRequirements(poolLane) {
   if (poolLane.name === "install-e2e-anthropic") {
     credentials.push("anthropic");
   }
-  if (poolLane.name === "openwebui" || poolLane.name === "openai-web-search-minimal") {
+  if (
+    poolLane.name === "openwebui" ||
+    poolLane.name === "openai-web-search-minimal" ||
+    poolLane.name === "live-codex-npm-plugin"
+  ) {
     credentials.push("openai");
   }
   return credentials;
@@ -299,7 +342,7 @@ function unique(values) {
   return [...new Set(values.filter(Boolean))];
 }
 
-export function buildPlanJson(params) {
+function buildPlanJson(params) {
   const scheduledLanes = [...params.orderedLanes, ...params.orderedTailLanes];
   const imageKinds = unique(scheduledLanes.map((poolLane) => poolLane.e2eImageKind)).toSorted(
     (a, b) => a.localeCompare(b),
@@ -327,7 +370,7 @@ export function buildPlanJson(params) {
       bareImage: imageKinds.includes("bare"),
       e2eImage: imageKinds.length > 0,
       functionalImage: imageKinds.includes("functional"),
-      liveImage: scheduledLanes.some((poolLane) => poolLane.live),
+      liveImage: scheduledLanes.some((poolLane) => poolLane.needsLiveImage),
       package: lanesNeedOpenClawPackage(scheduledLanes),
     },
     profile: params.profile,

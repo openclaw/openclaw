@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   embeddedRunMock,
@@ -23,6 +23,7 @@ const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 test("sessions.compaction.* lists checkpoints and branches or restores from pre-compaction snapshots", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   const fixture = await createCheckpointFixture(dir);
+  const checkpointCreatedAt = Date.now();
   const { SessionManager } = await getSessionManagerModule();
   await writeSessionStore({
     entries: {
@@ -33,7 +34,7 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
             checkpointId: "checkpoint-1",
             sessionKey: "agent:main:main",
             sessionId: fixture.sessionId,
-            createdAt: Date.now(),
+            createdAt: checkpointCreatedAt,
             reason: "manual",
             tokensBefore: 123,
             tokensAfter: 45,
@@ -64,7 +65,9 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
       compactionCheckpointCount?: number;
       latestCompactionCheckpoint?: {
         checkpointId: string;
+        createdAt: number;
         reason: string;
+        summary?: string;
         tokensBefore?: number;
         tokensAfter?: number;
       };
@@ -75,8 +78,11 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
     (session) => session.key === "agent:main:main",
   );
   expect(main?.compactionCheckpointCount).toBe(1);
-  expect(main?.latestCompactionCheckpoint?.checkpointId).toBe("checkpoint-1");
-  expect(main?.latestCompactionCheckpoint?.reason).toBe("manual");
+  expect(main?.latestCompactionCheckpoint).toEqual({
+    checkpointId: "checkpoint-1",
+    createdAt: checkpointCreatedAt,
+    reason: "manual",
+  });
 
   const listedCheckpoints = await rpcReq<{
     ok: true;
@@ -106,15 +112,34 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
     fixture.preCompactionSessionFile,
   );
 
-  const branched = await rpcReq<{
-    ok: true;
-    sourceKey: string;
-    key: string;
-    entry: { sessionId: string; sessionFile?: string; parentSessionKey?: string };
-  }>(ws, "sessions.compaction.branch", {
-    key: "main",
-    checkpointId: "checkpoint-1",
-  });
+  const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
+  const sessionManagerForkFromSpy = vi.spyOn(SessionManager, "forkFrom");
+  let branched: Awaited<
+    ReturnType<
+      typeof rpcReq<{
+        ok: true;
+        sourceKey: string;
+        key: string;
+        entry: { sessionId: string; sessionFile?: string; parentSessionKey?: string };
+      }>
+    >
+  >;
+  try {
+    branched = await rpcReq<{
+      ok: true;
+      sourceKey: string;
+      key: string;
+      entry: { sessionId: string; sessionFile?: string; parentSessionKey?: string };
+    }>(ws, "sessions.compaction.branch", {
+      key: "main",
+      checkpointId: "checkpoint-1",
+    });
+    expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
+    expect(sessionManagerForkFromSpy).not.toHaveBeenCalled();
+  } finally {
+    sessionManagerOpenSpy.mockRestore();
+    sessionManagerForkFromSpy.mockRestore();
+  }
   expect(branched.ok).toBe(true);
   expect(branched.payload?.sourceKey).toBe("agent:main:main");
   expect(branched.payload?.entry.parentSessionKey).toBe("agent:main:main");
@@ -137,15 +162,34 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
   expect(branchedEntry?.parentSessionKey).toBe("agent:main:main");
   expect(branchedEntry?.compactionCheckpoints).toBeUndefined();
 
-  const restored = await rpcReq<{
-    ok: true;
-    key: string;
-    sessionId: string;
-    entry: { sessionId: string; sessionFile?: string; compactionCheckpoints?: unknown[] };
-  }>(ws, "sessions.compaction.restore", {
-    key: "main",
-    checkpointId: "checkpoint-1",
-  });
+  const restoreSessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
+  const restoreSessionManagerForkFromSpy = vi.spyOn(SessionManager, "forkFrom");
+  let restored: Awaited<
+    ReturnType<
+      typeof rpcReq<{
+        ok: true;
+        key: string;
+        sessionId: string;
+        entry: { sessionId: string; sessionFile?: string; compactionCheckpoints?: unknown[] };
+      }>
+    >
+  >;
+  try {
+    restored = await rpcReq<{
+      ok: true;
+      key: string;
+      sessionId: string;
+      entry: { sessionId: string; sessionFile?: string; compactionCheckpoints?: unknown[] };
+    }>(ws, "sessions.compaction.restore", {
+      key: "main",
+      checkpointId: "checkpoint-1",
+    });
+    expect(restoreSessionManagerOpenSpy).not.toHaveBeenCalled();
+    expect(restoreSessionManagerForkFromSpy).not.toHaveBeenCalled();
+  } finally {
+    restoreSessionManagerOpenSpy.mockRestore();
+    restoreSessionManagerForkFromSpy.mockRestore();
+  }
   expect(restored.ok).toBe(true);
   expect(restored.payload?.key).toBe("agent:main:main");
   expect(restored.payload?.sessionId).not.toBe(fixture.sessionId);

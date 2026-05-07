@@ -37,6 +37,8 @@ OpenClaw uses the xAI Responses API as the bundled xAI transport. The same
 and remote `code_execution`.
 If you store an xAI key under `plugins.entries.xai.config.webSearch.apiKey`,
 the bundled xAI model provider reuses that key as a fallback too.
+Set `plugins.entries.xai.config.webSearch.baseUrl` to route Grok `web_search`
+and, by default, `x_search` through an operator xAI Responses proxy.
 `code_execution` tuning lives under `plugins.entries.xai.config.codeExecution`.
 </Note>
 
@@ -66,7 +68,7 @@ variants are the current image-capable Grok refs in the bundled catalog.
 
 The bundled plugin maps xAI's current public API surface onto OpenClaw's shared
 provider and tool contracts. Capabilities that don't fit the shared contract
-(for example streaming TTS and realtime voice) are not exposed — see the table
+(for example streaming TTS and realtime voice) are not exposed - see the table
 below.
 
 | xAI capability             | OpenClaw surface                          | Status                                                              |
@@ -78,10 +80,10 @@ below.
 | Images                     | `image_generate`                          | Yes                                                                 |
 | Videos                     | `video_generate`                          | Yes                                                                 |
 | Batch text-to-speech       | `messages.tts.provider: "xai"` / `tts`    | Yes                                                                 |
-| Streaming TTS              | —                                         | Not exposed; OpenClaw's TTS contract returns complete audio buffers |
+| Streaming TTS              | -                                         | Not exposed; OpenClaw's TTS contract returns complete audio buffers |
 | Batch speech-to-text       | `tools.media.audio` / media understanding | Yes                                                                 |
 | Streaming speech-to-text   | Voice Call `streaming.provider: "xai"`    | Yes                                                                 |
-| Realtime voice             | —                                         | Not exposed yet; different session/WebSocket contract               |
+| Realtime voice             | -                                         | Not exposed yet; different session/WebSocket contract               |
 | Files / batches            | Generic model API compatibility only      | Not a first-class OpenClaw tool                                     |
 
 <Note>
@@ -341,12 +343,13 @@ Legacy aliases still normalize to the canonical bundled ids:
 
     | Key                | Type    | Default            | Description                          |
     | ------------------ | ------- | ------------------ | ------------------------------------ |
-    | `enabled`          | boolean | —                  | Enable or disable x_search           |
+    | `enabled`          | boolean | -                  | Enable or disable x_search           |
     | `model`            | string  | `grok-4-1-fast`    | Model used for x_search requests     |
-    | `inlineCitations`  | boolean | —                  | Include inline citations in results  |
-    | `maxTurns`         | number  | —                  | Maximum conversation turns           |
-    | `timeoutSeconds`   | number  | —                  | Request timeout in seconds           |
-    | `cacheTtlMinutes`  | number  | —                  | Cache time-to-live in minutes        |
+    | `baseUrl`          | string  | -                  | xAI Responses base URL override      |
+    | `inlineCitations`  | boolean | -                  | Include inline citations in results  |
+    | `maxTurns`         | number  | -                  | Maximum conversation turns           |
+    | `timeoutSeconds`   | number  | -                  | Request timeout in seconds           |
+    | `cacheTtlMinutes`  | number  | -                  | Cache time-to-live in minutes        |
 
     ```json5
     {
@@ -357,6 +360,7 @@ Legacy aliases still normalize to the canonical bundled ids:
               xSearch: {
                 enabled: true,
                 model: "grok-4-1-fast",
+                baseUrl: "https://api.x.ai/v1",
                 inlineCitations: true,
               },
             },
@@ -378,8 +382,8 @@ Legacy aliases still normalize to the canonical bundled ids:
     | ----------------- | ------- | ------------------ | ---------------------------------------- |
     | `enabled`         | boolean | `true` (if key available) | Enable or disable code execution  |
     | `model`           | string  | `grok-4-1-fast`    | Model used for code execution requests   |
-    | `maxTurns`        | number  | —                  | Maximum conversation turns               |
-    | `timeoutSeconds`  | number  | —                  | Request timeout in seconds               |
+    | `maxTurns`        | number  | -                  | Maximum conversation turns               |
+    | `timeoutSeconds`  | number  | -                  | Request timeout in seconds               |
 
     <Note>
     This is remote xAI sandbox execution, not local [`exec`](/tools/exec).
@@ -429,6 +433,9 @@ Legacy aliases still normalize to the canonical bundled ids:
     - `web_search`, `x_search`, and `code_execution` are exposed as OpenClaw
       tools. OpenClaw enables the specific xAI built-in it needs inside each tool
       request instead of attaching all native tools to every chat turn.
+    - Grok `web_search` reads `plugins.entries.xai.config.webSearch.baseUrl`.
+      `x_search` reads `plugins.entries.xai.config.xSearch.baseUrl`, then
+      falls back to the Grok web-search base URL.
     - `x_search` and `code_execution` are owned by the bundled xAI plugin rather
       than hardcoded into the core model runtime.
     - `code_execution` is remote xAI sandbox execution, not local
