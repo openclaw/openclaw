@@ -293,7 +293,7 @@ function applyHeartbeatLoopDetectionDefault(
   if (config?.enabled !== undefined) {
     return config;
   }
-  return { ...(config ?? {}), enabled: true };
+  return { ...config, enabled: true };
 }
 
 export const __testing = {
