@@ -564,12 +564,25 @@ function formatCodexRouteChange(hit: CodexRouteHit, runtime: CodexRepairRuntime)
   return `${hit.path}: ${hit.model} -> ${hit.canonicalModel}${suffix}.`;
 }
 
+function hasCodexOAuthProfile(cfg: OpenClawConfig): boolean {
+  const profiles = cfg.auth?.profiles;
+  if (!profiles) {
+    return false;
+  }
+  return Object.values(profiles).some(
+    (profile) => profile.provider === "openai-codex" && profile.mode === "oauth",
+  );
+}
+
 export function collectCodexRouteWarnings(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): string[] {
   const hits = collectConfigModelRefs(params.cfg, params.env);
   if (hits.length === 0) {
+    return [];
+  }
+  if (hasCodexOAuthProfile(params.cfg)) {
     return [];
   }
   return [

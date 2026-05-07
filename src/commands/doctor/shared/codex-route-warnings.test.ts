@@ -106,6 +106,29 @@ describe("collectCodexRouteWarnings", () => {
     expect(warnings).toEqual([expect.stringContaining('runtime is "codex"')]);
   });
 
+  it("suppresses warning when openai-codex OAuth auth profile exists", () => {
+    const warnings = collectCodexRouteWarnings({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai-codex/gpt-5.5",
+          },
+        },
+        auth: {
+          profiles: {
+            "openai-codex:user@example.com": {
+              provider: "openai-codex",
+              mode: "oauth",
+              email: "user@example.com",
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(warnings).toEqual([]);
+  });
+
   it("does not warn for canonical OpenAI refs", () => {
     const warnings = collectCodexRouteWarnings({
       cfg: {
