@@ -141,6 +141,42 @@ to callers that do not have owner/admin identity (`operator.admin`) even when
 they are listed in `gateway.tools.allow`. Shared-secret bearer auth still follows
 the full trusted-operator rule above.
 
+### Unlocking `exec` for direct invokes
+
+The `exec` tool runs arbitrary shell commands on the gateway host, so it stays
+denied by default. Operators who need to script gateway-side commands can opt
+in with two settings:
+
+```json5
+{
+  gateway: {
+    tools: {
+      allow: ["exec"], // remove `exec` from the HTTP deny list
+    },
+  },
+  tools: {
+    exec: {
+      security: "full", // skip the agent approval flow
+      ask: "off", // /tools/invoke has no interactive approver
+    },
+  },
+}
+```
+
+Notes:
+
+- The HTTP-registered `exec` is owner-scoped. Shared-secret bearer auth always
+  resolves to owner; trusted-proxy callers must present `operator.admin`.
+- Stricter `tools.exec.security` settings (e.g. `allowlist`) still apply: a
+  command that requires approval will return `approval-unavailable` because
+  there is no interactive approver on the HTTP path.
+- Backgrounded execution is disabled on this surface; commands run synchronously
+  to completion or hit the configured `tools.exec.timeoutSec`.
+- The audit warning `gateway.tools_invoke_http.dangerous_allow` will fire
+  whenever `gateway.tools.allow` re-enables tools from the default deny list.
+  Treat the gateway token/password as full-admin and keep the bind on
+  loopback/tailnet.
+
 To help group policies resolve context, you can optionally set:
 
 - `x-openclaw-message-channel: <channel>` (example: `slack`, `telegram`)

@@ -1026,6 +1026,21 @@ describe("POST /tools/invoke", () => {
     expect(nodesAdminRes.status).toBe(404);
   });
 
+  it("exposes exec when operators opt in via gateway.tools.allow=[exec]", async () => {
+    setMainAllowedTools({ allow: ["exec"], gatewayAllow: ["exec"] });
+
+    const execRes = await invokeTool({
+      port: sharedPort,
+      headers: gatewayAdminHeaders(),
+      tool: "exec",
+      args: { command: "echo ok" },
+      sessionKey: "main",
+    });
+
+    const body = await expectOkInvokeResponse(execRes);
+    expect(body.result).toEqual({ ok: true, result: "exec" });
+  });
+
   it("falls back to plugin-backed tools when a cataloged core tool has no core implementation", async () => {
     setMainAllowedTools({ allow: ["browser"] });
 
