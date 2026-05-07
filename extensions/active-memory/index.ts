@@ -786,6 +786,9 @@ function requiresAdminToMutateActiveMemoryGlobal(gatewayClientScopes?: readonly 
   return Array.isArray(gatewayClientScopes) && !gatewayClientScopes.includes("operator.admin");
 }
 
+const ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT =
+  "⚠️ /active-memory global enable/disable changes require operator.admin for gateway clients.";
+
 function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPluginConfig {
   const raw = (
     pluginConfig && typeof pluginConfig === "object" ? pluginConfig : {}
@@ -2823,12 +2826,12 @@ export default definePluginEntry({
               text: `Active Memory: ${isActiveMemoryGloballyEnabled(currentConfig) ? "on" : "off"} globally.`,
             };
           }
+          if (requiresAdminToMutateActiveMemoryGlobal(ctx.gatewayClientScopes)) {
+            return {
+              text: ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT,
+            };
+          }
           if (action === "on" || action === "enable" || action === "enabled") {
-            if (requiresAdminToMutateActiveMemoryGlobal(ctx.gatewayClientScopes)) {
-              return {
-                text: "⚠️ /active-memory on|off --global requires operator.admin for gateway clients.",
-              };
-            }
             const nextConfig = updateActiveMemoryGlobalEnabledInConfig(currentConfig, true);
             await api.runtime.config.replaceConfigFile({
               nextConfig,
@@ -2838,11 +2841,6 @@ export default definePluginEntry({
             return { text: "Active Memory: on globally." };
           }
           if (action === "off" || action === "disable" || action === "disabled") {
-            if (requiresAdminToMutateActiveMemoryGlobal(ctx.gatewayClientScopes)) {
-              return {
-                text: "⚠️ /active-memory on|off --global requires operator.admin for gateway clients.",
-              };
-            }
             const nextConfig = updateActiveMemoryGlobalEnabledInConfig(currentConfig, false);
             await api.runtime.config.replaceConfigFile({
               nextConfig,

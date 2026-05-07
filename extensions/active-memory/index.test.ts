@@ -440,37 +440,33 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
   });
 
-  it("blocks write-scoped gateway callers from changing global active-memory config", async () => {
+  it("blocks gateway callers without admin scope from changing global active-memory config", async () => {
     const command = registeredCommands["active-memory"];
 
-    const offResult = await command.handler({
-      channel: "gateway",
-      isAuthorizedSender: true,
-      gatewayClientScopes: ["operator.write"],
-      args: "off --global",
-      commandBody: "/active-memory off --global",
-      config: {},
-      requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
-      detachConversationBinding: async () => ({ removed: false }),
-      getCurrentConversationBinding: async () => null,
-    });
+    for (const { args, gatewayClientScopes } of [
+      { args: "off --global", gatewayClientScopes: ["operator.write"] },
+      { args: "on --global", gatewayClientScopes: ["operator.write"] },
+      { args: "disable --global", gatewayClientScopes: ["operator.write"] },
+      { args: "enable --global", gatewayClientScopes: ["operator.write"] },
+      { args: "disabled --global", gatewayClientScopes: ["operator.write"] },
+      { args: "enabled --global", gatewayClientScopes: ["operator.write"] },
+      { args: "off --global", gatewayClientScopes: [] },
+    ]) {
+      const result = await command.handler({
+        channel: "gateway",
+        isAuthorizedSender: true,
+        gatewayClientScopes,
+        args,
+        commandBody: `/active-memory ${args}`,
+        config: {},
+        requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
+        detachConversationBinding: async () => ({ removed: false }),
+        getCurrentConversationBinding: async () => null,
+      });
 
-    expect(offResult.text).toContain("requires operator.admin");
-    expect(api.runtime.config.replaceConfigFile).not.toHaveBeenCalled();
+      expect(result.text).toContain("global enable/disable changes require operator.admin");
+    }
 
-    const onResult = await command.handler({
-      channel: "gateway",
-      isAuthorizedSender: true,
-      gatewayClientScopes: ["operator.write"],
-      args: "on --global",
-      commandBody: "/active-memory on --global",
-      config: {},
-      requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
-      detachConversationBinding: async () => ({ removed: false }),
-      getCurrentConversationBinding: async () => null,
-    });
-
-    expect(onResult.text).toContain("requires operator.admin");
     expect(api.runtime.config.replaceConfigFile).not.toHaveBeenCalled();
   });
 
