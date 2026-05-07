@@ -56,6 +56,7 @@ type OpenAIResponsesPayloadCapabilities = {
   allowsResponsesStore: boolean;
   shouldStripResponsesPromptCache: boolean;
   supportsResponsesStoreField: boolean;
+  usesExplicitProxyLikeEndpoint: boolean;
   usesKnownNativeOpenAIRoute: boolean;
 };
 
@@ -255,6 +256,7 @@ function resolveOpenAIResponsesPayloadCapabilities(
       usesKnownNativeOpenAIEndpoint,
     shouldStripResponsesPromptCache,
     supportsResponsesStoreField,
+    usesExplicitProxyLikeEndpoint,
     usesKnownNativeOpenAIRoute,
   };
 }
@@ -326,7 +328,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
     storeMode === "preserve"
       ? undefined
       : storeMode === "disable"
-        ? capabilities.supportsResponsesStoreField
+        ? capabilities.supportsResponsesStoreField && !capabilities.usesExplicitProxyLikeEndpoint
           ? false
           : undefined
         : capabilities.allowsResponsesStore
