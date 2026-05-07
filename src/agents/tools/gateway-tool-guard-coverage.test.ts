@@ -98,6 +98,87 @@ describe("gateway config mutation guard coverage", () => {
     );
   });
 
+  it("allows bounded compaction tuning via config.patch", () => {
+    expectAllowed(
+      {
+        agents: {
+          defaults: {
+            compaction: {
+              keepRecentTokens: 48000,
+              maxHistoryShare: 0.6,
+              maxActiveTranscriptBytes: "20mb",
+              recentTurnsPreserve: 6,
+              notifyUser: false,
+            },
+          },
+        },
+      },
+      {
+        agents: {
+          defaults: {
+            compaction: {
+              keepRecentTokens: 120000,
+              maxHistoryShare: 0.75,
+              maxActiveTranscriptBytes: "30mb",
+              recentTurnsPreserve: 10,
+              notifyUser: true,
+            },
+          },
+        },
+      },
+    );
+  });
+
+  it("allows bounded compaction tuning via config.apply", () => {
+    expectAllowedApply(
+      {
+        agents: {
+          defaults: {
+            compaction: {
+              keepRecentTokens: 48000,
+              maxHistoryShare: 0.6,
+              maxActiveTranscriptBytes: "20mb",
+              recentTurnsPreserve: 6,
+              notifyUser: false,
+            },
+          },
+        },
+      },
+      {
+        agents: {
+          defaults: {
+            compaction: {
+              keepRecentTokens: 120000,
+              maxHistoryShare: 0.75,
+              maxActiveTranscriptBytes: "30mb",
+              recentTurnsPreserve: 10,
+              notifyUser: true,
+            },
+          },
+        },
+      },
+    );
+  });
+
+  it("keeps neighboring compaction policy fields protected via config.patch", () => {
+    expectBlocked(
+      {},
+      {
+        agents: {
+          defaults: {
+            compaction: {
+              provider: "custom-provider",
+              model: "openrouter/anthropic/claude-sonnet-4-6",
+              truncateAfterCompaction: true,
+              memoryFlush: { enabled: false },
+              identifierInstructions: "custom preservation rule",
+            },
+          },
+        },
+      },
+    );
+  });
+
   it("allows documented per-agent subagent thinking edits via config.patch", () => {
     expectAllowed(
       {
