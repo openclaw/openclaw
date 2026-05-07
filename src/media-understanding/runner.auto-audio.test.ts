@@ -135,6 +135,7 @@ describe("runCapability auto audio entries", () => {
 
     expect(runResult?.outputs[0]).toMatchObject({
       kind: "audio.transcription",
+      attachmentIndex: 0,
       provider: "openai-codex",
       model: "gpt-4o-transcribe",
       text: "codex audio",
