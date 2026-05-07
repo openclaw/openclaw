@@ -139,6 +139,7 @@ function resolveProviderMetadataSnapshot(
       env,
       ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
       allowWorkspaceScopedSnapshot: true,
+      requireDefaultDiscoveryContext: true,
     });
     if (unscopedCurrent) {
       return unscopedCurrent;
