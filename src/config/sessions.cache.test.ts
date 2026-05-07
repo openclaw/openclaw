@@ -221,7 +221,7 @@ describe("Session Store Cache", () => {
       createSessionEntry({
         origin: { provider: "openai" },
         skillsSnapshot: {
-          prompt: "skills",
+          // loadSessionStore strips skillsSnapshot.prompt; keeping it here would break round-trip equality.
           skills: [{ name: "alpha" }],
         },
       }),
