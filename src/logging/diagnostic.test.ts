@@ -235,6 +235,8 @@ describe("stuck session diagnostics threshold", () => {
       ageMs: expect.any(Number),
       queueDepth: 0,
       stateGeneration: expect.any(Number),
+      terminalProgressStale: false,
+      lastProgressAgeMs: undefined,
     });
   });
 
@@ -275,6 +277,8 @@ describe("stuck session diagnostics threshold", () => {
       ageMs: expect.any(Number),
       queueDepth: 1,
       stateGeneration: expect.any(Number),
+      terminalProgressStale: false,
+      lastProgressAgeMs: undefined,
     });
   });
 
@@ -448,6 +452,8 @@ describe("stuck session diagnostics threshold", () => {
       queueDepth: 0,
       allowActiveAbort: true,
       stateGeneration: expect.any(Number),
+      terminalProgressStale: false,
+      lastProgressAgeMs: expect.any(Number),
     });
   });
 
@@ -476,6 +482,8 @@ describe("stuck session diagnostics threshold", () => {
       queueDepth: 0,
       allowActiveAbort: true,
       stateGeneration: expect.any(Number),
+      terminalProgressStale: false,
+      lastProgressAgeMs: expect.any(Number),
     });
   });
 

@@ -1009,38 +1009,51 @@ export function startDiagnosticHeartbeat(
           thresholdMs: stuckSessionWarnMs,
           abortThresholdMs: stuckSessionAbortMs,
         });
-        if (classification?.recoveryEligible) {
-          requestStuckSessionRecovery({
-            recover: opts?.recoverStuckSession ?? recoverStuckSession,
-            classification,
-            request: {
-              sessionId: state.sessionId,
-              sessionKey: state.sessionKey,
+        if (classification) {
+          const activity = getDiagnosticSessionActivitySnapshot(
+            { sessionId: state.sessionId, sessionKey: state.sessionKey },
+            now,
+          );
+          const terminalProgressStale = isTerminalDiagnosticProgressReason(
+            activity.lastProgressReason,
+          );
+          const lastProgressAgeMs = activity.lastProgressAgeMs;
+          if (classification.recoveryEligible) {
+            requestStuckSessionRecovery({
+              recover: opts?.recoverStuckSession ?? recoverStuckSession,
+              classification,
+              request: {
+                sessionId: state.sessionId,
+                sessionKey: state.sessionKey,
+                ageMs,
+                queueDepth: state.queueDepth,
+                stateGeneration: state.generation,
+                terminalProgressStale,
+                lastProgressAgeMs,
+              },
+            });
+          } else if (
+            isStalledEmbeddedRunRecoveryEligible({
+              classification,
               ageMs,
-              queueDepth: state.queueDepth,
-              stateGeneration: state.generation,
-            },
-          });
-        } else if (
-          classification &&
-          isStalledEmbeddedRunRecoveryEligible({
-            classification,
-            ageMs,
-            stuckSessionAbortMs,
-          })
-        ) {
-          requestStuckSessionRecovery({
-            recover: opts?.recoverStuckSession ?? recoverStuckSession,
-            classification,
-            request: {
-              sessionId: state.sessionId,
-              sessionKey: state.sessionKey,
-              ageMs,
-              queueDepth: state.queueDepth,
-              allowActiveAbort: true,
-              stateGeneration: state.generation,
-            },
-          });
+              stuckSessionAbortMs,
+            })
+          ) {
+            requestStuckSessionRecovery({
+              recover: opts?.recoverStuckSession ?? recoverStuckSession,
+              classification,
+              request: {
+                sessionId: state.sessionId,
+                sessionKey: state.sessionKey,
+                ageMs,
+                queueDepth: state.queueDepth,
+                allowActiveAbort: true,
+                stateGeneration: state.generation,
+                terminalProgressStale,
+                lastProgressAgeMs,
+              },
+            });
+          }
         }
       }
     }

@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   abortEmbeddedPiRun: vi.fn(),
   forceClearEmbeddedPiRun: vi.fn(),
+  forceClearReplyRunBySessionId: vi.fn(),
   isEmbeddedPiRunActive: vi.fn(),
   isEmbeddedPiRunHandleActive: vi.fn(),
   getCommandLaneSnapshot: vi.fn(),
@@ -51,6 +52,10 @@ vi.mock("../agents/pi-embedded-runner/lanes.js", () => ({
   resolveEmbeddedSessionLane: mocks.resolveEmbeddedSessionLane,
 }));
 
+vi.mock("../auto-reply/reply/reply-run-registry.js", () => ({
+  forceClearReplyRunBySessionId: mocks.forceClearReplyRunBySessionId,
+}));
+
 vi.mock("../process/command-queue.js", () => ({
   getCommandLaneSnapshot: mocks.getCommandLaneSnapshot,
   resetCommandLane: mocks.resetCommandLane,
@@ -85,6 +90,7 @@ function resetMocks() {
   mocks.resolveActiveEmbeddedRunHandleSessionId.mockReset();
   mocks.resolveEmbeddedSessionLane.mockClear();
   mocks.waitForEmbeddedPiRunEnd.mockReset();
+  mocks.forceClearReplyRunBySessionId.mockReset();
   mocks.diag.debug.mockReset();
   mocks.diag.warn.mockReset();
 }
@@ -254,12 +260,66 @@ describe("stuck session recovery", () => {
 
     expect(mocks.abortEmbeddedPiRun).not.toHaveBeenCalled();
     expect(mocks.forceClearEmbeddedPiRun).not.toHaveBeenCalled();
+    expect(mocks.forceClearReplyRunBySessionId).not.toHaveBeenCalled();
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
     expect(mocks.diag.warn).toHaveBeenCalledWith(
       expect.stringContaining("reason=active_reply_work"),
     );
     expect(mocks.diag.warn).toHaveBeenCalledWith(
       expect.stringContaining("activeSessionId=queued-reply-session"),
+    );
+  });
+
+  it("preserves keep_lane behavior when terminal progress is fresh below the leak threshold", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("queued-reply-session");
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedPiRunActive.mockReturnValue(true);
+    mocks.isEmbeddedPiRunHandleActive.mockReturnValue(false);
+
+    await recoverStuckDiagnosticSession({
+      sessionId: "queued-reply-session",
+      sessionKey: "agent:main:main",
+      ageMs: 180_000,
+      queueDepth: 1,
+      terminalProgressStale: true,
+      lastProgressAgeMs: 90_000,
+    });
+
+    expect(mocks.forceClearReplyRunBySessionId).not.toHaveBeenCalled();
+    expect(mocks.resetCommandLane).not.toHaveBeenCalled();
+    expect(mocks.diag.warn).toHaveBeenCalledWith(
+      expect.stringContaining("reason=active_reply_work"),
+    );
+  });
+
+  it("clears a leaked reply-run entry and releases the lane when terminal progress is stale past the threshold", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("queued-reply-session");
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedPiRunActive.mockReturnValue(true);
+    mocks.isEmbeddedPiRunHandleActive.mockReturnValue(false);
+    mocks.forceClearReplyRunBySessionId.mockReturnValue(true);
+    mocks.resetCommandLane.mockReturnValue(1);
+
+    await recoverStuckDiagnosticSession({
+      sessionId: "queued-reply-session",
+      sessionKey: "agent:main:main",
+      ageMs: 1_500_000,
+      queueDepth: 1,
+      terminalProgressStale: true,
+      lastProgressAgeMs: 1_400_000,
+    });
+
+    expect(mocks.forceClearReplyRunBySessionId).toHaveBeenCalledWith(
+      "queued-reply-session",
+      "stuck_recovery_leaked_reply_run",
+    );
+    expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
+    expect(mocks.diag.warn).toHaveBeenCalledWith(
+      expect.stringContaining("leaked reply-run cleared"),
+    );
+    expect(mocks.diag.warn).toHaveBeenCalledWith(expect.stringContaining("action=release_lane"));
+    expect(mocks.diag.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("reason=active_reply_work"),
     );
   });
 

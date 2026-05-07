@@ -24,6 +24,8 @@ export type StuckSessionRecoveryRequest = {
   queueDepth?: number;
   allowActiveAbort?: boolean;
   stateGeneration?: number;
+  terminalProgressStale?: boolean;
+  lastProgressAgeMs?: number;
 };
 
 type DiagnosticSessionRecoveryBaseOutcome = {

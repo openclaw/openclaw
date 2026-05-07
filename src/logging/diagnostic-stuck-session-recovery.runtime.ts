@@ -6,6 +6,7 @@ import {
   resolveActiveEmbeddedRunSessionId,
   resolveActiveEmbeddedRunHandleSessionId,
 } from "../agents/pi-embedded-runner/runs.js";
+import { forceClearReplyRunBySessionId } from "../auto-reply/reply/reply-run-registry.js";
 import { getCommandLaneSnapshot, resetCommandLane } from "../process/command-queue.js";
 import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
 import {
@@ -20,6 +21,8 @@ import {
 import { isDiagnosticSessionStateCurrent } from "./diagnostic-session-state.js";
 
 const STUCK_SESSION_ABORT_SETTLE_MS = 15_000;
+// Drop the keep_lane skip when terminal progress has been stale this long — symptom: leaked reply-run registry entry pinning the lane.
+const REPLY_RUN_LEAK_THRESHOLD_MS = 120_000;
 const recoveriesInFlight = new Set<string>();
 
 export type StuckSessionRecoveryParams = StuckSessionRecoveryRequest;
@@ -131,17 +134,30 @@ export async function recoverStuckDiagnosticSession(
     }
 
     if (!activeSessionId && activeWorkSessionId && isEmbeddedPiRunActive(activeWorkSessionId)) {
-      const outcome: StuckSessionRecoveryOutcome = {
-        status: "skipped",
-        action: "keep_lane",
-        reason: "active_reply_work",
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        activeSessionId: activeWorkSessionId,
-        activeWorkKind: "embedded_run",
-      };
-      diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
-      return outcome;
+      const replyRunIsLeaked =
+        params.terminalProgressStale === true &&
+        (params.lastProgressAgeMs ?? 0) > REPLY_RUN_LEAK_THRESHOLD_MS;
+
+      if (replyRunIsLeaked) {
+        forceClearReplyRunBySessionId(activeWorkSessionId, "stuck_recovery_leaked_reply_run");
+        diag.warn(
+          `stuck session recovery: leaked reply-run cleared sessionId=${activeWorkSessionId} ` +
+            `lastProgressAgeMs=${params.lastProgressAgeMs ?? 0} reason=terminal_progress_stale`,
+        );
+        forceCleared = true;
+      } else {
+        const outcome: StuckSessionRecoveryOutcome = {
+          status: "skipped",
+          action: "keep_lane",
+          reason: "active_reply_work",
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          activeSessionId: activeWorkSessionId,
+          activeWorkKind: "embedded_run",
+        };
+        diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
+        return outcome;
+      }
     }
 
     if (!activeSessionId && sessionLane) {
