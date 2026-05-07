@@ -168,6 +168,40 @@ describe("applyPluginAutoEnable core", () => {
     );
   });
 
+  it("does not reuse an unscoped current manifest registry when plugin load paths change", () => {
+    const manifestRegistry = makeRegistry([{ id: "load-path-chat", channels: ["load-path-chat"] }]);
+    const snapshotConfig: OpenClawConfig = { plugins: { allow: ["existing"] } };
+    setCurrentPluginMetadataSnapshot(
+      createPluginMetadataSnapshot({
+        config: snapshotConfig,
+        manifestRegistry,
+        workspaceDir: "/tmp/workspace",
+      }),
+      {
+        config: snapshotConfig,
+        workspaceDir: "/tmp/workspace",
+      },
+    );
+
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          allow: ["existing"],
+          load: { paths: ["/tmp/changed-plugin-root"] },
+          entries: {
+            "load-path-chat": { config: { token: "x" } },
+          },
+        },
+      },
+      env,
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["existing"]);
+    expect(result.changes).not.toContain(
+      "load-path-chat plugin config present, added to plugin allowlist.",
+    );
+  });
+
   it("formats typed provider-auth candidates into stable reasons", () => {
     expect(
       resolvePluginAutoEnableCandidateReason({

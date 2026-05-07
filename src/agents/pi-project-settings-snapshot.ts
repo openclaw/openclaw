@@ -41,6 +41,10 @@ function sanitizeProjectSettings(settings: PiSettingsSnapshot): PiSettingsSnapsh
   return sanitizePiSettingsSnapshot(settings);
 }
 
+function canReuseUnscopedCurrentPluginMetadataSnapshot(config: OpenClawConfig): boolean {
+  return normalizePluginsConfigWithResolver(config.plugins).loadPaths.length === 0;
+}
+
 function loadBundleSettingsFile(params: {
   rootDir: string;
   relativePath: string;
@@ -90,11 +94,13 @@ export function loadEnabledBundlePiSettingsSnapshot(params: {
           env,
           workspaceDir,
         }) ??
-        getCurrentPluginMetadataSnapshot({
-          env,
-          workspaceDir,
-          allowWorkspaceScopedSnapshot: true,
-        }) ??
+        (canReuseUnscopedCurrentPluginMetadataSnapshot(config)
+          ? getCurrentPluginMetadataSnapshot({
+              env,
+              workspaceDir,
+              allowWorkspaceScopedSnapshot: true,
+            })
+          : undefined) ??
         loadPluginMetadataSnapshot({
           workspaceDir,
           config,

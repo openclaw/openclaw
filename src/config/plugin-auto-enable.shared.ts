@@ -9,6 +9,7 @@ import {
   listBundledChannelIdsWithConfiguredState,
 } from "../channels/plugins/configured-state.js";
 import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import {
@@ -52,6 +53,10 @@ function resolveAutoEnableProviderPluginIds(
     }
   }
   return Object.fromEntries(entries);
+}
+
+function canReuseUnscopedCurrentPluginMetadataSnapshot(config: OpenClawConfig): boolean {
+  return normalizePluginsConfig(config.plugins).loadPaths.length === 0;
 }
 
 function extractProviderFromModelRef(value: string): string | null {
@@ -955,6 +960,9 @@ export function resolvePluginAutoEnableManifestRegistry(params: {
   const policyCompatibleCurrentSnapshot =
     currentSnapshot ??
     (() => {
+      if (!canReuseUnscopedCurrentPluginMetadataSnapshot(params.config)) {
+        return undefined;
+      }
       const snapshot = getCurrentPluginMetadataSnapshot({
         env: params.env,
         allowWorkspaceScopedSnapshot: true,
