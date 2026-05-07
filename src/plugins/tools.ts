@@ -586,9 +586,12 @@ function createCachedDescriptorPluginTool(params: {
           continue;
         }
       }
-      // If no match in named candidates, try all candidates (including unnamed)
+      // If no match in named candidates, try unnamed candidates only
       if (!matchedTool) {
-        for (const candidate of candidates) {
+        const unnamedCandidates = candidates.filter(
+          (candidate) => candidate.names.length === 0,
+        );
+        for (const candidate of unnamedCandidates) {
           try {
             const resolved = candidate.factory(params.ctx);
             const listRaw: unknown[] = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];
@@ -1284,5 +1287,6 @@ export function resolvePluginTools(params: {
 
   return tools;
 }
+
 
 
