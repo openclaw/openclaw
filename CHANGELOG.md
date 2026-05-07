@@ -506,6 +506,7 @@ Docs: https://docs.openclaw.ai
 - Agents/subagents: have completed session-mode subagent registry rows honor `agents.defaults.subagents.archiveAfterMinutes` (default 60 minutes; same knob run-mode already uses for `archiveAtMs`) instead of a hardcoded 5-minute TTL, so `subagents list` and other registry-backed surfaces still show recently-completed runs and operators have one consistent retention knob across spawn modes. (#78263) Thanks @arniesaha.
 - Plugins/channel setup: fix `setChannelRuntime` being silently dropped from non-bundled external plugin setup entries — external channel plugins that export `{ plugin, setChannelRuntime }` from their setup entry now have the runtime setter invoked, so the runtime initializer the provider polls for is set before the channel starts, preventing a poll timeout and gateway crash loop when the plugin opts into deferred startup loading. Fixes #77779. (#77799) Thanks @openperf.
 - WhatsApp: route proactive phone-number sends through Baileys LID forward mappings when available, so LID-addressed contacts receive agent messages instead of creating sender-only ghost chats. Fixes #67378. (#74925) Thanks @edenfunf.
+- WhatsApp: send captioned `MEDIA:` directive auto-replies once instead of emitting an empty media message before the captioned media reply. (#78770) Thanks @ai-hpc.
 
 ## 2026.5.3-1
 
