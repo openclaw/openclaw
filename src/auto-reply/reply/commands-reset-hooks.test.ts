@@ -61,6 +61,7 @@ function buildResetParams(
   commandBody: string,
   cfg: OpenClawConfig,
   ctxOverrides?: Partial<MsgContext>,
+  paramOverrides?: Partial<HandleCommandsParams>,
 ): HandleCommandsParams {
   const ctx = {
     Body: commandBody,
@@ -102,6 +103,7 @@ function buildResetParams(
     model: "test-model",
     contextTokens: 0,
     isGroup: false,
+    ...paramOverrides,
   };
 }
 
@@ -356,7 +358,10 @@ describe("handleCommands reset hooks", () => {
 
     const result = await maybeHandleResetCommand(params);
 
-    expect(result).toEqual({ shouldContinue: false });
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "⚠️ You are not authorized to reset this session." },
+    });
     expect(triggerInternalHookMock).not.toHaveBeenCalled();
     expect(params.command.softResetTriggered).not.toBe(true);
     expect(clearBootstrapSnapshotSpy).not.toHaveBeenCalled();
@@ -432,7 +437,59 @@ describe("handleCommands reset hooks", () => {
     expect(resetMocks.resetConfiguredBindingTargetInPlace).not.toHaveBeenCalled();
   });
 
-  it("acknowledges bare /reset without falling through to model execution", async () => {
+  it("acknowledges group bare /reset without falling through to model execution", async () => {
+    const params = buildResetParams(
+      "/reset",
+      {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        ChatType: "group",
+      },
+      {
+        isGroup: true,
+      },
+    );
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "✅ Session reset." },
+    });
+    expect(triggerInternalHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "command", action: "reset" }),
+    );
+  });
+
+  it("acknowledges group bare /new without falling through to model execution", async () => {
+    const params = buildResetParams(
+      "/new",
+      {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        ChatType: "group",
+      },
+      {
+        isGroup: true,
+      },
+    );
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "✅ New session started." },
+    });
+    expect(triggerInternalHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "command", action: "new" }),
+    );
+  });
+
+  it("keeps direct bare reset on the existing acknowledgment flow", async () => {
     const params = buildResetParams("/reset", {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -449,7 +506,7 @@ describe("handleCommands reset hooks", () => {
     );
   });
 
-  it("acknowledges bare /new without falling through to model execution", async () => {
+  it("keeps direct bare new on the existing acknowledgment flow", async () => {
     const params = buildResetParams("/new", {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -464,6 +521,48 @@ describe("handleCommands reset hooks", () => {
     expect(triggerInternalHookMock).toHaveBeenCalledWith(
       expect.objectContaining({ type: "command", action: "new" }),
     );
+  });
+
+  it("stops direct bare reset when a reset hook already routed a reply", async () => {
+    triggerInternalHookMock.mockImplementationOnce(async (event: { messages: string[] }) => {
+      event.messages.push("Reset hook says hi");
+    });
+    const params = buildResetParams("/reset", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: { text: "Reset hook says hi" },
+      }),
+    );
+    expect(result).toEqual({ shouldContinue: false });
+  });
+
+  it("returns a clear error for unauthorized bare reset attempts", async () => {
+    const params = buildResetParams(
+      "/reset",
+      {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["owner"] } },
+      } as OpenClawConfig,
+      {
+        CommandAuthorized: false,
+      },
+    );
+    params.command.isAuthorizedSender = false;
+    params.command.senderIsOwner = false;
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "⚠️ You are not authorized to reset this session." },
+    });
+    expect(triggerInternalHookMock).not.toHaveBeenCalled();
   });
 
   it("keeps reset tails falling through so the model receives the user input", async () => {
