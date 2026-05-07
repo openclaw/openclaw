@@ -130,10 +130,12 @@ describe("Codex plugin activation", () => {
     expect(appCache.getRevision()).toBeGreaterThan(0);
   });
 
-  it("fails closed when a missing plugin requires a remote marketplace install", async () => {
+  it("installs from a remote curated marketplace when no local marketplace path is present", async () => {
+    const calls: Array<{ method: string; params: unknown }> = [];
     const result = await ensureCodexPluginActivation({
       identity: identity("google-calendar"),
-      request: async (method) => {
+      request: async (method, params) => {
+        calls.push({ method, params });
         if (method === "plugin/list") {
           return {
             ...pluginList([pluginSummary("google-calendar", { installed: false, enabled: false })]),
@@ -147,15 +149,39 @@ describe("Codex plugin activation", () => {
             ],
           } satisfies v2.PluginListResponse;
         }
+        if (method === "plugin/install") {
+          expect(params).toEqual({
+            remoteMarketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+            pluginName: "google-calendar",
+          });
+          return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
+        }
+        if (method === "skills/list") {
+          return { data: [] } satisfies v2.SkillsListResponse;
+        }
+        if (method === "hooks/list") {
+          return { data: [] } satisfies v2.HooksListResponse;
+        }
+        if (method === "config/mcpServer/reload") {
+          return {};
+        }
         throw new Error(`unexpected request ${method}`);
       },
     });
 
     expect(result).toMatchObject({
-      ok: false,
-      reason: "remote_install_unsupported",
-      installAttempted: false,
+      ok: true,
+      reason: "installed",
+      installAttempted: true,
     });
+    expect(calls.map((call) => call.method)).toEqual([
+      "plugin/list",
+      "plugin/install",
+      "plugin/list",
+      "skills/list",
+      "hooks/list",
+      "config/mcpServer/reload",
+    ]);
   });
 
   it("upserts native apps substrate config without clobbering other toml", async () => {

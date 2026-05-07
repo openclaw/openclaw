@@ -19,7 +19,6 @@ export type CodexPluginActivationReason =
   | "disabled"
   | "marketplace_missing"
   | "plugin_missing"
-  | "remote_install_unsupported"
   | "auth_required";
 
 export type CodexPluginActivationDiagnostic = {
@@ -84,23 +83,6 @@ export async function ensureCodexPluginActivation(
       installAttempted: false,
       marketplace: resolved.marketplace,
       diagnostics: [],
-    };
-  }
-
-  if (!resolved.marketplace.path) {
-    return {
-      identity: params.identity,
-      ok: false,
-      reason: "remote_install_unsupported",
-      installed: resolved.summary.installed,
-      enabled: resolved.summary.enabled,
-      installAttempted: false,
-      marketplace: resolved.marketplace,
-      diagnostics: [
-        {
-          message: `${params.identity.pluginName} requires plugin/install but ${CODEX_PLUGINS_MARKETPLACE_NAME} has no local marketplace path.`,
-        },
-      ],
     };
   }
 
