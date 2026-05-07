@@ -48,6 +48,38 @@ function resolveHookRunSummary(result: RunCronAgentTurnResult): string {
   );
 }
 
+function sanitizeHookConsoleValue(value: string | undefined): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized
+    .replace(/[\u001b\r\n\t]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .slice(0, 500);
+}
+
+function formatHookRunWarningConsoleMessage(params: {
+  status: string;
+  model: string | undefined;
+  summary: string;
+}): string {
+  const parts = [
+    "hook agent run returned non-ok status",
+    `status=${sanitizeHookConsoleValue(params.status) ?? "unknown"}`,
+  ];
+  const model = sanitizeHookConsoleValue(params.model);
+  if (model) {
+    parts.push(`model=${model}`);
+  }
+  const summary = sanitizeHookConsoleValue(params.summary);
+  if (summary) {
+    parts.push(`summary=${summary}`);
+  }
+  return parts.join(" ");
+}
+
 export function createGatewayHooksRequestHandler(params: {
   deps: CliDeps;
   getHooksConfig: () => HooksConfigResolved | null;
@@ -134,6 +166,11 @@ export function createGatewayHooksRequestHandler(params: {
             status: result.status,
             model: value.model,
             summary,
+            consoleMessage: formatHookRunWarningConsoleMessage({
+              status: result.status,
+              model: value.model,
+              summary,
+            }),
           });
         }
         if (shouldAnnounce) {

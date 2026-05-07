@@ -195,6 +195,13 @@ describe("dispatchAgentHook trust handling", () => {
         status: "error",
         model: "anthropic/claude-sonnet-4-6",
         summary: diagnosticSummary,
+        consoleMessage: expect.stringContaining(diagnosticSummary),
+      }),
+    );
+    expect(logHooksWarnMock).toHaveBeenCalledWith(
+      "hook agent run returned non-ok status",
+      expect.objectContaining({
+        consoleMessage: expect.stringContaining("model=anthropic/claude-sonnet-4-6"),
       }),
     );
   });
