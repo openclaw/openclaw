@@ -646,6 +646,56 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(loadHistory).not.toHaveBeenCalled();
   });
 
+  it("tags overlapping burst runs as local even while another run is active (#3145)", () => {
+    // The gateway can run multiple chat sends concurrently per session, so a
+    // second burst-sent run can emit `delta`/`final` while the first run is
+    // still active. The local-binding decision must therefore happen on the
+    // first sighting of a run id, independent of `activeChatRunId`, otherwise
+    // run-2 falls into the non-local branch and its final triggers a stray
+    // history reload.
+    const harness = createHandlersHarness({
+      state: { activeChatRunId: null, pendingOptimisticUserMessage: 2 },
+    });
+    const { state, loadHistory, handleChatEvent } = harness;
+    const isLocalRunId = harness.isLocalRunId;
+
+    // Run 1 arrives first and becomes the active run.
+    handleChatEvent({
+      runId: "run-1",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "partial-1" },
+    });
+
+    // Run 2 starts streaming while run 1 is still active. With the previous
+    // boolean flag this branch was skipped entirely, leaving run 2 untagged.
+    handleChatEvent({
+      runId: "run-2",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "partial-2" },
+    });
+
+    expect(isLocalRunId("run-1")).toBe(true);
+    expect(isLocalRunId("run-2")).toBe(true);
+    expect(state.pendingOptimisticUserMessage).toBe(0);
+
+    // Both finals must take the local-run shortcut and skip `loadHistory`.
+    handleChatEvent({
+      runId: "run-1",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done-1" }] },
+    });
+    handleChatEvent({
+      runId: "run-2",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done-2" }] },
+    });
+    expect(loadHistory).not.toHaveBeenCalled();
+  });
+
   it("clears pendingChatRunId when an event for that runId arrives", () => {
     const { state, handleChatEvent } = createHandlersHarness({
       state: {

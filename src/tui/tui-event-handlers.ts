@@ -391,14 +391,24 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (reconnectPendingRunId === evt.runId) {
       reconnectPendingRunId = null;
     }
+    // Pair a pending optimistic send with the gateway run id on first sighting,
+    // before we decide whether to take over `activeChatRunId`. The gateway can
+    // run multiple chat sends concurrently within a session, so an overlapping
+    // run id must still be tagged as local — otherwise its `final` would fall
+    // back to the non-local path and trigger `loadHistory()` while another run
+    // is still streaming, racing with live events (NemoClaw #3145).
+    const isNonBtwRunSighting =
+      !isLocalBtwRunId?.(evt.runId) && !sessionRuns.has(evt.runId) && !finalizedRuns.has(evt.runId);
     noteSessionRun(evt.runId);
-    if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
-      state.activeChatRunId = evt.runId;
+    if (isNonBtwRunSighting) {
       const pendingCount = state.pendingOptimisticUserMessage ?? 0;
       if (pendingCount > 0) {
         noteLocalRunId?.(evt.runId);
         state.pendingOptimisticUserMessage = pendingCount - 1;
       }
+    }
+    if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
+      state.activeChatRunId = evt.runId;
     }
     if (state.pendingChatRunId === evt.runId) {
       state.pendingChatRunId = null;
