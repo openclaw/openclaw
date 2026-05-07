@@ -60,16 +60,34 @@ export async function startOrResumeThread(params: {
     config: params.params.config,
   });
   let preserveExistingBinding = false;
+  let prebuiltPluginThreadConfig: CodexPluginThreadConfig | undefined;
   if (binding?.threadId) {
+    let pluginBindingStale = isCodexPluginThreadBindingStale({
+      codexPluginsEnabled: params.pluginThreadConfig?.enabled ?? false,
+      bindingFingerprint: binding.pluginAppsFingerprint,
+      bindingInputFingerprint: binding.pluginAppsInputFingerprint,
+      currentInputFingerprint: params.pluginThreadConfig?.inputFingerprint,
+      hasBindingPolicyContext: Boolean(binding.pluginAppPolicyContext),
+    });
     if (
-      isCodexPluginThreadBindingStale({
-        codexPluginsEnabled: params.pluginThreadConfig?.enabled ?? false,
-        bindingFingerprint: binding.pluginAppsFingerprint,
-        bindingInputFingerprint: binding.pluginAppsInputFingerprint,
-        currentInputFingerprint: params.pluginThreadConfig?.inputFingerprint,
-        hasBindingPolicyContext: Boolean(binding.pluginAppPolicyContext),
+      !pluginBindingStale &&
+      shouldRecheckRecoverablePluginBinding({
+        binding,
+        pluginThreadConfig: params.pluginThreadConfig,
       })
     ) {
+      try {
+        prebuiltPluginThreadConfig = await params.pluginThreadConfig?.build();
+        pluginBindingStale =
+          prebuiltPluginThreadConfig?.fingerprint !== binding.pluginAppsFingerprint;
+      } catch (error) {
+        embeddedAgentLog.warn("codex app-server plugin app config recovery check failed", {
+          error,
+          threadId: binding.threadId,
+        });
+      }
+    }
+    if (pluginBindingStale) {
       embeddedAgentLog.debug("codex app-server plugin app config changed; starting a new thread", {
         threadId: binding.threadId,
       });
@@ -175,7 +193,7 @@ export async function startOrResumeThread(params: {
   }
 
   const pluginThreadConfig = params.pluginThreadConfig?.enabled
-    ? await params.pluginThreadConfig.build()
+    ? (prebuiltPluginThreadConfig ?? (await params.pluginThreadConfig.build()))
     : undefined;
   const config = mergeCodexThreadConfigs(params.config, pluginThreadConfig?.configPatch);
   const response = assertCodexThreadStartResponse(
@@ -235,6 +253,24 @@ export async function startOrResumeThread(params: {
     createdAt,
     updatedAt: createdAt,
   };
+}
+
+function shouldRecheckRecoverablePluginBinding(params: {
+  binding: CodexAppServerThreadBinding;
+  pluginThreadConfig?: CodexPluginThreadConfigProvider;
+}): boolean {
+  if (!params.pluginThreadConfig?.enabled) {
+    return false;
+  }
+  if (
+    !params.binding.pluginAppsFingerprint ||
+    !params.binding.pluginAppsInputFingerprint ||
+    params.binding.pluginAppsInputFingerprint !== params.pluginThreadConfig.inputFingerprint
+  ) {
+    return false;
+  }
+  const policyContext = params.binding.pluginAppPolicyContext;
+  return Boolean(policyContext && Object.keys(policyContext.apps).length === 0);
 }
 
 export function buildThreadStartParams(

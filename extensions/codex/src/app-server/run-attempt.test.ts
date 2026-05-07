@@ -3147,6 +3147,116 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
+  it("rebuilds an empty plugin app binding after app inventory recovers", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      dynamicToolsFingerprint: "[]",
+      pluginAppsFingerprint: "plugin-apps-empty",
+      pluginAppsInputFingerprint: "plugin-apps-input-1",
+      pluginAppPolicyContext: { fingerprint: "plugin-policy-empty", apps: {} },
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-recovered");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const pluginAppPolicyContext = createPluginAppPolicyContext();
+    const buildPluginThreadConfig = vi.fn(async () => ({
+      enabled: true,
+      configPatch: createPluginAppConfigPatch(),
+      fingerprint: "plugin-apps-config-1",
+      inputFingerprint: "plugin-apps-input-1",
+      policyContext: pluginAppPolicyContext,
+      diagnostics: [],
+    }));
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-apps-input-1",
+        build: buildPluginThreadConfig,
+      },
+    });
+
+    expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls).toEqual([
+      [
+        "thread/start",
+        expect.objectContaining({
+          config: createPluginAppConfigPatch(),
+        }),
+      ],
+    ]);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-recovered",
+      pluginAppsFingerprint: "plugin-apps-config-1",
+      pluginAppPolicyContext,
+    });
+  });
+
+  it("keeps an empty plugin app binding when recovery still produces the same config", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const emptyPolicyContext = { fingerprint: "plugin-policy-empty", apps: {} };
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      dynamicToolsFingerprint: "[]",
+      pluginAppsFingerprint: "plugin-apps-empty",
+      pluginAppsInputFingerprint: "plugin-apps-input-1",
+      pluginAppPolicyContext: emptyPolicyContext,
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/resume") {
+        return threadStartResult("thread-existing");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const buildPluginThreadConfig = vi.fn(async () => ({
+      enabled: true,
+      configPatch: {
+        apps: {
+          _default: {
+            enabled: false,
+            destructive_enabled: false,
+            open_world_enabled: false,
+          },
+        },
+      },
+      fingerprint: "plugin-apps-empty",
+      inputFingerprint: "plugin-apps-input-1",
+      policyContext: emptyPolicyContext,
+      diagnostics: [],
+    }));
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-apps-input-1",
+        build: buildPluginThreadConfig,
+      },
+    });
+
+    expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls).toEqual([
+      ["thread/resume", expect.not.objectContaining({ config: expect.anything() })],
+    ]);
+  });
+
   it("starts a new configured thread for legacy bindings missing plugin app metadata", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
