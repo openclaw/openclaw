@@ -96,9 +96,9 @@ Implications:
 - Trusted-proxy auth rejects loopback-source requests (`127.0.0.1`, `::1`, loopback CIDRs) by default.
 - Same-host loopback reverse proxies do **not** satisfy trusted-proxy auth unless you explicitly set `gateway.auth.trustedProxy.allowLoopback = true` and include the loopback address in `gateway.trustedProxies`.
 - `allowLoopback` trusts local processes on the Gateway host to the same degree as the reverse proxy. Enable it only when the Gateway is still firewalled from direct remote access and the local proxy strips or overwrites client-supplied identity headers.
-- Internal Gateway clients that do not travel through the reverse proxy should use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, not trusted-proxy identity headers.
+- Internal Gateway clients that do not travel through the reverse proxy are not authorized in `trusted-proxy` mode. Route them through the proxy, or use `gateway.auth.mode = "password"` for local password-auth deployments.
 - Non-loopback Control UI deployments still need explicit `gateway.controlUi.allowedOrigins`.
-- **Forwarded-header evidence overrides loopback locality for local direct fallback.** If a request arrives on loopback but carries `X-Forwarded-For` / `X-Forwarded-Host` / `X-Forwarded-Proto` headers pointing at a non-local origin, that evidence disqualifies local-direct password fallback and device-identity gating. With `allowLoopback: true`, trusted-proxy auth can still accept the request as a same-host proxy request, while `requiredHeaders` and `allowUsers` continue to apply.
+- **Forwarded-header evidence overrides loopback locality.** If a request arrives on loopback but carries `X-Forwarded-For` / `X-Forwarded-Host` / `X-Forwarded-Proto` headers pointing at a non-local origin, that evidence disqualifies local-direct device-identity gating. With `allowLoopback: true`, trusted-proxy auth can still accept the request as a same-host proxy request, while `requiredHeaders` and `allowUsers` continue to apply.
 
 </Warning>
 
@@ -305,7 +305,7 @@ If you see a `mixed_trusted_proxy_token` error on startup:
 - Remove the shared token when using trusted-proxy mode, or
 - Switch `gateway.auth.mode` to `"token"` if you intend token-based auth.
 
-Loopback trusted-proxy identity headers still fail closed: same-host callers are not silently authenticated as proxy users. Internal OpenClaw callers that bypass the proxy may authenticate with `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` instead. Token fallback remains intentionally unsupported in trusted-proxy mode.
+Loopback trusted-proxy identity headers still fail closed: same-host callers are not silently authenticated as proxy users. Internal OpenClaw callers that bypass the proxy are not authenticated by `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` in trusted-proxy mode. If you intended password auth for direct local callers, set `gateway.auth.mode = "password"` and restart the Gateway.
 
 ## Operator scopes header
 
@@ -339,7 +339,7 @@ Before enabling trusted-proxy auth, verify:
 - [ ] **allowedOrigins is explicit**: Non-loopback Control UI uses explicit `gateway.controlUi.allowedOrigins`.
 - [ ] **allowUsers is set** (recommended): Restrict to known users rather than allowing anyone authenticated.
 - [ ] **No mixed token config**: Do not set both `gateway.auth.token` and `gateway.auth.mode: "trusted-proxy"`.
-- [ ] **Local password fallback is private**: If you configure `gateway.auth.password` for internal direct callers, keep the Gateway port firewalled so non-proxy remote clients cannot reach it directly.
+- [ ] **No direct password fallback dependency**: Direct internal callers must either go through the proxy or use `gateway.auth.mode: "password"`; trusted-proxy mode does not use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` as a fallback.
 
 ## Security audit
 

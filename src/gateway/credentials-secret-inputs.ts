@@ -116,7 +116,7 @@ function localAuthModeAllowsGatewaySecretInputPath(params: {
     return false;
   }
   if (authMode === "trusted-proxy") {
-    return !isTokenGatewaySecretInputPath(path);
+    return false;
   }
   if (authMode === "token") {
     return isTokenGatewaySecretInputPath(path);

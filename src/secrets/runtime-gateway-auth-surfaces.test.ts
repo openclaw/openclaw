@@ -87,7 +87,7 @@ describe("evaluateGatewayAuthSurfaceStates", () => {
     });
   });
 
-  it("marks gateway.auth.password active when trusted-proxy mode is explicit", () => {
+  it("marks gateway.auth.password inactive when trusted-proxy mode is explicit", () => {
     const states = evaluate({
       gateway: {
         auth: {
@@ -99,8 +99,8 @@ describe("evaluateGatewayAuthSurfaceStates", () => {
 
     expect(states["gateway.auth.password"]).toMatchObject({
       hasSecretRef: true,
-      active: true,
-      reason: "no token source can win, so password auth can win.",
+      active: false,
+      reason: 'gateway.auth.mode is "trusted-proxy".',
     });
   });
 
@@ -231,7 +231,7 @@ describe("evaluateGatewayAuthSurfaceStates", () => {
     expect(states["gateway.remote.password"]).toMatchObject({
       hasSecretRef: true,
       active: false,
-      reason: "remote password fallback is not active.",
+      reason: 'password auth cannot win with gateway.auth.mode="trusted-proxy".',
     });
   });
 });

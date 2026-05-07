@@ -283,13 +283,15 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     });
   });
 
-  it("throws when trusted-proxy local password SecretRef cannot resolve", () => {
-    expect(() => resolveLocalModeWithUnresolvedPassword("trusted-proxy")).toThrow(
-      "gateway.auth.password",
-    );
+  it("ignores unresolved local password ref when local auth mode is trusted-proxy", () => {
+    const resolved = resolveLocalModeWithUnresolvedPassword("trusted-proxy");
+    expect(resolved).toEqual({
+      token: undefined,
+      password: undefined,
+    });
   });
 
-  it("resolves trusted-proxy local password credentials", () => {
+  it("ignores trusted-proxy local password credentials", () => {
     const resolved = resolveGatewayCredentialsFromConfig({
       cfg: cfg({
         gateway: {
@@ -305,7 +307,29 @@ describe("resolveGatewayCredentialsFromConfig", () => {
 
     expect(resolved).toEqual({
       token: undefined,
-      password: "local-trusted-proxy-password", // pragma: allowlist secret
+      password: undefined,
+    });
+  });
+
+  it("ignores trusted-proxy local environment shared secrets", () => {
+    const resolved = resolveGatewayCredentialsFromConfig({
+      cfg: cfg({
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "trusted-proxy",
+          },
+        },
+      }),
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "env-token",
+        OPENCLAW_GATEWAY_PASSWORD: "env-password", // pragma: allowlist secret
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(resolved).toEqual({
+      token: undefined,
+      password: undefined,
     });
   });
 

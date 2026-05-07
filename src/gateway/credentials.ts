@@ -107,22 +107,33 @@ function resolveLocalGatewayCredentials(params: {
   const fallbackToken = params.plan.localToken.configured
     ? params.plan.localToken.value
     : params.plan.remoteToken.value;
-  const fallbackPassword = params.plan.localPassword.configured
-    ? params.plan.localPassword.value
-    : params.plan.authMode === "trusted-proxy"
+  const fallbackPassword =
+    params.plan.authMode === "trusted-proxy"
       ? undefined
-      : params.plan.remotePassword.value;
+      : params.plan.localPassword.configured
+        ? params.plan.localPassword.value
+        : params.plan.remotePassword.value;
+  const env =
+    params.plan.authMode === "trusted-proxy"
+      ? {
+          ...params.env,
+          OPENCLAW_GATEWAY_TOKEN: undefined,
+          OPENCLAW_GATEWAY_PASSWORD: undefined,
+        }
+      : params.env;
   const localResolved = resolveGatewayCredentialsFromValues({
     configToken: fallbackToken,
     configPassword: fallbackPassword,
-    env: params.env,
+    env,
     tokenPrecedence: params.localTokenPrecedence,
     passwordPrecedence: params.localPasswordPrecedence,
   });
   const localPasswordCanWin =
     params.plan.authMode === "password" ||
-    params.plan.authMode === "trusted-proxy" ||
-    (params.plan.authMode !== "token" && params.plan.authMode !== "none" && !localResolved.token);
+    (params.plan.authMode !== "token" &&
+      params.plan.authMode !== "none" &&
+      params.plan.authMode !== "trusted-proxy" &&
+      !localResolved.token);
   const localTokenCanWin =
     params.plan.authMode === "token" ||
     (params.plan.authMode !== "password" &&

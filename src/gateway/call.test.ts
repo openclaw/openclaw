@@ -1482,7 +1482,7 @@ describe("callGateway password resolution", () => {
     expect(lastClientOptions?.password).toBeUndefined();
   });
 
-  it("resolves local password refs when auth mode is trusted-proxy", async () => {
+  it("ignores local password refs when auth mode is trusted-proxy", async () => {
     process.env.LOCAL_TRUSTED_PROXY_PASSWORD = "resolved-trusted-proxy-password";
     getRuntimeConfig.mockReturnValue({
       gateway: {
@@ -1503,10 +1503,28 @@ describe("callGateway password resolution", () => {
     await callGateway({ method: "health" });
 
     expect(lastClientOptions?.token).toBeUndefined();
-    expect(lastClientOptions?.password).toBe("resolved-trusted-proxy-password"); // pragma: allowlist secret
+    expect(lastClientOptions?.password).toBeUndefined();
   });
 
-  it("fails closed when trusted-proxy local password ref cannot resolve", async () => {
+  it("ignores env password when auth mode is trusted-proxy", async () => {
+    process.env.OPENCLAW_GATEWAY_PASSWORD = "env-trusted-proxy-password"; // pragma: allowlist secret
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: {
+          mode: "trusted-proxy",
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.password).toBeUndefined();
+  });
+
+  it("ignores unresolved trusted-proxy local password refs", async () => {
     getRuntimeConfig.mockReturnValue({
       gateway: {
         mode: "local",
@@ -1523,7 +1541,10 @@ describe("callGateway password resolution", () => {
       },
     } as unknown as OpenClawConfig);
 
-    await expect(callGateway({ method: "health" })).rejects.toThrow("gateway.auth.password");
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.password).toBeUndefined();
   });
 
   it("does not resolve local password ref when remote password is already configured", async () => {
