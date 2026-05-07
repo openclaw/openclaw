@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import http from "node:http";
 import type { IncomingMessage } from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -135,7 +137,7 @@ describe("handleControlUiHttpRequest", () => {
     trustedProxies?: string[];
     remoteAddress?: string;
   }) {
-    const { res, end } = makeMockHttpResponse();
+    const { res, end, setHeader } = makeMockHttpResponse();
     const handled = await handleControlUiAssistantMediaRequest(
       {
         url: params.url,
@@ -150,7 +152,7 @@ describe("handleControlUiHttpRequest", () => {
         ...(params.trustedProxies ? { trustedProxies: params.trustedProxies } : {}),
       },
     );
-    return { res, end, handled };
+    return { res, end, setHeader, handled };
   }
 
   function createTrustedProxyAuth(): ResolvedGatewayAuth {
@@ -330,6 +332,266 @@ describe("handleControlUiHttpRequest", () => {
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
       },
+    });
+  });
+
+  // Bug #9b: documents (xlsx/csv/pdf/zip/etc.) and any non-image/non-audio/
+  // non-video local attachment must be served with `Content-Disposition:
+  // attachment` so the browser triggers a binary download instead of
+  // rendering the file as a webpage and offering Save As "Webpage Complete".
+  // Images/audio/video keep the default inline disposition because the chat
+  // surface inlines them.
+  describe("assistant-media Content-Disposition (Bug #9b)", () => {
+    it("serves .xlsx with Content-Disposition: attachment and a sanitized filename", async () => {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-doc-xlsx-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "pricing.xlsx");
+          await fs.writeFile(filePath, Buffer.from("PK\u0003\u0004fake-xlsx"));
+          const { res, setHeader, handled } = await runAssistantMediaRequest({
+            url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+            method: "GET",
+            auth: { mode: "token", token: "test-token", allowTailscale: false },
+          });
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          const disposition = setHeader.mock.calls.find(
+            (call) => call[0] === "Content-Disposition",
+          )?.[1];
+          expect(disposition).toBe('attachment; filename="pricing.xlsx"');
+        },
+      });
+    });
+
+    it("serves .csv with Content-Disposition: attachment", async () => {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-doc-csv-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "export.csv");
+          await fs.writeFile(filePath, "a,b,c\n1,2,3\n");
+          const { res, setHeader, handled } = await runAssistantMediaRequest({
+            url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+            method: "GET",
+            auth: { mode: "token", token: "test-token", allowTailscale: false },
+          });
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          const disposition = setHeader.mock.calls.find(
+            (call) => call[0] === "Content-Disposition",
+          )?.[1];
+          expect(disposition).toBe('attachment; filename="export.csv"');
+        },
+      });
+    });
+
+    it("serves .pdf with Content-Disposition: attachment", async () => {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-doc-pdf-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "report.pdf");
+          await fs.writeFile(filePath, Buffer.from("%PDF-1.4\nfake\n%%EOF"));
+          const { res, setHeader, handled } = await runAssistantMediaRequest({
+            url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+            method: "GET",
+            auth: { mode: "token", token: "test-token", allowTailscale: false },
+          });
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          const disposition = setHeader.mock.calls.find(
+            (call) => call[0] === "Content-Disposition",
+          )?.[1];
+          expect(disposition).toBe('attachment; filename="report.pdf"');
+        },
+      });
+    });
+
+    it("serves .zip with Content-Disposition: attachment", async () => {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-doc-zip-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "bundle.zip");
+          await fs.writeFile(filePath, Buffer.from("PK\u0003\u0004fake-zip"));
+          const { res, setHeader, handled } = await runAssistantMediaRequest({
+            url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+            method: "GET",
+            auth: { mode: "token", token: "test-token", allowTailscale: false },
+          });
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          const disposition = setHeader.mock.calls.find(
+            (call) => call[0] === "Content-Disposition",
+          )?.[1];
+          expect(disposition).toBe('attachment; filename="bundle.zip"');
+        },
+      });
+    });
+
+    it("does not set Content-Disposition for image attachments (kept inline)", async () => {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-image-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "photo.png");
+          await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+          const { res, setHeader, handled } = await runAssistantMediaRequest({
+            url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+            method: "GET",
+            auth: { mode: "token", token: "test-token", allowTailscale: false },
+          });
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          const disposition = setHeader.mock.calls.find(
+            (call) => call[0] === "Content-Disposition",
+          );
+          expect(disposition).toBeUndefined();
+        },
+      });
+    });
+
+    it("sanitizes CR/LF/quote/backslash from filename in Content-Disposition", async () => {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-doc-sanitize-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, 'weird"name.csv');
+          await fs.writeFile(filePath, "a,b\n1,2\n");
+          const { res, setHeader, handled } = await runAssistantMediaRequest({
+            url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+            method: "GET",
+            auth: { mode: "token", token: "test-token", allowTailscale: false },
+          });
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          const disposition = setHeader.mock.calls.find(
+            (call) => call[0] === "Content-Disposition",
+          )?.[1];
+          // The double quote is replaced with `_` so the header value stays
+          // safely quoted.
+          expect(disposition).toBe('attachment; filename="weird_name.csv"');
+        },
+      });
+    });
+
+    // Codex P2 regression for #77912: Node's ServerResponse.setHeader
+    // throws ERR_INVALID_CHAR on header values containing non-Latin1 bytes.
+    // The original PR interpolated the sanitized basename directly into
+    // `filename="..."`, so a download for a CJK filename like `価格.xlsx`
+    // turned into a 404 inside the route try/catch. We use a real
+    // http.createServer here (not makeMockHttpResponse) because the mock's
+    // setHeader is a vi.fn() that does not enforce Node's runtime header
+    // character validation.
+    describe("non-ASCII filename header validation (real http.Server)", () => {
+      async function withRealHttpServer<T>(
+        filePath: string,
+        fn: (port: number) => Promise<T>,
+      ): Promise<T> {
+        const server = http.createServer(async (req, res) => {
+          const handled = await handleControlUiAssistantMediaRequest(req, res, {
+            auth: { mode: "token", token: "test-token", allowTailscale: false },
+          });
+          if (!handled) {
+            res.statusCode = 404;
+            res.end("unhandled");
+          }
+        });
+        await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+        try {
+          const port = (server.address() as AddressInfo).port;
+          return await fn(port);
+        } finally {
+          await new Promise<void>((resolve, reject) =>
+            server.close((err) => (err ? reject(err) : resolve())),
+          );
+        }
+      }
+
+      async function fetchHeaders(port: number, filePath: string) {
+        return await new Promise<{ statusCode: number; headers: http.IncomingHttpHeaders }>(
+          (resolve, reject) => {
+            const req = http.request(
+              {
+                host: "127.0.0.1",
+                port,
+                path: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+                method: "GET",
+              },
+              (resp) => {
+                resp.resume();
+                resp.on("end", () => {
+                  resolve({ statusCode: resp.statusCode ?? 0, headers: resp.headers });
+                });
+              },
+            );
+            req.on("error", reject);
+            req.end();
+          },
+        );
+      }
+
+      it("serves a CJK filename without ERR_INVALID_CHAR (uses RFC 5987 filename*)", async () => {
+        // 価格.xlsx (Japanese for "price.xlsx") — the previous header
+        // construction would throw ERR_INVALID_CHAR inside setHeader and
+        // turn this download into a 404.
+        await withAllowedAssistantMediaRoot({
+          prefix: "ui-media-cjk-",
+          fn: async (tmpRoot) => {
+            const filePath = path.join(tmpRoot, "価格.xlsx");
+            await fs.writeFile(filePath, Buffer.from("PK\u0003\u0004fake-xlsx"));
+            await withRealHttpServer(filePath, async (port) => {
+              const { statusCode, headers } = await fetchHeaders(port, filePath);
+              expect(statusCode).toBe(200);
+              const disposition = String(headers["content-disposition"] ?? "");
+              // ASCII fallback present for legacy clients ...
+              expect(disposition).toMatch(/^attachment; filename="[\x20-\x7E]+";/u);
+              // ... and the RFC 5987 UTF-8-encoded filename* present for
+              // modern browsers and curl.
+              expect(disposition).toContain("filename*=UTF-8''%E4%BE%A1%E6%A0%BC.xlsx");
+              // The two CJK characters (価, 格) become `_` in the
+              // ASCII fallback so legacy clients still see something
+              // meaningful.
+              expect(disposition).toMatch(/filename="__\.xlsx"/);
+            });
+          },
+        });
+      });
+
+      it("serves a Latin-1 accented filename via the ASCII fallback path", async () => {
+        // résumé.docx — Latin-1-safe but still non-ASCII; must include
+        // filename* so modern browsers prefer the precise filename.
+        await withAllowedAssistantMediaRoot({
+          prefix: "ui-media-latin1-",
+          fn: async (tmpRoot) => {
+            const filePath = path.join(tmpRoot, "résumé.docx");
+            await fs.writeFile(filePath, Buffer.from("PK\u0003\u0004fake-docx"));
+            await withRealHttpServer(filePath, async (port) => {
+              const { statusCode, headers } = await fetchHeaders(port, filePath);
+              expect(statusCode).toBe(200);
+              const disposition = String(headers["content-disposition"] ?? "");
+              expect(disposition).toContain("filename*=UTF-8''r%C3%A9sum%C3%A9.docx");
+              // ASCII fallback: percent-decoded UTF-8 bytes for `é` are 0xC3
+              // 0xA9, both Latin-1 safe but non-ASCII; the filename test
+              // pattern \x20-\x7E excludes them so they fall to `_` for the
+              // ASCII fallback. Modern clients use filename* anyway.
+              expect(disposition).toMatch(/filename="r_sum_\.docx"/);
+            });
+          },
+        });
+      });
+
+      it("keeps the legacy single-token form for pure-ASCII filenames", async () => {
+        // Codex's review noted we shouldn't churn header strings for the
+        // common ASCII case.
+        await withAllowedAssistantMediaRoot({
+          prefix: "ui-media-ascii-real-",
+          fn: async (tmpRoot) => {
+            const filePath = path.join(tmpRoot, "pricing.xlsx");
+            await fs.writeFile(filePath, Buffer.from("PK\u0003\u0004fake-xlsx"));
+            await withRealHttpServer(filePath, async (port) => {
+              const { statusCode, headers } = await fetchHeaders(port, filePath);
+              expect(statusCode).toBe(200);
+              expect(headers["content-disposition"]).toBe('attachment; filename="pricing.xlsx"');
+            });
+          },
+        });
+      });
     });
   });
 

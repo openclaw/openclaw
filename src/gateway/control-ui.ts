@@ -14,6 +14,7 @@ import { openLocalFileSafely, FsSafeError, readSecureFile } from "../infra/fs-sa
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { verifyPairingToken } from "../infra/pairing-token.js";
 import { isWithinDir } from "../infra/path-safety.js";
+import { mediaKindFromMime } from "../media/constants.js";
 import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-media-access.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
@@ -484,6 +485,48 @@ function classifyAssistantMediaError(err: unknown): AssistantMediaAvailability {
   return { available: false, code: "attachment-unavailable", reason: "Attachment unavailable" };
 }
 
+function safeAssistantMediaDownloadFilename(localPath: string): string {
+  // Mirror managed-document-attachments' filename hardening: strip CR/LF,
+  // quotes, backslashes, and path separators so the value can be safely
+  // interpolated into a Content-Disposition header. Unicode is preserved so
+  // user-facing filenames render correctly on download.
+  const fallback = "download";
+  const basename = path.basename(localPath || fallback);
+  const cleaned = basename.replace(/[\r\n"\\/]/g, "_").trim();
+  return cleaned || fallback;
+}
+
+/**
+ * Build an RFC 5987-compatible Content-Disposition header value for a
+ * download.
+ *
+ * Node's `ServerResponse.setHeader` validates header values against ISO-8859-1
+ * and throws `ERR_INVALID_CHAR` if a non-Latin1 byte is present. The chat
+ * surface accepts assistant filenames containing CJK / Cyrillic / accented
+ * characters (e.g. `価格.xlsx`, `résumé.docx`), so we cannot interpolate the
+ * raw filename into `filename="…"`.
+ *
+ * RFC 5987 / 6266 prescribes pairing an ASCII-only fallback `filename="…"`
+ * with a UTF-8 percent-encoded `filename*=UTF-8''…`. All modern browsers and
+ * curl prefer `filename*` when both are present.
+ */
+function buildDownloadContentDispositionHeader(safeFilename: string): string {
+  const isLatin1Safe = /^[\x20-\x7E\xA0-\xFF]*$/u.test(safeFilename);
+  const asciiFallback = safeFilename.replace(/[^\x20-\x7E]/gu, "_");
+  const utf8Encoded = encodeURIComponent(safeFilename)
+    // RFC 5987 attr-char excludes a few percent-encoding-reserved characters
+    // that encodeURIComponent leaves alone; tighten to the spec's value-chars.
+    .replace(/['()]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase())
+    .replace(/\*/g, "%2A");
+  if (isLatin1Safe && asciiFallback === safeFilename) {
+    // Pure ASCII filename: a single `filename="…"` is RFC-compliant and
+    // matches the previous behavior so we don't churn header strings on the
+    // common case.
+    return `attachment; filename="${safeFilename}"`;
+  }
+  return `attachment; filename="${asciiFallback}"; filename*=UTF-8''${utf8Encoded}`;
+}
+
 async function resolveAssistantMediaAvailability(
   source: string,
   localRoots: readonly string[],
@@ -582,10 +625,25 @@ export async function handleControlUiAssistantMediaRequest(
       buffer: sniffBuffer?.subarray(0, bytesRead),
       filePath: localPath,
     });
-    if (mime) {
-      res.setHeader("Content-Type", mime);
-    } else {
-      res.setHeader("Content-Type", "application/octet-stream");
+    const resolvedMime = mime || "application/octet-stream";
+    res.setHeader("Content-Type", resolvedMime);
+    // Bug #9b: documents (xlsx/csv/pdf/zip/etc.) must be served with
+    // `Content-Disposition: attachment` so the browser triggers a binary
+    // download instead of trying to render them as a webpage. Images, audio,
+    // and video are inlined by the chat surface and keep the default `inline`
+    // disposition; everything else (and unclassified content streamed as
+    // application/octet-stream) gets a save-to-disk hint with the original
+    // filename so Save As doesn't fall back to "Webpage Complete".
+    const mediaKind = mediaKindFromMime(resolvedMime);
+    const isInlineRenderable =
+      mediaKind === "image" || mediaKind === "audio" || mediaKind === "video";
+    if (!isInlineRenderable) {
+      const downloadFilename = safeAssistantMediaDownloadFilename(localPath);
+      // RFC 5987 / 6266: encode non-ASCII filenames with an ASCII fallback +
+      // UTF-8 `filename*` so Node's setHeader does not throw ERR_INVALID_CHAR
+      // and turn the response into a 404 for filenames like `価格.xlsx` or
+      // `résumé.docx`.
+      res.setHeader("Content-Disposition", buildDownloadContentDispositionHeader(downloadFilename));
     }
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Content-Length", String(opened.stat.size));
