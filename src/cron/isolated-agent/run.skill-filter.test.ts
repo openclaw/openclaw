@@ -212,6 +212,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     });
 
     it("fails closed when payload.model is not allowed", async () => {
+      const fallbacksWithCliHint = ["claude-cli/claude-sonnet-4-6", ...defaultFallbacks];
       resolveAllowedModelRefMock.mockReturnValueOnce({
         error: "model not allowed: anthropic/claude-sonnet-4-6",
       });
@@ -221,7 +222,10 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
           cfg: {
             agents: {
               defaults: {
-                model: { primary: "openai-codex/gpt-5.4", fallbacks: defaultFallbacks },
+                model: { primary: "openai-codex/gpt-5.4", fallbacks: fallbacksWithCliHint },
+                models: {
+                  "openai-codex/gpt-5.4": {},
+                },
               },
             },
           },
@@ -237,7 +241,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
       expect(result.status).toBe("error");
       expect(result.error).toBe(
-        "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.models allowlist: anthropic/claude-sonnet-4-6",
+        "cron payload.model 'anthropic/claude-sonnet-4-6' is not in the effective cron model allowlist (normalized: anthropic/claude-sonnet-4-6). Allowed: anthropic/claude-opus-4-6, claude-cli/claude-sonnet-4-6, google-gemini-cli/gemini-3-pro-preview, nvidia/deepseek-ai/deepseek-v3.2, openai-codex/gpt-5.4, openai/gpt-5.4. Did you mean 'claude-cli/claude-sonnet-4-6'?",
       );
       expect(logWarnMock).not.toHaveBeenCalled();
       expect(runWithModelFallbackMock).not.toHaveBeenCalled();

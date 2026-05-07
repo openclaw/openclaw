@@ -216,13 +216,26 @@ describe("cron model formatting and precedence edge cases", () => {
       });
     });
 
-    it("reports the cron allowlist path when payload.model is not allowed", async () => {
+    it("reports the cron allowlist keys when payload.model is not allowed", async () => {
       resolveAllowedModelRefMock.mockReturnValueOnce({
         error: "model not allowed: anthropic/claude-sonnet-4-6",
       });
 
       await expect(
         selectModel({
+          cfg: {
+            agents: {
+              defaults: {
+                model: {
+                  primary: "openai-codex/gpt-5.4",
+                  fallbacks: ["claude-cli/claude-sonnet-4-6"],
+                },
+                models: {
+                  "openai-codex/gpt-5.4": {},
+                },
+              },
+            },
+          },
           payload: {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
@@ -232,7 +245,7 @@ describe("cron model formatting and precedence edge cases", () => {
       ).resolves.toEqual({
         ok: false,
         error:
-          "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.models allowlist: anthropic/claude-sonnet-4-6",
+          "cron payload.model 'anthropic/claude-sonnet-4-6' is not in the effective cron model allowlist (normalized: anthropic/claude-sonnet-4-6). Allowed: claude-cli/claude-sonnet-4-6, openai-codex/gpt-5.4. Did you mean 'claude-cli/claude-sonnet-4-6'?",
       });
     });
 

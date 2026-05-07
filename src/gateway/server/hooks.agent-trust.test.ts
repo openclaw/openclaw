@@ -150,7 +150,7 @@ describe("dispatchAgentHook trust handling", () => {
 
   it("prefers cron diagnostics for returned hook errors", async () => {
     const diagnosticSummary =
-      "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.models allowlist: anthropic/claude-sonnet-4-6";
+      "cron payload.model 'anthropic/claude-sonnet-4-6' is not in the effective cron model allowlist (normalized: anthropic/claude-sonnet-4-6). Allowed: claude-cli/claude-sonnet-4-6, openai-codex/gpt-5.4. Did you mean 'claude-cli/claude-sonnet-4-6'?";
     runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
       status: "error",
       summary: "generic failure",
