@@ -21,7 +21,7 @@ on:
           - plugin-sdk-package-contract
           - plugin-sdk-reply-runtime
           - provider-runtime-boundary
-          - raw-socket-boundary
+          - network-runtime-boundary
           - session-diagnostics-boundary
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -164,7 +164,7 @@ jobs:
       plugin_sdk_package: ${{ steps.detect.outputs.plugin_sdk_package }}
       plugin_sdk_reply: ${{ steps.detect.outputs.plugin_sdk_reply }}
       provider: ${{ steps.detect.outputs.provider }}
-      raw_socket: ${{ steps.detect.outputs.raw_socket }}
+      network_runtime: ${{ steps.detect.outputs.network_runtime }}
       session_diagnostics: ${{ steps.detect.outputs.session_diagnostics }}
     steps:
       - name: Detect PR shard paths
@@ -188,7 +188,7 @@ jobs:
           plugin_sdk_package=false
           plugin_sdk_reply=false
           provider=false
-          raw_socket=false
+          network_runtime=false
           session_diagnostics=false
 
           if [[ "${EVENT_NAME}" != "pull_request" ]]; then
@@ -203,7 +203,7 @@ jobs:
             plugin_sdk_package=true
             plugin_sdk_reply=true
             provider=true
-            raw_socket=true
+            network_runtime=true
             session_diagnostics=true
           else
             while IFS= read -r file; do
@@ -220,11 +220,11 @@ jobs:
                   plugin_sdk_package=true
                   plugin_sdk_reply=true
                   provider=true
-                  raw_socket=true
+                  network_runtime=true
                   session_diagnostics=true
                   ;;
                 src/*.ts|src/**/*.ts|extensions/*.ts|extensions/**/*.ts)
-                  raw_socket=true
+                  network_runtime=true
                   ;;
                 src/acp/control-plane/*|src/agents/cli-runner/*|src/agents/command/*|src/agents/pi-embedded-runner/*|src/agents/tools/*|src/agents/*completion*.ts|src/agents/*transport*.ts|src/agents/model-*.ts|src/agents/openclaw-tools*.ts|src/agents/provider-*.ts|src/agents/session*.ts|src/agents/tool-call*.ts|src/auto-reply/reply/agent-runner*.ts|src/auto-reply/reply/commands*.ts|src/auto-reply/reply/directive-handling*.ts|src/auto-reply/reply/dispatch-*.ts|src/auto-reply/reply/get-reply-run*.ts|src/auto-reply/reply/provider-dispatcher*.ts|src/auto-reply/reply/queue*.ts|src/auto-reply/reply/reply-run-registry*.ts|src/auto-reply/reply/session*.ts)
                   agent=true
@@ -308,7 +308,7 @@ jobs:
             echo "plugin_sdk_package=${plugin_sdk_package}"
             echo "plugin_sdk_reply=${plugin_sdk_reply}"
             echo "provider=${provider}"
-            echo "raw_socket=${raw_socket}"
+            echo "network_runtime=${network_runtime}"
             echo "session_diagnostics=${session_diagnostics}"
           } >> "${GITHUB_OUTPUT}"
 
@@ -404,10 +404,10 @@ jobs:
         with:
           category: "/codeql-critical-quality/channel-runtime-boundary"
 
-  raw-socket-boundary:
-    name: Critical Quality (raw-socket-boundary)
+  network-runtime-boundary:
+    name: Critical Quality (network-runtime-boundary)
     needs: quality-shards
-    if: ${{ needs.quality-shards.outputs.raw_socket == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'raw-socket-boundary') }}
+    if: ${{ needs.quality-shards.outputs.network_runtime == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'network-runtime-boundary') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -420,16 +420,16 @@ jobs:
         uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
         with:
           languages: javascript-typescript
-          config-file: ./.github/codeql/codeql-raw-socket-boundary-critical-quality.yml
+          config-file: ./.github/codeql/codeql-network-runtime-boundary-critical-quality.yml
 
       - name: Analyze
         id: analyze
         uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
         with:
           output: sarif-results
-          category: "/codeql-critical-quality/raw-socket-boundary"
+          category: "/codeql-critical-quality/network-runtime-boundary"
 
-      - name: Fail on raw socket findings
+      - name: Fail on network runtime boundary findings
         env:
           SARIF_OUTPUT: sarif-results
         run: |
@@ -447,7 +447,7 @@ jobs:
             exit 0
           fi
 
-          echo "Found ${findings} unclassified raw socket client callsite(s):" >&2
+          echo "Found ${findings} network runtime boundary finding(s):" >&2
           jq -r '
             .runs[]?.results[]?
             | .locations[0].physicalLocation as $location
