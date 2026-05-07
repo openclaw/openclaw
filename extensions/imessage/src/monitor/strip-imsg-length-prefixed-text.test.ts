@@ -38,8 +38,26 @@ describe("stripImessageLengthPrefixedUtf8Text", () => {
     expect(stripImessageLengthPrefixedUtf8Text(inner)).toBe(inner);
   });
 
+  it("removes imsg attributedBody corruption markers from long decoded text", () => {
+    expect(stripImessageLengthPrefixedUtf8Text("��\u0000Direkt långtest från Bosse")).toBe(
+      "Direkt långtest från Bosse",
+    );
+    expect(stripImessageLengthPrefixedUtf8Text("�N\u0002Klart. Commit på N2-main")).toBe(
+      "Klart. Commit på N2-main",
+    );
+    expect(stripImessageLengthPrefixedUtf8Text("�\u000f\u0004Pass335 är klart")).toBe(
+      "Pass335 är klart",
+    );
+  });
+
   it("preserves plain text", () => {
     expect(stripImessageLengthPrefixedUtf8Text("Mrrrrow! 🐱")).toBe("Mrrrrow! 🐱");
+  });
+
+  it("preserves plain text that starts with a replacement character", () => {
+    expect(stripImessageLengthPrefixedUtf8Text("� unknown glyph at start")).toBe(
+      "� unknown glyph at start",
+    );
   });
 
   it("preserves text when the wrapped length does not consume the whole string", () => {
