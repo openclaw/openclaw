@@ -160,6 +160,7 @@ export function resolveIMessageInboundDecision(params: {
   };
   selfChatCache?: SelfChatCache;
   logVerbose?: (msg: string) => void;
+  logWarning?: (msg: string) => void;
 }): IMessageInboundDecision {
   const senderRaw = params.message.sender ?? "";
   const sender = senderRaw.trim();
@@ -174,6 +175,13 @@ export function resolveIMessageInboundDecision(params: {
   const createdAt = params.message.created_at ? Date.parse(params.message.created_at) : undefined;
   const messageText = params.messageText.trim();
   const bodyText = params.bodyText.trim();
+  const logWarningOrVerbose = (message: string) => {
+    if (params.logWarning) {
+      params.logWarning(message);
+      return;
+    }
+    params.logVerbose?.(message);
+  };
 
   const groupIdCandidate = chatId !== undefined ? String(chatId) : undefined;
   const groupListPolicy = groupIdCandidate
@@ -290,7 +298,7 @@ export function resolveIMessageInboundDecision(params: {
         return { kind: "drop", reason: "groupPolicy disabled" };
       }
       if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_EMPTY_ALLOWLIST) {
-        params.logVerbose?.(
+        logWarningOrVerbose(
           "Blocked iMessage group message (groupPolicy: allowlist, no groupAllowFrom)",
         );
         return { kind: "drop", reason: "groupPolicy allowlist (empty groupAllowFrom)" };
@@ -313,7 +321,7 @@ export function resolveIMessageInboundDecision(params: {
   }
 
   if (isGroup && groupListPolicy.allowlistEnabled && !groupListPolicy.allowed) {
-    params.logVerbose?.(
+    logWarningOrVerbose(
       `imessage: skipping group message (${groupId ?? "unknown"}) not in allowlist`,
     );
     return { kind: "drop", reason: "group id not in allowlist" };

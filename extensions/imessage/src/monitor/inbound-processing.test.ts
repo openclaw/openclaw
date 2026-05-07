@@ -288,6 +288,36 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       `imessage: dropping self-chat reflected duplicate: "${sanitizeTerminalText(bodyText)}"`,
     );
   });
+
+  it("warns when the group registry drops an otherwise authorized group", () => {
+    const logWarning = vi.fn();
+    const decision = resolveDecision({
+      cfg: {
+        channels: {
+          imessage: {
+            groupPolicy: "allowlist",
+            groups: { "999": { requireMention: false } },
+          },
+        },
+      } as OpenClawConfig,
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["+15555550123"],
+      logWarning,
+      message: {
+        id: 9901,
+        chat_id: 123,
+        text: "@openclaw hello",
+        is_group: true,
+      },
+      messageText: "@openclaw hello",
+      bodyText: "@openclaw hello",
+    });
+
+    expect(decision).toEqual({ kind: "drop", reason: "group id not in allowlist" });
+    expect(logWarning).toHaveBeenCalledWith(
+      "imessage: skipping group message (123) not in allowlist",
+    );
+  });
 });
 
 describe("describeIMessageEchoDropLog", () => {

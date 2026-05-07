@@ -296,6 +296,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       echoCache: sentMessageCache,
       selfChatCache,
       logVerbose,
+      logWarning: (message) => runtime.log?.(warn(message)),
     });
 
     // Build conversation key for rate limiting (used by both drop and dispatch paths).
