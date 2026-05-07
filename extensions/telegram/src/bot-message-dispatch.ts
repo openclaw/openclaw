@@ -215,12 +215,11 @@ function resolveTelegramReasoningLevel(params: {
   canUseReasoningState: boolean;
 }): TelegramReasoningLevel {
   const { cfg, sessionKey, agentId, telegramDeps, canUseReasoningState } = params;
-  // Explicit session-stored "off" must stop the chain rather than fall through
-  // to configured defaults, otherwise a global agents.defaults.reasoningDefault
-  // can re-enable reasoning despite the user having explicitly turned it off
-  // via /reasoning. Mirrors the nullish-coalescing precedence at
-  // src/auto-reply/reply/get-reply-directives.ts:456.
-  if (sessionKey) {
+  // Gate session reads on authorization, mirroring the canonical resolver at
+  // src/auto-reply/reply/get-reply-directives.ts:446. A sender whose
+  // authorization was revoked after storing a /reasoning value should not
+  // continue to inherit that stored state on subsequent messages.
+  if (canUseReasoningState && sessionKey) {
     try {
       const storePath = telegramDeps.resolveStorePath(cfg.session?.store, { agentId });
       const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath, {
@@ -228,6 +227,11 @@ function resolveTelegramReasoningLevel(params: {
       });
       const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
       const level = entry?.reasoningLevel;
+      // Explicit session-stored "off" must stop the chain rather than fall
+      // through to configured defaults, otherwise a global reasoningDefault
+      // can re-enable reasoning despite the user having explicitly turned it
+      // off via /reasoning. Mirrors the nullish-coalescing precedence at
+      // src/auto-reply/reply/get-reply-directives.ts:456.
       if (level === "on" || level === "stream" || level === "off") {
         return level;
       }
@@ -237,9 +241,7 @@ function resolveTelegramReasoningLevel(params: {
   }
   // Configured defaults apply to any inbound message, so they need sender
   // authorization to avoid widening reasoning disclosure to senders who never
-  // explicitly opted in via /reasoning. Session-stored values above were
-  // already written under the /reasoning command's authorization, so they do
-  // not need a re-check here. Mirrors the configured-default gate at
+  // explicitly opted in via /reasoning. Mirrors the configured-default gate at
   // src/auto-reply/reply/get-reply-directives.ts:435.
   if (!canUseReasoningState) {
     return "off";
@@ -389,6 +391,11 @@ export const dispatchTelegramMessage = async ({
     sessionKey: ctxPayload.SessionKey,
     agentId: route.agentId,
     telegramDeps,
+    // ctxPayload.CommandAuthorized already folds in commands.allowFrom and
+    // owner status (bot-native-commands.ts:643–658). The canonical resolver's
+    // third arm — GatewayClientScopes.includes("operator.admin") — is not
+    // included here because gateway scopes flow via direct clients, not bot
+    // polling, so that path is unreachable on Telegram inbound.
     canUseReasoningState: Boolean(ctxPayload.CommandAuthorized),
   });
   const forceBlockStreamingForReasoning = resolvedReasoningLevel === "on";
