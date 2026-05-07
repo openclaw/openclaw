@@ -1,7 +1,10 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
+import {
+  isConfiguredAwsSdkAuthProfileForProvider,
+  resolveAuthProfileOrder,
+} from "../auth-profiles/order.js";
 import { ensureAuthProfileStore, hasAnyAuthProfileStoreSource } from "../auth-profiles/store.js";
 import { isProfileInCooldown } from "../auth-profiles/usage.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
@@ -20,12 +23,24 @@ function isProfileForProvider(params: {
   profileId: string;
   store: ReturnType<typeof ensureAuthProfileStore>;
 }): boolean {
+  const providerKey = resolveProviderIdForAuth(params.provider, { config: params.cfg });
   const entry = params.store.profiles[params.profileId];
-  if (!entry?.provider) {
+  if (entry) {
+    if (!entry.provider) {
+      return false;
+    }
+    return resolveProviderIdForAuth(entry.provider, { config: params.cfg }) === providerKey;
+  }
+  if (
+    !isConfiguredAwsSdkAuthProfileForProvider({
+      cfg: params.cfg,
+      provider: params.provider,
+      profileId: params.profileId,
+    })
+  ) {
     return false;
   }
-  const providerKey = resolveProviderIdForAuth(params.provider, { config: params.cfg });
-  return resolveProviderIdForAuth(entry.provider, { config: params.cfg }) === providerKey;
+  return true;
 }
 
 export async function clearSessionAuthProfileOverride(params: {
@@ -95,7 +110,11 @@ export async function resolveSessionAuthProfileOverride(params: {
         ? "user"
         : undefined);
 
-  if (current && !store.profiles[current]) {
+  if (
+    current &&
+    !store.profiles[current] &&
+    !isConfiguredAwsSdkAuthProfileForProvider({ cfg, provider, profileId: current })
+  ) {
     await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
     current = undefined;
   }
