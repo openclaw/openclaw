@@ -156,6 +156,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Providers: preserve non-OK `text/event-stream` response bodies so provider HTTP errors keep their JSON detail instead of collapsing to generic streaming failures. Fixes #78180.
+- Gateway/auth: make explicit `trusted-proxy` mode fail closed instead of accepting local password fallback credentials after trusted-proxy identity checks fail. Fixes #78684.
 - Tools/session status: render the active heartbeat/run model for `session_status({"sessionKey":"current"})` instead of falling back to the persisted session default. Fixes #77493.
 - Doctor/secrets: allow safe inherited exec SecretRef `passEnv` names such as `HOME` while still blocking dangerous runtime env hooks. Fixes #78216.
 - Chat commands: make `/model default` reset the session model override instead of treating it as a literal model name. Fixes #78182.
