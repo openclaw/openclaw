@@ -4,6 +4,8 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "../shared/string-coerce.js";
+import { hasZeroTokenUsageSnapshot } from "./pi-embedded-runner/empty-assistant-turn.js";
+import { STREAM_ERROR_FALLBACK_TEXT } from "./stream-message-shared.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 import {
   REDACTED_SESSIONS_SPAWN_ATTACHMENT_CONTENT,
@@ -299,6 +301,106 @@ export function stripToolResultDetails(messages: AgentMessage[]): AgentMessage[]
     out.push(sanitized as unknown as AgentMessage);
   }
   return touched ? out : messages;
+}
+
+/**
+ * Remove the trailing assistant turn from the in-memory session copy when it has
+ * no usable model-visible content for prefill. Used at the embedded-runner
+ * boundary before fallback handoff and before normalized replay submission.
+ *
+ * Strip when the trailing assistant turn is one of:
+ *   - `stopReason === "error"` (the disk-repair rewriter sets this).
+ *   - any text-or-string content whose only non-whitespace is the
+ *     `STREAM_ERROR_FALLBACK_TEXT` sentinel (defense-in-depth in case the
+ *     rewriter omits the stopReason marker).
+ *   - `stopReason === "stop"` with empty content **and** zero-token usage
+ *     (false-success Bedrock zero-token shape, mirroring the boundary at
+ *     `src/agents/pi-embedded-runner/empty-assistant-turn.ts`).
+ *
+ * Preserve a trailing assistant turn that is a legitimate silent reply
+ * (`stopReason === "stop"` with empty content **and** nonzero usage) — that is
+ * a completed NO_REPLY response and must not be stripped from fallback
+ * snapshots or replay state.
+ */
+export function stripTrailingEmptyAssistantTurn(messages: AgentMessage[]): AgentMessage[] {
+  if (messages.length === 0) {
+    return messages;
+  }
+  const last = messages[messages.length - 1];
+  if (!last || typeof last !== "object" || (last as { role?: unknown }).role !== "assistant") {
+    return messages;
+  }
+  const stopReason = (last as { stopReason?: unknown }).stopReason;
+  if (stopReason === "error") {
+    return messages.slice(0, -1);
+  }
+  const content = (last as { content?: unknown }).content;
+  if (containsStreamErrorSentinel(content)) {
+    return messages.slice(0, -1);
+  }
+  if (!isEmptyAssistantContent(content)) {
+    return messages;
+  }
+  if (stopReason === "stop") {
+    const usage = (last as { usage?: unknown }).usage;
+    if (!hasZeroTokenUsageSnapshot(usage)) {
+      return messages;
+    }
+    return messages.slice(0, -1);
+  }
+  return messages.slice(0, -1);
+}
+
+function isEmptyAssistantContent(content: unknown): boolean {
+  if (content == null) {
+    return true;
+  }
+  if (typeof content === "string") {
+    const trimmed = content.trim();
+    return trimmed.length === 0 || trimmed === STREAM_ERROR_FALLBACK_TEXT;
+  }
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  if (content.length === 0) {
+    return true;
+  }
+  return content.every((block) => isEmptyAssistantContentBlock(block));
+}
+
+function isEmptyAssistantContentBlock(block: unknown): boolean {
+  if (!block || typeof block !== "object") {
+    return true;
+  }
+  const record = block as { type?: unknown; text?: unknown };
+  if (record.type !== "text") {
+    return false;
+  }
+  if (typeof record.text !== "string") {
+    return true;
+  }
+  const trimmed = record.text.trim();
+  return trimmed.length === 0 || trimmed === STREAM_ERROR_FALLBACK_TEXT;
+}
+
+function containsStreamErrorSentinel(content: unknown): boolean {
+  if (typeof content === "string") {
+    return content.trim() === STREAM_ERROR_FALLBACK_TEXT;
+  }
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const record = block as { type?: unknown; text?: unknown };
+    return (
+      record.type === "text" &&
+      typeof record.text === "string" &&
+      record.text.trim() === STREAM_ERROR_FALLBACK_TEXT
+    );
+  });
 }
 
 function repairToolCallInputs(

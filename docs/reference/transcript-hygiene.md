@@ -22,6 +22,7 @@ Scope includes:
 - Blank text-block cleanup before provider replay
 - User-input provenance tagging (for inter-session routed prompts)
 - Empty assistant error-turn repair for Bedrock Converse replay
+- Trailing empty assistant cleanup before fallback handoff
 
 If you need transcript storage details, see:
 
@@ -107,6 +108,43 @@ metadata both mark the turn as inter-session data.
 
 During context rebuild, OpenClaw applies the same marker to older persisted
 inter-session user turns that only have provenance metadata.
+
+---
+
+## Global rule: fallback tail cleanup
+
+When a provider attempt fails after appending an assistant turn with no usable
+model-visible content, OpenClaw removes that **trailing** assistant turn from
+the in-memory session copy before dispatching fallback or retry work. This
+prevents the fallback provider from receiving a stale prefill-like assistant
+tail that was created by the failed attempt instead of by a completed model
+response. Required for LiteLLM/Vertex-routed Claude, which rejects any
+conversation ending in an assistant message.
+
+The repair is intentionally narrow:
+
+- It runs at the embedded-runner boundary (after `filterHeartbeatPairs`) and
+  again after replay normalization, before prompt submission.
+- It removes the final assistant turn when:
+  - `stopReason === "error"` (the disk-repair rewriter sets this), or
+  - the only non-whitespace text content is the
+    `[assistant turn failed before producing content]` sentinel
+    (defense-in-depth in case the rewriter omits the stopReason marker), or
+  - it is a zero-token false-success Bedrock empty-stop shape
+    (`stopReason === "stop"` with empty content **and** zero-usage tokens —
+    the same boundary used by `normalizeAssistantReplayContent` in
+    [`src/agents/pi-embedded-runner/empty-assistant-turn.ts`](https://github.com/openclaw/openclaw/blob/main/src/agents/pi-embedded-runner/empty-assistant-turn.ts)).
+- It **preserves** legitimate silent replies (`stopReason === "stop"` with
+  empty content but **nonzero usage**), so fallback handoff cannot delete a
+  completed silent response from snapshots and replay state.
+- It leaves earlier assistant turns and assistant turns with real text, tool
+  calls, or reasoning content intact.
+
+Implementation:
+
+- `stripTrailingEmptyAssistantTurn` in `src/agents/session-transcript-repair.ts`
+- Applied in `src/agents/pi-embedded-runner/run/attempt.ts` before fallback and
+  before normalized replay submission.
 
 ---
 

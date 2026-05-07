@@ -145,6 +145,7 @@ import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js"
 import {
   sanitizeToolUseResultPairing,
   stripToolResultDetails,
+  stripTrailingEmptyAssistantTurn,
 } from "../../session-transcript-repair.js";
 import {
   acquireSessionWriteLock,
@@ -2807,6 +2808,15 @@ export async function runEmbeddedAttempt(
           if (filteredMessages.length < activeSession.messages.length) {
             activeSession.agent.state.messages = filteredMessages;
           }
+          // Required for LiteLLM/Vertex-routed Claude which rejects any
+          // conversation ending in a failed/empty assistant prefill.
+          // session-file-repair.ts handles the jsonl on disk; this catches the
+          // in-flight message array so fallback dispatch sees a clean
+          // conversation. Legitimate silent replies are preserved.
+          const replaySafeMessages = stripTrailingEmptyAssistantTurn(activeSession.messages);
+          if (replaySafeMessages.length < activeSession.messages.length) {
+            activeSession.agent.state.messages = replaySafeMessages;
+          }
           prePromptMessageCount = activeSession.messages.length;
 
           const promptSubmission = resolveRuntimeContextPromptParts({
@@ -3196,6 +3206,16 @@ export async function runEmbeddedAttempt(
             if (normalizedReplayMessages !== activeSession.messages) {
               activeSession.agent.state.messages = normalizedReplayMessages;
             }
+            // Replay normalization can append a fresh empty/error assistant
+            // turn to activeSession.messages between filterHeartbeatPairs and
+            // this prompt submission, so re-run the trailing-empty strip here
+            // to keep the conversation tail user-only when handed to the next
+            // provider. Required for LiteLLM/Vertex-routed Claude which rejects
+            // any conversation ending in an assistant message.
+            const replaySafeMessages = stripTrailingEmptyAssistantTurn(activeSession.messages);
+            if (replaySafeMessages.length < activeSession.messages.length) {
+              activeSession.agent.state.messages = replaySafeMessages;
+            }
             finalPromptText = promptForModel;
             trajectoryRecorder?.recordEvent("prompt.submitted", {
               prompt: promptForModel,
@@ -3203,7 +3223,7 @@ export async function runEmbeddedAttempt(
               messages: activeSession.messages,
               imagesCount: imageResult.images.length,
             });
-            const btwSnapshotMessages = normalizedReplayMessages.slice(-MAX_BTW_SNAPSHOT_MESSAGES);
+            const btwSnapshotMessages = activeSession.messages.slice(-MAX_BTW_SNAPSHOT_MESSAGES);
             updateActiveEmbeddedRunSnapshot(params.sessionId, {
               transcriptLeafId,
               messages: btwSnapshotMessages,
