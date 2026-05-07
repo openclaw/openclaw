@@ -6,7 +6,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 
 vi.mock("../../config/config.js", () => {
   return {
-    loadConfig: vi.fn(() => ({
+    getRuntimeConfig: vi.fn(() => ({
       agents: {
         list: [{ id: "main" }, { id: "opus" }],
       },
@@ -52,18 +52,26 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
       }
       return [];
     }),
-    loadSessionCostSummary: vi.fn(async () => ({
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      totalCost: 0,
-      inputCost: 0,
-      outputCost: 0,
-      cacheReadCost: 0,
-      cacheWriteCost: 0,
-      missingCostEntries: 0,
+    loadSessionCostSummaryFromCache: vi.fn(async () => ({
+      summary: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        totalCost: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+      },
+      cacheStatus: {
+        status: "fresh",
+        cachedFiles: 1,
+        pendingFiles: 0,
+        staleFiles: 0,
+      },
     })),
     loadSessionUsageTimeSeries: vi.fn(async () => ({
       sessionId: "s-opus",
@@ -75,18 +83,26 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
 
 import {
   discoverAllSessions,
-  loadSessionCostSummary,
+  loadSessionCostSummaryFromCache,
   loadSessionLogs,
   loadSessionUsageTimeSeries,
 } from "../../infra/session-cost-usage.js";
 import { loadCombinedSessionStoreForGateway } from "../session-utils.js";
 import { usageHandlers } from "./usage.js";
 
+const TEST_RUNTIME_CONFIG = {
+  agents: {
+    list: [{ id: "main" }, { id: "opus" }],
+  },
+  session: {},
+};
+
 async function runSessionsUsage(params: Record<string, unknown>) {
   const respond = vi.fn();
   await usageHandlers["sessions.usage"]({
     respond,
     params,
+    context: { getRuntimeConfig: () => TEST_RUNTIME_CONFIG },
   } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
   return respond;
 }
@@ -96,6 +112,7 @@ async function runSessionsUsageTimeseries(params: Record<string, unknown>) {
   await usageHandlers["sessions.usage.timeseries"]({
     respond,
     params,
+    context: { getRuntimeConfig: () => TEST_RUNTIME_CONFIG },
   } as unknown as Parameters<(typeof usageHandlers)["sessions.usage.timeseries"]>[0]);
   return respond;
 }
@@ -105,6 +122,7 @@ async function runSessionsUsageLogs(params: Record<string, unknown>) {
   await usageHandlers["sessions.usage.logs"]({
     respond,
     params,
+    context: { getRuntimeConfig: () => TEST_RUNTIME_CONFIG },
   } as unknown as Parameters<(typeof usageHandlers)["sessions.usage.logs"]>[0]);
   return respond;
 }
@@ -179,10 +197,57 @@ describe("sessions.usage", () => {
         const sessions = expectSuccessfulSessionsUsage(respond);
         expect(sessions).toHaveLength(1);
         expect(sessions[0]?.key).toBe(storeKey);
-        expect(vi.mocked(loadSessionCostSummary)).toHaveBeenCalled();
+        expect(vi.mocked(loadSessionCostSummaryFromCache)).toHaveBeenCalled();
         expect(
-          vi.mocked(loadSessionCostSummary).mock.calls.some((call) => call[0]?.agentId === "opus"),
+          vi
+            .mocked(loadSessionCostSummaryFromCache)
+            .mock.calls.some((call) => call[0]?.agentId === "opus"),
         ).toBe(true);
+        expect(
+          vi
+            .mocked(loadSessionCostSummaryFromCache)
+            .mock.calls.every((call) => call[0]?.refreshMode === "sync-when-empty"),
+        ).toBe(true);
+      });
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers the deterministic store key when duplicate sessionIds exist", async () => {
+    const preferredKey = "agent:opus:acp:run-dup";
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const agentSessionsDir = path.join(stateDir, "agents", "opus", "sessions");
+        fs.mkdirSync(agentSessionsDir, { recursive: true });
+        const sessionFile = path.join(agentSessionsDir, "run-dup.jsonl");
+        fs.writeFileSync(sessionFile, "", "utf-8");
+
+        vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+          storePath: "(multiple)",
+          store: {
+            [preferredKey]: {
+              sessionId: "run-dup",
+              sessionFile: "run-dup.jsonl",
+              updatedAt: 1_000,
+            },
+            "agent:other:main": {
+              sessionId: "run-dup",
+              sessionFile: "run-dup.jsonl",
+              updatedAt: 2_000,
+            },
+          },
+        });
+
+        const respond = await runSessionsUsage({
+          ...BASE_USAGE_RANGE,
+          key: "agent:opus:run-dup",
+        });
+        const sessions = expectSuccessfulSessionsUsage(respond);
+        expect(sessions).toHaveLength(1);
+        expect(sessions[0]?.key).toBe(preferredKey);
       });
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });

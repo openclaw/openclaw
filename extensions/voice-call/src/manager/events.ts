@@ -1,17 +1,15 @@
 import crypto from "node:crypto";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
-import type { CallRecord, CallState, NormalizedEvent } from "../types.js";
+import { resolveVoiceCallEffectiveConfig, resolveVoiceCallSessionKey } from "../config.js";
+import type { CallRecord, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
+import { finalizeCall } from "./lifecycle.js";
 import { findCall } from "./lookup.js";
 import { endCall } from "./outbound.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
 import { persistCallRecord } from "./store.js";
-import {
-  clearMaxDurationTimer,
-  rejectTranscriptWaiter,
-  resolveTranscriptWaiter,
-  startMaxDurationTimer,
-} from "./timers.js";
+import { resolveTranscriptWaiter, startMaxDurationTimer } from "./timers.js";
 
 type EventContext = Pick<
   CallManagerContext,
@@ -67,6 +65,11 @@ function createWebhookCall(params: {
   to: string;
 }): CallRecord {
   const callId = crypto.randomUUID();
+  const effective = resolveVoiceCallEffectiveConfig(
+    params.ctx.config,
+    params.direction === "inbound" ? params.to : undefined,
+  );
+  const effectiveConfig = effective.config;
 
   const callRecord: CallRecord = {
     callId,
@@ -76,14 +79,20 @@ function createWebhookCall(params: {
     state: "ringing",
     from: params.from,
     to: params.to,
+    sessionKey: resolveVoiceCallSessionKey({
+      config: effectiveConfig,
+      callId,
+      phone: params.direction === "outbound" ? params.to : params.from,
+    }),
     startedAt: Date.now(),
     transcript: [],
     processedEventIds: [],
     metadata: {
       initialMessage:
         params.direction === "inbound"
-          ? params.ctx.config.inboundGreeting || "Hello! How can I help you today?"
+          ? effectiveConfig.inboundGreeting || "Hello! How can I help you today?"
           : undefined,
+      ...(effective.numberRouteKey ? { numberRouteKey: effective.numberRouteKey } : {}),
     },
   };
 
@@ -102,7 +111,6 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
   if (ctx.processedEventIds.has(dedupeKey)) {
     return;
   }
-  ctx.processedEventIds.add(dedupeKey);
 
   let call = findCall({
     activeCalls: ctx.activeCalls,
@@ -128,6 +136,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
         );
         return;
       }
+      ctx.processedEventIds.add(dedupeKey);
       if (ctx.rejectedProviderCallIds.has(pid)) {
         return;
       }
@@ -141,7 +150,8 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
           reason: "hangup-bot",
         })
         .catch((err) => {
-          const message = err instanceof Error ? err.message : String(err);
+          ctx.rejectedProviderCallIds.delete(pid);
+          const message = formatErrorMessage(err);
           console.warn(`[voice-call] Failed to reject inbound call ${pid}:`, message);
         });
       return;
@@ -175,11 +185,29 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
     }
   }
 
-  call.processedEventIds.push(dedupeKey);
+  const shouldCommitReplayKey = !(event.type === "call.error" && event.retryable);
+  if (shouldCommitReplayKey) {
+    ctx.processedEventIds.add(dedupeKey);
+    call.processedEventIds.push(dedupeKey);
+  }
 
   switch (event.type) {
     case "call.initiated":
       transitionState(call, "initiated");
+      if (call.direction === "inbound" && call.providerCallId && ctx.provider?.answerCall) {
+        void ctx.provider
+          .answerCall({
+            callId: call.callId,
+            providerCallId: call.providerCallId,
+          })
+          .catch((err) => {
+            const message = formatErrorMessage(err);
+            console.warn(
+              `[voice-call] Failed to answer inbound call ${call.providerCallId}:`,
+              message,
+            );
+          });
+      }
       break;
 
     case "call.ringing":
@@ -193,7 +221,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
         ctx,
         callId: call.callId,
         onTimeout: async (callId) => {
-          await endCall(ctx, callId);
+          await endCall(ctx, callId, { reason: "timeout" });
         },
       });
       ctx.onCallAnswered?.(call);
@@ -227,30 +255,32 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
       transitionState(call, "listening");
       break;
 
-    case "call.ended":
-      call.endedAt = event.timestamp;
-      call.endReason = event.reason;
-      transitionState(call, event.reason as CallState);
-      clearMaxDurationTimer(ctx, call.callId);
-      rejectTranscriptWaiter(ctx, call.callId, `Call ended: ${event.reason}`);
-      ctx.activeCalls.delete(call.callId);
-      if (call.providerCallId) {
-        ctx.providerCallIdMap.delete(call.providerCallId);
-      }
+    case "call.silence":
+    case "call.dtmf":
       break;
+
+    case "call.ended":
+      finalizeCall({
+        ctx,
+        call,
+        endReason: event.reason,
+        endedAt: event.timestamp,
+      });
+      return;
 
     case "call.error":
       if (!event.retryable) {
-        call.endedAt = event.timestamp;
-        call.endReason = "error";
-        transitionState(call, "error");
-        clearMaxDurationTimer(ctx, call.callId);
-        rejectTranscriptWaiter(ctx, call.callId, `Call error: ${event.error}`);
-        ctx.activeCalls.delete(call.callId);
-        if (call.providerCallId) {
-          ctx.providerCallIdMap.delete(call.providerCallId);
-        }
+        finalizeCall({
+          ctx,
+          call,
+          endReason: "error",
+          endedAt: event.timestamp,
+          transcriptRejectReason: `Call error: ${event.error}`,
+        });
+        return;
       }
+      // Keep retryable provider errors replayable so a redelivery can still
+      // drive later recovery or terminal handling for the same event key.
       break;
   }
 

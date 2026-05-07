@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
+import { sensitive } from "../config/zod-schema.sensitive.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
@@ -7,16 +8,21 @@ import {
   SECRET_PROVIDER_ALIAS_PATTERN,
 } from "../secrets/ref-contract.js";
 
-/** Build the shared zod schema for secret inputs accepted by plugin auth/config surfaces. */
 export function buildSecretInputSchema() {
-  const providerSchema = z
-    .string()
-    .regex(
-      SECRET_PROVIDER_ALIAS_PATTERN,
-      'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").',
-    );
+  return secretInputSchema;
+}
 
-  return z.union([
+const providerSchema = z
+  .string()
+  .regex(
+    SECRET_PROVIDER_ALIAS_PATTERN,
+    'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").',
+  );
+
+// Singleton registered with the sensitive registry so that mapSensitivePaths
+// marks every config field using this schema as sensitive (redacted).
+const secretInputSchema = z
+  .union([
     z.string(),
     z.discriminatedUnion("source", [
       z.object({
@@ -45,5 +51,5 @@ export function buildSecretInputSchema() {
         id: z.string().refine(isValidExecSecretRefId, formatExecSecretRefIdValidationMessage()),
       }),
     ]),
-  ]);
-}
+  ])
+  .register(sensitive);

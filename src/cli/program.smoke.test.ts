@@ -1,9 +1,11 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildProgram } from "./program.js";
 import {
   configureCommand,
   ensureConfigReady,
   installBaseProgramMocks,
   installSmokeProgramMocks,
+  runCrestodian,
   runTui,
   runtime,
   setupCommand,
@@ -23,8 +25,6 @@ vi.mock("./config-cli.js", () => ({
   runConfigUnset: vi.fn(),
 }));
 
-const { buildProgram } = await import("./program.js");
-
 describe("cli program (smoke)", () => {
   let program = createProgram();
 
@@ -36,26 +36,30 @@ describe("cli program (smoke)", () => {
     await program.parseAsync(argv, { from: "user" });
   }
 
-  beforeAll(() => {
-    program = createProgram();
-  });
-
   beforeEach(() => {
+    program = createProgram();
     vi.clearAllMocks();
     runTui.mockResolvedValue(undefined);
+    runCrestodian.mockResolvedValue(undefined);
     ensureConfigReady.mockResolvedValue(undefined);
   });
 
-  it("registers memory + status commands", () => {
+  it("registers message + status commands", () => {
     const names = program.commands.map((command) => command.name());
     expect(names).toContain("message");
-    expect(names).toContain("memory");
     expect(names).toContain("status");
   });
 
   it("runs tui with explicit timeout override", async () => {
     await runProgram(["tui", "--timeout-ms", "45000"]);
     expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 45000 }));
+  });
+
+  it("runs crestodian one-shot requests", async () => {
+    await runProgram(["crestodian", "--message", "status"]);
+    expect(runCrestodian).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "status", yes: false, json: false }),
+    );
   });
 
   it("warns and ignores invalid tui timeout override", async () => {

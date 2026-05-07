@@ -1,11 +1,18 @@
 import fs from "node:fs/promises";
-import { Static, Type } from "@sinclair/typebox";
-import type { AnyAgentTool, OpenClawPluginApi } from "../api.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { Static, Type } from "typebox";
+import type { AnyAgentTool, OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import { PlaywrightDiffScreenshotter, type DiffScreenshotter } from "./browser.js";
 import { resolveDiffImageRenderOptions } from "./config.js";
 import { renderDiffDocument } from "./render.js";
 import type { DiffArtifactStore } from "./store.js";
-import type { DiffRenderOptions, DiffToolDefaults } from "./types.js";
+import type {
+  DiffArtifactContext,
+  DiffRenderOptions,
+  DiffRenderTarget,
+  DiffToolDefaults,
+} from "./types.js";
 import {
   DIFF_IMAGE_QUALITY_PRESETS,
   DIFF_LAYOUTS,
@@ -27,11 +34,16 @@ const MAX_TITLE_BYTES = 1_024;
 const MAX_PATH_BYTES = 2_048;
 const MAX_LANG_BYTES = 128;
 
-function stringEnum<T extends readonly string[]>(values: T, description: string) {
+function stringEnum<T extends readonly string[]>(
+  values: T,
+  description: string,
+  options: { deprecated?: boolean } = {},
+) {
   return Type.Unsafe<T[number]>({
     type: "string",
     enum: [...values],
     description,
+    ...options,
   });
 }
 
@@ -64,7 +76,10 @@ const DiffsToolSchema = Type.Object(
       }),
     ),
     mode: Type.Optional(
-      stringEnum(DIFF_MODES, "Output mode: view, file, image, or both. Default: both."),
+      stringEnum(
+        DIFF_MODES,
+        "Output mode: view, file, image (deprecated alias for file), or both. Default: both.",
+      ),
     ),
     theme: Type.Optional(stringEnum(DIFF_THEMES, "Viewer theme. Default: dark.")),
     layout: Type.Optional(stringEnum(DIFF_LAYOUTS, "Diff layout. Default: unified.")),
@@ -86,20 +101,32 @@ const DiffsToolSchema = Type.Object(
         maximum: 2400,
       }),
     ),
+    /** @deprecated Use fileQuality. */
     imageQuality: Type.Optional(
-      stringEnum(DIFF_IMAGE_QUALITY_PRESETS, "Deprecated alias for fileQuality."),
+      stringEnum(DIFF_IMAGE_QUALITY_PRESETS, "Deprecated alias for fileQuality.", {
+        deprecated: true,
+      }),
     ),
-    imageFormat: Type.Optional(stringEnum(DIFF_OUTPUT_FORMATS, "Deprecated alias for fileFormat.")),
+    /** @deprecated Use fileFormat. */
+    imageFormat: Type.Optional(
+      stringEnum(DIFF_OUTPUT_FORMATS, "Deprecated alias for fileFormat.", {
+        deprecated: true,
+      }),
+    ),
+    /** @deprecated Use fileScale. */
     imageScale: Type.Optional(
       Type.Number({
         description: "Deprecated alias for fileScale.",
+        deprecated: true,
         minimum: 1,
         maximum: 4,
       }),
     ),
+    /** @deprecated Use fileMaxWidth. */
     imageMaxWidth: Type.Optional(
       Type.Number({
         description: "Deprecated alias for fileMaxWidth.",
+        deprecated: true,
         minimum: 640,
         maximum: 2400,
       }),
@@ -117,7 +144,7 @@ const DiffsToolSchema = Type.Object(
     baseUrl: Type.Optional(
       Type.String({
         description:
-          "Optional gateway base URL override used when building the viewer URL, for example https://gateway.example.com.",
+          "Optional gateway base URL override used when building the viewer URL. Overrides configured viewerBaseUrl, for example https://gateway.example.com.",
       }),
     ),
   },
@@ -126,7 +153,7 @@ const DiffsToolSchema = Type.Object(
 
 type DiffsToolParams = Static<typeof DiffsToolSchema>;
 type DiffsToolRawParams = DiffsToolParams & {
-  // Keep backward compatibility for direct calls that still pass `format`.
+  /** @deprecated Use fileFormat. */
   format?: DiffOutputFormat;
 };
 
@@ -134,7 +161,9 @@ export function createDiffsTool(params: {
   api: OpenClawPluginApi;
   store: DiffArtifactStore;
   defaults: DiffToolDefaults;
+  viewerBaseUrl?: string;
   screenshotter?: DiffScreenshotter;
+  context?: OpenClawPluginToolContext;
 }): AnyAgentTool {
   return {
     name: "diffs",
@@ -144,6 +173,7 @@ export function createDiffsTool(params: {
     parameters: DiffsToolSchema,
     execute: async (_toolCallId, rawParams) => {
       const toolParams = rawParams as DiffsToolRawParams;
+      const artifactContext = buildArtifactContext(params.context);
       const input = normalizeDiffInput(toolParams);
       const mode = normalizeMode(toolParams.mode, params.defaults.mode);
       const theme = normalizeTheme(toolParams.theme, params.defaults.theme);
@@ -159,16 +189,21 @@ export function createDiffsTool(params: {
         fileScale: toolParams.fileScale ?? toolParams.imageScale,
         fileMaxWidth: toolParams.fileMaxWidth ?? toolParams.imageMaxWidth,
       });
+      const renderTarget = resolveRenderTarget(mode);
 
-      const rendered = await renderDiffDocument(input, {
-        presentation: {
-          ...params.defaults,
-          layout,
-          theme,
+      const rendered = await renderDiffDocument(
+        input,
+        {
+          presentation: {
+            ...params.defaults,
+            layout,
+            theme,
+          },
+          image,
+          expandUnchanged,
         },
-        image,
-        expandUnchanged,
-      });
+        renderTarget,
+      );
 
       const screenshotter =
         params.screenshotter ?? new PlaywrightDiffScreenshotter({ config: params.api.config });
@@ -177,10 +212,11 @@ export function createDiffsTool(params: {
         const artifactFile = await renderDiffArtifactFile({
           screenshotter,
           store: params.store,
-          html: rendered.imageHtml,
+          html: requireRenderedHtml(rendered.imageHtml, "image"),
           theme,
           image,
           ttlMs,
+          context: artifactContext,
         });
 
         return {
@@ -195,10 +231,13 @@ export function createDiffsTool(params: {
           ],
           details: buildArtifactDetails({
             baseDetails: {
+              ...(artifactFile.artifactId ? { artifactId: artifactFile.artifactId } : {}),
+              ...(artifactFile.expiresAt ? { expiresAt: artifactFile.expiresAt } : {}),
               title: rendered.title,
               inputKind: rendered.inputKind,
               fileCount: rendered.fileCount,
               mode,
+              ...(artifactContext ? { context: artifactContext } : {}),
             },
             artifactFile,
             image,
@@ -207,17 +246,18 @@ export function createDiffsTool(params: {
       }
 
       const artifact = await params.store.createArtifact({
-        html: rendered.html,
+        html: requireRenderedHtml(rendered.html, "viewer"),
         title: rendered.title,
         inputKind: rendered.inputKind,
         fileCount: rendered.fileCount,
         ttlMs,
+        context: artifactContext,
       });
 
       const viewerUrl = buildViewerUrl({
         config: params.api.config,
         viewerPath: artifact.viewerPath,
-        baseUrl: normalizeBaseUrl(toolParams.baseUrl),
+        baseUrl: normalizeBaseUrl(toolParams.baseUrl) ?? params.viewerBaseUrl,
       });
 
       const baseDetails = {
@@ -229,6 +269,7 @@ export function createDiffsTool(params: {
         inputKind: artifact.inputKind,
         fileCount: artifact.fileCount,
         mode,
+        ...(artifactContext ? { context: artifactContext } : {}),
       };
 
       if (mode === "view") {
@@ -248,7 +289,7 @@ export function createDiffsTool(params: {
           screenshotter,
           store: params.store,
           artifactId: artifact.id,
-          html: rendered.imageHtml,
+          html: requireRenderedHtml(rendered.imageHtml, "image"),
           theme,
           image,
         });
@@ -273,19 +314,18 @@ export function createDiffsTool(params: {
         };
       } catch (error) {
         if (mode === "both") {
+          const errorMessage = formatErrorMessage(error);
           return {
             content: [
               {
                 type: "text",
-                text:
-                  `Diff viewer ready.\n${viewerUrl}\n` +
-                  `File rendering failed: ${error instanceof Error ? error.message : String(error)}`,
+                text: `Diff viewer ready.\n${viewerUrl}\nFile rendering failed: ${errorMessage}`,
               },
             ],
             details: {
               ...baseDetails,
-              fileError: error instanceof Error ? error.message : String(error),
-              imageError: error instanceof Error ? error.message : String(error),
+              fileError: errorMessage,
+              imageError: errorMessage,
             },
           };
         }
@@ -307,6 +347,23 @@ function normalizeOutputFormat(format: DiffOutputFormat | undefined): DiffOutput
 
 function isArtifactOnlyMode(mode: DiffMode): mode is "image" | "file" {
   return mode === "image" || mode === "file";
+}
+
+function resolveRenderTarget(mode: DiffMode): DiffRenderTarget {
+  if (mode === "view") {
+    return "viewer";
+  }
+  if (isArtifactOnlyMode(mode)) {
+    return "image";
+  }
+  return "both";
+}
+
+function requireRenderedHtml(html: string | undefined, target: DiffRenderTarget): string {
+  if (html !== undefined) {
+    return html;
+  }
+  throw new Error(`Missing ${target} render output.`);
 }
 
 function buildArtifactDetails(params: {
@@ -351,15 +408,18 @@ async function renderDiffArtifactFile(params: {
   theme: DiffTheme;
   image: DiffRenderOptions["image"];
   ttlMs?: number;
-}): Promise<{ path: string; bytes: number }> {
+  context?: DiffArtifactContext;
+}): Promise<{ path: string; bytes: number; artifactId?: string; expiresAt?: string }> {
+  const standaloneArtifact = params.artifactId
+    ? undefined
+    : await params.store.createStandaloneFileArtifact({
+        format: params.image.format,
+        ttlMs: params.ttlMs,
+        context: params.context,
+      });
   const outputPath = params.artifactId
     ? params.store.allocateFilePath(params.artifactId, params.image.format)
-    : (
-        await params.store.createStandaloneFileArtifact({
-          format: params.image.format,
-          ttlMs: params.ttlMs,
-        })
-      ).filePath;
+    : standaloneArtifact!.filePath;
 
   await params.screenshotter.screenshotHtml({
     html: params.html,
@@ -372,7 +432,28 @@ async function renderDiffArtifactFile(params: {
   return {
     path: outputPath,
     bytes: stats.size,
+    ...(standaloneArtifact?.id ? { artifactId: standaloneArtifact.id } : {}),
+    ...(standaloneArtifact?.expiresAt ? { expiresAt: standaloneArtifact.expiresAt } : {}),
   };
+}
+
+function buildArtifactContext(
+  context: OpenClawPluginToolContext | undefined,
+): DiffArtifactContext | undefined {
+  if (!context) {
+    return undefined;
+  }
+
+  const artifactContext = {
+    agentId: normalizeOptionalString(context.agentId),
+    sessionId: normalizeOptionalString(context.sessionId),
+    messageChannel: normalizeOptionalString(context.messageChannel),
+    agentAccountId: normalizeOptionalString(context.agentAccountId),
+  };
+
+  return Object.values(artifactContext).some((value) => value !== undefined)
+    ? artifactContext
+    : undefined;
 }
 
 function normalizeDiffInput(params: DiffsToolParams): DiffInput {
@@ -401,9 +482,9 @@ function normalizeDiffInput(params: DiffsToolParams): DiffInput {
   }
   assertMaxBytes(before, "before", MAX_BEFORE_AFTER_BYTES);
   assertMaxBytes(after, "after", MAX_BEFORE_AFTER_BYTES);
-  const path = params.path?.trim() || undefined;
-  const lang = params.lang?.trim() || undefined;
-  const title = params.title?.trim() || undefined;
+  const path = normalizeOptionalString(params.path);
+  const lang = normalizeOptionalString(params.lang);
+  const title = normalizeOptionalString(params.title);
   if (path) {
     assertMaxBytes(path, "path", MAX_PATH_BYTES);
   }

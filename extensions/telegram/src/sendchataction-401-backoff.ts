@@ -1,8 +1,10 @@
+import type { Bot } from "grammy";
 import {
   computeBackoff,
   sleepWithAbort,
   type BackoffPolicy,
-} from "openclaw/plugin-sdk/infra-runtime";
+} from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 export type TelegramSendChatActionLogger = (message: string) => void;
 
@@ -19,11 +21,13 @@ type ChatAction =
   | "upload_video_note"
   | "choose_sticker";
 
+type TelegramSendChatActionParams = Parameters<Bot["api"]["sendChatAction"]>[2];
+
 type SendChatActionFn = (
   chatId: number | string,
   action: ChatAction,
-  threadParams?: unknown,
-) => Promise<unknown>;
+  threadParams?: TelegramSendChatActionParams,
+) => Promise<true>;
 
 export type TelegramSendChatActionHandler = {
   /**
@@ -33,7 +37,7 @@ export type TelegramSendChatActionHandler = {
   sendChatAction: (
     chatId: number | string,
     action: ChatAction,
-    threadParams?: unknown,
+    threadParams?: TelegramSendChatActionParams,
   ) => Promise<void>;
   isSuspended: () => boolean;
   reset: () => void;
@@ -57,7 +61,9 @@ function is401Error(error: unknown): boolean {
     return false;
   }
   const message = error instanceof Error ? error.message : JSON.stringify(error);
-  return message.includes("401") || message.toLowerCase().includes("unauthorized");
+  return (
+    message.includes("401") || normalizeLowercaseStringOrEmpty(message).includes("unauthorized")
+  );
 }
 
 /**
@@ -85,7 +91,7 @@ export function createTelegramSendChatActionHandler({
   const sendChatAction = async (
     chatId: number | string,
     action: ChatAction,
-    threadParams?: unknown,
+    threadParams?: TelegramSendChatActionParams,
   ): Promise<void> => {
     if (suspended) {
       return;

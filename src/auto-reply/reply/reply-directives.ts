@@ -1,23 +1,31 @@
 import { splitMediaFromOutput } from "../../media/parse.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../tokens.js";
 
 export type ReplyDirectiveParseResult = {
   text: string;
   mediaUrls?: string[];
   mediaUrl?: string;
   replyToId?: string;
-  replyToCurrent: boolean;
+  replyToCurrent?: boolean;
   replyToTag: boolean;
   audioAsVoice?: boolean;
   isSilent: boolean;
 };
 
+export type ReplyDirectiveParseOptions = {
+  currentMessageId?: string;
+  silentToken?: string;
+  extractMarkdownImages?: boolean;
+};
+
 export function parseReplyDirectives(
   raw: string,
-  options: { currentMessageId?: string; silentToken?: string } = {},
+  options: ReplyDirectiveParseOptions = {},
 ): ReplyDirectiveParseResult {
-  const split = splitMediaFromOutput(raw);
+  const split = splitMediaFromOutput(raw, {
+    extractMarkdownImages: options.extractMarkdownImages,
+  });
   let text = split.text ?? "";
 
   const replyParsed = parseInlineDirectives(text, {
@@ -31,7 +39,7 @@ export function parseReplyDirectives(
   }
 
   const silentToken = options.silentToken ?? SILENT_REPLY_TOKEN;
-  const isSilent = isSilentReplyText(text, silentToken);
+  const isSilent = isSilentReplyPayloadText(text, silentToken);
   if (isSilent) {
     text = "";
   }
@@ -41,7 +49,7 @@ export function parseReplyDirectives(
     mediaUrls: split.mediaUrls,
     mediaUrl: split.mediaUrl,
     replyToId: replyParsed.replyToId,
-    replyToCurrent: replyParsed.replyToCurrent,
+    replyToCurrent: replyParsed.replyToCurrent || undefined,
     replyToTag: replyParsed.hasReplyTag,
     audioAsVoice: split.audioAsVoice,
     isSilent,

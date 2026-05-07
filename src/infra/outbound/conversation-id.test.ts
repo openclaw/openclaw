@@ -14,6 +14,11 @@ describe("resolveConversationIdFromTargets", () => {
       expected: "123456789",
     },
     {
+      name: "truncates decimal numeric thread ids",
+      params: { threadId: 42.9, targets: ["channel:987654321"] },
+      expected: "42",
+    },
+    {
       name: "falls back when the thread id is blank",
       params: { threadId: "   ", targets: ["channel:987654321"] },
       expected: "987654321",
@@ -32,6 +37,26 @@ describe("resolveConversationIdFromTargets", () => {
       name: "trims channel target ids",
       targets: ["channel: 987654321 "],
       expected: "987654321",
+    },
+    {
+      name: "extracts room ids from Matrix room targets",
+      targets: ["room:!room:example.org"],
+      expected: "!room:example.org",
+    },
+    {
+      name: "extracts ids from explicit conversation targets",
+      targets: ["conversation:19:abc@thread.tacv2"],
+      expected: "19:abc@thread.tacv2",
+    },
+    {
+      name: "extracts ids from explicit group targets",
+      targets: ["group:1471383327500481391"],
+      expected: "1471383327500481391",
+    },
+    {
+      name: "extracts ids from explicit dm targets",
+      targets: ["dm:alice"],
+      expected: "alice",
     },
     {
       name: "extracts ids from Discord channel mentions",

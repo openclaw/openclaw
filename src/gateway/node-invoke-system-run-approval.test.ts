@@ -12,8 +12,16 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     connId: "conn-1",
     connect: {
       scopes: ["operator.write", "operator.approvals"],
+      client: { id: "cli-1", mode: "cli" },
       device: { id: "dev-1" },
-      client: { id: "cli-1" },
+    },
+  };
+  const trustedBackendClient = {
+    connId: "backend-conn",
+    connect: {
+      scopes: ["operator.write", "operator.approvals"],
+      client: { id: "gateway-client", mode: "backend" },
+      device: null,
     },
   };
 
@@ -45,6 +53,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       requestedByConnId: "conn-1",
       requestedByDeviceId: "dev-1",
       requestedByClientId: "cli-1",
+      requestedByDeviceTokenAuth: false,
       resolvedAtMs: now - 500,
       decision: "allow-once",
       resolvedBy: "operator",
@@ -336,33 +345,6 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expectRejectedForwardingResult(result, "APPROVAL_ENV_MISMATCH");
   });
 
-  test("accepts matching env hash with reordered keys", () => {
-    const record = makeRecord("git diff", ["git", "diff"]);
-    const binding = buildSystemRunApprovalEnvBinding({ SAFE_A: "1", SAFE_B: "2" });
-    record.request.systemRunBinding = {
-      argv: ["git", "diff"],
-      cwd: null,
-      agentId: null,
-      sessionKey: null,
-      envHash: binding.envHash,
-    };
-    const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: {
-        command: ["git", "diff"],
-        rawCommand: "git diff",
-        env: { SAFE_B: "2", SAFE_A: "1" },
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
-      },
-      nodeId: "node-1",
-      client,
-      execApprovalManager: manager(record),
-      nowMs: now,
-    });
-    expectAllowOnceForwardingResult(result);
-  });
-
   test("consumes allow-once approvals and blocks same runId replay", async () => {
     const approvalManager = new ExecApprovalManager();
     const runId = "approval-replay-1";
@@ -388,6 +370,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     record.requestedByConnId = "conn-1";
     record.requestedByDeviceId = "dev-1";
     record.requestedByClientId = "cli-1";
+    record.requestedByDeviceTokenAuth = false;
 
     const decisionPromise = approvalManager.register(record, 60_000);
     approvalManager.resolve(runId, "allow-once", "operator");
@@ -452,5 +435,114 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       nowMs: now,
     });
     expectRejectedForwardingResult(result, "APPROVAL_NODE_MISMATCH", "not valid for this node");
+  });
+
+  test("accepts trusted backend replay for no-device approval after the request connection changes", () => {
+    const record = makeRecord("echo SAFE", ["echo", "SAFE"]);
+    record.requestedByConnId = "control-ui-conn";
+    record.requestedByDeviceId = null;
+    record.requestedByClientId = "openclaw-control-ui";
+    record.requestedByDeviceTokenAuth = false;
+
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        rawCommand: "echo SAFE",
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client: trustedBackendClient,
+      execApprovalManager: manager(record),
+      nowMs: now,
+    });
+
+    expectAllowOnceForwardingResult(result);
+  });
+
+  test("rejects no-device approval replay from a backend client without approval scope", () => {
+    const record = makeRecord("echo SAFE", ["echo", "SAFE"]);
+    record.requestedByConnId = "control-ui-conn";
+    record.requestedByDeviceId = null;
+    record.requestedByClientId = "openclaw-control-ui";
+    record.requestedByDeviceTokenAuth = false;
+
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        rawCommand: "echo SAFE",
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client: {
+        ...trustedBackendClient,
+        connect: {
+          ...trustedBackendClient.connect,
+          scopes: ["operator.write"],
+        },
+      },
+      execApprovalManager: manager(record),
+      nowMs: now,
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
+  });
+
+  test("rejects no-device approval replay from a non-backend client on a different connection", () => {
+    const record = makeRecord("echo SAFE", ["echo", "SAFE"]);
+    record.requestedByConnId = "control-ui-conn";
+    record.requestedByDeviceId = null;
+    record.requestedByClientId = "openclaw-control-ui";
+    record.requestedByDeviceTokenAuth = false;
+
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        rawCommand: "echo SAFE",
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client: {
+        connId: "other-control-ui-conn",
+        connect: {
+          scopes: ["operator.write", "operator.approvals"],
+          client: { id: "openclaw-control-ui", mode: "ui" },
+          device: null,
+        },
+      },
+      execApprovalManager: manager(record),
+      nowMs: now,
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
+  });
+
+  test("rejects no-device approval replay when the original request used device-token auth", () => {
+    const record = makeRecord("echo SAFE", ["echo", "SAFE"]);
+    record.requestedByConnId = "control-ui-conn";
+    record.requestedByDeviceId = null;
+    record.requestedByClientId = "openclaw-control-ui";
+    record.requestedByDeviceTokenAuth = true;
+
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        rawCommand: "echo SAFE",
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client: trustedBackendClient,
+      execApprovalManager: manager(record),
+      nowMs: now,
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
   });
 });

@@ -1,3 +1,4 @@
+import { channelRouteCompactKey } from "../../../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import {
@@ -22,6 +23,13 @@ const FOLLOWUP_RUN_CALLBACKS = resolveGlobalMap<string, (run: FollowupRun) => Pr
   FOLLOWUP_DRAIN_CALLBACKS_KEY,
 );
 
+export function rememberFollowupDrainCallback(
+  key: string,
+  runFollowup: (run: FollowupRun) => Promise<void>,
+): void {
+  FOLLOWUP_RUN_CALLBACKS.set(key, runFollowup);
+}
+
 export function clearFollowupDrainCallback(key: string): void {
   FOLLOWUP_RUN_CALLBACKS.delete(key);
 }
@@ -41,14 +49,108 @@ type OriginRoutingMetadata = Pick<
 >;
 
 function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetadata {
-  return {
-    originatingChannel: items.find((item) => item.originatingChannel)?.originatingChannel,
-    originatingTo: items.find((item) => item.originatingTo)?.originatingTo,
-    originatingAccountId: items.find((item) => item.originatingAccountId)?.originatingAccountId,
+  const metadata: OriginRoutingMetadata = {};
+  for (const item of items) {
+    if (!metadata.originatingChannel && item.originatingChannel) {
+      metadata.originatingChannel = item.originatingChannel;
+    }
+    if (!metadata.originatingTo && item.originatingTo) {
+      metadata.originatingTo = item.originatingTo;
+    }
+    if (!metadata.originatingAccountId && item.originatingAccountId) {
+      metadata.originatingAccountId = item.originatingAccountId;
+    }
     // Support both number (Telegram topic) and string (Slack thread_ts) thread IDs.
-    originatingThreadId: items.find(
-      (item) => item.originatingThreadId != null && item.originatingThreadId !== "",
-    )?.originatingThreadId,
+    if (
+      metadata.originatingThreadId == null &&
+      item.originatingThreadId != null &&
+      item.originatingThreadId !== ""
+    ) {
+      metadata.originatingThreadId = item.originatingThreadId;
+    }
+    if (
+      metadata.originatingChannel &&
+      metadata.originatingTo &&
+      metadata.originatingAccountId &&
+      metadata.originatingThreadId != null
+    ) {
+      break;
+    }
+  }
+  return metadata;
+}
+
+// Keep this key aligned with the fields that affect per-message authorization or
+// exec-context propagation in collect-mode batching. Display-only sender fields
+// stay out of the key so profile/name drift does not force conservative splits.
+// Fields like authProfileId, elevatedLevel, ownerNumbers, and config are
+// intentionally excluded because they are session-level or not consulted in
+// per-message authorization checks.
+export function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string {
+  return JSON.stringify([
+    run.senderId ?? "",
+    run.senderE164 ?? "",
+    run.senderIsOwner === true,
+    run.execOverrides?.host ?? "",
+    run.execOverrides?.security ?? "",
+    run.execOverrides?.ask ?? "",
+    run.execOverrides?.node ?? "",
+    run.bashElevated?.enabled === true,
+    run.bashElevated?.allowed === true,
+    run.bashElevated?.defaultLevel ?? "",
+  ]);
+}
+
+function splitCollectItemsByAuthorization(items: FollowupRun[]): FollowupRun[][] {
+  if (items.length <= 1) {
+    return items.length === 0 ? [] : [items];
+  }
+
+  const groups: FollowupRun[][] = [];
+  let currentGroup: FollowupRun[] = [];
+  let currentKey: string | undefined;
+
+  for (const item of items) {
+    const itemKey = resolveFollowupAuthorizationKey(item.run);
+    if (currentGroup.length === 0 || itemKey === currentKey) {
+      currentGroup.push(item);
+      currentKey = itemKey;
+      continue;
+    }
+
+    groups.push(currentGroup);
+    currentGroup = [item];
+    currentKey = itemKey;
+  }
+
+  if (currentGroup.length > 0) {
+    groups.push(currentGroup);
+  }
+
+  return groups;
+}
+
+function renderCollectItem(item: FollowupRun, idx: number): string {
+  const senderLabel =
+    item.run.senderName ?? item.run.senderUsername ?? item.run.senderId ?? item.run.senderE164;
+  const senderSuffix = senderLabel ? ` (from ${senderLabel})` : "";
+  return `---\nQueued #${idx + 1}${senderSuffix}\n${item.prompt}`.trim();
+}
+
+function collectQueuedImages(items: FollowupRun[]): Pick<FollowupRun, "images" | "imageOrder"> {
+  const images: NonNullable<FollowupRun["images"]> = [];
+  const imageOrder: NonNullable<FollowupRun["imageOrder"]> = [];
+  for (const item of items) {
+    if (item.images) {
+      images.push(...item.images);
+    }
+    if (item.imageOrder) {
+      imageOrder.push(...item.imageOrder);
+    }
+  }
+  return {
+    ...(images.length > 0 ? { images } : {}),
+    ...(imageOrder.length > 0 ? { imageOrder } : {}),
   };
 }
 
@@ -61,11 +163,8 @@ function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string
   if (!isRoutableChannel(channel) || !to) {
     return { cross: true };
   }
-  // Support both number (Telegram topic IDs) and string (Slack thread_ts) thread IDs.
-  const threadKey = threadId != null && threadId !== "" ? String(threadId) : "";
-  return {
-    key: [channel, to, accountId || "", threadKey].join("|"),
-  };
+  const key = channelRouteCompactKey({ channel, to, accountId, threadId });
+  return key ? { key } : { cross: true };
 }
 
 export function scheduleFollowupDrain(
@@ -76,9 +175,10 @@ export function scheduleFollowupDrain(
   if (!queue) {
     return;
   }
+  const effectiveRunFollowup = FOLLOWUP_RUN_CALLBACKS.get(key) ?? runFollowup;
   // Cache callback only when a drain actually starts. Avoid keeping stale
   // callbacks around from finalize calls where no queue work is pending.
-  FOLLOWUP_RUN_CALLBACKS.set(key, runFollowup);
+  rememberFollowupDrainCallback(key, effectiveRunFollowup);
   void (async () => {
     try {
       const collectState = { forceIndividualCollect: false };
@@ -97,9 +197,21 @@ export function scheduleFollowupDrain(
             collectState,
             isCrossChannel,
             items: queue.items,
-            run: runFollowup,
+            run: effectiveRunFollowup,
           });
           if (collectDrainResult === "empty") {
+            const summaryOnlyPrompt = previewQueueSummaryPrompt({ state: queue, noun: "message" });
+            const run = queue.lastRun;
+            if (summaryOnlyPrompt && run) {
+              await effectiveRunFollowup({
+                prompt: summaryOnlyPrompt,
+                run,
+                enqueuedAt: Date.now(),
+                ...collectQueuedImages(queue.items),
+              });
+              clearQueueSummaryState(queue);
+              continue;
+            }
             break;
           }
           if (collectDrainResult === "drained") {
@@ -108,28 +220,47 @@ export function scheduleFollowupDrain(
 
           const items = queue.items.slice();
           const summary = previewQueueSummaryPrompt({ state: queue, noun: "message" });
-          const run = items.at(-1)?.run ?? queue.lastRun;
-          if (!run) {
-            break;
+          const authGroups = splitCollectItemsByAuthorization(items);
+          if (authGroups.length === 0) {
+            const run = queue.lastRun;
+            if (!summary || !run) {
+              break;
+            }
+            await effectiveRunFollowup({
+              prompt: summary,
+              run,
+              enqueuedAt: Date.now(),
+            });
+            clearQueueSummaryState(queue);
+            continue;
           }
 
-          const routing = resolveOriginRoutingMetadata(items);
+          let pendingSummary = summary;
+          for (const groupItems of authGroups) {
+            const run = groupItems.at(-1)?.run ?? queue.lastRun;
+            if (!run) {
+              break;
+            }
 
-          const prompt = buildCollectPrompt({
-            title: "[Queued messages while agent was busy]",
-            items,
-            summary,
-            renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
-          });
-          await runFollowup({
-            prompt,
-            run,
-            enqueuedAt: Date.now(),
-            ...routing,
-          });
-          queue.items.splice(0, items.length);
-          if (summary) {
-            clearQueueSummaryState(queue);
+            const routing = resolveOriginRoutingMetadata(groupItems);
+            const prompt = buildCollectPrompt({
+              title: "[Queued messages while agent was busy]",
+              items: groupItems,
+              summary: pendingSummary,
+              renderItem: renderCollectItem,
+            });
+            await effectiveRunFollowup({
+              prompt,
+              run,
+              enqueuedAt: Date.now(),
+              ...routing,
+              ...collectQueuedImages(groupItems),
+            });
+            queue.items.splice(0, groupItems.length);
+            if (pendingSummary) {
+              clearQueueSummaryState(queue);
+              pendingSummary = undefined;
+            }
           }
           continue;
         }
@@ -142,7 +273,7 @@ export function scheduleFollowupDrain(
           }
           if (
             !(await drainNextQueueItem(queue.items, async (item) => {
-              await runFollowup({
+              await effectiveRunFollowup({
                 prompt: summaryPrompt,
                 run,
                 enqueuedAt: Date.now(),
@@ -150,6 +281,7 @@ export function scheduleFollowupDrain(
                 originatingTo: item.originatingTo,
                 originatingAccountId: item.originatingAccountId,
                 originatingThreadId: item.originatingThreadId,
+                ...collectQueuedImages([item]),
               });
             }))
           ) {
@@ -159,7 +291,7 @@ export function scheduleFollowupDrain(
           continue;
         }
 
-        if (!(await drainNextQueueItem(queue.items, runFollowup))) {
+        if (!(await drainNextQueueItem(queue.items, effectiveRunFollowup))) {
           break;
         }
       }
@@ -170,8 +302,9 @@ export function scheduleFollowupDrain(
       queue.draining = false;
       if (queue.items.length === 0 && queue.droppedCount === 0) {
         FOLLOWUP_QUEUES.delete(key);
+        clearFollowupDrainCallback(key);
       } else {
-        scheduleFollowupDrain(key, runFollowup);
+        scheduleFollowupDrain(key, effectiveRunFollowup);
       }
     }
   })();

@@ -3,6 +3,7 @@ import {
   evaluateMissingDeviceIdentity,
   isTrustedProxyControlUiOperatorAuth,
   resolveControlUiAuthPolicy,
+  shouldClearUnboundScopesForMissingDeviceIdentity,
   shouldSkipControlUiPairing,
 } from "./connect-policy.js";
 
@@ -250,6 +251,47 @@ describe("ws connect policy", () => {
     expect(shouldSkipControlUiPairing(controlUi, "operator", false)).toBe(false);
   });
 
+  test("tailscale auth skips pairing only for operator control-ui with device identity", () => {
+    const device = {
+      id: "dev-1",
+      publicKey: "pk",
+      signature: "sig",
+      signedAt: Date.now(),
+      nonce: "nonce-1",
+    };
+    const controlUiWithDevice = resolveControlUiAuthPolicy({
+      isControlUi: true,
+      controlUiConfig: undefined,
+      deviceRaw: device,
+    });
+    const controlUiWithoutDevice = resolveControlUiAuthPolicy({
+      isControlUi: true,
+      controlUiConfig: undefined,
+      deviceRaw: null,
+    });
+    const nonControlUiWithDevice = resolveControlUiAuthPolicy({
+      isControlUi: false,
+      controlUiConfig: undefined,
+      deviceRaw: device,
+    });
+
+    expect(
+      shouldSkipControlUiPairing(controlUiWithDevice, "operator", false, "token", "tailscale"),
+    ).toBe(true);
+    expect(
+      shouldSkipControlUiPairing(controlUiWithoutDevice, "operator", false, "token", "tailscale"),
+    ).toBe(false);
+    expect(
+      shouldSkipControlUiPairing(controlUiWithDevice, "node", false, "token", "tailscale"),
+    ).toBe(false);
+    expect(
+      shouldSkipControlUiPairing(nonControlUiWithDevice, "operator", false, "token", "tailscale"),
+    ).toBe(false);
+    expect(
+      shouldSkipControlUiPairing(controlUiWithDevice, "operator", false, "token", "token"),
+    ).toBe(false);
+  });
+
   test("trusted-proxy control-ui bypass only applies to operator + trusted-proxy auth", () => {
     const cases: Array<{
       role: "operator" | "node";
@@ -299,5 +341,73 @@ describe("ws connect policy", () => {
         }),
       ).toBe(tc.expected);
     }
+  });
+
+  test("clears unbound scopes for device-less shared auth outside explicit preservation cases", () => {
+    const nonControlUi = resolveControlUiAuthPolicy({
+      isControlUi: false,
+      controlUiConfig: undefined,
+      deviceRaw: null,
+    });
+    const controlUi = resolveControlUiAuthPolicy({
+      isControlUi: true,
+      controlUiConfig: { allowInsecureAuth: true },
+      deviceRaw: null,
+    });
+
+    expect(
+      shouldClearUnboundScopesForMissingDeviceIdentity({
+        decision: { kind: "allow" },
+        controlUiAuthPolicy: nonControlUi,
+        preserveInsecureLocalControlUiScopes: false,
+        authMethod: "token",
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldClearUnboundScopesForMissingDeviceIdentity({
+        decision: { kind: "allow" },
+        controlUiAuthPolicy: nonControlUi,
+        preserveInsecureLocalControlUiScopes: false,
+        authMethod: "password",
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldClearUnboundScopesForMissingDeviceIdentity({
+        decision: { kind: "allow" },
+        controlUiAuthPolicy: nonControlUi,
+        preserveInsecureLocalControlUiScopes: false,
+        authMethod: "trusted-proxy",
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldClearUnboundScopesForMissingDeviceIdentity({
+        decision: { kind: "allow" },
+        controlUiAuthPolicy: nonControlUi,
+        preserveInsecureLocalControlUiScopes: false,
+        authMethod: undefined,
+        trustedProxyAuthOk: true,
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldClearUnboundScopesForMissingDeviceIdentity({
+        decision: { kind: "allow" },
+        controlUiAuthPolicy: controlUi,
+        preserveInsecureLocalControlUiScopes: true,
+        authMethod: "token",
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldClearUnboundScopesForMissingDeviceIdentity({
+        decision: { kind: "reject-device-required" },
+        controlUiAuthPolicy: nonControlUi,
+        preserveInsecureLocalControlUiScopes: false,
+        authMethod: undefined,
+      }),
+    ).toBe(true);
   });
 });

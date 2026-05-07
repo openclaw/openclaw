@@ -6,67 +6,59 @@ import {
 } from "./shell-inline-command.js";
 
 describe("resolveInlineCommandMatch", () => {
-  it("extracts the next token for exact inline-command flags", () => {
-    expect(
-      resolveInlineCommandMatch(["bash", "-lc", "echo hi"], POSIX_INLINE_COMMAND_FLAGS),
-    ).toEqual({
-      command: "echo hi",
-      valueTokenIndex: 2,
-    });
-    expect(
-      resolveInlineCommandMatch(
-        ["pwsh", "-Command", "Get-ChildItem"],
-        POWERSHELL_INLINE_COMMAND_FLAGS,
-      ),
-    ).toEqual({
-      command: "Get-ChildItem",
-      valueTokenIndex: 2,
-    });
-    expect(
-      resolveInlineCommandMatch(["pwsh", "-File", "script.ps1"], POWERSHELL_INLINE_COMMAND_FLAGS),
-    ).toEqual({
-      command: "script.ps1",
-      valueTokenIndex: 2,
-    });
-    expect(
-      resolveInlineCommandMatch(
-        ["powershell", "-f", "script.ps1"],
-        POWERSHELL_INLINE_COMMAND_FLAGS,
-      ),
-    ).toEqual({
-      command: "script.ps1",
-      valueTokenIndex: 2,
-    });
-  });
-
-  it("supports combined -c forms only when enabled", () => {
-    expect(
-      resolveInlineCommandMatch(["sh", "-cecho hi"], POSIX_INLINE_COMMAND_FLAGS, {
-        allowCombinedC: true,
-      }),
-    ).toEqual({
-      command: "echo hi",
-      valueTokenIndex: 1,
-    });
-    expect(
-      resolveInlineCommandMatch(["sh", "-cecho hi"], POSIX_INLINE_COMMAND_FLAGS, {
-        allowCombinedC: false,
-      }),
-    ).toEqual({
-      command: null,
-      valueTokenIndex: null,
-    });
-  });
-
-  it("returns a value index even when the flag is present without a usable command", () => {
-    expect(resolveInlineCommandMatch(["bash", "-lc", "   "], POSIX_INLINE_COMMAND_FLAGS)).toEqual({
-      command: null,
-      valueTokenIndex: 2,
-    });
-    expect(resolveInlineCommandMatch(["bash", "-lc"], POSIX_INLINE_COMMAND_FLAGS)).toEqual({
-      command: null,
-      valueTokenIndex: null,
-    });
+  it.each([
+    {
+      name: "extracts the next token for bash -lc",
+      argv: ["bash", "-lc", "echo hi"],
+      flags: POSIX_INLINE_COMMAND_FLAGS,
+      expected: { command: "echo hi", valueTokenIndex: 2 },
+    },
+    {
+      name: "extracts the next token for PowerShell -Command",
+      argv: ["pwsh", "-Command", "Get-ChildItem"],
+      flags: POWERSHELL_INLINE_COMMAND_FLAGS,
+      expected: { command: "Get-ChildItem", valueTokenIndex: 2 },
+    },
+    {
+      name: "extracts the next token for PowerShell -File",
+      argv: ["pwsh", "-File", "script.ps1"],
+      flags: POWERSHELL_INLINE_COMMAND_FLAGS,
+      expected: { command: "script.ps1", valueTokenIndex: 2 },
+    },
+    {
+      name: "extracts the next token for PowerShell -f",
+      argv: ["powershell", "-f", "script.ps1"],
+      flags: POWERSHELL_INLINE_COMMAND_FLAGS,
+      expected: { command: "script.ps1", valueTokenIndex: 2 },
+    },
+    {
+      name: "supports combined -c forms when enabled",
+      argv: ["sh", "-cecho hi"],
+      flags: POSIX_INLINE_COMMAND_FLAGS,
+      opts: { allowCombinedC: true },
+      expected: { command: "echo hi", valueTokenIndex: 1 },
+    },
+    {
+      name: "rejects combined -c forms when disabled",
+      argv: ["sh", "-cecho hi"],
+      flags: POSIX_INLINE_COMMAND_FLAGS,
+      opts: { allowCombinedC: false },
+      expected: { command: null, valueTokenIndex: null },
+    },
+    {
+      name: "returns a value index for blank command tokens",
+      argv: ["bash", "-lc", "   "],
+      flags: POSIX_INLINE_COMMAND_FLAGS,
+      expected: { command: null, valueTokenIndex: 2 },
+    },
+    {
+      name: "returns null value index when the flag has no following token",
+      argv: ["bash", "-lc"],
+      flags: POSIX_INLINE_COMMAND_FLAGS,
+      expected: { command: null, valueTokenIndex: null },
+    },
+  ])("$name", ({ argv, flags, opts, expected }) => {
+    expect(resolveInlineCommandMatch(argv, flags, opts)).toEqual(expected);
   });
 
   it("stops parsing after --", () => {

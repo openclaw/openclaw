@@ -1,13 +1,13 @@
 import type { WebClient } from "@slack/web-api";
 import { vi } from "vitest";
 
-export type SlackEditTestClient = WebClient & {
+type SlackEditTestClient = WebClient & {
   chat: {
     update: ReturnType<typeof vi.fn>;
   };
 };
 
-export type SlackSendTestClient = WebClient & {
+type SlackSendTestClient = WebClient & {
   conversations: {
     open: ReturnType<typeof vi.fn>;
   };
@@ -16,19 +16,27 @@ export type SlackSendTestClient = WebClient & {
   };
 };
 
-export function installSlackBlockTestMocks() {
-  vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
-    loadConfig: () => ({}),
-  }));
+const slackBlockTestState = vi.hoisted(() => ({
+  account: {
+    accountId: "default",
+    botToken: "xoxb-test",
+    botTokenSource: "config",
+    config: {},
+  },
+  config: {},
+}));
 
-  vi.mock("./accounts.js", () => ({
-    resolveSlackAccount: () => ({
-      accountId: "default",
-      botToken: "xoxb-test",
-      botTokenSource: "config",
-      config: {},
-    }),
-  }));
+vi.mock("./accounts.js", async () => {
+  const actual = await vi.importActual<typeof import("./accounts.js")>("./accounts.js");
+  return {
+    ...actual,
+    resolveSlackAccount: () => slackBlockTestState.account,
+  };
+});
+
+// Kept for compatibility with existing tests; mocks install at module evaluation.
+export function installSlackBlockTestMocks() {
+  return;
 }
 
 export function createSlackEditTestClient(): SlackEditTestClient {

@@ -1,3 +1,4 @@
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 type LoggerModule = typeof import("./logger.js");
@@ -12,7 +13,6 @@ async function importBrowserSafeLogger(params?: {
   module: LoggerModule;
   resolvePreferredOpenClawTmpDir: ReturnType<typeof vi.fn>;
 }> {
-  vi.resetModules();
   const resolvePreferredOpenClawTmpDir =
     params?.resolvePreferredOpenClawTmpDir ??
     vi.fn(() => {
@@ -34,13 +34,15 @@ async function importBrowserSafeLogger(params?: {
     value: undefined,
   });
 
-  const module = await import("./logger.js");
+  const module = await importFreshModule<LoggerModule>(
+    import.meta.url,
+    "./logger.js?scope=browser-safe",
+  );
   return { module, resolvePreferredOpenClawTmpDir };
 }
 
 describe("logging/logger browser-safe import", () => {
   afterEach(() => {
-    vi.resetModules();
     vi.doUnmock("../infra/tmp-openclaw-dir.js");
     Object.defineProperty(process, "getBuiltinModule", {
       configurable: true,

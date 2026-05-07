@@ -1,1 +1,1 @@
-export * from "./src/login-qr.js";
+export { startWebLoginWithQr, waitForWebLogin } from "./login-qr-runtime.js";

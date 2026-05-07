@@ -1,10 +1,16 @@
-import type { CommandFlagKey } from "../../config/commands.js";
-import { isCommandFlagEnabled } from "../../config/commands.js";
+import { isCommandFlagEnabled, type CommandFlagKey } from "../../config/commands.flags.js";
 import { logVerbose } from "../../globals.js";
 import { redactIdentifier } from "../../logging/redact-identifier.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "./commands-types.js";
+
+function buildNativeCommandGateReply(text: string): CommandHandlerResult {
+  return {
+    shouldContinue: false,
+    reply: { text },
+  };
+}
 
 export function rejectUnauthorizedCommand(
   params: HandleCommandsParams,
@@ -16,6 +22,9 @@ export function rejectUnauthorizedCommand(
   logVerbose(
     `Ignoring ${commandLabel} from unauthorized sender: ${redactIdentifier(params.command.senderId)}`,
   );
+  if (params.ctx.CommandSource === "native") {
+    return buildNativeCommandGateReply("You are not authorized to use this command.");
+  }
   return { shouldContinue: false };
 }
 
@@ -29,6 +38,9 @@ export function rejectNonOwnerCommand(
   logVerbose(
     `Ignoring ${commandLabel} from non-owner sender: ${redactIdentifier(params.command.senderId)}`,
   );
+  if (params.ctx.CommandSource === "native") {
+    return buildNativeCommandGateReply("You are not authorized to use this command.");
+  }
   return { shouldContinue: false };
 }
 

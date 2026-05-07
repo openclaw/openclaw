@@ -22,7 +22,7 @@ function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
     if (matchesAnyGlobPattern(normalized, allow)) {
       return true;
     }
-    if (normalized === "apply_patch" && matchesAnyGlobPattern("exec", allow)) {
+    if (normalized === "apply_patch" && matchesAnyGlobPattern("write", allow)) {
       return true;
     }
     return false;

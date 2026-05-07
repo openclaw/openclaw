@@ -1,6 +1,6 @@
-import OpenClawKit
 import Foundation
 import Observation
+import OpenClawKit
 import OSLog
 import UniformTypeIdentifiers
 
@@ -14,12 +14,14 @@ private let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawC
 
 @MainActor
 @Observable
+// swiftlint:disable:next type_body_length
 public final class OpenClawChatViewModel {
     public static let defaultModelSelectionID = "__default__"
 
     public private(set) var messages: [OpenClawChatMessage] = []
     public var input: String = ""
     public private(set) var thinkingLevel: String
+    public private(set) var thinkingLevelOptions: [OpenClawChatThinkingLevelOption]
     public private(set) var modelSelectionID: String = "__default__"
     public private(set) var modelChoices: [OpenClawChatModelChoice] = []
     public private(set) var isLoading = false
@@ -60,6 +62,9 @@ public final class OpenClawChatViewModel {
     private var nextThinkingSelectionRequestID: UInt64 = 0
     private var latestThinkingSelectionRequestIDsBySession: [String: UInt64] = [:]
     private var latestThinkingLevelsBySession: [String: String] = [:]
+    private var isCompacting = false
+    private var lastCompactAt: Date?
+    private let compactCooldown: TimeInterval = 60
 
     private var pendingToolCallsById: [String: OpenClawChatPendingToolCall] = [:] {
         didSet {
@@ -79,7 +84,11 @@ public final class OpenClawChatViewModel {
         self.sessionKey = sessionKey
         self.transport = transport
         let normalizedThinkingLevel = Self.normalizedThinkingLevel(initialThinkingLevel)
-        self.thinkingLevel = normalizedThinkingLevel ?? "off"
+        let initialResolvedThinkingLevel = normalizedThinkingLevel ?? "off"
+        self.thinkingLevel = initialResolvedThinkingLevel
+        self.thinkingLevelOptions = Self.withCurrentThinkingOption(
+            Self.baseThinkingLevelOptions,
+            current: initialResolvedThinkingLevel)
         self.prefersExplicitThinkingLevel = normalizedThinkingLevel != nil
         self.onThinkingLevelChanged = onThinkingLevelChanged
 
@@ -194,6 +203,14 @@ public final class OpenClawChatViewModel {
         return "Default: \(self.modelLabel(for: defaultModelID))"
     }
 
+    private static let baseThinkingLevelOptions: [OpenClawChatThinkingLevelOption] = [
+        OpenClawChatThinkingLevelOption(id: "off", label: "off"),
+        OpenClawChatThinkingLevelOption(id: "minimal", label: "minimal"),
+        OpenClawChatThinkingLevelOption(id: "low", label: "low"),
+        OpenClawChatThinkingLevelOption(id: "medium", label: "medium"),
+        OpenClawChatThinkingLevelOption(id: "high", label: "high"),
+    ]
+
     public func addAttachments(urls: [URL]) {
         Task { await self.loadAttachments(urls: urls) }
     }
@@ -239,6 +256,7 @@ public final class OpenClawChatViewModel {
             {
                 self.thinkingLevel = level
             }
+            self.syncThinkingLevelOptions()
             await self.pollHealthIfNeeded(force: true)
             await self.fetchSessions(limit: 50)
             await self.fetchModels()
@@ -289,6 +307,17 @@ public final class OpenClawChatViewModel {
             stopReason: message.stopReason)
     }
 
+    private static func messageContentFingerprint(for message: OpenClawChatMessage) -> String {
+        message.content.map { item in
+            let type = (item.type ?? "text").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let text = (item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let id = (item.id ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let name = (item.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let fileName = (item.fileName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return [type, text, id, name, fileName].joined(separator: "\\u{001F}")
+        }.joined(separator: "\\u{001E}")
+    }
+
     private static func messageIdentityKey(for message: OpenClawChatMessage) -> String? {
         let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !role.isEmpty else { return nil }
@@ -298,21 +327,26 @@ public final class OpenClawChatViewModel {
             return String(format: "%.3f", value)
         }()
 
-        let contentFingerprint = message.content.map { item in
-            let type = (item.type ?? "text").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let text = (item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let id = (item.id ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let name = (item.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let fileName = (item.fileName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return [type, text, id, name, fileName].joined(separator: "\\u{001F}")
-        }.joined(separator: "\\u{001E}")
-
+        let contentFingerprint = Self.messageContentFingerprint(for: message)
         let toolCallId = (message.toolCallId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let toolName = (message.toolName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if timestamp.isEmpty, contentFingerprint.isEmpty, toolCallId.isEmpty, toolName.isEmpty {
             return nil
         }
         return [role, timestamp, toolCallId, toolName, contentFingerprint].joined(separator: "|")
+    }
+
+    private static func userRefreshIdentityKey(for message: OpenClawChatMessage) -> String? {
+        let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard role == "user" else { return nil }
+
+        let contentFingerprint = Self.messageContentFingerprint(for: message)
+        let toolCallId = (message.toolCallId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let toolName = (message.toolName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if contentFingerprint.isEmpty, toolCallId.isEmpty, toolName.isEmpty {
+            return nil
+        }
+        return [role, toolCallId, toolName, contentFingerprint].joined(separator: "|")
     }
 
     private static func reconcileMessageIDs(
@@ -353,6 +387,75 @@ public final class OpenClawChatViewModel {
         }
     }
 
+    private static func reconcileRunRefreshMessages(
+        previous: [OpenClawChatMessage],
+        incoming: [OpenClawChatMessage]) -> [OpenClawChatMessage]
+    {
+        guard !previous.isEmpty else { return incoming }
+        guard !incoming.isEmpty else { return previous }
+
+        func countKeys(_ keys: [String]) -> [String: Int] {
+            keys.reduce(into: [:]) { counts, key in
+                counts[key, default: 0] += 1
+            }
+        }
+
+        var reconciled = Self.reconcileMessageIDs(previous: previous, incoming: incoming)
+        let incomingIdentityKeys = Set(reconciled.compactMap(Self.messageIdentityKey(for:)))
+        var remainingIncomingUserRefreshCounts = countKeys(
+            reconciled.compactMap(Self.userRefreshIdentityKey(for:)))
+
+        var lastMatchedPreviousIndex: Int?
+        for (index, message) in previous.enumerated() {
+            if let key = Self.messageIdentityKey(for: message),
+               incomingIdentityKeys.contains(key)
+            {
+                lastMatchedPreviousIndex = index
+                continue
+            }
+            if let userKey = Self.userRefreshIdentityKey(for: message),
+               let remaining = remainingIncomingUserRefreshCounts[userKey],
+               remaining > 0
+            {
+                remainingIncomingUserRefreshCounts[userKey] = remaining - 1
+                lastMatchedPreviousIndex = index
+            }
+        }
+
+        let trailingUserMessages = (lastMatchedPreviousIndex != nil
+            ? previous.suffix(from: previous.index(after: lastMatchedPreviousIndex!))
+            : ArraySlice(previous))
+            .filter { message in
+                guard message.role.lowercased() == "user" else { return false }
+                guard let key = Self.userRefreshIdentityKey(for: message) else { return false }
+                let remaining = remainingIncomingUserRefreshCounts[key] ?? 0
+                if remaining > 0 {
+                    remainingIncomingUserRefreshCounts[key] = remaining - 1
+                    return false
+                }
+                return true
+            }
+
+        guard !trailingUserMessages.isEmpty else {
+            return reconciled
+        }
+
+        for message in trailingUserMessages {
+            guard let messageTimestamp = message.timestamp else {
+                reconciled.append(message)
+                continue
+            }
+
+            let insertIndex = reconciled.firstIndex { existing in
+                guard let existingTimestamp = existing.timestamp else { return false }
+                return existingTimestamp > messageTimestamp
+            } ?? reconciled.endIndex
+            reconciled.insert(message, at: insertIndex)
+        }
+
+        return Self.dedupeMessages(reconciled)
+    }
+
     private static func dedupeMessages(_ messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
         var result: [OpenClawChatMessage] = []
         result.reserveCapacity(messages.count)
@@ -380,6 +483,7 @@ public final class OpenClawChatViewModel {
     }
 
     private static let resetTriggers: Set<String> = ["/new", "/reset", "/clear"]
+    private static let compactTriggers: Set<String> = ["/compact"]
 
     private func performSend() async {
         guard !self.isSending else { return }
@@ -389,6 +493,11 @@ public final class OpenClawChatViewModel {
         if Self.resetTriggers.contains(trimmed.lowercased()) {
             self.input = ""
             await self.performReset()
+            return
+        }
+        if Self.compactTriggers.contains(trimmed.lowercased()) {
+            self.input = ""
+            await self.performCompact()
             return
         }
 
@@ -499,6 +608,7 @@ public final class OpenClawChatViewModel {
             self.sessions = res.sessions
             self.sessionDefaults = res.defaults
             self.syncSelectedModel()
+            self.syncThinkingLevelOptions()
         } catch {
             // Best-effort.
         }
@@ -538,12 +648,50 @@ public final class OpenClawChatViewModel {
         await self.bootstrap()
     }
 
+    private func performCompact() async {
+        guard !self.isCompacting else { return }
+        guard !self.isSending, self.pendingRuns.isEmpty, !self.isAborting else {
+            self.errorText = "Wait for the current response before compacting the session."
+            return
+        }
+        if let lastCompactAt,
+           Date().timeIntervalSince(lastCompactAt) < self.compactCooldown
+        {
+            self.errorText = "Please wait before compacting this session again."
+            return
+        }
+
+        self.isCompacting = true
+        self.isLoading = true
+        self.errorText = nil
+        defer {
+            self.isLoading = false
+            self.isCompacting = false
+        }
+
+        do {
+            try await self.transport.compactSession(sessionKey: self.sessionKey)
+        } catch {
+            self.errorText = "Unable to compact the session. Please try again."
+            let nsError = error as NSError
+            chatUILogger.error(
+                "compact failed domain=\(nsError.domain, privacy: .public) code=\(nsError.code, privacy: .public)")
+            chatUILogger.error("compact details=\(String(describing: error), privacy: .private)")
+            return
+        }
+
+        self.lastCompactAt = Date()
+        await self.bootstrap()
+    }
+
     private func performSelectThinkingLevel(_ level: String) async {
         let next = Self.normalizedThinkingLevel(level) ?? "off"
         guard next != self.thinkingLevel else { return }
 
         let sessionKey = self.sessionKey
         self.thinkingLevel = next
+        self.syncThinkingLevelOptions()
+        self.updateCurrentSessionThinkingLevel(next, sessionKey: sessionKey)
         self.onThinkingLevelChanged?(next)
         self.nextThinkingSelectionRequestID &+= 1
         let requestID = self.nextThinkingSelectionRequestID
@@ -603,7 +751,10 @@ public final class OpenClawChatViewModel {
                 self.latestModelSelectionRequestIDsBySession.removeValue(forKey: sessionKey)
             }
             if self.lastSuccessfulModelSelectionIDsBySession[sessionKey] == previous {
-                self.applySuccessfulModelSelection(previous, sessionKey: sessionKey, syncSelection: sessionKey == self.sessionKey)
+                self.applySuccessfulModelSelection(
+                    previous,
+                    sessionKey: sessionKey,
+                    syncSelection: sessionKey == self.sessionKey)
             }
             guard sessionKey == self.sessionKey else { return }
             self.modelSelectionID = previous
@@ -634,6 +785,99 @@ public final class OpenClawChatViewModel {
         await withCheckedContinuation { continuation in
             self.modelPatchWaitersBySession[sessionKey, default: []].append(continuation)
         }
+    }
+
+    private func syncThinkingLevelOptions() {
+        let currentSession = self.sessions.first(where: { $0.key == self.sessionKey })
+        var options = self.resolvedThinkingLevelOptions(for: currentSession)
+        if let current = Self.normalizedThinkingLevel(self.thinkingLevel) {
+            options = Self.withCurrentThinkingOption(options, current: current)
+        }
+        self.thinkingLevelOptions = options
+    }
+
+    private func resolvedThinkingLevelOptions(
+        for currentSession: OpenClawChatSessionEntry?) -> [OpenClawChatThinkingLevelOption]
+    {
+        if let levels = Self.normalizedThinkingLevelOptions(currentSession?.thinkingLevels), !levels.isEmpty {
+            return levels
+        }
+
+        let defaultsMatch = currentSession.map {
+            Self.sessionModelMatchesDefaults($0, defaults: self.sessionDefaults)
+        } ?? true
+
+        if defaultsMatch,
+           let levels = Self.normalizedThinkingLevelOptions(self.sessionDefaults?.thinkingLevels),
+           !levels.isEmpty
+        {
+            return levels
+        }
+
+        if let options = Self.thinkingOptions(from: currentSession?.thinkingOptions), !options.isEmpty {
+            return options
+        }
+
+        if defaultsMatch,
+           let options = Self.thinkingOptions(from: self.sessionDefaults?.thinkingOptions),
+           !options.isEmpty
+        {
+            return options
+        }
+
+        return Self.baseThinkingLevelOptions
+    }
+
+    private static func sessionModelMatchesDefaults(
+        _ session: OpenClawChatSessionEntry,
+        defaults: OpenClawChatSessionsDefaults?) -> Bool
+    {
+        let providerMatches = session.modelProvider == nil || session.modelProvider == defaults?.modelProvider
+        let modelMatches = session.model == nil || session.model == defaults?.model
+        return providerMatches && modelMatches
+    }
+
+    private static func normalizedThinkingLevelOptions(
+        _ levels: [OpenClawChatThinkingLevelOption]?) -> [OpenClawChatThinkingLevelOption]?
+    {
+        guard let levels else { return nil }
+        return Self.dedupedThinkingOptions(
+            levels.compactMap { level in
+                guard let id = Self.normalizedThinkingLevel(level.id) else { return nil }
+                let label = level.label.trimmingCharacters(in: .whitespacesAndNewlines)
+                return OpenClawChatThinkingLevelOption(id: id, label: label.isEmpty ? id : label)
+            })
+    }
+
+    private static func thinkingOptions(from labels: [String]?) -> [OpenClawChatThinkingLevelOption]? {
+        guard let labels else { return nil }
+        return Self.dedupedThinkingOptions(
+            labels.compactMap { label in
+                guard let id = Self.normalizedThinkingLevel(label) else { return nil }
+                let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+                return OpenClawChatThinkingLevelOption(id: id, label: trimmed.isEmpty ? id : trimmed)
+            })
+    }
+
+    private static func withCurrentThinkingOption(
+        _ options: [OpenClawChatThinkingLevelOption],
+        current: String) -> [OpenClawChatThinkingLevelOption]
+    {
+        guard !options.contains(where: { $0.id == current }) else { return options }
+        return options + [OpenClawChatThinkingLevelOption(id: current, label: current)]
+    }
+
+    private static func dedupedThinkingOptions(
+        _ options: [OpenClawChatThinkingLevelOption]) -> [OpenClawChatThinkingLevelOption]
+    {
+        var result: [OpenClawChatThinkingLevelOption] = []
+        var seen = Set<String>()
+        for option in options {
+            guard !option.id.isEmpty, !seen.contains(option.id) else { continue }
+            seen.insert(option.id)
+            result.append(option)
+        }
+        return result
     }
 
     private func placeholderSession(key: String) -> OpenClawChatSessionEntry {
@@ -724,9 +968,13 @@ public final class OpenClawChatViewModel {
             modelProvider: resolved.modelProvider,
             sessionKey: sessionKey,
             syncSelection: syncSelection)
+        if sessionKey == self.sessionKey {
+            self.syncThinkingLevelOptions()
+        }
     }
 
-    private func resolvedSessionModelIdentity(forSelectionID selectionID: String) -> (modelID: String?, modelProvider: String?) {
+    private func resolvedSessionModelIdentity(forSelectionID selectionID: String)
+    -> (modelID: String?, modelProvider: String?) {
         guard let modelRef = self.modelRef(forSelectionID: selectionID) else {
             return (nil, nil)
         }
@@ -748,6 +996,34 @@ public final class OpenClawChatViewModel {
             return modelID
         }
         return "\(provider)/\(modelID)"
+    }
+
+    private func updateCurrentSessionThinkingLevel(_ thinkingLevel: String?, sessionKey: String) {
+        guard let index = self.sessions.firstIndex(where: { $0.key == sessionKey }) else { return }
+        let current = self.sessions[index]
+        self.sessions[index] = OpenClawChatSessionEntry(
+            key: current.key,
+            kind: current.kind,
+            displayName: current.displayName,
+            surface: current.surface,
+            subject: current.subject,
+            room: current.room,
+            space: current.space,
+            updatedAt: current.updatedAt,
+            sessionId: current.sessionId,
+            systemSent: current.systemSent,
+            abortedLastRun: current.abortedLastRun,
+            thinkingLevel: thinkingLevel,
+            verboseLevel: current.verboseLevel,
+            inputTokens: current.inputTokens,
+            outputTokens: current.outputTokens,
+            totalTokens: current.totalTokens,
+            modelProvider: current.modelProvider,
+            model: current.model,
+            contextTokens: current.contextTokens,
+            thinkingLevels: current.thinkingLevels,
+            thinkingOptions: current.thinkingOptions,
+            thinkingDefault: current.thinkingDefault)
     }
 
     private func updateCurrentSessionModel(
@@ -815,6 +1091,8 @@ public final class OpenClawChatViewModel {
             Task { await self.pollHealthIfNeeded(force: false) }
         case let .chat(chat):
             self.handleChatEvent(chat)
+        case let .sessionMessage(message):
+            self.handleSessionMessageEvent(message)
         case let .agent(agent):
             self.handleAgentEvent(agent)
         case .seqGap:
@@ -825,6 +1103,26 @@ public final class OpenClawChatViewModel {
                 await self.pollHealthIfNeeded(force: true)
             }
         }
+    }
+
+    private func handleSessionMessageEvent(_ payload: OpenClawSessionMessageEventPayload) {
+        if let sessionKey = payload.sessionKey,
+           !Self.matchesCurrentSessionKey(incoming: sessionKey, current: self.sessionKey)
+        {
+            return
+        }
+
+        guard let message = payload.message else { return }
+        guard message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user" else {
+            return
+        }
+        if self.pendingRunCount > 0 {
+            return
+        }
+
+        let sanitized = Self.stripInboundMetadata(from: message)
+        let reconciled = Self.reconcileMessageIDs(previous: self.messages, incoming: self.messages + [sanitized])
+        self.messages = Self.dedupeMessages(reconciled)
     }
 
     private func handleChatEvent(_ chat: OpenClawChatEventPayload) {
@@ -919,7 +1217,7 @@ public final class OpenClawChatViewModel {
     private func refreshHistoryAfterRun() async {
         do {
             let payload = try await self.transport.requestHistory(sessionKey: self.sessionKey)
-            self.messages = Self.reconcileMessageIDs(
+            self.messages = Self.reconcileRunRefreshMessages(
                 previous: self.messages,
                 incoming: Self.decodeMessages(payload.messages ?? []))
             self.sessionId = payload.sessionId
@@ -927,6 +1225,7 @@ public final class OpenClawChatViewModel {
                let level = Self.normalizedThinkingLevel(payload.thinkingLevel)
             {
                 self.thinkingLevel = level
+                self.syncThinkingLevelOptions()
             }
         } catch {
             chatUILogger.error("refresh history failed \(error.localizedDescription, privacy: .public)")
@@ -1038,9 +1337,33 @@ public final class OpenClawChatViewModel {
     private static func normalizedThinkingLevel(_ level: String?) -> String? {
         guard let level else { return nil }
         let trimmed = level.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"].contains(trimmed) else {
-            return nil
+        guard !trimmed.isEmpty else { return nil }
+        let collapsed = trimmed.replacingOccurrences(
+            of: "[\\s_-]+",
+            with: "",
+            options: .regularExpression)
+
+        switch collapsed {
+        case "adaptive", "auto":
+            return "adaptive"
+        case "max":
+            return "max"
+        case "xhigh", "extrahigh":
+            return "xhigh"
+        case "off", "none":
+            return "off"
+        case "on", "enable", "enabled":
+            return "low"
+        case "min", "minimal", "think":
+            return "minimal"
+        case "low", "thinkhard":
+            return "low"
+        case "mid", "med", "medium", "thinkharder", "harder":
+            return "medium"
+        case "high", "ultra", "ultrathink", "thinkhardest", "highest":
+            return "high"
+        default:
+            return trimmed
         }
-        return trimmed
     }
 }

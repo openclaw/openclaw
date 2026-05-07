@@ -1,5 +1,12 @@
+import { execFileSync } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  buildGatewayDistEntrypointCandidates,
+  findFirstAccessibleGatewayEntrypoint,
+  isGatewayDistEntrypointPath,
+} from "./gateway-entrypoint.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 
 type GatewayProgramArgs = {
@@ -9,6 +16,8 @@ type GatewayProgramArgs = {
 
 type GatewayRuntimePreference = "auto" | "node" | "bun";
 
+export const OPENCLAW_WRAPPER_ENV_KEY = "OPENCLAW_WRAPPER";
+
 async function resolveCliEntrypointPathForService(): Promise<string> {
   const argv1 = process.argv[1];
   if (!argv1) {
@@ -17,15 +26,28 @@ async function resolveCliEntrypointPathForService(): Promise<string> {
 
   const normalized = path.resolve(argv1);
   const resolvedPath = await resolveRealpathSafe(normalized);
-  const looksLikeDist = /[/\\]dist[/\\].+\.(cjs|js|mjs)$/.test(resolvedPath);
+  const looksLikeDist = isGatewayDistEntrypointPath(resolvedPath);
   if (looksLikeDist) {
-    await fs.access(resolvedPath);
+    const preferredDistEntrypoint = await findFirstAccessibleGatewayEntrypoint(
+      buildGatewayDistEntrypointCandidates(normalized, resolvedPath),
+      async (candidate) => {
+        try {
+          await fs.access(candidate);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    );
+    if (preferredDistEntrypoint) {
+      return preferredDistEntrypoint;
+    }
     // Prefer the original (possibly symlinked) path over the resolved realpath.
     // This keeps LaunchAgent/systemd paths stable across package version updates,
     // since symlinks like node_modules/openclaw -> .pnpm/openclaw@X.Y.Z/...
     // are automatically updated by pnpm, while the resolved path contains
     // version-specific directories that break after updates.
-    const normalizedLooksLikeDist = /[/\\]dist[/\\].+\.(cjs|js|mjs)$/.test(normalized);
+    const normalizedLooksLikeDist = isGatewayDistEntrypointPath(normalized);
     if (normalizedLooksLikeDist && normalized !== resolvedPath) {
       try {
         await fs.access(normalized);
@@ -139,7 +161,6 @@ async function resolveNodePath(): Promise<string> {
 }
 
 async function resolveBinaryPath(binary: string): Promise<string> {
-  const { execFileSync } = await import("node:child_process");
   const cmd = process.platform === "win32" ? "where" : "which";
   try {
     const output = execFileSync(cmd, [binary], { encoding: "utf8" }).trim();
@@ -159,12 +180,42 @@ async function resolveBinaryPath(binary: string): Promise<string> {
   }
 }
 
+export async function resolveOpenClawWrapperPath(
+  inputPath: string | undefined,
+): Promise<string | undefined> {
+  const trimmed = inputPath?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const resolved = path.resolve(trimmed);
+  try {
+    const stat = await fs.stat(resolved);
+    if (!stat.isFile()) {
+      throw new Error("not a regular file");
+    }
+    await fs.access(resolved, fsConstants.X_OK);
+  } catch (error) {
+    const detail = error instanceof Error ? ` (${error.message})` : "";
+    throw new Error(
+      `${OPENCLAW_WRAPPER_ENV_KEY} must point to an executable file: ${resolved}${detail}`,
+      { cause: error },
+    );
+  }
+  return resolved;
+}
+
 async function resolveCliProgramArguments(params: {
   args: string[];
   dev?: boolean;
   runtime?: GatewayRuntimePreference;
   nodePath?: string;
+  wrapperPath?: string;
 }): Promise<GatewayProgramArgs> {
+  const wrapperPath = await resolveOpenClawWrapperPath(params.wrapperPath);
+  if (wrapperPath) {
+    return { programArguments: [wrapperPath, ...params.args] };
+  }
+
   const execPath = process.execPath;
   const runtime = params.runtime ?? "auto";
 
@@ -237,6 +288,7 @@ export async function resolveGatewayProgramArguments(params: {
   dev?: boolean;
   runtime?: GatewayRuntimePreference;
   nodePath?: string;
+  wrapperPath?: string;
 }): Promise<GatewayProgramArgs> {
   const gatewayArgs = ["gateway", "--port", String(params.port)];
   return resolveCliProgramArguments({
@@ -244,6 +296,7 @@ export async function resolveGatewayProgramArguments(params: {
     dev: params.dev,
     runtime: params.runtime,
     nodePath: params.nodePath,
+    wrapperPath: params.wrapperPath,
   });
 }
 

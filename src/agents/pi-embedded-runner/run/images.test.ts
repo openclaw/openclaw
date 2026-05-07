@@ -1,14 +1,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../../test-helpers/unsafe-mounted-sandbox.js";
 import {
   detectAndLoadPromptImages,
   detectImageReferences,
   loadImageFromRef,
+  mergePromptAttachmentImages,
   modelSupportsImages,
+  splitPromptAndAttachmentRefs,
 } from "./images.js";
 
 function expectNoPromptImages(result: { detectedRefs: unknown[]; images: unknown[] }) {
@@ -79,6 +81,13 @@ describe("detectImageReferences", () => {
     );
 
     expect(refs.some((r) => r.type === "path")).toBe(true);
+  });
+
+  it("does not leak parser state between calls", () => {
+    expectSingleImageReference("[media attached: /tmp/first.png (image/png)]");
+    expectSingleImageReference("[Image: source: /tmp/second.jpg]");
+    expectSingleImageReference("See file:///tmp/third.webp");
+    expectSingleImageReference("See ./fourth.jpeg");
   });
 
   it("handles various image extensions", () => {
@@ -190,6 +199,22 @@ what is this?`);
     // Only 1 ref - the local path (example.com URLs are skipped)
     expect(ref?.resolved).toContain("ChatGPT Image Apr 21, 2025.png");
   });
+
+  it("ignores remote-host file URLs", () => {
+    expectNoImageReferences("See file://attacker/share/evil.png");
+  });
+
+  it("ignores Windows network paths from attachment-style references", () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    try {
+      expectNoImageReferences(
+        "[media attached: \\\\attacker\\share\\photo.png (image/png)] what is this?",
+      );
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
 });
 
 describe("modelSupportsImages", () => {
@@ -273,6 +298,59 @@ describe("detectAndLoadPromptImages", () => {
     expectNoPromptImages(result);
   });
 
+  it("sanitizes existing images even when prompt has no image references", async () => {
+    const result = await detectAndLoadPromptImages({
+      prompt: "describe the attached image",
+      workspaceDir: "/tmp",
+      model: { input: ["text", "image"] },
+      existingImages: [{ type: "image", data: "not-valid-base64", mimeType: "image/png" }],
+    });
+
+    expect(result.images).toHaveLength(0);
+    expect(result.detectedRefs).toHaveLength(0);
+  });
+
+  it("preserves attachment order when offloaded refs and inline images are mixed", async () => {
+    const merged = mergePromptAttachmentImages({
+      imageOrder: ["offloaded", "inline"],
+      existingImages: [{ type: "image", data: "small-b", mimeType: "image/png" }],
+      offloadedImages: [{ type: "image", data: "large-a", mimeType: "image/jpeg" }],
+    });
+
+    expect(merged).toEqual([
+      { type: "image", data: "large-a", mimeType: "image/jpeg" },
+      { type: "image", data: "small-b", mimeType: "image/png" },
+    ]);
+  });
+
+  it("classifies trailing offloaded refs separately from prompt refs", () => {
+    const prompt =
+      "compare [media attached: media://inbound/prompt-ref.png] and ./prompt-b.png\n[media attached: media://inbound/att-b.png]";
+    const refs = detectImageReferences(prompt);
+
+    const split = splitPromptAndAttachmentRefs({
+      prompt,
+      refs,
+      imageOrder: ["inline", "offloaded"],
+    });
+
+    expect(split.promptRefs).toEqual([
+      {
+        raw: "media://inbound/prompt-ref.png",
+        type: "media-uri",
+        resolved: "media://inbound/prompt-ref.png",
+      },
+      { raw: "./prompt-b.png", type: "path", resolved: "./prompt-b.png" },
+    ]);
+    expect(split.attachmentRefs).toEqual([
+      {
+        raw: "media://inbound/att-b.png",
+        type: "media-uri",
+        resolved: "media://inbound/att-b.png",
+      },
+    ]);
+  });
+
   it("blocks prompt image refs outside workspace when sandbox workspaceOnly is enabled", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-sandbox-"));
     const sandboxRoot = path.join(stateDir, "sandbox");
@@ -302,6 +380,36 @@ describe("detectAndLoadPromptImages", () => {
       expect(result.skippedCount).toBe(1);
       expect(result.images).toHaveLength(0);
     } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("loads managed inbound absolute paths when workspaceOnly is enabled", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-managed-"));
+    const workspaceDir = path.join(stateDir, "workspace-agent");
+    const inboundDir = path.join(stateDir, "media", "inbound");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(inboundDir, { recursive: true });
+    const imagePath = path.join(inboundDir, "signal-replay.png");
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+    await fs.writeFile(imagePath, Buffer.from(pngB64, "base64"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: `Inspect ${imagePath}`,
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        workspaceOnly: true,
+      });
+
+      expect(result.detectedRefs).toHaveLength(1);
+      expect(result.loadedCount).toBe(1);
+      expect(result.skippedCount).toBe(0);
+      expect(result.images).toHaveLength(1);
+    } finally {
+      vi.unstubAllEnvs();
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });

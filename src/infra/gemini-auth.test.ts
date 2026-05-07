@@ -11,24 +11,15 @@ describe("parseGeminiAuth", () => {
     });
   });
 
-  it("falls back to API key auth for invalid or unusable OAuth payloads", () => {
-    expect(parseGeminiAuth('{"token":"","projectId":"demo"}')).toEqual({
-      headers: {
-        "x-goog-api-key": '{"token":"","projectId":"demo"}',
-        "Content-Type": "application/json",
-      },
-    });
-    expect(parseGeminiAuth("{not-json}")).toEqual({
-      headers: {
-        "x-goog-api-key": "{not-json}",
-        "Content-Type": "application/json",
-      },
-    });
-    expect(parseGeminiAuth(' {"token":"oauth-token"}')).toEqual({
-      headers: {
-        "x-goog-api-key": ' {"token":"oauth-token"}',
-        "Content-Type": "application/json",
-      },
-    });
-  });
+  it.each(['{"token":"","projectId":"demo"}', "{not-json}", ' {"token":"oauth-token"}'])(
+    "falls back to API key auth for %j",
+    (value) => {
+      expect(parseGeminiAuth(value)).toEqual({
+        headers: {
+          "x-goog-api-key": value,
+          "Content-Type": "application/json",
+        },
+      });
+    },
+  );
 });

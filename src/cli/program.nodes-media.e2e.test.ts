@@ -5,7 +5,7 @@ import { IOS_NODE, createIosNodeListResponse } from "./program.nodes-test-helper
 import { callGateway, installBaseProgramMocks, runtime } from "./program.test-mocks.js";
 
 installBaseProgramMocks();
-let registerNodesCli: (program: Command) => void;
+let registerNodesCli: typeof import("./nodes-cli.js").registerNodesCli;
 
 function getFirstRuntimeLogLine(): string {
   const first = runtime.log.mock.calls[0]?.[0];
@@ -57,7 +57,7 @@ describe("cli program (nodes media)", () => {
     ({ registerNodesCli } = await import("./nodes-cli.js"));
     program = new Command();
     program.exitOverride();
-    registerNodesCli(program);
+    await registerNodesCli(program);
   });
 
   async function runNodesCommand(argv: string[]) {
@@ -70,7 +70,7 @@ describe("cli program (nodes media)", () => {
 
     const parseProgram = new Command();
     parseProgram.exitOverride();
-    registerNodesCli(parseProgram);
+    await registerNodesCli(parseProgram);
     runtime.error.mockClear();
 
     await expect(parseProgram.parseAsync(args, { from: "user" })).rejects.toThrow(/exit/i);
@@ -146,7 +146,7 @@ describe("cli program (nodes media)", () => {
           nodeId: "ios-node",
           command: "camera.clip",
           timeoutMs: 90000,
-          idempotencyKey: "idem-test",
+          idempotencyKey: expect.any(String),
           params: expect.objectContaining({
             facing: "front",
             durationMs: 3000,
@@ -190,7 +190,7 @@ describe("cli program (nodes media)", () => {
           nodeId: "ios-node",
           command: "camera.snap",
           timeoutMs: 20000,
-          idempotencyKey: "idem-test",
+          idempotencyKey: expect.any(String),
           params: expect.objectContaining({
             facing: "front",
             maxWidth: 640,
@@ -233,7 +233,7 @@ describe("cli program (nodes media)", () => {
           nodeId: "ios-node",
           command: "camera.clip",
           timeoutMs: 90000,
-          idempotencyKey: "idem-test",
+          idempotencyKey: expect.any(String),
           params: expect.objectContaining({
             includeAudio: false,
             deviceId: "cam-123",
@@ -265,16 +265,6 @@ describe("cli program (nodes media)", () => {
         }),
       }),
     );
-  });
-
-  it("runs nodes canvas snapshot and prints MEDIA path", async () => {
-    mockNodeGateway("canvas.snapshot", { format: "png", base64: "aGk=" });
-
-    await runNodesCommand(["nodes", "canvas", "snapshot", "--node", "ios-node", "--format", "png"]);
-
-    await expectLoggedSingleMediaFile({
-      expectedPathPattern: /openclaw-canvas-snapshot-.*\.png$/,
-    });
   });
 
   it("fails nodes camera snap on invalid facing", async () => {
@@ -310,7 +300,7 @@ describe("cli program (nodes media)", () => {
         async () =>
           new Response("url-content", {
             status: 200,
-            headers: { "content-length": String("11") },
+            headers: { "content-length": "11" },
           }),
       ) as unknown as typeof globalThis.fetch;
     });

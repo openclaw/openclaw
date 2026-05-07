@@ -1,9 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
-import { buildModelsProviderData } from "openclaw/plugin-sdk/mattermost";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../runtime-api.js";
 import {
   buildMattermostAllowedModelRefs,
   parseMattermostModelPickerContext,
@@ -24,6 +23,7 @@ const data = {
     provider: "anthropic",
     model: "claude-opus-4-5",
   },
+  modelNames: new Map<string, string>(),
 };
 
 describe("Mattermost model picker", () => {
@@ -57,6 +57,8 @@ describe("Mattermost model picker", () => {
     expect(view.text).toContain("Current: openai/gpt-5");
     expect(view.text).toContain("Tap below to browse models");
     expect(view.text).toContain("/oc_model <provider/model> to switch");
+    expect(view.text).toContain("Browse keeps the current runtime");
+    expect(view.text).toContain("/oc_model <provider/model> --runtime <runtime>");
     expect(view.buttons[0]?.[0]?.text).toBe("Browse providers");
   });
 
@@ -145,7 +147,18 @@ describe("Mattermost model picker", () => {
           ],
         },
       };
-      const providerData = await buildModelsProviderData(cfg, "support");
+      const providerData = {
+        byProvider: new Map<string, Set<string>>([
+          ["anthropic", new Set(["claude-opus-4-5"])],
+          ["openai", new Set(["gpt-5"])],
+        ]),
+        providers: ["anthropic", "openai"],
+        resolvedDefault: {
+          provider: "openai",
+          model: "gpt-5",
+        },
+        modelNames: new Map<string, string>(),
+      };
 
       expect(
         resolveMattermostModelPickerCurrentModel({

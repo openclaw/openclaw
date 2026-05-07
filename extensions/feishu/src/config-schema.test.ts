@@ -19,7 +19,10 @@ describe("FeishuConfigSchema webhook validation", () => {
     expect(result.webhookPath).toBe("/feishu/events");
     expect(result.dmPolicy).toBe("pairing");
     expect(result.groupPolicy).toBe("allowlist");
-    expect(result.requireMention).toBe(true);
+    // requireMention has no schema-level default now — it is resolved at runtime
+    // through shared channel group-policy resolution, with an open-group override
+    // that defaults to false only when requireMention is otherwise unset.
+    expect(result.requireMention).toBeUndefined();
   });
 
   it("does not force top-level policy defaults into account config", () => {
@@ -203,6 +206,20 @@ describe("FeishuConfigSchema optimization flags", () => {
     expect(result.resolveSenderNames).toBe(true);
   });
 
+  it("accepts top-level and account-level block streaming", () => {
+    const result = FeishuConfigSchema.parse({
+      blockStreaming: true,
+      accounts: {
+        main: {
+          blockStreaming: false,
+        },
+      },
+    });
+
+    expect(result.blockStreaming).toBe(true);
+    expect(result.accounts?.main?.blockStreaming).toBe(false);
+  });
+
   it("accepts account-level optimization flags", () => {
     const result = FeishuConfigSchema.parse({
       accounts: {
@@ -214,6 +231,45 @@ describe("FeishuConfigSchema optimization flags", () => {
     });
     expect(result.accounts?.main?.typingIndicator).toBe(false);
     expect(result.accounts?.main?.resolveSenderNames).toBe(false);
+  });
+});
+
+describe("FeishuConfigSchema TTS overrides", () => {
+  it("accepts top-level and account-level TTS overrides", () => {
+    const result = FeishuConfigSchema.parse({
+      tts: {
+        auto: "always",
+        provider: "openai",
+        providers: {
+          openai: {
+            voice: "alloy",
+          },
+        },
+      },
+      accounts: {
+        english: {
+          tts: {
+            providers: {
+              openai: {
+                voice: "shimmer",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.tts).toMatchObject({
+      auto: "always",
+      provider: "openai",
+    });
+    expect(result.accounts?.english?.tts).toMatchObject({
+      providers: {
+        openai: {
+          voice: "shimmer",
+        },
+      },
+    });
   });
 });
 

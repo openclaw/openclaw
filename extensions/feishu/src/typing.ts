@@ -1,5 +1,5 @@
-import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
-import { resolveFeishuAccount } from "./accounts.js";
+import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { getFeishuRuntime } from "./runtime.js";
 
@@ -39,6 +39,10 @@ export type TypingIndicatorState = {
   messageId: string;
   reactionId: string | null;
 };
+
+type FeishuMessageReactionCreateResponse = Awaited<
+  ReturnType<ReturnType<typeof createFeishuClient>["im"]["messageReaction"]["create"]>
+>;
 
 /**
  * Check whether an error represents a rate-limit or quota-exceeded condition
@@ -107,7 +111,7 @@ export async function addTypingIndicator(params: {
   runtime?: RuntimeEnv;
 }): Promise<TypingIndicatorState> {
   const { cfg, messageId, accountId, runtime } = params;
-  const account = resolveFeishuAccount({ cfg, accountId });
+  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
     return { messageId, reactionId: null };
   }
@@ -134,8 +138,8 @@ export async function addTypingIndicator(params: {
       throw new FeishuBackoffError(backoffCode);
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
-    const reactionId = (response as any)?.data?.reaction_id ?? null;
+    const typedResponse: FeishuMessageReactionCreateResponse = response;
+    const reactionId = typedResponse.data?.reaction_id ?? null;
     return { messageId, reactionId };
   } catch (err) {
     if (isFeishuBackoffError(err)) {
@@ -168,7 +172,7 @@ export async function removeTypingIndicator(params: {
     return;
   }
 
-  const account = resolveFeishuAccount({ cfg, accountId });
+  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
     return;
   }

@@ -1,4 +1,5 @@
-import type { SlackSlashCommandConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { SlackSlashCommandConfig } from "openclaw/plugin-sdk/config-types";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 /**
  * Strip Slack mentions (<@U123>, <@U123|name>) so command detection works on
@@ -11,19 +12,21 @@ export function stripSlackMentionsForCommandDetection(text: string): string {
     .trim();
 }
 
-export function normalizeSlackSlashCommandName(raw: string) {
+function normalizeSlackSlashCommandName(raw: string) {
   return raw.replace(/^\/+/, "");
 }
 
 export function resolveSlackSlashCommandConfig(
   raw?: SlackSlashCommandConfig,
 ): Required<SlackSlashCommandConfig> {
-  const normalizedName = normalizeSlackSlashCommandName(raw?.name?.trim() || "openclaw");
+  const normalizedName = normalizeSlackSlashCommandName(
+    normalizeOptionalString(raw?.name) ?? "openclaw",
+  );
   const name = normalizedName || "openclaw";
   return {
     enabled: raw?.enabled === true,
     name,
-    sessionPrefix: raw?.sessionPrefix?.trim() || "slack:slash",
+    sessionPrefix: normalizeOptionalString(raw?.sessionPrefix) ?? "slack:slash",
     ephemeral: raw?.ephemeral !== false,
   };
 }

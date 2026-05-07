@@ -67,7 +67,6 @@ function resolveLocalModeWithUnresolvedPassword(mode: "none" | "trusted-proxy") 
       },
     } as unknown as OpenClawConfig,
     env: {} as NodeJS.ProcessEnv,
-    includeLegacyEnv: false,
   });
 }
 
@@ -103,7 +102,6 @@ function expectUnresolvedLocalAuthSecretRefFailure(params: {
         },
       } as unknown as OpenClawConfig,
       env: {} as NodeJS.ProcessEnv,
-      includeLegacyEnv: false,
     }),
   ).toThrow(params.errorPath);
 }
@@ -187,7 +185,6 @@ describe("resolveGatewayCredentialsFromConfig", () => {
         },
       }),
       env: {} as NodeJS.ProcessEnv,
-      includeLegacyEnv: false,
     });
     expect(resolved).toEqual({
       token: "remote-token",
@@ -235,7 +232,6 @@ describe("resolveGatewayCredentialsFromConfig", () => {
       env: {
         OPENCLAW_GATEWAY_TOKEN: "env-token",
       } as NodeJS.ProcessEnv,
-      includeLegacyEnv: false,
     });
 
     expect(resolved).toEqual({
@@ -257,7 +253,6 @@ describe("resolveGatewayCredentialsFromConfig", () => {
           },
         }),
         env: {} as NodeJS.ProcessEnv,
-        includeLegacyEnv: false,
       }),
     ).toThrow("gateway.auth.token");
   });
@@ -288,8 +283,48 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     });
   });
 
-  it("ignores unresolved local password ref when local auth mode is trusted-proxy", () => {
-    const resolved = resolveLocalModeWithUnresolvedPassword("trusted-proxy");
+  it("throws when trusted-proxy local password SecretRef cannot resolve", () => {
+    expect(() => resolveLocalModeWithUnresolvedPassword("trusted-proxy")).toThrow(
+      "gateway.auth.password",
+    );
+  });
+
+  it("resolves trusted-proxy local password credentials", () => {
+    const resolved = resolveGatewayCredentialsFromConfig({
+      cfg: cfg({
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "trusted-proxy",
+            password: "local-trusted-proxy-password", // pragma: allowlist secret
+          },
+        },
+      }),
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(resolved).toEqual({
+      token: undefined,
+      password: "local-trusted-proxy-password", // pragma: allowlist secret
+    });
+  });
+
+  it("does not use remote password as trusted-proxy local fallback", () => {
+    const resolved = resolveGatewayCredentialsFromConfig({
+      cfg: cfg({
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "trusted-proxy",
+          },
+          remote: {
+            password: "remote-password", // pragma: allowlist secret
+          },
+        },
+      }),
+      env: {} as NodeJS.ProcessEnv,
+    });
+
     expect(resolved).toEqual({
       token: undefined,
       password: undefined,
@@ -306,7 +341,6 @@ describe("resolveGatewayCredentialsFromConfig", () => {
         },
       }),
       env: {} as NodeJS.ProcessEnv,
-      includeLegacyEnv: false,
     });
     expect(resolved).toEqual({
       token: "local-token",
@@ -405,7 +439,6 @@ describe("resolveGatewayCredentialsFromConfig", () => {
           },
         } as unknown as OpenClawConfig,
         env: {} as NodeJS.ProcessEnv,
-        includeLegacyEnv: false,
         remoteTokenFallback: "remote-only",
       }),
     ).toThrow("gateway.remote.token");
@@ -435,7 +468,6 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     const resolved = resolveGatewayCredentialsFromConfig({
       cfg: createRemoteConfigWithMissingLocalTokenRef(),
       env: {} as NodeJS.ProcessEnv,
-      includeLegacyEnv: false,
       remoteTokenFallback: "remote-only",
       remotePasswordFallback: "remote-only", // pragma: allowlist secret
     });
@@ -450,7 +482,6 @@ describe("resolveGatewayCredentialsFromConfig", () => {
       resolveGatewayCredentialsFromConfig({
         cfg: createRemoteConfigWithMissingLocalTokenRef(),
         env: {} as NodeJS.ProcessEnv,
-        includeLegacyEnv: false,
         remoteTokenFallback: "remote-env-local",
         remotePasswordFallback: "remote-only", // pragma: allowlist secret
       }),
@@ -476,7 +507,6 @@ describe("resolveGatewayCredentialsFromConfig", () => {
         },
       } as unknown as OpenClawConfig,
       env: {} as NodeJS.ProcessEnv,
-      includeLegacyEnv: false,
     });
     expect(resolved).toEqual({
       token: undefined,
@@ -503,26 +533,9 @@ describe("resolveGatewayCredentialsFromConfig", () => {
           },
         } as unknown as OpenClawConfig,
         env: {} as NodeJS.ProcessEnv,
-        includeLegacyEnv: false,
         remotePasswordFallback: "remote-only", // pragma: allowlist secret
       }),
     ).toThrow("gateway.remote.password");
-  });
-
-  it("can disable legacy CLAWDBOT env fallback", () => {
-    const resolved = resolveGatewayCredentialsFromConfig({
-      cfg: cfg({
-        gateway: {
-          mode: "local",
-        },
-      }),
-      env: {
-        CLAWDBOT_GATEWAY_TOKEN: "legacy-token",
-        CLAWDBOT_GATEWAY_PASSWORD: "legacy-password", // pragma: allowlist secret
-      } as NodeJS.ProcessEnv,
-      includeLegacyEnv: false,
-    });
-    expect(resolved).toEqual({ token: undefined, password: undefined });
   });
 });
 
@@ -535,7 +548,6 @@ describe("resolveGatewayCredentialsFromValues", () => {
         OPENCLAW_GATEWAY_TOKEN: "env-token",
         OPENCLAW_GATEWAY_PASSWORD: "env-password", // pragma: allowlist secret
       } as NodeJS.ProcessEnv,
-      includeLegacyEnv: false,
       tokenPrecedence: "config-first",
       passwordPrecedence: "config-first", // pragma: allowlist secret
     });

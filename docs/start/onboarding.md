@@ -3,14 +3,12 @@ summary: "First-run setup flow for OpenClaw (macOS app)"
 read_when:
   - Designing the macOS onboarding assistant
   - Implementing auth or identity setup
-title: "Onboarding (macOS App)"
+title: "Onboarding (macOS app)"
 sidebarTitle: "Onboarding: macOS App"
 ---
 
-# Onboarding (macOS App)
-
-This doc describes the **current** first‑run setup flow. The goal is a
-smooth “day 0” experience: pick where the Gateway runs, connect auth, run the
+This doc describes the **current** first-run setup flow. The goal is a
+smooth "day 0" experience: pick where the Gateway runs, connect auth, run the
 wizard, and let the agent bootstrap itself.
 For a general overview of onboarding paths, see [Onboarding Overview](/start/onboarding-overview).
 
@@ -56,7 +54,7 @@ Where does the **Gateway** run?
 
 - The wizard now generates a **token** even for loopback, so local WS clients must authenticate.
 - If you disable auth, any local process can connect; use that only on fully trusted machines.
-- Use a **token** for multi‑machine access or non‑loopback binds.
+- Use a **token** for multi-machine access or non-loopback binds.
 
 </Tip>
 </Step>
@@ -79,13 +77,19 @@ Onboarding requests TCC permissions needed for:
 </Step>
 <Step title="CLI">
   <Info>This step is optional</Info>
-  The app can install the global `openclaw` CLI via npm/pnpm so terminal
-  workflows and launchd tasks work out of the box.
+  The app can install the global `openclaw` CLI via npm, pnpm, or bun.
+  It prefers npm first, then pnpm, then bun if that is the only detected
+  package manager. For the Gateway runtime, Node remains the recommended path.
 </Step>
 <Step title="Onboarding Chat (dedicated session)">
   After setup, the app opens a dedicated onboarding chat session so the agent can
-  introduce itself and guide next steps. This keeps first‑run guidance separate
+  introduce itself and guide next steps. This keeps first-run guidance separate
   from your normal conversation. See [Bootstrapping](/start/bootstrapping) for
   what happens on the gateway host during the first agent run.
 </Step>
 </Steps>
+
+## Related
+
+- [Onboarding overview](/start/onboarding-overview)
+- [Getting started](/start/getting-started)

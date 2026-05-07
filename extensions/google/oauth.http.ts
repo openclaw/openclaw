@@ -1,4 +1,4 @@
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/infra-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { DEFAULT_FETCH_TIMEOUT_MS } from "./oauth.shared.js";
 
 export async function fetchWithTimeout(

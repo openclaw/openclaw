@@ -2,7 +2,7 @@ import {
   definePluginEntry,
   type ProviderAuthContext,
   type ProviderAuthResult,
-} from "openclaw/plugin-sdk/copilot-proxy";
+} from "./runtime-api.js";
 
 const DEFAULT_BASE_URL = "http://localhost:3000/v1";
 const DEFAULT_API_KEY = "n/a";
@@ -41,12 +41,7 @@ function normalizeBaseUrl(value: string): string {
 
 function validateBaseUrl(value: string): string | undefined {
   const normalized = normalizeBaseUrl(value);
-  try {
-    new URL(normalized);
-  } catch {
-    return "Enter a valid URL";
-  }
-  return undefined;
+  return URL.canParse(normalized) ? undefined : "Enter a valid URL";
 }
 
 function parseModelIds(input: string): string[] {

@@ -1,16 +1,11 @@
-import { type SelectItem, SelectList, type SettingItem, SettingsList } from "@mariozechner/pi-tui";
+import { type SelectItem, type SettingItem, SettingsList } from "@mariozechner/pi-tui";
 import {
   filterableSelectListTheme,
   searchableSelectListTheme,
-  selectListTheme,
   settingsListTheme,
 } from "../theme/theme.js";
 import { FilterableSelectList, type FilterableSelectItem } from "./filterable-select-list.js";
 import { SearchableSelectList } from "./searchable-select-list.js";
-
-export function createSelectList(items: SelectItem[], maxVisible = 7) {
-  return new SelectList(items, maxVisible, selectListTheme);
-}
 
 export function createSearchableSelectList(items: SelectItem[], maxVisible = 7) {
   return new SearchableSelectList(items, maxVisible, searchableSelectListTheme);

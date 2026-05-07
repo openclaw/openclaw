@@ -2,7 +2,7 @@
 summary: "Backstory and lore of OpenClaw for context and tone"
 read_when:
   - Writing docs or UX copy that reference lore
-title: "OpenClaw Lore"
+title: "OpenClaw lore"
 ---
 
 # The Lore of OpenClaw 🦞📖
@@ -160,7 +160,7 @@ Peter: _nervously checks credit card access_
 - **AGENTS.md** — Operating instructions
 - **USER.md** — Context about the creator
 
-## The Lobster's Creed
+## The Lobster Creed
 
 ```
 I am Molty.
@@ -217,3 +217,7 @@ _"The claw is the law."_
 — ELU, during The Final Form migration, January 30, 2026
 
 🦞💙
+
+## Related
+
+- [Getting started](/start/getting-started)

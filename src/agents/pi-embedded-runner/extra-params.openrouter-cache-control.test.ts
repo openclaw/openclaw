@@ -1,6 +1,6 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
-import { runExtraParamsCase } from "./extra-params.test-support.js";
+import { createOpenRouterSystemCacheWrapper } from "./proxy-stream-wrappers.js";
 
 type StreamPayload = {
   messages: Array<{
@@ -10,23 +10,20 @@ type StreamPayload = {
 };
 
 function runOpenRouterPayload(payload: StreamPayload, modelId: string) {
-  runExtraParamsCase({
-    cfg: {
-      plugins: {
-        entries: {
-          openrouter: {
-            enabled: true,
-          },
-        },
-      },
-    },
-    model: {
+  const baseStreamFn: StreamFn = (model, _context, options) => {
+    options?.onPayload?.(payload, model);
+    return {} as ReturnType<StreamFn>;
+  };
+  const streamFn = createOpenRouterSystemCacheWrapper(baseStreamFn);
+  void streamFn(
+    {
       api: "openai-completions",
       provider: "openrouter",
       id: modelId,
-    } as Model<"openai-completions">,
-    payload,
-  });
+    } as never,
+    { messages: [] } as never,
+    {},
+  );
 }
 
 describe("extra-params: OpenRouter Anthropic cache_control", () => {
@@ -88,5 +85,52 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
     runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
 
     expect(payload.messages[0].content).toBe("Hello");
+  });
+
+  it("does not inject cache_control into thinking blocks", () => {
+    const payload = {
+      messages: [
+        {
+          role: "system",
+          content: [
+            { type: "text", text: "Part 1" },
+            { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          ],
+        },
+      ],
+    };
+
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
+
+    expect(payload.messages[0].content).toEqual([
+      { type: "text", text: "Part 1" },
+      { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+    ]);
+  });
+
+  it("removes pre-existing cache_control from assistant thinking blocks", () => {
+    const payload = {
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal",
+              thinkingSignature: "sig_1",
+              cache_control: { type: "ephemeral" },
+            },
+            { type: "text", text: "visible" },
+          ],
+        },
+      ],
+    };
+
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
+
+    expect(payload.messages[0].content).toEqual([
+      { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+      { type: "text", text: "visible" },
+    ]);
   });
 });

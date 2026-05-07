@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { normalizeSlackMessagingTarget } from "../../../src/channels/plugins/normalize/slack.js";
-import { parseSlackTarget, resolveSlackChannelId } from "./targets.js";
+import {
+  normalizeSlackMessagingTarget,
+  parseSlackTarget,
+  resolveSlackChannelId,
+} from "./targets.js";
 
 describe("parseSlackTarget", () => {
   it("parses user mentions and prefixes", () => {

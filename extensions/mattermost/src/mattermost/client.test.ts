@@ -16,7 +16,7 @@ function createMockFetch(response?: { status?: number; body?: unknown; contentTy
   const calls: Array<{ url: string; init?: RequestInit }> = [];
 
   const mockFetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-    const urlStr = typeof url === "string" ? url : url.toString();
+    const urlStr = requestUrl(url);
     calls.push({ url: urlStr, init });
     return new Response(JSON.stringify(body), {
       status,
@@ -24,7 +24,28 @@ function createMockFetch(response?: { status?: number; body?: unknown; contentTy
     });
   });
 
-  return { mockFetch: mockFetch as unknown as typeof fetch, calls };
+  return { mockFetch: mockFetch as typeof fetch, calls };
+}
+
+function requestUrl(url: string | URL | Request): string {
+  if (typeof url === "string") {
+    return url;
+  }
+  if (url instanceof URL) {
+    return url.toString();
+  }
+  return url.url;
+}
+
+function parseRequestJson(init: RequestInit | undefined): Record<string, unknown> {
+  if (typeof init?.body !== "string") {
+    throw new Error("expected JSON request body");
+  }
+  const parsed: unknown = JSON.parse(init.body);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("expected JSON object request body");
+  }
+  return parsed as Record<string, unknown>;
 }
 
 function createTestClient(response?: { status?: number; body?: unknown; contentType?: string }) {
@@ -45,7 +66,7 @@ async function updatePostAndCapture(
   await updateMattermostPost(client, "post1", update);
   return {
     calls,
-    body: JSON.parse(calls[0].init?.body as string) as Record<string, unknown>,
+    body: parseRequestJson(calls[0].init),
   };
 }
 
@@ -131,13 +152,13 @@ describe("createMattermostClient", () => {
   });
 
   it("returns undefined on 204 responses", async () => {
-    const fetchImpl = vi.fn(async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
       return new Response(null, { status: 204 });
     });
     const client = createMattermostClient({
       baseUrl: "https://chat.example.com",
       botToken: "test-token",
-      fetchImpl: fetchImpl as any,
+      fetchImpl,
     });
     const result = await client.request<unknown>("/anything", { method: "DELETE" });
     expect(result).toBeUndefined();
@@ -160,7 +181,7 @@ describe("createMattermostPost", () => {
       message: "Hello world",
     });
 
-    const body = JSON.parse(calls[0].init?.body as string);
+    const body = parseRequestJson(calls[0].init);
     expect(body.channel_id).toBe("ch123");
     expect(body.message).toBe("Hello world");
   });
@@ -179,7 +200,7 @@ describe("createMattermostPost", () => {
       rootId: "root456",
     });
 
-    const body = JSON.parse(calls[0].init?.body as string);
+    const body = parseRequestJson(calls[0].init);
     expect(body.root_id).toBe("root456");
   });
 
@@ -197,7 +218,7 @@ describe("createMattermostPost", () => {
       fileIds: ["file1", "file2"],
     });
 
-    const body = JSON.parse(calls[0].init?.body as string);
+    const body = parseRequestJson(calls[0].init);
     expect(body.file_ids).toEqual(["file1", "file2"]);
   });
 
@@ -224,9 +245,11 @@ describe("createMattermostPost", () => {
       props,
     });
 
-    const body = JSON.parse(calls[0].init?.body as string);
+    const body = parseRequestJson(calls[0].init);
     expect(body.props).toEqual(props);
-    expect(body.props.attachments[0].actions[0].type).toBe("button");
+    expect(body.props).toMatchObject({
+      attachments: [{ actions: [{ type: "button" }] }],
+    });
   });
 
   it("omits props when not provided", async () => {
@@ -242,7 +265,7 @@ describe("createMattermostPost", () => {
       message: "No props",
     });
 
-    const body = JSON.parse(calls[0].init?.body as string);
+    const body = parseRequestJson(calls[0].init);
     expect(body.props).toBeUndefined();
   });
 });

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   clearApnsRegistration,
   clearApnsRegistrationIfCurrent,
@@ -10,21 +10,14 @@ import {
   registerApnsToken,
 } from "./push-apns.js";
 
-const tempDirs: string[] = [];
+const tempDirs = createTrackedTempDirs();
 
 async function makeTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-push-apns-store-test-"));
-  tempDirs.push(dir);
-  return dir;
+  return await tempDirs.make("openclaw-push-apns-store-test-");
 }
 
 afterEach(async () => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (dir) {
-      await fs.rm(dir, { recursive: true, force: true });
-    }
-  }
+  await tempDirs.cleanup();
 });
 
 describe("push APNs registration store", () => {

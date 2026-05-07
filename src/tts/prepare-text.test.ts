@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stripMarkdown } from "../line/markdown-to-line.js";
+import { stripMarkdown } from "../shared/text/strip-markdown.js";
 
 /**
  * Tests that stripMarkdown (used in the TTS pipeline via maybeApplyTtsToPayload)
@@ -18,6 +18,15 @@ describe("TTS text preparation – stripMarkdown", () => {
   it("strips bold and italic markers before TTS", () => {
     expect(stripMarkdown("This is **important** and *useful*")).toBe(
       "This is important and useful",
+    );
+  });
+
+  it("preserves underscores inside words while still stripping italic markers", () => {
+    expect(stripMarkdown("here_is_a_message")).toBe("here_is_a_message");
+    expect(stripMarkdown("привет_мир_тест")).toBe("привет_мир_тест");
+    expect(stripMarkdown("東京_駅_前")).toBe("東京_駅_前");
+    expect(stripMarkdown("use foo_bar_baz and _italic_ text")).toBe(
+      "use foo_bar_baz and italic text",
     );
   });
 

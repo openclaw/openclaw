@@ -1,8 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import {
-  generatePkceVerifierChallenge,
-  toFormUrlEncoded,
-} from "openclaw/plugin-sdk/minimax-portal-auth";
+import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
+import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 
 export type MiniMaxRegion = "cn" | "global";
 
@@ -30,7 +28,7 @@ function getOAuthEndpoints(region: MiniMaxRegion) {
   };
 }
 
-export type MiniMaxOAuthAuthorization = {
+type MiniMaxOAuthAuthorization = {
   user_code: string;
   verification_uri: string;
   expired_in: number;
@@ -38,7 +36,7 @@ export type MiniMaxOAuthAuthorization = {
   state: string;
 };
 
-export type MiniMaxOAuthToken = {
+type MiniMaxOAuthToken = {
   access: string;
   refresh: string;
   expires: number;
@@ -187,6 +185,9 @@ export async function loginMiniMaxPortalOAuth(params: {
   progress: { update: (message: string) => void; stop: (message?: string) => void };
   region?: MiniMaxRegion;
 }): Promise<MiniMaxOAuthToken> {
+  // Ensure env-based proxy dispatcher is active before any outbound fetch calls.
+  // Without this, HTTP_PROXY/HTTPS_PROXY env vars are silently ignored (#51619).
+  ensureGlobalUndiciEnvProxyDispatcher();
   const region = params.region ?? "global";
   const { verifier, challenge, state } = generatePkce();
   const oauth = await requestOAuthCode({ challenge, state, region });

@@ -1,10 +1,5 @@
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type { SessionEntry } from "../config/sessions.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSessionModelRef } from "../gateway/session-utils.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
-import { parseAgentSessionKey } from "../routing/session-key.js";
 import { theme } from "../terminal/theme.js";
 
 export type SessionDisplayRow = {
@@ -16,6 +11,7 @@ export type SessionDisplayRow = {
   abortedLastRun?: boolean;
   thinkingLevel?: string;
   verboseLevel?: string;
+  traceLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
   responseUsage?: string;
@@ -31,66 +27,42 @@ export type SessionDisplayRow = {
   contextTokens?: number;
 };
 
-export type SessionDisplayDefaults = {
-  model: string;
-};
-
 export const SESSION_KEY_PAD = 26;
 export const SESSION_AGE_PAD = 9;
 export const SESSION_MODEL_PAD = 14;
 
-export function toSessionDisplayRows(store: Record<string, SessionEntry>): SessionDisplayRow[] {
-  return Object.entries(store)
-    .map(([key, entry]) => {
-      const updatedAt = entry?.updatedAt ?? null;
-      return {
-        key,
-        updatedAt,
-        ageMs: updatedAt ? Date.now() - updatedAt : null,
-        sessionId: entry?.sessionId,
-        systemSent: entry?.systemSent,
-        abortedLastRun: entry?.abortedLastRun,
-        thinkingLevel: entry?.thinkingLevel,
-        verboseLevel: entry?.verboseLevel,
-        reasoningLevel: entry?.reasoningLevel,
-        elevatedLevel: entry?.elevatedLevel,
-        responseUsage: entry?.responseUsage,
-        groupActivation: entry?.groupActivation,
-        inputTokens: entry?.inputTokens,
-        outputTokens: entry?.outputTokens,
-        totalTokens: entry?.totalTokens,
-        totalTokensFresh: entry?.totalTokensFresh,
-        model: entry?.model,
-        modelProvider: entry?.modelProvider,
-        providerOverride: entry?.providerOverride,
-        modelOverride: entry?.modelOverride,
-        contextTokens: entry?.contextTokens,
-      } satisfies SessionDisplayRow;
-    })
-    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-}
-
-export function resolveSessionDisplayDefaults(cfg: OpenClawConfig): SessionDisplayDefaults {
-  const resolved = resolveConfiguredModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
+export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDisplayRow {
+  const updatedAt = entry?.updatedAt ?? null;
   return {
-    model: resolved.model ?? DEFAULT_MODEL,
+    key,
+    updatedAt,
+    ageMs: updatedAt ? Date.now() - updatedAt : null,
+    sessionId: entry?.sessionId,
+    systemSent: entry?.systemSent,
+    abortedLastRun: entry?.abortedLastRun,
+    thinkingLevel: entry?.thinkingLevel,
+    verboseLevel: entry?.verboseLevel,
+    traceLevel: entry?.traceLevel,
+    reasoningLevel: entry?.reasoningLevel,
+    elevatedLevel: entry?.elevatedLevel,
+    responseUsage: entry?.responseUsage,
+    groupActivation: entry?.groupActivation,
+    inputTokens: entry?.inputTokens,
+    outputTokens: entry?.outputTokens,
+    totalTokens: entry?.totalTokens,
+    totalTokensFresh: entry?.totalTokensFresh,
+    model: entry?.model,
+    modelProvider: entry?.modelProvider,
+    providerOverride: entry?.providerOverride,
+    modelOverride: entry?.modelOverride,
+    contextTokens: entry?.contextTokens,
   };
 }
 
-export function resolveSessionDisplayModel(
-  cfg: OpenClawConfig,
-  row: Pick<
-    SessionDisplayRow,
-    "key" | "model" | "modelProvider" | "modelOverride" | "providerOverride"
-  >,
-  defaults: SessionDisplayDefaults,
-): string {
-  const resolved = resolveSessionModelRef(cfg, row, parseAgentSessionKey(row.key)?.agentId);
-  return resolved.model ?? defaults.model;
+export function toSessionDisplayRows(store: Record<string, SessionEntry>): SessionDisplayRow[] {
+  return Object.entries(store)
+    .map(([key, entry]) => toSessionDisplayRow(key, entry))
+    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 }
 
 function truncateSessionKey(key: string): string {
@@ -122,6 +94,7 @@ export function formatSessionFlagsCell(
     SessionDisplayRow,
     | "thinkingLevel"
     | "verboseLevel"
+    | "traceLevel"
     | "reasoningLevel"
     | "elevatedLevel"
     | "responseUsage"
@@ -135,6 +108,7 @@ export function formatSessionFlagsCell(
   const flags = [
     row.thinkingLevel ? `think:${row.thinkingLevel}` : null,
     row.verboseLevel ? `verbose:${row.verboseLevel}` : null,
+    row.traceLevel ? `trace:${row.traceLevel}` : null,
     row.reasoningLevel ? `reasoning:${row.reasoningLevel}` : null,
     row.elevatedLevel ? `elev:${row.elevatedLevel}` : null,
     row.responseUsage ? `usage:${row.responseUsage}` : null,

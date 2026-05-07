@@ -7,14 +7,14 @@
 
 import { SimplePool, verifyEvent, type Event } from "nostr-tools";
 import type { NostrProfile } from "./config-schema.js";
-import { validateUrlSafety } from "./nostr-profile-http.js";
+import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 import { contentToProfile, type ProfileContent } from "./nostr-profile.js";
 
 // ============================================================================
 // Types
 // ============================================================================
 
-export interface ProfileImportResult {
+interface ProfileImportResult {
   /** Whether the import was successful */
   ok: boolean;
   /** The imported profile (if found and valid) */
@@ -33,7 +33,7 @@ export interface ProfileImportResult {
   sourceRelay?: string;
 }
 
-export interface ProfileImportOptions {
+interface ProfileImportOptions {
   /** The public key to fetch profile for */
   pubkey: string;
   /** Relay URLs to query */

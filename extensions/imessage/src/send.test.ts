@@ -1,135 +1,94 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ResolvedIMessageAccount } from "./accounts.js";
+import { describe, expect, it, vi } from "vitest";
 import type { IMessageRpcClient } from "./client.js";
 import { sendMessageIMessage } from "./send.js";
 
-const requestMock = vi.fn();
-const stopMock = vi.fn();
-
-const defaultAccount: ResolvedIMessageAccount = {
-  accountId: "default",
-  enabled: true,
-  configured: false,
-  config: {},
+const IMESSAGE_TEST_CFG = {
+  channels: {
+    imessage: {
+      accounts: {
+        default: {},
+      },
+    },
+  },
 };
 
-function createClient(): IMessageRpcClient {
+function createClient(result: Record<string, unknown>): IMessageRpcClient {
   return {
-    request: (...args: unknown[]) => requestMock(...args),
-    stop: (...args: unknown[]) => stopMock(...args),
+    request: vi.fn(async () => result),
+    stop: vi.fn(async () => {}),
   } as unknown as IMessageRpcClient;
 }
 
-async function sendWithDefaults(
-  to: string,
-  text: string,
-  opts: Parameters<typeof sendMessageIMessage>[2] = {},
-) {
-  return await sendMessageIMessage(to, text, {
-    account: defaultAccount,
-    config: {},
-    client: createClient(),
-    ...opts,
-  });
-}
+describe("sendMessageIMessage receipts", () => {
+  it("attaches a text receipt for native send ids", async () => {
+    const client = createClient({ guid: "p:0/imsg-1" });
 
-function getSentParams() {
-  return requestMock.mock.calls[0]?.[1] as Record<string, unknown>;
-}
-
-describe("sendMessageIMessage", () => {
-  beforeEach(() => {
-    requestMock.mockClear().mockResolvedValue({ ok: true });
-    stopMock.mockClear().mockResolvedValue(undefined);
-  });
-
-  it("sends to chat_id targets", async () => {
-    await sendWithDefaults("chat_id:123", "hi");
-    const params = getSentParams();
-    expect(requestMock).toHaveBeenCalledWith("send", expect.any(Object), expect.any(Object));
-    expect(params.chat_id).toBe(123);
-    expect(params.text).toBe("hi");
-  });
-
-  it("applies sms service prefix", async () => {
-    await sendWithDefaults("sms:+1555", "hello");
-    const params = getSentParams();
-    expect(params.service).toBe("sms");
-    expect(params.to).toBe("+1555");
-  });
-
-  it("adds file attachment with placeholder text", async () => {
-    await sendWithDefaults("chat_id:7", "", {
-      mediaUrl: "http://x/y.jpg",
-      resolveAttachmentImpl: async () => ({
-        path: "/tmp/imessage-media.jpg",
-        contentType: "image/jpeg",
-      }),
+    const result = await sendMessageIMessage("chat_id:42", "hello", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      replyToId: "reply-1",
     });
-    const params = getSentParams();
-    expect(params.file).toBe("/tmp/imessage-media.jpg");
-    expect(params.text).toBe("<media:image>");
-  });
 
-  it("normalizes mixed-case parameterized MIME for attachment placeholder text", async () => {
-    await sendWithDefaults("chat_id:7", "", {
-      mediaUrl: "http://x/voice",
-      resolveAttachmentImpl: async () => ({
-        path: "/tmp/imessage-media.ogg",
-        contentType: " Audio/Ogg; codecs=opus ",
-      }),
+    expect(result).toMatchObject({
+      messageId: "p:0/imsg-1",
+      sentText: "hello",
+      receipt: {
+        primaryPlatformMessageId: "p:0/imsg-1",
+        platformMessageIds: ["p:0/imsg-1"],
+        replyToId: "reply-1",
+        parts: [
+          expect.objectContaining({
+            platformMessageId: "p:0/imsg-1",
+            kind: "text",
+            replyToId: "reply-1",
+            raw: expect.objectContaining({
+              channel: "imessage",
+              chatId: "42",
+            }),
+          }),
+        ],
+      },
     });
-    const params = getSentParams();
-    expect(params.file).toBe("/tmp/imessage-media.ogg");
-    expect(params.text).toBe("<media:audio>");
   });
 
-  it("returns message id when rpc provides one", async () => {
-    requestMock.mockResolvedValue({ ok: true, id: 123 });
-    const result = await sendWithDefaults("chat_id:7", "hello");
-    expect(result.messageId).toBe("123");
-  });
+  it("attaches a media receipt after attachment resolution", async () => {
+    const client = createClient({ message_id: 12345 });
 
-  it("prepends reply tag as the first token when replyToId is provided", async () => {
-    await sendWithDefaults("chat_id:123", "  hello\nworld", {
-      replyToId: "abc-123",
+    const result = await sendMessageIMessage("chat_guid:chat-1", "", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/image.png",
+      resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
     });
-    const params = getSentParams();
-    expect(params.text).toBe("[[reply_to:abc-123]] hello\nworld");
-  });
 
-  it("rewrites an existing leading reply tag to keep the requested id first", async () => {
-    await sendWithDefaults("chat_id:123", " [[reply_to:old-id]] hello", {
-      replyToId: "new-id",
+    expect(result).toMatchObject({
+      messageId: "12345",
+      sentText: "<media:image>",
+      receipt: {
+        primaryPlatformMessageId: "12345",
+        platformMessageIds: ["12345"],
+        parts: [
+          expect.objectContaining({
+            platformMessageId: "12345",
+            kind: "media",
+            raw: expect.objectContaining({
+              conversationId: "chat-1",
+            }),
+          }),
+        ],
+      },
     });
-    const params = getSentParams();
-    expect(params.text).toBe("[[reply_to:new-id]] hello");
   });
 
-  it("sanitizes replyToId before writing the leading reply tag", async () => {
-    await sendWithDefaults("chat_id:123", "hello", {
-      replyToId: " [ab]\n\u0000c\td ] ",
+  it("does not treat compatibility ok responses as visible platform ids", async () => {
+    const client = createClient({ ok: "true" });
+
+    const result = await sendMessageIMessage("+15551234567", "hello", {
+      config: IMESSAGE_TEST_CFG,
+      client,
     });
-    const params = getSentParams();
-    expect(params.text).toBe("[[reply_to:abcd]] hello");
-  });
 
-  it("skips reply tagging when sanitized replyToId is empty", async () => {
-    await sendWithDefaults("chat_id:123", "hello", {
-      replyToId: "[]\u0000\n\r",
-    });
-    const params = getSentParams();
-    expect(params.text).toBe("hello");
-  });
-
-  it("normalizes string message_id values from rpc result", async () => {
-    requestMock.mockResolvedValue({ ok: true, message_id: "  guid-1  " });
-    const result = await sendWithDefaults("chat_id:7", "hello");
-    expect(result.messageId).toBe("guid-1");
-  });
-
-  it("does not stop an injected client", async () => {
-    await sendWithDefaults("chat_id:123", "hello");
-    expect(stopMock).not.toHaveBeenCalled();
+    expect(result.messageId).toBe("ok");
+    expect(result.receipt.platformMessageIds).toEqual([]);
   });
 });

@@ -8,6 +8,10 @@ import {
   validateArchiveEntryPath,
 } from "./archive-path.js";
 
+function expectArchivePathError(run: () => void, message: string) {
+  expect(run).toThrow(message);
+}
+
 describe("archive path helpers", () => {
   it.each([
     { value: "C:\\temp\\file.txt", expected: true },
@@ -51,11 +55,13 @@ describe("archive path helpers", () => {
       message: "archive entry is absolute: \\\\server\\share.txt",
     },
   ])("$name", ({ entryPath, message }) => {
-    expect(() =>
-      validateArchiveEntryPath(entryPath, {
-        escapeLabel: "targetDir",
-      }),
-    ).toThrow(message);
+    expectArchivePathError(
+      () =>
+        validateArchiveEntryPath(entryPath, {
+          escapeLabel: "targetDir",
+        }),
+      message,
+    );
   });
 
   it.each([
@@ -71,19 +77,23 @@ describe("archive path helpers", () => {
   it("preserves strip-induced traversal for follow-up validation", () => {
     const stripped = stripArchivePath("a/../escape.txt", 1);
     expect(stripped).toBe("../escape.txt");
-    expect(() =>
-      validateArchiveEntryPath(stripped ?? "", {
-        escapeLabel: "targetDir",
-      }),
-    ).toThrow("archive entry escapes targetDir: ../escape.txt");
+    expectArchivePathError(
+      () =>
+        validateArchiveEntryPath(stripped ?? "", {
+          escapeLabel: "targetDir",
+        }),
+      "archive entry escapes targetDir: ../escape.txt",
+    );
   });
+
+  const rootDir = path.join(path.sep, "tmp", "archive-root");
 
   it.each([
     {
       name: "keeps resolved output paths inside the root",
       relPath: "sub/file.txt",
       originalPath: "sub/file.txt",
-      expected: path.resolve(path.join(path.sep, "tmp", "archive-root"), "sub/file.txt"),
+      expected: path.resolve(rootDir, "sub/file.txt"),
     },
     {
       name: "rejects output paths that escape the root",
@@ -93,16 +103,17 @@ describe("archive path helpers", () => {
       message: "archive entry escapes targetDir: ../escape.txt",
     },
   ])("$name", ({ relPath, originalPath, escapeLabel, expected, message }) => {
-    const rootDir = path.join(path.sep, "tmp", "archive-root");
     if (message) {
-      expect(() =>
-        resolveArchiveOutputPath({
-          rootDir,
-          relPath,
-          originalPath,
-          escapeLabel,
-        }),
-      ).toThrow(message);
+      expectArchivePathError(
+        () =>
+          resolveArchiveOutputPath({
+            rootDir,
+            relPath,
+            originalPath,
+            escapeLabel,
+          }),
+        message,
+      );
       return;
     }
 

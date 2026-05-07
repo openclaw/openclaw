@@ -3,6 +3,7 @@ import type { SessionSendPolicyConfig } from "./types.base.js";
 export type MemoryBackend = "builtin" | "qmd";
 export type MemoryCitationsMode = "auto" | "on" | "off";
 export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
+export type MemoryQmdStartupMode = "off" | "idle" | "immediate";
 
 export type MemoryConfig = {
   backend?: MemoryBackend;
@@ -14,6 +15,7 @@ export type MemoryQmdConfig = {
   command?: string;
   mcporter?: MemoryQmdMcporterConfig;
   searchMode?: MemoryQmdSearchMode;
+  searchTool?: string;
   includeDefaultMemory?: boolean;
   paths?: MemoryQmdIndexPath[];
   sessions?: MemoryQmdSessionConfig;
@@ -52,6 +54,8 @@ export type MemoryQmdUpdateConfig = {
   interval?: string;
   debounceMs?: number;
   onBoot?: boolean;
+  startup?: MemoryQmdStartupMode;
+  startupDelayMs?: number;
   waitForBootSync?: boolean;
   embedInterval?: string;
   commandTimeoutMs?: number;

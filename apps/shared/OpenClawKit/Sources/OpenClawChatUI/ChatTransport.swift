@@ -4,6 +4,7 @@ public enum OpenClawChatTransportEvent: Sendable {
     case health(ok: Bool)
     case tick
     case chat(OpenClawChatEventPayload)
+    case sessionMessage(OpenClawSessionMessageEventPayload)
     case agent(OpenClawAgentEventPayload)
     case seqGap
 }
@@ -28,6 +29,7 @@ public protocol OpenClawChatTransport: Sendable {
 
     func setActiveSessionKey(_ sessionKey: String) async throws
     func resetSession(sessionKey: String) async throws
+    func compactSession(sessionKey: String) async throws
 }
 
 extension OpenClawChatTransport {
@@ -38,6 +40,13 @@ extension OpenClawChatTransport {
             domain: "OpenClawChatTransport",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "sessions.reset not supported by this transport"])
+    }
+
+    public func compactSession(sessionKey _: String) async throws {
+        throw NSError(
+            domain: "OpenClawChatTransport",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: "sessions.compact not supported by this transport"])
     }
 
     public func abortRun(sessionKey _: String, runId _: String) async throws {

@@ -1,4 +1,4 @@
-import type { ModelsProviderData } from "openclaw/plugin-sdk/reply-runtime";
+import type { ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 
 export function createModelsProviderData(
   entries: Record<string, string[]>,
@@ -21,5 +21,6 @@ export function createModelsProviderData(
       provider: defaultProvider,
       model: entries[defaultProvider]?.[0] ?? "gpt-4o",
     },
+    modelNames: new Map<string, string>(),
   };
 }

@@ -8,8 +8,8 @@ final class CanvasA2UIActionMessageHandler: NSObject, WKScriptMessageHandler {
     static let messageName = "openclawCanvasA2UIAction"
     static let allMessageNames = [messageName]
 
-    // Compatibility helper for debug/test shims. Runtime dispatch remains
-    // limited to in-app canvas schemes in `didReceive`.
+    /// Compatibility helper for debug/test shims. Runtime dispatch remains
+    /// limited to in-app canvas schemes in `didReceive`.
     static func isLocalNetworkCanvasURL(_ url: URL) -> Bool {
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
             return false

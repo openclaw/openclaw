@@ -1,27 +1,35 @@
 package ai.openclaw.app
 
-import android.content.pm.PackageManager
-import android.content.Intent
 import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
-import androidx.appcompat.app.AlertDialog
 import androidx.activity.ComponentActivity
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.ContextCompat
+import androidx.appcompat.app.AlertDialog
 import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.suspendCancellableCoroutine
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 
-class PermissionRequester(private val activity: ComponentActivity) {
+class PermissionRequester(
+  private val activity: ComponentActivity,
+) {
   private val mutex = Mutex()
   private var pending: CompletableDeferred<Map<String, Boolean>>? = null
+  private val mainHandler = Handler(Looper.getMainLooper())
 
   private val launcher: ActivityResultLauncher<Array<String>> =
     activity.registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
@@ -68,10 +76,10 @@ class PermissionRequester(private val activity: ComponentActivity) {
       // Merge: if something was already granted, treat it as granted even if launcher omitted it.
       val merged =
         permissions.associateWith { perm ->
-        val nowGranted =
-          ContextCompat.checkSelfPermission(activity, perm) == PackageManager.PERMISSION_GRANTED
-        result[perm] == true || nowGranted
-      }
+          val nowGranted =
+            ContextCompat.checkSelfPermission(activity, perm) == PackageManager.PERMISSION_GRANTED
+          result[perm] == true || nowGranted
+        }
 
       val denied =
         merged.filterValues { !it }.keys.filter {
@@ -86,32 +94,86 @@ class PermissionRequester(private val activity: ComponentActivity) {
 
   private suspend fun showRationaleDialog(permissions: List<String>): Boolean =
     withContext(Dispatchers.Main) {
+      if (activity.isFinishing || activity.isDestroyed) {
+        return@withContext false
+      }
       suspendCancellableCoroutine { cont ->
-        AlertDialog.Builder(activity)
-          .setTitle("Permission required")
-          .setMessage(buildRationaleMessage(permissions))
-          .setPositiveButton("Continue") { _, _ -> cont.resume(true) }
-          .setNegativeButton("Not now") { _, _ -> cont.resume(false) }
-          .setOnCancelListener { cont.resume(false) }
-          .show()
+        val lifecycle = activity.lifecycle
+        var dialog: AlertDialog? = null
+        var observer: LifecycleEventObserver? = null
+        val finished = AtomicBoolean(false)
+        val removeObserver = {
+          observer?.let(lifecycle::removeObserver)
+          observer = null
+        }
+
+        fun finish(result: Boolean?) {
+          if (!finished.compareAndSet(false, true)) return
+          removeObserver()
+          dialog?.dismiss()
+          if (result != null) {
+            cont.resume(result)
+          }
+        }
+        val actualObserver =
+          LifecycleEventObserver { _, event ->
+            if (event != Lifecycle.Event.ON_DESTROY) return@LifecycleEventObserver
+            finish(false)
+          }
+        observer = actualObserver
+        lifecycle.addObserver(actualObserver)
+        cont.invokeOnCancellation {
+          mainHandler.post {
+            finish(null)
+          }
+        }
+        dialog =
+          AlertDialog
+            .Builder(activity)
+            .setTitle("Permission required")
+            .setMessage(buildRationaleMessage(permissions))
+            .setPositiveButton("Continue") { _, _ -> finish(true) }
+            .setNegativeButton("Not now") { _, _ -> finish(false) }
+            .setOnCancelListener { finish(false) }
+            .show()
       }
     }
 
-  private fun showSettingsDialog(permissions: List<String>) {
-    AlertDialog.Builder(activity)
-      .setTitle("Enable permission in Settings")
-      .setMessage(buildSettingsMessage(permissions))
-      .setPositiveButton("Open Settings") { _, _ ->
-        val intent =
-          Intent(
-            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-            Uri.fromParts("package", activity.packageName, null),
-          )
-        activity.startActivity(intent)
+  private suspend fun showSettingsDialog(permissions: List<String>) =
+    withContext(Dispatchers.Main) {
+      if (activity.isFinishing || activity.isDestroyed) return@withContext
+      val lifecycle = activity.lifecycle
+      var dialog: AlertDialog? = null
+      var observer: LifecycleEventObserver? = null
+      val removeObserver = {
+        observer?.let(lifecycle::removeObserver)
+        observer = null
       }
-      .setNegativeButton("Cancel", null)
-      .show()
-  }
+      val actualObserver =
+        LifecycleEventObserver { _, event ->
+          if (event != Lifecycle.Event.ON_DESTROY) return@LifecycleEventObserver
+          removeObserver()
+          dialog?.dismiss()
+        }
+      observer = actualObserver
+      lifecycle.addObserver(actualObserver)
+      dialog =
+        AlertDialog
+          .Builder(activity)
+          .setTitle("Enable permission in Settings")
+          .setMessage(buildSettingsMessage(permissions))
+          .setPositiveButton("Open Settings") { _, _ ->
+            if (activity.isFinishing || activity.isDestroyed) return@setPositiveButton
+            val intent =
+              Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.fromParts("package", activity.packageName, null),
+              )
+            activity.startActivity(intent)
+          }.setNegativeButton("Cancel", null)
+          .setOnDismissListener { removeObserver() }
+          .show()
+    }
 
   private fun buildRationaleMessage(permissions: List<String>): String {
     val labels = permissions.map { permissionLabel(it) }
@@ -127,7 +189,16 @@ class PermissionRequester(private val activity: ComponentActivity) {
     when (permission) {
       Manifest.permission.CAMERA -> "Camera"
       Manifest.permission.RECORD_AUDIO -> "Microphone"
-      Manifest.permission.SEND_SMS -> "SMS"
+      Manifest.permission.SEND_SMS -> "Send SMS"
+      Manifest.permission.READ_SMS -> "Read SMS"
+      Manifest.permission.READ_CONTACTS -> "Read Contacts"
+      Manifest.permission.WRITE_CONTACTS -> "Write Contacts"
+      Manifest.permission.READ_CALENDAR -> "Read Calendar"
+      Manifest.permission.WRITE_CALENDAR -> "Write Calendar"
+      Manifest.permission.READ_CALL_LOG -> "Read Call Log"
+      Manifest.permission.ACTIVITY_RECOGNITION -> "Motion Activity"
+      Manifest.permission.READ_MEDIA_IMAGES -> "Photos"
+      Manifest.permission.READ_EXTERNAL_STORAGE -> "Photos"
       else -> permission
     }
 }

@@ -51,7 +51,6 @@ describe("promptChannelAllowlist", () => {
     });
 
     const result = await promptChannelAllowlist({
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: prompter as any,
       label: "Test",
       currentEntries: ["alpha", "beta"],
@@ -73,7 +72,6 @@ describe("promptChannelAccessPolicy", () => {
     });
 
     const result = await promptChannelAccessPolicy({
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: prompter as any,
       label: "Discord",
       currentPolicy: "allowlist",
@@ -94,7 +92,6 @@ describe("promptChannelAccessConfig", () => {
     });
 
     const result = await promptChannelAccessConfig({
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: prompter as any,
       label: "Twitch chat",
       skipAllowlistEntries: true,
@@ -111,7 +108,6 @@ describe("promptChannelAccessConfig", () => {
     });
 
     const result = await promptChannelAccessConfig({
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: prompter as any,
       label: "Slack",
     });
@@ -127,7 +123,6 @@ describe("promptChannelAccessConfig", () => {
     });
 
     const result = await promptChannelAccessConfig({
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: prompter as any,
       label: "Slack",
     });
@@ -145,7 +140,6 @@ describe("promptChannelAccessConfig", () => {
     });
 
     const result = await promptChannelAccessConfig({
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: prompter as any,
       label: "Slack",
       allowDisabled: true,

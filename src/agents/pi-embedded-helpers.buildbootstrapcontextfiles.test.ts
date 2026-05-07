@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -5,6 +8,7 @@ import {
   DEFAULT_BOOTSTRAP_MAX_CHARS,
   DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE,
   DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
+  ensureSessionHeader,
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
@@ -25,6 +29,22 @@ const createLargeBootstrapFiles = (): WorkspaceBootstrapFile[] => [
   makeFile({ name: "SOUL.md", path: "/tmp/SOUL.md", content: "b".repeat(10_000) }),
   makeFile({ name: "USER.md", path: "/tmp/USER.md", content: "c".repeat(10_000) }),
 ];
+
+describe("ensureSessionHeader", () => {
+  it("creates transcript files with restrictive permissions", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-header-"));
+    try {
+      const sessionFile = path.join(tempDir, "nested", "session.jsonl");
+      await ensureSessionHeader({ sessionFile, sessionId: "session-1", cwd: tempDir });
+
+      expect((await fs.stat(path.dirname(sessionFile))).mode & 0o777).toBe(0o700);
+      expect((await fs.stat(sessionFile)).mode & 0o777).toBe(0o600);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("buildBootstrapContextFiles", () => {
   it("keeps missing markers", () => {
     const files = [makeFile({ missing: true, content: undefined })];
@@ -46,18 +66,71 @@ describe("buildBootstrapContextFiles", () => {
     const files = [makeFile({ name: "TOOLS.md", content: long })];
     const warnings: string[] = [];
     const maxChars = 200;
-    const expectedTailChars = Math.floor(maxChars * 0.2);
     const [result] = buildBootstrapContextFiles(files, {
       maxChars,
       warn: (message) => warnings.push(message),
     });
+    const kept = result?.content.match(/kept (\d+)\+(\d+) chars/);
+    expect(kept).not.toBeNull();
+    if (!kept) {
+      throw new Error("missing truncation kept-count marker");
+    }
+    const headChars = Number(kept[1]);
+    const tailChars = Number(kept[2]);
     expect(result?.content).toContain("[...truncated, read TOOLS.md for full content...]");
     expect(result?.content.length).toBeLessThan(long.length);
-    expect(result?.content.startsWith(long.slice(0, 120))).toBe(true);
-    expect(result?.content.endsWith(long.slice(-expectedTailChars))).toBe(true);
+    expect(result?.content.length).toBeLessThanOrEqual(maxChars);
+    expect(result?.content.startsWith(long.slice(0, headChars))).toBe(true);
+    if (tailChars > 0) {
+      expect(result?.content.endsWith(long.slice(-tailChars))).toBe(true);
+    }
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("TOOLS.md");
     expect(warnings[0]).toContain("limit 200");
+  });
+  it("fits the rendered truncation marker inside the per-file budget", () => {
+    const maxChars = DEFAULT_BOOTSTRAP_MAX_CHARS;
+    const files = [
+      makeFile({
+        name: "HEARTBEAT.md",
+        path: "/tmp/HEARTBEAT.md",
+        content: "a".repeat(maxChars * 2),
+      }),
+    ];
+    const [result] = buildBootstrapContextFiles(files, { maxChars });
+    expect(result?.content).toContain("[...truncated, read HEARTBEAT.md for full content...]");
+    expect(result?.content.length).toBeLessThanOrEqual(maxChars);
+  });
+  it("keeps bootstrap bytes in tiny per-file budgets when the marker is longer than the limit", () => {
+    const maxChars = 64;
+    const content = `HEAD-${"a".repeat(1_000)}-TAIL`;
+    const files = [
+      makeFile({
+        name: "HEARTBEAT.md",
+        path: "/tmp/HEARTBEAT.md",
+        content,
+      }),
+    ];
+    const [result] = buildBootstrapContextFiles(files, { maxChars });
+    expect(result?.content.startsWith("HEAD-")).toBe(true);
+    expect(result?.content.endsWith("-TAIL")).toBe(true);
+    expect(result?.content).toContain("truncated");
+    expect(result?.content.length).toBeLessThanOrEqual(maxChars);
+  });
+  it("keeps at least one bootstrap byte when only the compact marker fits", () => {
+    const maxChars = 22;
+    const content = `HEAD-${"a".repeat(1_000)}-TAIL`;
+    const files = [
+      makeFile({
+        name: "HEARTBEAT.md",
+        path: "/tmp/HEARTBEAT.md",
+        content,
+      }),
+    ];
+    const [result] = buildBootstrapContextFiles(files, { maxChars });
+    expect(result?.content).toContain("truncated");
+    expect(result?.content.length).toBeLessThanOrEqual(maxChars);
+    expect(result?.content).toContain("H");
   });
   it("keeps content under the default limit", () => {
     const long = "a".repeat(DEFAULT_BOOTSTRAP_MAX_CHARS - 10);

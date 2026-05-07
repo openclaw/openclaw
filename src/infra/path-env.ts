@@ -58,6 +58,17 @@ function candidateBinDirs(opts: EnsureOpenClawPathOpts): { prepend: string[]; ap
   const prepend: string[] = [];
   const append: string[] = [];
 
+  // Keep the active runtime directory ahead of PATH hardening so shebang-based
+  // subprocesses keep using the same Node/Bun the current OpenClaw process is on.
+  try {
+    const execDir = path.dirname(execPath);
+    if (isExecutable(execPath)) {
+      prepend.push(execDir);
+    }
+  } catch {
+    // ignore
+  }
+
   // Bundled macOS app: `openclaw` lives next to the executable (process.execPath).
   try {
     const execDir = path.dirname(execPath);
@@ -81,26 +92,30 @@ function candidateBinDirs(opts: EnsureOpenClawPathOpts): { prepend: string[]; ap
     }
   }
 
+  // Only immutable OS directories go in prepend so they take priority over
+  // user-writable locations, preventing PATH hijack of system binaries.
+  prepend.push("/usr/bin", "/bin");
+
+  // User-writable / package-manager directories are appended so they never
+  // shadow trusted OS binaries.
+  // This includes Brew/Homebrew dirs, which are useful for finding `openclaw`
+  // in launchd/minimal environments but must not be treated as trusted.
+  append.push(...resolveBrewPathDirs({ homeDir }));
   const miseDataDir = process.env.MISE_DATA_DIR ?? path.join(homeDir, ".local", "share", "mise");
   const miseShims = path.join(miseDataDir, "shims");
   if (isDirectory(miseShims)) {
-    prepend.push(miseShims);
+    append.push(miseShims);
   }
-
-  prepend.push(...resolveBrewPathDirs({ homeDir }));
-
-  // Common global install locations (macOS first).
   if (platform === "darwin") {
-    prepend.push(path.join(homeDir, "Library", "pnpm"));
+    append.push(path.join(homeDir, "Library", "pnpm"));
   }
   if (process.env.XDG_BIN_HOME) {
-    prepend.push(process.env.XDG_BIN_HOME);
+    append.push(process.env.XDG_BIN_HOME);
   }
-  prepend.push(path.join(homeDir, ".local", "bin"));
-  prepend.push(path.join(homeDir, ".local", "share", "pnpm"));
-  prepend.push(path.join(homeDir, ".bun", "bin"));
-  prepend.push(path.join(homeDir, ".yarn", "bin"));
-  prepend.push("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin");
+  append.push(path.join(homeDir, ".local", "bin"));
+  append.push(path.join(homeDir, ".local", "share", "pnpm"));
+  append.push(path.join(homeDir, ".bun", "bin"));
+  append.push(path.join(homeDir, ".yarn", "bin"));
 
   return { prepend: prepend.filter(isDirectory), append: append.filter(isDirectory) };
 }

@@ -1,3 +1,4 @@
+// Focused self-hosted provider setup helpers for OpenAI-compatible backends.
 export type {
   OpenClawPluginApi,
   ProviderAuthContext,
@@ -9,6 +10,7 @@ export type {
 export {
   applyProviderDefaultModel,
   configureOpenAICompatibleSelfHostedProviderNonInteractive,
+  discoverOpenAICompatibleLocalModels,
   discoverOpenAICompatibleSelfHostedProvider,
   promptAndConfigureOpenAICompatibleSelfHostedProvider,
   promptAndConfigureOpenAICompatibleSelfHostedProviderAuth,
@@ -16,8 +18,3 @@ export {
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "../plugins/provider-self-hosted-setup.js";
-
-export {
-  buildSglangProvider,
-  buildVllmProvider,
-} from "../agents/models-config.providers.discovery.js";

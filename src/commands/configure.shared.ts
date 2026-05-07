@@ -5,6 +5,7 @@ import {
   select as clackSelect,
   text as clackText,
 } from "@clack/prompts";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
 
 export const CONFIGURE_WIZARD_SECTIONS = [
@@ -14,6 +15,7 @@ export const CONFIGURE_WIZARD_SECTIONS = [
   "gateway",
   "daemon",
   "channels",
+  "plugins",
   "skills",
   "health",
 ] as const;
@@ -24,9 +26,7 @@ export function parseConfigureWizardSections(raw: unknown): {
   sections: WizardSection[];
   invalid: string[];
 } {
-  const sectionsRaw: string[] = Array.isArray(raw)
-    ? raw.map((value: unknown) => (typeof value === "string" ? value.trim() : "")).filter(Boolean)
-    : [];
+  const sectionsRaw: string[] = Array.isArray(raw) ? normalizeStringEntries(raw) : [];
   if (sectionsRaw.length === 0) {
     return { sections: [], invalid: [] };
   }
@@ -64,6 +64,7 @@ export const CONFIGURE_SECTION_OPTIONS: Array<{
     label: "Channels",
     hint: "Link WhatsApp/Telegram/etc and defaults",
   },
+  { value: "plugins", label: "Plugins", hint: "Configure plugin settings (sandbox, tools, etc.)" },
   { value: "skills", label: "Skills", hint: "Install/enable workspace skills" },
   {
     value: "health",

@@ -8,8 +8,8 @@ import {
 } from "../../config/config-paths.js";
 import {
   readConfigFileSnapshot,
+  replaceConfigFile,
   validateConfigObjectWithPlugins,
-  writeConfigFile,
 } from "../../config/config.js";
 import {
   getConfigOverrides,
@@ -17,7 +17,9 @@ import {
   setConfigOverride,
   unsetConfigOverride,
 } from "../../config/runtime-overrides.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { resolveChannelAccountId } from "./channel-context.js";
 import {
   rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
@@ -84,7 +86,11 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
       cfg: params.cfg,
       channel: params.command.channel,
       channelId,
-      accountId: params.ctx.AccountId,
+      accountId: resolveChannelAccountId({
+        cfg: params.cfg,
+        ctx: params.ctx,
+        command: params.command,
+      }),
       gatewayClientScopes: params.ctx.GatewayClientScopes,
       target: resolveConfigWriteTargetFromPath(parsedWritePath),
     });
@@ -110,7 +116,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
   const parsedBase = structuredClone(snapshot.parsed as Record<string, unknown>);
 
   if (configCommand.action === "show") {
-    const pathRaw = configCommand.path?.trim();
+    const pathRaw = normalizeOptionalString(configCommand.path);
     if (pathRaw) {
       const parsedPath = parseConfigPath(pathRaw);
       if (!parsedPath.ok || !parsedPath.path) {
@@ -153,7 +159,10 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
         },
       };
     }
-    await writeConfigFile(validated.config);
+    await replaceConfigFile({
+      nextConfig: validated.config,
+      afterWrite: { mode: "auto" },
+    });
     return {
       shouldContinue: false,
       reply: { text: `⚙️ Config updated: ${configCommand.path} removed.` },
@@ -172,7 +181,10 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
         },
       };
     }
-    await writeConfigFile(validated.config);
+    await replaceConfigFile({
+      nextConfig: validated.config,
+      afterWrite: { mode: "auto" },
+    });
     const valueLabel =
       typeof configCommand.value === "string"
         ? `"${configCommand.value}"`

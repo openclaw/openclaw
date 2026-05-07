@@ -1,11 +1,14 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgramContext } from "./context.js";
+import { configureProgramHelp } from "./help.js";
 
-const hasEmittedCliBannerMock = vi.fn(() => false);
-const formatCliBannerLineMock = vi.fn(() => "BANNER-LINE");
-const formatDocsLinkMock = vi.fn((_path: string, full: string) => `https://${full}`);
-const resolveCommitHashMock = vi.fn<() => string | null>(() => "abc1234");
+const hasEmittedCliBannerMock = vi.hoisted(() => vi.fn(() => false));
+const formatCliBannerLineMock = vi.hoisted(() => vi.fn(() => "BANNER-LINE"));
+const formatDocsLinkMock = vi.hoisted(() =>
+  vi.fn((_path: string, full: string) => `https://${full}`),
+);
+const resolveCommitHashMock = vi.hoisted(() => vi.fn<() => string | null>(() => "abc1234"));
 
 vi.mock("../../terminal/links.js", () => ({
   formatDocsLink: formatDocsLinkMock,
@@ -44,27 +47,33 @@ vi.mock("./register.subclis.js", () => ({
   getSubCliCommandsWithSubcommands: () => ["gateway"],
 }));
 
-const { configureProgramHelp } = await import("./help.js");
-
 const testProgramContext: ProgramContext = {
   programVersion: "9.9.9-test",
-  channelOptions: ["telegram"],
-  messageChannelOptions: "telegram",
-  agentChannelOptions: "last|telegram",
+  channelOptions: ["quietchat"],
+  messageChannelOptions: "quietchat",
+  agentChannelOptions: "last|quietchat",
 };
 
 describe("configureProgramHelp", () => {
   let originalArgv: string[];
+  let originalSuppressHelpBanner: string | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
     originalArgv = [...process.argv];
+    originalSuppressHelpBanner = process.env.OPENCLAW_SUPPRESS_HELP_BANNER;
     hasEmittedCliBannerMock.mockReturnValue(false);
     resolveCommitHashMock.mockReturnValue("abc1234");
+    delete process.env.OPENCLAW_SUPPRESS_HELP_BANNER;
   });
 
   afterEach(() => {
     process.argv = originalArgv;
+    if (originalSuppressHelpBanner === undefined) {
+      delete process.env.OPENCLAW_SUPPRESS_HELP_BANNER;
+    } else {
+      process.env.OPENCLAW_SUPPRESS_HELP_BANNER = originalSuppressHelpBanner;
+    }
   });
 
   function makeProgramWithCommands() {
@@ -128,6 +137,17 @@ describe("configureProgramHelp", () => {
     expect(help).toContain("BANNER-LINE");
     expect(help).toContain("Examples:");
     expect(help).toContain("https://docs.openclaw.ai/cli");
+  });
+
+  it("suppresses banner formatting when parent default help requests it", () => {
+    process.argv = ["node", "openclaw", "channels"];
+    process.env.OPENCLAW_SUPPRESS_HELP_BANNER = "1";
+    const program = makeProgramWithCommands();
+    configureProgramHelp(program, testProgramContext);
+
+    const help = captureHelpOutput(program);
+    expect(help).not.toContain("BANNER-LINE");
+    expect(formatCliBannerLineMock).not.toHaveBeenCalled();
   });
 
   it("prints version and exits immediately when version flags are present", () => {

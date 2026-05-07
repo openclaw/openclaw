@@ -50,6 +50,10 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     .description("")
     .version(ctx.programVersion)
     .option(
+      "--container <name>",
+      "Run the CLI inside a running Podman/Docker container named <name> (default: env OPENCLAW_CONTAINER)",
+    )
+    .option(
       "--dev",
       "Dev profile: isolate state under ~/.openclaw-dev, default gateway port 19001, and shift derived ports (browser/canvas)",
     )
@@ -118,7 +122,7 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
   }
 
   program.addHelpText("beforeAll", () => {
-    if (hasEmittedCliBanner()) {
+    if (hasEmittedCliBanner() || process.env.OPENCLAW_SUPPRESS_HELP_BANNER === "1") {
       return "";
     }
     const rich = isRich();

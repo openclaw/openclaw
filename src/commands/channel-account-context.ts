@@ -1,10 +1,11 @@
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isRecord } from "../utils.js";
 
-export type ChannelDefaultAccountContext = {
+type ChannelDefaultAccountContext = {
   accountIds: string[];
   defaultAccountId: string;
   account: unknown;
@@ -18,17 +19,10 @@ export type ChannelDefaultAccountContext = {
   degraded: boolean;
 };
 
-export type ChannelAccountContextMode = "strict" | "read_only";
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
+type ChannelAccountContextMode = "strict" | "read_only";
 
 function getBooleanField(value: unknown, key: string): boolean | undefined {
-  const record = asRecord(value);
+  const record = isRecord(value) ? value : null;
   if (!record) {
     return undefined;
   }

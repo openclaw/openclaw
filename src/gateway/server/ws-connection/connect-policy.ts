@@ -39,8 +39,12 @@ export function shouldSkipControlUiPairing(
   role: GatewayRole,
   trustedProxyAuthOk = false,
   authMode?: string,
+  authMethod?: string,
 ): boolean {
   if (trustedProxyAuthOk) {
+    return true;
+  }
+  if (policy.isControlUi && role === "operator" && authMethod === "tailscale" && policy.device) {
     return true;
   }
   // When auth is completely disabled (mode=none), there is no shared secret
@@ -80,6 +84,26 @@ export type MissingDeviceIdentityDecision =
   | { kind: "reject-control-ui-insecure-auth" }
   | { kind: "reject-unauthorized" }
   | { kind: "reject-device-required" };
+
+export function shouldClearUnboundScopesForMissingDeviceIdentity(params: {
+  decision: MissingDeviceIdentityDecision;
+  controlUiAuthPolicy: ControlUiAuthPolicy;
+  preserveInsecureLocalControlUiScopes: boolean;
+  authMethod: string | undefined;
+  trustedProxyAuthOk?: boolean;
+}): boolean {
+  return (
+    params.decision.kind !== "allow" ||
+    (!params.controlUiAuthPolicy.allowBypass &&
+      !params.preserveInsecureLocalControlUiScopes &&
+      // trusted-proxy auth can bypass pairing for some clients, but those
+      // self-declared scopes are still unbound without device identity.
+      (params.authMethod === "token" ||
+        params.authMethod === "password" ||
+        params.authMethod === "trusted-proxy" ||
+        params.trustedProxyAuthOk === true))
+  );
+}
 
 export function evaluateMissingDeviceIdentity(params: {
   hasDeviceIdentity: boolean;

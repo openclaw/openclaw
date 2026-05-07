@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { probeSlack } from "./probe.js";
 
 const authTestMock = vi.hoisted(() => vi.fn());
 const createSlackWebClientMock = vi.hoisted(() => vi.fn());
@@ -8,11 +9,9 @@ vi.mock("./client.js", () => ({
   createSlackWebClient: createSlackWebClientMock,
 }));
 
-vi.mock("../../../src/utils/with-timeout.js", () => ({
+vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
   withTimeout: withTimeoutMock,
 }));
-
-const { probeSlack } = await import("./probe.js");
 
 describe("probeSlack", () => {
   beforeEach(() => {

@@ -1,9 +1,10 @@
-import { readConfigFileSnapshot } from "../../config/config.js";
+import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { shouldMigrateStateFromPath } from "../argv.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["doctor", "logs", "health", "help", "status"]);
 const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
+  "run",
   "status",
   "probe",
   "health",
@@ -37,24 +38,28 @@ export async function ensureConfigReady(params: {
   runtime: RuntimeEnv;
   commandPath?: string[];
   suppressDoctorStdout?: boolean;
+  allowInvalid?: boolean;
 }): Promise<void> {
   const commandPath = params.commandPath ?? [];
+  let preflightSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | null = null;
   if (!didRunDoctorConfigFlow && shouldMigrateStateFromPath(commandPath)) {
     didRunDoctorConfigFlow = true;
-    const runDoctorConfigFlow = async () =>
-      (await import("../../commands/doctor-config-flow.js")).loadAndMaybeMigrateDoctorConfig({
-        options: { nonInteractive: true },
-        confirm: async () => false,
+    const runDoctorConfigPreflight = async () =>
+      (await import("../../commands/doctor-config-preflight.js")).runDoctorConfigPreflight({
+        // Keep ordinary CLI startup on the lightweight validation path.
+        migrateState: false,
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
       });
     if (!params.suppressDoctorStdout) {
-      await runDoctorConfigFlow();
+      preflightSnapshot = (await runDoctorConfigPreflight()).snapshot;
     } else {
       const originalStdoutWrite = process.stdout.write.bind(process.stdout);
       const originalSuppressNotes = process.env.OPENCLAW_SUPPRESS_NOTES;
       process.stdout.write = (() => true) as unknown as typeof process.stdout.write;
       process.env.OPENCLAW_SUPPRESS_NOTES = "1";
       try {
-        await runDoctorConfigFlow();
+        preflightSnapshot = (await runDoctorConfigPreflight()).snapshot;
       } finally {
         process.stdout.write = originalStdoutWrite;
         if (originalSuppressNotes === undefined) {
@@ -66,11 +71,15 @@ export async function ensureConfigReady(params: {
     }
   }
 
-  const snapshot = await getConfigSnapshot();
+  const snapshot = preflightSnapshot ?? (await getConfigSnapshot());
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
+  const isBareGatewayForegroundRun =
+    commandName === "gateway" && (subcommandName === undefined || subcommandName.trim() === "");
   const allowInvalid = commandName
-    ? ALLOWED_INVALID_COMMANDS.has(commandName) ||
+    ? params.allowInvalid === true ||
+      ALLOWED_INVALID_COMMANDS.has(commandName) ||
+      isBareGatewayForegroundRun ||
       (commandName === "gateway" &&
         subcommandName &&
         ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName))
@@ -84,6 +93,9 @@ export async function ensureConfigReady(params: {
     snapshot.legacyIssues.length > 0 ? formatConfigIssueLines(snapshot.legacyIssues, "-") : [];
 
   const invalid = snapshot.exists && !snapshot.valid;
+  if (!invalid) {
+    setRuntimeConfigSnapshot(snapshot.runtimeConfig ?? snapshot.config, snapshot.sourceConfig);
+  }
   if (!invalid) {
     return;
   }

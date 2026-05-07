@@ -1,5 +1,5 @@
-import fs from "node:fs";
 import path from "node:path";
+import { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
 import {
   clearDeviceAuthTokenFromStore,
@@ -8,8 +8,14 @@ import {
   storeDeviceAuthTokenInStore,
 } from "../shared/device-auth-store.js";
 import type { DeviceAuthStore } from "../shared/device-auth.js";
+import { privateFileStoreSync } from "./private-file-store.js";
 
 const DEVICE_AUTH_FILE = "device-auth.json";
+const DeviceAuthStoreSchema = z.object({
+  version: z.literal(1),
+  deviceId: z.string(),
+  tokens: z.record(z.string(), z.unknown()),
+}) as z.ZodType<DeviceAuthStore>;
 
 function resolveDeviceAuthPath(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), "identity", DEVICE_AUTH_FILE);
@@ -17,31 +23,20 @@ function resolveDeviceAuthPath(env: NodeJS.ProcessEnv = process.env): string {
 
 function readStore(filePath: string): DeviceAuthStore | null {
   try {
-    if (!fs.existsSync(filePath)) {
-      return null;
-    }
-    const raw = fs.readFileSync(filePath, "utf8");
-    const parsed = JSON.parse(raw) as DeviceAuthStore;
-    if (parsed?.version !== 1 || typeof parsed.deviceId !== "string") {
-      return null;
-    }
-    if (!parsed.tokens || typeof parsed.tokens !== "object") {
-      return null;
-    }
-    return parsed;
+    const parsed = privateFileStoreSync(path.dirname(filePath)).readJsonIfExists(
+      path.basename(filePath),
+    );
+    const store = DeviceAuthStoreSchema.safeParse(parsed);
+    return store.success ? store.data : null;
   } catch {
     return null;
   }
 }
 
 function writeStore(filePath: string, store: DeviceAuthStore): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
-  try {
-    fs.chmodSync(filePath, 0o600);
-  } catch {
-    // best-effort
-  }
+  privateFileStoreSync(path.dirname(filePath)).writeJson(path.basename(filePath), store, {
+    trailingNewline: true,
+  });
 }
 
 export function loadDeviceAuthToken(params: {

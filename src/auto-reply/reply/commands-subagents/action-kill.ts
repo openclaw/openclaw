@@ -1,9 +1,8 @@
 import {
   killAllControlledSubagentRuns,
   killControlledSubagentRun,
-} from "../../../agents/subagent-control.js";
+} from "../commands-subagents-control.runtime.js";
 import type { CommandHandlerResult } from "../commands-types.js";
-import { formatRunLabel } from "../subagents-utils.js";
 import {
   type SubagentsCommandContext,
   COMMAND,
@@ -42,9 +41,6 @@ export async function handleSubagentsKillAction(
   const targetResolution = resolveSubagentEntryForToken(runs, target);
   if ("reply" in targetResolution) {
     return targetResolution.reply;
-  }
-  if (targetResolution.entry.endedAt) {
-    return stopWithText(`${formatRunLabel(targetResolution.entry)} is already finished.`);
   }
 
   const controller = resolveCommandSubagentController(params, requesterKey);

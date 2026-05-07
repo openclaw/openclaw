@@ -1,11 +1,20 @@
 import { type RunOptions, run } from "@grammyjs/runner";
-import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/infra-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
-import { formatDurationPrecise } from "openclaw/plugin-sdk/infra-runtime";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import {
+  computeBackoff,
+  formatDurationPrecise,
+  sleepWithAbort,
+} from "openclaw/plugin-sdk/runtime-env";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 import { type TelegramTransport } from "./fetch.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
+import { TelegramPollingLivenessTracker } from "./polling-liveness.js";
+import { createTelegramPollingStatusPublisher } from "./polling-status.js";
+import { TelegramPollingTransportState } from "./polling-transport-state.js";
+import { TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS } from "./request-timeouts.js";
 
 const TELEGRAM_POLL_RESTART_POLICY = {
   initialMs: 2000,
@@ -14,9 +23,16 @@ const TELEGRAM_POLL_RESTART_POLICY = {
   jitter: 0.25,
 };
 
-const POLL_STALL_THRESHOLD_MS = 90_000;
+const DEFAULT_POLL_STALL_THRESHOLD_MS = 120_000;
+const MIN_POLL_STALL_THRESHOLD_MS = 30_000;
+const MAX_POLL_STALL_THRESHOLD_MS = 600_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
+const TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS = Math.ceil(
+  TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS / 1000,
+);
+
+type TelegramBot = ReturnType<typeof createTelegramBot>;
 
 const waitForGracefulStop = async (stop: () => Promise<void>) => {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -35,7 +51,15 @@ const waitForGracefulStop = async (stop: () => Promise<void>) => {
   }
 };
 
-type TelegramBot = ReturnType<typeof createTelegramBot>;
+const resolvePollingStallThresholdMs = (value: number | undefined): number => {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_POLL_STALL_THRESHOLD_MS;
+  }
+  return Math.min(
+    MAX_POLL_STALL_THRESHOLD_MS,
+    Math.max(MIN_POLL_STALL_THRESHOLD_MS, Math.floor(value)),
+  );
+};
 
 type TelegramPollingSessionOpts = {
   token: string;
@@ -43,6 +67,7 @@ type TelegramPollingSessionOpts = {
   accountId: string;
   runtime: Parameters<typeof createTelegramBot>[0]["runtime"];
   proxyFetch: Parameters<typeof createTelegramBot>[0]["proxyFetch"];
+  botInfo?: Parameters<typeof createTelegramBot>[0]["botInfo"];
   abortSignal?: AbortSignal;
   runnerOptions: RunOptions<unknown>;
   getLastUpdateId: () => number | null;
@@ -50,6 +75,11 @@ type TelegramPollingSessionOpts = {
   log: (line: string) => void;
   /** Pre-resolved Telegram transport to reuse across bot instances */
   telegramTransport?: TelegramTransport;
+  /** Rebuild Telegram transport after stall/network recovery when marked dirty. */
+  createTelegramTransport?: () => TelegramTransport;
+  /** Stall detection threshold in ms. Defaults to 120_000 (2 min). */
+  stallThresholdMs?: number;
+  setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 };
 
 export class TelegramPollingSession {
@@ -58,8 +88,19 @@ export class TelegramPollingSession {
   #forceRestarted = false;
   #activeRunner: ReturnType<typeof run> | undefined;
   #activeFetchAbort: AbortController | undefined;
+  #transportState: TelegramPollingTransportState;
+  #status: ReturnType<typeof createTelegramPollingStatusPublisher>;
+  #stallThresholdMs: number;
 
-  constructor(private readonly opts: TelegramPollingSessionOpts) {}
+  constructor(private readonly opts: TelegramPollingSessionOpts) {
+    this.#transportState = new TelegramPollingTransportState({
+      log: opts.log,
+      initialTransport: opts.telegramTransport,
+      createTelegramTransport: opts.createTelegramTransport,
+    });
+    this.#status = createTelegramPollingStatusPublisher(opts.setStatus);
+    this.#stallThresholdMs = resolvePollingStallThresholdMs(opts.stallThresholdMs);
+  }
 
   get activeRunner() {
     return this.#activeRunner;
@@ -69,29 +110,42 @@ export class TelegramPollingSession {
     this.#forceRestarted = true;
   }
 
+  markTransportDirty() {
+    this.#transportState.markDirty();
+  }
+
   abortActiveFetch() {
     this.#activeFetchAbort?.abort();
   }
 
   async runUntilAbort(): Promise<void> {
-    while (!this.opts.abortSignal?.aborted) {
-      const bot = await this.#createPollingBot();
-      if (!bot) {
-        continue;
-      }
+    this.#status.notePollingStart();
+    try {
+      while (!this.opts.abortSignal?.aborted) {
+        const bot = await this.#createPollingBot();
+        if (!bot) {
+          continue;
+        }
 
-      const cleanupState = await this.#ensureWebhookCleanup(bot);
-      if (cleanupState === "retry") {
-        continue;
-      }
-      if (cleanupState === "exit") {
-        return;
-      }
+        const cleanupState = await this.#ensureWebhookCleanup(bot);
+        if (cleanupState === "retry") {
+          continue;
+        }
+        if (cleanupState === "exit") {
+          return;
+        }
 
-      const state = await this.#runPollingCycle(bot);
-      if (state === "exit") {
-        return;
+        const state = await this.#runPollingCycle(bot);
+        if (state === "exit") {
+          return;
+        }
       }
+    } finally {
+      // Release the transport's dispatchers on session shutdown. Without
+      // this, the undici keep-alive sockets survive beyond the session and
+      // leak to api.telegram.org; see openclaw#68128.
+      await this.#transportState.dispose();
+      this.#status.notePollingStop();
     }
   }
 
@@ -126,6 +180,7 @@ export class TelegramPollingSession {
   async #createPollingBot(): Promise<TelegramBot | undefined> {
     const fetchAbortController = new AbortController();
     this.#activeFetchAbort = fetchAbortController;
+    const telegramTransport = this.#transportState.acquireForNextCycle();
     try {
       return createTelegramBot({
         token: this.opts.token,
@@ -133,12 +188,14 @@ export class TelegramPollingSession {
         proxyFetch: this.opts.proxyFetch,
         config: this.opts.config,
         accountId: this.opts.accountId,
+        botInfo: this.opts.botInfo,
         fetchAbortSignal: fetchAbortController.signal,
+        minimumClientTimeoutSeconds: TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS,
         updateOffset: {
           lastUpdateId: this.opts.getLastUpdateId(),
           onUpdateId: this.opts.persistUpdateId,
         },
-        telegramTransport: this.opts.telegramTransport,
+        telegramTransport,
       });
     } catch (err) {
       await this.#waitBeforeRetryOnRecoverableSetupError(err, "Telegram setup network error");
@@ -162,6 +219,12 @@ export class TelegramPollingSession {
       this.#webhookCleared = true;
       return "ready";
     } catch (err) {
+      if (isRecoverableTelegramNetworkError(err, { context: "unknown" })) {
+        this.opts.log(
+          `[telegram] deleteWebhook failed with a recoverable network error; continuing to polling so getUpdates can confirm webhook state: ${formatErrorMessage(err)}`,
+        );
+        return "ready";
+      }
       const shouldRetry = await this.#waitBeforeRetryOnRecoverableSetupError(
         err,
         "Telegram webhook cleanup failed",
@@ -170,32 +233,45 @@ export class TelegramPollingSession {
     }
   }
 
-  async #confirmPersistedOffset(bot: TelegramBot): Promise<void> {
-    const lastUpdateId = this.opts.getLastUpdateId();
-    if (lastUpdateId === null || lastUpdateId >= Number.MAX_SAFE_INTEGER) {
-      return;
-    }
-    try {
-      await bot.api.getUpdates({ offset: lastUpdateId + 1, limit: 1, timeout: 0 });
-    } catch {
-      // Non-fatal: runner middleware still skips duplicates via shouldSkipUpdate.
-    }
-  }
-
   async #runPollingCycle(bot: TelegramBot): Promise<"continue" | "exit"> {
-    await this.#confirmPersistedOffset(bot);
-
-    let lastGetUpdatesAt = Date.now();
-    bot.api.config.use((prev, method, payload, signal) => {
-      if (method === "getUpdates") {
-        lastGetUpdatesAt = Date.now();
+    const liveness = new TelegramPollingLivenessTracker({
+      onPollSuccess: (finishedAt) => this.#status.notePollSuccess(finishedAt),
+    });
+    bot.api.config.use(async (prev, method, payload, signal) => {
+      if (method !== "getUpdates") {
+        const callId = liveness.noteApiCallStarted();
+        try {
+          const result = await prev(method, payload, signal);
+          liveness.noteApiCallSuccess();
+          return result;
+        } finally {
+          liveness.noteApiCallFinished(callId);
+        }
       }
-      return prev(method, payload, signal);
+
+      liveness.noteGetUpdatesStarted(payload);
+      try {
+        const result = await prev(method, payload, signal);
+        liveness.noteGetUpdatesSuccess(result);
+        return result;
+      } catch (err) {
+        liveness.noteGetUpdatesError(err);
+        throw err;
+      } finally {
+        liveness.noteGetUpdatesFinished();
+      }
     });
 
     const runner = run(bot, this.opts.runnerOptions);
     this.#activeRunner = runner;
     const fetchAbortController = this.#activeFetchAbort;
+    const abortFetch = () => {
+      fetchAbortController?.abort();
+    };
+
+    if (this.opts.abortSignal && fetchAbortController) {
+      this.opts.abortSignal.addEventListener("abort", abortFetch, { once: true });
+    }
     let stopPromise: Promise<void> | undefined;
     let stalledRestart = false;
     let forceCycleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -229,12 +305,14 @@ export class TelegramPollingSession {
       if (this.opts.abortSignal?.aborted) {
         return;
       }
-      const elapsed = Date.now() - lastGetUpdatesAt;
-      if (elapsed > POLL_STALL_THRESHOLD_MS && runner.isRunning()) {
+
+      const stall = liveness.detectStall({
+        thresholdMs: this.#stallThresholdMs,
+      });
+      if (stall) {
+        this.#transportState.markDirty();
         stalledRestart = true;
-        this.opts.log(
-          `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}); forcing restart.`,
-        );
+        this.opts.log(`[telegram] ${stall.message}`);
         void stopRunner();
         void stopBot();
         if (!forceCycleTimer) {
@@ -263,6 +341,9 @@ export class TelegramPollingSession {
           ? "unhandled network error"
           : "runner stopped (maxRetryTime exceeded or graceful stop)";
       this.#forceRestarted = false;
+      this.opts.log(
+        `[telegram][diag] polling cycle finished reason=${reason} ${liveness.formatDiagnosticFields("error")}`,
+      );
       const shouldRestart = await this.#waitBeforeRestart(
         (delay) => `Telegram polling runner stopped (${reason}); restarting in ${delay}.`,
       );
@@ -277,13 +358,27 @@ export class TelegramPollingSession {
         this.#webhookCleared = false;
       }
       const isRecoverable = isRecoverableTelegramNetworkError(err, { context: "polling" });
+      // Mark transport dirty on 409 conflict as well as recoverable network
+      // errors. Without this, Telegram-side session termination returns 409
+      // and the retry reuses the same HTTP keep-alive TCP socket, which
+      // Telegram treats as the "old" session and keeps terminating — producing
+      // a tight 409 retry loop at low but non-zero rate. (#69787)
+      if (isRecoverable || isConflict) {
+        this.#transportState.markDirty();
+      }
       if (!isConflict && !isRecoverable) {
         throw err;
       }
       const reason = isConflict ? "getUpdates conflict" : "network error";
       const errMsg = formatErrorMessage(err);
+      const conflictHint = isConflict
+        ? " Another OpenClaw gateway, script, or Telegram poller may be using this bot token; stop the duplicate poller or switch this account to webhook mode."
+        : "";
+      this.opts.log(
+        `[telegram][diag] polling cycle error reason=${reason} ${liveness.formatDiagnosticFields("lastGetUpdatesError")} err=${errMsg}${conflictHint}`,
+      );
       const shouldRestart = await this.#waitBeforeRestart(
-        (delay) => `Telegram ${reason}: ${errMsg}; retrying in ${delay}.`,
+        (delay) => `Telegram ${reason}: ${errMsg};${conflictHint} retrying in ${delay}.`,
       );
       return shouldRestart ? "continue" : "exit";
     } finally {
@@ -291,6 +386,7 @@ export class TelegramPollingSession {
       if (forceCycleTimer) {
         clearTimeout(forceCycleTimer);
       }
+      this.opts.abortSignal?.removeEventListener("abort", abortFetch);
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
       await waitForGracefulStop(stopRunner);
       await waitForGracefulStop(stopBot);
@@ -319,7 +415,7 @@ const isGetUpdatesConflict = (err: unknown) => {
   }
   const haystack = [typed.method, typed.description, typed.message]
     .filter((value): value is string => typeof value === "string")
-    .join(" ")
-    .toLowerCase();
-  return haystack.includes("getupdates");
+    .join(" ");
+  const normalizedHaystack = normalizeLowercaseStringOrEmpty(haystack);
+  return normalizedHaystack.includes("getupdates");
 };
