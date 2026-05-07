@@ -9,6 +9,8 @@ import { describe, expect, it } from 'vitest';
 import {
   OcPathError,
   formatOcPath,
+  getPathLayout,
+  isPattern,
   isValidOcPath,
   parseOcPath,
 } from '../../oc-path.js';
@@ -206,5 +208,45 @@ describe('wave-07 oc-path-parse-edges', () => {
     expect(formatOcPath({ file: 'gateway.jsonc', section: 'version' })).toBe(
       'oc://gateway.jsonc/version',
     );
+  });
+
+  it('OP-28 formatOcPath rejects field without item or section', () => {
+    // Closes Galin P2 (round 8): the nesting guard caught
+    // `field + section + no item` but missed `field + no section + no item`.
+    // Such a struct emits `oc://FILE/FIELD` which silently re-parses as
+    // `{ file, section: FIELD }` — different shape, breaking round-trip.
+    expect(() => formatOcPath({ file: 'X', field: 'name' })).toThrow(OcPathError);
+    try {
+      formatOcPath({ file: 'X', field: 'name' });
+    } catch (err) {
+      expect(err).toBeInstanceOf(OcPathError);
+      expect((err as OcPathError).code).toBe('OC_PATH_NESTING');
+    }
+  });
+
+  it('OP-29 isPattern is quote-aware (literal `*` inside quoted segment)', () => {
+    // Closes Galin P2 (round 8): `isPattern` previously used
+    // `slot.split('.')` which shredded a quoted key like `"items.*.glob"`
+    // and falsely detected the literal `*` as a wildcard, causing
+    // single-match verbs to reject a concrete path.
+    const concrete = parseOcPath('oc://config.jsonc/"items.*.glob"');
+    expect(isPattern(concrete)).toBe(false);
+
+    // Sanity: an unquoted `*` IS still a wildcard.
+    const wildcard = parseOcPath('oc://config.jsonc/items/*');
+    expect(isPattern(wildcard)).toBe(true);
+  });
+
+  it('OP-30 getPathLayout is quote-aware', () => {
+    // Closes Galin P2 (round 8): `getPathLayout` used `slot.split('.')`
+    // for all three slots, breaking the find-walker / repackPath layout
+    // contract for quoted segments containing `.`.
+    const path = parseOcPath('oc://config.jsonc/"github.com"/repos');
+    const layout = getPathLayout(path);
+    // Quoted segment is one sub-segment, not two.
+    expect(layout.sectionLen).toBe(1);
+    expect(layout.subs[0]).toBe('"github.com"');
+    expect(layout.itemLen).toBe(1);
+    expect(layout.subs[1]).toBe('repos');
   });
 });

@@ -214,6 +214,22 @@ describe("openclaw path CLI", () => {
       );
       expect(rt.exitCode).toBe(1);
     });
+
+    it("CLI-F03 file-slot wildcard rejected with clear error (no ENOENT)", async () => {
+      // Closes Galin P3 (round 8): `find` resolves `pattern.file` to one
+      // literal path, so `oc://*.jsonc/...` would silently ENOENT during
+      // fs.readFile. The CLI now surfaces a clear error before touching
+      // the filesystem, with stable code OC_PATH_FILE_WILDCARD_UNSUPPORTED.
+      const rt = createTestRuntime();
+      await pathFindCommand(
+        "oc://*.jsonc/items",
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
+      expect(rt.exitCode).toBe(2);
+      expect(stderrText(rt)).toContain("OC_PATH_FILE_WILDCARD_UNSUPPORTED");
+      expect(stderrText(rt)).toContain("file-slot wildcards are not supported");
+    });
   });
 
   describe("emit", () => {

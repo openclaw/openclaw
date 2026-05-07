@@ -214,11 +214,21 @@ function resolveYamlToUniversal(ast: YamlAst, path: OcPath): OcMatch | null {
 
 function locateYamlLine(ast: YamlAst, path: OcPath): number {
   // Re-walk the yaml CST to find the matched node's byte range, then
-  // convert via the AST's `lineCounter`.
+  // convert via the AST's `lineCounter`. Quote-aware split + unquote so
+  // a quoted segment containing `.` survives as a single key (matches
+  // `resolveYamlOcPath`'s lookup behavior; without this a key like
+  // `"github.com/foo"` would shred and the line locator would fall back
+  // to line 1 silently).
   const segments: string[] = [];
-  if (path.section !== undefined) {segments.push(...path.section.split('.'));}
-  if (path.item !== undefined) {segments.push(...path.item.split('.'));}
-  if (path.field !== undefined) {segments.push(...path.field.split('.'));}
+  const collect = (slot: string | undefined) => {
+    if (slot === undefined) {return;}
+    for (const sub of splitRespectingBrackets(slot, '.')) {
+      segments.push(isQuotedSeg(sub) ? unquoteSeg(sub) : sub);
+    }
+  };
+  collect(path.section);
+  collect(path.item);
+  collect(path.field);
   if (segments.length === 0) {return 1;}
   let node: unknown = ast.doc.contents;
   for (const seg of segments) {

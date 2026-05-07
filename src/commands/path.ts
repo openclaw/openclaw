@@ -318,6 +318,22 @@ export async function pathFindCommand(
     }
     throw err;
   }
+  // The CLI resolves `pattern.file` to a single literal filesystem path.
+  // Wildcards in the file slot (e.g. `oc://*.jsonc/...`) would silently
+  // ENOENT during `fs.readFile`. The substrate's `findOcPaths` walks
+  // *inside* an AST — multi-file globbing is out of scope for v0. Surface
+  // a clear error so users don't get a confusing missing-file failure.
+  if (/[*?]/.test(pattern.file)) {
+    emitError(
+      runtime,
+      mode,
+      `find: file-slot wildcards are not supported (got "${pattern.file}"). ` +
+        `Pass a concrete file path; multi-file globbing is a follow-up feature.`,
+      "OC_PATH_FILE_WILDCARD_UNSUPPORTED",
+    );
+    runtime.exit(2);
+    return;
+  }
   const fsPath = resolveFsPath(pattern, options);
   const ast = await loadAst(fsPath, pattern.file);
   const matches = findOcPaths(ast, pattern);

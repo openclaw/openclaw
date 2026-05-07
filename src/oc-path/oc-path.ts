@@ -257,6 +257,18 @@ export function formatOcPath(path: OcPath): string {
       'OC_PATH_NESTING',
     );
   }
+  if (path.field !== undefined && path.item === undefined && path.section === undefined) {
+    // `{ file, field }` with no section / item would emit `oc://FILE/FIELD`
+    // and silently re-parse as `{ file, section: FIELD }`. The struct
+    // already violates the slot grammar (field implies item) — refuse
+    // here so programmatic callers don't ship a path that round-trips
+    // to a different shape than they wrote.
+    throw new OcPathError(
+      'Structural nesting violation: field requires item',
+      path.file,
+      'OC_PATH_NESTING',
+    );
+  }
 
   // Each slot is a dotted sub-segment string. Round-trip requires that
   // raw sub-segments containing the path grammar's special characters
@@ -424,7 +436,11 @@ export const WILDCARD_RECURSIVE = '**';
 export function isPattern(path: OcPath): boolean {
   for (const slot of [path.section, path.item, path.field]) {
     if (slot === undefined) {continue;}
-    for (const sub of slot.split('.')) {
+    // Quote-aware split — `slot.split('.')` would shred quoted keys
+    // containing literal `*` (e.g. `"items.*.glob"`) and falsely
+    // detect them as wildcards, causing single-match verbs to reject
+    // a concrete path.
+    for (const sub of splitRespectingBrackets(slot, '.')) {
       if (sub === WILDCARD_SINGLE || sub === WILDCARD_RECURSIVE) {return true;}
       if (isUnionSeg(sub)) {return true;}
       if (isPredicateSeg(sub)) {return true;}
@@ -594,9 +610,14 @@ export interface PathSegmentLayout {
 }
 
 export function getPathLayout(path: OcPath): PathSegmentLayout {
-  const sectionSubs = path.section === undefined ? [] : path.section.split('.');
-  const itemSubs = path.item === undefined ? [] : path.item.split('.');
-  const fieldSubs = path.field === undefined ? [] : path.field.split('.');
+  // Quote-aware split — `slot.split('.')` would shred a quoted segment
+  // containing a literal `.` (e.g. `"a.b"`) into two sub-segments and
+  // break the find-walker / repackPath layout contract. Mirror the
+  // splitter used by `parseOcPath` so downstream walkers see the same
+  // sub-segment shape on both directions.
+  const sectionSubs = path.section === undefined ? [] : splitRespectingBrackets(path.section, '.');
+  const itemSubs = path.item === undefined ? [] : splitRespectingBrackets(path.item, '.');
+  const fieldSubs = path.field === undefined ? [] : splitRespectingBrackets(path.field, '.');
   return {
     subs: [...sectionSubs, ...itemSubs, ...fieldSubs],
     sectionLen: sectionSubs.length,
