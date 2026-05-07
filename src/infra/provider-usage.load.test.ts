@@ -193,7 +193,7 @@ describe("provider-usage.load", () => {
   });
 
   it("prefers proxy-aware fetch from env when HTTP_PROXY is set", async () => {
-    resolveProviderUsageSnapshotWithPluginMock.mockReturnValue(null);
+    resolveProviderUsageSnapshotWithPluginMock.mockReturnValue(Promise.resolve(null));
 
     const mockFetch = createProviderUsageFetch(async () => {
       throw new Error("opts.fetch should not be called when proxy env is set");
@@ -211,7 +211,7 @@ describe("provider-usage.load", () => {
   });
 
   it("falls back to opts.fetch when no proxy env is set", async () => {
-    resolveProviderUsageSnapshotWithPluginMock.mockReturnValue(null);
+    resolveProviderUsageSnapshotWithPluginMock.mockReturnValue(Promise.resolve(null));
 
     const mockFetch = createProviderUsageFetch(async (url) => {
       if (url.includes("chatgpt.com")) {
