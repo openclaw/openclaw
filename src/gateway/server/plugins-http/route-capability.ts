@@ -34,10 +34,11 @@ export function findMatchingPluginNodeCapabilityRoutes(
 ): PluginNodeCapabilityRoute[] {
   return findMatchingPluginHttpRoutes(registry, context)
     .filter(hasNodeCapabilityRoute)
-    .map((route) => ({
-      ...route,
-      nodeCapability: resolvePluginNodeCapabilityRouteSurface(route),
-    }));
+    .map((route) =>
+      Object.assign({}, route, {
+        nodeCapability: resolvePluginNodeCapabilityRouteSurface(route),
+      }),
+    );
 }
 
 export function findMatchingPluginNodeCapabilityRoute(
