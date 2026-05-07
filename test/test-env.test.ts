@@ -69,23 +69,27 @@ describe("installTestEnv", () => {
             custom: { baseUrl: "https://example.test/v1" },
           },
         },
-        channels: {
-          telegram: {
-            streaming: {
-              mode: "block",
-              chunkMode: "newline",
-              block: {
-                enabled: true,
-              },
-              preview: {
-                chunk: {
-                  minChars: 120,
-                },
+      channels: {
+        telegram: {
+          streaming: {
+            mode: "block",
+            chunkMode: "newline",
+            block: {
+              enabled: true,
+            },
+            preview: {
+              chunk: {
+                minChars: 120,
               },
             },
           },
         },
-      }`,
+      },
+      plugins: {
+        enabled: true,
+        bundledDiscovery: false,
+      },
+}`,
     );
     writeFile(path.join(realHome, ".openclaw", "credentials", "token.txt"), "secret\n");
     writeFile(
@@ -151,6 +155,9 @@ describe("installTestEnv", () => {
       block: { enabled: true },
       preview: { chunk: { minChars: 120 } },
     });
+    expect(
+      (copiedConfig as { plugins?: Record<string, unknown> }).plugins?.bundledDiscovery,
+    ).toBeUndefined();
 
     expect(
       fs.existsSync(path.join(testEnv.tempHome, ".openclaw", "credentials", "token.txt")),

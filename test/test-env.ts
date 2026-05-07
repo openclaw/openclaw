@@ -328,6 +328,10 @@ function sanitizeLiveConfig(raw: string): string {
       });
     }
 
+    if (parsed.plugins && typeof parsed.plugins === "object") {
+      delete (parsed.plugins as Record<string, unknown>).bundledDiscovery;
+    }
+
     if (!isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_NORMALIZE_CONFIG)) {
       return `${JSON.stringify(parsed, null, 2)}\n`;
     }
