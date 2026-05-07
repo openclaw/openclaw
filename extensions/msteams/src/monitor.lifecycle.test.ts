@@ -292,8 +292,8 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     const cfg = createConfig(0);
     cfg.channels!.msteams = {
       ...cfg.channels!.msteams!,
-      allowFrom: ["Alice"],
-      groupAllowFrom: ["Bob"],
+      allowFrom: ["Alice", "user:40a1a0ed-4ff2-4164-a219-55518990c197"],
+      groupAllowFrom: ["Bob", "msteams:user:50a1a0ed-4ff2-4164-a219-55518990c198"],
       teams: {
         Product: {
           channels: {
@@ -330,8 +330,16 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
 
     const registeredCfg = registerMSTeamsHandlers.mock.calls[0]?.[1] as { cfg: OpenClawConfig };
-    expect(registeredCfg.cfg.channels?.msteams?.allowFrom).toEqual(["Alice"]);
-    expect(registeredCfg.cfg.channels?.msteams?.groupAllowFrom).toEqual(["Bob"]);
+    expect(registeredCfg.cfg.channels?.msteams?.allowFrom).toEqual([
+      "Alice",
+      "user:40a1a0ed-4ff2-4164-a219-55518990c197",
+      "40a1a0ed-4ff2-4164-a219-55518990c197",
+    ]);
+    expect(registeredCfg.cfg.channels?.msteams?.groupAllowFrom).toEqual([
+      "Bob",
+      "msteams:user:50a1a0ed-4ff2-4164-a219-55518990c198",
+      "50a1a0ed-4ff2-4164-a219-55518990c198",
+    ]);
 
     abort.abort();
     await task;

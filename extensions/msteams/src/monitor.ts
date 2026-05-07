@@ -81,6 +81,13 @@ export async function monitorMSTeamsProvider(
       .replace(/^(msteams|teams):/i, "")
       .replace(/^user:/i, "")
       .trim();
+  const isStableUserId = (entry: string) => /^[0-9a-fA-F-]{16,}$/.test(entry);
+  const cleanAllowEntries = (entries?: string[]) =>
+    entries?.map((entry) => cleanAllowEntry(entry)).filter((entry) => entry && entry !== "*") ?? [];
+  const mergeStableUserIds = (entries?: string[]) => {
+    const additions = cleanAllowEntries(entries).filter((entry) => isStableUserId(entry));
+    return additions.length > 0 ? mergeAllowlist({ existing: entries, additions }) : entries;
+  };
 
   const resolveAllowlistUsers = async (label: string, entries: string[]) => {
     if (entries.length === 0) {
@@ -104,20 +111,22 @@ export async function monitorMSTeamsProvider(
   };
 
   try {
+    allowFrom = mergeStableUserIds(allowFrom);
+    if (Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0) {
+      groupAllowFrom = mergeStableUserIds(groupAllowFrom);
+    }
+
     if (allowNameMatching) {
-      const allowEntries =
-        allowFrom
-          ?.map((entry) => cleanAllowEntry(entry))
-          .filter((entry) => entry && entry !== "*") ?? [];
+      const allowEntries = cleanAllowEntries(allowFrom).filter((entry) => !isStableUserId(entry));
       if (allowEntries.length > 0) {
         const { additions } = await resolveAllowlistUsers("msteams users", allowEntries);
         allowFrom = mergeAllowlist({ existing: allowFrom, additions });
       }
 
       if (Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0) {
-        const groupEntries = groupAllowFrom
-          .map((entry) => cleanAllowEntry(entry))
-          .filter((entry) => entry && entry !== "*");
+        const groupEntries = cleanAllowEntries(groupAllowFrom).filter(
+          (entry) => !isStableUserId(entry),
+        );
         if (groupEntries.length > 0) {
           const { additions } = await resolveAllowlistUsers("msteams group users", groupEntries);
           groupAllowFrom = mergeAllowlist({ existing: groupAllowFrom, additions });
