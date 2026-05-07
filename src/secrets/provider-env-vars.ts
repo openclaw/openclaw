@@ -1,12 +1,16 @@
 import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
   isWorkspacePluginAllowedByConfig,
   normalizePluginConfigId,
 } from "../plugins/plugin-config-trust.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  loadPluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
 import { hasKind } from "../plugins/slots.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
@@ -115,15 +119,31 @@ function appendUniqueAuthEvidence(
   }
 }
 
+function resolveProviderMetadataSnapshot(
+  params?: ProviderEnvVarLookupParams,
+): PluginMetadataSnapshot {
+  const config = params?.config ?? {};
+  const env = params?.env ?? process.env;
+  const current = getCurrentPluginMetadataSnapshot({
+    config,
+    env,
+    ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+  });
+  if (current) {
+    return current;
+  }
+  return loadPluginMetadataSnapshot({
+    config,
+    workspaceDir: params?.workspaceDir,
+    env,
+    preferPersisted: false,
+  });
+}
+
 function resolveManifestProviderAuthEnvVarCandidates(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, string[]> {
-  const snapshot = loadPluginMetadataSnapshot({
-    config: params?.config ?? {},
-    workspaceDir: params?.workspaceDir,
-    env: params?.env ?? process.env,
-    preferPersisted: false,
-  });
+  const snapshot = resolveProviderMetadataSnapshot(params);
   const candidates: Record<string, string[]> = {};
   for (const plugin of snapshot.plugins) {
     if (!shouldUsePluginProviderEnvVars(plugin, params)) {
@@ -155,12 +175,7 @@ function resolveManifestProviderAuthEnvVarCandidates(
 function resolveManifestProviderAuthEvidence(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, ProviderAuthEvidence[]> {
-  const snapshot = loadPluginMetadataSnapshot({
-    config: params?.config ?? {},
-    workspaceDir: params?.workspaceDir,
-    env: params?.env ?? process.env,
-    preferPersisted: false,
-  });
+  const snapshot = resolveProviderMetadataSnapshot(params);
   const evidenceByProvider: Record<string, ProviderAuthEvidence[]> = {};
   for (const plugin of snapshot.plugins) {
     if (

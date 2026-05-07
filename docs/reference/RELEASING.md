@@ -1,10 +1,11 @@
 ---
-summary: "Release lanes, operator checklist, validation boxes, version naming, and cadence"
+summary: "Release lanes, operator checklist, validation boxes, version naming, planned monthly support lines, and cadence"
 title: "Release policy"
 read_when:
   - Looking for public release channel definitions
   - Running release validation or package acceptance
   - Looking for version naming and cadence
+  - Planning monthly support or LTS release lines
 ---
 
 OpenClaw has three public release lanes:
@@ -17,17 +18,37 @@ OpenClaw has three public release lanes:
 
 - Stable release version: `YYYY.M.D`
   - Git tag: `vYYYY.M.D`
-- Stable correction release version: `YYYY.M.D-N`
+- Legacy stable correction release version: `YYYY.M.D-N`
   - Git tag: `vYYYY.M.D-N`
 - Beta prerelease version: `YYYY.M.D-beta.N`
   - Git tag: `vYYYY.M.D-beta.N`
 - Do not zero-pad month or day
 - `latest` means the current promoted stable npm release
 - `beta` means the current beta install target
-- Stable and stable correction releases publish to npm `beta` by default; release operators can target `latest` explicitly, or promote a vetted beta build later
+- Stable and legacy correction releases publish to npm `beta` by default; release operators can target `latest` explicitly, or promote a vetted beta build later
 - Every stable OpenClaw release ships the npm package and macOS app together;
   beta releases normally validate and publish the npm/package path first, with
   mac app build/sign/notarize reserved for stable unless explicitly requested
+
+### Planned monthly support versioning
+
+OpenClaw does not yet have an LTS or monthly support channel. Maintainers are
+working toward SemVer-compatible monthly support lines, but the shipped update
+channels today are still `stable`, `beta`, and `dev`.
+
+The planned version shape is `YYYY.M.PATCH`:
+
+- `YYYY` is the year.
+- `M` is the monthly release line, without a leading zero.
+- `PATCH` increments within that monthly line and can grow as high as needed.
+
+For example, `2026.6.0`, `2026.6.1`, and `2026.6.2` would all be on the June
+2026 line. A future monthly support dist-tag such as `stable-2026-6` or
+`lts-2026-6` may point at that line, while `latest` continues to move quickly.
+
+This future model replaces the need for new `YYYY.M.D-N` correction releases.
+Existing legacy correction versions remain recognized so older packages and
+upgrade paths keep working.
 
 ## Release cadence
 
@@ -77,10 +98,13 @@ the maintainer-only release runbook.
    prior evidence stale.
 9. For beta, tag `vYYYY.M.D-beta.N`, then run `OpenClaw Release Publish` from
    the matching `release/YYYY.M.D` branch. It verifies `pnpm plugins:sync:check`,
-   publishes all publishable plugin packages to npm first, publishes the same
-   set to ClawHub second as ClawPack npm-pack tarballs, and then promotes the
-   prepared OpenClaw npm preflight artifact with the matching dist-tag. After
-   publish, run post-publish package
+   dispatches all publishable plugin packages to npm and the same set to
+   ClawHub in parallel, and then promotes the prepared OpenClaw npm preflight
+   artifact with the matching dist-tag as soon as plugin npm publish succeeds.
+   ClawHub publishing may still be running while OpenClaw npm publishes, but the
+   release publish workflow does not finish until both plugin publish paths and
+   the OpenClaw npm publish path have completed successfully. After publish, run
+   the post-publish package
    acceptance against the published `openclaw@YYYY.M.D-beta.N` or
    `openclaw@beta` package. If a pushed or published prerelease needs a fix,
    cut the next matching prerelease number; do not delete or rewrite the old
@@ -141,11 +165,13 @@ the maintainer-only release runbook.
   `telegram_mode=mock-openai` or `telegram_mode=live-frontier`. When the
   selected Docker lanes include `published-upgrade-survivor`, the package
   artifact is the candidate and `published_upgrade_survivor_baseline` selects
-  the published baseline.
+  the published baseline. `update-restart-auth` uses the candidate package as
+  both the installed CLI and the package-under-test so it exercises the
+  candidate update command's managed restart path.
   Example: `gh workflow run package-acceptance.yml --ref main -f workflow_ref=main -f source=npm -f package_spec=openclaw@beta -f suite_profile=product -f published_upgrade_survivor_baseline=openclaw@2026.4.26 -f telegram_mode=mock-openai`
   Common profiles:
   - `smoke`: install/channel/agent, gateway network, and config reload lanes
-  - `package`: artifact-native package/update/plugin lanes without OpenWebUI or live ClawHub
+  - `package`: artifact-native package/update/restart/plugin lanes without OpenWebUI or live ClawHub
   - `product`: package profile plus MCP channels, cron/subagent cleanup,
     OpenAI web search, and OpenWebUI
   - `full`: Docker release-path chunks with OpenWebUI
@@ -234,7 +260,7 @@ Validation` or from the `main`/release workflow ref so workflow logic and
     `preflight_run_id` and `validate_run_id`
   - the real publish paths promote prepared artifacts instead of rebuilding
     them again
-- For stable correction releases like `YYYY.M.D-N`, the post-publish verifier
+- For legacy stable correction releases like `YYYY.M.D-N`, the post-publish verifier
   also checks the same temp-prefix upgrade path from `YYYY.M.D` to `YYYY.M.D-N`
   so release corrections cannot silently leave older global installs on the
   base stable payload
@@ -322,7 +348,10 @@ Use `release_profile` to select live/provider breadth:
 
 Use `run_release_soak=true` with `stable` when the release-blocking lanes are
 green and you want the exhaustive live/E2E, Docker release-path, and
-all-since-2026.4.23 upgrade-survivor sweep before promotion. `full` implies
+bounded published upgrade-survivor sweep before promotion. That sweep covers
+the latest four stable packages plus pinned `2026.4.23` and `2026.5.2`
+baselines plus older `2026.4.15` coverage, with duplicate baselines removed and
+each baseline sharded into its own Docker runner job. `full` implies
 `run_release_soak=true`.
 
 `OpenClaw Release Checks` uses the trusted workflow ref to resolve the target
@@ -483,11 +512,12 @@ Supported candidate sources:
 
 `OpenClaw Release Checks` runs Package Acceptance with `source=artifact`, the
 prepared release package artifact, `suite_profile=custom`,
-`docker_lanes=doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor plugins-offline plugin-update`,
-`telegram_mode=mock-openai`. Package Acceptance keeps migration, update, stale
-plugin dependency cleanup, offline plugin fixtures, plugin update, and Telegram
-package QA against the same resolved tarball. Blocking release checks use the
-default latest published package baseline; `run_release_soak=true` or
+`docker_lanes=doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor update-restart-auth plugins-offline plugin-update`,
+`telegram_mode=mock-openai`. Package Acceptance keeps migration, update,
+configured-auth update restart, stale plugin dependency cleanup, offline plugin
+fixtures, plugin update, and Telegram package QA against the same resolved
+tarball. Blocking release checks use the default latest published package
+baseline; `run_release_soak=true` or
 `release_profile=full` expands to every stable npm-published baseline from
 `2026.4.23` through `latest` plus reported-issue fixtures. Use
 Package Acceptance with `source=npm` for an already shipped candidate, or
@@ -533,8 +563,8 @@ Common package profiles:
 
 - `smoke`: quick package install/channel/agent, gateway network, and config
   reload lanes
-- `package`: install/update/plugin package contracts without live ClawHub; this is the release-check
-  default
+- `package`: install/update/restart/plugin package contracts without live
+  ClawHub; this is the release-check default
 - `product`: `package` plus MCP channels, cron/subagent cleanup, OpenAI web
   search, and OpenWebUI
 - `full`: Docker release-path chunks with OpenWebUI

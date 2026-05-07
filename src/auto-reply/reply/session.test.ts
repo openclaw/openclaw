@@ -1407,6 +1407,36 @@ describe("initSessionState reset policy", () => {
     expect(result.sessionId).not.toBe(existingSessionId);
   });
 
+  it("rotates sessionFile on daily reset when the stored path still points at the previous session id", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    const root = await makeCaseDir("openclaw-reset-rotate-session-file-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:whatsapp:dm:s-rotate";
+    const existingSessionId = "daily-rotate-old";
+    const oldSessionFile = path.join(root, `${existingSessionId}.jsonl`);
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        sessionFile: oldSessionFile,
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionEntry.sessionFile).toBeTruthy();
+    expect(path.basename(result.sessionEntry.sessionFile ?? "")).toBe(`${result.sessionId}.jsonl`);
+    expect(result.sessionEntry.sessionFile).not.toBe(oldSessionFile);
+  });
+
   it("drains stale system events when idle rollover creates a new session", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
     const root = await makeCaseDir("openclaw-reset-idle-system-events-");

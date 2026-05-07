@@ -14,6 +14,11 @@ when finished, **announce** their result back to the requester chat
 channel. Each sub-agent run is tracked as a
 [background task](/automation/tasks).
 
+For the security model behind delegation, see
+[Multi-agent and sub-agent boundaries](/gateway/security#multi-agent-and-sub-agent-boundaries).
+Sub-agents are useful isolation and workflow units, but they are not a hostile
+multi-tenant authorization boundary inside one shared Gateway.
+
 Primary goals:
 
 - Parallelize "research / long task / slow tool" work without blocking the main run.

@@ -1,7 +1,6 @@
 import path from "node:path";
 import {
   DEFAULT_ACCOUNT_ID,
-  normalizeE164,
   pathExists,
   splitSetupEntries,
   type DmPolicy,
