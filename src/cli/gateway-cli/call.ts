@@ -1,8 +1,11 @@
 import type { Command } from "commander";
+import { readSourceConfigBestEffort } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../gateway/protocol/client-info.js";
+import { defaultRuntime } from "../../runtime.js";
 import { withProgress } from "../progress.js";
+import { parsePort } from "../shared/parse-port.js";
 
 export type GatewayRpcOpts = {
   config?: OpenClawConfig;
@@ -24,18 +27,22 @@ export const gatewayCallOpts = (cmd: Command) =>
     .option("--expect-final", "Wait for final response (agent)", false)
     .option("--json", "Output JSON", false);
 
-function applyPortOverride(
-  config: OpenClawConfig | undefined,
+async function resolveConfigWithPort(
+  base: OpenClawConfig | undefined,
   port: string | undefined,
-): OpenClawConfig | undefined {
+): Promise<OpenClawConfig | undefined> {
   if (!port) {
-    return config;
+    return base;
   }
-  const parsed = Number(port);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return config;
+  const parsed = parsePort(port);
+  if (parsed === null) {
+    defaultRuntime.error("Invalid port");
+    defaultRuntime.exit(1);
+    return base;
   }
-  return { ...config, gateway: { ...config?.gateway, port: parsed } };
+  // Load real config so auth, TLS, and mode settings are preserved.
+  const real = base ?? (await readSourceConfigBestEffort());
+  return { ...real, gateway: { ...real.gateway, port: parsed } };
 }
 
 export const callGatewayCli = async (method: string, opts: GatewayRpcOpts, params?: unknown) =>
@@ -47,7 +54,7 @@ export const callGatewayCli = async (method: string, opts: GatewayRpcOpts, param
     },
     async () =>
       await callGateway({
-        config: applyPortOverride(opts.config, opts.port),
+        config: await resolveConfigWithPort(opts.config, opts.port),
         url: opts.url,
         token: opts.token,
         password: opts.password,

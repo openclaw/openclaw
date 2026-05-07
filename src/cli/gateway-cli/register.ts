@@ -21,6 +21,7 @@ import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import { formatHelpExamples } from "../help-format.js";
 import { withProgress } from "../progress.js";
+import { parsePort } from "../shared/parse-port.js";
 import { callGatewayCli, gatewayCallOpts, type GatewayRpcOpts } from "./call.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
 import {
@@ -603,7 +604,10 @@ export function registerGatewayCli(program: Command) {
       "Show gateway reachability, auth capability, and read-probe summary (local + remote)",
     )
     .option("--url <url>", "Explicit Gateway WebSocket URL (still probes localhost)")
-    .option("--port <port>", "Gateway port on localhost (builds ws://127.0.0.1:<port>)")
+    .option(
+      "--port <port>",
+      "Local port override for the gateway probe (preserves TLS/auth from loaded config)",
+    )
     .option("--ssh <target>", "SSH target for remote gateway tunnel (user@host or user@host:port)")
     .option("--ssh-identity <path>", "SSH identity file path")
     .option("--ssh-auto", "Try to derive an SSH target from Bonjour discovery", false)
@@ -614,11 +618,18 @@ export function registerGatewayCli(program: Command) {
     .action(async (opts, command) => {
       await runGatewayCommand(async () => {
         const rpcOpts = resolveGatewayRpcOptions(opts, command);
+        const rawPort = rpcOpts.port;
+        const portNum = rawPort !== undefined ? parsePort(rawPort) : null;
+        if (rawPort !== undefined && portNum === null) {
+          defaultRuntime.error("Invalid port");
+          defaultRuntime.exit(1);
+          return;
+        }
         const { gatewayStatusCommand } = await loadGatewayStatusModule();
         await gatewayStatusCommand(
           {
             ...rpcOpts,
-            url: rpcOpts.url ?? (opts.port ? `ws://127.0.0.1:${opts.port}` : undefined),
+            port: portNum ?? undefined,
           },
           defaultRuntime,
         );

@@ -167,6 +167,20 @@ describe("gateway-cli coverage", () => {
     expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
   });
 
+  it("gateway --port <N> probe passes port as number, not a ws:// url, preserving TLS scheme", async () => {
+    gatewayStatusCommand.mockClear();
+
+    await runGatewayCommand(["gateway", "--port", "18799", "probe", "--json"]);
+
+    expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
+    const probeArgs = gatewayStatusCommand.mock.calls[0][0] as Record<string, unknown>;
+    // port must arrive as a number so gatewayStatusCommand can route through
+    // resolveTargets, which uses the loaded config's TLS setting for the scheme.
+    expect(probeArgs.port).toBe(18799);
+    // url must NOT be a synthetic ws:// override — that would hard-code plaintext.
+    expect(typeof probeArgs.url).not.toBe("string");
+  });
+
   it("registers gateway stability and routes to diagnostics RPC", async () => {
     callGateway.mockClear();
 
