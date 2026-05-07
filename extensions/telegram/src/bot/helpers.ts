@@ -11,12 +11,8 @@ import type {
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import {
-  expandTelegramAllowFromWithAccessGroups,
-  firstDefined,
-  normalizeAllowFrom,
-  type NormalizedAllowFrom,
-} from "../bot-access.js";
+import { expandTelegramAllowFromWithAccessGroups } from "../access-groups.js";
+import { firstDefined, normalizeAllowFrom, type NormalizedAllowFrom } from "../bot-access.js";
 import { normalizeTelegramReplyToMessageId } from "../outbound-params.js";
 import { resolveTelegramPreviewStreamMode } from "../preview-streaming.js";
 import {
@@ -220,14 +216,14 @@ export async function resolveTelegramGroupAllowFromContext(params: {
     threadIdForConfig,
   );
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
-  // Group sender access must remain explicit (groupAllowFrom/per-group allowFrom only).
-  // DM pairing store entries are not a group authorization source.
   const expandedGroupAllowFrom = await expandTelegramAllowFromWithAccessGroups({
     cfg: params.cfg,
     allowFrom: groupAllowOverride ?? params.groupAllowFrom,
     accountId,
     senderId: params.senderId,
   });
+  // Group sender access must remain explicit (groupAllowFrom/per-group allowFrom only).
+  // DM pairing store entries are not a group authorization source.
   const effectiveGroupAllow = normalizeAllowFrom(expandedGroupAllowFrom);
   const hasGroupAllowOverride = groupAllowOverride !== undefined;
   return {

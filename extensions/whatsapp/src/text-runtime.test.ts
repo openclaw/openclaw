@@ -95,10 +95,10 @@ describe("jidToE164", () => {
         const { jidToE164: freshJidToE164 } = await import("./text-runtime.js");
         expect(freshJidToE164("123@lid")).toBe("+5551234");
       } finally {
-        if (previousStateDir) {
-          process.env.OPENCLAW_STATE_DIR = previousStateDir;
-        } else {
+        if (previousStateDir === undefined) {
           delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = previousStateDir;
         }
         vi.resetModules();
       }
