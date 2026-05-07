@@ -111,6 +111,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - OpenAI/Codex: suppress stale `openai-codex` GPT-5.1/5.2/5.3 model refs that ChatGPT/Codex OAuth accounts now reject, keeping model lists, config validation, and forward-compat resolution on current 5.4/5.5 routes. Fixes #67158. Thanks @drpau.
+- CLI/infer: canonicalize mixed-case model refs in `infer model run` to lowercase provider/model before dispatch so pasted refs like `Anthropic/CLAUDE-OPUS-4-7` resolve through the catalog instead of failing with an empty-output provider error. (#73717) Thanks @ai-hpc.
 - Google Meet/Voice Call: wait longer before playing PIN-derived Twilio DTMF for Meet dial-in prompts and retire stale delegated phone sessions instead of reusing completed calls.
 - PDF/Codex: include extraction-fallback instructions for `openai-codex/*` PDF tool requests so Codex Responses receives its required system prompt. Fixes #77872. Thanks @anyech.
 - Onboard/channels: recover externalized channel plugins from stale `channels.<id>` config by falling back to `ensureChannelSetupPluginInstalled` via the trusted catalog when the plugin is missing on disk, so leftover `appId`/token entries no longer dead-end onboard with "<channel> plugin not available." (#78328) Thanks @sliverp.
