@@ -44,6 +44,14 @@ describe("gateway server health/presence", () => {
       const status = await statusP;
       const presence = await presenceP;
       expect(health.ok).toBe(true);
+      const connection = health.payload?.connection as
+        | { connected?: unknown; rttMs?: unknown; lastHeartbeatAt?: unknown }
+        | undefined;
+      expect(connection?.connected).toBe(true);
+      expect(connection?.rttMs === null || typeof connection?.rttMs === "number").toBe(true);
+      expect(
+        connection?.lastHeartbeatAt === null || typeof connection?.lastHeartbeatAt === "number",
+      ).toBe(true);
       expect(status.ok).toBe(true);
       expect(presence.ok).toBe(true);
       expect(Array.isArray(presence.payload)).toBe(true);

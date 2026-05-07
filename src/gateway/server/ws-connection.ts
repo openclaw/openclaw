@@ -19,6 +19,11 @@ import { clearNodeWakeState } from "../server-methods/nodes-wake-state.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
 import { logWs } from "../ws-log.js";
+import {
+  CONNECTION_PING_INTERVAL_MS,
+  pingGatewayClient,
+  recordConnectionPong,
+} from "./connection-health.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
 import type { PreauthConnectionBudget } from "./preauth-connection-budget.js";
 import { broadcastPresenceSnapshot } from "./presence-events.js";
@@ -345,6 +350,10 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       close();
     });
 
+    socket.on("pong", (data) => {
+      recordConnectionPong(client, data);
+    });
+
     const isNoisySwiftPmHelperClose = (userAgent: string | undefined, remote: string | undefined) =>
       normalizeLowercaseStringOrEmpty(userAgent).includes("swiftpm-testing-helper") &&
       isLoopbackAddress(remote);
@@ -472,13 +481,10 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         releasePreauthBudget();
         client = next;
         clients.add(next);
+        pingGatewayClient(next);
         pingTimer = setInterval(() => {
-          try {
-            socket.ping();
-          } catch {
-            // close() clears the timer; ping can race with a socket already entering CLOSING.
-          }
-        }, 25_000);
+          pingGatewayClient(next);
+        }, CONNECTION_PING_INTERVAL_MS);
         return true;
       },
       setHandshakeState: (next) => {

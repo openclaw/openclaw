@@ -321,7 +321,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
 
 <AccordionGroup>
   <Accordion title="System and identity">
-    - `health` returns the cached or freshly probed gateway health snapshot.
+    - `health` returns the cached or freshly probed gateway health snapshot. Authenticated WebSocket responses include a per-client `connection` block with `connected`, authenticated keepalive ping/pong `rttMs`, and `lastHeartbeatAt`; this block is overlaid per response and is not part of the shared cached service snapshot.
     - `diagnostics.stability` returns the recent bounded diagnostic stability recorder. It keeps operational metadata such as event names, counts, byte sizes, memory readings, queue/session state, channel/plugin names, and session ids. It does not keep chat text, webhook bodies, tool outputs, raw request or response bodies, tokens, cookies, or secret values. Operator read scope is required.
     - `status` returns the `/status`-style gateway summary; sensitive fields are included only for admin-scoped operator clients.
     - `gateway.identity.get` returns the gateway device identity used by relay and pairing flows.

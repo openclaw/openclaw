@@ -14,12 +14,15 @@ import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
+import type { GatewayConnectionHealthState } from "../server/ws-types.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 export type GatewayClient = {
   connect: ConnectParams;
   connId?: string;
+  socket?: { readyState: number };
+  connectionHealth?: GatewayConnectionHealthState;
   clientIp?: string;
   canvasHostUrl?: string;
   canvasCapability?: string;
