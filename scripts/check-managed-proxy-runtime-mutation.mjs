@@ -6,55 +6,19 @@ import { runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs"
 
 const sourceRoots = ["src", "extensions"];
 
-const allowedManagedProxyRuntimeMutationCallsites = new Set([
+const allowedManagedProxyRuntimeMutationScopes = new Set([
   // Canonical managed proxy lifecycle owns process proxy env/global-agent mutation.
-  "src/infra/net/proxy/proxy-lifecycle.ts:114",
-  "src/infra/net/proxy/proxy-lifecycle.ts:117",
-  "src/infra/net/proxy/proxy-lifecycle.ts:119",
-  "src/infra/net/proxy/proxy-lifecycle.ts:120",
-  "src/infra/net/proxy/proxy-lifecycle.ts:121",
-  "src/infra/net/proxy/proxy-lifecycle.ts:123",
-  "src/infra/net/proxy/proxy-lifecycle.ts:131",
-  "src/infra/net/proxy/proxy-lifecycle.ts:133",
-  "src/infra/net/proxy/proxy-lifecycle.ts:146",
-  "src/infra/net/proxy/proxy-lifecycle.ts:147",
-  "src/infra/net/proxy/proxy-lifecycle.ts:148",
-  "src/infra/net/proxy/proxy-lifecycle.ts:178",
-  "src/infra/net/proxy/proxy-lifecycle.ts:180",
-  "src/infra/net/proxy/proxy-lifecycle.ts:199",
-  "src/infra/net/proxy/proxy-lifecycle.ts:200",
-  "src/infra/net/proxy/proxy-lifecycle.ts:201",
-  "src/infra/net/proxy/proxy-lifecycle.ts:312",
-  "src/infra/net/proxy/proxy-lifecycle.ts:313",
-  "src/infra/net/proxy/proxy-lifecycle.ts:314",
-  "src/infra/net/proxy/proxy-lifecycle.ts:315",
-  "src/infra/net/proxy/proxy-lifecycle.ts:316",
-  "src/infra/net/proxy/proxy-lifecycle.ts:317",
-  "src/infra/net/proxy/proxy-lifecycle.ts:318",
-  "src/infra/net/proxy/proxy-lifecycle.ts:319",
-  "src/infra/net/proxy/proxy-lifecycle.ts:329",
-  "src/infra/net/proxy/proxy-lifecycle.ts:330",
-  "src/infra/net/proxy/proxy-lifecycle.ts:331",
-  "src/infra/net/proxy/proxy-lifecycle.ts:332",
-  "src/infra/net/proxy/proxy-lifecycle.ts:333",
-  "src/infra/net/proxy/proxy-lifecycle.ts:334",
-  "src/infra/net/proxy/proxy-lifecycle.ts:335",
-  "src/infra/net/proxy/proxy-lifecycle.ts:336",
-  "src/infra/net/proxy/proxy-lifecycle.ts:369",
-  "src/infra/net/proxy/proxy-lifecycle.ts:376",
-  "src/infra/net/proxy/proxy-lifecycle.ts:484",
-  "src/infra/net/proxy/proxy-lifecycle.ts:507",
-  "src/infra/net/proxy/proxy-lifecycle.ts:508",
-  "src/infra/net/proxy/proxy-lifecycle.ts:515",
-  "src/infra/net/proxy/proxy-lifecycle.ts:516",
+  "src/infra/net/proxy/proxy-lifecycle.ts#applyProxyEnv",
+  "src/infra/net/proxy/proxy-lifecycle.ts#restoreProxyEnv",
+  "src/infra/net/proxy/proxy-lifecycle.ts#restoreGlobalAgentRuntime",
+  "src/infra/net/proxy/proxy-lifecycle.ts#restoreNodeHttpStack",
+  "src/infra/net/proxy/proxy-lifecycle.ts#bootstrapNodeHttpStack",
+  "src/infra/net/proxy/proxy-lifecycle.ts#writeGlobalAgentNoProxy",
+  "src/infra/net/proxy/proxy-lifecycle.ts#disableGlobalAgentProxyForIpv6GatewayLoopback",
 
-  // Browser CDP loopback control-plane helper leases NO_PROXY only for localhost/loopback CDP URLs.
-  "extensions/browser/src/browser/cdp-proxy-bypass.ts:87",
-  "extensions/browser/src/browser/cdp-proxy-bypass.ts:88",
-  "extensions/browser/src/browser/cdp-proxy-bypass.ts:120",
-  "extensions/browser/src/browser/cdp-proxy-bypass.ts:122",
-  "extensions/browser/src/browser/cdp-proxy-bypass.ts:125",
-  "extensions/browser/src/browser/cdp-proxy-bypass.ts:127",
+  // Browser CDP loopback helper leases NO_PROXY only for localhost/loopback CDP URLs.
+  "extensions/browser/src/browser/cdp-proxy-bypass.ts#NoProxyLeaseManager.acquire",
+  "extensions/browser/src/browser/cdp-proxy-bypass.ts#NoProxyLeaseManager.release",
 ]);
 
 const forbiddenEnvKeys = new Set([
@@ -76,6 +40,55 @@ const forbiddenGlobalAgentKeys = new Set(["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY
 
 function stringLiteralText(node) {
   return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) ? node.text : null;
+}
+
+function propertyNameText(name) {
+  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
+    return name.text;
+  }
+  return null;
+}
+
+function qualifiedScopeName(name, classScopes) {
+  const classScope = classScopes.at(-1);
+  return classScope ? `${classScope}.${name}` : name;
+}
+
+function functionExpressionScopeName(node, classScopes) {
+  const parent = node.parent;
+  if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) {
+    return parent.name.text;
+  }
+  if (ts.isPropertyAssignment(parent)) {
+    const name = propertyNameText(parent.name);
+    return name ? qualifiedScopeName(name, classScopes) : null;
+  }
+  if (ts.isPropertyDeclaration(parent) && parent.name) {
+    const name = propertyNameText(parent.name);
+    return name ? qualifiedScopeName(name, classScopes) : null;
+  }
+  return null;
+}
+
+function scopeNameForNode(node, classScopes) {
+  if (ts.isFunctionDeclaration(node) && node.name) {
+    return node.name.text;
+  }
+  if (ts.isFunctionExpression(node) || ts.isArrowFunction(node)) {
+    return functionExpressionScopeName(node, classScopes);
+  }
+  if (
+    ts.isMethodDeclaration(node) ||
+    ts.isGetAccessorDeclaration(node) ||
+    ts.isSetAccessorDeclaration(node)
+  ) {
+    const name = propertyNameText(node.name);
+    return name ? qualifiedScopeName(name, classScopes) : null;
+  }
+  if (ts.isConstructorDeclaration(node)) {
+    return qualifiedScopeName("constructor", classScopes);
+  }
+  return null;
 }
 
 function isGlobalIdentifier(node, context = { globalAliases: new Set() }) {
@@ -398,7 +411,7 @@ function mutatingCallTarget(expression, context) {
   return null;
 }
 
-export function findManagedProxyRuntimeMutationLines(content, fileName = "source.ts") {
+export function findManagedProxyRuntimeMutations(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const globalAliases = collectGlobalAliases(sourceFile);
   const context = {
@@ -411,19 +424,61 @@ export function findManagedProxyRuntimeMutationLines(content, fileName = "source
     envAliases: collectEnvAliases(sourceFile),
     stringConstants: collectStringConstants(sourceFile),
   };
-  const lines = [];
+  const mutations = [];
+  const classScopes = [];
+  const scopeStack = [];
   const visit = (node) => {
+    let pushedClass = false;
+    let pushedScope = false;
+    if (ts.isClassDeclaration(node) && node.name) {
+      classScopes.push(node.name.text);
+      pushedClass = true;
+    }
+    const scopeName = scopeNameForNode(node, classScopes);
+    if (scopeName) {
+      scopeStack.push(scopeName);
+      pushedScope = true;
+    }
+
     const match =
       assignmentTarget(node, context) ??
       deleteTarget(node, context) ??
       mutatingCallTarget(node, context);
     if (match) {
-      lines.push(toLine(sourceFile, match));
+      mutations.push({
+        line: toLine(sourceFile, match),
+        scope: scopeStack.at(-1) ?? null,
+      });
     }
     ts.forEachChild(node, visit);
+
+    if (pushedScope) {
+      scopeStack.pop();
+    }
+    if (pushedClass) {
+      classScopes.pop();
+    }
   };
   visit(sourceFile);
-  return lines;
+  return mutations;
+}
+
+export function findManagedProxyRuntimeMutationLines(content, fileName = "source.ts") {
+  return findManagedProxyRuntimeMutations(content, fileName).map((mutation) => mutation.line);
+}
+
+export function isAllowedManagedProxyRuntimeMutation(violation) {
+  if (!violation.scope) {
+    return false;
+  }
+  return allowedManagedProxyRuntimeMutationScopes.has(
+    `${violation.relativePath}#${violation.scope}`,
+  );
+}
+
+function formatManagedProxyRuntimeMutationCallsite(violation) {
+  const scope = violation.scope ? ` (${violation.scope})` : "";
+  return `${violation.relativePath}:${violation.line}${scope}`;
 }
 
 export async function main() {
@@ -437,8 +492,9 @@ export async function main() {
       ".e2e.test.ts",
       ".integration.test.ts",
     ],
-    findCallLines: findManagedProxyRuntimeMutationLines,
-    allowCallsite: (callsite) => allowedManagedProxyRuntimeMutationCallsites.has(callsite),
+    findCallViolations: findManagedProxyRuntimeMutations,
+    allowViolation: isAllowedManagedProxyRuntimeMutation,
+    formatViolation: formatManagedProxyRuntimeMutationCallsite,
     header: "Found unmanaged managed-proxy runtime mutation:",
     footer:
       "Only proxy lifecycle code may mutate GLOBAL_AGENT or proxy-related process.env runtime state.",

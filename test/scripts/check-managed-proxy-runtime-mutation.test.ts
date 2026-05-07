@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { findManagedProxyRuntimeMutationLines } from "../../scripts/check-managed-proxy-runtime-mutation.mjs";
+import {
+  findManagedProxyRuntimeMutationLines,
+  findManagedProxyRuntimeMutations,
+  isAllowedManagedProxyRuntimeMutation,
+} from "../../scripts/check-managed-proxy-runtime-mutation.mjs";
 
 describe("check-managed-proxy-runtime-mutation", () => {
   it("finds assignments and deletes for proxy env vars", () => {
@@ -180,5 +184,50 @@ describe("check-managed-proxy-runtime-mutation", () => {
     `;
 
     expect(findManagedProxyRuntimeMutationLines(source)).toEqual([]);
+  });
+
+  it("reports the enclosing owner scope for each mutation", () => {
+    const source = `
+      function applyProxyEnv() {
+        process.env.HTTP_PROXY = "http://proxy";
+      }
+
+      class NoProxyLeaseManager {
+        release() {
+          delete process.env.NO_PROXY;
+        }
+      }
+
+      const updateProxy = () => {
+        global.GLOBAL_AGENT.NO_PROXY = "localhost";
+      };
+    `;
+
+    expect(findManagedProxyRuntimeMutations(source)).toEqual([
+      { line: 3, scope: "applyProxyEnv" },
+      { line: 8, scope: "NoProxyLeaseManager.release" },
+      { line: 13, scope: "updateProxy" },
+    ]);
+  });
+
+  it("allows approved owner scopes without exact line allowlists", () => {
+    expect(
+      isAllowedManagedProxyRuntimeMutation({
+        relativePath: "src/infra/net/proxy/proxy-lifecycle.ts",
+        scope: "applyProxyEnv",
+      }),
+    ).toBe(true);
+    expect(
+      isAllowedManagedProxyRuntimeMutation({
+        relativePath: "extensions/browser/src/browser/cdp-proxy-bypass.ts",
+        scope: "NoProxyLeaseManager.release",
+      }),
+    ).toBe(true);
+    expect(
+      isAllowedManagedProxyRuntimeMutation({
+        relativePath: "src/infra/net/proxy/proxy-lifecycle.ts",
+        scope: "startProxy",
+      }),
+    ).toBe(false);
   });
 });
