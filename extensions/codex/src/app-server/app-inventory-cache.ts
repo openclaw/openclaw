@@ -55,6 +55,7 @@ export class CodexAppInventoryCache {
   private readonly ttlMs: number;
   private readonly entries = new Map<string, CacheEntry>();
   private readonly inFlight = new Map<string, Promise<CodexAppInventorySnapshot>>();
+  private readonly refreshTokens = new Map<string, number>();
   private readonly diagnostics = new Map<string, CodexAppInventoryCacheDiagnostic>();
   private revision = 0;
 
@@ -112,6 +113,7 @@ export class CodexAppInventoryCache {
   clear(): void {
     this.entries.clear();
     this.inFlight.clear();
+    this.refreshTokens.clear();
     this.diagnostics.clear();
     this.revision = 0;
   }
@@ -132,11 +134,13 @@ export class CodexAppInventoryCache {
 
   private async refresh(params: RefreshParams): Promise<CodexAppInventorySnapshot> {
     const existing = this.inFlight.get(params.key);
-    if (existing) {
+    if (existing && !params.forceRefetch) {
       return existing;
     }
 
-    const promise = this.refreshUncoalesced(params);
+    const refreshToken = (this.refreshTokens.get(params.key) ?? 0) + 1;
+    this.refreshTokens.set(params.key, refreshToken);
+    const promise = this.refreshUncoalesced(params, refreshToken);
     this.inFlight.set(params.key, promise);
     try {
       return await promise;
@@ -147,7 +151,10 @@ export class CodexAppInventoryCache {
     }
   }
 
-  private async refreshUncoalesced(params: RefreshParams): Promise<CodexAppInventorySnapshot> {
+  private async refreshUncoalesced(
+    params: RefreshParams,
+    refreshToken: number,
+  ): Promise<CodexAppInventorySnapshot> {
     const nowMs = params.nowMs ?? Date.now();
     try {
       const apps = await listAllApps(params.request, params.forceRefetch ?? false);
@@ -159,8 +166,10 @@ export class CodexAppInventoryCache {
         expiresAtMs: nowMs + this.ttlMs,
         revision: this.revision,
       };
-      this.entries.set(params.key, { ...snapshot, invalidated: false });
-      this.diagnostics.delete(params.key);
+      if (this.refreshTokens.get(params.key) === refreshToken) {
+        this.entries.set(params.key, { ...snapshot, invalidated: false });
+        this.diagnostics.delete(params.key);
+      }
       return snapshot;
     } catch (error) {
       const diagnostic = {

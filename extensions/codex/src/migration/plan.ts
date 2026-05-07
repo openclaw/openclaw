@@ -2,7 +2,9 @@ import path from "node:path";
 import {
   createMigrationItem,
   createMigrationManualItem,
+  hasMigrationConfigPatchConflict,
   MIGRATION_REASON_TARGET_EXISTS,
+  readMigrationConfigPath,
   summarizeMigrationItems,
 } from "openclaw/plugin-sdk/migration";
 import type {
@@ -22,6 +24,14 @@ import { resolveCodexMigrationTargets } from "./targets.js";
 
 export const CODEX_PLUGIN_CONFIG_ITEM_ID = "config:codex-plugins";
 export const CODEX_PLUGIN_CONFIG_PATH = ["plugins", "entries", "codex"] as const;
+const CODEX_PLUGIN_ENABLED_PATH = ["plugins", "entries", "codex", "enabled"] as const;
+const CODEX_PLUGIN_NATIVE_CONFIG_PATH = [
+  "plugins",
+  "entries",
+  "codex",
+  "config",
+  "codexPlugins",
+] as const;
 
 export type CodexPluginMigrationConfigEntry = {
   configKey: string;
@@ -168,8 +178,19 @@ export function readCodexPluginMigrationConfigEntry(
   return { configKey, pluginName, enabled };
 }
 
+function readExistingAllowDestructiveActions(
+  config: MigrationProviderContext["config"],
+): boolean | undefined {
+  const value = readMigrationConfigPath(config as Record<string, unknown>, [
+    ...CODEX_PLUGIN_NATIVE_CONFIG_PATH,
+    "allow_destructive_actions",
+  ]);
+  return typeof value === "boolean" ? value : undefined;
+}
+
 export function buildCodexPluginsConfigValue(
   entries: readonly CodexPluginMigrationConfigEntry[],
+  params: { config?: MigrationProviderContext["config"] } = {},
 ): Record<string, unknown> {
   const plugins = Object.fromEntries(
     entries
@@ -188,31 +209,55 @@ export function buildCodexPluginsConfigValue(
     config: {
       codexPlugins: {
         enabled: true,
-        allow_destructive_actions: false,
+        allow_destructive_actions:
+          params.config === undefined
+            ? false
+            : (readExistingAllowDestructiveActions(params.config) ?? false),
         plugins,
       },
     },
   };
 }
 
-function buildPluginConfigItem(pluginItems: readonly MigrationItem[]): MigrationItem | undefined {
+export function hasCodexPluginConfigConflict(
+  config: MigrationProviderContext["config"],
+  value: Record<string, unknown>,
+): boolean {
+  const enabled = readMigrationConfigPath(
+    config as Record<string, unknown>,
+    CODEX_PLUGIN_ENABLED_PATH,
+  );
+  if (enabled !== undefined && enabled !== true) {
+    return true;
+  }
+  const nativeConfig = (value.config as Record<string, unknown> | undefined)?.codexPlugins;
+  return hasMigrationConfigPatchConflict(config, CODEX_PLUGIN_NATIVE_CONFIG_PATH, nativeConfig);
+}
+
+function buildPluginConfigItem(
+  ctx: MigrationProviderContext,
+  pluginItems: readonly MigrationItem[],
+): MigrationItem | undefined {
   const entries = pluginItems
     .map((item) => readCodexPluginMigrationConfigEntry(item, true))
     .filter((entry): entry is CodexPluginMigrationConfigEntry => entry !== undefined);
   if (entries.length === 0) {
     return undefined;
   }
+  const value = buildCodexPluginsConfigValue(entries, { config: ctx.config });
+  const conflict = !ctx.overwrite && hasCodexPluginConfigConflict(ctx.config, value);
   return createMigrationItem({
     id: CODEX_PLUGIN_CONFIG_ITEM_ID,
     kind: "config",
     action: "merge",
     target: "plugins.entries.codex.config.codexPlugins",
-    status: "planned",
+    status: conflict ? "conflict" : "planned",
+    reason: conflict ? MIGRATION_REASON_TARGET_EXISTS : undefined,
     message:
       "Enable OpenClaw's Codex plugin integration and record migrated source-installed curated plugins.",
     details: {
       path: [...CODEX_PLUGIN_CONFIG_PATH],
-      value: buildCodexPluginsConfigValue(entries),
+      value,
     },
   });
 }
@@ -237,7 +282,7 @@ export async function buildCodexMigrationPlan(
   );
   const pluginItems = buildPluginItems(source.plugins);
   items.push(...pluginItems);
-  const pluginConfigItem = buildPluginConfigItem(pluginItems);
+  const pluginConfigItem = buildPluginConfigItem(ctx, pluginItems);
   if (pluginConfigItem) {
     items.push(pluginConfigItem);
   }

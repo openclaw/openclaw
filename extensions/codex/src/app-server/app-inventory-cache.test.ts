@@ -74,6 +74,45 @@ describe("Codex app inventory cache", () => {
     expect(read.snapshot?.apps.map((item) => item.id)).toEqual(["app-1"]);
     expect(read.diagnostic?.message).toBe("app list failed");
   });
+
+  it("forces a post-install refresh past an older in-flight app/list", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
+    const key = "runtime";
+    let resolveStale: ((response: v2.AppsListResponse) => void) | undefined;
+    let resolveFresh: ((response: v2.AppsListResponse) => void) | undefined;
+    const request = vi.fn(
+      async (_method: "app/list", params: v2.AppsListParams): Promise<v2.AppsListResponse> => {
+        expect(params.forceRefetch).toBe(request.mock.calls.length === 2);
+        return await new Promise((resolve) => {
+          if (request.mock.calls.length === 1) {
+            resolveStale = resolve;
+          } else {
+            resolveFresh = resolve;
+          }
+        });
+      },
+    );
+
+    const staleRead = cache.read({ key, request, nowMs: 0 });
+    expect(staleRead.state).toBe("missing");
+    expect(staleRead.refreshScheduled).toBe(true);
+
+    cache.invalidate(key, "plugin installed", 1);
+    const forced = cache.refreshNow({ key, request, nowMs: 1, forceRefetch: true });
+    expect(request).toHaveBeenCalledTimes(2);
+
+    resolveFresh?.({ data: [app("fresh-app")], nextCursor: null });
+    await expect(forced).resolves.toMatchObject({
+      apps: [expect.objectContaining({ id: "fresh-app" })],
+    });
+
+    resolveStale?.({ data: [app("stale-app")], nextCursor: null });
+    await Promise.resolve();
+
+    const freshRead = cache.read({ key, request, nowMs: 2 });
+    expect(freshRead.state).toBe("fresh");
+    expect(freshRead.snapshot?.apps.map((item) => item.id)).toEqual(["fresh-app"]);
+  });
 });
 
 function app(id: string): v2.AppInfo {

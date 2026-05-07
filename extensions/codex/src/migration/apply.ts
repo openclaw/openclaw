@@ -1,8 +1,10 @@
 import path from "node:path";
 import {
   applyMigrationManualItem,
+  markMigrationItemConflict,
   markMigrationItemError,
   markMigrationItemSkipped,
+  MIGRATION_REASON_TARGET_EXISTS,
   summarizeMigrationItems,
   writeMigrationConfigPath,
 } from "openclaw/plugin-sdk/migration";
@@ -31,12 +33,20 @@ import {
   buildCodexPluginsConfigValue,
   CODEX_PLUGIN_CONFIG_ITEM_ID,
   CODEX_PLUGIN_CONFIG_PATH,
+  hasCodexPluginConfigConflict,
   readCodexPluginMigrationConfigEntry,
   type CodexPluginMigrationConfigEntry,
 } from "./plan.js";
 
 const CODEX_PLUGIN_AUTH_REQUIRED_REASON = "auth_required";
 const CODEX_PLUGIN_NOT_SELECTED_REASON = "not selected for migration";
+
+class CodexPluginConfigConflictError extends Error {
+  constructor(readonly reason: string) {
+    super(reason);
+    this.name = "CodexPluginConfigConflictError";
+  }
+}
 
 export async function applyCodexMigrationPlan(params: {
   ctx: MigrationProviderContext;
@@ -165,12 +175,19 @@ async function applyCodexPluginConfigItem(
   if (!configApi?.current || !configApi.mutateConfigFile) {
     return markMigrationItemError(item, "config runtime unavailable");
   }
-  const value = buildCodexPluginsConfigValue(entries);
+  const currentConfig = configApi.current() as MigrationProviderContext["config"];
+  const value = buildCodexPluginsConfigValue(entries, { config: currentConfig });
+  if (!ctx.overwrite && hasCodexPluginConfigConflict(currentConfig, value)) {
+    return markMigrationItemConflict(item, MIGRATION_REASON_TARGET_EXISTS);
+  }
   try {
     await configApi.mutateConfigFile({
       base: "runtime",
       afterWrite: { mode: "auto" },
       mutate(draft) {
+        if (!ctx.overwrite && hasCodexPluginConfigConflict(draft, value)) {
+          throw new CodexPluginConfigConflictError(MIGRATION_REASON_TARGET_EXISTS);
+        }
         writeMigrationConfigPath(draft as Record<string, unknown>, CODEX_PLUGIN_CONFIG_PATH, value);
       },
     });
@@ -184,6 +201,9 @@ async function applyCodexPluginConfigItem(
       },
     };
   } catch (error) {
+    if (error instanceof CodexPluginConfigConflictError) {
+      return markMigrationItemConflict(item, error.reason);
+    }
     return markMigrationItemError(item, error instanceof Error ? error.message : String(error));
   }
 }
