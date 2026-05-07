@@ -38,7 +38,10 @@ export async function maybeHandleResetCommand(
       logVerbose(
         `Ignoring /reset soft from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
       );
-      return { shouldContinue: false };
+      return {
+        shouldContinue: false,
+        reply: { text: "⚠️ You are not authorized to reset this session." },
+      };
     }
 
     const boundAcpSessionKey = resolveBoundAcpThreadSessionKey(params);
@@ -114,7 +117,10 @@ export async function maybeHandleResetCommand(
     logVerbose(
       `Ignoring /reset from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
-    return { shouldContinue: false };
+    return {
+      shouldContinue: false,
+      reply: { text: "⚠️ You are not authorized to reset this session." },
+    };
   }
 
   const commandAction: ResetCommandAction = resetMatch[1] === "reset" ? "reset" : "new";
@@ -167,15 +173,14 @@ export async function maybeHandleResetCommand(
     workspaceDir: params.workspaceDir,
   });
   if (!resetTail) {
+    if (hookResult.routedReply) {
+      return { shouldContinue: false };
+    }
     return {
       shouldContinue: false,
-      ...(hookResult.routedReply
-        ? {}
-        : {
-            reply: {
-              text: commandAction === "reset" ? "✅ Session reset." : "✅ New session started.",
-            },
-          }),
+      reply: {
+        text: commandAction === "reset" ? "✅ Session reset." : "✅ New session started.",
+      },
     };
   }
   return null;
