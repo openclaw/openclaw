@@ -8,8 +8,10 @@ import {
   isPackageScriptOnlyChange,
 } from "../../scripts/changed-lanes.mjs";
 import {
+  buildChangedCheckTestboxArgs,
   createChangedCheckChildEnv,
   createChangedCheckPlan,
+  shouldDelegateChangedCheckToTestbox,
 } from "../../scripts/check-changed.mjs";
 import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
 
@@ -215,6 +217,44 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
+  it("delegates local Testbox-mode changed gates before running locally", () => {
+    expect(
+      shouldDelegateChangedCheckToTestbox(["--base", "origin/main"], {
+        OPENCLAW_TESTBOX: "1",
+        PATH: "/usr/bin",
+      }),
+    ).toBe(true);
+
+    expect(buildChangedCheckTestboxArgs(["--base", "origin/main", "--head", "HEAD"])).toEqual([
+      "testbox:run",
+      "--",
+      "OPENCLAW_TESTBOX=1",
+      "OPENCLAW_TESTBOX_REMOTE_RUN=1",
+      "pnpm",
+      "check:changed",
+      "--base",
+      "origin/main",
+      "--head",
+      "HEAD",
+    ]);
+  });
+
+  it("does not delegate dry-run, CI, or already-remote changed gates", () => {
+    expect(shouldDelegateChangedCheckToTestbox(["--dry-run"], { OPENCLAW_TESTBOX: "1" })).toBe(
+      false,
+    );
+    expect(
+      shouldDelegateChangedCheckToTestbox([], { OPENCLAW_TESTBOX: "1", GITHUB_ACTIONS: "true" }),
+    ).toBe(false);
+    expect(shouldDelegateChangedCheckToTestbox([], { OPENCLAW_TESTBOX: "1", CI: "1" })).toBe(false);
+    expect(
+      shouldDelegateChangedCheckToTestbox([], {
+        OPENCLAW_TESTBOX: "1",
+        OPENCLAW_TESTBOX_REMOTE_RUN: "1",
+      }),
+    ).toBe(false);
+  });
+
   it("runs changed-check lint lanes under the parent heavy-check lock", () => {
     const result = detectChangedLanes(["extensions/discord/src/index.ts"]);
     const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
@@ -294,7 +334,7 @@ describe("scripts/changed-lanes", () => {
       extensionTests: true,
       all: false,
     });
-    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions");
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core");
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions:test");
   });
 
@@ -679,7 +719,6 @@ describe("scripts/changed-lanes", () => {
       "apps/macos/Sources/OpenClaw/Resources/Info.plist",
       "docs/.generated/config-baseline.sha256",
       "package.json",
-      "src/config/schema.base.generated.ts",
     ]);
     const plan = createChangedCheckPlan(result, { staged: true });
 
@@ -814,6 +853,22 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
   });
 
+  it("routes A2UI bundle source changes as extension changes", () => {
+    const result = detectChangedLanes([
+      "extensions/canvas/src/host/a2ui-app/bootstrap.js",
+      "extensions/canvas/src/host/a2ui-app/rolldown.config.mjs",
+    ]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes).toMatchObject({
+      extensions: true,
+      extensionTests: true,
+      all: false,
+    });
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+  });
+
   it("keeps shared Vitest wiring changes out of check test execution", () => {
     const result = detectChangedLanes(["test/vitest/vitest.shared.config.ts"]);
     const plan = createChangedCheckPlan(result);
@@ -830,14 +885,14 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
   });
 
-  it("does not route generated A2UI artifacts as direct Vitest targets", () => {
+  it("does not route generated plugin bundle artifacts as direct Vitest targets", () => {
     const result = detectChangedLanes([
-      "src/canvas-host/a2ui/.bundle.hash",
-      "test/scripts/bundle-a2ui.test.ts",
+      "extensions/demo/src/host/assets/.bundle.hash",
+      "extensions/canvas/scripts/bundle-a2ui.test.ts",
     ]);
     const plan = createChangedCheckPlan(result);
 
-    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core");
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
   });
 

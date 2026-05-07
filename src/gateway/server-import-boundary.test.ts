@@ -33,7 +33,7 @@ describe("gateway startup import boundaries", () => {
       'from "./config-reload.js"',
     );
     expect(readSource("src/gateway/server-runtime-state.ts")).not.toContain(
-      'createCanvasHostHandler } from "../canvas-host/server.js"',
+      'createCanvasHostHandler } from "../../extensions/canvas/runtime-api.js"',
     );
     expect(serverImpl).not.toContain('from "../plugins/hook-runner-global.js"');
     expect(serverImpl).not.toContain('from "../tasks/task-registry.js"');
@@ -56,9 +56,24 @@ describe("gateway startup import boundaries", () => {
     const closeStart = serverImpl.indexOf("close: async (opts)");
     const hookStart = serverImpl.indexOf("runGlobalGatewayStopSafely", closeStart);
     const markStart = serverImpl.indexOf("markClosePreludeStarted();", closeStart);
+    const markHelperStart = serverImpl.indexOf("const markClosePreludeStarted = () => {");
+    const markHelperEnd = serverImpl.indexOf("};", markHelperStart);
+    const postReadyStart = serverImpl.indexOf("scheduleGatewayPostReadyMaintenance({");
+    const postReadyEnd = serverImpl.indexOf("});", postReadyStart);
+    const postReadyBlock = serverImpl.slice(postReadyStart, postReadyEnd);
 
     expect(closeStart).toBeGreaterThan(-1);
     expect(markStart).toBeGreaterThan(closeStart);
     expect(markStart).toBeLessThan(hookStart);
+    expect(markHelperStart).toBeGreaterThan(-1);
+    expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(
+      "clearPostReadyMaintenanceTimer();",
+    );
+    expect(postReadyStart).toBeGreaterThan(-1);
+    expect(postReadyBlock).toContain("isClosing: () => closePreludeStarted");
+    expect(postReadyBlock).toContain("if (closePreludeStarted)");
+    expect(postReadyBlock).toContain(
+      "shouldStartCron: () => !closePreludeStarted && !gatewayCronStartHandled",
+    );
   });
 });

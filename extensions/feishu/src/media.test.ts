@@ -1,7 +1,8 @@
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -61,7 +62,7 @@ function expectPathIsolatedToTmpRoot(pathValue: string, key: string): void {
   expect(pathValue).not.toContain(key);
   expect(pathValue).not.toContain("..");
 
-  const tmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
+  const tmpRoot = realpathSync(resolvePreferredOpenClawTmpDir());
   const resolved = path.resolve(pathValue);
   const rel = path.relative(tmpRoot, resolved);
   expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
@@ -95,6 +96,15 @@ describe("sendMediaFeishu msg_type routing", () => {
       sendMediaFeishu,
       shouldSuppressFeishuTextForVoiceMedia,
     } = await import("./media.js"));
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./client.js");
+    vi.doUnmock("./accounts.js");
+    vi.doUnmock("./targets.js");
+    vi.doUnmock("./runtime.js");
+    vi.doUnmock("openclaw/plugin-sdk/media-runtime");
+    vi.resetModules();
   });
 
   beforeEach(() => {

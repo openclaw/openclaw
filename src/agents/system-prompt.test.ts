@@ -286,7 +286,6 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
       runtimeInfo: {
         channel: "webchat",
-        canvasRootDir: "/Users/example/.openclaw-dev/canvas",
       },
     });
 
@@ -300,7 +299,7 @@ describe("buildAgentSystemPrompt", () => {
       "Never use local filesystem paths or `file://...` URLs in `[embed ...]`.",
     );
     expect(prompt).toContain(
-      "The active hosted embed root for this session is: `/Users/example/.openclaw-dev/canvas`.",
+      "The active hosted embed root is profile-scoped, not workspace-scoped.",
     );
     expect(prompt).not.toContain('[embed content_type="html" title="Status"]...[/embed]');
   });
@@ -458,7 +457,10 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("- Read: Read file contents");
     expect(prompt).toContain("- Exec: Run shell commands");
     expect(prompt).toContain(
-      "- If exactly one skill clearly applies: read its SKILL.md at <location> with `Read`, then follow it.",
+      "- If exactly one skill clearly applies: read its SKILL.md at <location> with `Read`, then follow it. You MUST use the exact <location> value from <available_skills>; never guess, fabricate, or hard-code a skill file path.",
+    );
+    expect(prompt).toContain(
+      "- If multiple could apply: choose the most specific one, read its SKILL.md at <location> with `Read`, then follow it. You MUST use the exact <location> value from <available_skills>; never guess, fabricate, or hard-code a skill file path.",
     );
     expect(prompt).toContain("OpenClaw docs: /tmp/openclaw/docs");
     expect(prompt).toContain(
@@ -644,7 +646,10 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Skills");
     expect(prompt).toContain(
-      "- If exactly one skill clearly applies: read its SKILL.md at <location> with `read`, then follow it.",
+      "- If exactly one skill clearly applies: read its SKILL.md at <location> with `read`, then follow it. You MUST use the exact <location> value from <available_skills>; never guess, fabricate, or hard-code a skill file path.",
+    );
+    expect(prompt).toContain(
+      "- If multiple could apply: choose the most specific one, read its SKILL.md at <location> with `read`, then follow it. You MUST use the exact <location> value from <available_skills>; never guess, fabricate, or hard-code a skill file path.",
     );
   });
 
@@ -1050,7 +1055,6 @@ describe("buildAgentSystemPrompt", () => {
       runtimeInfo: {
         channel: "telegram",
         capabilities: ["inlineButtons"],
-        canvasRootDir: "/tmp/canvas",
       },
       contextFiles: [
         {

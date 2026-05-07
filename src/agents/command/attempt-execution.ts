@@ -2,7 +2,10 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
-import { resolveSessionTranscriptFile } from "../../config/sessions/transcript.js";
+import {
+  readTailAssistantTextFromSessionTranscript,
+  resolveSessionTranscriptFile,
+} from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
@@ -20,6 +23,8 @@ import { FailoverError } from "../failover-error.js";
 import { resolveAgentHarnessPolicy } from "../harness/selection.js";
 import { isCliRuntimeAlias, resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
+import { isOpenAIProvider, resolveOpenAIRuntimeProviderForPi } from "../openai-codex-routing.js";
+import { normalizeEmbeddedAgentRuntime } from "../pi-embedded-runner/runtime.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import {
@@ -44,6 +49,10 @@ export {
 } from "./attempt-execution.helpers.js";
 
 const log = createSubsystemLogger("agents/agent-command");
+
+function normalizeTranscriptMirrorText(value: string): string {
+  return value.trim().replace(/\s+/gu, " ");
+}
 
 const ACP_TRANSCRIPT_USAGE = {
   input: 0,
@@ -81,6 +90,7 @@ type PersistTextTurnTranscriptParams = {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
+  embeddedAssistantGapFill?: boolean;
   assistant: {
     api: string;
     provider: string;
@@ -217,22 +227,33 @@ async function persistTextTurnTranscript(
     }
 
     if (replyText) {
-      await appendSessionTranscriptMessage({
-        transcriptPath: sessionFile,
-        sessionId: params.sessionId,
-        cwd: params.sessionCwd,
-        config: params.config,
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: replyText }],
-          api: params.assistant.api,
-          provider: params.assistant.provider,
-          model: params.assistant.model,
-          usage: resolveTranscriptUsage(params.assistant.usage),
-          stopReason: "stop",
-          timestamp: Date.now(),
-        },
-      });
+      let appendAssistant = true;
+      if (params.embeddedAssistantGapFill) {
+        const latest = await readTailAssistantTextFromSessionTranscript(sessionFile);
+        const normalizedReply = normalizeTranscriptMirrorText(replyText);
+        const normalizedLatest = latest?.text ? normalizeTranscriptMirrorText(latest.text) : "";
+        if (normalizedLatest && normalizedLatest === normalizedReply) {
+          appendAssistant = false;
+        }
+      }
+      if (appendAssistant) {
+        await appendSessionTranscriptMessage({
+          transcriptPath: sessionFile,
+          sessionId: params.sessionId,
+          cwd: params.sessionCwd,
+          config: params.config,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: replyText }],
+            api: params.assistant.api,
+            provider: params.assistant.provider,
+            model: params.assistant.model,
+            usage: resolveTranscriptUsage(params.assistant.usage),
+            stopReason: "stop",
+            timestamp: Date.now(),
+          },
+        });
+      }
     }
   } finally {
     await lock.release();
@@ -296,14 +317,16 @@ export async function persistCliTurnTranscript(params: {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
+  embeddedAssistantGapFill?: boolean;
 }): Promise<SessionEntry | undefined> {
   const replyText = resolveCliTranscriptReplyText(params.result);
   const provider = params.result.meta.agentMeta?.provider?.trim() ?? "cli";
   const model = params.result.meta.agentMeta?.model?.trim() ?? "default";
+  const gapFill = params.embeddedAssistantGapFill ?? false;
 
   return await persistTextTurnTranscript({
-    body: params.body,
-    transcriptBody: params.transcriptBody,
+    body: gapFill ? "" : params.body,
+    transcriptBody: gapFill ? undefined : params.transcriptBody,
     finalText: replyText,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -314,6 +337,7 @@ export async function persistCliTurnTranscript(params: {
     threadId: params.threadId,
     sessionCwd: params.sessionCwd,
     config: params.config,
+    embeddedAssistantGapFill: gapFill,
     assistant: {
       api: "cli",
       provider,
@@ -394,6 +418,8 @@ export function runAgentAttempt(params: {
         sessionHasHistory: params.sessionHasHistory,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey ?? params.sessionId,
+        provider: params.providerOverride,
+        modelId: params.modelOverride,
       });
   const agentRuntimeOverride = isRawModelRun
     ? undefined
@@ -438,6 +464,15 @@ export function runAgentAttempt(params: {
     allowHarnessAuthProfileForwarding: !isCliProvider(cliExecutionProvider, params.cfg),
   });
   const authProfileId = runtimeAuthPlan.forwardedAuthProfileId;
+  const embeddedPiProvider = resolveOpenAIRuntimeProviderForPi({
+    provider: params.providerOverride,
+    harnessRuntime: agentHarnessPolicy.runtime,
+    agentHarnessId: sessionPinnedAgentHarnessId,
+    authProfileProvider: runtimeAuthPlan.authProfileProviderForAuth,
+    authProfileId,
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
   if (!isRawModelRun && isCliProvider(cliExecutionProvider, params.cfg)) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
     const resolveReusableCliSessionBinding = async () => {
@@ -589,7 +624,7 @@ export function runAgentAttempt(params: {
     images: params.isFallbackRetry ? undefined : params.opts.images,
     imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
     clientTools: params.opts.clientTools,
-    provider: params.providerOverride,
+    provider: embeddedPiProvider,
     model: params.modelOverride,
     modelFallbacksOverride: params.modelFallbacksOverride,
     authProfileId,
@@ -628,11 +663,33 @@ function resolveSessionPinnedAgentHarnessId(params: {
   sessionHasHistory?: boolean;
   sessionId: string;
   sessionKey: string;
+  provider: string;
+  modelId?: string;
 }): string | undefined {
   if (params.sessionEntry?.sessionId !== params.sessionId) {
     return resolveConfiguredAgentHarnessId(params);
   }
   if (params.sessionEntry.agentHarnessId) {
+    if (isOpenAIProvider(params.provider)) {
+      const configuredPolicy = resolveAgentHarnessPolicy({
+        config: params.cfg,
+        agentId: params.sessionAgentId,
+        sessionKey: params.sessionKey,
+        provider: params.provider,
+        modelId: params.modelId,
+      });
+      const configuredAgentHarnessId =
+        configuredPolicy.runtime === "auto" || isCliRuntimeAlias(configuredPolicy.runtime)
+          ? undefined
+          : configuredPolicy.runtime;
+      const storedRuntime = normalizeEmbeddedAgentRuntime(params.sessionEntry.agentHarnessId);
+      if (configuredAgentHarnessId && configuredPolicy.runtimeSource !== "implicit") {
+        return configuredAgentHarnessId;
+      }
+      if (storedRuntime === "pi" && configuredAgentHarnessId) {
+        return configuredAgentHarnessId;
+      }
+    }
     return params.sessionEntry.agentHarnessId;
   }
   const configuredAgentHarnessId = resolveConfiguredAgentHarnessId(params);
@@ -649,11 +706,15 @@ function resolveConfiguredAgentHarnessId(params: {
   cfg: OpenClawConfig;
   sessionAgentId: string;
   sessionKey: string;
+  provider: string;
+  modelId?: string;
 }): string | undefined {
   const policy = resolveAgentHarnessPolicy({
     config: params.cfg,
     agentId: params.sessionAgentId,
     sessionKey: params.sessionKey,
+    provider: params.provider,
+    modelId: params.modelId,
   });
   if (policy.runtime === "auto" || isCliRuntimeAlias(policy.runtime)) {
     return undefined;

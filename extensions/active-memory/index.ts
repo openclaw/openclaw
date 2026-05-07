@@ -18,11 +18,12 @@ import {
 } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
+import { isPathInside, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import {
   resolveSessionStoreEntry,
   updateSessionStore,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_AGENT_ID = "main";
@@ -41,6 +42,7 @@ const DEFAULT_QMD_SEARCH_MODE = "search" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
 const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
+const ACTIVE_MEMORY_TOOL_ALLOWLIST = ["memory_recall", "memory_search", "memory_get"] as const;
 const TOGGLE_STATE_FILE = "session-toggles.json";
 const DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS = 32_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_LINES = 2_000;
@@ -247,6 +249,7 @@ const toggleStoreLocks = new Map<string, AsyncLock>();
 let lastActiveRecallCacheSweepAt = 0;
 let minimumTimeoutMs = DEFAULT_MIN_TIMEOUT_MS;
 let setupGraceTimeoutMs = DEFAULT_SETUP_GRACE_TIMEOUT_MS;
+let timeoutPartialDataGraceMs = TIMEOUT_PARTIAL_DATA_GRACE_MS;
 
 function createAsyncLock(): AsyncLock {
   let lock: Promise<void> = Promise.resolve();
@@ -420,7 +423,7 @@ function resolveSafeTranscriptDir(baseSessionsDir: string, transcriptDir: string
   }
   const resolvedBase = path.resolve(baseSessionsDir);
   const candidate = path.resolve(resolvedBase, normalized);
-  if (candidate !== resolvedBase && !candidate.startsWith(resolvedBase + path.sep)) {
+  if (!isPathInside(resolvedBase, candidate)) {
     return path.resolve(resolvedBase, DEFAULT_TRANSCRIPT_DIR);
   }
   return candidate;
@@ -492,6 +495,38 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
 
 function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function isMissingRegisteredMemoryToolsError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.trim();
+  const prefix = "No callable tools remain after resolving explicit tool allowlist (";
+  const suffix =
+    "); no registered tools matched. Fix the allowlist or enable the plugin that registers the requested tool.";
+  if (!message.startsWith(prefix) || !message.endsWith(suffix)) {
+    return false;
+  }
+  const sources = message.slice(prefix.length, -suffix.length);
+  const runtimeSource = `runtime toolsAllow: ${ACTIVE_MEMORY_TOOL_ALLOWLIST.join(", ")}`;
+  const sourceParts = sources
+    .split(";")
+    .map((source) => source.trim())
+    .filter(Boolean);
+  if (!sourceParts.includes(runtimeSource)) {
+    return false;
+  }
+  return sourceParts.every((source) => {
+    if (source === runtimeSource) {
+      return true;
+    }
+    const entries = source
+      .slice(source.indexOf(":") + 1)
+      .split(",")
+      .map((entry) => entry.trim());
+    return entries.includes("*");
+  });
 }
 
 function resolveRecallRunChannelContext(params: {
@@ -630,14 +665,11 @@ async function readToggleStore(statePath: string): Promise<ActiveMemoryToggleSto
 }
 
 async function writeToggleStore(statePath: string, store: ActiveMemoryToggleStore): Promise<void> {
-  await fs.mkdir(path.dirname(statePath), { recursive: true });
-  const tempPath = `${statePath}.${process.pid}.${Date.now()}.${crypto.randomUUID()}.tmp`;
-  try {
-    await fs.writeFile(tempPath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
-    await fs.rename(tempPath, statePath);
-  } finally {
-    await fs.rm(tempPath, { force: true }).catch(() => undefined);
-  }
+  await replaceFileAtomic({
+    filePath: statePath,
+    content: `${JSON.stringify(store, null, 2)}\n`,
+    tempPrefix: ".active-memory",
+  });
 }
 
 async function isSessionActiveMemoryDisabled(params: {
@@ -749,6 +781,13 @@ function updateActiveMemoryGlobalEnabledInConfig(
     },
   };
 }
+
+function requiresAdminToMutateActiveMemoryGlobal(gatewayClientScopes?: readonly string[]): boolean {
+  return Array.isArray(gatewayClientScopes) && !gatewayClientScopes.includes("operator.admin");
+}
+
+const ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT =
+  "⚠️ /active-memory global enable/disable changes require operator.admin for gateway clients.";
 
 function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPluginConfig {
   const raw = (
@@ -1873,7 +1912,7 @@ async function waitForSubagentPartialTimeoutData(
   }
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<undefined>((resolve) => {
-    timeoutId = setTimeout(() => resolve(undefined), TIMEOUT_PARTIAL_DATA_GRACE_MS);
+    timeoutId = setTimeout(() => resolve(undefined), timeoutPartialDataGraceMs);
     timeoutId.unref?.();
   });
   try {
@@ -2344,9 +2383,13 @@ async function runRecallSubagent(params: {
   const subagentSessionKey = parentSessionKey
     ? `${parentSessionKey}:${subagentSuffix}`
     : `agent:${params.agentId}:${subagentSuffix}`;
-  const tempDir = params.config.persistTranscripts
+  const transientWorkspace = params.config.persistTranscripts
     ? undefined
-    : await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-active-memory-"));
+    : await tempWorkspace({
+        rootDir: resolvePreferredOpenClawTmpDir(),
+        prefix: "openclaw-active-memory-",
+      });
+  const tempDir = transientWorkspace?.dir;
   const persistedDir = params.config.persistTranscripts
     ? resolveSafeTranscriptDir(
         resolvePersistentTranscriptBaseDir(params.api, params.agentId),
@@ -2394,7 +2437,7 @@ async function runRecallSubagent(params: {
       timeoutMs: embeddedTimeoutMs,
       runId: subagentSessionId,
       trigger: "manual",
-      toolsAllow: ["memory_recall", "memory_search", "memory_get"],
+      toolsAllow: [...ACTIVE_MEMORY_TOOL_ALLOWLIST],
       disableMessageTool: true,
       allowGatewaySubagentBinding: true,
       bootstrapContextMode: "lightweight",
@@ -2437,11 +2480,15 @@ async function runRecallSubagent(params: {
       const searchDebug = partialReply ? await readActiveMemorySearchDebug(sessionFile) : undefined;
       attachPartialTimeoutData(error, partialReply, searchDebug);
     }
+    if (!params.abortSignal?.aborted && isMissingRegisteredMemoryToolsError(error)) {
+      params.api.logger.debug?.(
+        `active-memory: no memory tools registered (memory-core or memory-lancedb required); skipping sub-agent`,
+      );
+      return { rawReply: "NONE" };
+    }
     throw error;
   } finally {
-    if (tempDir) {
-      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
-    }
+    await transientWorkspace?.cleanup();
   }
 }
 
@@ -2779,6 +2826,11 @@ export default definePluginEntry({
               text: `Active Memory: ${isActiveMemoryGloballyEnabled(currentConfig) ? "on" : "off"} globally.`,
             };
           }
+          if (requiresAdminToMutateActiveMemoryGlobal(ctx.gatewayClientScopes)) {
+            return {
+              text: ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT,
+            };
+          }
           if (action === "on" || action === "enable" || action === "enabled") {
             const nextConfig = updateActiveMemoryGlobalEnabledInConfig(currentConfig, true);
             await api.runtime.config.replaceConfigFile({
@@ -2959,6 +3011,7 @@ const testing = {
   buildPromptPrefix,
   getCachedResult,
   isCircuitBreakerOpen,
+  isMissingRegisteredMemoryToolsError,
   normalizePluginConfig,
   readActiveMemorySearchDebug,
   readPartialAssistantText,
@@ -2969,12 +3022,16 @@ const testing = {
     lastActiveRecallCacheSweepAt = 0;
     minimumTimeoutMs = DEFAULT_MIN_TIMEOUT_MS;
     setupGraceTimeoutMs = DEFAULT_SETUP_GRACE_TIMEOUT_MS;
+    timeoutPartialDataGraceMs = TIMEOUT_PARTIAL_DATA_GRACE_MS;
   },
   setMinimumTimeoutMsForTests(value: number) {
     minimumTimeoutMs = value;
   },
   setSetupGraceTimeoutMsForTests(value: number) {
     setupGraceTimeoutMs = Math.max(0, Math.floor(value));
+  },
+  setTimeoutPartialDataGraceMsForTests(value: number) {
+    timeoutPartialDataGraceMs = Math.max(0, Math.floor(value));
   },
   setCachedResult,
   getCircuitBreakerEntry(key: string) {

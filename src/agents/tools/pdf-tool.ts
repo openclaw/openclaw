@@ -90,7 +90,14 @@ function hasExplicitPdfToolModelConfig(config?: OpenClawConfig): boolean {
 // Build context for extraction fallback path
 // ---------------------------------------------------------------------------
 
-function buildPdfExtractionContext(prompt: string, extractions: PdfExtractedContent[]): Context {
+const CODEX_PDF_INSTRUCTIONS =
+  "Analyze the provided PDF content and answer the user's request accurately.";
+
+function buildPdfExtractionContext(
+  prompt: string,
+  extractions: PdfExtractedContent[],
+  model?: { api?: string },
+): Context {
   const content: Array<
     { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
   > = [];
@@ -110,7 +117,10 @@ function buildPdfExtractionContext(prompt: string, extractions: PdfExtractedCont
   // Add the user prompt
   content.push({ type: "text", text: prompt });
 
+  const systemPrompt = model?.api === "openai-codex-responses" ? CODEX_PDF_INSTRUCTIONS : undefined;
+
   return {
+    ...(systemPrompt ? { systemPrompt } : {}),
     messages: [{ role: "user", content, timestamp: Date.now() }],
   };
 }
@@ -127,6 +137,7 @@ type PdfSandboxConfig = {
 async function runPdfPrompt(params: {
   cfg?: OpenClawConfig;
   agentDir: string;
+  workspaceDir?: string;
   pdfModelConfig: ImageModelConfig;
   modelOverride?: string;
   prompt: string;
@@ -142,7 +153,8 @@ async function runPdfPrompt(params: {
 }> {
   const effectiveCfg = applyImageModelConfigDefaults(params.cfg, params.pdfModelConfig);
 
-  await ensureOpenClawModelsJson(effectiveCfg, params.agentDir);
+  const modelsOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : undefined;
+  await ensureOpenClawModelsJson(effectiveCfg, params.agentDir, modelsOptions);
   const authStorage = discoverAuthStorage(params.agentDir);
   const modelRegistry = discoverModels(authStorage, params.agentDir);
 
@@ -215,7 +227,7 @@ async function runPdfPrompt(params: {
           text: e.text,
           images: [],
         }));
-        const context = buildPdfExtractionContext(params.prompt, textOnlyExtractions);
+        const context = buildPdfExtractionContext(params.prompt, textOnlyExtractions, model);
         const message = await complete(model, context, {
           apiKey,
           maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
@@ -224,7 +236,7 @@ async function runPdfPrompt(params: {
         return { text, provider, model: modelId, native: false };
       }
 
-      const context = buildPdfExtractionContext(params.prompt, extractions);
+      const context = buildPdfExtractionContext(params.prompt, extractions, model);
       const message = await complete(model, context, {
         apiKey,
         maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
@@ -482,6 +494,7 @@ export function createPdfTool(options?: {
       const result = await runPdfPrompt({
         cfg: options?.config,
         agentDir,
+        ...(options?.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
         pdfModelConfig,
         modelOverride,
         prompt: promptRaw,

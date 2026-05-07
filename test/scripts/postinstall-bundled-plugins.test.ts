@@ -1,4 +1,4 @@
-import { readFileSync as readFileSyncOriginal } from "node:fs";
+import { existsSync as existsSyncOriginal, readFileSync as readFileSyncOriginal } from "node:fs";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -51,6 +51,13 @@ async function writePluginPackage(
 }
 
 describe("bundled plugin postinstall", () => {
+  function existsSyncWithoutGlobalCompileCache(value: string) {
+    if (path.resolve(value) === path.join(tmpdir(), "node-compile-cache")) {
+      return false;
+    }
+    return existsSyncOriginal(value);
+  }
+
   it("recognizes direct invocation through symlinked temp prefixes", () => {
     const realpathSync = vi.fn((value: string) =>
       value.replace(/^\/var\/folders\//u, "/private/var/folders/"),
@@ -138,6 +145,57 @@ describe("bundled plugin postinstall", () => {
     expect(warn).toHaveBeenCalledWith(
       "[postinstall] could not prune OpenClaw compile cache: Error: locked",
     );
+  });
+
+  it("does not warn when compile-cache pruning hits EACCES or EPERM (shared caches)", () => {
+    const base = path.join("/tmp", "openclaw-shared-compile-cache");
+    const dirA = path.join(base, "v22.13.1-x64-efe9a9df-1001");
+    const dirB = path.join(base, "v22.13.1-x64-efe9a9df-1002");
+    const warn = vi.fn();
+    const rmSync = vi.fn((value: string) => {
+      if (value === dirA) {
+        throw Object.assign(new Error(`permission denied pruning ${value}`), { code: "EACCES" });
+      }
+      if (value === dirB) {
+        throw Object.assign(new Error(`operation not permitted pruning ${value}`), {
+          code: "EPERM",
+        });
+      }
+    });
+
+    pruneOpenClawCompileCache({
+      env: { NODE_COMPILE_CACHE: base },
+      existsSync: vi.fn((value: string) => value === base),
+      readdirSync: vi.fn(() => [
+        { name: path.basename(dirA), isDirectory: () => true },
+        { name: path.basename(dirB), isDirectory: () => true },
+      ]),
+      rmSync,
+      log: { warn },
+    });
+
+    expect(rmSync).toHaveBeenCalledTimes(2);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when the compile-cache base directory cannot be listed (EACCES)", () => {
+    const base = path.join("/tmp", "openclaw-compile-cache-no-list");
+    const warn = vi.fn();
+    const rmSync = vi.fn();
+    const err = Object.assign(new Error(`EACCES: ${base}`), { code: "EACCES" });
+
+    pruneOpenClawCompileCache({
+      env: { NODE_COMPILE_CACHE: base },
+      existsSync: vi.fn(() => true),
+      readdirSync: vi.fn(() => {
+        throw err;
+      }),
+      rmSync,
+      log: { warn },
+    });
+
+    expect(rmSync).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("does not classify published packages with source files as source checkouts", () => {
@@ -448,6 +506,7 @@ describe("bundled plugin postinstall", () => {
         STATE_DIRECTORY: systemState,
       },
       packageRoot,
+      existsSync: existsSyncWithoutGlobalCompileCache,
       log,
     });
 

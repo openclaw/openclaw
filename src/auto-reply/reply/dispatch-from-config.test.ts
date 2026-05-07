@@ -25,7 +25,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import type { MsgContext } from "../templating.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { setReplyPayloadMetadata, type GetReplyOptions, type ReplyPayload } from "../types.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -3099,7 +3099,7 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
-  it("keeps diagnostic progress when source progress callbacks are suppressed", async () => {
+  it("forwards non-answer progress callbacks when source replies are suppressed", async () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
     const dispatcher = createDispatcher();
@@ -3131,6 +3131,7 @@ describe("dispatchReplyFromConfig", () => {
       dispatcher,
       replyOptions: {
         sourceReplyDeliveryMode: "message_tool_only",
+        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
         onToolStart: callbacks.toolStart,
         onItemEvent: callbacks.itemEvent,
         onCommandOutput: callbacks.commandOutput,
@@ -3138,9 +3139,9 @@ describe("dispatchReplyFromConfig", () => {
       replyResolver,
     });
 
-    expect(callbacks.toolStart).not.toHaveBeenCalled();
-    expect(callbacks.itemEvent).not.toHaveBeenCalled();
-    expect(callbacks.commandOutput).not.toHaveBeenCalled();
+    expect(callbacks.toolStart).toHaveBeenCalledTimes(1);
+    expect(callbacks.itemEvent).toHaveBeenCalledTimes(1);
+    expect(callbacks.commandOutput).toHaveBeenCalledTimes(1);
     expect(diagnosticMocks.markDiagnosticSessionProgress).toHaveBeenCalledTimes(3);
     expect(diagnosticMocks.markDiagnosticSessionProgress).toHaveBeenCalledWith({
       sessionKey: "agent:main:discord:channel:C1",
@@ -4162,6 +4163,7 @@ describe("before_dispatch hook", () => {
 describe("sendPolicy deny — suppress delivery, not processing (#53328)", () => {
   beforeEach(() => {
     resetInboundDedupe();
+    sessionStoreMocks.currentEntry = undefined;
     sessionBindingMocks.resolveByConversation.mockReset();
     sessionBindingMocks.resolveByConversation.mockReturnValue(null);
     sessionBindingMocks.touch.mockReset();
@@ -4579,6 +4581,104 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     );
   });
 
+  it("preserves hook-blocked metadata when source delivery is message-tool-only", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const blockedReply = setReplyPayloadMetadata(
+      { text: "Your message could not be sent: blocked by policy-plugin", isError: true },
+      { beforeAgentRunBlocked: true },
+    );
+    const replyResolver = vi.fn(async () => blockedReply satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:session" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(result.beforeAgentRunBlocked).toBe(true);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("delivers marked runtime failure notices in message-tool-only mode", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const failureNotice = setReplyPayloadMetadata(
+      { text: "⚠️ You've reached your Codex subscription usage limit." },
+      { deliverDespiteSourceReplySuppression: true },
+    );
+    const replyResolver = vi.fn(async () => failureNotice satisfies ReplyPayload);
+    const ctx = buildTestCtx({ SessionKey: "test:session" });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(true);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(failureNotice);
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+  });
+
+  it("does not deliver marked runtime failure notices when sendPolicy denies delivery", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(
+      async () =>
+        setReplyPayloadMetadata(
+          { text: "⚠️ You've reached your Codex subscription usage limit." },
+          { deliverDespiteSourceReplySuppression: true },
+        ) satisfies ReplyPayload,
+    );
+    const ctx = buildTestCtx({ SessionKey: "test:session" });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
   it("defaults group/channel turns to message-tool-only source delivery", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
@@ -4591,6 +4691,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const result = await dispatchReplyFromConfig({
       ctx: buildTestCtx({
         ChatType: "channel",
+        CommandSource: undefined,
         SessionKey: "test:discord:channel:C1",
       }),
       cfg: emptyConfig,
@@ -4615,6 +4716,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const result = await dispatchReplyFromConfig({
       ctx: buildTestCtx({
         ChatType: "channel",
+        CommandSource: undefined,
         Provider: "discord",
         Surface: "discord",
         OriginatingChannel: "discord",
@@ -4681,6 +4783,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const result = await dispatchReplyFromConfig({
       ctx: buildTestCtx({
         ChatType: "direct",
+        CommandSource: undefined,
         SessionKey: "agent:main:main",
       }),
       cfg: emptyConfig,

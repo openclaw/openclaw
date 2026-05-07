@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildMarkdownCard } from "./send.js";
 
@@ -75,6 +75,15 @@ describe("getMessageFeishu", () => {
     } = await import("./send.js"));
   });
 
+  afterAll(() => {
+    vi.doUnmock("openclaw/plugin-sdk/markdown-table-runtime");
+    vi.doUnmock("openclaw/plugin-sdk/text-runtime");
+    vi.doUnmock("./client.js");
+    vi.doUnmock("./accounts.js");
+    vi.doUnmock("./runtime.js");
+    vi.resetModules();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockResolveMarkdownTableMode.mockReturnValue("preserve");
@@ -128,7 +137,8 @@ describe("getMessageFeishu", () => {
       channel: "feishu",
     });
     expect(mockConvertMarkdownTables).toHaveBeenCalledWith("hello", "preserve");
-    expect(result).toEqual({ messageId: "om_send", chatId: "oc_send" });
+    expect(result).toMatchObject({ messageId: "om_send", chatId: "oc_send" });
+    expect(result.receipt.primaryPlatformMessageId).toBe("om_send");
   });
 
   it("extracts text content from interactive card elements", async () => {

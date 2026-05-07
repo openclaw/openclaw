@@ -45,7 +45,7 @@ const mocks = vi.hoisted(() => {
     loadModelsConfigWithSource: vi.fn(),
     ensureOpenClawModelsJson: vi.fn(),
     ensureAuthProfileStore: vi.fn(),
-    resolveOpenClawAgentDir: vi.fn(),
+    resolveDefaultAgentDir: vi.fn(),
     loadModelRegistry: vi.fn(),
     loadModelCatalog: vi.fn(),
     loadProviderCatalogModelsForList: vi.fn(),
@@ -69,7 +69,7 @@ function resetMocks() {
   });
   mocks.ensureOpenClawModelsJson.mockResolvedValue({ wrote: false });
   mocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {}, order: {} });
-  mocks.resolveOpenClawAgentDir.mockReturnValue("/tmp/openclaw-agent");
+  mocks.resolveDefaultAgentDir.mockReturnValue("/tmp/openclaw-agent");
   mocks.loadModelRegistry.mockResolvedValue({
     models: [],
     availableKeys: new Set(),
@@ -201,8 +201,10 @@ function installModelsListCommandForwardCompatMocks() {
     loadAuthProfileStoreWithoutExternalProfiles: mocks.ensureAuthProfileStore,
   }));
 
-  vi.doMock("../../agents/agent-paths.js", () => ({
-    resolveOpenClawAgentDir: mocks.resolveOpenClawAgentDir,
+  vi.doMock("../../agents/agent-scope.js", () => ({
+    resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
+    resolveDefaultAgentDir: mocks.resolveDefaultAgentDir,
+    resolveDefaultAgentId: vi.fn(() => "main"),
   }));
 
   vi.doMock("../../agents/model-catalog.js", () => ({
@@ -245,7 +247,10 @@ async function buildAllOpenAiCodexRows(opts: { supplementCatalog?: boolean } = {
   const context = {
     cfg: mocks.resolvedConfig,
     agentDir: "/tmp/openclaw-agent",
-    authIndex: { hasProviderAuth: (provider: string) => provider === "openai-codex" },
+    authIndex: {
+      hasProviderAuth: (provider: string) => provider === "openai-codex",
+      allowsProviderAuthAvailabilityFallback: () => false,
+    },
     availableKeys: loaded.availableKeys,
     configuredByKey: new Map(),
     discoveredKeys: new Set(
@@ -1178,7 +1183,10 @@ describe("modelsListCommand forward-compat", () => {
         ] as never,
         context: {
           cfg: mocks.resolvedConfig,
-          authIndex: { hasProviderAuth: () => false },
+          authIndex: {
+            hasProviderAuth: () => false,
+            allowsProviderAuthAvailabilityFallback: () => false,
+          },
           availableKeys: new Set(["openai-codex/gpt-5.4"]),
           configuredByKey: new Map(),
           discoveredKeys: new Set(),

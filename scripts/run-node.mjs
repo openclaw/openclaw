@@ -30,7 +30,9 @@ import { runRuntimePostBuild } from "./runtime-postbuild.mjs";
 export { isBuildRelevantRunNodePath, isRestartRelevantRunNodePath, runNodeWatchedPaths };
 
 const buildScript = "scripts/tsdown-build.mjs";
+const bundledPluginAssetsScript = "scripts/bundled-plugin-assets.mjs";
 const compilerArgs = [buildScript, "--no-clean"];
+const bundledPluginAssetBuildArgs = [bundledPluginAssetsScript, "--phase", "build"];
 
 const runtimePostBuildWatchedPaths = [
   "scripts/copy-bundled-plugin-metadata.mjs",
@@ -386,6 +388,7 @@ const getSignalExitCode = (signal) => (isSignalKey(signal) ? SIGNAL_EXIT_CODES[s
 
 const RUN_NODE_OUTPUT_LOG_ENV = "OPENCLAW_RUN_NODE_OUTPUT_LOG";
 const RUN_NODE_CPU_PROF_DIR_ENV = "OPENCLAW_RUN_NODE_CPU_PROF_DIR";
+const RUN_NODE_FILTER_SYNC_IO_STDERR_ENV = "OPENCLAW_RUN_NODE_FILTER_SYNC_IO_STDERR";
 const RUN_NODE_BUILD_LOCK_TIMEOUT_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_TIMEOUT_MS";
 const RUN_NODE_BUILD_LOCK_POLL_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS";
 const RUN_NODE_BUILD_LOCK_STALE_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_STALE_MS";
@@ -487,6 +490,15 @@ const resolveRunNodeCpuProfileArgs = (deps) => {
   return ["--cpu-prof", `--cpu-prof-dir=${absoluteProfileDir}`, `--cpu-prof-name=${profileName}`];
 };
 
+const resolveRunNodeDiagnosticArgs = (deps) => {
+  const args = [...resolveRunNodeCpuProfileArgs(deps)];
+  if (deps.env.OPENCLAW_TRACE_SYNC_IO === "1") {
+    logRunner("Enabling Node --trace-sync-io for startup I/O diagnostics.", deps);
+    args.push("--trace-sync-io");
+  }
+  return args;
+};
+
 const waitForSpawnedProcess = async (childProcess, deps) => {
   let forwardedSignal = null;
   let onSigInt;
@@ -557,8 +569,8 @@ const getInterruptedSpawnExitCode = (res) => {
 };
 
 const runOpenClaw = async (deps) => {
-  const cpuProfileArgs = resolveRunNodeCpuProfileArgs(deps);
-  const nodeProcess = deps.spawn(deps.execPath, [...cpuProfileArgs, "openclaw.mjs", ...deps.args], {
+  const diagnosticArgs = resolveRunNodeDiagnosticArgs(deps);
+  const nodeProcess = deps.spawn(deps.execPath, [...diagnosticArgs, "openclaw.mjs", ...deps.args], {
     cwd: deps.cwd,
     env: deps.env,
     stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
@@ -576,14 +588,78 @@ const pipeSpawnedOutput = (childProcess, deps) => {
   if (!deps.outputTee) {
     return;
   }
+  const stderrFilter =
+    deps.env[RUN_NODE_FILTER_SYNC_IO_STDERR_ENV] === "1"
+      ? createSyncIoTraceStderrFilter(deps)
+      : null;
   childProcess.stdout?.on("data", (chunk) => {
     deps.stdout.write(chunk);
     deps.outputTee.write(chunk);
   });
   childProcess.stderr?.on("data", (chunk) => {
-    deps.stderr.write(chunk);
+    if (stderrFilter) {
+      stderrFilter.write(chunk);
+    } else {
+      deps.stderr.write(chunk);
+    }
     deps.outputTee.write(chunk);
   });
+  childProcess.stderr?.on("end", () => {
+    stderrFilter?.flush();
+  });
+};
+
+const createSyncIoTraceStderrFilter = (deps) => {
+  let buffer = "";
+  let inSyncIoTrace = false;
+
+  const shouldSuppressLine = (line) => {
+    const text = line.replace(/\r?\n$/, "");
+    if (/^\(node:\d+\) WARNING: Detected use of sync API/.test(text)) {
+      inSyncIoTrace = true;
+      return true;
+    }
+    if (!inSyncIoTrace) {
+      return false;
+    }
+    if (text.trim() === "") {
+      inSyncIoTrace = false;
+      return true;
+    }
+    if (/^\s+at\b/.test(text)) {
+      return true;
+    }
+    inSyncIoTrace = false;
+    return false;
+  };
+
+  const writeLine = (line) => {
+    if (!shouldSuppressLine(line)) {
+      deps.stderr.write(line);
+    }
+  };
+
+  return {
+    write(chunk) {
+      buffer += String(chunk);
+      while (true) {
+        const newlineIndex = buffer.indexOf("\n");
+        if (newlineIndex === -1) {
+          break;
+        }
+        const line = buffer.slice(0, newlineIndex + 1);
+        buffer = buffer.slice(newlineIndex + 1);
+        writeLine(line);
+      }
+    },
+    flush() {
+      if (!buffer) {
+        return;
+      }
+      writeLine(buffer);
+      buffer = "";
+    },
+  };
 };
 
 const closeRunNodeOutputTee = async (deps, exitCode) => {
@@ -796,6 +872,7 @@ const shouldUseExistingDistForGatewayClient = (deps, buildRequirement) =>
   statMtime(deps.distEntry, deps.fs) != null;
 
 const isQaParityReportCommand = (args) => args[0] === "qa" && args[1] === "parity-report";
+const isQaCoverageReportCommand = (args) => args[0] === "qa" && args[1] === "coverage";
 
 const shouldRunQaParityReportFromSource = (deps, buildRequirement) =>
   buildRequirement.reason === "missing_private_qa_dist" &&
@@ -803,8 +880,34 @@ const shouldRunQaParityReportFromSource = (deps, buildRequirement) =>
   deps.env.OPENCLAW_FORCE_BUILD !== "1" &&
   statMtime(path.join(deps.cwd, "extensions", "qa-lab", "src", "cli.runtime.ts"), deps.fs) != null;
 
+const shouldRunQaCoverageReportFromSource = (deps, buildRequirement) =>
+  buildRequirement.reason === "missing_private_qa_dist" &&
+  isQaCoverageReportCommand(deps.args) &&
+  deps.env.OPENCLAW_FORCE_BUILD !== "1" &&
+  statMtime(path.join(deps.cwd, "extensions", "qa-lab", "src", "cli.runtime.ts"), deps.fs) != null;
+
 const runQaParityReportFromSource = async (deps) => {
   const sourceEntrypoint = path.join(deps.cwd, "scripts", "qa-parity-report.ts");
+  const nodeProcess = deps.spawn(
+    deps.execPath,
+    ["--import", "tsx", sourceEntrypoint, ...deps.args.slice(2)],
+    {
+      cwd: deps.cwd,
+      env: deps.env,
+      stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
+    },
+  );
+  pipeSpawnedOutput(nodeProcess, deps);
+  const res = await waitForSpawnedProcess(nodeProcess, deps);
+  const interruptedExitCode = getInterruptedSpawnExitCode(res);
+  if (interruptedExitCode !== null) {
+    return interruptedExitCode;
+  }
+  return res.exitCode ?? 1;
+};
+
+const runQaCoverageReportFromSource = async (deps) => {
+  const sourceEntrypoint = path.join(deps.cwd, "scripts", "qa-coverage-report.ts");
   const nodeProcess = deps.spawn(
     deps.execPath,
     ["--import", "tsx", sourceEntrypoint, ...deps.args.slice(2)],
@@ -862,12 +965,18 @@ export async function runNodeMain(params = {}) {
       buildRequirement,
     );
     const useQaParityReportSource = shouldRunQaParityReportFromSource(deps, buildRequirement);
+    const useQaCoverageReportSource = shouldRunQaCoverageReportFromSource(deps, buildRequirement);
     if (useExistingGatewayClientDist) {
       buildRequirement = { shouldBuild: false, reason: "gateway_client_existing_dist" };
     }
     if (useQaParityReportSource) {
       logRunner("Running QA parity report from source without rebuilding private QA dist.", deps);
       exitCode = await runQaParityReportFromSource(deps);
+      return await closeRunNodeOutputTee(deps, exitCode);
+    }
+    if (useQaCoverageReportSource) {
+      logRunner("Running QA coverage report from source without rebuilding private QA dist.", deps);
+      exitCode = await runQaCoverageReportFromSource(deps);
       return await closeRunNodeOutputTee(deps, exitCode);
     }
     if (!buildRequirement.shouldBuild) {
@@ -915,7 +1024,23 @@ export async function runNodeMain(params = {}) {
         `Building TypeScript (dist is stale: ${lockedBuildRequirement.reason} - ${formatBuildReason(lockedBuildRequirement.reason)}).`,
         deps,
       );
+      logRunner("Building bundled plugin assets.", deps);
       const buildCmd = deps.execPath;
+      const assetBuild = deps.spawn(buildCmd, bundledPluginAssetBuildArgs, {
+        cwd: deps.cwd,
+        env: deps.env,
+        stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
+      });
+      pipeSpawnedOutput(assetBuild, deps);
+      const assetBuildRes = await waitForSpawnedProcess(assetBuild, deps);
+      const assetBuildInterruptedExitCode = getInterruptedSpawnExitCode(assetBuildRes);
+      if (assetBuildInterruptedExitCode !== null) {
+        return assetBuildInterruptedExitCode;
+      }
+      if (assetBuildRes.exitCode !== 0 && assetBuildRes.exitCode !== null) {
+        return assetBuildRes.exitCode;
+      }
+
       const buildArgs = compilerArgs;
       const build = deps.spawn(buildCmd, buildArgs, {
         cwd: deps.cwd,

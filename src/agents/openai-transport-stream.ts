@@ -17,7 +17,10 @@ import type {
   ResponseCreateParamsStreaming,
   ResponseFunctionCallOutputItemList,
   ResponseInput,
+  ResponseInputItem,
   ResponseInputMessageContentList,
+  ResponseOutputMessage,
+  ResponseReasoningItem,
 } from "openai/resources/responses/responses.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -55,7 +58,11 @@ import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transpor
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
 const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
+const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 const log = createSubsystemLogger("openai-transport");
+
+type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
+type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> & { id?: string };
 
 type BaseStreamOptions = {
   temperature?: number;
@@ -211,9 +218,16 @@ function convertResponsesMessages(
   model: Model<Api>,
   context: Context,
   allowedToolCallProviders: Set<string>,
-  options?: { includeSystemPrompt?: boolean; supportsDeveloperRole?: boolean },
+  options?: {
+    includeSystemPrompt?: boolean;
+    supportsDeveloperRole?: boolean;
+    replayReasoningItems?: boolean;
+    replayResponsesItemIds?: boolean;
+  },
 ): ResponseInput {
   const messages: ResponseInput = [];
+  const shouldReplayReasoningItems = options?.replayReasoningItems ?? true;
+  const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
   const normalizeIdPart = (part: string) => {
     const sanitized = part.replace(/[^a-zA-Z0-9_-]/g, "_");
     const normalized = sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
@@ -287,15 +301,24 @@ function convertResponsesMessages(
         msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
       for (const block of msg.content) {
         if (block.type === "thinking") {
-          if (block.thinkingSignature) {
-            output.push(JSON.parse(block.thinkingSignature));
+          if (shouldReplayReasoningItems && block.thinkingSignature) {
+            const reasoningItem = JSON.parse(
+              block.thinkingSignature,
+            ) as ReplayableResponseReasoningItem;
+            if (!shouldReplayResponsesItemIds) {
+              delete reasoningItem.id;
+            }
+            output.push(reasoningItem as ResponseInputItem);
           }
         } else if (block.type === "text") {
-          let msgId = parseTextSignature(block.textSignature)?.id ?? `msg_${msgIndex}`;
-          if (msgId.length > 64) {
+          const textSignature = parseTextSignature(block.textSignature);
+          let msgId = shouldReplayResponsesItemIds
+            ? (textSignature?.id ?? `msg_${msgIndex}`)
+            : undefined;
+          if (msgId && msgId.length > 64) {
             msgId = `msg_${shortHash(msgId)}`;
           }
-          output.push({
+          const messageItem: ReplayableResponseOutputMessage = {
             type: "message",
             role: "assistant",
             content: [
@@ -306,12 +329,16 @@ function convertResponsesMessages(
               },
             ],
             status: "completed",
-            id: msgId,
-            phase: parseTextSignature(block.textSignature)?.phase,
-          });
+            ...(msgId ? { id: msgId } : {}),
+            phase: textSignature?.phase,
+          };
+          output.push(messageItem as ResponseInputItem);
         } else if (block.type === "toolCall") {
           const [callId, itemIdRaw] = block.id.split("|");
-          const itemId = isDifferentModel && itemIdRaw?.startsWith("fc_") ? undefined : itemIdRaw;
+          const itemId =
+            shouldReplayResponsesItemIds && !(isDifferentModel && itemIdRaw?.startsWith("fc_"))
+              ? itemIdRaw
+              : undefined;
           output.push({
             type: "function_call",
             id: itemId,
@@ -957,6 +984,7 @@ export function buildOpenAIResponsesParams(
   metadata?: Record<string, string>,
 ) {
   const isCodexResponses = isOpenAICodexResponsesModel(model);
+  const isNativeCodexResponses = usesNativeOpenAICodexResponsesBackend(model);
   const compat = getCompat(model as OpenAIModeModel);
   const supportsDeveloperRole =
     typeof compat.supportsDeveloperRole === "boolean" ? compat.supportsDeveloperRole : undefined;
@@ -964,7 +992,12 @@ export function buildOpenAIResponsesParams(
     model,
     context,
     new Set(["openai", "openai-codex", "opencode", "azure-openai-responses"]),
-    { includeSystemPrompt: !isCodexResponses, supportsDeveloperRole },
+    {
+      includeSystemPrompt: !isCodexResponses,
+      supportsDeveloperRole,
+      replayReasoningItems: true,
+      replayResponsesItemIds: !isNativeCodexResponses,
+    },
   );
   if (isCodexResponses) {
     ensureOpenAICodexResponsesInput(messages, context);
@@ -1768,6 +1801,10 @@ function isGoogleOpenAICompatModel(model: OpenAIModeModel): boolean {
   );
 }
 
+function requiresGoogleCompatToolCallThoughtSignature(model: OpenAIModeModel): boolean {
+  return model.id.toLowerCase().includes("gemini-3");
+}
+
 function injectToolCallThoughtSignatures(
   outgoingMessages: unknown[],
   context: Context,
@@ -1777,18 +1814,14 @@ function injectToolCallThoughtSignatures(
     return;
   }
   const sigById = new Map<string, string>();
+  const fallbackSig = requiresGoogleCompatToolCallThoughtSignature(model)
+    ? GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP
+    : undefined;
   for (const msg of context.messages ?? []) {
     if ((msg as { role?: string }).role !== "assistant") {
       continue;
     }
     const source = msg as { api?: string; provider?: string; model?: string; content?: unknown };
-    if (
-      source.api !== model.api ||
-      source.provider !== model.provider ||
-      source.model !== model.id
-    ) {
-      continue;
-    }
     if (!Array.isArray(source.content)) {
       continue;
     }
@@ -1799,11 +1832,18 @@ function injectToolCallThoughtSignatures(
       const id = block.id;
       const sig = block.thoughtSignature;
       if (typeof id === "string" && typeof sig === "string" && sig.length > 0) {
-        sigById.set(id, sig);
+        const isSameRoute =
+          source.api === model.api &&
+          source.provider === model.provider &&
+          source.model === model.id;
+        if (!isSameRoute && !fallbackSig) {
+          continue;
+        }
+        sigById.set(id, isSameRoute ? sig : (fallbackSig ?? sig));
       }
     }
   }
-  if (sigById.size === 0) {
+  if (sigById.size === 0 && !fallbackSig) {
     return;
   }
   for (const message of outgoingMessages) {
@@ -1816,7 +1856,7 @@ function injectToolCallThoughtSignatures(
       if (typeof id !== "string") {
         continue;
       }
-      const sig = sigById.get(id);
+      const sig = sigById.get(id) ?? fallbackSig;
       if (!sig) {
         continue;
       }

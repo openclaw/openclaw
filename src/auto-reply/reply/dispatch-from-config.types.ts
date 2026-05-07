@@ -8,7 +8,9 @@ import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.type
 export type DispatchFromConfigResult = {
   queuedFinal: boolean;
   counts: Record<ReplyDispatchKind, number>;
+  failedCounts?: Partial<Record<ReplyDispatchKind, number>>;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  beforeAgentRunBlocked?: boolean;
 };
 
 export type DispatchFromConfigParams = {

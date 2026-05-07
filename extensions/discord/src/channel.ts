@@ -8,6 +8,7 @@ import type {
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-message";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createChannelDirectoryAdapter,
@@ -28,6 +29,7 @@ import {
   type ResolvedDiscordAccount,
 } from "./accounts.js";
 import { getDiscordApprovalCapability } from "./approval-native.js";
+import { resolveRequiredDiscordChannelPermissions } from "./audit-core.js";
 import { discordMessageActions as discordMessageActionsImpl } from "./channel-actions.js";
 import {
   buildTokenChannelStatusSummary,
@@ -79,8 +81,25 @@ import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
 import { collectDiscordStatusIssues } from "./status-issues.js";
 import { parseDiscordTarget } from "./target-parsing.js";
 
-const REQUIRED_DISCORD_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
 const DISCORD_ACCOUNT_STARTUP_STAGGER_MS = 10_000;
+const discordMessageAdapter = createChannelMessageAdapterFromOutbound({
+  id: "discord",
+  outbound: discordOutbound,
+  live: {
+    capabilities: {
+      draftPreview: true,
+      previewFinalization: true,
+      progressUpdates: true,
+    },
+    finalizer: {
+      capabilities: {
+        finalEdit: true,
+        normalFallback: true,
+        discardPending: true,
+      },
+    },
+  },
+});
 
 function startDiscordStartupProbe(params: {
   accountId: string;
@@ -179,6 +198,12 @@ const discordMessageActions = {
   ) =>
     resolveRuntimeDiscordMessageActions()?.extractToolSend?.(ctx) ??
     discordMessageActionsImpl.extractToolSend?.(ctx) ??
+    null,
+  prepareSendPayload: (
+    ctx: Parameters<NonNullable<ChannelMessageActionAdapter["prepareSendPayload"]>>[0],
+  ) =>
+    resolveRuntimeDiscordMessageActions()?.prepareSendPayload?.(ctx) ??
+    discordMessageActionsImpl.prepareSendPayload?.(ctx) ??
     null,
   handleAction: async (
     ctx: Parameters<NonNullable<ChannelMessageActionAdapter["handleAction"]>>[0],
@@ -315,6 +340,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           listGroupsLive: (runtime) => runtime.listDiscordDirectoryGroupsLive,
         }),
       }),
+      message: discordMessageAdapter,
       resolver: {
         resolveTargets: async ({ cfg, accountId, inputs, kind }) => {
           const account = resolveDiscordAccount({ cfg, accountId });
@@ -513,7 +539,8 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
               token,
               accountId: account.accountId ?? undefined,
             });
-            const missingRequired = REQUIRED_DISCORD_PERMISSIONS.filter(
+            const requiredPermissions = resolveRequiredDiscordChannelPermissions(perms.channelType);
+            const missingRequired = requiredPermissions.filter(
               (permission) => !perms.permissions.includes(permission),
             );
             details.permissions = {

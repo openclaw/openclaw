@@ -53,6 +53,7 @@ import { resolveSession } from "./command/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveFastModeState } from "./fast-mode.js";
+import { resolveAgentHarnessPolicy } from "./harness/selection.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
 import { loadManifestModelCatalog } from "./model-catalog.js";
@@ -67,6 +68,7 @@ import {
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
 } from "./model-selection.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-codex-routing.js";
 import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import { hydrateResolvedSkillsAsync } from "./skills/snapshot-hydration.js";
@@ -832,11 +834,22 @@ async function agentCommandInternal(
         const profileAuthProvider = profile
           ? resolveProviderIdForAuth(profile.provider, { config: cfg, workspaceDir })
           : undefined;
-        const validationAuthProvider = resolveProviderIdForAuth(providerForAuthProfileValidation, {
+        const validationHarnessPolicy = resolveAgentHarnessPolicy({
+          provider: providerForAuthProfileValidation,
+          modelId: model,
           config: cfg,
-          workspaceDir,
+          agentId: sessionAgentId,
+          sessionKey,
         });
-        if (!profile || profileAuthProvider !== validationAuthProvider) {
+        const acceptedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
+          provider: providerForAuthProfileValidation,
+          harnessRuntime: validationHarnessPolicy.runtime,
+          sessionAgentHarnessId: sessionEntry.agentHarnessId,
+          sessionAgentRuntimeOverride: sessionEntry.agentRuntimeOverride,
+        }).map((candidateProvider) =>
+          resolveProviderIdForAuth(candidateProvider, { config: cfg, workspaceDir }),
+        );
+        if (!profile || !acceptedAuthProviders.includes(profileAuthProvider ?? "")) {
           if (sessionStore && sessionKey) {
             await clearSessionAuthProfileOverride({
               sessionEntry: entry,
@@ -1031,14 +1044,6 @@ async function agentCommandInternal(
                 currentTurnUserMessagePersisted = true;
               },
               onAgentEvent: (evt) => {
-                if (evt.stream.startsWith("codex_app_server.")) {
-                  emitAgentEvent({
-                    runId,
-                    stream: evt.stream,
-                    data: evt.data ?? {},
-                    ...(evt.sessionKey ? { sessionKey: evt.sessionKey } : {}),
-                  });
-                }
                 if (
                   evt.stream === "lifecycle" &&
                   typeof evt.data?.phase === "string" &&
@@ -1204,7 +1209,12 @@ async function agentCommandInternal(
       sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
     }
 
-    if (result.meta.executionTrace?.runner === "cli") {
+    const transcriptPersistenceRunner = result.meta.executionTrace?.runner;
+    const embeddedAssistantGapFill =
+      transcriptPersistenceRunner === "embedded" ||
+      (transcriptPersistenceRunner === undefined &&
+        Boolean(result.meta.finalAssistantVisibleText?.trim()));
+    if (transcriptPersistenceRunner === "cli" || embeddedAssistantGapFill) {
       try {
         sessionEntry = await attemptExecutionRuntime.persistCliTurnTranscript({
           body,
@@ -1219,6 +1229,7 @@ async function agentCommandInternal(
           threadId: opts.threadId,
           sessionCwd: workspaceDir,
           config: cfg,
+          embeddedAssistantGapFill,
         });
         sessionEntry = await (
           await loadCliCompactionRuntime()
@@ -1243,7 +1254,7 @@ async function agentCommandInternal(
         });
       } catch (error) {
         log.warn(
-          `CLI transcript persistence failed for ${sessionKey ?? sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+          `Turn transcript persistence failed for ${sessionKey ?? sessionId}: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
     }

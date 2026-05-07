@@ -267,6 +267,33 @@ describe("legacy migrate mention routing", () => {
   });
 });
 
+describe("legacy bundled provider discovery migrate", () => {
+  it("sets compat mode for existing restrictive plugin allowlists", () => {
+    const res = migrateLegacyConfigForTest({
+      plugins: {
+        allow: ["telegram"],
+      },
+    });
+
+    expect(res.config?.plugins?.bundledDiscovery).toBe("compat");
+    expect(res.changes).toContain(
+      'Set plugins.bundledDiscovery="compat" to preserve legacy bundled provider discovery for this restrictive plugins.allow config.',
+    );
+  });
+
+  it("does not override explicit bundled discovery mode", () => {
+    const res = migrateLegacyConfigForTest({
+      plugins: {
+        allow: ["telegram"],
+        bundledDiscovery: "allowlist",
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+  });
+});
+
 describe("legacy migrate sandbox scope aliases", () => {
   it("removes legacy agents.defaults.llm timeout config", () => {
     const res = migrateLegacyConfigForTest({

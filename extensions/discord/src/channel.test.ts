@@ -1,11 +1,13 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { ChannelType } from "discord-api-types/v10";
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import * as sendModule from "./send.js";
+import { createDiscordSendReceipt } from "./send.receipt.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "./test-support/config.js";
 let discordPlugin: typeof import("./channel.js").discordPlugin;
 let setDiscordRuntime: typeof import("./runtime.js").setDiscordRuntime;
@@ -17,6 +19,14 @@ const collectDiscordAuditChannelIdsMock = vi.hoisted(() =>
   vi.fn(() => ({ channelIds: [], unresolvedChannels: 0 })),
 );
 const sleepWithAbortMock = vi.hoisted(() => vi.fn(async () => undefined));
+
+function discordTestSendResult(messageId: string, channelId = "channel:thread-123") {
+  return {
+    messageId,
+    channelId,
+    receipt: createDiscordSendReceipt({ platformMessageIds: [messageId], channelId, kind: "text" }),
+  };
+}
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
@@ -250,8 +260,8 @@ describe("discordPlugin outbound", () => {
   it("splits text and video into separate sends for attached outbound delivery", async () => {
     const sendMessageDiscord = vi
       .fn()
-      .mockResolvedValueOnce({ messageId: "text-1" })
-      .mockResolvedValueOnce({ messageId: "video-1" });
+      .mockResolvedValueOnce(discordTestSendResult("text-1"))
+      .mockResolvedValueOnce(discordTestSendResult("video-1"));
 
     const result = await discordPlugin.outbound!.sendMedia!({
       cfg: EMPTY_DISCORD_TEST_CONFIG,
@@ -287,10 +297,7 @@ describe("discordPlugin outbound", () => {
   });
 
   it("threads poll sends through the thread target", async () => {
-    const sendPollDiscord = vi.fn(async () => ({
-      channelId: "channel:thread-123",
-      messageId: "poll-1",
-    }));
+    const sendPollDiscord = vi.fn(async () => discordTestSendResult("poll-1"));
     const sendPollSpy = vi.spyOn(sendModule, "sendPollDiscord").mockImplementation(sendPollDiscord);
     try {
       const result = await discordPlugin.outbound!.sendPoll!({
@@ -377,6 +384,42 @@ describe("discordPlugin outbound", () => {
       includeApplication: true,
     });
     expect(runtimeProbeDiscord).not.toHaveBeenCalled();
+  });
+
+  it("reports missing voice permissions in targeted capabilities diagnostics", async () => {
+    const fetchPermissionsSpy = vi
+      .spyOn(sendModule, "fetchChannelPermissionsDiscord")
+      .mockResolvedValueOnce({
+        channelId: "222",
+        guildId: "123",
+        permissions: ["ViewChannel", "SendMessages"],
+        raw: "0",
+        isDm: false,
+        channelType: ChannelType.GuildVoice,
+      });
+    try {
+      const cfg = createCfg();
+      const diagnostics = await discordPlugin.status!.buildCapabilitiesDiagnostics!({
+        account: resolveAccount(cfg),
+        timeoutMs: 5000,
+        cfg,
+        target: "channel:222",
+      });
+
+      expect(fetchPermissionsSpy).toHaveBeenCalledWith(
+        "222",
+        expect.objectContaining({ token: "discord-token" }),
+      );
+      expect(diagnostics?.details?.permissions).toMatchObject({
+        channelId: "222",
+        missingRequired: ["Connect", "Speak", "ReadMessageHistory"],
+      });
+      expect(diagnostics?.lines?.map((line) => line.text).join("\n")).toContain(
+        "Missing required: Connect, Speak, ReadMessageHistory",
+      );
+    } finally {
+      fetchPermissionsSpy.mockRestore();
+    }
   });
 
   it("uses direct Discord startup helpers for async startup enrichment", async () => {

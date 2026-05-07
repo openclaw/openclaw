@@ -1,5 +1,5 @@
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGoogleRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
 type MockGoogleLiveSession = {
@@ -16,7 +16,7 @@ type MockGoogleLiveConnectParams = {
     onopen: () => void;
     onmessage: (message: Record<string, unknown>) => void;
     onerror: (event: { error?: unknown; message?: string }) => void;
-    onclose: () => void;
+    onclose: (event?: { code?: number; reason?: string; wasClean?: boolean }) => void;
   };
 };
 
@@ -45,6 +45,10 @@ vi.mock("./google-genai-runtime.js", () => ({
   })),
 }));
 
+const ENV_KEYS = ["GEMINI_API_KEY", "GOOGLE_API_KEY"] as const;
+
+let envSnapshot: Partial<Record<(typeof ENV_KEYS)[number], string>>;
+
 function lastConnectParams(): MockGoogleLiveConnectParams {
   const params = connectMock.mock.calls.at(-1)?.[0];
   if (!params) {
@@ -55,6 +59,7 @@ function lastConnectParams(): MockGoogleLiveConnectParams {
 
 describe("buildGoogleRealtimeVoiceProvider", () => {
   beforeEach(() => {
+    envSnapshot = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
     connectMock.mockClear();
     createTokenMock.mockClear();
     session.close.mockClear();
@@ -63,6 +68,44 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     session.sendToolResponse.mockClear();
     delete process.env.GEMINI_API_KEY;
     delete process.env.GOOGLE_API_KEY;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    for (const key of ENV_KEYS) {
+      const value = envSnapshot[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./google-genai-runtime.js");
+    vi.resetModules();
+  });
+
+  it("declares realtime Talk capabilities for catalog selection", () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+
+    expect(provider.capabilities).toEqual({
+      transports: ["provider-websocket", "gateway-relay"],
+      inputAudioFormats: [
+        { encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 },
+        { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
+      ],
+      outputAudioFormats: [
+        { encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 },
+        { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
+      ],
+      supportsBrowserSession: true,
+      supportsBargeIn: true,
+      supportsToolCalls: true,
+      supportsVideoFrames: true,
+      supportsSessionResumption: true,
+    });
   });
 
   it("normalizes provider config and cfg model-provider key fallback", () => {
@@ -294,7 +337,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     });
     expect(session).toMatchObject({
       provider: "google",
-      transport: "json-pcm-websocket",
+      transport: "provider-websocket",
       protocol: "google-live-bidi",
       clientSecret: "auth_tokens/browser-session",
       websocketUrl:
@@ -350,6 +393,47 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     await bridge.connect();
 
     expect(lastConnectParams().config.sessionResumption).toEqual({ handle: "resume-1" });
+  });
+
+  it("reconnects unexpected Google Live closes with the latest resumption handle", async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = buildGoogleRealtimeVoiceProvider();
+      const onClose = vi.fn();
+      const onError = vi.fn();
+      const bridge = provider.createBridge({
+        providerConfig: { apiKey: "gemini-key" },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+        onClose,
+        onError,
+      });
+
+      await bridge.connect();
+      lastConnectParams().callbacks.onmessage({
+        setupComplete: { sessionId: "session-1" },
+        sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
+      });
+      lastConnectParams().callbacks.onclose({
+        code: 1011,
+        reason: "temporary upstream close",
+        wasClean: false,
+      });
+
+      expect(onClose).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("reconnecting 1/3"),
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(connectMock).toHaveBeenCalledTimes(2);
+      expect(lastConnectParams().config.sessionResumption).toEqual({ handle: "resume-1" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("waits for setup completion before draining audio and firing ready", async () => {
