@@ -1412,6 +1412,28 @@ describe("active-memory plugin", () => {
       agents: ["main"],
       toolsAllow: [
         "*",
+        "agents_list",
+        "apply_patch",
+        "canvas",
+        "cron",
+        "edit",
+        "gateway",
+        "heartbeat_respond",
+        "heartbeat_response",
+        "image",
+        "image_generate",
+        "music_generate",
+        "nodes",
+        "pdf",
+        "process",
+        "session_status",
+        "sessions_history",
+        "sessions_list",
+        "sessions_send",
+        "sessions_spawn",
+        "sessions_yield",
+        "tts",
+        "video_generate",
         "group:plugins",
         "read",
         "exec",
@@ -1806,7 +1828,7 @@ describe("active-memory plugin", () => {
 
     expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
       provider: "google",
-      model: "gemini-3-flash",
+      model: "gemini-3-flash-preview",
     });
     expect(api.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("config.modelFallbackPolicy is deprecated"),
