@@ -45,6 +45,7 @@ describe("telegram channel message adapter", () => {
         expect.objectContaining({ verbose: false }),
       );
       expect(result.receipt.platformMessageIds).toEqual(["tg-text"]);
+      expect(result.delivery).toEqual({ providerAccepted: true });
     };
 
     const proveMedia = async () => {
@@ -66,6 +67,7 @@ describe("telegram channel message adapter", () => {
         }),
       );
       expect(result.receipt.parts[0]?.kind).toBe("media");
+      expect(result.delivery).toEqual({ providerAccepted: true });
     };
 
     const provePayload = async () => {
@@ -83,6 +85,7 @@ describe("telegram channel message adapter", () => {
         expect.objectContaining({ verbose: false }),
       );
       expect(result.receipt.platformMessageIds).toEqual(["tg-payload"]);
+      expect(result.delivery).toEqual({ providerAccepted: true });
     };
 
     const proveReplyThreadSilent = async () => {
@@ -151,6 +154,26 @@ describe("telegram channel message adapter", () => {
         batch: proveBatch,
       },
     });
+  });
+
+  it("does not mark unsent payload fallbacks as provider accepted through message sends", async () => {
+    const adapter = telegramPlugin.message;
+    expect(adapter).toBeDefined();
+
+    const result = await adapter!.send!.payload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: {
+        text: "fallback only",
+        mediaUrls: ["", ""],
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+    expect(result.messageId).toBe("unknown");
+    expect(result.delivery).toBeUndefined();
   });
 
   it("backs declared live capabilities with adapter proofs", async () => {

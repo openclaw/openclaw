@@ -50,6 +50,11 @@ Adapter sends should return `MessageReceipt` values. When compatibility code
 still needs legacy ids, derive them with `listMessageReceiptPlatformIds(...)`
 or `resolveMessageReceiptPrimaryId(...)` instead of keeping parallel
 `messageIds` fields in new lifecycle code.
+If a send result exposes `delivery.providerAccepted`, treat it only as a
+provider-acceptance projection: the provider accepted the send request, but no
+read, visibility, or user acknowledgement is implied. Keep receipts as the
+source of platform message ids and leave the projection unset for unknown,
+failed, dry-run, or local-only outcomes.
 Preview-capable channels should also declare `message.live.capabilities` with
 the exact live lifecycle they own, such as `draftPreview`,
 `previewFinalization`, `progressUpdates`, `nativeStreaming`, or
