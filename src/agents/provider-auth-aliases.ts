@@ -1,4 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
   isWorkspacePluginAllowedByConfig,
@@ -118,11 +120,31 @@ export function resolveProviderAuthAliasMap(
   if (cached) {
     return cached;
   }
-  const snapshot = loadPluginMetadataSnapshot({
-    config: params?.config ?? {},
-    workspaceDir: params?.workspaceDir,
-    env,
-  });
+  const config = params?.config ?? {};
+  const snapshot =
+    getCurrentPluginMetadataSnapshot({
+      config,
+      ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      env,
+      allowWorkspaceScopedSnapshot: true,
+    }) ??
+    (() => {
+      if (normalizePluginsConfig(config.plugins).loadPaths.length !== 0) {
+        return undefined;
+      }
+      const currentSnapshot = getCurrentPluginMetadataSnapshot({
+        ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+        env,
+        allowWorkspaceScopedSnapshot: true,
+        requireDefaultDiscoveryContext: true,
+      });
+      return currentSnapshot;
+    })() ??
+    loadPluginMetadataSnapshot({
+      config,
+      ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      env,
+    });
   const preferredAliases = new Map<string, ProviderAuthAliasCandidate>();
   const aliases: Record<string, string> = Object.create(null) as Record<string, string>;
   for (const plugin of snapshot.plugins) {

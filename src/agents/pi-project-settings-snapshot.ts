@@ -9,7 +9,12 @@ import {
   normalizePluginsConfigWithResolver,
   resolveEffectivePluginActivationState,
 } from "../plugins/config-policy.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import {
+  isPluginMetadataSnapshotCompatible,
+  loadPluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
 import { loadEmbeddedPiMcpConfig } from "./embedded-pi-mcp.js";
 
 const log = createSubsystemLogger("embedded-pi-settings");
@@ -34,6 +39,26 @@ function sanitizePiSettingsSnapshot(settings: PiSettingsSnapshot): PiSettingsSna
 
 function sanitizeProjectSettings(settings: PiSettingsSnapshot): PiSettingsSnapshot {
   return sanitizePiSettingsSnapshot(settings);
+}
+
+function canReuseUnscopedCurrentPluginMetadataSnapshot(config: OpenClawConfig): boolean {
+  return normalizePluginsConfigWithResolver(config.plugins).loadPaths.length === 0;
+}
+
+function resolveUnscopedCurrentPluginMetadataSnapshot(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  workspaceDir?: string;
+}): PluginMetadataSnapshot | undefined {
+  if (!canReuseUnscopedCurrentPluginMetadataSnapshot(params.config)) {
+    return undefined;
+  }
+  return getCurrentPluginMetadataSnapshot({
+    env: params.env,
+    workspaceDir: params.workspaceDir,
+    allowWorkspaceScopedSnapshot: true,
+    requireDefaultDiscoveryContext: true,
+  });
 }
 
 function loadBundleSettingsFile(params: {
@@ -61,23 +86,47 @@ function loadBundleSettingsFile(params: {
 export function loadEnabledBundlePiSettingsSnapshot(params: {
   cwd: string;
   cfg?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 }): PiSettingsSnapshot {
   const workspaceDir = params.cwd.trim();
   if (!workspaceDir) {
     return {};
   }
-  const metadataSnapshot = loadPluginMetadataSnapshot({
-    workspaceDir,
-    config: params.cfg ?? {},
-    env: process.env,
-  });
+  const config = params.cfg ?? {};
+  const env = params.env ?? process.env;
+  const providedSnapshot = params.pluginMetadataSnapshot;
+  const metadataSnapshot =
+    providedSnapshot &&
+    isPluginMetadataSnapshotCompatible({
+      snapshot: providedSnapshot,
+      config,
+      env,
+      workspaceDir,
+    })
+      ? providedSnapshot
+      : (getCurrentPluginMetadataSnapshot({
+          config,
+          env,
+          workspaceDir,
+        }) ??
+        resolveUnscopedCurrentPluginMetadataSnapshot({
+          config,
+          env,
+          workspaceDir,
+        }) ??
+        loadPluginMetadataSnapshot({
+          workspaceDir,
+          config,
+          env,
+        }));
   const registry = metadataSnapshot.manifestRegistry;
   if (registry.plugins.length === 0) {
     return {};
   }
 
   const normalizedPlugins = normalizePluginsConfigWithResolver(
-    params.cfg?.plugins,
+    config.plugins,
     metadataSnapshot.normalizePluginId,
   );
   let snapshot: PiSettingsSnapshot = {};
@@ -91,7 +140,7 @@ export function loadEnabledBundlePiSettingsSnapshot(params: {
       id: record.id,
       origin: record.origin,
       config: normalizedPlugins,
-      rootConfig: params.cfg,
+      rootConfig: config,
     });
     if (!activationState.activated) {
       continue;
@@ -110,7 +159,7 @@ export function loadEnabledBundlePiSettingsSnapshot(params: {
 
   const embeddedPiMcp = loadEmbeddedPiMcpConfig({
     workspaceDir,
-    cfg: params.cfg,
+    cfg: config,
   });
   for (const diagnostic of embeddedPiMcp.diagnostics) {
     log.warn(`bundle MCP skipped for ${diagnostic.pluginId}: ${diagnostic.message}`);

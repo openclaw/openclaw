@@ -37,7 +37,7 @@ import {
   describeVideoFile,
   transcribeAudioFile,
 } from "../media-understanding/runtime.js";
-import { getImageMetadata } from "../media/image-ops.js";
+import { convertHeicToJpeg, getImageMetadata } from "../media/image-ops.js";
 import { detectMime, extensionForMime, normalizeMimeType } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
 import {
@@ -90,6 +90,8 @@ import { collectOption } from "./program/helpers.js";
 type CapabilityTransport = "local" | "gateway";
 const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
+const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenClaw.";
+const HEIC_MODEL_RUN_MIMES = new Set(["image/heic", "image/heif"]);
 
 type CapabilityMetadata = {
   id: string;
@@ -613,6 +615,15 @@ async function readModelRunImageFiles(files: string[] | undefined): Promise<Mode
           `Unsupported --file for model run: ${resolvedPath}. Only image files are supported; use infer audio transcribe for audio files.`,
         );
       }
+      if (HEIC_MODEL_RUN_MIMES.has(mimeType)) {
+        const converted = await convertHeicToJpeg(buffer);
+        return {
+          path: resolvedPath,
+          fileName: path.basename(resolvedPath),
+          mimeType: "image/jpeg",
+          data: converted.toString("base64"),
+        };
+      }
       return {
         path: resolvedPath,
         fileName: path.basename(resolvedPath),
@@ -659,11 +670,17 @@ async function runModelRun(params: {
         'The codex provider is served by the Codex app-server agent runtime, not the local simple-completion transport. Use an openai/<model> ref with agents.defaults.agentRuntime.id: "codex", run through the gateway, or use /codex commands.',
       );
     }
+    const localModelRunSystemPrompt =
+      prepared.selection.provider === "openai-codex" ||
+      prepared.model.api === "openai-codex-responses"
+        ? LOCAL_MODEL_RUN_SYSTEM_PROMPT
+        : undefined;
     const result = await completeWithPreparedSimpleCompletionModel({
       model: prepared.model,
       auth: prepared.auth,
       cfg,
       context: {
+        ...(localModelRunSystemPrompt ? { systemPrompt: localModelRunSystemPrompt } : {}),
         messages: [
           {
             role: "user",
@@ -681,8 +698,13 @@ async function runModelRun(params: {
     });
     const text = collectModelRunText(result.content);
     if (!text) {
+      const providerErrorMessage = (result as { errorMessage?: unknown }).errorMessage;
+      const detail =
+        typeof providerErrorMessage === "string" && providerErrorMessage.trim()
+          ? `: ${providerErrorMessage.trim()}`
+          : "";
       throw new Error(
-        `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}".`,
+        `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail}.`,
       );
     }
     return {

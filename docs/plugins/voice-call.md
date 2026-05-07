@@ -902,10 +902,11 @@ If Voice Call is green but the Meet participant never joins, check the Meet
 dial-in number, PIN, and `--dtmf-sequence`. The phone call can be healthy while
 the meeting rejects or ignores an incorrect DTMF sequence.
 
-Google Meet passes the Meet DTMF sequence and intro text to `voicecall.start`.
-For Twilio calls, Voice Call serves the DTMF TwiML first, redirects back to the
-webhook, then opens the realtime media stream so the saved intro is generated
-after the phone participant has joined the meeting.
+Google Meet starts the Twilio phone leg through `voicecall.start` with a
+pre-connect DTMF sequence. PIN-derived sequences include the Google Meet plugin's
+`voiceCall.dtmfDelayMs` as leading Twilio wait digits. The default is 12 seconds
+because Meet dial-in prompts can arrive late. Voice Call then redirects back to
+realtime handling before the intro greeting is requested.
 
 Use `openclaw logs --follow` for the live phase trace. A healthy Twilio Meet
 join logs this order:
@@ -914,7 +915,7 @@ join logs this order:
 - Voice Call stores pre-connect DTMF TwiML.
 - Twilio initial TwiML is consumed and served before realtime handling.
 - Voice Call serves realtime TwiML for the Twilio call.
-- The realtime bridge starts with the initial greeting queued.
+- Google Meet requests intro speech with `voicecall.speak` after the post-DTMF delay.
 
 `openclaw voicecall tail` still shows persisted call records; it is useful for
 call state and transcripts, but not every webhook/realtime transition appears

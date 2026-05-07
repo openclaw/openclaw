@@ -1145,6 +1145,103 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
+  it("skips channel item progress when a matching tool event carries the progress", async () => {
+    const onItemEvent = vi.fn();
+    const onToolStart = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "item",
+        data: {
+          itemId: "cmd-1",
+          kind: "command",
+          title: "Command",
+          name: "bash",
+          phase: "start",
+          status: "running",
+          suppressChannelProgress: true,
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          itemId: "cmd-1",
+          toolCallId: "cmd-1",
+          name: "bash",
+          phase: "start",
+          args: { command: "pnpm test" },
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: {
+          onItemEvent,
+          onToolStart,
+        } satisfies GetReplyOptions,
+      }),
+    });
+
+    expect(result.kind).toBe("success");
+    expect(onItemEvent).not.toHaveBeenCalled();
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "bash",
+      phase: "start",
+      args: { command: "pnpm test" },
+      detailMode: undefined,
+    });
+  });
+
+  it("preserves suppressed item progress when no tool-start callback is registered", async () => {
+    const onItemEvent = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "item",
+        data: {
+          itemId: "cmd-1",
+          kind: "command",
+          title: "Command",
+          name: "bash",
+          phase: "start",
+          status: "running",
+          suppressChannelProgress: true,
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          itemId: "cmd-1",
+          toolCallId: "cmd-1",
+          name: "bash",
+          phase: "start",
+          args: { command: "pnpm test" },
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: {
+          onItemEvent,
+        } satisfies GetReplyOptions,
+      }),
+    });
+
+    expect(result.kind).toBe("success");
+    expect(onItemEvent).toHaveBeenCalledWith({
+      itemId: "cmd-1",
+      kind: "command",
+      title: "Command",
+      name: "bash",
+      phase: "start",
+      status: "running",
+    });
+  });
+
   it("forwards raw tool progress detail mode to tool-start reply options", async () => {
     const onToolStart = vi.fn();
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -1176,6 +1273,54 @@ describe("runAgentTurnWithFallback", () => {
       args: { command: "pnpm test -- --watch=false" },
       detailMode: "raw",
     });
+  });
+
+  it("fires tool-start progress before slow typing signals resolve for best-effort Pi events", async () => {
+    const onToolStart = vi.fn(async () => {});
+    let releaseTyping: (() => void) | undefined;
+    const typingSignals = createMockTypingSignaler();
+    vi.mocked(typingSignals.signalToolStart).mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseTyping = resolve;
+        }),
+    );
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      void params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          name: "exec",
+          phase: "start",
+          args: { command: "echo hi" },
+        },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: {
+          onToolStart,
+        } satisfies GetReplyOptions,
+      }),
+      typingSignals,
+    });
+
+    try {
+      expect(result.kind).toBe("success");
+      expect(onToolStart).toHaveBeenCalledWith({
+        name: "exec",
+        phase: "start",
+        args: { command: "echo hi" },
+        detailMode: undefined,
+      });
+    } finally {
+      releaseTyping?.();
+      await Promise.resolve();
+    }
   });
 
   it("leaves Codex app-server telemetry publication to the harness", async () => {
