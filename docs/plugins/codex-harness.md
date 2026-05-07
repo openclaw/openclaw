@@ -748,9 +748,13 @@ until the next inventory refresh proves ownership.
 
 Plugin-owned app tools use Codex's native app configuration. OpenClaw injects a
 restrictive `config.apps` patch for the Codex thread: `_default` is disabled and
-only apps owned by enabled migrated plugins are enabled. Tool approval mode is
-prompted by default for destructive-capable plugin apps, because OpenClaw does
-not have an interactive app-elicitation UI in this same-thread path.
+only apps owned by enabled migrated plugins are enabled. OpenClaw sets
+app-level `destructive_enabled` from the effective global/per-plugin
+`allow_destructive_actions` policy and lets Codex enforce destructive tool
+metadata from its native app tool annotations. OpenClaw does not maintain
+per-plugin destructive tool-name deny lists. Tool approval mode is prompted by
+default for plugin apps, because OpenClaw does not have an interactive
+app-elicitation UI in this same-thread path.
 
 Destructive plugin elicitations fail closed by default:
 

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { CodexAppInventoryCache } from "./app-inventory-cache.js";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./config.js";
@@ -100,8 +101,8 @@ describe("Codex plugin thread config", () => {
     expect(disabledApps?.["google-calendar-app"]).toMatchObject({
       enabled: true,
       destructive_enabled: false,
-      tools: expectedGoogleCalendarDestructiveToolsDisabled(),
     });
+    expect(disabledApps?.["google-calendar-app"]).not.toHaveProperty("tools");
     expect(
       pluginOverrideDisabled.policyContext.apps["google-calendar-app"]?.allowDestructiveActions,
     ).toBe(false);
@@ -254,7 +255,6 @@ describe("Codex plugin thread config", () => {
           open_world_enabled: false,
           default_tools_enabled: true,
           default_tools_approval_mode: "prompt",
-          tools: expectedGoogleCalendarDestructiveToolsDisabled(),
         },
       },
     });
@@ -529,6 +529,88 @@ describe("Codex plugin thread config", () => {
     expect(third).not.toBe(second);
   });
 
+  it("versions the input fingerprint to invalidate prior generated plugin app config shapes", () => {
+    const pluginConfig = {
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          "google-calendar": {
+            marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+            pluginName: "google-calendar",
+          },
+        },
+      },
+    };
+    const legacyInputFingerprint = legacyPluginThreadConfigInputFingerprint({
+      pluginConfig,
+      appCacheKey: "runtime-a",
+    });
+    const currentInputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
+      pluginConfig,
+      appCacheKey: "runtime-a",
+    });
+
+    expect(currentInputFingerprint).not.toBe(legacyInputFingerprint);
+    expect(
+      isCodexPluginThreadBindingStale({
+        codexPluginsEnabled: true,
+        bindingFingerprint: "old-config-with-per-tool-deny-list",
+        bindingInputFingerprint: legacyInputFingerprint,
+        currentInputFingerprint,
+        hasBindingPolicyContext: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("uses app-level destructive policy for plugins without OpenClaw tool-name knowledge", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () => ({
+        data: [appInfo("github-app", true)],
+        nextCursor: null,
+      }),
+    });
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          allow_destructive_actions: false,
+          plugins: {
+            github: {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "github",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      nowMs: 1,
+      request: async (method) => {
+        if (method === "plugin/list") {
+          return pluginList([pluginSummary("github", { installed: true, enabled: true })]);
+        }
+        if (method === "plugin/read") {
+          return pluginDetail("github", [appSummary("github-app")], ["github"]);
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    const apps = config.configPatch?.apps as Record<string, unknown> | undefined;
+    expect(apps?.["github-app"]).toEqual({
+      enabled: true,
+      destructive_enabled: false,
+      open_world_enabled: false,
+      default_tools_enabled: true,
+      default_tools_approval_mode: "prompt",
+    });
+    expect(apps?.["github-app"]).not.toHaveProperty("tools");
+  });
+
   it("merges app config with native hook config", () => {
     expect(
       mergeCodexThreadConfigs(
@@ -654,15 +736,65 @@ function appInfo(id: string, accessible: boolean, enabled = true): v2.AppInfo {
   };
 }
 
-function expectedGoogleCalendarDestructiveToolsDisabled(): Record<string, { enabled: false }> {
-  return {
-    create_event: { enabled: false },
-    update_event: { enabled: false },
-    delete_event: { enabled: false },
-    calendar_create_event: { enabled: false },
-    calendar_update_event: { enabled: false },
-    calendar_delete_event: { enabled: false },
+function legacyPluginThreadConfigInputFingerprint(params: {
+  pluginConfig?: unknown;
+  appCacheKey?: string;
+}): string {
+  return fingerprintJson({
+    version: 1,
+    policy: legacyPolicyFingerprint(params.pluginConfig),
+    appCacheKey: params.appCacheKey ?? null,
+  });
+}
+
+function legacyPolicyFingerprint(pluginConfig: unknown) {
+  const config = pluginConfig as {
+    codexPlugins?: {
+      enabled?: boolean;
+      allow_destructive_actions?: boolean;
+      plugins?: Record<
+        string,
+        {
+          enabled?: boolean;
+          marketplaceName?: string;
+          pluginName?: string;
+          allow_destructive_actions?: boolean;
+        }
+      >;
+    };
   };
+  const codexPlugins = config.codexPlugins ?? {};
+  const globalAllowDestructive = codexPlugins.allow_destructive_actions === true;
+  return {
+    enabled: codexPlugins.enabled === true,
+    allowDestructiveActions: globalAllowDestructive,
+    plugins: Object.entries(codexPlugins.plugins ?? {})
+      .map(([configKey, plugin]) => ({
+        configKey,
+        marketplaceName: plugin.marketplaceName,
+        pluginName: plugin.pluginName,
+        enabled: plugin.enabled !== false,
+        allowDestructiveActions: plugin.allow_destructive_actions ?? globalAllowDestructive,
+      }))
+      .toSorted((left, right) => left.configKey.localeCompare(right.configKey)),
+  };
+}
+
+function fingerprintJson(value: unknown): string {
+  return crypto.createHash("sha256").update(stableStringify(value)).digest("hex");
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 async function buildReadyGoogleCalendarThreadConfig(

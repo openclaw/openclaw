@@ -61,16 +61,8 @@ export type BuildCodexPluginThreadConfigParams = {
   nowMs?: number;
 };
 
-const CURATED_PLUGIN_DESTRUCTIVE_TOOL_NAMES: Readonly<Record<string, readonly string[]>> = {
-  "google-calendar": [
-    "create_event",
-    "update_event",
-    "delete_event",
-    "calendar_create_event",
-    "calendar_update_event",
-    "calendar_delete_event",
-  ],
-};
+const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 2;
+const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 2;
 
 export function shouldBuildCodexPluginThreadConfig(pluginConfig?: unknown): boolean {
   return resolveCodexPluginsPolicy(pluginConfig).configured;
@@ -82,7 +74,7 @@ export function buildCodexPluginThreadConfigInputFingerprint(params: {
 }): string {
   const policy = resolveCodexPluginsPolicy(params.pluginConfig);
   return fingerprintJson({
-    version: 1,
+    version: CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION,
     policy: policyFingerprint(policy),
     appCacheKey: params.appCacheKey ?? null,
   });
@@ -207,10 +199,6 @@ export async function buildCodexPluginThreadConfig(
         default_tools_enabled: true,
         default_tools_approval_mode: "prompt",
       };
-      const destructiveToolsConfig = buildDestructiveToolsConfig(record.policy);
-      if (destructiveToolsConfig) {
-        appConfig.tools = destructiveToolsConfig;
-      }
       apps[app.id] = appConfig;
       policyApps[app.id] = {
         configKey: record.policy.configKey,
@@ -228,7 +216,7 @@ export async function buildCodexPluginThreadConfig(
     enabled: true,
     configPatch,
     fingerprint: fingerprintJson({
-      version: 1,
+      version: CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION,
       inputFingerprint,
       configPatch,
       policyContext,
@@ -238,19 +226,6 @@ export async function buildCodexPluginThreadConfig(
     inventory,
     diagnostics,
   };
-}
-
-function buildDestructiveToolsConfig(policy: ResolvedCodexPluginPolicy): JsonObject | undefined {
-  if (policy.allowDestructiveActions) {
-    return undefined;
-  }
-  const toolNames = CURATED_PLUGIN_DESTRUCTIVE_TOOL_NAMES[policy.pluginName];
-  if (!toolNames?.length) {
-    return undefined;
-  }
-  return Object.fromEntries(
-    toolNames.map((toolName) => [toolName, { enabled: false } satisfies JsonObject]),
-  );
 }
 
 export function mergeCodexThreadConfigs(
@@ -297,7 +272,7 @@ function emptyPluginThreadConfig(params: {
   return {
     enabled: params.enabled,
     fingerprint: fingerprintJson({
-      version: 1,
+      version: CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION,
       inputFingerprint: params.inputFingerprint,
       configPatch: params.configPatch ?? null,
       policyContext,
