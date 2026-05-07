@@ -14,6 +14,7 @@ import type {
   UsageProviderId,
   UsageSummary,
 } from "./provider-usage.types.js";
+import { resolveProxyFetchFromEnv } from "./net/proxy-fetch.js";
 
 async function fetchProviderUsageSnapshotFallback(params: {
   auth: ProviderAuth;
@@ -86,7 +87,7 @@ export async function loadProviderUsageSummary(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const config = opts.config ?? getRuntimeConfig();
   const env = opts.env ?? process.env;
-  const fetchFn = resolveFetch(opts.fetch);
+  const fetchFn = resolveProxyFetchFromEnv(env) ?? resolveFetch(opts.fetch);
   if (!fetchFn) {
     throw new Error("fetch is not available");
   }
