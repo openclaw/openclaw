@@ -108,6 +108,8 @@ export function resolveConfiguredDoctorSessionStateRoute(params: {
     }
   }
   const runtime = resolveAgentHarnessPolicy({
+    provider: primary.provider,
+    modelId: primary.model,
     config: params.cfg,
     agentId,
     sessionKey: params.sessionKey,

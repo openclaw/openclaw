@@ -188,6 +188,58 @@ describe("runAgentHarnessAttempt", () => {
     expect(piRunAttempt).not.toHaveBeenCalled();
   });
 
+  it("keeps custom OpenAI-compatible provider routes on PI by default", async () => {
+    registerSuccessfulCodexHarness();
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://compatible.example.test/v1",
+            api: "openai-responses",
+            models: [],
+          },
+        },
+      },
+    };
+
+    await expect(
+      runAgentHarnessAttempt({
+        ...createAttemptParams(config),
+        provider: "openai",
+        modelId: "custom-gpt",
+      }),
+    ).resolves.toMatchObject({
+      sessionIdUsed: "pi",
+    });
+    expect(piRunAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows explicit PI runtime for custom OpenAI-compatible provider routes", async () => {
+    const config: OpenClawConfig = {
+      agents: { defaults: { agentRuntime: { id: "pi" } } },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://compatible.example.test/v1",
+            api: "openai-responses",
+            models: [],
+          },
+        },
+      },
+    };
+
+    await expect(
+      runAgentHarnessAttempt({
+        ...createAttemptParams(config),
+        provider: "openai",
+        modelId: "custom-gpt",
+      }),
+    ).resolves.toMatchObject({
+      sessionIdUsed: "pi",
+    });
+    expect(piRunAttempt).toHaveBeenCalledTimes(1);
+  });
+
   it("annotates non-ok harness result classifications for outer model fallback", async () => {
     const classify = vi.fn(() => "empty" as const);
     registerAgentHarness(

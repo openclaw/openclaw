@@ -64,7 +64,7 @@ describe("collectCodexRouteWarnings", () => {
       } as OpenClawConfig,
     });
 
-    expect(warnings).toEqual([expect.stringContaining("Legacy `openai-codex/*`")]);
+    expect(warnings).toEqual([expect.stringContaining("OpenAI Codex routes")]);
     expect(warnings[0]).toContain("agents.defaults.model");
     expect(warnings[0]).toContain("openai/gpt-5.5");
     expect(warnings[0]).toContain('runtime is "codex"');
@@ -112,6 +112,48 @@ describe("collectCodexRouteWarnings", () => {
         agents: {
           defaults: {
             model: "openai/gpt-5.5",
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(warnings).toEqual([]);
+  });
+
+  it("warns when official OpenAI refs are pinned to PI", () => {
+    const warnings = collectCodexRouteWarnings({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+            agentRuntime: { id: "pi" },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(warnings).toEqual([expect.stringContaining("agents.defaults.model")]);
+    expect(warnings[0]).toContain("openai/gpt-5.5");
+    expect(warnings[0]).toContain('runtime is "pi"');
+    expect(warnings[0]).toContain('agentRuntime.id: "codex"');
+  });
+
+  it("does not warn when custom OpenAI-compatible refs are pinned to PI", () => {
+    const warnings = collectCodexRouteWarnings({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai/custom-gpt",
+            agentRuntime: { id: "pi" },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://compatible.example.test/v1",
+              api: "openai-responses",
+              models: [],
+            },
           },
         },
       } as OpenClawConfig,
@@ -240,6 +282,27 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.changes.join("\n")).toContain('set agentRuntime.id to "codex"');
   });
 
+  it("repairs official OpenAI PI runtime pins without changing the model ref", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+            agentRuntime: { id: "pi" },
+          },
+        },
+      } as OpenClawConfig,
+      shouldRepair: true,
+      codexRuntimeReady: false,
+    });
+
+    expect(result.cfg.agents?.defaults?.model).toBe("openai/gpt-5.5");
+    expect(result.cfg.agents?.defaults?.agentRuntime).toEqual({ id: "codex" });
+    expect(result.changes.join("\n")).toContain(
+      'agents.defaults.model: openai/gpt-5.5 -> openai/gpt-5.5; set agentRuntime.id to "codex".',
+    );
+  });
+
   it("repairs persisted session route pins to Codex and preserves Codex auth pins", () => {
     const store: Record<string, SessionEntry> = {
       main: {
@@ -344,6 +407,85 @@ describe("collectCodexRouteWarnings", () => {
     const result = repairCodexSessionStoreRoutes({
       store,
       runtime: "codex",
+      now: 123,
+    });
+
+    expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
+    expect(store.main).toMatchObject({
+      updatedAt: 123,
+      agentHarnessId: "codex",
+      agentRuntimeOverride: "codex",
+      authProfileOverride: "openai-codex:default",
+    });
+  });
+
+  it("does not repair custom OpenAI-compatible sessions pinned to PI", () => {
+    const store: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "s1",
+        updatedAt: 1,
+        modelProvider: "openai",
+        model: "custom-gpt",
+        providerOverride: "openai",
+        modelOverride: "custom-gpt",
+        agentHarnessId: "pi",
+        agentRuntimeOverride: "pi",
+      },
+    };
+
+    const result = repairCodexSessionStoreRoutes({
+      store,
+      runtime: "codex",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://compatible.example.test/v1",
+              api: "openai-responses",
+              models: [],
+            },
+          },
+        },
+      },
+      now: 123,
+    });
+
+    expect(result).toEqual({ changed: false, sessionKeys: [] });
+    expect(store.main).toMatchObject({
+      updatedAt: 1,
+      agentHarnessId: "pi",
+      agentRuntimeOverride: "pi",
+    });
+  });
+
+  it("repairs custom OpenAI-compatible PI pins when Codex auth is present", () => {
+    const store: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "s1",
+        updatedAt: 1,
+        modelProvider: "openai",
+        model: "custom-gpt",
+        agentHarnessId: "pi",
+        agentRuntimeOverride: "pi",
+        authProfileOverride: "openai-codex:default",
+        authProfileOverrideSource: "auto",
+      },
+    };
+
+    const result = repairCodexSessionStoreRoutes({
+      store,
+      runtime: "codex",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://compatible.example.test/v1",
+              api: "openai-responses",
+              models: [],
+            },
+          },
+        },
+      },
       now: 123,
     });
 

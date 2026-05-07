@@ -66,6 +66,55 @@ describe("doctor session state provider routes", () => {
     });
   });
 
+  it("resolves implicit official OpenAI routes to the Codex runtime", () => {
+    expect(
+      resolveConfiguredDoctorSessionStateRoute({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.5" },
+            },
+          },
+        },
+        sessionKey: "agent:main:telegram:direct:1",
+        env: {},
+      }),
+    ).toMatchObject({
+      defaultProvider: "openai",
+      configuredModelRefs: ["openai/gpt-5.5"],
+      runtime: "codex",
+    });
+  });
+
+  it("keeps implicit custom OpenAI-compatible routes on PI", () => {
+    expect(
+      resolveConfiguredDoctorSessionStateRoute({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "openai/custom-gpt" },
+            },
+          },
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://compatible.example.test/v1",
+                api: "openai-responses",
+                models: [],
+              },
+            },
+          },
+        },
+        sessionKey: "agent:main:telegram:direct:1",
+        env: {},
+      }),
+    ).toMatchObject({
+      defaultProvider: "openai",
+      configuredModelRefs: ["openai/custom-gpt"],
+      runtime: "pi",
+    });
+  });
+
   it("lets environment CLI runtime overrides reach plugin-owned scanners", () => {
     expect(
       resolveConfiguredDoctorSessionStateRoute({

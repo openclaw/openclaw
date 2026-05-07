@@ -1,3 +1,5 @@
+import { openAIRouteRequiresCodexRuntime } from "../agents/openai-codex-routing.js";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import type { AgentModelListConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -48,6 +50,10 @@ export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawC
   const defaults = cfg.agents?.defaults;
   const existingModel = defaults?.model;
   const existingModels = defaults?.models;
+  const slashIndex = model.indexOf("/");
+  const provider = slashIndex > 0 ? normalizeProviderId(model.slice(0, slashIndex)) : undefined;
+  const shouldUseCodexRuntime =
+    provider === "openai-codex" || openAIRouteRequiresCodexRuntime({ provider, config: cfg });
   const fallbacks =
     typeof existingModel === "object" && existingModel !== null && "fallbacks" in existingModel
       ? (existingModel as { fallbacks?: string[] }).fallbacks
@@ -62,6 +68,7 @@ export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawC
           ...(fallbacks ? { fallbacks } : undefined),
           primary: model,
         },
+        ...(shouldUseCodexRuntime ? { agentRuntime: { id: "codex" } } : undefined),
         models: {
           ...existingModels,
           [model]: existingModels?.[model] ?? {},
