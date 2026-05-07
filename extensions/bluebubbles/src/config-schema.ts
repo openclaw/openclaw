@@ -125,6 +125,11 @@ const bluebubblesAccountSchema = z
     }
   });
 
+type BlueBubblesAccountConfig = z.infer<typeof bluebubblesAccountSchema>;
+type BlueBubblesConfigWithAccounts = BlueBubblesAccountConfig & {
+  accounts?: Record<string, BlueBubblesAccountConfig>;
+};
+
 export const BlueBubblesConfigSchema = buildCatchallMultiAccountChannelSchema(
   bluebubblesAccountSchema,
 )
@@ -132,26 +137,27 @@ export const BlueBubblesConfigSchema = buildCatchallMultiAccountChannelSchema(
     actions: bluebubblesActionSchema,
   })
   .superRefine((value, ctx) => {
+    const config = value as BlueBubblesConfigWithAccounts;
     requireOpenAllowFrom({
-      policy: value.dmPolicy,
-      allowFrom: value.allowFrom,
+      policy: config.dmPolicy,
+      allowFrom: config.allowFrom,
       ctx,
       path: ["allowFrom"],
       message:
         'channels.bluebubbles.dmPolicy="open" requires channels.bluebubbles.allowFrom to include "*"',
     });
     requireAllowlistAllowFrom({
-      policy: value.dmPolicy,
-      allowFrom: value.allowFrom,
+      policy: config.dmPolicy,
+      allowFrom: config.allowFrom,
       ctx,
       path: ["allowFrom"],
       message:
         'channels.bluebubbles.dmPolicy="allowlist" requires channels.bluebubbles.allowFrom to contain at least one sender ID',
     });
 
-    for (const [accountId, account] of Object.entries(value.accounts ?? {})) {
-      const effectivePolicy = account.dmPolicy ?? value.dmPolicy;
-      const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
+    for (const [accountId, account] of Object.entries(config.accounts ?? {})) {
+      const effectivePolicy = account.dmPolicy ?? config.dmPolicy;
+      const effectiveAllowFrom = account.allowFrom ?? config.allowFrom;
       requireOpenAllowFrom({
         policy: effectivePolicy,
         allowFrom: effectiveAllowFrom,
