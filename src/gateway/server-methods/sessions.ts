@@ -1568,6 +1568,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         storeKey: primaryKey,
         patch: p,
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+        ensureCodexRuntimePluginInstall: async ({ cfg: installCfg, model }) => {
+          const { repairCodexRuntimePluginInstallForModelSelection } =
+            await import("../../commands/codex-runtime-plugin-install.js");
+          return await repairCodexRuntimePluginInstallForModelSelection({
+            cfg: installCfg,
+            model,
+          });
+        },
       });
     });
     if (!applied.ok) {

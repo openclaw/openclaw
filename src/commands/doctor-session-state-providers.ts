@@ -108,6 +108,8 @@ export function resolveConfiguredDoctorSessionStateRoute(params: {
     }
   }
   const runtime = resolveAgentHarnessPolicy({
+    provider: primary.provider,
+    modelId: primary.model,
     config: params.cfg,
     agentId,
     sessionKey: params.sessionKey,
@@ -216,6 +218,36 @@ function routeAllowsOwnerState(params: {
   );
 }
 
+function routeHasConfiguredProvider(
+  route: DoctorSessionRouteState | undefined,
+  providerId: string,
+): boolean {
+  const normalizedProvider = normalizeProviderId(providerId);
+  if (!route || !normalizedProvider) {
+    return false;
+  }
+  if (normalizeProviderId(route.defaultProvider) === normalizedProvider) {
+    return true;
+  }
+  return route.configuredModelRefs.some((ref) => {
+    const slash = ref.indexOf("/");
+    return slash > 0 && normalizeProviderId(ref.slice(0, slash)) === normalizedProvider;
+  });
+}
+
+function routeAllowsOpenAICodexAuthState(params: {
+  ownerProviderIds: ReadonlySet<string>;
+  authProfilePrefixes: readonly string[];
+  entry: Record<string, unknown>;
+  route: DoctorSessionRouteState | undefined;
+}): boolean {
+  return (
+    params.ownerProviderIds.has("openai-codex") &&
+    ownsPrefixedValue(params.authProfilePrefixes, params.entry.authProfileOverride) &&
+    routeHasConfiguredProvider(params.route, "openai")
+  );
+}
+
 function hasOwnedCliSession(params: {
   entry: Record<string, unknown>;
   cliSessionKeys: readonly string[];
@@ -254,7 +286,14 @@ function scanEntryForOwner(params: {
   const runtimeIds = normalizeIdSet(params.owner.runtimeIds);
   const cliSessionKeys = [...normalizeIdSet(params.owner.cliSessionKeys)];
   const authProfilePrefixes = normalizePrefixList(params.owner.authProfilePrefixes);
-  const routeAllowsOwner = routeAllowsOwnerState({ owner: params.owner, route: params.route });
+  const routeAllowsOwner =
+    routeAllowsOwnerState({ owner: params.owner, route: params.route }) ||
+    routeAllowsOpenAICodexAuthState({
+      ownerProviderIds: providerIds,
+      authProfilePrefixes,
+      entry: params.entry,
+      route: params.route,
+    });
   const reasons: string[] = [];
   const directOverride = resolvePersistedOverrideModelRef({
     defaultProvider: params.route?.defaultProvider ?? "",

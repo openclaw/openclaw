@@ -62,9 +62,7 @@ type ProviderRuntimeHooks = {
   normalizeProviderResolvedModelWithPlugin: (
     params: Parameters<typeof normalizeProviderResolvedModelWithPlugin>[0],
   ) => unknown;
-  normalizeProviderTransportWithPlugin: (
-    params: Parameters<typeof normalizeProviderTransportWithPlugin>[0],
-  ) => unknown;
+  normalizeProviderTransportWithPlugin: typeof normalizeProviderTransportWithPlugin;
 };
 
 const TARGET_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
@@ -714,6 +712,7 @@ function resolveExplicitModelWithRegistry(params: {
         provider,
         cfg,
         agentDir,
+        workspaceDir,
         model: applyConfiguredProviderOverrides({
           provider,
           discoveredModel: model,
@@ -724,7 +723,6 @@ function resolveExplicitModelWithRegistry(params: {
           workspaceDir,
         }),
         runtimeHooks,
-        workspaceDir,
       }),
     };
   }
