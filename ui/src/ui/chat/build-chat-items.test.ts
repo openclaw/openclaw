@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { MessageGroup } from "../types/chat-types.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./build-chat-items.ts";
 
+const SENDER_METADATA_BLOCK =
+  'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n```';
+
 function createProps(overrides: Partial<BuildChatItemsProps> = {}): BuildChatItemsProps {
   return {
     sessionKey: "main",
@@ -149,6 +152,50 @@ describe("buildChatItems", () => {
     );
 
     expect(items).toEqual([]);
+  });
+
+  it("suppresses active sender metadata streams before rendering", () => {
+    const items = buildChatItems(
+      createProps({
+        stream: SENDER_METADATA_BLOCK,
+        streamStartedAt: 1,
+      }),
+    );
+
+    expect(items).toEqual([]);
+  });
+
+  it("strips sender metadata from active stream text that has visible content", () => {
+    const items = buildChatItems(
+      createProps({
+        stream: `${SENDER_METADATA_BLOCK}\n\nVisible reply`,
+        streamStartedAt: 1,
+      }),
+    );
+
+    expect(items).toEqual([
+      {
+        kind: "stream",
+        key: "stream:main:1",
+        text: "Visible reply",
+        startedAt: 1,
+      },
+    ]);
+  });
+
+  it("suppresses metadata-only history messages before grouping", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: SENDER_METADATA_BLOCK,
+          senderLabel: "openclaw-control-ui",
+          timestamp: 1,
+        },
+      ],
+    });
+
+    expect(groups).toEqual([]);
   });
 
   it("does not collapse duplicate text messages separated by another message", () => {
