@@ -21,6 +21,14 @@ type RuntimeSendOpts = {
   forceDocument?: boolean;
   gifPlayback?: boolean;
   gatewayClientScopes?: readonly string[];
+  /**
+   * Channel-native interactive components (e.g. Discord action rows with
+   * buttons). Forwarded to the underlying outbound adapter so HITL approval
+   * flows can attach action rows when sending plain text.
+   */
+  components?: unknown;
+  embeds?: unknown;
+  filename?: string;
 };
 
 function resolveRuntimeThreadId(opts: RuntimeSendOpts): string | number | undefined {
@@ -56,6 +64,13 @@ export function createChannelOutboundRuntimeSend(params: {
         forceDocument: opts.forceDocument,
         gifPlayback: opts.gifPlayback,
         gatewayClientScopes: opts.gatewayClientScopes,
+        // Channel-native fields forwarded to the outbound adapter so
+        // plugins (e.g. Discord) can attach interactive components to a
+        // plain-text send when the gateway proxies `send` through the
+        // runtime layer.
+        ...(opts.components !== undefined ? { components: opts.components } : {}),
+        ...(opts.embeds !== undefined ? { embeds: opts.embeds } : {}),
+        ...(opts.filename !== undefined ? { filename: opts.filename } : {}),
       });
       const hasMedia = Boolean(opts.mediaUrl);
       if (hasMedia && outbound?.sendMedia) {
