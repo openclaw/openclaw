@@ -169,7 +169,8 @@ export function createIMessageCliPathTextInput(
 export const imessageCompletionNote = {
   title: "iMessage next steps",
   lines: [
-    "This is still a work in progress.",
+    "Run OpenClaw on the Mac signed into Messages, or set cliPath to an SSH wrapper that runs imsg on that Mac.",
+    "Linux/Windows hosts cannot run the default local imsg path directly.",
     "Ensure OpenClaw has Full Disk Access to Messages DB.",
     "Grant Automation permission for Messages when prompted.",
     "List chats with: imsg chats --limit 20",
