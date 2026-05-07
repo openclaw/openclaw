@@ -386,7 +386,9 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
     context.messages,
     model,
     (id) => (requiresToolCallId(model.id) ? normalizeToolCallId(id) : id),
-    { preserveCrossModelToolCallThoughtSignature: true },
+    {
+      preserveCrossModelToolCallThoughtSignature: requiresToolCallThoughtSignature(model.id),
+    },
   );
   for (const msg of transformedMessages) {
     if (msg.role === "user") {

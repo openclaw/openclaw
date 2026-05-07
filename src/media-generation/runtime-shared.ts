@@ -64,6 +64,7 @@ type CapabilityProviderCandidate = {
   id: string;
   aliases?: readonly string[];
   defaultModel?: string | null;
+  models?: readonly string[];
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
 };
 
@@ -162,6 +163,34 @@ function resolveAutoCapabilityFallbackRefs(params: {
   });
 }
 
+function providerMatchesId(provider: CapabilityProviderCandidate, providerId: string): boolean {
+  const normalizedProviderId = normalizeOptionalString(providerId);
+  if (!normalizedProviderId) {
+    return false;
+  }
+  return (
+    normalizeOptionalString(provider.id) === normalizedProviderId ||
+    (provider.aliases ?? []).some(
+      (alias) => normalizeOptionalString(alias) === normalizedProviderId,
+    )
+  );
+}
+
+function resolveProviderModelOnlyRef(params: {
+  raw: string;
+  providers: CapabilityProviderCandidate[];
+}): ParsedProviderModelRef | null {
+  const model = normalizeOptionalString(params.raw);
+  if (!model) {
+    return null;
+  }
+  const provider = params.providers.find((candidate) => {
+    const models = [candidate.defaultModel, ...(candidate.models ?? [])];
+    return models.some((entry) => normalizeOptionalString(entry) === model);
+  });
+  return provider ? { provider: provider.id, model } : null;
+}
+
 export function resolveCapabilityModelCandidates(params: {
   cfg: OpenClawConfig;
   modelConfig: AgentModelConfig | undefined;
@@ -173,20 +202,42 @@ export function resolveCapabilityModelCandidates(params: {
 }): ParsedProviderModelRef[] {
   const candidates: ParsedProviderModelRef[] = [];
   const seen = new Set<string>();
+  let providers: CapabilityProviderCandidate[] | undefined;
+  const getProviders = (): CapabilityProviderCandidate[] => {
+    providers ??= params.listProviders?.(params.cfg) ?? [];
+    return providers;
+  };
   const add = (raw: string | undefined) => {
-    const parsed = params.parseModelRef(raw);
-    if (!parsed) {
+    const trimmed = normalizeOptionalString(raw);
+    if (!trimmed) {
       return;
     }
-    const key = `${parsed.provider}/${parsed.model}`;
+    const parsed = params.parseModelRef(raw);
+    const candidate =
+      parsed && getProviders().some((provider) => providerMatchesId(provider, parsed.provider))
+        ? parsed
+        : (resolveProviderModelOnlyRef({ raw: trimmed, providers: getProviders() }) ?? parsed);
+    if (!candidate) {
+      return;
+    }
+    const key = `${candidate.provider}/${candidate.model}`;
     if (seen.has(key)) {
       return;
     }
     seen.add(key);
-    candidates.push(parsed);
+    candidates.push(candidate);
   };
 
-  const override = params.parseModelRef(params.modelOverride);
+  const override = (() => {
+    const raw = normalizeOptionalString(params.modelOverride);
+    if (!raw) {
+      return null;
+    }
+    const parsed = params.parseModelRef(raw);
+    return parsed && getProviders().some((provider) => providerMatchesId(provider, parsed.provider))
+      ? parsed
+      : (resolveProviderModelOnlyRef({ raw, providers: getProviders() }) ?? parsed);
+  })();
   if (override) {
     return [override];
   }
@@ -203,7 +254,7 @@ export function resolveCapabilityModelCandidates(params: {
     for (const candidate of resolveAutoCapabilityFallbackRefs({
       cfg: params.cfg,
       agentDir: params.agentDir,
-      listProviders: params.listProviders,
+      listProviders: () => getProviders(),
     })) {
       add(candidate);
     }
