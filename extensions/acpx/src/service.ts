@@ -19,6 +19,7 @@ import {
 import { createAcpxProcessLeaseStore, type AcpxProcessLeaseStore } from "./process-lease.js";
 import {
   cleanupOpenClawOwnedAcpxProcessTree,
+  reapStaleOpenClawOwnedAcpxOrphans,
   type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
 
@@ -228,9 +229,27 @@ async function reapOpenAcpxProcessLeases(params: {
   const leases = await params.leaseStore.listOpen(params.gatewayInstanceId);
   const inspectedPids: number[] = [];
   const terminatedPids: number[] = [];
+  const pendingLeaseRootResults = new Map<
+    string,
+    { inspectedPids: number[]; terminatedPids: number[] }
+  >();
   for (const lease of leases) {
     if (lease.rootPid <= 0) {
-      await params.leaseStore.markState(lease.leaseId, "lost");
+      await params.leaseStore.markState(lease.leaseId, "closing");
+      let result = pendingLeaseRootResults.get(lease.wrapperRoot);
+      if (!result) {
+        result = await reapStaleOpenClawOwnedAcpxOrphans({
+          wrapperRoot: lease.wrapperRoot,
+          deps: params.deps,
+        });
+        pendingLeaseRootResults.set(lease.wrapperRoot, result);
+        inspectedPids.push(...result.inspectedPids);
+        terminatedPids.push(...result.terminatedPids);
+      }
+      await params.leaseStore.markState(
+        lease.leaseId,
+        result.terminatedPids.length > 0 ? "closed" : "lost",
+      );
       continue;
     }
     await params.leaseStore.markState(lease.leaseId, "closing");
