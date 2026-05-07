@@ -69,25 +69,30 @@ direct API-key auth for an OpenAI agent model.
 
 <Note>
 OpenAI agent model turns require the bundled Codex app-server plugin. Explicit
-PI runtime config for OpenAI models is rejected; run `openclaw doctor --fix` to
-repair stale `openai-codex/*` model refs or old PI session pins.
+PI runtime config remains available as an opt-in compatibility route. When PI is
+explicitly selected with an `openai-codex` auth profile, OpenClaw keeps the
+public model ref as `openai/*` and routes PI internally through the legacy
+Codex-auth transport. Run `openclaw doctor --fix` to repair stale
+`openai-codex/*` model refs or old PI session pins that do not come from
+explicit runtime config.
 </Note>
 
 ## OpenClaw feature coverage
 
-| OpenAI capability         | OpenClaw surface                                           | Status                                                 |
-| ------------------------- | ---------------------------------------------------------- | ------------------------------------------------------ |
-| Chat / Responses          | `openai/<model>` model provider                            | Yes                                                    |
-| Codex subscription models | `openai-codex/<model>` with `openai-codex` OAuth           | Yes                                                    |
-| Codex app-server harness  | `openai/<model>` with `agentRuntime.id: codex`             | Yes                                                    |
-| Server-side web search    | Native OpenAI Responses tool                               | Yes, when web search is enabled and no provider pinned |
-| Images                    | `image_generate`                                           | Yes                                                    |
-| Videos                    | `video_generate`                                           | Yes                                                    |
-| Text-to-speech            | `messages.tts.provider: "openai"` / `tts`                  | Yes                                                    |
-| Batch speech-to-text      | `tools.media.audio` / media understanding                  | Yes                                                    |
-| Streaming speech-to-text  | Voice Call `streaming.provider: "openai"`                  | Yes                                                    |
-| Realtime voice            | Voice Call `realtime.provider: "openai"` / Control UI Talk | Yes                                                    |
-| Embeddings                | memory embedding provider                                  | Yes                                                    |
+| OpenAI capability         | OpenClaw surface                                                  | Status                                                 |
+| ------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------ |
+| Chat / Responses          | `openai/<model>` model provider                                   | Yes                                                    |
+| Codex subscription models | `openai/<model>` with `openai-codex` OAuth                        | Yes                                                    |
+| Legacy Codex model refs   | `openai-codex/<model>`                                            | Repaired by doctor to `openai/<model>`                 |
+| Codex app-server harness  | `openai/<model>` with omitted runtime or `agentRuntime.id: codex` | Yes                                                    |
+| Server-side web search    | Native OpenAI Responses tool                                      | Yes, when web search is enabled and no provider pinned |
+| Images                    | `image_generate`                                                  | Yes                                                    |
+| Videos                    | `video_generate`                                                  | Yes                                                    |
+| Text-to-speech            | `messages.tts.provider: "openai"` / `tts`                         | Yes                                                    |
+| Batch speech-to-text      | `tools.media.audio` / media understanding                         | Yes                                                    |
+| Streaming speech-to-text  | Voice Call `streaming.provider: "openai"`                         | Yes                                                    |
+| Realtime voice            | Voice Call `realtime.provider: "openai"` / Control UI Talk        | Yes                                                    |
+| Embeddings                | memory embedding provider                                         | Yes                                                    |
 
 ## Memory embeddings
 
@@ -147,8 +152,9 @@ Choose your preferred auth method and follow the setup steps.
 
     | Model ref              | Runtime config             | Route                       | Auth             |
     | ---------------------- | -------------------------- | --------------------------- | ---------------- |
-    | `openai/gpt-5.5`       | omitted / `agentRuntime.id: "codex"` | Codex app-server harness    | `openai-codex` profile |
-    | `openai/gpt-5.4-mini`  | omitted / `agentRuntime.id: "codex"` | Codex app-server harness    | `openai-codex` profile |
+    | `openai/gpt-5.5`      | omitted / `agentRuntime.id: "codex"` | Codex app-server harness | `openai-codex` profile |
+    | `openai/gpt-5.4-mini` | omitted / `agentRuntime.id: "codex"` | Codex app-server harness | `openai-codex` profile |
+    | `openai/gpt-5.5`      | `agentRuntime.id: "pi"`              | PI embedded runtime      | `openai` profile or selected `openai-codex` profile |
 
     <Note>
     `openai/*` agent models use the Codex app-server harness. To use API-key
@@ -210,12 +216,14 @@ Choose your preferred auth method and follow the setup steps.
         openclaw models auth login --provider openai-codex --device-code
         ```
       </Step>
-      <Step title="Use the native Codex runtime">
+      <Step title="Use the canonical OpenAI model route">
         ```bash
-        openclaw config set plugins.entries.codex '{"enabled":true}' --strict-json --merge
         openclaw config set agents.defaults.model.primary openai/gpt-5.5
-        openclaw config set agents.defaults.agentRuntime '{"id":"codex"}' --strict-json
         ```
+
+        No runtime config is required for the default path. OpenAI agent turns
+        select the native Codex app-server runtime automatically, and OpenClaw
+        installs or repairs the bundled Codex plugin when this route is chosen.
       </Step>
       <Step title="Verify Codex auth is available">
         ```bash
@@ -232,6 +240,7 @@ Choose your preferred auth method and follow the setup steps.
     | Model ref | Runtime config | Route | Auth |
     |-----------|----------------|-------|------|
     | `openai/gpt-5.5` | omitted / `agentRuntime.id: "codex"` | Native Codex app-server harness | Codex sign-in or selected `openai-codex` profile |
+    | `openai/gpt-5.5` | `agentRuntime.id: "pi"` | PI embedded runtime with internal Codex-auth transport | Selected `openai-codex` profile |
     | `openai-codex/gpt-5.5` | repaired by doctor | Legacy route rewritten to `openai/gpt-5.5` | Existing `openai-codex` profile |
 
     <Warning>
@@ -286,7 +295,7 @@ Choose your preferred auth method and follow the setup steps.
     ```
 
     If an older config still has `openai-codex/gpt-*` or a stale OpenAI PI
-    session pin, repair it:
+    session pin without explicit runtime config, repair it:
 
     ```bash
     openclaw doctor --fix
@@ -308,14 +317,14 @@ Choose your preferred auth method and follow the setup steps.
 
     Chat `/status` shows which model runtime is active for the current session.
     The bundled Codex app-server harness appears as `Runtime: OpenAI Codex` for
-    OpenAI agent model turns. Existing sessions with stale PI pins should be
-    repaired with `openclaw doctor --fix` before continuing.
+    OpenAI agent model turns. Stale PI session pins are repaired to Codex unless
+    config explicitly pins PI.
 
     ### Doctor warning
 
-    If `openai-codex/*` routes or OpenAI PI pins remain in config or session
-    state, `openclaw doctor --fix` rewrites them to `openai/*` with the Codex
-    runtime.
+    If `openai-codex/*` routes or stale OpenAI PI pins remain in config or
+    session state, `openclaw doctor --fix` rewrites them to `openai/*` with the
+    Codex runtime unless PI is explicitly configured.
 
     ### Context window cap
 
@@ -357,8 +366,9 @@ Choose your preferred auth method and follow the setup steps.
 
 ## Native Codex app-server auth
 
-The native Codex app-server harness uses `openai/*` model refs plus
-`agentRuntime.id: "codex"`, but its auth is still account-based. OpenClaw
+The native Codex app-server harness uses `openai/*` model refs plus omitted
+runtime config or `agentRuntime.id: "codex"`, but its auth is still
+account-based. OpenClaw
 selects auth in this order:
 
 1. An explicit OpenClaw `openai-codex` auth profile bound to the agent.

@@ -175,7 +175,7 @@ describe("runAgentHarnessAttempt", () => {
     expect(piRunAttempt).not.toHaveBeenCalled();
   });
 
-  it("rejects explicit PI runtime for OpenAI agent model runs", async () => {
+  it("honors explicit PI runtime for OpenAI agent model runs", async () => {
     await expect(
       runAgentHarnessAttempt({
         ...createAttemptParams({
@@ -184,8 +184,10 @@ describe("runAgentHarnessAttempt", () => {
         provider: "openai",
         modelId: "gpt-5.4",
       }),
-    ).rejects.toThrow("OpenAI agent model runs require the Codex harness");
-    expect(piRunAttempt).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({
+      sessionIdUsed: "pi",
+    });
+    expect(piRunAttempt).toHaveBeenCalledTimes(1);
   });
 
   it("annotates non-ok harness result classifications for outer model fallback", async () => {

@@ -23,9 +23,9 @@ import { FailoverError } from "../failover-error.js";
 import { resolveAgentHarnessPolicy } from "../harness/selection.js";
 import { isCliRuntimeAlias, resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
+import { isOpenAIProvider, resolveOpenAIRuntimeProviderForPi } from "../openai-codex-routing.js";
 import { normalizeEmbeddedAgentRuntime } from "../pi-embedded-runner/runtime.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
-import { normalizeProviderId } from "../provider-id.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import {
   acquireSessionWriteLock,
@@ -464,6 +464,15 @@ export function runAgentAttempt(params: {
     allowHarnessAuthProfileForwarding: !isCliProvider(cliExecutionProvider, params.cfg),
   });
   const authProfileId = runtimeAuthPlan.forwardedAuthProfileId;
+  const embeddedPiProvider = resolveOpenAIRuntimeProviderForPi({
+    provider: params.providerOverride,
+    harnessRuntime: agentHarnessPolicy.runtime,
+    agentHarnessId: sessionPinnedAgentHarnessId,
+    authProfileProvider: runtimeAuthPlan.authProfileProviderForAuth,
+    authProfileId,
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
   if (!isRawModelRun && isCliProvider(cliExecutionProvider, params.cfg)) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
     const resolveReusableCliSessionBinding = async () => {
@@ -615,7 +624,7 @@ export function runAgentAttempt(params: {
     images: params.isFallbackRetry ? undefined : params.opts.images,
     imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
     clientTools: params.opts.clientTools,
-    provider: params.providerOverride,
+    provider: embeddedPiProvider,
     model: params.modelOverride,
     modelFallbacksOverride: params.modelFallbacksOverride,
     authProfileId,
@@ -661,13 +670,25 @@ function resolveSessionPinnedAgentHarnessId(params: {
     return resolveConfiguredAgentHarnessId(params);
   }
   if (params.sessionEntry.agentHarnessId) {
-    if (
-      normalizeProviderId(params.provider) === "openai" &&
-      normalizeEmbeddedAgentRuntime(params.sessionEntry.agentHarnessId) === "pi"
-    ) {
-      throw new Error(
-        "OpenAI agent model runs require the Codex harness. The existing session is pinned to PI; run `openclaw doctor --fix` to repair stale OpenAI runtime pins.",
-      );
+    if (isOpenAIProvider(params.provider)) {
+      const configuredPolicy = resolveAgentHarnessPolicy({
+        config: params.cfg,
+        agentId: params.sessionAgentId,
+        sessionKey: params.sessionKey,
+        provider: params.provider,
+        modelId: params.modelId,
+      });
+      const configuredAgentHarnessId =
+        configuredPolicy.runtime === "auto" || isCliRuntimeAlias(configuredPolicy.runtime)
+          ? undefined
+          : configuredPolicy.runtime;
+      const storedRuntime = normalizeEmbeddedAgentRuntime(params.sessionEntry.agentHarnessId);
+      if (configuredAgentHarnessId && configuredPolicy.runtimeSource !== "implicit") {
+        return configuredAgentHarnessId;
+      }
+      if (storedRuntime === "pi" && configuredAgentHarnessId) {
+        return configuredAgentHarnessId;
+      }
     }
     return params.sessionEntry.agentHarnessId;
   }

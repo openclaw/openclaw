@@ -86,11 +86,15 @@ This is the agent-facing decision tree:
    native `/codex` command surface when the bundled `codex` plugin is enabled.
 2. If the user asks for **Codex as the embedded runtime** or wants the normal
    subscription-backed Codex agent experience, use `openai/<model>`.
-3. If legacy config still contains **`openai-codex/*` model refs**, repair it to
+3. If the user explicitly chooses **PI for an OpenAI model**, keep the model ref
+   as `openai/<model>` and set `agentRuntime.id: "pi"`. A selected
+   `openai-codex` auth profile is routed internally through PI's legacy
+   Codex-auth transport.
+4. If legacy config still contains **`openai-codex/*` model refs**, repair it to
    `openai/<model>` with `openclaw doctor --fix`.
-4. If the user explicitly says **ACP**, **acpx**, or **Codex ACP adapter**, use
+5. If the user explicitly says **ACP**, **acpx**, or **Codex ACP adapter**, use
    ACP with `runtime: "acp"` and `agentId: "codex"`.
-5. If the request is for **Claude Code, Gemini CLI, OpenCode, Cursor, Droid, or
+6. If the request is for **Claude Code, Gemini CLI, OpenCode, Cursor, Droid, or
    another external harness**, use ACP/acpx, not the native sub-agent runtime.
 
 | You mean...                             | Use...                                       |
@@ -164,8 +168,11 @@ the execution backend in `agentRuntime.id`.
 
 `auto` mode is intentionally conservative for most providers. OpenAI agent
 models are the exception: unset runtime and `auto` both resolve to the Codex
-harness, while explicit PI runtime config is rejected for `openai/*` agent
-turns.
+harness. Explicit PI runtime config remains an opt-in compatibility route for
+`openai/*` agent turns; when paired with a selected `openai-codex` auth profile,
+OpenClaw routes PI internally through the legacy Codex-auth transport while
+keeping the public model ref as `openai/*`. Stale OpenAI PI session pins without
+explicit config are repaired back to Codex.
 
 If `openclaw doctor` warns that the `codex` plugin is enabled while
 `openai-codex/*` remains in config, treat that as legacy route state. Run

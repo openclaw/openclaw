@@ -6,6 +6,10 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveAgentRuntimePolicy } from "../agent-runtime-policy.js";
 import { listAgentEntries, resolveSessionAgentIds } from "../agent-scope.js";
 import { isCliRuntimeAlias } from "../model-runtime-aliases.js";
+import {
+  isOpenAICodexProvider,
+  openAIProviderUsesCodexRuntimeByDefault,
+} from "../openai-codex-routing.js";
 import type { CompactEmbeddedPiSessionParams } from "../pi-embedded-runner/compact.types.js";
 import type {
   EmbeddedRunAttemptParams,
@@ -17,7 +21,6 @@ import {
   type EmbeddedAgentRuntime,
 } from "../pi-embedded-runner/runtime.js";
 import type { EmbeddedPiCompactResult } from "../pi-embedded-runner/types.js";
-import { normalizeProviderId } from "../provider-id.js";
 import { createPiAgentHarness } from "./builtin-pi.js";
 import { listRegisteredAgentHarnesses } from "./registry.js";
 import type { AgentHarness, AgentHarnessSupport } from "./types.js";
@@ -90,7 +93,6 @@ function selectAgentHarnessDecision(params: {
 }): AgentHarnessSelectionDecision {
   const pinnedPolicy = resolvePinnedAgentHarnessPolicy({
     agentHarnessId: params.agentHarnessId,
-    provider: params.provider,
   });
   const policy = pinnedPolicy ?? resolveAgentHarnessPolicy(params);
   // PI is intentionally not part of the plugin candidate list. Explicit plugin
@@ -247,17 +249,8 @@ function logAgentHarnessSelection(
   });
 }
 
-function isOpenAIProvider(provider: string | undefined): boolean {
-  return normalizeProviderId(provider ?? "") === "openai";
-}
-
-function formatOpenAIPiRuntimeError(source: string): string {
-  return `OpenAI agent model runs require the Codex harness. ${source} selected PI; remove that runtime override or run \`openclaw doctor --fix\` to repair stale OpenAI runtime pins.`;
-}
-
 function resolvePinnedAgentHarnessPolicy(params: {
   agentHarnessId: string | undefined;
-  provider: string | undefined;
 }): AgentHarnessPolicy | undefined {
   const { agentHarnessId } = params;
   if (!agentHarnessId?.trim()) {
@@ -266,9 +259,6 @@ function resolvePinnedAgentHarnessPolicy(params: {
   const runtime = normalizeEmbeddedAgentRuntime(agentHarnessId);
   if (runtime === "auto") {
     return undefined;
-  }
-  if (runtime === "pi" && isOpenAIProvider(params.provider)) {
-    throw new Error(formatOpenAIPiRuntimeError("The existing session harness pin"));
   }
   return { runtime, runtimeSource: "pinned" };
 }
@@ -325,12 +315,26 @@ export function resolveAgentHarnessPolicy(params: {
   const runtime = envRuntime
     ? resolveEmbeddedAgentRuntime(env)
     : normalizeEmbeddedAgentRuntime(agentRuntime ?? defaultsRuntime);
-  if (isOpenAIProvider(params.provider)) {
+  if (
+    openAIProviderUsesCodexRuntimeByDefault({ provider: params.provider, config: params.config })
+  ) {
     if (runtime === "pi") {
       if (runtimeSource === "implicit") {
         return { runtime: "codex", runtimeSource };
       }
-      throw new Error(formatOpenAIPiRuntimeError(`${runtimeSource} runtime config`));
+      return { runtime, runtimeSource };
+    }
+    if (runtime === "auto" || isCliRuntimeAlias(runtime)) {
+      return { runtime: "codex", runtimeSource };
+    }
+    return { runtime, runtimeSource };
+  }
+  if (isOpenAICodexProvider(params.provider)) {
+    if (runtime === "pi") {
+      if (runtimeSource === "implicit") {
+        return { runtime: "codex", runtimeSource };
+      }
+      return { runtime, runtimeSource };
     }
     if (runtime === "auto" || isCliRuntimeAlias(runtime)) {
       return { runtime: "codex", runtimeSource };
