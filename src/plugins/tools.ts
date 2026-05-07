@@ -580,7 +580,7 @@ function createCachedDescriptorPluginTool(params: {
               break;
             }
           }
-          if (matchedTool) break;
+          if (matchedTool) {break;}
         } catch {
           // Continue to next candidate if factory/materialization fails
           continue;
@@ -606,7 +606,7 @@ function createCachedDescriptorPluginTool(params: {
                 break;
               }
             }
-            if (matchedTool) break;
+            if (matchedTool) {break;}
           } catch {
             // Continue to next candidate if factory/materialization fails
             continue;
@@ -938,7 +938,7 @@ export function resolvePluginTools(params: {
   if (currentRuntimeConfigForDescriptorCache === undefined && params.context.getRuntimeConfig) {
     try {
       currentRuntimeConfigForDescriptorCache = params.context.getRuntimeConfig();
-    } catch (error) {
+    } catch {
       currentRuntimeConfigForDescriptorCache = null;
     }
   }
@@ -986,7 +986,7 @@ export function resolvePluginTools(params: {
         requiredPluginIds: runtimePluginIds,
         loadOptions,
       });
-    } catch (error) {
+    } catch {
       context.logger.error(
         `failed to cold-load plugin tool registry for plugin ids [${runtimePluginIds.join(", ")}]: ${error instanceof Error ? error.message : String(error)
         }`,
