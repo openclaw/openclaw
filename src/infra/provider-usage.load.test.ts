@@ -193,19 +193,12 @@ describe("provider-usage.load", () => {
   });
 
   it("prefers proxy-aware fetch from env when HTTP_PROXY is set", async () => {
-    // When env has HTTP_PROXY set, resolveProxyFetchFromEnv returns a proxy-aware fetch.
-    // That should be used even when opts.fetch is also provided.
-    // We verify this by checking the proxy-aware path is used (no throw).
     resolveProviderUsageSnapshotWithPluginMock.mockReturnValue(null);
 
     const mockFetch = createProviderUsageFetch(async () => {
       throw new Error("opts.fetch should not be called when proxy env is set");
     });
 
-    // With HTTP_PROXY in env, resolveProxyFetchFromEnv returns a proxy-aware fetch.
-    // So opts.fetch (mockFetch) should NOT be called.
-    // The proxy fetch will fail to get usage (no real network), but at least
-    // it proves the proxy path was attempted, not opts.fetch.
     const summary = await loadProviderUsageSummary({
       now: usageNow,
       auth: [{ provider: "openai-codex" as any, token: "token-codex" }],
@@ -213,9 +206,7 @@ describe("provider-usage.load", () => {
       env: { HTTP_PROXY: "http://127.0.0.1:7890", HTTPS_PROXY: "http://127.0.0.1:7890" },
     });
 
-    // mockFetch should NOT have been called because proxy-aware fetch took priority
     expect(mockFetch).not.toHaveBeenCalled();
-    // Should get an error snapshot since the proxy fetch can't actually reach chatgpt.com
     expect(summary.providers[0]?.error).toBeTruthy();
   });
 
@@ -229,7 +220,6 @@ describe("provider-usage.load", () => {
       return makeResponse(404, "not found");
     });
 
-    // No proxy env — should fall through to resolveFetch(opts.fetch)
     const summary = await loadProviderUsageSummary({
       now: usageNow,
       auth: [{ provider: "openai-codex" as any, token: "token-codex" }],
