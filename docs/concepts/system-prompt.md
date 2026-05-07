@@ -137,9 +137,10 @@ collaboration-mode instructions inside the Codex runtime after OpenClaw sends
 thread and turn params.
 
 Regenerate them with `pnpm prompt:snapshots:gen` and verify drift with
-`pnpm prompt:snapshots:check`. CI runs the drift check in the additional
-boundary shard so prompt changes and snapshot updates stay attached to the same
-PR.
+`pnpm prompt:snapshots:check`. CI runs the drift check as a dedicated
+additional check for manual CI and prompt-affecting changes so prompt changes
+and snapshot updates stay attached to the same PR without slowing unrelated
+boundary shards.
 
 ## Workspace bootstrap injection
 
