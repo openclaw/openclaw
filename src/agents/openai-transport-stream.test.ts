@@ -653,6 +653,32 @@ describe("openai transport stream", () => {
     });
   });
 
+  it("records zero cost for openai-codex provider (OAuth subscription, no per-token billing)", () => {
+    const model = {
+      id: "gpt-5.3-codex-spark",
+      name: "GPT-5.3 Codex Spark",
+      api: "openai-codex-responses" as const,
+      provider: "openai-codex",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      input: ["text" as const],
+      cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
+      contextWindow: 272000,
+      maxTokens: 128000,
+    } satisfies Model<"openai-codex-responses">;
+
+    const usage = parseTransportChunkUsage(
+      {
+        prompt_tokens: 100,
+        completion_tokens: 50,
+        total_tokens: 150,
+      },
+      model,
+    );
+
+    expect(usage.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
+  });
+
   it("records usage from OpenAI-compatible streaming usage chunks", async () => {
     const model = {
       id: "glm-5",

@@ -599,6 +599,9 @@ async function processResponsesStream(
         };
       }
       calculateCost(model as never, output.usage as never);
+      if (model.provider === "openai-codex") {
+        output.usage.cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+      }
       if (options?.applyServiceTierPricing) {
         options.applyServiceTierPricing(
           output.usage,
@@ -1978,6 +1981,9 @@ export function parseTransportChunkUsage(
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
   calculateCost(model as never, usage as never);
+  if (model.provider === "openai-codex") {
+    usage.cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+  }
   return usage;
 }
 
