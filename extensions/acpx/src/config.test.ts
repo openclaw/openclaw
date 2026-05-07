@@ -5,7 +5,7 @@ import { resolveAcpxPluginConfig, resolveAcpxPluginRoot } from "./config.js";
 
 describe("embedded acpx plugin config", () => {
   it("resolves workspace stateDir and cwd by default", () => {
-    const workspaceDir = "/tmp/openclaw-acpx";
+    const workspaceDir = path.resolve("/tmp/openclaw-acpx");
     const resolved = resolveAcpxPluginConfig({
       rawConfig: undefined,
       workspaceDir,
@@ -117,6 +117,13 @@ describe("embedded acpx plugin config", () => {
     expect(server.command).toBe(process.execPath);
     expect(Array.isArray(server.args)).toBe(true);
     expect(server.args?.length).toBeGreaterThan(0);
+  });
+
+  it("resolves the plugin root from shared dist chunk paths", () => {
+    const moduleUrl = new URL("../../../dist/extensions/acpx/service-shared.js", import.meta.url)
+      .href;
+
+    expect(resolveAcpxPluginRoot(moduleUrl)).toBe(path.resolve("extensions/acpx"));
   });
 
   it("keeps the runtime json schema in sync with the manifest config schema", () => {

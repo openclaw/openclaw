@@ -1,4 +1,5 @@
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient, type GatewayReconnectPausedInfo } from "../gateway/client.js";
 import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
@@ -56,7 +57,7 @@ export function shouldExitNodeHostOnReconnectPaused(detailCode: string | null): 
   return detailCode !== null && NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES.has(detailCode);
 }
 
-export function formatNodeHostReconnectPausedMessage(
+function formatNodeHostReconnectPausedMessage(
   info: GatewayReconnectPausedInfo,
   params?: { exiting?: boolean },
 ): string {
@@ -269,6 +270,11 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     return bins;
   }, pathEnv);
 
-  client.start();
+  const readiness = await startGatewayClientWhenEventLoopReady(client, {
+    clientOptions: { preauthHandshakeTimeoutMs: cfg.gateway?.handshakeTimeoutMs },
+  });
+  if (!readiness.ready) {
+    throw new Error("node host gateway event loop readiness timeout");
+  }
   await new Promise(() => {});
 }

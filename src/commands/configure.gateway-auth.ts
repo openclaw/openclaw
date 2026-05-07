@@ -15,7 +15,7 @@ import {
 } from "./model-picker.js";
 import { loadStaticManifestCatalogRowsForList } from "./models/list.manifest-catalog.js";
 import { promptCustomApiConfig } from "./onboard-custom.js";
-import { randomToken } from "./onboard-helpers.js";
+import { randomToken } from "./random-token.js";
 
 type GatewayAuthChoice = "token" | "password" | "trusted-proxy";
 type ProviderChoiceModelPrompt = {
@@ -254,6 +254,8 @@ export async function promptAuthConfig(
     const allowlistSelection = await promptModelAllowlist({
       config: next,
       prompter,
+      workspaceDir: resolveDefaultAgentWorkspaceDir(),
+      env: process.env,
       allowedKeys: modelPrompt?.allowedKeys,
       initialSelections: modelPrompt?.initialSelections,
       message: modelPrompt?.message,

@@ -4,6 +4,7 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { readStateDirDotEnvVarsFromStateDir } from "../config/state-dir-dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
@@ -16,6 +17,11 @@ import { execFileUtf8 } from "./exec-file.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
 import { resolveHomeDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
+import {
+  hasEnvironmentFileSource,
+  hasInlineEnvironmentSource,
+  readManagedServiceEnvKeysFromEnvironment,
+} from "./service-managed-env.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -27,11 +33,7 @@ import type {
   GatewayServiceManageArgs,
   GatewayServiceRestartResult,
 } from "./service-types.js";
-import {
-  enableSystemdUserLinger,
-  readSystemdUserLingerStatus,
-  type SystemdUserLingerStatus,
-} from "./systemd-linger.js";
+import { enableSystemdUserLinger, readSystemdUserLingerStatus } from "./systemd-linger.js";
 import {
   classifySystemdUnavailableDetail,
   isSystemctlMissingDetail,
@@ -67,7 +69,6 @@ export function resolveSystemdUserUnitPath(env: GatewayServiceEnv): string {
 }
 
 export { enableSystemdUserLinger, readSystemdUserLingerStatus };
-export type { SystemdUserLingerStatus };
 
 // Unit file parsing/rendering: see systemd-unit.ts
 
@@ -150,6 +151,50 @@ function mergeEnvironmentValueSources(
     sources[key] = Object.hasOwn(inlineEnvironment, key) ? "inline-and-file" : "file";
   }
   return sources;
+}
+
+function normalizeSystemdEnvironmentKey(key: string): string | null {
+  return normalizeEnvVarKey(key, { portable: true })?.toUpperCase() ?? null;
+}
+
+function readSystemdEnvironmentValueSource(params: {
+  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
+  key: string;
+}): GatewayServiceEnvironmentValueSource | undefined {
+  const normalizedKey = normalizeSystemdEnvironmentKey(params.key);
+  if (!normalizedKey) {
+    return undefined;
+  }
+  for (const [rawKey, source] of Object.entries(params.environmentValueSources ?? {})) {
+    if (normalizeSystemdEnvironmentKey(rawKey) === normalizedKey) {
+      return source;
+    }
+  }
+  return undefined;
+}
+
+function collectSystemdInlineManagedKeys(params: {
+  environment?: GatewayServiceEnv;
+  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
+}): Set<string> {
+  const keys = readManagedServiceEnvKeysFromEnvironment(params.environment);
+  for (const [rawKey, value] of Object.entries(params.environment ?? {})) {
+    if (typeof value !== "string" || !value.trim()) {
+      continue;
+    }
+    const key = normalizeSystemdEnvironmentKey(rawKey);
+    if (!key) {
+      continue;
+    }
+    const source = readSystemdEnvironmentValueSource({
+      environmentValueSources: params.environmentValueSources,
+      key: rawKey,
+    });
+    if (hasInlineEnvironmentSource(source) && !hasEnvironmentFileSource(source)) {
+      keys.add(key);
+    }
+  }
+  return keys;
 }
 
 function expandSystemdSpecifier(input: string, env: GatewayServiceEnv): string {
@@ -235,7 +280,7 @@ async function resolveSystemdEnvironmentFiles(params: {
   return { environment: resolved };
 }
 
-export type SystemdServiceInfo = {
+type SystemdServiceInfo = {
   activeState?: string;
   subState?: string;
   mainPid?: number;
@@ -507,6 +552,7 @@ async function writeSystemdUnit({
   programArguments,
   workingDirectory,
   environment,
+  environmentValueSources,
   description,
 }: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{ unitPath: string; backedUp: boolean }> {
   await assertSystemdAvailable(env);
@@ -536,13 +582,26 @@ async function writeSystemdUnit({
       return inlineValue.trim() === value.trim();
     }),
   );
-  const environmentFiles = await writeSystemdGatewayEnvironmentFile({
+  const inlineManagedKeys = collectSystemdInlineManagedKeys({
+    environment,
+    environmentValueSources,
+  });
+  const environmentFileResult = await writeSystemdGatewayEnvironmentFile({
     stateDir,
     dotenvVars: stateDirDotEnvVars,
+    inlineManagedKeys,
   });
   const environmentSansDotEnvEntries = Object.fromEntries(
     Object.entries(environment ?? {}).filter(([key, value]) => {
       if (typeof value !== "string") {
+        return false;
+      }
+      const normalizedKey = normalizeSystemdEnvironmentKey(key);
+      if (
+        normalizedKey &&
+        environmentFileResult.environmentKeys.has(normalizedKey) &&
+        !inlineManagedKeys.has(normalizedKey)
+      ) {
         return false;
       }
       const stateDirValue = stateDirDotEnvVars[key];
@@ -557,7 +616,7 @@ async function writeSystemdUnit({
     programArguments,
     workingDirectory,
     environment: environmentSansDotEnvEntries,
-    environmentFiles,
+    environmentFiles: environmentFileResult.environmentFiles,
   });
   await fs.writeFile(unitPath, unit, "utf8");
   return { unitPath, backedUp };
@@ -566,12 +625,12 @@ async function writeSystemdUnit({
 async function writeSystemdGatewayEnvironmentFile(params: {
   stateDir: string;
   dotenvVars: Record<string, string>;
-}): Promise<string[]> {
-  const entries = Object.entries(params.dotenvVars);
-  if (entries.length === 0) {
-    return [];
-  }
-  for (const [key, value] of entries) {
+  /** OpenClaw-managed keys that must not be preserved from an old env file; stale file values
+   *  would override fresh inline Environment= entries because EnvironmentFile takes precedence. */
+  inlineManagedKeys?: ReadonlySet<string>;
+}): Promise<{ environmentFiles: string[]; environmentKeys: Set<string> }> {
+  const incoming = params.dotenvVars;
+  for (const [key, value] of Object.entries(incoming)) {
     if (/[\r\n]/.test(value)) {
       throw new Error(
         `state-dir .env contains a multiline value for ${key}; systemd EnvironmentFile values must be single-line`,
@@ -579,10 +638,45 @@ async function writeSystemdGatewayEnvironmentFile(params: {
     }
   }
   const envFilePath = path.join(params.stateDir, SYSTEMD_GATEWAY_DOTENV_FILENAME);
-  const content = entries.map(([key, value]) => `${key}=${value}`).join("\n");
+
+  // Read the existing env file first so we can preserve operator-added secrets
+  // (e.g. provider API keys) across upgrades and re-stages.
+  // OpenClaw-managed keys (identified by inlineManagedKeys) are excluded: a stale
+  // file copy would override the fresh inline Environment= value because systemd's
+  // EnvironmentFile takes precedence over inline Environment= directives.
+  let existing: Record<string, string> = {};
+  try {
+    existing = await readSystemdEnvironmentFile(envFilePath);
+  } catch {
+    // File does not exist yet — nothing to preserve.
+  }
+  const operatorOnly = params.inlineManagedKeys
+    ? Object.fromEntries(
+        Object.entries(existing).filter(([key]) => {
+          const normalized = normalizeSystemdEnvironmentKey(key);
+          return !normalized || !params.inlineManagedKeys!.has(normalized);
+        }),
+      )
+    : existing;
+  const merged = { ...operatorOnly, ...incoming };
+  const environmentKeys = new Set(
+    Object.keys(merged).flatMap((key) => {
+      const normalized = normalizeSystemdEnvironmentKey(key);
+      return normalized ? [normalized] : [];
+    }),
+  );
+
+  // If the merged result is empty there is nothing to write and no file needed.
+  if (Object.keys(merged).length === 0) {
+    return { environmentFiles: [], environmentKeys };
+  }
+
+  const content = Object.entries(merged)
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n");
   await fs.writeFile(envFilePath, `${content}\n`, { encoding: "utf8", mode: 0o600 });
   await fs.chmod(envFilePath, 0o600);
-  return [envFilePath];
+  return { environmentFiles: [envFilePath], environmentKeys };
 }
 
 export async function stageSystemdService({
@@ -804,7 +898,7 @@ export async function readSystemdServiceRuntime(
     lastExitReason: parsed.execMainCode,
   };
 }
-export type LegacySystemdUnit = {
+type LegacySystemdUnit = {
   name: string;
   unitPath: string;
   enabled: boolean;
@@ -819,7 +913,7 @@ async function isSystemctlAvailable(env: GatewayServiceEnv): Promise<boolean> {
   return !isSystemctlMissing(readSystemctlDetail(res));
 }
 
-export async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySystemdUnit[]> {
+async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySystemdUnit[]> {
   const results: LegacySystemdUnit[] = [];
   const systemctlAvailable = await isSystemctlAvailable(env);
   for (const name of LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES) {

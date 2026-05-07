@@ -29,6 +29,7 @@ import type {
   VideoGenerationResolution,
   VideoGenerationSourceAsset,
 } from "../../video-generation/types.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import { withMediaGenerationTaskKeepalive } from "./media-generate-background-shared.js";
@@ -36,6 +37,7 @@ import {
   applyVideoGenerationModelConfigDefaults,
   buildMediaReferenceDetails,
   buildTaskRunDetails,
+  hasGenerationToolAvailability,
   normalizeMediaReferenceInputs,
   readBooleanToolParam,
   readGenerationTimeoutMs,
@@ -45,7 +47,11 @@ import {
   resolveRemoteMediaSsrfPolicy,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
-import { type ToolModelConfig } from "./model-config.helpers.js";
+import {
+  coerceToolModelConfig,
+  hasToolModelConfig,
+  type ToolModelConfig,
+} from "./model-config.helpers.js";
 import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
@@ -71,26 +77,6 @@ const log = createSubsystemLogger("agents/tools/video-generate");
 const MAX_INPUT_IMAGES = 9;
 const MAX_INPUT_VIDEOS = 4;
 const MAX_INPUT_AUDIOS = 3;
-const SUPPORTED_ASPECT_RATIOS = new Set([
-  "1:1",
-  "2:3",
-  "3:2",
-  "3:4",
-  "4:3",
-  "4:5",
-  "5:4",
-  "9:16",
-  "16:9",
-  "21:9",
-  // Provider-specific sentinel: accepted at the tool boundary, then forwarded
-  // to the active provider only if that provider declares "adaptive" in its
-  // capabilities.aspectRatios list. Providers that do not declare it see the
-  // value pushed into `ignoredOverrides` in the normalization layer so the
-  // tool surfaces a user-visible "ignored override" warning rather than
-  // silently dropping the request. Seedance uses this to auto-detect the
-  // ratio from input image dimensions.
-  "adaptive",
-]);
 
 const VideoGenerateToolSchema = Type.Object({
   action: Type.Optional(
@@ -178,12 +164,13 @@ const VideoGenerateToolSchema = Type.Object({
   aspectRatio: Type.Optional(
     Type.String({
       description:
-        'Optional aspect ratio hint: 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, or "adaptive".',
+        'Optional aspect ratio hint such as 1:1, 16:9, 9:16, "adaptive", or a provider-specific value. OpenClaw normalizes or ignores unsupported values per provider.',
     }),
   ),
   resolution: Type.Optional(
     Type.String({
-      description: "Optional resolution hint: 480P, 720P, 768P, or 1080P.",
+      description:
+        "Optional resolution hint such as 480P, 720P, 768P, 1080P, 4K, or a provider-specific value. OpenClaw normalizes or ignores unsupported values per provider.",
     }),
   ),
   durationSeconds: Type.Optional(
@@ -224,13 +211,19 @@ const VideoGenerateToolSchema = Type.Object({
 export function resolveVideoGenerationModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
+  authStore?: AuthProfileStore;
 }): ToolModelConfig | null {
   return resolveCapabilityModelConfigForTool({
     cfg: params.cfg,
     agentDir: params.agentDir,
+    authStore: params.authStore,
     modelConfig: params.cfg?.agents?.defaults?.videoGenerationModel,
-    providers: listRuntimeVideoGenerationProviders({ config: params.cfg }),
+    providers: () => listRuntimeVideoGenerationProviders({ config: params.cfg }),
   });
+}
+
+function hasExplicitVideoGenerationModelConfig(cfg?: OpenClawConfig): boolean {
+  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.videoGenerationModel));
 }
 
 function resolveAction(args: Record<string, unknown>): "generate" | "list" | "status" {
@@ -242,19 +235,15 @@ function resolveAction(args: Record<string, unknown>): "generate" | "list" | "st
 }
 
 function normalizeResolution(raw: string | undefined): VideoGenerationResolution | undefined {
-  const normalized = raw?.trim().toUpperCase();
+  const normalized = raw?.trim();
   if (!normalized) {
     return undefined;
   }
-  if (
-    normalized === "480P" ||
-    normalized === "720P" ||
-    normalized === "768P" ||
-    normalized === "1080P"
-  ) {
-    return normalized;
+  const uppercase = normalized.toUpperCase();
+  if (/^\d+P$/.test(uppercase) || /^\d+K$/.test(uppercase)) {
+    return uppercase;
   }
-  throw new ToolInputError("resolution must be one of 480P, 720P, 768P, or 1080P");
+  return normalized;
 }
 
 function normalizeAspectRatio(raw: string | undefined): string | undefined {
@@ -262,12 +251,7 @@ function normalizeAspectRatio(raw: string | undefined): string | undefined {
   if (!normalized) {
     return undefined;
   }
-  if (SUPPORTED_ASPECT_RATIOS.has(normalized)) {
-    return normalized;
-  }
-  throw new ToolInputError(
-    "aspectRatio must be one of 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, or adaptive",
-  );
+  return normalized;
 }
 
 /**
@@ -582,6 +566,7 @@ async function executeVideoGenerationJob(params: {
   loadedReferenceAudios: LoadedReferenceAsset[];
   taskHandle?: VideoGenerationTaskHandle | null;
   providerOptions?: Record<string, unknown>;
+  autoProviderFallback?: boolean;
   timeoutMs?: number;
 }): Promise<ExecutedVideoGeneration> {
   if (params.taskHandle) {
@@ -604,6 +589,7 @@ async function executeVideoGenerationJob(params: {
     inputImages: params.loadedReferenceImages.map((entry) => entry.sourceAsset),
     inputVideos: params.loadedReferenceVideos.map((entry) => entry.sourceAsset),
     inputAudios: params.loadedReferenceAudios.map((entry) => entry.sourceAsset),
+    autoProviderFallback: params.autoProviderFallback,
     providerOptions: params.providerOptions,
     timeoutMs: params.timeoutMs,
   });
@@ -794,6 +780,7 @@ async function executeVideoGenerationJob(params: {
 export function createVideoGenerateTool(options?: {
   config?: OpenClawConfig;
   agentDir?: string;
+  authProfileStore?: AuthProfileStore;
   agentSessionKey?: string;
   requesterOrigin?: DeliveryContext;
   workspaceDir?: string;
@@ -802,11 +789,16 @@ export function createVideoGenerateTool(options?: {
   scheduleBackgroundWork?: VideoGenerateBackgroundScheduler;
 }): AnyAgentTool | null {
   const cfg: OpenClawConfig = options?.config ?? getRuntimeConfig();
-  const videoGenerationModelConfig = resolveVideoGenerationModelConfigForTool({
-    cfg,
-    agentDir: options?.agentDir,
-  });
-  if (!videoGenerationModelConfig) {
+  if (
+    !hasGenerationToolAvailability({
+      cfg,
+      agentDir: options?.agentDir,
+      workspaceDir: options?.workspaceDir,
+      authStore: options?.authProfileStore,
+      modelConfig: cfg.agents?.defaults?.videoGenerationModel,
+      providerKey: "videoGenerationProviders",
+    })
+  ) {
     return null;
   }
 
@@ -830,17 +822,27 @@ export function createVideoGenerateTool(options?: {
     execute: async (_toolCallId, rawArgs) => {
       const args = rawArgs as Record<string, unknown>;
       const action = resolveAction(args);
-      const effectiveCfg =
-        applyVideoGenerationModelConfigDefaults(cfg, videoGenerationModelConfig) ?? cfg;
-      const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
 
       if (action === "list") {
-        return createVideoGenerateListActionResult(effectiveCfg);
+        return createVideoGenerateListActionResult(cfg);
       }
 
       if (action === "status") {
         return createVideoGenerateStatusActionResult(options?.agentSessionKey);
       }
+
+      const videoGenerationModelConfig = resolveVideoGenerationModelConfigForTool({
+        cfg,
+        agentDir: options?.agentDir,
+        authStore: options?.authProfileStore,
+      });
+      if (!videoGenerationModelConfig) {
+        throw new ToolInputError("No video-generation model configured.");
+      }
+      const explicitModelConfig = hasExplicitVideoGenerationModelConfig(cfg);
+      const effectiveCfg =
+        applyVideoGenerationModelConfigDefaults(cfg, videoGenerationModelConfig) ?? cfg;
+      const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
 
       const duplicateGuardResult = createVideoGenerateDuplicateGuardResult(
         options?.agentSessionKey,
@@ -1004,6 +1006,7 @@ export function createVideoGenerateTool(options?: {
                   loadedReferenceAudios,
                   taskHandle,
                   providerOptions,
+                  autoProviderFallback: explicitModelConfig ? false : undefined,
                   timeoutMs,
                 }),
             });
@@ -1101,6 +1104,7 @@ export function createVideoGenerateTool(options?: {
           loadedReferenceAudios,
           taskHandle,
           providerOptions,
+          autoProviderFallback: explicitModelConfig ? false : undefined,
           timeoutMs,
         });
         completeVideoGenerationTaskRun({

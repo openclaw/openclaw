@@ -4,12 +4,13 @@ import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
 
 const START_OPTIONS_KEY_SECRET = randomBytes(32);
 
-export type CodexAppServerTransportMode = "stdio" | "websocket";
-export type CodexAppServerPolicyMode = "yolo" | "guardian";
+type CodexAppServerTransportMode = "stdio" | "websocket";
+type CodexAppServerPolicyMode = "yolo" | "guardian";
 export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
-export type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
-export type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
+type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
+type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
+type CodexDynamicToolsProfile = "native-first" | "openclaw-compat";
 
 export type CodexComputerUseConfig = {
   enabled?: boolean;
@@ -48,6 +49,7 @@ export type CodexAppServerStartOptions = {
 export type CodexAppServerRuntimeOptions = {
   start: CodexAppServerStartOptions;
   requestTimeoutMs: number;
+  turnCompletionIdleTimeoutMs: number;
   approvalPolicy: CodexAppServerApprovalPolicy;
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
@@ -55,6 +57,8 @@ export type CodexAppServerRuntimeOptions = {
 };
 
 export type CodexPluginConfig = {
+  codexDynamicToolsProfile?: CodexDynamicToolsProfile;
+  codexDynamicToolsExclude?: string[];
   discovery?: {
     enabled?: boolean;
     timeoutMs?: number;
@@ -70,6 +74,7 @@ export type CodexPluginConfig = {
     headers?: Record<string, string>;
     clearEnv?: string[];
     requestTimeoutMs?: number;
+    turnCompletionIdleTimeoutMs?: number;
     approvalPolicy?: CodexAppServerApprovalPolicy;
     sandbox?: CodexAppServerSandboxMode;
     approvalsReviewer?: CodexAppServerApprovalsReviewer;
@@ -88,6 +93,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "headers",
   "clearEnv",
   "requestTimeoutMs",
+  "turnCompletionIdleTimeoutMs",
   "approvalPolicy",
   "sandbox",
   "approvalsReviewer",
@@ -106,9 +112,9 @@ export const CODEX_COMPUTER_USE_CONFIG_KEYS = [
   "mcpServerName",
 ] as const;
 
-export const DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME = "computer-use";
-export const DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME = "computer-use";
-export const DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 60_000;
+const DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME = "computer-use";
+const DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME = "computer-use";
+const DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 60_000;
 
 const codexAppServerTransportSchema = z.enum(["stdio", "websocket"]);
 const codexAppServerPolicyModeSchema = z.enum(["yolo", "guardian"]);
@@ -120,13 +126,18 @@ const codexAppServerApprovalPolicySchema = z.enum([
 ]);
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 const codexAppServerApprovalsReviewerSchema = z.enum(["user", "auto_review", "guardian_subagent"]);
-const codexAppServerServiceTierSchema = z.preprocess(
-  (value) => (value === null ? null : resolveServiceTier(value)),
-  z.enum(["fast", "flex"]).nullable().optional(),
-);
+const codexDynamicToolsProfileSchema = z.enum(["native-first", "openclaw-compat"]);
+const codexAppServerServiceTierSchema = z
+  .preprocess(
+    (value) => (value === null ? null : resolveServiceTier(value)),
+    z.enum(["fast", "flex"]).nullable().optional(),
+  )
+  .optional();
 
 const codexPluginConfigSchema = z
   .object({
+    codexDynamicToolsProfile: codexDynamicToolsProfileSchema.optional(),
+    codexDynamicToolsExclude: z.array(z.string()).optional(),
     discovery: z
       .object({
         enabled: z.boolean().optional(),
@@ -158,6 +169,7 @@ const codexPluginConfigSchema = z
         headers: z.record(z.string(), z.string()).optional(),
         clearEnv: z.array(z.string()).optional(),
         requestTimeoutMs: z.number().positive().optional(),
+        turnCompletionIdleTimeoutMs: z.number().positive().optional(),
         approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
         sandbox: codexAppServerSandboxSchema.optional(),
         approvalsReviewer: codexAppServerApprovalsReviewerSchema.optional(),
@@ -219,6 +231,10 @@ export function resolveCodexAppServerRuntimeOptions(
       ...(transport === "stdio" && clearEnv.length > 0 ? { clearEnv } : {}),
     },
     requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
+    turnCompletionIdleTimeoutMs: normalizePositiveNumber(
+      config.turnCompletionIdleTimeoutMs,
+      60_000,
+    ),
     approvalPolicy:
       resolveApprovalPolicy(config.approvalPolicy) ??
       resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY) ??
@@ -323,12 +339,11 @@ export function codexSandboxPolicyForTurn(
     return { type: "dangerFullAccess" };
   }
   if (mode === "read-only") {
-    return { type: "readOnly", access: { type: "fullAccess" }, networkAccess: false };
+    return { type: "readOnly", networkAccess: false };
   }
   return {
     type: "workspaceWrite",
     writableRoots: [cwd],
-    readOnlyAccess: { type: "fullAccess" },
     networkAccess: false,
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false,

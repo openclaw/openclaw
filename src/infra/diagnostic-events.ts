@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
 import {
   formatDiagnosticTraceparent,
   getActiveDiagnosticTraceContext,
@@ -114,6 +115,21 @@ export type DiagnosticMessageDeliveryErrorEvent = DiagnosticMessageDeliveryBaseE
   errorCategory: string;
 };
 
+export type DiagnosticTalkEvent = DiagnosticBaseEvent & {
+  type: "talk.event";
+  sessionId?: string;
+  turnId?: string;
+  captureId?: string;
+  talkEventType: TalkEventType;
+  mode: TalkMode;
+  transport: TalkTransport;
+  brain: TalkBrain;
+  provider?: string;
+  final?: boolean;
+  durationMs?: number;
+  byteLength?: number;
+};
+
 export type DiagnosticSessionStateEvent = DiagnosticBaseEvent & {
   type: "session.state";
   sessionKey?: string;
@@ -124,13 +140,76 @@ export type DiagnosticSessionStateEvent = DiagnosticBaseEvent & {
   queueDepth?: number;
 };
 
-export type DiagnosticSessionStuckEvent = DiagnosticBaseEvent & {
-  type: "session.stuck";
+export type DiagnosticSessionActiveWorkKind = "embedded_run" | "model_call" | "tool_call";
+
+export type DiagnosticSessionAttentionClassification =
+  | "long_running"
+  | "blocked_tool_call"
+  | "stalled_agent_run"
+  | "stale_session_state";
+
+type DiagnosticSessionAttentionBaseEvent = DiagnosticBaseEvent & {
   sessionKey?: string;
   sessionId?: string;
   state: DiagnosticSessionState;
   ageMs: number;
   queueDepth?: number;
+  reason?: string;
+  classification: DiagnosticSessionAttentionClassification;
+  activeWorkKind?: DiagnosticSessionActiveWorkKind;
+  lastProgressAgeMs?: number;
+  lastProgressReason?: string;
+  activeToolName?: string;
+  activeToolCallId?: string;
+  activeToolAgeMs?: number;
+  terminalProgressStale?: boolean;
+};
+
+export type DiagnosticSessionLongRunningEvent = DiagnosticSessionAttentionBaseEvent & {
+  type: "session.long_running";
+  classification: "long_running";
+};
+
+export type DiagnosticSessionStalledEvent = DiagnosticSessionAttentionBaseEvent & {
+  type: "session.stalled";
+  classification: "blocked_tool_call" | "stalled_agent_run";
+};
+
+export type DiagnosticSessionStuckEvent = DiagnosticSessionAttentionBaseEvent & {
+  type: "session.stuck";
+  classification: "stale_session_state";
+};
+
+export type DiagnosticSessionRecoveryStatus =
+  | "aborted"
+  | "released"
+  | "skipped"
+  | "noop"
+  | "failed";
+
+type DiagnosticSessionRecoveryBaseEvent = DiagnosticBaseEvent & {
+  sessionKey?: string;
+  sessionId?: string;
+  state: DiagnosticSessionState;
+  stateGeneration?: number;
+  ageMs: number;
+  queueDepth?: number;
+  reason?: string;
+  activeWorkKind?: DiagnosticSessionActiveWorkKind;
+  allowActiveAbort?: boolean;
+};
+
+export type DiagnosticSessionRecoveryRequestedEvent = DiagnosticSessionRecoveryBaseEvent & {
+  type: "session.recovery.requested";
+};
+
+export type DiagnosticSessionRecoveryCompletedEvent = DiagnosticSessionRecoveryBaseEvent & {
+  type: "session.recovery.completed";
+  status: DiagnosticSessionRecoveryStatus;
+  action: string;
+  outcomeReason?: string;
+  released?: number;
+  stale?: boolean;
 };
 
 export type DiagnosticLaneEnqueueEvent = DiagnosticBaseEvent & {
@@ -154,6 +233,14 @@ export type DiagnosticRunAttemptEvent = DiagnosticBaseEvent & {
   attempt: number;
 };
 
+export type DiagnosticRunProgressEvent = DiagnosticBaseEvent & {
+  type: "run.progress";
+  sessionKey?: string;
+  sessionId?: string;
+  runId?: string;
+  reason: string;
+};
+
 export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
   type: "diagnostic.heartbeat";
   webhooks: {
@@ -167,6 +254,20 @@ export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
 };
 
 export type DiagnosticLivenessWarningReason = "event_loop_delay" | "event_loop_utilization" | "cpu";
+
+export type DiagnosticPhaseDetails = Record<string, string | number | boolean>;
+
+export type DiagnosticPhaseSnapshot = {
+  name: string;
+  startedAt: number;
+  endedAt?: number;
+  durationMs?: number;
+  cpuUserMs?: number;
+  cpuSystemMs?: number;
+  cpuTotalMs?: number;
+  cpuCoreRatio?: number;
+  details?: DiagnosticPhaseDetails;
+};
 
 export type DiagnosticLivenessWarningEvent = DiagnosticBaseEvent & {
   type: "diagnostic.liveness.warning";
@@ -182,7 +283,17 @@ export type DiagnosticLivenessWarningEvent = DiagnosticBaseEvent & {
   active: number;
   waiting: number;
   queued: number;
+  phase?: string;
+  recentPhases?: DiagnosticPhaseSnapshot[];
+  activeWorkLabels?: string[];
+  waitingWorkLabels?: string[];
+  queuedWorkLabels?: string[];
 };
+
+export type DiagnosticPhaseCompletedEvent = DiagnosticBaseEvent &
+  DiagnosticPhaseSnapshot & {
+    type: "diagnostic.phase.completed";
+  };
 
 export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   type: "tool.loop";
@@ -277,8 +388,9 @@ export type DiagnosticRunStartedEvent = DiagnosticRunBaseEvent & {
 export type DiagnosticRunCompletedEvent = DiagnosticRunBaseEvent & {
   type: "run.completed";
   durationMs: number;
-  outcome: "completed" | "aborted" | "error";
+  outcome: "completed" | "aborted" | "blocked" | "error";
   errorCategory?: string;
+  blockedBy?: string;
 };
 
 export type DiagnosticHarnessRunPhase = "prepare" | "start" | "send" | "resolve" | "cleanup";
@@ -453,13 +565,20 @@ export type DiagnosticEventPayload =
   | DiagnosticMessageDeliveryStartedEvent
   | DiagnosticMessageDeliveryCompletedEvent
   | DiagnosticMessageDeliveryErrorEvent
+  | DiagnosticTalkEvent
   | DiagnosticSessionStateEvent
+  | DiagnosticSessionLongRunningEvent
+  | DiagnosticSessionStalledEvent
   | DiagnosticSessionStuckEvent
+  | DiagnosticSessionRecoveryRequestedEvent
+  | DiagnosticSessionRecoveryCompletedEvent
   | DiagnosticLaneEnqueueEvent
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent
+  | DiagnosticRunProgressEvent
   | DiagnosticHeartbeatEvent
   | DiagnosticLivenessWarningEvent
+  | DiagnosticPhaseCompletedEvent
   | DiagnosticToolLoopEvent
   | DiagnosticToolExecutionStartedEvent
   | DiagnosticToolExecutionCompletedEvent
@@ -522,9 +641,11 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "message.delivery.started",
   "message.delivery.completed",
   "message.delivery.error",
+  "talk.event",
   "model.call.started",
   "model.call.completed",
   "model.call.error",
+  "run.progress",
   "harness.run.started",
   "harness.run.completed",
   "harness.run.error",

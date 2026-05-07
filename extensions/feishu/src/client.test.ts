@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FeishuConfigSchema } from "./config-schema.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -119,9 +119,23 @@ function readCallOptions(
   return isRecord(call) ? call : {};
 }
 
-function firstWsClientOptions(): { agent?: unknown; wsConfig?: unknown } {
+function firstWsClientOptions(): {
+  agent?: unknown;
+  wsConfig?: unknown;
+  onError?: unknown;
+  onReady?: unknown;
+  onReconnected?: unknown;
+  onReconnecting?: unknown;
+} {
   const options = readCallOptions(wsClientCtorMock, 0);
-  return { agent: options.agent, wsConfig: options.wsConfig };
+  return {
+    agent: options.agent,
+    wsConfig: options.wsConfig,
+    onError: options.onError,
+    onReady: options.onReady,
+    onReconnected: options.onReconnected,
+    onReconnecting: options.onReconnecting,
+  };
 }
 
 beforeAll(async () => {
@@ -190,6 +204,21 @@ afterEach(() => {
     process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR] = priorFeishuTimeoutEnv;
   }
   setFeishuClientRuntimeForTest();
+});
+
+afterAll(() => {
+  vi.doUnmock("./channel.js");
+  vi.doUnmock("./docx.js");
+  vi.doUnmock("./chat.js");
+  vi.doUnmock("./wiki.js");
+  vi.doUnmock("./drive.js");
+  vi.doUnmock("./perm.js");
+  vi.doUnmock("./bitable.js");
+  vi.doUnmock("./runtime.js");
+  vi.doUnmock("./subagent-hooks.js");
+  vi.doUnmock("@larksuiteoapi/node-sdk");
+  vi.doUnmock("proxy-agent");
+  vi.resetModules();
 });
 
 describe("createFeishuClient HTTP timeout", () => {
@@ -349,6 +378,30 @@ describe("createFeishuWSClient proxy handling", () => {
     await createFeishuWSClient(baseAccount);
 
     const options = firstWsClientOptions();
+    expect(options.wsConfig).toEqual({
+      PingInterval: 30,
+      PingTimeout: 3,
+    });
+  });
+
+  it("passes lifecycle callbacks while preserving heartbeat wsConfig defaults", async () => {
+    const onError = vi.fn();
+    const onReady = vi.fn();
+    const onReconnected = vi.fn();
+    const onReconnecting = vi.fn();
+
+    await createFeishuWSClient(baseAccount, {
+      onError,
+      onReady,
+      onReconnected,
+      onReconnecting,
+    });
+
+    const options = firstWsClientOptions();
+    expect(options.onError).toBe(onError);
+    expect(options.onReady).toBe(onReady);
+    expect(options.onReconnected).toBe(onReconnected);
+    expect(options.onReconnecting).toBe(onReconnecting);
     expect(options.wsConfig).toEqual({
       PingInterval: 30,
       PingTimeout: 3,

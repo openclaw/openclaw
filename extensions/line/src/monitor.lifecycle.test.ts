@@ -3,9 +3,9 @@ import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { WEBHOOK_IN_FLIGHT_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-guards";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
+import { WEBHOOK_IN_FLIGHT_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-guards";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type LineNodeWebhookHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 
@@ -52,8 +52,9 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", () => ({
-  createChannelReplyPipeline: vi.fn(() => ({})),
+vi.mock("openclaw/plugin-sdk/channel-message", () => ({
+  createChannelMessageReplyPipeline: vi.fn(() => ({})),
+  hasFinalChannelMessageReplyDispatch: vi.fn(() => false),
 }));
 
 vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
@@ -111,6 +112,21 @@ describe("monitorLineProvider lifecycle", () => {
       await import("./monitor.js"));
   });
 
+  afterAll(() => {
+    vi.doUnmock("./bot.js");
+    vi.doUnmock("openclaw/plugin-sdk/reply-runtime");
+    vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+    vi.doUnmock("openclaw/plugin-sdk/channel-message");
+    vi.doUnmock("openclaw/plugin-sdk/webhook-ingress");
+    vi.doUnmock("./webhook-node.js");
+    vi.doUnmock("./auto-reply-delivery.js");
+    vi.doUnmock("./markdown-to-line.js");
+    vi.doUnmock("./reply-chunks.js");
+    vi.doUnmock("./send.js");
+    vi.doUnmock("./template-messages.js");
+    vi.resetModules();
+  });
+
   beforeEach(() => {
     clearLineRuntimeStateForTests();
     createLineBotMock.mockReset();
@@ -145,6 +161,10 @@ describe("monitorLineProvider lifecycle", () => {
         },
       };
     });
+  });
+
+  afterEach(() => {
+    clearLineRuntimeStateForTests();
   });
 
   const createRouteResponse = () => {

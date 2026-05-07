@@ -2,7 +2,7 @@ import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 import { discoverLmstudioModels, ensureLmstudioModelLoaded } from "./models.fetch.js";
 import {
@@ -21,6 +21,11 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
     ...actual,
     fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.resetModules();
 });
 
 describe("lmstudio-models", () => {
@@ -146,7 +151,7 @@ describe("lmstudio-models", () => {
     ).toBe(false);
   });
 
-  it("maps LM Studio native reasoning options into OpenAI-compatible effort compat", () => {
+  it("maps LM Studio binary reasoning options into OpenAI-compatible effort compat", () => {
     expect(
       resolveLmstudioReasoningCompat({
         capabilities: {
@@ -158,13 +163,30 @@ describe("lmstudio-models", () => {
       }),
     ).toEqual({
       supportsReasoningEffort: true,
-      supportedReasoningEfforts: ["off", "on"],
+      supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
       reasoningEffortMap: expect.objectContaining({
-        off: "off",
-        none: "off",
-        low: "on",
-        medium: "on",
-        high: "on",
+        off: "none",
+        none: "none",
+        adaptive: "xhigh",
+        max: "xhigh",
+      }),
+    });
+
+    expect(
+      resolveLmstudioReasoningCompat({
+        capabilities: {
+          reasoning: {
+            allowed_options: ["low", "medium", "high"],
+            default: "low",
+          },
+        },
+      }),
+    ).toEqual({
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["low", "medium", "high"],
+      reasoningEffortMap: expect.objectContaining({
+        adaptive: "high",
+        max: "high",
       }),
     });
 
@@ -243,12 +265,12 @@ describe("lmstudio-models", () => {
       compat: {
         supportsUsageInStreaming: true,
         supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["off", "on"],
+        supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
         reasoningEffortMap: expect.objectContaining({
-          off: "off",
-          none: "off",
-          medium: "on",
-          high: "on",
+          off: "none",
+          none: "none",
+          adaptive: "xhigh",
+          max: "xhigh",
         }),
       },
       contextWindow: 262144,

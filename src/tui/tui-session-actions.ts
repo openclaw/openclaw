@@ -10,6 +10,7 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { ChatLog } from "./components/chat-log.js";
 import type { TuiAgentsList, TuiBackend } from "./tui-backend.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
+import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import type { SessionInfo, TuiOptions, TuiStateAccess } from "./tui-types.js";
 
 type SessionActionBtwPresenter = {
@@ -32,6 +33,7 @@ type SessionActionContext = {
   updateAutocompleteProvider: () => void;
   setActivityStatus: (text: string) => void;
   clearLocalRunIds?: () => void;
+  rememberSessionKey?: (sessionKey: string) => void | Promise<void>;
 };
 
 type SessionInfoDefaults = {
@@ -63,6 +65,7 @@ export function createSessionActions(context: SessionActionContext) {
     updateAutocompleteProvider,
     setActivityStatus,
     clearLocalRunIds,
+    rememberSessionKey,
   } = context;
   let refreshSessionInfoPromise: Promise<void> = Promise.resolve();
   let lastSessionDefaults: SessionInfoDefaults | null = null;
@@ -232,6 +235,8 @@ export function createSessionActions(context: SessionActionContext) {
       };
       const listAgentId = resolveListAgentId();
       const result = await client.listSessions({
+        limit: TUI_SESSION_LOOKUP_LIMIT,
+        search: state.currentSessionKey,
         includeGlobal: false,
         includeUnknown: false,
         agentId: listAgentId,
@@ -362,6 +367,7 @@ export function createSessionActions(context: SessionActionContext) {
         }
       }
       state.historyLoaded = true;
+      void rememberSessionKey?.(state.currentSessionKey);
     } catch (err) {
       chatLog.addSystem(`history failed: ${String(err)}`);
     }
@@ -374,6 +380,7 @@ export function createSessionActions(context: SessionActionContext) {
     updateAgentFromSessionKey(nextKey);
     state.currentSessionKey = nextKey;
     state.activeChatRunId = null;
+    state.pendingChatRunId = null;
     setActivityStatus("idle");
     state.currentSessionId = null;
     // Session keys can move backwards in updatedAt ordering; drop previous session freshness
@@ -388,7 +395,8 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const abortActive = async () => {
-    if (!state.activeChatRunId) {
+    const runId = state.activeChatRunId ?? state.pendingChatRunId ?? null;
+    if (!runId) {
       chatLog.addSystem("no active run");
       tui.requestRender();
       return;
@@ -396,8 +404,9 @@ export function createSessionActions(context: SessionActionContext) {
     try {
       await client.abortChat({
         sessionKey: state.currentSessionKey,
-        runId: state.activeChatRunId,
+        runId,
       });
+      state.pendingChatRunId = null;
       setActivityStatus("aborted");
     } catch (err) {
       chatLog.addSystem(`abort failed: ${String(err)}`);

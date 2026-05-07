@@ -458,6 +458,86 @@ describe("sanitizeChatHistoryMessages", () => {
 });
 
 describe("projectRecentChatDisplayMessages", () => {
+  it("keeps visible assistant progress text from mixed tool-use messages", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "fix it" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "private reasoning" },
+          {
+            type: "text",
+            text: "I will clean that up now.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "msg-progress",
+              phase: "commentary",
+            }),
+          },
+          {
+            type: "toolCall",
+            id: "call-read",
+            name: "read",
+            arguments: { path: "AGENTS.md" },
+          },
+        ],
+        timestamp: 2,
+        __openclaw: { seq: 2 },
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-read",
+        toolName: "read",
+        content: [{ type: "text", text: "file contents" }],
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result[1]).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "I will clean that up now." }],
+      timestamp: 2,
+      __openclaw: { seq: 2 },
+    });
+  });
+
+  it("keeps pure commentary assistant messages hidden", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "status" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Working...",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "msg-commentary",
+              phase: "commentary",
+            }),
+          },
+        ],
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "status" }],
+        timestamp: 1,
+      },
+    ]);
+  });
+
   it("applies history limits after dropping display-hidden messages", () => {
     const result = projectRecentChatDisplayMessages(
       [
@@ -587,7 +667,7 @@ describe("sanitizeChatSendMessageInput", () => {
 });
 
 describe("gateway chat transcript writes (guardrail)", () => {
-  it("routes transcript writes through helper and SessionManager parentId append", () => {
+  it("routes transcript writes through helper and async parentId append", () => {
     const chatTs = fileURLToPath(new URL("./chat.ts", import.meta.url));
     const chatSrc = fs.readFileSync(chatTs, "utf-8");
     const helperTs = fileURLToPath(new URL("./chat-transcript-inject.ts", import.meta.url));
@@ -596,9 +676,9 @@ describe("gateway chat transcript writes (guardrail)", () => {
     expect(chatSrc.includes("fs.appendFileSync(transcriptPath")).toBe(false);
     expect(chatSrc).toContain("appendInjectedAssistantMessageToTranscript(");
 
-    expect(helperSrc.includes("fs.appendFileSync(params.transcriptPath")).toBe(false);
-    expect(helperSrc).toContain("SessionManager.open(params.transcriptPath)");
-    expect(helperSrc).toContain("appendMessage(messageBody)");
+    expect(helperSrc).toContain("appendSessionTranscriptMessage({");
+    expect(helperSrc).toContain("useRawWhenLinear: true");
+    expect(helperSrc).not.toContain("SessionManager.open(params.transcriptPath)");
   });
 });
 
@@ -891,6 +971,43 @@ describe("exec approval handlers", () => {
     await resolveExecApproval({
       handlers,
       id,
+      respond: resolveRespond,
+      context,
+    });
+    await requestPromise;
+  });
+
+  it("attaches shared command analysis to gateway exec approval requests", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        twoPhase: true,
+        host: "gateway",
+        command: "python3 -c 'print(1)'",
+        commandArgv: ["python3", "script.py"],
+        systemRunPlan: undefined,
+        nodeId: undefined,
+      },
+    });
+
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    const request = requested?.payload as { id?: string; request?: { commandAnalysis?: unknown } };
+    expect(request.request?.commandAnalysis).toEqual(
+      expect.objectContaining({
+        commandCount: 1,
+        riskKinds: expect.arrayContaining(["inline-eval"]),
+        warningLines: expect.arrayContaining(["Contains inline-eval: python3 -c"]),
+      }),
+    );
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: request.id ?? "",
       respond: resolveRespond,
       context,
     });
@@ -1918,6 +2035,233 @@ describe("gateway healthHandlers.status scope handling", () => {
       includeChannelSummary: false,
     });
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+});
+
+describe("gateway healthHandlers.health cache freshness", () => {
+  let healthHandlers: typeof import("./health.js").healthHandlers;
+
+  beforeAll(async () => {
+    ({ healthHandlers } = await import("./health.js"));
+  });
+
+  it("refreshes cached health when runtime channel lifecycle has changed", async () => {
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {
+        discord: {
+          configured: true,
+          running: false,
+          connected: false,
+          accounts: {
+            default: {
+              accountId: "default",
+              configured: true,
+              running: false,
+              connected: false,
+            },
+          },
+        },
+      },
+      channelOrder: ["discord"],
+      channelLabels: { discord: "Discord" },
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+    };
+    const fresh = {
+      ...cached,
+      ts: cached.ts + 1,
+      channels: {
+        discord: {
+          ...cached.channels.discord,
+          running: true,
+          connected: true,
+          accounts: {
+            default: {
+              ...cached.channels.discord.accounts.default,
+              running: true,
+              connected: true,
+            },
+          },
+        },
+      },
+    };
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
+
+    await healthHandlers.health({
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => cached,
+        refreshHealthSnapshot,
+        getRuntimeSnapshot: () => ({
+          channels: {},
+          channelAccounts: {
+            discord: {
+              default: {
+                accountId: "default",
+                running: true,
+                connected: true,
+              },
+            },
+          },
+        }),
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+  });
+
+  it("preserves event-loop health sampled by the refresh path", async () => {
+    const eventLoop = {
+      degraded: true,
+      reasons: ["event_loop_delay" as const],
+      intervalMs: 2_000,
+      delayP99Ms: 1_500,
+      delayMaxMs: 1_800,
+      utilization: 0.2,
+      cpuCoreRatio: 0.1,
+    };
+    const replacementEventLoop = {
+      degraded: false,
+      reasons: [],
+      intervalMs: 1,
+      delayP99Ms: 0,
+      delayMaxMs: 0,
+      utilization: 0,
+      cpuCoreRatio: 0,
+    };
+    const fresh = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      eventLoop,
+    };
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
+    const getEventLoopHealth = vi.fn(() => replacementEventLoop);
+
+    await healthHandlers.health({
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => null,
+        refreshHealthSnapshot,
+        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+        getEventLoopHealth,
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+    expect(getEventLoopHealth).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ eventLoop }), undefined);
+  });
+
+  it("refreshes cached health when a runtime account is missing from the cached account summary", async () => {
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {
+        discord: {
+          configured: true,
+          running: true,
+          connected: true,
+          accounts: {
+            default: {
+              accountId: "default",
+              configured: true,
+              running: true,
+              connected: true,
+            },
+          },
+        },
+      },
+      channelOrder: ["discord"],
+      channelLabels: { discord: "Discord" },
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+    };
+    const fresh = {
+      ...cached,
+      ts: cached.ts + 1,
+      channels: {
+        discord: {
+          ...cached.channels.discord,
+          accounts: {
+            ...cached.channels.discord.accounts,
+            work: {
+              accountId: "work",
+              configured: true,
+              running: true,
+              connected: true,
+            },
+          },
+        },
+      },
+    };
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
+
+    await healthHandlers.health({
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => cached,
+        refreshHealthSnapshot,
+        getRuntimeSnapshot: () => ({
+          channels: {},
+          channelAccounts: {
+            discord: {
+              work: {
+                accountId: "work",
+                running: true,
+                connected: true,
+              },
+            },
+          },
+        }),
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
   });
 });
 

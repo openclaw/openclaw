@@ -4,23 +4,24 @@ import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  deliverInboundReplyWithMessageSendContext,
+  createChannelMessageReplyPipeline,
+} from "openclaw/plugin-sdk/channel-message";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
+import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
-import {
-  clearHistoryEntriesIfEnabled,
-  DEFAULT_GROUP_HISTORY_LIMIT,
-  type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-history";
+import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
+import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, shouldLogVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -43,7 +44,7 @@ import { probeIMessage } from "../probe.js";
 import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
-import { deliverReplies } from "./deliver.js";
+import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import {
   buildIMessageInboundContext,
@@ -395,36 +396,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       allowFrom,
       normalizeEntry: normalizeIMessageHandle,
     });
-    await recordInboundSession({
-      storePath,
-      sessionKey: ctxPayload.SessionKey ?? decision.route.sessionKey,
-      ctx: ctxPayload,
-      updateLastRoute:
-        !decision.isGroup && updateTarget
-          ? {
-              sessionKey: decision.route.mainSessionKey,
-              channel: "imessage",
-              to: updateTarget,
-              accountId: decision.route.accountId,
-              mainDmOwnerPin:
-                pinnedMainDmOwner && decision.senderNormalized
-                  ? {
-                      ownerRecipient: pinnedMainDmOwner,
-                      senderRecipient: decision.senderNormalized,
-                      onSkip: ({ ownerRecipient, senderRecipient }) => {
-                        logVerbose(
-                          `imessage: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                        );
-                      },
-                    }
-                  : undefined,
-            }
-          : undefined,
-      onRecordError: (err) => {
-        logVerbose(`imessage: failed updating session meta: ${String(err)}`);
-      },
-    });
-
     if (shouldLogVerbose()) {
       const preview = truncateUtf16Safe(ctxPayload.Body ?? "", 200).replace(/\n/g, "\\n");
       logVerbose(
@@ -434,7 +405,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       );
     }
 
-    const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+    const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
       cfg,
       agentId: decision.route.agentId,
       channel: "imessage",
@@ -444,10 +415,33 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const dispatcher = createReplyDispatcher({
       ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(cfg, decision.route.agentId),
-      deliver: async (payload) => {
+      deliver: async (payload, info) => {
         const target = ctxPayload.To;
         if (!target) {
           runtime.error?.(danger("imessage: missing delivery target"));
+          return;
+        }
+        const durable = await deliverInboundReplyWithMessageSendContext({
+          cfg,
+          channel: "imessage",
+          accountId: accountInfo.accountId,
+          agentId: decision.route.agentId,
+          ctxPayload,
+          payload,
+          info,
+          to: target,
+          deps: {
+            imessage: createIMessageEchoCachingSend({
+              client: getActiveClient(),
+              accountId: accountInfo.accountId,
+              sentMessageCache,
+            }),
+          },
+        });
+        if (durable.status === "failed") {
+          throw durable.error;
+        }
+        if (durable.status === "handled_visible" || durable.status === "handled_no_send") {
           return;
         }
         await deliverReplies({
@@ -467,36 +461,75 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       },
     });
 
-    const { queuedFinal } = await dispatchInboundMessage({
-      ctx: ctxPayload,
-      cfg,
-      dispatcher,
-      replyOptions: {
-        disableBlockStreaming:
-          typeof accountInfo.config.blockStreaming === "boolean"
-            ? !accountInfo.config.blockStreaming
-            : undefined,
-        onModelSelected,
+    await runInboundReplyTurn({
+      channel: "imessage",
+      accountId: decision.route.accountId,
+      raw: decision,
+      adapter: {
+        ingest: () => ({
+          id: ctxPayload.MessageSid ?? `${ctxPayload.From}:${Date.now()}`,
+          timestamp: typeof ctxPayload.Timestamp === "number" ? ctxPayload.Timestamp : undefined,
+          rawText: ctxPayload.RawBody ?? "",
+          textForAgent: ctxPayload.BodyForAgent,
+          textForCommands: ctxPayload.CommandBody,
+          raw: decision,
+        }),
+        resolveTurn: () => ({
+          channel: "imessage",
+          accountId: decision.route.accountId,
+          routeSessionKey: decision.route.sessionKey,
+          storePath,
+          ctxPayload,
+          recordInboundSession,
+          record: {
+            updateLastRoute:
+              !decision.isGroup && updateTarget
+                ? {
+                    sessionKey: decision.route.mainSessionKey,
+                    channel: "imessage",
+                    to: updateTarget,
+                    accountId: decision.route.accountId,
+                    mainDmOwnerPin:
+                      pinnedMainDmOwner && decision.senderNormalized
+                        ? {
+                            ownerRecipient: pinnedMainDmOwner,
+                            senderRecipient: decision.senderNormalized,
+                            onSkip: ({ ownerRecipient, senderRecipient }) => {
+                              logVerbose(
+                                `imessage: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                              );
+                            },
+                          }
+                        : undefined,
+                  }
+                : undefined,
+            onRecordError: (err) => {
+              logVerbose(`imessage: failed updating session meta: ${String(err)}`);
+            },
+          },
+          history: {
+            isGroup: decision.isGroup,
+            historyKey: decision.historyKey,
+            historyMap: groupHistories,
+            limit: historyLimit,
+          },
+          onPreDispatchFailure: () => settleReplyDispatcher({ dispatcher }),
+          runDispatch: () =>
+            dispatchInboundMessage({
+              ctx: ctxPayload,
+              cfg,
+              dispatcher,
+              replyOptions: {
+                disableBlockStreaming:
+                  typeof accountInfo.config.blockStreaming === "boolean"
+                    ? !accountInfo.config.blockStreaming
+                    : undefined,
+                onModelSelected,
+              },
+            }),
+        }),
       },
     });
-
-    if (!queuedFinal) {
-      if (decision.isGroup && decision.historyKey) {
-        clearHistoryEntriesIfEnabled({
-          historyMap: groupHistories,
-          historyKey: decision.historyKey,
-          limit: historyLimit,
-        });
-      }
-      return;
-    }
-    if (decision.isGroup && decision.historyKey) {
-      clearHistoryEntriesIfEnabled({
-        historyMap: groupHistories,
-        historyKey: decision.historyKey,
-        limit: historyLimit,
-      });
-    }
   }
 
   const handleMessage = async (raw: unknown) => {
@@ -640,10 +673,3 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     await activeClient.stop();
   }
 }
-
-export const __testing = {
-  resolveIMessageRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-};
-
-export const resolveIMessageRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;

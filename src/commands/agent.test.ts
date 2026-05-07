@@ -5,7 +5,8 @@ import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest"
 import "./agent-command.test-mocks.js";
 import { __testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
-import { loadModelCatalog } from "../agents/model-catalog.js";
+import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
+import { loadManifestModelCatalog, loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
@@ -105,6 +106,7 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
         authProfileId,
         authProfileIdSource: authProfileId ? sessionEntry?.authProfileOverrideSource : undefined,
         thinkLevel: params.resolvedThinkLevel,
+        fastMode: params.fastMode,
         verboseLevel: params.resolvedVerboseLevel,
         timeoutMs: params.timeoutMs,
         runId: params.runId,
@@ -232,7 +234,11 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
 const runtime = createThrowingTestRuntime();
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "openclaw-agent-", skipSessionCleanup: true });
+  return withTempHomeBase(fn, {
+    prefix: "openclaw-agent-",
+    skipHomeCleanup: true,
+    skipSessionCleanup: true,
+  });
 }
 
 function mockConfig(
@@ -300,6 +306,11 @@ async function runAgentWithSessionKey(sessionKey: string): Promise<void> {
   await agentCommand({ message: "hi", sessionKey }, runtime);
 }
 
+function mockModelCatalogOnce(entries: ReturnType<typeof loadManifestModelCatalog>): void {
+  vi.mocked(loadManifestModelCatalog).mockReturnValueOnce(entries);
+  vi.mocked(loadModelCatalog).mockResolvedValueOnce(entries);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   clearSessionStoreCacheForTest();
@@ -308,6 +319,7 @@ beforeEach(() => {
   acpManagerTesting.resetAcpSessionManagerForTests();
   runtimeSnapshotModule.clearRuntimeConfigSnapshot();
   vi.mocked(runEmbeddedPiAgent).mockResolvedValue(createDefaultAgentResult());
+  vi.mocked(loadManifestModelCatalog).mockReturnValue([]);
   vi.mocked(loadModelCatalog).mockResolvedValue([]);
   vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
   configIoMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
@@ -382,6 +394,95 @@ describe("agentCommand", () => {
       expect(parsed.payloads[0].text).toBe("json-reply");
       expect(parsed.payloads[0].mediaUrl).toBe("http://x.test/a.jpg");
       expect(parsed.meta.durationMs).toBe(42);
+    });
+  });
+
+  it("persists embedded-runner turns to the session transcript", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      const base = createDefaultAgentResult({ payloads: [{ text: "assistant-visible" }] });
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValueOnce({
+        ...base,
+        meta: {
+          ...base.meta,
+          executionTrace: { runner: "embedded" },
+        },
+      });
+
+      await agentCommand({ message: "hello from user", agentId: "main" }, runtime);
+
+      expect(vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript)).toHaveBeenCalledTimes(1);
+      const persistArgs = vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript).mock
+        .calls[0]?.[0];
+      expect(persistArgs?.embeddedAssistantGapFill).toBe(true);
+      expect(persistArgs?.body).toBe("hello from user");
+      expect(persistArgs?.result.meta?.executionTrace?.runner).toBe("embedded");
+    });
+  });
+
+  it("gap-fills Telegram-visible embedded replies without a runner trace", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      const sendMessageTelegram = vi.fn(async () => undefined);
+      const base = createDefaultAgentResult({ payloads: [{ text: "assistant-visible" }] });
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValueOnce({
+        ...base,
+        meta: {
+          ...base.meta,
+          finalAssistantVisibleText: "assistant-visible",
+        },
+      });
+
+      await agentCommandFromIngress(
+        {
+          message: "call a tool then answer",
+          agentId: "main",
+          to: "+1222",
+          channel: "telegram",
+          messageChannel: "telegram",
+          deliver: true,
+          senderIsOwner: false,
+          allowModelOverride: false,
+        },
+        runtime,
+        { sendMessageTelegram },
+      );
+
+      expect(sendMessageTelegram).toHaveBeenCalledWith(
+        "+1222",
+        "assistant-visible",
+        expect.objectContaining({ verbose: false }),
+      );
+      expect(vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript)).toHaveBeenCalledTimes(1);
+      const persistArgs = vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript).mock
+        .calls[0]?.[0];
+      expect(persistArgs?.embeddedAssistantGapFill).toBe(true);
+      expect(persistArgs?.body).toBe("call a tool then answer");
+    });
+  });
+
+  it("passes configured fast mode to embedded runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, {
+        model: "openai/gpt-5.5",
+        models: {
+          "openai/gpt-5.5": { params: { fastMode: true } },
+        },
+      });
+
+      await agentCommand({ message: "ping", agentId: "main" }, runtime);
+
+      const callArgs = getLastEmbeddedCall();
+      expect(callArgs).toEqual(
+        expect.objectContaining({
+          provider: "openai",
+          model: "gpt-5.5",
+          fastMode: true,
+        }),
+      );
     });
   });
 
@@ -558,6 +659,44 @@ describe("agentCommand", () => {
     });
   });
 
+  it("does not publish Codex app-server events from the core command callback", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+
+      const codexEvents: Array<{ runId: string; phase?: string }> = [];
+      const stop = onAgentEvent((evt) => {
+        if (evt.stream !== "codex_app_server.lifecycle") {
+          return;
+        }
+        codexEvents.push({
+          runId: evt.runId,
+          phase: typeof evt.data?.phase === "string" ? evt.data.phase : undefined,
+        });
+      });
+
+      vi.mocked(runEmbeddedPiAgent).mockImplementationOnce(async (params) => {
+        (
+          params as {
+            onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
+          }
+        ).onAgentEvent?.({
+          stream: "codex_app_server.lifecycle",
+          data: { phase: "startup" },
+        });
+        return {
+          payloads: [{ text: "hello" }],
+          meta: { agentMeta: { provider: "p", model: "m" } },
+        } as never;
+      });
+
+      await agentCommand({ message: "hi", to: "+1555", thinking: "low" }, runtime);
+      stop();
+
+      expect(codexEvents).toHaveLength(0);
+    });
+  });
+
   it("uses default fallback list for auto session model overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
@@ -583,7 +722,7 @@ describe("agentCommand", () => {
         },
       });
 
-      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+      mockModelCatalogOnce([
         { id: "claude-opus-4-6", name: "Opus", provider: "anthropic" },
         { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
         { id: "gpt-5.4", name: "GPT-5.2", provider: "openai" },
@@ -641,7 +780,7 @@ describe("agentCommand", () => {
         },
       });
 
-      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+      mockModelCatalogOnce([
         { id: "qwen3.5:27b", name: "Qwen 3.5", provider: "ollama" },
         { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
         { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
@@ -690,7 +829,7 @@ describe("agentCommand", () => {
         },
       });
 
-      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+      mockModelCatalogOnce([
         { id: "claude-opus-4-6", name: "Opus", provider: "anthropic" },
         { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
       ]);
@@ -847,7 +986,7 @@ describe("agentCommand", () => {
           "openai/gpt-4.1-mini": {},
         },
       });
-      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+      mockModelCatalogOnce([
         {
           id: "gpt-4.1-mini",
           name: "GPT-4.1 Mini",

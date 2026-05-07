@@ -7,7 +7,7 @@ export type OnboardMode = "local" | "remote";
  * Auth choices are plugin-owned contract ids plus a few legacy aliases that
  * are normalized elsewhere (for example `oauth` -> `setup-token`).
  */
-export type BuiltInAuthChoice =
+type BuiltInAuthChoice =
   /** @deprecated Use `setup-token`. */
   "oauth" | "setup-token" | "token" | "apiKey" | "custom-api-key" | "skip";
 export type AuthChoice = BuiltInAuthChoice | (string & {});
@@ -20,8 +20,6 @@ export type GatewayBind = "loopback" | "lan" | "auto" | "custom" | "tailnet";
 export type TailscaleMode = "off" | "serve" | "funnel";
 export type NodeManagerChoice = "npm" | "pnpm" | "bun";
 export type ChannelChoice = ChannelId;
-/** @deprecated Use ChannelChoice. */
-export type ProviderChoice = ChannelChoice;
 export type { SecretInputMode } from "../plugins/provider-auth-types.js";
 
 type OnboardDynamicProviderOptions = {

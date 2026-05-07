@@ -23,20 +23,31 @@ if ((prepareResult.status ?? 1) !== 0) {
 const shards = [
   {
     name: "core",
-    args: ["--tsconfig", "tsconfig.oxlint.core.json", "src", "ui", "packages"],
+    args: ["--tsconfig", "config/tsconfig/oxlint.core.json", "src", "ui", "packages"],
   },
   {
     name: "extensions",
-    args: ["--tsconfig", "tsconfig.oxlint.extensions.json", "extensions"],
+    args: ["--tsconfig", "config/tsconfig/oxlint.extensions.json", "extensions"],
   },
   {
     name: "scripts",
-    args: ["--tsconfig", "tsconfig.oxlint.scripts.json", "scripts"],
+    args: ["--tsconfig", "config/tsconfig/oxlint.scripts.json", "scripts"],
   },
 ];
 
-const results = await Promise.all(shards.map((shard) => runShard(shard)));
+const runSerial = process.env.OPENCLAW_OXLINT_SHARDS_SERIAL === "1";
+const results = runSerial
+  ? await runShardsSerial(shards)
+  : await Promise.all(shards.map((shard) => runShard(shard)));
 process.exitCode = results.find((status) => status !== 0) ?? 0;
+
+async function runShardsSerial(entries) {
+  const results = [];
+  for (const shard of entries) {
+    results.push(await runShard(shard));
+  }
+  return results;
+}
 
 async function runShard(shard) {
   console.error(`[oxlint:${shard.name}] starting`);

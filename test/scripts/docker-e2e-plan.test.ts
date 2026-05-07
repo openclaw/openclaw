@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_LIVE_RETRIES,
@@ -8,6 +9,9 @@ import {
 import { BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS } from "../../scripts/lib/docker-e2e-scenarios.mjs";
 
 const orderLanes = <T>(lanes: T[]) => lanes;
+const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+  scripts?: Record<string, string>;
+};
 
 function planFor(
   overrides: Partial<Parameters<typeof resolveDockerE2ePlan>[0]> = {},
@@ -45,8 +49,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes.map((lane) => lane.name)).toContain("install-e2e-openai");
     expect(plan.lanes.map((lane) => lane.name)).toContain("install-e2e-anthropic");
     expect(plan.lanes.map((lane) => lane.name)).toContain("mcp-channels");
-    expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-channel-feishu");
-    expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-channel-update-acpx");
+    expect(plan.lanes.map((lane) => lane.name)).toContain("commitments-safety");
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-plugin-install-uninstall-0");
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-plugin-install-uninstall-23");
     expect(plan.lanes.filter((lane) => lane.name === "install-e2e-openai")).toHaveLength(1);
@@ -140,31 +143,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
       profile: RELEASE_PATH_PROFILE,
       releaseChunk: "plugins-runtime-install-h",
     });
-    const bundledChannelsCore = planFor({
-      includeOpenWebUI: true,
-      profile: RELEASE_PATH_PROFILE,
-      releaseChunk: "bundled-channels-core",
-    });
-    const bundledChannelsUpdateA = planFor({
-      includeOpenWebUI: true,
-      profile: RELEASE_PATH_PROFILE,
-      releaseChunk: "bundled-channels-update-a",
-    });
-    const bundledChannelsUpdateDiscord = planFor({
-      includeOpenWebUI: true,
-      profile: RELEASE_PATH_PROFILE,
-      releaseChunk: "bundled-channels-update-discord",
-    });
-    const bundledChannelsUpdateB = planFor({
-      includeOpenWebUI: true,
-      profile: RELEASE_PATH_PROFILE,
-      releaseChunk: "bundled-channels-update-b",
-    });
-    const bundledChannelsContracts = planFor({
-      includeOpenWebUI: true,
-      profile: RELEASE_PATH_PROFILE,
-      releaseChunk: "bundled-channels-contracts",
-    });
 
     expect(packageInstallOpenAi.lanes.map((lane) => lane.name)).toEqual(["install-e2e-openai"]);
     expect(packageInstallAnthropic.lanes.map((lane) => lane.name)).toEqual([
@@ -172,13 +150,26 @@ describe("scripts/lib/docker-e2e-plan", () => {
     ]);
     expect(packageUpdateCore.lanes.map((lane) => lane.name)).toEqual([
       "npm-onboard-channel-agent",
+      "npm-onboard-discord-channel-agent",
+      "npm-onboard-slack-channel-agent",
       "doctor-switch",
       "update-channel-switch",
+      "upgrade-survivor",
+      "published-upgrade-survivor",
+      "update-restart-auth",
     ]);
     expect(packageUpdateCore.lanes).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           name: "npm-onboard-channel-agent",
+          stateScenario: "empty",
+        }),
+        expect.objectContaining({
+          name: "npm-onboard-discord-channel-agent",
+          stateScenario: "empty",
+        }),
+        expect.objectContaining({
+          name: "npm-onboard-slack-channel-agent",
           stateScenario: "empty",
         }),
         expect.objectContaining({
@@ -188,6 +179,20 @@ describe("scripts/lib/docker-e2e-plan", () => {
         expect.objectContaining({
           name: "update-channel-switch",
           stateScenario: "update-stable",
+        }),
+        expect.objectContaining({
+          name: "upgrade-survivor",
+          command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:upgrade-survivor",
+          stateScenario: "upgrade-survivor",
+        }),
+        expect.objectContaining({
+          name: "published-upgrade-survivor",
+          stateScenario: "upgrade-survivor",
+        }),
+        expect.objectContaining({
+          name: "update-restart-auth",
+          command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-restart-auth",
+          stateScenario: "upgrade-survivor",
         }),
       ]),
     );
@@ -248,42 +253,25 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "bundled-plugin-install-uninstall-22",
       "bundled-plugin-install-uninstall-23",
     ]);
-    expect(bundledChannelsCore.lanes.map((lane) => lane.name)).toEqual([
-      "plugin-update",
-      "bundled-channel-telegram",
-      "bundled-channel-discord",
-      "bundled-channel-slack",
-      "bundled-channel-feishu",
-      "bundled-channel-memory-lancedb",
-    ]);
-    expect(bundledChannelsCore.lanes[0]).toMatchObject({
-      name: "plugin-update",
-      stateScenario: "empty",
+  });
+
+  it("keeps planned pnpm docker lanes backed by package scripts", () => {
+    const plan = planFor({
+      includeOpenWebUI: true,
+      planReleaseAll: true,
+      profile: RELEASE_PATH_PROFILE,
     });
-    expect(bundledChannelsUpdateA.lanes.map((lane) => lane.name)).toEqual([
-      "bundled-channel-update-telegram",
-      "bundled-channel-update-memory-lancedb",
-    ]);
-    expect(bundledChannelsUpdateDiscord.lanes.map((lane) => lane.name)).toEqual([
-      "bundled-channel-update-discord",
-    ]);
-    expect(bundledChannelsUpdateDiscord.lanes[0]).toMatchObject({
-      noOutputTimeoutMs: 4 * 60 * 1000,
-      timeoutMs: 6 * 60 * 1000,
-    });
-    expect(bundledChannelsUpdateB.lanes.map((lane) => lane.name)).toEqual([
-      "bundled-channel-update-slack",
-      "bundled-channel-update-feishu",
-      "bundled-channel-update-acpx",
-    ]);
-    expect(bundledChannelsContracts.lanes.map((lane) => lane.name)).toEqual([
-      "bundled-channel-root-owned",
-      "bundled-channel-setup-entry",
-      "bundled-channel-load-failure",
-      "bundled-channel-disabled-config",
-    ]);
-    expect(bundledChannelsCore.lanes.map((lane) => lane.name)).not.toContain("plugins");
-    expect(bundledChannelsUpdateA.lanes.map((lane) => lane.name)).not.toContain("openwebui");
+    const scripts = packageJson.scripts ?? {};
+    const missing = plan.lanes
+      .flatMap((lane) =>
+        Array.from(lane.command.matchAll(/\bpnpm\s+(test:docker:[\w:-]+)/gu), (match) => ({
+          lane: lane.name,
+          script: match[1],
+        })),
+      )
+      .filter(({ script }) => !scripts[script]);
+
+    expect(missing).toEqual([]);
   });
 
   it("keeps legacy release chunk names as aggregate aliases", () => {
@@ -296,11 +284,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
       includeOpenWebUI: true,
       profile: RELEASE_PATH_PROFILE,
       releaseChunk: "plugins-runtime",
-    });
-    const bundledChannelsUpdateALegacy = planFor({
-      includeOpenWebUI: true,
-      profile: RELEASE_PATH_PROFILE,
-      releaseChunk: "bundled-channels-update-a-legacy",
     });
     const legacy = planFor({
       includeOpenWebUI: true,
@@ -323,18 +306,148 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "openwebui",
       ]),
     );
-    expect(bundledChannelsUpdateALegacy.lanes.map((lane) => lane.name)).toEqual([
-      "bundled-channel-update-telegram",
-      "bundled-channel-update-discord",
-      "bundled-channel-update-memory-lancedb",
-    ]);
     expect(legacy.lanes.map((lane) => lane.name)).toEqual(
+      expect.arrayContaining(["plugins", "bundled-plugin-install-uninstall-0", "openwebui"]),
+    );
+  });
+
+  it("expands the published upgrade survivor lane across deduped baselines", () => {
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines:
+        "openclaw@2026.4.29 2026.4.23 openclaw@2026.4.23 openclaw@2026.3.13-1",
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "published-upgrade-survivor-2026.4.29",
+      "published-upgrade-survivor-2026.4.23",
+      "published-upgrade-survivor-2026.3.13-1",
+    ]);
+    expect(plan.lanes).toEqual([
+      expect.objectContaining({
+        command: expect.stringContaining(
+          "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC='openclaw@2026.4.29'",
+        ),
+        imageKind: "bare",
+        stateScenario: "upgrade-survivor",
+      }),
+      expect.objectContaining({
+        command: expect.stringContaining(
+          "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC='openclaw@2026.4.23'",
+        ),
+      }),
+      expect.objectContaining({
+        command: expect.stringContaining(
+          "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC='openclaw@2026.3.13-1'",
+        ),
+      }),
+    ]);
+    expect(plan.lanes[0]?.command).toContain(
+      'OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/published-upgrade-survivor-2026.4.29"',
+    );
+  });
+
+  it("expands the published upgrade survivor lane across scenarios", () => {
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.4.29 2026.4.23",
+      upgradeSurvivorScenarios: "base feishu-channel tilde-log-path",
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "published-upgrade-survivor-2026.4.29",
+      "published-upgrade-survivor-2026.4.29-feishu-channel",
+      "published-upgrade-survivor-2026.4.29-tilde-log-path",
+      "published-upgrade-survivor-2026.4.23",
+      "published-upgrade-survivor-2026.4.23-feishu-channel",
+      "published-upgrade-survivor-2026.4.23-tilde-log-path",
+    ]);
+    expect(plan.lanes).toEqual(
       expect.arrayContaining([
-        "plugins",
-        "bundled-plugin-install-uninstall-0",
-        "plugin-update",
-        "bundled-channel-update-acpx",
-        "openwebui",
+        expect.objectContaining({
+          command: expect.stringContaining("OPENCLAW_UPGRADE_SURVIVOR_SCENARIO='feishu-channel'"),
+        }),
+        expect.objectContaining({
+          command: expect.stringContaining("OPENCLAW_UPGRADE_SURVIVOR_SCENARIO='tilde-log-path'"),
+        }),
+      ]),
+    );
+    expect(
+      plan.lanes.find((lane) => lane.name === "published-upgrade-survivor-2026.4.29-tilde-log-path")
+        ?.command,
+    ).toContain(
+      'OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/published-upgrade-survivor-2026.4.29-tilde-log-path"',
+    );
+  });
+
+  it("expands reported upgrade issue scenarios", () => {
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.4.29",
+      upgradeSurvivorScenarios: "reported-issues",
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "published-upgrade-survivor-2026.4.29",
+      "published-upgrade-survivor-2026.4.29-feishu-channel",
+      "published-upgrade-survivor-2026.4.29-bootstrap-persona",
+      "published-upgrade-survivor-2026.4.29-plugin-deps-cleanup",
+      "published-upgrade-survivor-2026.4.29-configured-plugin-installs",
+      "published-upgrade-survivor-2026.4.29-stale-source-plugin-shadow",
+      "published-upgrade-survivor-2026.4.29-tilde-log-path",
+      "published-upgrade-survivor-2026.4.29-versioned-runtime-deps",
+    ]);
+  });
+
+  it("skips plugin dependency cleanup for baselines without packaged plugin dirs", () => {
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.4.29 2026.3.13",
+      upgradeSurvivorScenarios: "reported-issues",
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "published-upgrade-survivor-2026.4.29",
+      "published-upgrade-survivor-2026.4.29-feishu-channel",
+      "published-upgrade-survivor-2026.4.29-bootstrap-persona",
+      "published-upgrade-survivor-2026.4.29-plugin-deps-cleanup",
+      "published-upgrade-survivor-2026.4.29-configured-plugin-installs",
+      "published-upgrade-survivor-2026.4.29-stale-source-plugin-shadow",
+      "published-upgrade-survivor-2026.4.29-tilde-log-path",
+      "published-upgrade-survivor-2026.4.29-versioned-runtime-deps",
+      "published-upgrade-survivor-2026.3.13",
+      "published-upgrade-survivor-2026.3.13-feishu-channel",
+      "published-upgrade-survivor-2026.3.13-bootstrap-persona",
+      "published-upgrade-survivor-2026.3.13-configured-plugin-installs",
+      "published-upgrade-survivor-2026.3.13-stale-source-plugin-shadow",
+      "published-upgrade-survivor-2026.3.13-tilde-log-path",
+      "published-upgrade-survivor-2026.3.13-versioned-runtime-deps",
+    ]);
+  });
+
+  it("expands update migration across baselines and cleanup scenarios", () => {
+    const plan = planFor({
+      selectedLaneNames: ["update-migration"],
+      upgradeSurvivorBaselines: "2026.4.29 2026.4.23",
+      upgradeSurvivorScenarios: "plugin-deps-cleanup",
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "update-migration-2026.4.29-plugin-deps-cleanup",
+      "update-migration-2026.4.23-plugin-deps-cleanup",
+    ]);
+    expect(plan.lanes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          command: expect.stringContaining("pnpm test:docker:update-migration"),
+          imageKind: "bare",
+          stateScenario: "upgrade-survivor",
+        }),
+        expect.objectContaining({
+          command: expect.stringContaining(
+            "OPENCLAW_UPGRADE_SURVIVOR_SCENARIO='plugin-deps-cleanup'",
+          ),
+        }),
       ]),
     );
   });
@@ -352,7 +465,28 @@ describe("scripts/lib/docker-e2e-plan", () => {
     });
   });
 
-  it("plans Open WebUI as a functional-image lane with OpenAI credentials", () => {
+  it("plans the Codex npm plugin live lane as package-backed OpenAI proof", () => {
+    const plan = planFor({ selectedLaneNames: ["live-codex-npm-plugin"] });
+
+    expect(plan.credentials).toEqual(["openai"]);
+    expect(plan.lanes).toEqual([
+      expect.objectContaining({
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-codex-npm-plugin",
+        imageKind: "bare",
+        live: true,
+        name: "live-codex-npm-plugin",
+        resources: ["docker", "live", "live:openai", "npm"],
+        stateScenario: "empty",
+      }),
+    ]);
+    expect(plan.needs).toMatchObject({
+      bareImage: true,
+      liveImage: true,
+      package: true,
+    });
+  });
+
+  it("plans Open WebUI as a live-auth functional image lane", () => {
     const plan = planFor({
       includeOpenWebUI: true,
       selectedLaneNames: ["openwebui"],
@@ -362,14 +496,25 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes).toEqual([
       expect.objectContaining({
         imageKind: "functional",
-        live: false,
+        live: true,
         name: "openwebui",
+        resources: expect.arrayContaining(["docker", "live", "live:openai", "service"]),
       }),
     ]);
     expect(plan.needs).toMatchObject({
+      e2eImage: true,
       functionalImage: true,
+      liveImage: false,
       package: true,
     });
+  });
+
+  it("excludes Open WebUI from skip-live Docker all plans", () => {
+    const plan = planFor({
+      liveMode: "skip",
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).not.toContain("openwebui");
   });
 
   it("surfaces Docker lane test-state scenarios in plan JSON", () => {
@@ -390,10 +535,10 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "plugin-update",
         "plugins",
         "kitchen-sink-plugin",
-        "bundled-channel-deps-compat",
-        "bundled-channel-setup-entry",
         "bundled-plugin-install-uninstall-0",
+        "commitments-safety",
         "update-channel-switch",
+        "upgrade-survivor",
       ],
     });
 
@@ -459,33 +604,20 @@ describe("scripts/lib/docker-e2e-plan", () => {
         stateScenario: "empty",
       }),
       expect.objectContaining({
-        name: "bundled-channel-deps-compat",
-        stateScenario: "empty",
-      }),
-      expect.objectContaining({
-        name: "bundled-channel-setup-entry",
-        stateScenario: "empty",
-      }),
-      expect.objectContaining({
         name: "bundled-plugin-install-uninstall-0",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "commitments-safety",
         stateScenario: "empty",
       }),
       expect.objectContaining({
         name: "update-channel-switch",
         stateScenario: "update-stable",
       }),
-    ]);
-  });
-
-  it("maps the legacy bundled channel deps lane to the split compat lane", () => {
-    const selectedLaneNames = parseLaneSelection("bundled-channel-deps");
-    const plan = planFor({ selectedLaneNames });
-
-    expect(selectedLaneNames).toEqual(["bundled-channel-deps-compat"]);
-    expect(plan.lanes).toEqual([
       expect.objectContaining({
-        imageKind: "bare",
-        name: "bundled-channel-deps-compat",
+        name: "upgrade-survivor",
+        stateScenario: "upgrade-survivor",
       }),
     ]);
   });

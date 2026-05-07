@@ -49,8 +49,8 @@ Benefits:
 
 For end-to-end provider checks, prefer `openclaw infer ...` once lower-level
 provider tests are green. It exercises the shipped CLI, config loading,
-default-agent resolution, bundled plugin activation, runtime-dependency repair,
-and the shared capability runtime before the provider request is made.
+default-agent resolution, bundled plugin activation, and the shared capability
+runtime before the provider request is made.
 
 ## Command tree
 
@@ -164,7 +164,8 @@ openclaw infer model run --local --model ollama/qwen2.5vl:7b --prompt "Describe 
 
 Notes:
 
-- Local `model run` is the narrowest CLI smoke for provider/model/auth health because it sends only the supplied prompt to the selected model.
+- Local `model run` is the narrowest CLI smoke for provider/model/auth health because, for non-Codex providers, it sends only the supplied prompt to the selected model.
+- `openai-codex/*` local probes are the narrow exception: OpenClaw adds a minimal system instruction so the Codex Responses transport can populate its required `instructions` field, without adding full agent context, tools, memory, or session transcript.
 - Local `model run --file` keeps that lean path and attaches image content directly to the single user message. Common image files such as PNG, JPEG, and WebP work when their MIME type is detected as `image/*`; unsupported or unrecognized files fail before the provider is called.
 - `model run --file` is best when you want to test the selected multimodal text model directly. Use `infer image describe` when you want OpenClaw's image-understanding provider selection and default image-model routing.
 - The selected model must support image input; text-only models may reject the request at the provider layer.

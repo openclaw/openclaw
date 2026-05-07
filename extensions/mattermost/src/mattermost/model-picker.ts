@@ -19,18 +19,18 @@ const ACTION_IDS = {
   back: "mdlback",
 } as const;
 
-export type MattermostModelPickerEntry =
+type MattermostModelPickerEntry =
   | { kind: "summary" }
   | { kind: "providers" }
   | { kind: "models"; provider: string };
 
-export type MattermostModelPickerState =
+type MattermostModelPickerState =
   | { action: "providers"; ownerUserId: string }
   | { action: "back"; ownerUserId: string }
   | { action: "list"; ownerUserId: string; provider: string; page: number }
   | { action: "select"; ownerUserId: string; provider: string; page: number; model: string };
 
-export type MattermostModelPickerRenderedView = {
+type MattermostModelPickerRenderedView = {
   text: string;
   buttons: MattermostInteractiveButtonInput[][];
 };
@@ -273,7 +273,7 @@ export function renderMattermostModelSummaryView(params: {
       "",
       "Tap below to browse models, or use:",
       "/oc_model <provider/model> to switch",
-      "/oc_model <provider/model> --runtime <runtime> for runtime",
+      "Browse keeps the current runtime; use /oc_model <provider/model> --runtime <runtime> to switch runtime too",
       "/oc_model status for details",
     ].join("\n"),
     buttons: [

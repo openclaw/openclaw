@@ -5,18 +5,31 @@ import {
   type ManifestModelCatalogSuppressionEntry,
 } from "../model-catalog/index.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
+import {
+  isManifestPluginAvailableForControlPlane,
+  loadManifestMetadataSnapshot,
+} from "./manifest-contract-eligibility.js";
 
 function listManifestModelCatalogSuppressions(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): readonly ManifestModelCatalogSuppressionEntry[] {
-  const registry = loadPluginManifestRegistryForPluginRegistry({
+  const snapshot = loadManifestMetadataSnapshot({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
+  const registry = {
+    diagnostics: snapshot.diagnostics,
+    plugins: snapshot.plugins.filter((plugin) =>
+      isManifestPluginAvailableForControlPlane({
+        snapshot,
+        plugin,
+        config: params.config,
+      }),
+    ),
+  };
   const planned = planManifestModelCatalogSuppressions({ registry });
   return planned.suppressions;
 }
@@ -99,10 +112,6 @@ function manifestSuppressionMatchesConditions(params: {
   return true;
 }
 
-export function clearManifestModelSuppressionCacheForTest(): void {
-  // Manifest suppressions are read fresh. Keep the test hook as a no-op.
-}
-
 export function buildManifestBuiltInModelSuppressionResolver(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -118,6 +127,7 @@ export function buildManifestBuiltInModelSuppressionResolver(params: {
     provider?: string | null;
     id?: string | null;
     baseUrl?: string | null;
+    unconditionalOnly?: boolean;
   }) => {
     const provider = normalizeLowercaseStringOrEmpty(input.provider);
     const modelId = normalizeLowercaseStringOrEmpty(input.id);
@@ -128,6 +138,7 @@ export function buildManifestBuiltInModelSuppressionResolver(params: {
     const suppression = suppressions.find(
       (entry) =>
         entry.mergeKey === mergeKey &&
+        (!input.unconditionalOnly || !entry.when) &&
         manifestSuppressionMatchesConditions({
           suppression: entry,
           provider,
@@ -163,6 +174,7 @@ export function resolveManifestBuiltInModelSuppression(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   baseUrl?: string | null;
+  unconditionalOnly?: boolean;
 }) {
   const resolver = buildManifestBuiltInModelSuppressionResolver({
     config: params.config,
@@ -173,5 +185,6 @@ export function resolveManifestBuiltInModelSuppression(params: {
     provider: params.provider,
     id: params.id,
     baseUrl: params.baseUrl,
+    unconditionalOnly: params.unconditionalOnly,
   });
 }

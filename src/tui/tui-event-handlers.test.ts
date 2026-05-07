@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import type { AgentEvent, BtwEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 
@@ -528,6 +529,26 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(loadHistory).not.toHaveBeenCalled();
   });
 
+  it("clears pendingChatRunId when an event for that runId arrives", () => {
+    const { state, handleChatEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: null,
+        pendingOptimisticUserMessage: true,
+        pendingChatRunId: "run-pending",
+      },
+    });
+
+    handleChatEvent({
+      runId: "run-pending",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hi" },
+    });
+
+    expect(state.pendingChatRunId).toBeNull();
+    expect(state.activeChatRunId).toBe("run-pending");
+  });
+
   function createConcurrentRunHarness(localContent = "partial") {
     const { state, chatLog, setActivityStatus, loadHistory, handleChatEvent } =
       createHandlersHarness({
@@ -753,6 +774,42 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.dropAssistant).not.toHaveBeenCalledWith("run-error-envelope");
   });
 
+  it("renders malformed streaming fragment text when chat final only has event errorMessage", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleChatEvent({
+      runId: "run-malformed-final",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [] },
+      errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+    });
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith(
+      "LLM streaming response contained a malformed fragment. Please try again.",
+      "run-malformed-final",
+    );
+  });
+
+  it("renders malformed streaming fragment text for chat error events", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleChatEvent({
+      runId: "run-malformed-error",
+      sessionKey: state.currentSessionKey,
+      state: "error",
+      errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+    });
+
+    expect(chatLog.addSystem).toHaveBeenCalledWith(
+      "run error: LLM streaming response contained a malformed fragment. Please try again.",
+    );
+  });
+
   it("shows a concise /auth hint for local auth failures", () => {
     const { chatLog, handleChatEvent } = createHandlersHarness({
       localMode: true,
@@ -857,6 +914,9 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 });
 
 describe("tui-event-handlers: streaming watchdog", () => {
+  const expectedTimeoutMessage =
+    "This response is taking longer than expected. Send another message to continue.";
+
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -934,7 +994,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
 
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
     expect(state.activeChatRunId).toBeNull();
-    expect(chatLog.addSystem).toHaveBeenCalledWith(expect.stringContaining("streaming watchdog"));
+    expect(chatLog.addSystem).toHaveBeenCalledWith(expectedTimeoutMessage);
 
     handlers.dispose?.();
   });
@@ -1140,9 +1200,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
     expect(state.activeChatRunId).toBeNull();
     expect(loadHistory).toHaveBeenCalledTimes(1);
-    expect(chatLog.addSystem).not.toHaveBeenCalledWith(
-      expect.stringContaining("streaming watchdog"),
-    );
+    expect(chatLog.addSystem).not.toHaveBeenCalledWith(expectedTimeoutMessage);
 
     handlers.dispose?.();
   });
@@ -1169,9 +1227,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
 
     const statusCalls = setActivityStatus.mock.calls.map((c) => c[0]);
     expect(statusCalls.filter((s) => s === "idle").length).toBe(1);
-    expect(chatLog.addSystem).not.toHaveBeenCalledWith(
-      expect.stringContaining("streaming watchdog"),
-    );
+    expect(chatLog.addSystem).not.toHaveBeenCalledWith(expectedTimeoutMessage);
     expect(state.activeChatRunId).toBeNull();
 
     handlers.dispose?.();

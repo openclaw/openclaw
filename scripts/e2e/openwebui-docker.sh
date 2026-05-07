@@ -8,9 +8,9 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-openwebui-e2e" OPENCLAW_OPENWEBUI_E2E_IMAGE)"
 OPENWEBUI_IMAGE="${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.8.10}"
-# Keep the default on a broadly available non-reasoning OpenAI model for
-# Open WebUI compatibility smoke. Callers can still override this explicitly.
-MODEL="${OPENCLAW_OPENWEBUI_MODEL:-openai/gpt-4.1-mini}"
+# Keep the default on the preferred GPT-5 OpenAI model for Open WebUI
+# compatibility smoke. Callers can still override this explicitly.
+MODEL="${OPENCLAW_OPENWEBUI_MODEL:-openai/gpt-5.5}"
 PROMPT_NONCE="OPENWEBUI_DOCKER_E2E_$(date +%s)_$$"
 PROMPT="${OPENCLAW_OPENWEBUI_PROMPT:-Reply with exactly this token and nothing else: ${PROMPT_NONCE}}"
 PORT="${OPENCLAW_OPENWEBUI_GATEWAY_PORT:-18789}"
@@ -23,6 +23,14 @@ GW_NAME="openclaw-openwebui-gateway-$$"
 OW_NAME="openclaw-openwebui-$$"
 DOCKER_COMMAND_TIMEOUT="${OPENCLAW_OPENWEBUI_DOCKER_COMMAND_TIMEOUT:-600s}"
 DOCKER_PULL_TIMEOUT="${OPENCLAW_OPENWEBUI_DOCKER_PULL_TIMEOUT:-600s}"
+
+PROFILE_FILE="${OPENCLAW_TESTBOX_PROFILE_FILE:-$HOME/.openclaw-testbox-live.profile}"
+if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$PROFILE_FILE"
+  set +a
+fi
 
 OPENAI_API_KEY_VALUE="${OPENAI_API_KEY:-}"
 if [[ "$OPENAI_API_KEY_VALUE" == "undefined" || "$OPENAI_API_KEY_VALUE" == "null" ]]; then

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { fetchBlueBubblesHistory } from "./history.js";
 import {
@@ -78,6 +78,16 @@ vi.mock("./webhook-ingress.js", async () => {
         timeoutMs: TEST_WEBHOOK_BODY_TIMEOUT_MS,
       }),
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("./send.js");
+  vi.doUnmock("./chat.js");
+  vi.doUnmock("./attachments.js");
+  vi.doUnmock("./reactions.js");
+  vi.doUnmock("./history.js");
+  vi.doUnmock("./webhook-ingress.js");
+  vi.resetModules();
 });
 
 // Mock runtime
@@ -430,6 +440,16 @@ describe("BlueBubbles webhook monitor", () => {
         createProtectedPasswordQueryRequestParams("wrong-token"),
         401,
       );
+    });
+
+    it("rejects unresolved SecretRef webhook passwords without crashing", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          password: { source: "exec", provider: "vault", id: "bluebubbles/webhook" } as never,
+        }),
+      });
+
+      await expectProtectedPasswordQueryRequestStatus(401);
     });
 
     it("rate limits repeated invalid password guesses from the same client", async () => {

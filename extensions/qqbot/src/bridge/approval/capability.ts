@@ -11,10 +11,7 @@
  * QQBot falls back to "always handle, anyone can approve".
  */
 
-import {
-  createChannelApprovalCapability,
-  splitChannelApprovalCapability,
-} from "openclaw/plugin-sdk/approval-delivery-runtime";
+import { createChannelApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { resolveApprovalRequestSessionConversation } from "openclaw/plugin-sdk/approval-native-runtime";
@@ -230,9 +227,7 @@ function createQQBotApprovalCapability(): ChannelApprovalCapability {
   });
 }
 
-export const qqbotApprovalCapability = createQQBotApprovalCapability();
-
-export const qqbotNativeApprovalAdapter = splitChannelApprovalCapability(qqbotApprovalCapability);
+const qqbotApprovalCapability = createQQBotApprovalCapability();
 
 let _cachedCapability: ChannelApprovalCapability | undefined;
 

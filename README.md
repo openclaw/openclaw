@@ -96,7 +96,7 @@ Model note: while many providers and models are supported, prefer a current flag
 
 ## Install (recommended)
 
-Runtime: **Node 24 (recommended) or Node 22.14+**.
+Runtime: **Node 24 (recommended) or Node 22.16+**.
 
 ```bash
 npm install -g openclaw@latest
@@ -109,7 +109,7 @@ OpenClaw Onboard installs the Gateway daemon (launchd/systemd user service) so i
 
 ## Quick start (TL;DR)
 
-Runtime: **Node 24 (recommended) or Node 22.14+**.
+Runtime: **Node 24 (recommended) or Node 22.16+**.
 
 Full beginner guide (auth, pairing, channels): [Getting started](https://docs.openclaw.ai/start/getting-started)
 
@@ -210,7 +210,10 @@ Runbook: [iOS connect](https://docs.openclaw.ai/platforms/ios).
 
 ## From source (development)
 
-Prefer `pnpm` for builds from source. Bun is optional for running TypeScript directly.
+Use `pnpm` for source checkouts. The repository is a pnpm workspace, and bundled
+plugins load from `extensions/*` during development so their package-local
+dependencies and your edits are used directly. Plain `npm install` at the repo
+root is not a supported source setup.
 
 For the dev loop:
 

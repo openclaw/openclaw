@@ -601,6 +601,51 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("channel override");
   });
 
+  it("uses the channel override model context window instead of stale persisted context", () => {
+    const text = buildStatusMessage({
+      config: {
+        channels: {
+          modelByChannel: {
+            discord: {
+              "123": "minimax-portal/MiniMax-M2.7",
+            },
+          },
+        },
+        models: {
+          providers: {
+            "minimax-portal": {
+              models: [{ id: "MiniMax-M2.7", contextWindow: 200_000 }],
+            },
+            anthropic: {
+              models: [{ id: "claude-opus-4-6", contextWindow: 1_048_576 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "minimax-portal/MiniMax-M2.7",
+        contextTokens: 1_048_576,
+      },
+      sessionEntry: {
+        sessionId: "channel-context-window",
+        updatedAt: 0,
+        channel: "discord",
+        groupId: "123",
+        totalTokens: 49_000,
+        contextTokens: 1_048_576,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+    const normalized = normalizeTestText(text);
+
+    expect(normalized).toContain("Model: minimax-portal/MiniMax-M2.7");
+    expect(normalized).toContain("channel override");
+    expect(normalized).toContain("Context: 49k/200k");
+    expect(normalized).not.toContain("Context: 49k/1.0m");
+  });
+
   it("shows 1M context window when anthropic context1m is enabled", () => {
     const text = buildStatusMessage({
       config: {
@@ -1920,6 +1965,54 @@ describe("buildStatusMessage", () => {
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Context: 25k/1.0m");
     expect(normalized).not.toContain("Context: 25k/200k");
+  });
+
+  it("does not let agent contextTokens inflate status above the model window", () => {
+    MODEL_CONTEXT_TOKEN_CACHE.set("openai/gpt-5.5", 272_000);
+
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-5.5",
+        contextTokens: 1_000_000,
+      },
+      sessionEntry: {
+        sessionId: "sess-openai-codex-cap-context",
+        updatedAt: 0,
+        totalTokens: 25_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "oauth",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Context: 25k/272k");
+    expect(normalized).not.toContain("Context: 25k/1.0m");
+  });
+
+  it("uses runtime context tokens to cap status when the sync cache is cold", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-5.5",
+        contextTokens: 1_000_000,
+      },
+      explicitConfiguredContextTokens: 1_000_000,
+      runtimeContextTokens: 272_000,
+      sessionEntry: {
+        sessionId: "sess-openai-codex-runtime-cap-context",
+        updatedAt: 0,
+        totalTokens: 25_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "oauth",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Context: 25k/272k");
+    expect(normalized).not.toContain("Context: 25k/1.0m");
   });
 
   it("does not synthesize a 32k fallback window when the active runtime model is unknown", () => {

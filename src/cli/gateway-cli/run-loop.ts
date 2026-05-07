@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import net from "node:net";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
 const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
@@ -14,49 +16,18 @@ const UPDATE_RESPAWN_HEALTH_POLL_MS = 200;
 
 type GatewayRunSignalAction = "stop" | "restart";
 type RestartDrainTimeoutMs = number | undefined;
+type RestartIntentOptions = {
+  force?: boolean;
+  waitMs?: number;
+};
 
-type EmbeddedRunsModule = typeof import("../../agents/pi-embedded-runner/runs.js");
-type RuntimeConfigModule = typeof import("../../config/config.js");
-type ProcessRespawnModule = typeof import("../../infra/process-respawn.js");
-type RestartSentinelModule = typeof import("../../infra/restart-sentinel.js");
-type RestartModule = typeof import("../../infra/restart.js");
-type SupervisorMarkersModule = typeof import("../../infra/supervisor-markers.js");
-type DiagnosticStabilityBundleModule =
-  typeof import("../../logging/diagnostic-stability-bundle.js");
-type BundledRuntimeDepsActivityModule =
-  typeof import("../../plugins/bundled-runtime-deps-activity.js");
-type CommandQueueModule = typeof import("../../process/command-queue.js");
-type RuntimeInternalModule = typeof import("../../tasks/runtime-internal.js");
+type GatewayLifecycleRuntimeModule = typeof import("./lifecycle.runtime.js");
 
-let embeddedRunsModule: Promise<EmbeddedRunsModule> | undefined;
-let runtimeConfigModule: Promise<RuntimeConfigModule> | undefined;
-let processRespawnModule: Promise<ProcessRespawnModule> | undefined;
-let restartSentinelModule: Promise<RestartSentinelModule> | undefined;
-let restartModule: Promise<RestartModule> | undefined;
-let supervisorMarkersModule: Promise<SupervisorMarkersModule> | undefined;
-let diagnosticStabilityBundleModule: Promise<DiagnosticStabilityBundleModule> | undefined;
-let bundledRuntimeDepsActivityModule: Promise<BundledRuntimeDepsActivityModule> | undefined;
-let commandQueueModule: Promise<CommandQueueModule> | undefined;
-let runtimeInternalModule: Promise<RuntimeInternalModule> | undefined;
+const gatewayLifecycleRuntimeLoader = createLazyImportLoader<GatewayLifecycleRuntimeModule>(
+  () => import("./lifecycle.runtime.js"),
+);
 
-const loadEmbeddedRunsModule = () =>
-  (embeddedRunsModule ??= import("../../agents/pi-embedded-runner/runs.js"));
-const loadRuntimeConfigModule = () => (runtimeConfigModule ??= import("../../config/config.js"));
-const loadProcessRespawnModule = () =>
-  (processRespawnModule ??= import("../../infra/process-respawn.js"));
-const loadRestartSentinelModule = () =>
-  (restartSentinelModule ??= import("../../infra/restart-sentinel.js"));
-const loadRestartModule = () => (restartModule ??= import("../../infra/restart.js"));
-const loadSupervisorMarkersModule = () =>
-  (supervisorMarkersModule ??= import("../../infra/supervisor-markers.js"));
-const loadDiagnosticStabilityBundleModule = () =>
-  (diagnosticStabilityBundleModule ??= import("../../logging/diagnostic-stability-bundle.js"));
-const loadBundledRuntimeDepsActivityModule = () =>
-  (bundledRuntimeDepsActivityModule ??= import("../../plugins/bundled-runtime-deps-activity.js"));
-const loadCommandQueueModule = () =>
-  (commandQueueModule ??= import("../../process/command-queue.js"));
-const loadRuntimeInternalModule = () =>
-  (runtimeInternalModule ??= import("../../tasks/runtime-internal.js"));
+const loadGatewayLifecycleRuntimeModule = () => gatewayLifecycleRuntimeLoader.load();
 
 function createRestartIterationHook(onRestart: () => Promise<void> | void): () => Promise<boolean> {
   let isFirstIteration = true;
@@ -124,6 +95,7 @@ export async function runGatewayLoop(params: {
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let shuttingDown = false;
   let restartResolver: (() => void) | null = null;
+  const processInstanceId = randomUUID();
   const waitForHealthyChild = params.waitForHealthyChild ?? waitForHealthyGatewayChild;
 
   const cleanupSignals = () => {
@@ -137,7 +109,7 @@ export async function runGatewayLoop(params: {
   };
   const writeStabilityBundle = async (reason: string, error?: unknown) => {
     const { writeDiagnosticStabilityBundleForFailureSync } =
-      await loadDiagnosticStabilityBundleModule();
+      await loadGatewayLifecycleRuntimeModule();
     const result = writeDiagnosticStabilityBundleForFailureSync(reason, error);
     if ("message" in result) {
       gatewayLog.warn(result.message);
@@ -165,10 +137,13 @@ export async function runGatewayLoop(params: {
   const handleRestartAfterServerClose = async (restartReason?: string) => {
     const hadLock = await releaseLockIfHeld();
     const isUpdateRestart = restartReason === "update.run";
-    const { respawnGatewayProcessForUpdate, restartGatewayProcessWithFreshPid } =
-      await loadProcessRespawnModule();
-    const { detectRespawnSupervisor } = await loadSupervisorMarkersModule();
-    const { markUpdateRestartSentinelFailure } = await loadRestartSentinelModule();
+    const {
+      detectRespawnSupervisor,
+      markUpdateRestartSentinelFailure,
+      respawnGatewayProcessForUpdate,
+      restartGatewayProcessWithFreshPid,
+      writeGatewayRestartHandoffSync,
+    } = await loadGatewayLifecycleRuntimeModule();
 
     if (isUpdateRestart) {
       const respawn = respawnGatewayProcessForUpdate();
@@ -204,8 +179,15 @@ export async function runGatewayLoop(params: {
         return;
       }
       if (respawn.mode === "supervised") {
+        const supervisorMode = detectRespawnSupervisor(process.env, process.platform);
+        writeGatewayRestartHandoffSync({
+          restartKind: "update-process",
+          reason: restartReason,
+          processInstanceId,
+          supervisorMode: supervisorMode ?? "external",
+        });
         gatewayLog.info("restart mode: update process respawn (supervisor restart)");
-        if (detectRespawnSupervisor(process.env, process.platform) === "launchd") {
+        if (supervisorMode === "launchd") {
           await new Promise((resolve) => {
             setTimeout(resolve, LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS);
           });
@@ -236,15 +218,24 @@ export async function runGatewayLoop(params: {
     // Release the lock BEFORE spawning so the child can acquire it immediately.
     const respawn = restartGatewayProcessWithFreshPid();
     if (respawn.mode === "spawned" || respawn.mode === "supervised") {
+      const supervisorMode =
+        respawn.mode === "supervised"
+          ? detectRespawnSupervisor(process.env, process.platform)
+          : null;
       const modeLabel =
         respawn.mode === "spawned"
           ? `spawned pid ${respawn.pid ?? "unknown"}`
           : "supervisor restart";
+      if (respawn.mode === "supervised") {
+        writeGatewayRestartHandoffSync({
+          restartKind: "full-process",
+          reason: restartReason,
+          processInstanceId,
+          supervisorMode: supervisorMode ?? "external",
+        });
+      }
       gatewayLog.info(`restart mode: full process restart (${modeLabel})`);
-      if (
-        respawn.mode === "supervised" &&
-        detectRespawnSupervisor(process.env, process.platform) === "launchd"
-      ) {
+      if (supervisorMode === "launchd") {
         // A short clean-exit pause keeps rapid SIGUSR1/config restarts from
         // tripping launchd crash-loop throttling before KeepAlive relaunches.
         await new Promise((resolve) => {
@@ -277,12 +268,18 @@ export async function runGatewayLoop(params: {
 
   const SUPERVISOR_STOP_TIMEOUT_MS = 30_000;
   const SHUTDOWN_TIMEOUT_MS = SUPERVISOR_STOP_TIMEOUT_MS - 5_000;
-  const resolveRestartDrainTimeoutMs = async (): Promise<RestartDrainTimeoutMs> => {
+  const resolveRestartDrainTimeoutMs = async (
+    restartIntent?: RestartIntentOptions,
+  ): Promise<RestartDrainTimeoutMs> => {
+    if (restartIntent?.force) {
+      return 0;
+    }
+    if (typeof restartIntent?.waitMs === "number" && Number.isFinite(restartIntent.waitMs)) {
+      return restartIntent.waitMs > 0 ? Math.floor(restartIntent.waitMs) : undefined;
+    }
     try {
-      const [{ getRuntimeConfig }, { resolveGatewayRestartDeferralTimeoutMs }] = await Promise.all([
-        loadRuntimeConfigModule(),
-        loadRestartModule(),
-      ]);
+      const { getRuntimeConfig, resolveGatewayRestartDeferralTimeoutMs } =
+        await loadGatewayLifecycleRuntimeModule();
       const timeoutMs = getRuntimeConfig().gateway?.reload?.deferralTimeoutMs;
       return resolveGatewayRestartDeferralTimeoutMs(timeoutMs);
     } catch {
@@ -290,7 +287,12 @@ export async function runGatewayLoop(params: {
     }
   };
 
-  const request = (action: GatewayRunSignalAction, signal: string, restartReason?: string) => {
+  const request = (
+    action: GatewayRunSignalAction,
+    signal: string,
+    restartReason?: string,
+    restartIntent?: RestartIntentOptions,
+  ) => {
     if (shuttingDown) {
       gatewayLog.info(`received ${signal} during shutdown; ignoring`);
       return;
@@ -329,7 +331,9 @@ export async function runGatewayLoop(params: {
     };
 
     void (async () => {
-      const restartDrainTimeoutMs = isRestart ? await resolveRestartDrainTimeoutMs() : 0;
+      const restartDrainTimeoutMs = isRestart
+        ? await resolveRestartDrainTimeoutMs(restartIntent)
+        : 0;
       if (!isRestart) {
         armForceExitTimer(SHUTDOWN_TIMEOUT_MS);
       } else if (restartDrainTimeoutMs !== undefined) {
@@ -351,19 +355,41 @@ export async function runGatewayLoop(params: {
         // On restart, wait for in-flight agent turns to finish before
         // tearing down the server so buffered messages are delivered.
         if (isRestart) {
-          const [
-            { abortEmbeddedPiRun, getActiveEmbeddedRunCount, waitForActiveEmbeddedRuns },
-            { getActiveBundledRuntimeDepsInstallCount, waitForBundledRuntimeDepsInstallIdle },
-            { getActiveTaskCount, markGatewayDraining, waitForActiveTasks },
-          ] = await Promise.all([
-            loadEmbeddedRunsModule(),
-            loadBundledRuntimeDepsActivityModule(),
-            loadCommandQueueModule(),
-          ]);
+          const {
+            abortEmbeddedPiRun,
+            getInspectableActiveTaskRestartBlockers,
+            getActiveEmbeddedRunCount,
+            getActiveTaskCount,
+            markGatewayDraining,
+            waitForActiveEmbeddedRuns,
+            waitForActiveTasks,
+          } = await loadGatewayLifecycleRuntimeModule();
+          const formatTaskBlockers = () => {
+            const blockers = getInspectableActiveTaskRestartBlockers();
+            if (blockers.length === 0) {
+              return null;
+            }
+            const shown = blockers
+              .slice(0, 8)
+              .map((task) =>
+                [
+                  `taskId=${task.taskId}`,
+                  task.runId ? `runId=${task.runId}` : null,
+                  `status=${task.status}`,
+                  `runtime=${task.runtime}`,
+                  task.label ? `label=${task.label}` : null,
+                  task.title ? `title=${task.title.slice(0, 80)}` : null,
+                ]
+                  .filter((value): value is string => Boolean(value))
+                  .join(" "),
+              );
+            const omitted = blockers.length - shown.length;
+            return omitted > 0 ? `${shown.join("; ")}; +${omitted} more` : shown.join("; ");
+          };
           const createStillPendingDrainLogger = () =>
             setInterval(() => {
               gatewayLog.warn(
-                `still draining ${getActiveTaskCount()} active task(s), ${getActiveEmbeddedRunCount()} active embedded run(s), and ${getActiveBundledRuntimeDepsInstallCount()} runtime deps install(s) before restart`,
+                `still draining ${getActiveTaskCount()} active task(s) and ${getActiveEmbeddedRunCount()} active embedded run(s) before restart`,
               );
             }, RESTART_DRAIN_STILL_PENDING_WARN_MS);
 
@@ -372,7 +398,6 @@ export async function runGatewayLoop(params: {
           markGatewayDraining();
           const activeTasks = getActiveTaskCount();
           const activeRuns = getActiveEmbeddedRunCount();
-          const activeRuntimeDepsInstalls = getActiveBundledRuntimeDepsInstallCount();
 
           // Best-effort abort for compacting runs so long compaction operations
           // don't hold session write locks across restart boundaries.
@@ -380,29 +405,35 @@ export async function runGatewayLoop(params: {
             abortEmbeddedPiRun(undefined, { mode: "compacting" });
           }
 
-          if (activeTasks > 0 || activeRuns > 0 || activeRuntimeDepsInstalls > 0) {
+          if (activeTasks > 0 || activeRuns > 0) {
+            const taskBlockers = formatTaskBlockers();
             gatewayLog.info(
-              `draining ${activeTasks} active task(s), ${activeRuns} active embedded run(s), and ${activeRuntimeDepsInstalls} runtime deps install(s) before restart ${formatRestartDrainBudget()}`,
+              `draining ${activeTasks} active task(s) and ${activeRuns} active embedded run(s) before restart ${formatRestartDrainBudget()}`,
             );
-            const stillPendingDrainLogger = createStillPendingDrainLogger();
-            const [tasksDrain, runsDrain, runtimeDepsDrain] = await Promise.all([
-              activeTasks > 0
-                ? waitForActiveTasks(restartDrainTimeoutMs)
-                : Promise.resolve({ drained: true }),
-              activeRuns > 0
-                ? waitForActiveEmbeddedRuns(restartDrainTimeoutMs)
-                : Promise.resolve({ drained: true }),
-              activeRuntimeDepsInstalls > 0
-                ? waitForBundledRuntimeDepsInstallIdle(restartDrainTimeoutMs)
-                : Promise.resolve({ drained: true }),
-            ]).finally(() => clearInterval(stillPendingDrainLogger));
-            if (tasksDrain.drained && runsDrain.drained && runtimeDepsDrain.drained) {
-              gatewayLog.info("all active work drained");
-            } else {
-              gatewayLog.warn("drain timeout reached; proceeding with restart");
-              // Final best-effort abort to avoid carrying active runs into the
-              // next lifecycle when drain time budget is exhausted.
+            if (taskBlockers) {
+              gatewayLog.warn(`restart blocked by active background task run(s): ${taskBlockers}`);
+            }
+            if (restartIntent?.force) {
+              gatewayLog.warn("forced restart requested; skipping active work drain");
               abortEmbeddedPiRun(undefined, { mode: "all" });
+            } else {
+              const stillPendingDrainLogger = createStillPendingDrainLogger();
+              const [tasksDrain, runsDrain] = await Promise.all([
+                activeTasks > 0
+                  ? waitForActiveTasks(restartDrainTimeoutMs)
+                  : Promise.resolve({ drained: true }),
+                activeRuns > 0
+                  ? waitForActiveEmbeddedRuns(restartDrainTimeoutMs)
+                  : Promise.resolve({ drained: true }),
+              ]).finally(() => clearInterval(stillPendingDrainLogger));
+              if (tasksDrain.drained && runsDrain.drained) {
+                gatewayLog.info("all active work drained");
+              } else {
+                gatewayLog.warn("drain timeout reached; proceeding with restart");
+                // Final best-effort abort to avoid carrying active runs into the
+                // next lifecycle when drain time budget is exhausted.
+                abortEmbeddedPiRun(undefined, { mode: "all" });
+              }
             }
           }
         }
@@ -429,8 +460,9 @@ export async function runGatewayLoop(params: {
   const onSigterm = () => {
     gatewayLog.info("signal SIGTERM received");
     void (async () => {
-      const { consumeGatewayRestartIntentSync } = await loadRestartModule();
-      request(consumeGatewayRestartIntentSync() ? "restart" : "stop", "SIGTERM");
+      const { consumeGatewayRestartIntentPayloadSync } = await loadGatewayLifecycleRuntimeModule();
+      const restartIntent = consumeGatewayRestartIntentPayloadSync();
+      request(restartIntent ? "restart" : "stop", "SIGTERM", undefined, restartIntent ?? undefined);
     })();
   };
   const onSigint = () => {
@@ -441,12 +473,18 @@ export async function runGatewayLoop(params: {
     gatewayLog.info("signal SIGUSR1 received");
     void (async () => {
       const {
+        consumeGatewayRestartIntentPayloadSync,
         consumeGatewaySigusr1RestartAuthorization,
         isGatewaySigusr1RestartExternallyAllowed,
         markGatewaySigusr1RestartHandled,
         peekGatewaySigusr1RestartReason,
         scheduleGatewaySigusr1Restart,
-      } = await loadRestartModule();
+      } = await loadGatewayLifecycleRuntimeModule();
+      const restartIntent = consumeGatewayRestartIntentPayloadSync();
+      if (restartIntent) {
+        request("restart", "SIGUSR1", "gateway.restart", restartIntent);
+        return;
+      }
       const authorized = consumeGatewaySigusr1RestartAuthorization();
       if (!authorized) {
         if (!isGatewaySigusr1RestartExternallyAllowed()) {
@@ -482,15 +520,11 @@ export async function runGatewayLoop(params: {
       // new work from draining. The same boundary also discards stale restart
       // deferral timers and reloads the task registry from durable state so
       // cancelled/completed work is not kept alive by old in-memory maps.
-      const [
-        { resetAllLanes },
-        { resetGatewayRestartStateForInProcessRestart },
-        { reloadTaskRegistryFromStore },
-      ] = await Promise.all([
-        loadCommandQueueModule(),
-        loadRestartModule(),
-        loadRuntimeInternalModule(),
-      ]);
+      const {
+        reloadTaskRegistryFromStore,
+        resetAllLanes,
+        resetGatewayRestartStateForInProcessRestart,
+      } = await loadGatewayLifecycleRuntimeModule();
       resetAllLanes();
       resetGatewayRestartStateForInProcessRestart();
       reloadTaskRegistryFromStore();

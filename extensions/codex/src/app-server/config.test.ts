@@ -22,6 +22,7 @@ describe("Codex app-server config", () => {
           sandbox: "danger-full-access",
           approvalsReviewer: "guardian_subagent",
           serviceTier: "flex",
+          turnCompletionIdleTimeoutMs: 120_000,
         },
       },
       env: {
@@ -36,6 +37,7 @@ describe("Codex app-server config", () => {
         sandbox: "danger-full-access",
         approvalsReviewer: "guardian_subagent",
         serviceTier: "flex",
+        turnCompletionIdleTimeoutMs: 120_000,
         start: expect.objectContaining({
           transport: "websocket",
           url: "ws://127.0.0.1:39175",
@@ -136,6 +138,18 @@ describe("Codex app-server config", () => {
         }),
       }),
     );
+  });
+
+  it("parses dynamic tool profile controls", () => {
+    expect(
+      readCodexPluginConfig({
+        codexDynamicToolsProfile: "openclaw-compat",
+        codexDynamicToolsExclude: ["custom_tool"],
+      }),
+    ).toMatchObject({
+      codexDynamicToolsProfile: "openclaw-compat",
+      codexDynamicToolsExclude: ["custom_tool"],
+    });
   });
 
   it("treats configured and environment commands as explicit overrides", () => {

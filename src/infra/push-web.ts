@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
+import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
 
 // --- Types ---
 
-export type WebPushSubscription = {
+type WebPushSubscription = {
   subscriptionId: string;
   endpoint: string;
   keys: { p256dh: string; auth: string };
@@ -13,17 +13,17 @@ export type WebPushSubscription = {
   updatedAtMs: number;
 };
 
-export type WebPushRegistrationState = {
+type WebPushRegistrationState = {
   subscriptionsByEndpointHash: Record<string, WebPushSubscription>;
 };
 
-export type VapidKeyPair = {
+type VapidKeyPair = {
   publicKey: string;
   privateKey: string;
   subject: string;
 };
 
-export type WebPushSendResult = {
+type WebPushSendResult = {
   ok: boolean;
   subscriptionId: string;
   statusCode?: number;
@@ -88,13 +88,13 @@ function isValidKey(key: string): boolean {
 
 async function loadState(baseDir?: string): Promise<WebPushRegistrationState> {
   const filePath = resolveWebPushStatePath(baseDir);
-  const state = await readJsonFile<WebPushRegistrationState>(filePath);
+  const state = await tryReadJson<WebPushRegistrationState>(filePath);
   return state ?? { subscriptionsByEndpointHash: {} };
 }
 
 async function persistState(state: WebPushRegistrationState, baseDir?: string): Promise<void> {
   const filePath = resolveWebPushStatePath(baseDir);
-  await writeJsonAtomic(filePath, state, { trailingNewline: true });
+  await writeJson(filePath, state, { trailingNewline: true });
 }
 
 // --- VAPID keys ---
@@ -116,7 +116,7 @@ export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> 
   // prevent concurrent bootstraps from writing different keypairs.
   return await withLock(async () => {
     const filePath = resolveVapidKeysPath(baseDir);
-    const existing = await readJsonFile<VapidKeyPair>(filePath);
+    const existing = await tryReadJson<VapidKeyPair>(filePath);
     if (existing?.publicKey && existing?.privateKey) {
       return {
         publicKey: existing.publicKey,
@@ -133,7 +133,7 @@ export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> 
       privateKey: keys.privateKey,
       subject: resolveVapidSubjectFromEnv(),
     };
-    await writeJsonAtomic(filePath, pair, { trailingNewline: true });
+    await writeJson(filePath, pair, { trailingNewline: true });
     return pair;
   });
 }
@@ -142,17 +142,17 @@ function resolveVapidSubjectFromEnv(): string {
   return process.env.OPENCLAW_VAPID_SUBJECT || DEFAULT_VAPID_SUBJECT;
 }
 
-export function resolveVapidPublicKeyFromEnv(): string | undefined {
+function resolveVapidPublicKeyFromEnv(): string | undefined {
   return process.env.OPENCLAW_VAPID_PUBLIC_KEY || undefined;
 }
 
-export function resolveVapidPrivateKeyFromEnv(): string | undefined {
+function resolveVapidPrivateKeyFromEnv(): string | undefined {
   return process.env.OPENCLAW_VAPID_PRIVATE_KEY || undefined;
 }
 
 // --- Subscription CRUD ---
 
-export type RegisterWebPushParams = {
+type RegisterWebPushParams = {
   endpoint: string;
   keys: { p256dh: string; auth: string };
   baseDir?: string;
@@ -243,7 +243,7 @@ export async function clearWebPushSubscriptionByEndpoint(
 
 // --- Sending ---
 
-export type WebPushPayload = {
+type WebPushPayload = {
   title: string;
   body?: string;
   tag?: string;

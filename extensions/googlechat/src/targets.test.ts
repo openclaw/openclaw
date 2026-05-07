@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
@@ -37,6 +37,10 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => {
 vi.mock("gaxios", () => ({
   Gaxios: class {
     defaults: unknown;
+    interceptors = {
+      request: { add: vi.fn() },
+      response: { add: vi.fn() },
+    };
 
     constructor(defaults?: unknown) {
       this.defaults = defaults;
@@ -75,6 +79,14 @@ vi.mock("./auth.js", async () => {
 
 const authActual = await vi.importActual<typeof import("./auth.js")>("./auth.js");
 const { __testing: authTesting, getGoogleChatAccessToken, verifyGoogleChatRequest } = authActual;
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.doUnmock("gaxios");
+  vi.doUnmock("google-auth-library");
+  vi.doUnmock("./auth.js");
+  vi.resetModules();
+});
 
 const account = {
   accountId: "default",

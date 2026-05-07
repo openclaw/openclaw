@@ -256,15 +256,14 @@ export default definePluginEntry({
     }
 
     async function runGitHubCopilotAuth(ctx: ProviderAuthContext) {
-      const { githubCopilotLoginCommand } = await loadGithubCopilotRuntime();
-      let authResult = resolveExistingCopilotAuthResult(ctx.agentDir);
-      if (authResult) {
+      const existing = resolveExistingCopilotAuthResult(ctx.agentDir);
+      if (existing) {
         const runLogin = await ctx.prompter.confirm({
           message: "GitHub Copilot auth already exists. Re-run login?",
           initialValue: false,
         });
         if (!runLogin) {
-          return authResult;
+          return existing;
         }
       }
 
@@ -276,26 +275,54 @@ export default definePluginEntry({
         "GitHub Copilot",
       );
 
-      if (!process.stdin.isTTY) {
+      const { runGitHubCopilotDeviceFlow } = await import("./login.js");
+
+      const result = await runGitHubCopilotDeviceFlow({
+        showCode: async ({ verificationUrl, userCode, expiresInMs }) => {
+          const expiresInMinutes = Math.max(1, Math.round(expiresInMs / 60_000));
+          await ctx.prompter.note(
+            [
+              "Open this URL in your browser and enter the code below.",
+              `URL: ${verificationUrl}`,
+              `Code: ${userCode}`,
+              `Code expires in ${expiresInMinutes} minutes. Never share it.`,
+              "",
+              "If a browser does not open automatically after you continue, copy the URL manually.",
+            ].join("\n"),
+            "Authorize GitHub Copilot",
+          );
+        },
+        openUrl: async (url) => {
+          await ctx.openUrl(url);
+        },
+      });
+
+      if (result.status === "access_denied") {
+        await ctx.prompter.note("GitHub Copilot login was cancelled.", "GitHub Copilot");
+        return { profiles: [] };
+      }
+
+      if (result.status === "expired") {
         await ctx.prompter.note(
-          "GitHub Copilot login requires an interactive TTY.",
+          "The GitHub device code expired. Retry login to get a new code.",
           "GitHub Copilot",
         );
         return { profiles: [] };
       }
 
-      try {
-        await githubCopilotLoginCommand(
-          { yes: true, profileId: "github-copilot:github", agentDir: ctx.agentDir },
-          ctx.runtime,
-        );
-      } catch (err) {
-        await ctx.prompter.note(`GitHub Copilot login failed: ${String(err)}`, "GitHub Copilot");
-        return { profiles: [] };
-      }
-
-      authResult = resolveExistingCopilotAuthResult(ctx.agentDir);
-      return authResult ?? { profiles: [] };
+      return {
+        profiles: [
+          {
+            profileId: DEFAULT_COPILOT_PROFILE_ID,
+            credential: {
+              type: "token" as const,
+              provider: PROVIDER_ID,
+              token: result.accessToken,
+            },
+          },
+        ],
+        defaultModel: DEFAULT_COPILOT_MODEL,
+      };
     }
 
     api.registerMemoryEmbeddingProvider(githubCopilotMemoryEmbeddingProviderAdapter);

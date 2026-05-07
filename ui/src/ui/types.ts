@@ -19,6 +19,8 @@ export type ChannelsStatusSnapshot = {
   channels: Record<string, unknown>;
   channelAccounts: Record<string, ChannelAccountSnapshot[]>;
   channelDefaultAccountId: Record<string, string>;
+  partial?: boolean;
+  warnings?: string[];
 };
 
 export type ChannelUiMetaEntry = {
@@ -409,10 +411,15 @@ export type SessionCompactionCheckpoint = {
   postCompaction: SessionCompactionTranscriptReference;
 };
 
+export type SessionCompactionCheckpointPreview = Pick<
+  SessionCompactionCheckpoint,
+  "checkpointId" | "createdAt" | "reason"
+>;
+
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
-  kind: "direct" | "group" | "global" | "unknown";
+  kind: "cron" | "direct" | "group" | "global" | "unknown";
   label?: string;
   displayName?: string;
   surface?: string;
@@ -436,6 +443,8 @@ export type GatewaySessionRow = {
   totalTokens?: number;
   totalTokensFresh?: boolean;
   status?: SessionRunStatus;
+  archived?: boolean;
+  hasActiveRun?: boolean;
   subagentRunState?: SubagentRunState;
   hasActiveSubagentRun?: boolean;
   startedAt?: number;
@@ -447,7 +456,7 @@ export type GatewaySessionRow = {
   agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;
   compactionCheckpointCount?: number;
-  latestCompactionCheckpoint?: SessionCompactionCheckpoint;
+  latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
 };
 
 export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;

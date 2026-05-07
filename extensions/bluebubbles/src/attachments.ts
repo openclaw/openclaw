@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -23,7 +24,7 @@ import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./sen
 import { createChatForHandle, resolveChatGuidForTarget } from "./send.js";
 import { type BlueBubblesAttachment } from "./types.js";
 
-export type BlueBubblesAttachmentOpts = {
+type BlueBubblesAttachmentOpts = {
   serverUrl?: string;
   password?: string;
   accountId?: string;
@@ -35,9 +36,7 @@ const AUDIO_MIME_MP3 = new Set(["audio/mpeg", "audio/mp3"]);
 const AUDIO_MIME_CAF = new Set(["audio/x-caf", "audio/caf"]);
 
 function sanitizeFilename(input: string | undefined, fallback: string): string {
-  const trimmed = input?.trim() ?? "";
-  const base = trimmed ? path.basename(trimmed) : "";
-  const name = base || fallback;
+  const name = sanitizeUntrustedFileName(input ?? "", fallback);
   // Strip characters that could enable multipart header injection (CWE-93)
   return name.replace(/[\r\n"\\]/g, "_");
 }
@@ -111,7 +110,7 @@ export async function downloadBlueBubblesAttachment(
   });
 }
 
-export type SendBlueBubblesAttachmentResult = {
+type SendBlueBubblesAttachmentResult = {
   messageId: string;
 };
 

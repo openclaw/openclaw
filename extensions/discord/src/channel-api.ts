@@ -5,7 +5,6 @@ export {
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
 } from "openclaw/plugin-sdk/channel-status";
-export { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 export type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 export type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 
@@ -19,6 +18,7 @@ const DISCORD_CHANNEL_META = {
   blurb: "very well supported right now.",
   systemImage: "bubble.left.and.bubble.right",
   markdownCapable: true,
+  preferSessionLookupForAnnounceTarget: true,
 } as const;
 
 export function getChatChannelMeta(id: string) {

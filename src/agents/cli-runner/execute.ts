@@ -2,12 +2,12 @@ import crypto from "node:crypto";
 import { shouldLogVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
-import { requestHeartbeatNow as requestHeartbeatNowImpl } from "../../infra/heartbeat-wake.js";
+import { requestHeartbeat as requestHeartbeatImpl } from "../../infra/heartbeat-wake.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system-events.js";
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
 import { scopedHeartbeatWakeOptions } from "../../routing/session-key.js";
-import { prependBootstrapPromptWarning } from "../bootstrap-budget.js";
+import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
 import {
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
@@ -42,7 +42,7 @@ import type { PreparedCliRunContext } from "./types.js";
 const executeDeps = {
   getProcessSupervisor: getProcessSupervisorImpl,
   enqueueSystemEvent: enqueueSystemEventImpl,
-  requestHeartbeatNow: requestHeartbeatNowImpl,
+  requestHeartbeat: requestHeartbeatImpl,
 };
 
 export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDeps>): void {
@@ -248,7 +248,7 @@ export async function executePreparedCliRun(
     ? params.prompt
     : (context.openClawHistoryPrompt ?? params.prompt);
   let prompt = applyPluginTextReplacements(
-    prependBootstrapPromptWarning(basePrompt, context.bootstrapPromptWarningLines, {
+    appendBootstrapPromptWarning(basePrompt, context.bootstrapPromptWarningLines, {
       preserveExactPrompt: context.heartbeatPrompt,
     }),
     context.backendResolved.textTransforms?.input,
@@ -279,12 +279,24 @@ export async function executePreparedCliRun(
     skillsSnapshot: params.skillsSnapshot,
   });
   let claudeSkillsPluginCleanupOwned = false;
+  const baseArgsWithSkills =
+    claudeSkillsPlugin.args.length > 0
+      ? [...resolvedArgs, ...claudeSkillsPlugin.args]
+      : resolvedArgs;
+  const executionBaseArgs =
+    context.backendResolved.resolveExecutionArgs?.({
+      config: params.config,
+      workspaceDir: context.workspaceDir,
+      provider: params.provider,
+      modelId: context.modelId,
+      authProfileId: context.effectiveAuthProfileId,
+      thinkingLevel: params.thinkLevel,
+      useResume,
+      baseArgs: baseArgsWithSkills,
+    }) ?? baseArgsWithSkills;
   const args = buildCliArgs({
     backend,
-    baseArgs:
-      claudeSkillsPlugin.args.length > 0
-        ? [...resolvedArgs, ...claudeSkillsPlugin.args]
-        : resolvedArgs,
+    baseArgs: Array.from(executionBaseArgs),
     modelId: context.normalizedModel,
     sessionId: resolvedSessionId,
     systemPrompt: systemPromptArg,
@@ -383,6 +395,7 @@ export async function executePreparedCliRun(
           backend,
           timeoutMs: params.timeoutMs,
           useResume,
+          trigger: params.trigger,
         });
         const hasJsonlOutput = backend.output === "jsonl";
         if (shouldUseClaudeLiveSession(context)) {
@@ -545,14 +558,20 @@ export async function executePreparedCliRun(
                 "For Claude Code, prefer --permission-mode bypassPermissions --print.",
               ].join(" ");
               executeDeps.enqueueSystemEvent(stallNotice, { sessionKey: params.sessionKey });
-              executeDeps.requestHeartbeatNow(
-                scopedHeartbeatWakeOptions(params.sessionKey, { reason: "cli:watchdog:stall" }),
+              executeDeps.requestHeartbeat(
+                scopedHeartbeatWakeOptions(params.sessionKey, {
+                  source: "cli-watchdog",
+                  intent: "event",
+                  reason: "cli:watchdog:stall",
+                }),
               );
             }
             throw new FailoverError(timeoutReason, {
               reason: "timeout",
               provider: params.provider,
               model: context.modelId,
+              sessionId: params.sessionId,
+              lane: params.lane,
               status: resolveFailoverStatus("timeout"),
             });
           }
@@ -562,6 +581,8 @@ export async function executePreparedCliRun(
               reason: "timeout",
               provider: params.provider,
               model: context.modelId,
+              sessionId: params.sessionId,
+              lane: params.lane,
               status: resolveFailoverStatus("timeout"),
             });
           }
@@ -576,6 +597,8 @@ export async function executePreparedCliRun(
             reason,
             provider: params.provider,
             model: context.modelId,
+            sessionId: params.sessionId,
+            lane: params.lane,
             status,
           });
         }

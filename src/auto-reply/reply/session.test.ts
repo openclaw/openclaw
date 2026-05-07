@@ -52,11 +52,26 @@ vi.mock("./session-fork.js", () => ({
     sessionForkMocks.forkSessionFromParent(...args),
   resolveParentForkTokenCount: (...args: [{ parentEntry: SessionEntry; storePath: string }]) =>
     sessionForkMocks.resolveParentForkTokenCount(...args),
-  resolveParentForkMaxTokens: (cfg: { session?: { parentForkMaxTokens?: unknown } }) => {
-    const configured = cfg.session?.parentForkMaxTokens;
-    return typeof configured === "number" && Number.isFinite(configured) && configured >= 0
-      ? Math.floor(configured)
-      : 100_000;
+  resolveParentForkDecision: async (params: { parentEntry: SessionEntry; storePath: string }) => {
+    const maxTokens = 100_000;
+    const parentTokens = await sessionForkMocks.resolveParentForkTokenCount({
+      parentEntry: params.parentEntry,
+      storePath: params.storePath,
+    });
+    if (typeof parentTokens === "number" && parentTokens > maxTokens) {
+      return {
+        status: "skip",
+        reason: "parent-too-large",
+        maxTokens,
+        parentTokens,
+        message: `Parent context is too large to fork (${parentTokens}/${maxTokens} tokens); starting with isolated context instead.`,
+      };
+    }
+    return {
+      status: "fork",
+      maxTokens,
+      ...(typeof parentTokens === "number" ? { parentTokens } : {}),
+    };
   },
 }));
 
@@ -599,84 +614,6 @@ describe("initSessionState thread forking", () => {
     expect(sessionForkMocks.forkSessionFromParent).not.toHaveBeenCalled();
   });
 
-  it("respects session.parentForkMaxTokens override", async () => {
-    const root = await makeCaseDir("openclaw-thread-session-overflow-override-");
-    const sessionsDir = path.join(root, "sessions");
-    await fs.mkdir(sessionsDir);
-
-    const parentSessionId = "parent-override";
-    const parentSessionFile = path.join(sessionsDir, "parent.jsonl");
-    const header = {
-      type: "session",
-      version: 3,
-      id: parentSessionId,
-      timestamp: new Date().toISOString(),
-      cwd: process.cwd(),
-    };
-    const message = {
-      type: "message",
-      id: "m1",
-      parentId: null,
-      timestamp: new Date().toISOString(),
-      message: { role: "user", content: "Parent prompt" },
-    };
-    const assistantMessage = {
-      type: "message",
-      id: "m2",
-      parentId: "m1",
-      timestamp: new Date().toISOString(),
-      message: { role: "assistant", content: "Parent reply" },
-    };
-    await fs.writeFile(
-      parentSessionFile,
-      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(assistantMessage)}\n`,
-      "utf-8",
-    );
-
-    const storePath = path.join(root, "sessions.json");
-    const parentSessionKey = "agent:main:slack:channel:c1";
-    await writeSessionStoreFast(storePath, {
-      [parentSessionKey]: {
-        sessionId: parentSessionId,
-        sessionFile: parentSessionFile,
-        updatedAt: Date.now(),
-        totalTokens: 170_000,
-      },
-    });
-
-    const cfg = {
-      session: {
-        store: storePath,
-        parentForkMaxTokens: 200_000,
-      },
-    } as OpenClawConfig;
-
-    const threadSessionKey = "agent:main:slack:channel:c1:thread:789";
-    const result = await initSessionState({
-      ctx: {
-        Body: "Thread reply",
-        SessionKey: threadSessionKey,
-        ParentSessionKey: parentSessionKey,
-      },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.sessionEntry.forkedFromParent).toBe(true);
-    expect(result.sessionEntry.sessionFile).toBeTruthy();
-    const forkedContent = await fs.readFile(result.sessionEntry.sessionFile ?? "", "utf-8");
-    const headerLine = forkedContent.split(/\r?\n/).find((line) => line.trim().length > 0);
-    if (!headerLine) {
-      throw new Error("Missing session header");
-    }
-    const parsedHeader = JSON.parse(headerLine) as { parentSession?: string };
-    const expectedParentSession = await fs.realpath(parentSessionFile);
-    const actualParentSession = parsedHeader.parentSession
-      ? await fs.realpath(parsedHeader.parentSession)
-      : undefined;
-    expect(actualParentSession).toBe(expectedParentSession);
-  });
-
   it("records topic-specific session files when MessageThreadId is present", async () => {
     const root = await makeCaseDir("openclaw-topic-session-");
     const storePath = path.join(root, "sessions.json");
@@ -790,6 +727,54 @@ describe("initSessionState RawBody", () => {
     expect(result.isNewSession).toBe(true);
     expect(result.bodyStripped).toBe("KeepThisCase");
     expect(result.triggerBodyNormalized).toBe("/NEW KeepThisCase");
+  });
+
+  it("drops cached skills snapshot when /new rotates an existing session", async () => {
+    const root = await makeCaseDir("openclaw-rawbody-reset-skills-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:signal:direct:uuid:reset-skills";
+    const existingSessionId = "session-with-stale-skills";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+        systemSent: true,
+        skillsSnapshot: {
+          prompt: "<available_skills><skill><name>stale</name></skill></available_skills>",
+          skills: [{ name: "stale" }],
+          version: 0,
+        },
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        resetTriggers: ["/new"],
+      },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "/new continue",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionEntry.skillsSnapshot).toBeUndefined();
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { skillsSnapshot?: unknown }
+    >;
+    expect(store[sessionKey]?.skillsSnapshot).toBeUndefined();
   });
 
   it("drains stale system events when /new rotates an existing session", async () => {
