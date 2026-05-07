@@ -19,6 +19,12 @@ import {
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
+import {
+  buildCodexAppInventoryCacheKey,
+  defaultCodexAppInventoryCache,
+} from "./app-inventory-cache.js";
+import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
+import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import type { CodexServerNotification } from "./protocol.js";
@@ -461,6 +467,7 @@ describe("runCodexAppServerAttempt", () => {
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
     resetAgentEventsForTest();
     resetGlobalHookRunner();
+    defaultCodexAppInventoryCache.clear();
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
@@ -2410,6 +2417,201 @@ describe("runCodexAppServerAttempt", () => {
       expect.objectContaining({
         threadId: "thread-1",
         turnId: "turn-1",
+      }),
+    );
+
+    await notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed" },
+      },
+    });
+    await run;
+  });
+
+  it("passes session plugin app policy context to elicitation handling", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const agentDir = path.join(tempDir, "agent");
+    const pluginConfig = {
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          "google-calendar": {
+            marketplaceName: "openai-curated",
+            pluginName: "google-calendar",
+          },
+        },
+      },
+    };
+    const appServer = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: readCodexPluginConfig(pluginConfig),
+    });
+    defaultCodexAppInventoryCache.clear();
+    await defaultCodexAppInventoryCache.refreshNow({
+      key: buildCodexAppInventoryCacheKey({
+        codexHome: resolveCodexAppServerHomeDir(agentDir),
+        endpoint: JSON.stringify({
+          transport: appServer.start.transport,
+          command: appServer.start.command,
+          args: appServer.start.args,
+          url: appServer.start.url ?? null,
+        }),
+      }),
+      request: async () => ({
+        data: [
+          {
+            id: "google-calendar-app",
+            name: "Google Calendar",
+            description: null,
+            logoUrl: null,
+            logoUrlDark: null,
+            distributionChannel: null,
+            branding: null,
+            appMetadata: null,
+            labels: null,
+            installUrl: null,
+            isAccessible: true,
+            isEnabled: true,
+            pluginDisplayNames: [],
+          },
+        ],
+        nextCursor: null,
+      }),
+    });
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    let handleRequest:
+      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
+      | undefined;
+    const bridgeSpy = vi
+      .spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest")
+      .mockResolvedValue({
+        action: "decline",
+        content: null,
+        _meta: null,
+      });
+    const request = vi.fn(async (method: string) => {
+      if (method === "plugin/list") {
+        return {
+          marketplaces: [
+            {
+              name: "openai-curated",
+              path: "/marketplaces/openai-curated",
+              interface: null,
+              plugins: [
+                {
+                  id: "google-calendar",
+                  name: "google-calendar",
+                  source: { type: "remote" },
+                  installed: true,
+                  enabled: true,
+                  installPolicy: "AVAILABLE",
+                  authPolicy: "ON_USE",
+                  availability: "AVAILABLE",
+                  interface: null,
+                },
+              ],
+            },
+          ],
+          marketplaceLoadErrors: [],
+          featuredPluginIds: [],
+        };
+      }
+      if (method === "plugin/read") {
+        return {
+          plugin: {
+            marketplaceName: "openai-curated",
+            marketplacePath: "/marketplaces/openai-curated",
+            summary: {
+              id: "google-calendar",
+              name: "google-calendar",
+              source: { type: "remote" },
+              installed: true,
+              enabled: true,
+              installPolicy: "AVAILABLE",
+              authPolicy: "ON_USE",
+              availability: "AVAILABLE",
+              interface: null,
+            },
+            description: null,
+            skills: [],
+            apps: [
+              {
+                id: "google-calendar-app",
+                name: "Google Calendar",
+                description: null,
+                installUrl: null,
+                needsAuth: false,
+              },
+            ],
+            mcpServers: ["google-calendar"],
+          },
+        };
+      }
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-1", "inProgress");
+      }
+      return {};
+    });
+    __testing.setCodexAppServerClientFactoryForTests(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: (handler: typeof notify) => {
+            notify = handler;
+            return () => undefined;
+          },
+          addRequestHandler: (
+            handler: (request: {
+              id: string;
+              method: string;
+              params?: unknown;
+            }) => Promise<unknown>,
+          ) => {
+            handleRequest = handler;
+            return () => undefined;
+          },
+        }) as never,
+    );
+
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = agentDir;
+    const run = runCodexAppServerAttempt(params, { pluginConfig });
+    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"));
+
+    const result = await handleRequest?.({
+      id: "request-elicitation-1",
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        serverName: "google-calendar",
+        mode: "form",
+      },
+    });
+
+    expect(result).toEqual({
+      action: "decline",
+      content: null,
+      _meta: null,
+    });
+    expect(bridgeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        pluginAppPolicyContext: expect.objectContaining({
+          apps: {
+            "google-calendar-app": expect.objectContaining({
+              pluginName: "google-calendar",
+              mcpServerNames: ["google-calendar"],
+            }),
+          },
+        }),
       }),
     );
 

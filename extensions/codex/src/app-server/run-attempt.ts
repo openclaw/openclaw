@@ -1067,6 +1067,7 @@ export async function runCodexAppServerAttempt(
           paramsForRun: params,
           threadId: thread.threadId,
           turnId,
+          pluginAppPolicyContext: thread.pluginAppPolicyContext,
           signal: runAbortController.signal,
         });
       }
