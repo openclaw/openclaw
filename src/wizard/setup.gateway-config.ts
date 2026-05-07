@@ -27,6 +27,7 @@ import { maskApiKey } from "../utils/mask-api-key.js";
 import type { WizardPrompter } from "./prompts.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import type {
+import { t } from "./i18n/index.js";
   GatewayWizardSettings,
   QuickstartGatewayDefaults,
   WizardFlow,
@@ -108,10 +109,10 @@ export async function configureGatewayForSetup(
           options: [
             {
               value: "token",
-              label: "Token",
+              label: t("Token"),
               hint: "Recommended default (local + remote)",
             },
-            { value: "password", label: "Password" },
+            { value: "password", label: t("Password") },
           ],
           initialValue: "token",
         })) as GatewayAuthChoice);
@@ -227,7 +228,7 @@ export async function configureGatewayForSetup(
             });
       } else {
         tokenInput = await prompter.text({
-          message: "Gateway token (blank to generate)",
+          message: t("Gateway token (blank to generate)"),
           placeholder: "Needed for multi-machine or non-loopback access",
           sensitive: true,
         });

@@ -522,14 +522,14 @@ export async function runSetupWizard(
           options: [
             {
               value: "local",
-              label: "Local gateway (this machine)",
+              label: t("Local gateway (this machine)"),
               hint: localProbe.ok
                 ? `Gateway reachable (${localUrl})`
                 : `No gateway detected (${localUrl})`,
             },
             {
               value: "remote",
-              label: "Remote gateway (info-only)",
+              label: t("Remote gateway (info-only)"),
               hint: !remoteUrl
                 ? "No remote URL configured yet"
                 : remoteProbe?.ok

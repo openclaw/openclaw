@@ -107,4 +107,13 @@ export const zhCN: LocaleMap = {
   "Install missing skill dependencies": "安装缺失的技能依赖",
   "Show Homebrew install command?": "显示 Homebrew 安装命令？",
   "Preferred node manager for skill installs": "技能安装的首选包管理器",
-};
+}
+  // ===== Additional translations for missed strings =====
+  "Local gateway (this machine)": "本地网关（本机）",
+  "Remote gateway (info-only)": "远程网关（仅查看）",
+  "Token": "令牌",
+  "Password": "密码",
+  "Back": "返回",
+  "Return to section menu": "返回分区菜单",
+
+;

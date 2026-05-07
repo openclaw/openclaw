@@ -4,6 +4,7 @@ import type { PluginConfigUiHint } from "../plugins/types.js";
 import { getPath, setPathCreateStrict } from "../secrets/path-utils.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type { WizardPrompter } from "./prompts.js";
+import { t } from "./i18n/index.js";
 
 /**
  * A discovered plugin that has configurable fields via uiHints.
@@ -335,7 +336,7 @@ export async function setupPluginConfig(params: {
     options: [
       {
         value: "__skip__",
-        label: "Skip for now",
+        label: t("Skip for now"),
         hint: "Continue without configuring plugins",
       },
       ...unconfigured.map((p) => ({
@@ -402,7 +403,7 @@ export async function configurePluginConfig(params: {
           hint: `${configuredCount}/${totalCount} configured`,
         };
       }),
-      { value: "__skip__", label: "Back", hint: "Return to section menu" },
+      { value: "__skip__", label: t("Back"), hint: t("Return to section menu") },
     ],
     searchable: true,
   });

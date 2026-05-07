@@ -37,6 +37,7 @@ import type { WizardPrompter } from "./prompts.js";
 import { setupWizardShellCompletion } from "./setup.completion.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import type { GatewayWizardSettings, WizardFlow } from "./setup.types.js";
+import { t } from "./i18n/index.js";
 
 type FinalizeOnboardingOptions = {
   flow: WizardFlow;
@@ -442,8 +443,8 @@ export async function finalizeSetupWizard(
 
     const hatchOptions: { value: "tui" | "web" | "later"; label: string }[] = [
       { value: "tui", label: t("Hatch in Terminal (recommended)") },
-      ...(gatewayProbe.ok ? [{ value: "web" as const, label: "Open the Web UI" }] : []),
-      { value: "later", label: "Do this later" },
+      ...(gatewayProbe.ok ? [{ value: "web" as const, label: t("Open the Web UI") }] : []),
+      { value: "later", label: t("Do this later") },
     ];
 
     hatchChoice = await prompter.select({
