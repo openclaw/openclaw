@@ -10,7 +10,7 @@ describe("buildSubagentInitialUserMessage", () => {
       persistentSession: false,
     });
 
-    expect(msg).not.toContain("[Subagent Task]:");
+    expect(msg).not.toContain("[Subagent Task]");
     expect(msg).toContain("**Your Role**");
     expect(msg).toContain("depth 1/3");
   });
@@ -23,6 +23,22 @@ describe("buildSubagentInitialUserMessage", () => {
     });
 
     expect(msg).toContain("persistent and remains available");
+  });
+
+  it("can include an opt-in visible task envelope", () => {
+    const msg = buildSubagentInitialUserMessage({
+      childDepth: 1,
+      maxSpawnDepth: 2,
+      persistentSession: false,
+      task: "UNIQUE_VISIBLE_SUBAGENT_TASK_TOKEN\n  preserve indentation",
+      visibleTaskEnvelope: true,
+    });
+
+    expect(msg).toContain("[Subagent Task]");
+    expect(msg).toContain("UNIQUE_VISIBLE_SUBAGENT_TASK_TOKEN");
+    expect(msg).toContain("  preserve indentation");
+    expect(msg).toContain("Begin. Execute the assigned task to completion.");
+    expect(msg).not.toContain("**Your Role**");
   });
 
   it("keeps the delegated task single-sourced across system and first user text", () => {

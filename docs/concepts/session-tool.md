@@ -146,6 +146,10 @@ Key options:
   requester transcript; omit it or use `context: "isolated"` for a clean child.
   Thread-bound native sub-agents default to `context: "fork"` unless
   `threadBindings.defaultSpawnContext` says otherwise.
+- `visibleTaskEnvelope: true` for native sub-agents when the child transcript
+  must visibly contain the delegated task for auditability. The default keeps
+  the task in the hidden system prompt only to avoid duplicating first-request
+  tokens.
 
 Default leaf sub-agents do not get session tools. When
 `maxSpawnDepth >= 2`, depth-1 orchestrator sub-agents additionally receive

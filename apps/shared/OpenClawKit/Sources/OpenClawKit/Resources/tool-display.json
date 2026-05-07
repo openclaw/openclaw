@@ -451,6 +451,7 @@
         "model",
         "thinking",
         "runTimeoutSeconds",
+        "visibleTaskEnvelope",
         "cleanup"
       ]
     },

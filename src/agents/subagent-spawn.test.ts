@@ -399,8 +399,46 @@ describe("spawnSubagentDirect seam flow", () => {
     const agentCall = calls.find((call) => call.method === "agent");
     const params = agentCall?.params as { message?: string; extraSystemPrompt?: string };
     expect(params.message).not.toContain("UNIQUE_LONG_SUBAGENT_TASK_TOKEN");
-    expect(params.message).not.toContain("[Subagent Task]:");
+    expect(params.message).not.toContain("[Subagent Task]");
     expect(params.message).toContain("**Your Role**");
+    expect(params.extraSystemPrompt).toBe("system-prompt");
+  });
+
+  it("includes the task in the initial user message when visibleTaskEnvelope is enabled", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        calls.push(request);
+        if (request.method === "agent") {
+          return { runId: "run-visible-task", status: "accepted", acceptedAt: 1000 };
+        }
+        if (request.method?.startsWith("sessions.")) {
+          return { ok: true };
+        }
+        return {};
+      },
+    );
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock);
+
+    const task = "UNIQUE_VISIBLE_SUBAGENT_TASK_TOKEN\n  keep indentation";
+    const result = await spawnSubagentDirect(
+      {
+        task,
+        visibleTaskEnvelope: true,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const agentCall = calls.find((call) => call.method === "agent");
+    const params = agentCall?.params as { message?: string; extraSystemPrompt?: string };
+    expect(params.message).toContain("[Subagent Task]");
+    expect(params.message).toContain("UNIQUE_VISIBLE_SUBAGENT_TASK_TOKEN");
+    expect(params.message).toContain("  keep indentation");
+    expect(params.message).not.toContain("**Your Role**");
     expect(params.extraSystemPrompt).toBe("system-prompt");
   });
 

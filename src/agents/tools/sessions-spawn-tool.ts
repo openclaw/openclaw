@@ -193,6 +193,12 @@ function createSessionsSpawnToolSchema(params: {
           "When true, spawned subagent runs use lightweight bootstrap context. Only applies to runtime='subagent'.",
       }),
     ),
+    visibleTaskEnvelope: Type.Optional(
+      Type.Boolean({
+        description:
+          "Native subagent only. When true, also include the delegated task in the child session's first visible user message for auditability. Omit or false keeps the token-saving system-prompt-only default.",
+      }),
+    ),
 
     // Inline attachments (snapshot-by-value).
     // NOTE: Attachment contents are redacted from transcript persistence by sanitizeToolCallInputs.
@@ -304,6 +310,7 @@ export function createSessionsSpawnTool(
         params.context === "fork" || params.context === "isolated" ? params.context : undefined;
       const streamTo = runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
       const lightContext = params.lightContext === true;
+      const visibleTaskEnvelope = params.visibleTaskEnvelope === true;
       const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
       if (runtime === "acp" && !acpAvailable) {
         return jsonResult({
@@ -314,6 +321,9 @@ export function createSessionsSpawnTool(
       }
       if (runtime === "acp" && lightContext) {
         throw new Error("lightContext is only supported for runtime='subagent'.");
+      }
+      if (runtime === "acp" && visibleTaskEnvelope) {
+        throw new Error("visibleTaskEnvelope is only supported for runtime='subagent'.");
       }
       if (runtime === "acp" && context === "fork") {
         throw new Error('context="fork" is only supported for runtime="subagent".');
@@ -458,6 +468,7 @@ export function createSessionsSpawnTool(
           sandbox,
           context,
           lightContext,
+          visibleTaskEnvelope,
           expectsCompletionMessage,
           attachments,
           attachMountPath:

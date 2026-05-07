@@ -446,6 +446,25 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs.lightContext).toBe(true);
   });
 
+  it("passes visibleTaskEnvelope through to subagent spawns", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-visible-task", {
+      task: "summarize this",
+      visibleTaskEnvelope: true,
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "summarize this",
+        visibleTaskEnvelope: true,
+      }),
+      expect.any(Object),
+    );
+  });
+
   it('rejects lightContext when runtime is not "subagent"', async () => {
     registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({
@@ -459,6 +478,24 @@ describe("sessions_spawn tool", () => {
         lightContext: true,
       }),
     ).rejects.toThrow("lightContext is only supported for runtime='subagent'.");
+
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects visibleTaskEnvelope when runtime is not "subagent"', async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await expect(
+      tool.execute("call-visible-task-acp", {
+        runtime: "acp",
+        task: "summarize this",
+        visibleTaskEnvelope: true,
+      }),
+    ).rejects.toThrow("visibleTaskEnvelope is only supported for runtime='subagent'.");
 
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();

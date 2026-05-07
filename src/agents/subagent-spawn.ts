@@ -128,6 +128,7 @@ export type SpawnSubagentParams = {
   sandbox?: SpawnSubagentSandboxMode;
   context?: SpawnSubagentContextMode;
   lightContext?: boolean;
+  visibleTaskEnvelope?: boolean;
   expectsCompletionMessage?: boolean;
   attachments?: Array<{
     name: string;
@@ -1049,6 +1050,8 @@ export async function spawnSubagentDirect(
     childDepth,
     maxSpawnDepth,
     persistentSession: spawnMode === "session",
+    task,
+    visibleTaskEnvelope: params.visibleTaskEnvelope,
   });
 
   const toolSpawnMetadata = mapToolContextToSpawnedRunMetadata({

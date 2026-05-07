@@ -220,6 +220,9 @@ Per-agent overrides use `agents.list[].subagents.delegationMode`.
 <ParamField path="context" type='"isolated" | "fork"' default="isolated">
   `fork` branches the requester's current transcript into the child session. Native sub-agents only. Thread-bound spawns default to `fork`; non-thread spawns default to `isolated`.
 </ParamField>
+<ParamField path="visibleTaskEnvelope" type="boolean" default="false">
+  Native sub-agents only. When `true`, the child receives the delegated task in the visible first user message as `[Subagent Task]`; by default, the task remains in hidden runtime context to keep transcripts smaller.
+</ParamField>
 
 <Warning>
 `sessions_spawn` does **not** accept channel-delivery params (`target`,
