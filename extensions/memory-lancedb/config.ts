@@ -88,6 +88,17 @@ function resolveEnvVars(value: string): string {
   });
 }
 
+function assertValidRegex(pattern: string, label: string): void {
+  try {
+    const r = new RegExp(pattern);
+    if (!r.source) {
+      throw new Error();
+    }
+  } catch {
+    throw new Error(`${label} is not a valid regex: ${pattern}`);
+  }
+}
+
 function resolveCategoryRules(raw: unknown): Partial<Record<MemoryCategory, string>> | undefined {
   if (raw === undefined || raw === null) {
     return undefined;
@@ -103,11 +114,7 @@ function resolveCategoryRules(raw: unknown): Partial<Record<MemoryCategory, stri
     if (typeof value !== "string") {
       throw new Error(`categoryRules.${key} must be a string`);
     }
-    try {
-      new RegExp(value);
-    } catch {
-      throw new Error(`categoryRules.${key} is not a valid regex: ${value}`);
-    }
+    assertValidRegex(value, `categoryRules.${key}`);
     result[key as MemoryCategory] = value;
   }
   return result;
@@ -124,11 +131,7 @@ function resolveTriggers(raw: unknown): string[] | undefined {
     if (typeof item !== "string") {
       throw new Error(`triggers[${i}] must be a string`);
     }
-    try {
-      new RegExp(item);
-    } catch {
-      throw new Error(`triggers[${i}] is not a valid regex: ${item}`);
-    }
+    assertValidRegex(item, `triggers[${i}]`);
     return item;
   });
 }
