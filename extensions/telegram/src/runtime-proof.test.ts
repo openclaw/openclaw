@@ -114,7 +114,7 @@ describe("telegram runtime proof helpers", () => {
       expect(proofPath).toBe(join(root, "logs", "telegram-runtime-proof.jsonl"));
       const lines = readFileSync(proofPath!, "utf8").trim().split("\n");
       expect(lines).toHaveLength(1);
-      expect(JSON.parse(lines[0]!)).toMatchObject({
+      expect(JSON.parse(lines[0])).toMatchObject({
         event: "inbound_accepted",
         kind: "inbound_accepted",
         proofEvent: TELEGRAM_RUNTIME_PROOF_EVENT,

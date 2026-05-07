@@ -98,7 +98,14 @@ export function hashTelegramRuntimeProofId(value: unknown): string | undefined {
   if (value === null || value === undefined) {
     return undefined;
   }
-  const raw = typeof value === "string" ? value : String(value);
+  let raw: string;
+  if (typeof value === "string") {
+    raw = value;
+  } else if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
+    raw = String(value);
+  } else {
+    return undefined;
+  }
   const trimmed = raw.trim();
   if (!trimmed) {
     return undefined;
