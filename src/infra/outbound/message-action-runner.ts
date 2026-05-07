@@ -1244,9 +1244,19 @@ export async function runMessageAction(
       readNumberParam(params, "longitude") != null
     ) {
       const message = readStringParam(params, "message");
-      const mediaUrl = readStringParam(params, "mediaUrl");
+      const attachmentSources = [
+        readStringParam(params, "media"),
+        readStringParam(params, "mediaUrl"),
+        readStringParam(params, "path"),
+        readStringParam(params, "filePath"),
+        readStringParam(params, "fileUrl"),
+      ];
       const mediaUrls = readStringArrayParam(params, "mediaUrls");
-      if (message || mediaUrl || (mediaUrls?.length ?? 0) > 0) {
+      if (
+        message ||
+        attachmentSources.some((value) => Boolean(value)) ||
+        (mediaUrls?.length ?? 0) > 0
+      ) {
         throw new Error("location sends cannot include text or media payloads");
       }
       return handleLocationAction({

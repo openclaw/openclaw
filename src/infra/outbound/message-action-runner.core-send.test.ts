@@ -165,6 +165,46 @@ describe("runMessageAction core send routing", () => {
     ).rejects.toThrow("location sends cannot include text or media payloads");
   });
 
+  it("rejects attachment aliases when rerouting location sends", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "testchat",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "testchat",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: vi.fn(),
+            },
+          }),
+        },
+      ]),
+    );
+    const cfg = {
+      channels: {
+        testchat: {
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      runMessageAction({
+        cfg,
+        action: "send",
+        params: {
+          channel: "testchat",
+          target: "channel:abc",
+          latitude: 28.2723,
+          longitude: -16.6424,
+          filePath: "/tmp/photo.png",
+        },
+        dryRun: false,
+      }),
+    ).rejects.toThrow("location sends cannot include text or media payloads");
+  });
+
   it("accepts Telegram numeric forum topic targets through plugin-owned grammar", async () => {
     setActivePluginRegistry(
       createTestRegistry([
