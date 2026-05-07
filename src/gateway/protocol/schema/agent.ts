@@ -172,6 +172,11 @@ export const AgentParamsSchema = Type.Object(
     internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
     inputProvenance: Type.Optional(InputProvenanceSchema),
     voiceWakeTrigger: Type.Optional(Type.String()),
+    // Opaque metadata from Paperclip cloud adapters. The Gateway accepts this
+    // field for forward-compatible integrations but does not interpret it in
+    // the core agent handler; callers should continue to include any user-visible
+    // run context in `message`.
+    paperclip: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
   },
