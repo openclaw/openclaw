@@ -104,6 +104,11 @@ Then widen one control at a time. For example, add a specific channel allowlist
 before enabling write-capable tools, or enable a reverse proxy before accepting
 remote Control UI traffic.
 
+The strict `exec.security: "deny"` baseline blocks all exec calls, including
+benign diagnostics. If diagnostics or low-risk commands are required, relax this
+only after choosing the specific senders, agents, commands, and approval mode
+that match your threat model.
+
 ## 5. DM and group exposure
 
 Messaging channels are untrusted input surfaces. Before allowing DMs or groups:

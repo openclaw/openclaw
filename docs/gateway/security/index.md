@@ -25,6 +25,10 @@ OpenClaw security guidance assumes a **personal assistant** deployment: one trus
 
 This page explains hardening **within that model**. It does not claim hostile multi-tenant isolation on one shared gateway.
 
+Before changing remote access, DM policy, reverse proxy, or public exposure,
+use the [Gateway exposure runbook](/gateway/security/exposure-runbook) as a
+pre-flight and rollback checklist.
+
 ## Quick check: `openclaw security audit`
 
 See also: [Formal Verification (Security Models)](/security/formal-verification)
@@ -42,10 +46,6 @@ openclaw security audit --json
 policies to allowlists, restores `logging.redactSensitive: "tools"`, tightens
 state/config/include-file permissions, and uses Windows ACL resets instead of
 POSIX `chmod` when running on Windows.
-
-If you are about to expose the Gateway beyond loopback, use the
-[Gateway exposure runbook](/gateway/security/exposure-runbook) before and after
-the change.
 
 It flags common footguns (Gateway auth exposure, browser control exposure, elevated allowlists, filesystem permissions, permissive exec approvals, and open-channel tool exposure).
 
