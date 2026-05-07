@@ -145,6 +145,20 @@ describe("gateway-cli coverage", () => {
     expect(runtimeLogs.join("\n")).toContain('"ok": true');
   });
 
+  it("gateway --port <N> health routes through config.gateway.port, not url override, preserving local auth", async () => {
+    callGateway.mockClear();
+
+    await runGatewayCommand(["gateway", "--port", "18799", "health", "--json"]);
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    const callArgs = callGateway.mock.calls[0][0] as Record<string, unknown>;
+    // applyPortOverride patches config.gateway.port rather than setting opts.url,
+    // so ensureExplicitGatewayAuth is not triggered for local port overrides.
+    const config = callArgs.config as { gateway?: { port?: number } } | undefined;
+    expect(config?.gateway?.port).toBe(18799);
+    expect(callArgs.url).toBeUndefined();
+  });
+
   it("registers gateway probe and routes to gatewayStatusCommand", async () => {
     gatewayStatusCommand.mockClear();
 

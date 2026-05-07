@@ -118,16 +118,18 @@ function parseDaysOption(raw: unknown, fallback = 30): number {
   return fallback;
 }
 
-function resolveGatewayRpcOptions<T extends { token?: string; password?: string }>(
+function resolveGatewayRpcOptions<T extends { token?: string; password?: string; port?: string }>(
   opts: T,
   command?: Command,
 ): T {
   const parentToken = inheritOptionFromParent<string>(command, "token");
   const parentPassword = inheritOptionFromParent<string>(command, "password");
+  const parentPort = inheritOptionFromParent<string>(command, "port");
   return {
     ...opts,
     token: opts.token ?? parentToken,
     password: opts.password ?? parentPassword,
+    port: opts.port ?? parentPort,
   };
 }
 
