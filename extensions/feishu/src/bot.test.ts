@@ -2644,6 +2644,110 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("hydrates topic thread_id from rootId for normal groups with topic message format", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    // When querying the rootId (replied-to message), Feishu returns its threadId
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "om_bot_reply_001",
+      chatId: "oc-group",
+      chatType: "group",
+      content: "bot reply",
+      contentType: "text",
+      threadId: "omt_normal_group_topic",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group_topic",
+              replyInThread: "enabled",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    // Normal group (chat_type="group") with topic message format.
+    // User replies to bot's message (root_id=om_*), event has thread_id=omt_*
+    const replyEvent: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-user" } },
+      message: {
+        message_id: "msg-user-reply",
+        chat_id: "oc-group",
+        chat_type: "group",
+        root_id: "om_bot_reply_001",
+        thread_id: "omt_normal_group_topic",
+        message_type: "text",
+        content: JSON.stringify({ text: "reply in normal group topic" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event: replyEvent });
+
+    expect(mockResolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc-group:topic:omt_normal_group_topic" },
+      }),
+    );
+  });
+
+  it("hydrates topic thread_id via rootId when threadId is missing in normal group", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    // The replied-to message has a threadId that can be retrieved via API
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "om_bot_reply_002",
+      chatId: "oc-group",
+      chatType: "group",
+      content: "bot reply",
+      contentType: "text",
+      threadId: "omt_hydrated_topic",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group_topic",
+              replyInThread: "enabled",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    // Normal group reply where event does NOT carry thread_id but has root_id
+    const replyEvent: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-user" } },
+      message: {
+        message_id: "msg-user-reply-2",
+        chat_id: "oc-group",
+        chat_type: "group",
+        root_id: "om_bot_reply_002",
+        message_type: "text",
+        content: JSON.stringify({ text: "reply without thread_id" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event: replyEvent });
+
+    // Should hydrate via rootId
+    expect(mockGetMessageFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "om_bot_reply_002",
+      }),
+    );
+    expect(mockResolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc-group:topic:omt_hydrated_topic" },
+      }),
+    );
+  });
+
   it("replies to the topic root when handling a message inside an existing topic", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 

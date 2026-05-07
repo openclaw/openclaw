@@ -533,30 +533,44 @@ export async function handleFeishuMessage(params: {
     ? resolveConfiguredFeishuGroupSessionScope({ groupConfig, feishuCfg })
     : null;
   let effectiveThreadId = ctx.threadId;
-  if (
-    isGroup &&
-    ctx.chatType === "topic_group" &&
-    !effectiveThreadId &&
-    isFeishuTopicSessionScope(groupSessionScope ?? "group")
-  ) {
-    try {
-      const messageInfo = await getMessageFeishu({
-        cfg,
-        accountId: account.accountId,
-        messageId: ctx.messageId,
-      });
-      const hydratedThreadId = messageInfo?.threadId?.trim();
-      if (hydratedThreadId) {
-        ctx = { ...ctx, threadId: hydratedThreadId };
-        effectiveThreadId = hydratedThreadId;
+  // Track whether we hydrated to a native Feishu topic ID so we can suppress
+  // rootId in session routing (rootId would otherwise take priority and split the session).
+  let hydratedToNativeTopic = false;
+  if (isGroup && isFeishuTopicSessionScope(groupSessionScope ?? "group")) {
+    const hasValidTopicThreadId = effectiveThreadId && effectiveThreadId.startsWith("omt_");
+    // Only attempt hydration when rootId looks like a real Feishu message ID (om_*)
+    // but is not already a native topic ID (omt_*). This avoids hydrating for
+    // OpenClaw-created threads where rootId is the initiating message.
+    const hasFeishuRootIdToHydrate =
+      ctx.rootId && ctx.rootId.startsWith("om_") && !ctx.rootId.startsWith("omt_");
+    if (!hasValidTopicThreadId && (ctx.chatType === "topic_group" || hasFeishuRootIdToHydrate)) {
+      try {
+        // Prefer querying rootId (the replied-to message already in the topic)
+        // over messageId (the newly sent message which may not have threadId yet).
+        const hydrateMessageId = ctx.rootId || ctx.messageId;
+        const messageInfo = await getMessageFeishu({
+          cfg,
+          accountId: account.accountId,
+          messageId: hydrateMessageId,
+        });
+        const hydratedThreadId = messageInfo?.threadId?.trim();
+        if (hydratedThreadId && hydratedThreadId.startsWith("omt_")) {
+          ctx = { ...ctx, threadId: hydratedThreadId };
+          effectiveThreadId = hydratedThreadId;
+          hydratedToNativeTopic = true;
+          log(
+            `feishu[${account.accountId}]: hydrated topic thread_id=${hydratedThreadId} for message=${ctx.messageId} (via ${hydrateMessageId})`,
+          );
+        }
+      } catch (err) {
         log(
-          `feishu[${account.accountId}]: hydrated topic thread_id=${hydratedThreadId} for message=${ctx.messageId}`,
+          `feishu[${account.accountId}]: failed to hydrate topic thread_id for message=${ctx.messageId}: ${String(err)}`,
         );
       }
-    } catch (err) {
-      log(
-        `feishu[${account.accountId}]: failed to hydrate topic thread_id for message=${ctx.messageId}: ${String(err)}`,
-      );
+    } else if (hasValidTopicThreadId && hasFeishuRootIdToHydrate) {
+      // Event already carries omt_* threadId AND a Feishu rootId (om_*) — this means
+      // we're in a Feishu native topic with a quote-reply. Suppress rootId so threadId wins.
+      hydratedToNativeTopic = true;
     }
   }
   const effectiveGroupSenderAllowFrom = isGroup
@@ -569,7 +583,10 @@ export async function handleFeishuMessage(params: {
         chatId: ctx.chatId,
         senderOpenId: ctx.senderOpenId,
         messageId: ctx.messageId,
-        rootId: ctx.rootId,
+        // When we hydrated to a native Feishu topic (omt_*), suppress rootId so the
+        // topicScope fallback chain uses threadId instead of the stale om_* rootId.
+        // For OpenClaw-created threads (non-hydrated), rootId is preserved as-is.
+        rootId: hydratedToNativeTopic ? undefined : ctx.rootId,
         threadId: effectiveThreadId,
         chatType: ctx.chatType,
         groupConfig,
