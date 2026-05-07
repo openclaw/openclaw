@@ -248,6 +248,17 @@ function isLegacyShLoginInlineForm(argv: string[], baseExecutable: string): bool
   return baseExecutable === "sh" && isLegacyLoginInlineForm(argv);
 }
 
+function formatShellWrapperArgv(argv: string[]): string {
+  return argv
+    .map((arg) => {
+      if (arg.length === 0) {
+        return '""';
+      }
+      return /\s|"/.test(arg) ? `"${arg.replace(/"/g, '\\"')}"` : arg;
+    })
+    .join(" ");
+}
+
 function startupWrapperRequiresFullArgv(params: {
   argv: string[];
   spec: ShellWrapperSpec;
@@ -328,8 +339,11 @@ function extractShellWrapperCommandInternal(
   ) {
     return { isWrapper: true, command: null };
   }
+  const rawMatchesPayload = rawCommand === payload;
+  const rawMatchesCanonicalArgv = rawCommand === formatShellWrapperArgv(candidate.argv);
   const allowLegacyShLoginPayloadBinding =
-    rawCommand === payload && isLegacyShLoginInlineForm(candidate.argv, baseExecutable);
+    isLegacyShLoginInlineForm(candidate.argv, baseExecutable) &&
+    (rawMatchesPayload || rawMatchesCanonicalArgv);
   if (
     startupWrapperRequiresFullArgv({
       argv: candidate.argv,
@@ -346,7 +360,10 @@ function extractShellWrapperCommandInternal(
     return { isWrapper: false, command: null };
   }
 
-  return { isWrapper: true, command: rawCommand ?? resolved.payload };
+  return {
+    isWrapper: true,
+    command: rawMatchesCanonicalArgv ? resolved.payload : (rawCommand ?? resolved.payload),
+  };
 }
 
 export function resolveShellWrapperTransportArgv(argv: string[]): string[] | null {
@@ -354,8 +371,14 @@ export function resolveShellWrapperTransportArgv(argv: string[]): string[] | nul
 }
 
 export function extractShellWrapperInlineCommand(argv: string[]): string | null {
-  const extracted = extractShellWrapperCommandInternal(argv, null, 0);
-  return extracted.isWrapper ? extracted.command : null;
+  return resolveShellWrapperSpecAndArgvInternal(argv, 0)?.payload ?? null;
+}
+
+export function extractBindableShellWrapperInlineCommand(
+  argv: string[],
+  rawCommand?: string | null,
+): string | null {
+  return extractShellWrapperCommandInternal(argv, normalizeRawCommand(rawCommand), 0).command;
 }
 
 export function extractShellWrapperCommand(
@@ -363,4 +386,9 @@ export function extractShellWrapperCommand(
   rawCommand?: string | null,
 ): ShellWrapperCommand {
   return extractShellWrapperCommandInternal(argv, normalizeRawCommand(rawCommand), 0);
+}
+
+export function isBlockedShellWrapperCommand(argv: string[], rawCommand?: string | null): boolean {
+  const extracted = extractShellWrapperCommandInternal(argv, normalizeRawCommand(rawCommand), 0);
+  return extracted.isWrapper && extracted.command === null;
 }

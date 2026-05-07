@@ -470,12 +470,12 @@ describe("extractShellWrapperCommand", () => {
   test.each([
     {
       argv: ["bash", "-lc", "echo hi"],
-      expectedInline: null,
+      expectedInline: "echo hi",
       expectedCommand: { isWrapper: true, command: null },
     },
     {
       argv: ["busybox", "sh", "-lc", "echo hi"],
-      expectedInline: null,
+      expectedInline: "echo hi",
       expectedCommand: { isWrapper: true, command: null },
     },
     {
