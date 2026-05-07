@@ -3061,6 +3061,33 @@ describe("active-memory plugin", () => {
     });
   });
 
+  it("skips slash-containing session-store channels for embedded recall (Google Chat #78918)", async () => {
+    hoisted.sessionStore["agent:main:googlechat:default:direct:spaces/khfx4yaaaae"] = {
+      sessionId: "session-b",
+      updatedAt: 26,
+      channel: "spaces/khfx4yaaaae",
+      origin: {
+        provider: "googlechat",
+      },
+    };
+
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order? google chat stored channel", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:googlechat:default:direct:spaces/khfx4yaaaae",
+        messageProvider: "googlechat",
+        channelId: "googlechat",
+      },
+    );
+
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
+      messageChannel: "googlechat",
+      messageProvider: "googlechat",
+    });
+  });
+
   it("preserves an explicit real channel hint over a stale stored wrapper channel", async () => {
     hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
       sessionId: "session-a",
