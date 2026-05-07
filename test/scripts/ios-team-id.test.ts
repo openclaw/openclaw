@@ -10,11 +10,44 @@ const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
 const BASH_ARGS = process.platform === "win32" ? [SCRIPT] : ["--noprofile", "--norc", SCRIPT];
 const BASE_PATH = process.env.PATH ?? "/usr/bin:/bin";
 const BASE_LANG = process.env.LANG ?? "C";
+
+/** Fake plist output for `defaults export com.apple.dt.Xcode -` with the
+ *  IDEProvisioningTeamByIdentifier key layout (Xcode 16+). */
+const FAKE_XCODE_TEAMS_PLIST = `\
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>IDEProvisioningTeamByIdentifier</key>
+  <dict>
+    <key>dev@example.com</key>
+    <array>
+      <dict>
+        <key>teamID</key>
+        <string>AAAAA11111</string>
+        <key>teamName</key>
+        <string>Alpha Team</string>
+        <key>isFreeProvisioningTeam</key>
+        <true/>
+      </dict>
+      <dict>
+        <key>teamID</key>
+        <string>BBBBB22222</string>
+        <key>teamName</key>
+        <string>Beta Team</string>
+        <key>isFreeProvisioningTeam</key>
+        <false/>
+      </dict>
+    </array>
+  </dict>
+</dict>
+</plist>`;
 let fixtureRoot = "";
 let sharedBinDir = "";
 let sharedHomeDir = "";
 let sharedHomeBinDir = "";
 let sharedFakePythonPath = "";
+let guidanceHomeDir = "";
 const tempDirs: string[] = [];
 const runScriptCache = new Map<string, { ok: boolean; stdout: string; stderr: string }>();
 type TeamCandidate = {
@@ -151,6 +184,12 @@ echo '{}'`,
     await writeExecutable(
       path.join(sharedBinDir, "defaults"),
       `#!/usr/bin/env bash
+if [[ "$1" == "export" && "$2" == "com.apple.dt.Xcode" ]]; then
+  cat <<'PLIST'
+${FAKE_XCODE_TEAMS_PLIST}
+PLIST
+  exit 0
+fi
 if [[ "$3" == "DVTDeveloperAccountManagerAppleIDLists" ]]; then
   echo '(identifier = "dev@example.com";)'
   exit 0
@@ -184,8 +223,26 @@ exit 1`,
     await writeExecutable(
       sharedFakePythonPath,
       `#!/usr/bin/env bash
-printf 'AAAAA11111\\t0\\tAlpha Team\\r\\n'
+printf 'AAAAA11111\\t1\\tAlpha Team\\r\\n'
 printf 'BBBBB22222\\t0\\tBeta Team\\r\\n'`,
+    );
+
+    guidanceHomeDir = path.join(fixtureRoot, "guidance-home");
+    const guidanceHomeBinDir = path.join(guidanceHomeDir, "bin");
+    await mkdir(guidanceHomeBinDir, { recursive: true });
+    await mkdir(path.join(guidanceHomeDir, "Library", "Preferences"), { recursive: true });
+    await writeFile(
+      path.join(guidanceHomeDir, "Library", "Preferences", "com.apple.dt.Xcode.plist"),
+      "",
+    );
+    await writeExecutable(
+      path.join(guidanceHomeBinDir, "defaults"),
+      `#!/usr/bin/env bash
+if [[ "$3" == "DVTDeveloperAccountManagerAppleIDLists" ]]; then
+  echo '(identifier = "dev@example.com";)'
+  exit 0
+fi
+exit 0`,
     );
   });
 
@@ -218,11 +275,11 @@ printf 'BBBBB22222\\t0\\tBeta Team\\r\\n'`,
   it("resolves a fallback team ID from Xcode team listings (smoke)", async () => {
     const fallbackResult = runScript(sharedHomeDir, { IOS_PYTHON_BIN: sharedFakePythonPath });
     expect(fallbackResult.ok).toBe(true);
-    expect(fallbackResult.stdout).toBe("AAAAA11111");
+    expect(fallbackResult.stdout).toBe("BBBBB22222");
   });
 
   it("prints actionable guidance when Xcode account exists but no Team ID is resolvable", async () => {
-    const result = runScript(sharedHomeDir);
+    const result = runScript(guidanceHomeDir);
     expect(result.ok).toBe(false);
     expect(
       result.stderr.includes("An Apple account is signed in to Xcode") ||
