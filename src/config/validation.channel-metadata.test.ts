@@ -182,7 +182,7 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
   it("still injects channel AJV defaults even in raw mode — persistence safety is handled by io.ts", async () => {
     // Channel and plugin AJV validation always runs with applyDefaults: true
     // (hardcoded) to avoid breaking schemas that mark defaulted fields as
-    // required (e.g., BlueBubbles enrichGroupParticipantsFromContacts).
+    // required.
     //
     // The actual protection against leaking these defaults to disk lives in
     // writeConfigFile (io.ts), which uses persistCandidate (the pre-validation

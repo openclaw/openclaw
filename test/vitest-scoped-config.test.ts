@@ -19,7 +19,6 @@ import { createCommandsVitestConfig } from "./vitest/vitest.commands.config.ts";
 import { createCronVitestConfig } from "./vitest/vitest.cron.config.ts";
 import { createDaemonVitestConfig } from "./vitest/vitest.daemon.config.ts";
 import { createExtensionAcpxVitestConfig } from "./vitest/vitest.extension-acpx.config.ts";
-import { createExtensionBlueBubblesVitestConfig } from "./vitest/vitest.extension-bluebubbles.config.ts";
 import { createExtensionBrowserVitestConfig } from "./vitest/vitest.extension-browser.config.ts";
 import { createExtensionChannelsVitestConfig } from "./vitest/vitest.extension-channels.config.ts";
 import { createExtensionDiffsVitestConfig } from "./vitest/vitest.extension-diffs.config.ts";
@@ -236,7 +235,6 @@ describe("scoped vitest configs", () => {
   const defaultCliConfig = createCliVitestConfig({});
   const defaultExtensionsConfig = createExtensionsVitestConfig({});
   const defaultExtensionAcpxConfig = createExtensionAcpxVitestConfig({});
-  const defaultExtensionBlueBubblesConfig = createExtensionBlueBubblesVitestConfig({});
   const defaultExtensionChannelsConfig = createExtensionChannelsVitestConfig({});
   const defaultExtensionBrowserConfig = createExtensionBrowserVitestConfig({});
   const defaultExtensionDiffsConfig = createExtensionDiffsVitestConfig({});
@@ -432,13 +430,6 @@ describe("scoped vitest configs", () => {
     }
   });
 
-  it("normalizes bluebubbles extension include patterns relative to the scoped dir", () => {
-    expect(defaultExtensionBlueBubblesConfig.test?.dir).toBe(
-      path.join(process.cwd(), "extensions"),
-    );
-    expect(defaultExtensionBlueBubblesConfig.test?.include).toEqual(["bluebubbles/**/*.test.ts"]);
-  });
-
   it("normalizes acpx extension include patterns relative to the scoped dir", () => {
     expect(defaultExtensionAcpxConfig.test?.dir).toBe(path.join(process.cwd(), "extensions"));
     expect(defaultExtensionAcpxConfig.test?.include).toEqual(["acpx/**/*.test.ts"]);
@@ -621,15 +612,6 @@ describe("scoped vitest configs", () => {
     expect(
       extensionExcludes.some((pattern) =>
         path.matchesGlob("memory-core/src/memory/test-runtime-mocks.ts", pattern),
-      ),
-    ).toBe(true);
-  });
-
-  it("keeps bluebubbles tests out of the shared extensions lane", () => {
-    const extensionExcludes = defaultExtensionsConfig.test?.exclude ?? [];
-    expect(
-      extensionExcludes.some((pattern) =>
-        path.matchesGlob("bluebubbles/src/monitor.test.ts", pattern),
       ),
     ).toBe(true);
   });

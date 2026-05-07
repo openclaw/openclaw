@@ -65,7 +65,7 @@ describe("createChannelReplyPipeline", () => {
     const pipeline = createChannelReplyPipeline({
       cfg: {},
       agentId: "main",
-      channel: "bluebubbles",
+      channel: "imessage",
       typingCallbacks: {
         onReplyStart,
         onIdle,

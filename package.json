@@ -33,7 +33,6 @@
     "!dist/extensions/acpx/**",
     "!dist/extensions/node_modules/**",
     "!dist/extensions/*/node_modules/**",
-    "!dist/extensions/bluebubbles/**",
     "!dist/extensions/brave/**",
     "!dist/extensions/codex/**",
     "!dist/extensions/diagnostics-otel/**",

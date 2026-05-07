@@ -97,7 +97,7 @@ describe("config plugin validation", () => {
   let suiteHome = "";
   let badPluginDir = "";
   let enumPluginDir = "";
-  let bluebubblesPluginDir = "";
+  let chatPluginDir = "";
   let googleOverridePluginDir = "";
   let voiceCallSchemaPluginDir = "";
   let bundlePluginDir = "";
@@ -135,7 +135,7 @@ describe("config plugin validation", () => {
     await mkdirSafe(suiteHome);
     badPluginDir = path.join(suiteHome, "bad-plugin");
     enumPluginDir = path.join(suiteHome, "enum-plugin");
-    bluebubblesPluginDir = path.join(suiteHome, "bluebubbles-plugin");
+    chatPluginDir = path.join(suiteHome, "chat-plugin");
     await writePluginFixture({
       dir: badPluginDir,
       id: "bad-plugin",
@@ -163,9 +163,9 @@ describe("config plugin validation", () => {
       },
     });
     await writePluginFixture({
-      dir: bluebubblesPluginDir,
-      id: "bluebubbles-plugin",
-      channels: ["bluebubbles"],
+      dir: chatPluginDir,
+      id: "chat-plugin",
+      channels: ["chat"],
       schema: { type: "object" },
     });
     googleOverridePluginDir = path.join(suiteHome, "google");
@@ -640,7 +640,7 @@ describe("config plugin validation", () => {
   it("does not auto-allow config-loaded overrides of bundled web search plugin ids", async () => {
     const res = validateInSuite({
       plugins: {
-        allow: ["bluebubbles", "memory-core"],
+        allow: ["imessage", "memory-core"],
         load: {
           paths: [googleOverridePluginDir],
         },
@@ -909,8 +909,8 @@ describe("config plugin validation", () => {
 
   it("accepts plugin heartbeat targets", async () => {
     const res = validateInSuite({
-      agents: { defaults: { heartbeat: { target: "bluebubbles" } }, list: [{ id: "pi" }] },
-      plugins: { enabled: false, load: { paths: [bluebubblesPluginDir] } },
+      agents: { defaults: { heartbeat: { target: "chat" } }, list: [{ id: "pi" }] },
+      plugins: { enabled: false, load: { paths: [chatPluginDir] } },
     });
     expect(res.ok).toBe(true);
   });

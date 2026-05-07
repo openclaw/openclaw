@@ -47,15 +47,6 @@ describe("scripts/test-extension.mjs", () => {
     expect(plan.hasTests).toBe(true);
   });
 
-  it("resolves bluebubbles onto the bluebubbles vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "bluebubbles", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("bluebubbles");
-    expect(plan.config).toBe("test/vitest/vitest.extension-bluebubbles.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("bluebubbles"));
-    expect(plan.hasTests).toBe(true);
-  });
-
   it("resolves acpx onto the acpx vitest config", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "acpx", cwd: process.cwd() });
 
@@ -272,7 +263,6 @@ describe("scripts/test-extension.mjs", () => {
         "msteams",
         "feishu",
         "irc",
-        "bluebubbles",
         "acpx",
         "diffs",
         "browser",
@@ -283,7 +273,6 @@ describe("scripts/test-extension.mjs", () => {
 
     expect(batch.extensionIds).toEqual([
       "acpx",
-      "bluebubbles",
       "browser",
       "diffs",
       "feishu",
@@ -310,13 +299,6 @@ describe("scripts/test-extension.mjs", () => {
         estimatedCost: expect.any(Number),
         extensionIds: ["acpx"],
         roots: [bundledPluginRoot("acpx")],
-        testFileCount: expect.any(Number),
-      },
-      {
-        config: "test/vitest/vitest.extension-bluebubbles.config.ts",
-        estimatedCost: expect.any(Number),
-        extensionIds: ["bluebubbles"],
-        roots: [bundledPluginRoot("bluebubbles")],
         testFileCount: expect.any(Number),
       },
       {

@@ -68,8 +68,8 @@ describe("config schema", () => {
     heartbeatChannelInput = {
       channels: [
         {
-          id: "bluebubbles",
-          label: "BlueBubbles",
+          id: "imessage",
+          label: "iMessage",
           configSchema: { type: "object" },
         },
       ],
@@ -276,9 +276,9 @@ describe("config schema", () => {
 
     const defaultsHint = res.uiHints["agents.defaults.heartbeat.target"];
     const listHint = res.uiHints["agents.list.*.heartbeat.target"];
-    expect(defaultsHint?.help).toContain("bluebubbles");
+    expect(defaultsHint?.help).toContain("imessage");
     expect(defaultsHint?.help).toContain("last");
-    expect(listHint?.help).toContain("bluebubbles");
+    expect(listHint?.help).toContain("imessage");
   });
 
   it("caches merged schemas for identical plugin/channel metadata", () => {

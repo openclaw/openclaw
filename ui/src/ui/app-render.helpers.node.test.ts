@@ -190,7 +190,7 @@ describe("parseSessionKey", () => {
   });
 
   it("identifies direct chat with known channel", () => {
-    expect(parseSessionKey("agent:main:bluebubbles:direct:+19257864429")).toEqual({
+    expect(parseSessionKey("agent:main:imessage:direct:+19257864429")).toEqual({
       prefix: "",
       fallbackName: "iMessage · +19257864429",
     });
@@ -218,7 +218,7 @@ describe("parseSessionKey", () => {
   });
 
   it("identifies channel-prefixed legacy keys", () => {
-    expect(parseSessionKey("bluebubbles:g-agent-main-bluebubbles-direct-+19257864429")).toEqual({
+    expect(parseSessionKey("imessage:g-agent-main-imessage-direct-+19257864429")).toEqual({
       prefix: "",
       fallbackName: "iMessage Session",
     });
@@ -309,7 +309,7 @@ describe("resolveSessionDisplayName", () => {
   });
 
   it("parses direct chat key with channel", () => {
-    expect(resolveSessionDisplayName("agent:main:bluebubbles:direct:+19257864429")).toBe(
+    expect(resolveSessionDisplayName("agent:main:imessage:direct:+19257864429")).toBe(
       "iMessage · +19257864429",
     );
   });
@@ -448,8 +448,8 @@ describe("resolveSessionDisplayName", () => {
   it("does not prefix non-typed sessions with labels", () => {
     expect(
       resolveSessionDisplayName(
-        "agent:main:bluebubbles:direct:+19257864429",
-        row({ key: "agent:main:bluebubbles:direct:+19257864429", label: "Tyler" }),
+        "agent:main:imessage:direct:+19257864429",
+        row({ key: "agent:main:imessage:direct:+19257864429", label: "Tyler" }),
       ),
     ).toBe("Tyler");
   });

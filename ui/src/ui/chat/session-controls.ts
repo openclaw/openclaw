@@ -407,7 +407,7 @@ async function switchChatThinkingLevel(state: AppViewState, nextThinkingLevel: s
 
 /* Channel display labels. */
 const CHANNEL_LABELS: Record<string, string> = {
-  bluebubbles: "iMessage",
+  imessage: "iMessage",
   telegram: "Telegram",
   discord: "Discord",
   signal: "Signal",
@@ -471,7 +471,7 @@ export function parseSessionKey(key: string): SessionKeyInfo {
     return { prefix: "", fallbackName: `${channelLabel} Group` };
   }
 
-  // Channel-prefixed legacy keys, for example "bluebubbles:g-...".
+  // Channel-prefixed legacy keys, for example "imessage:g-...".
   for (const ch of KNOWN_CHANNEL_KEYS) {
     if (key === ch || key.startsWith(`${ch}:`)) {
       return { prefix: "", fallbackName: `${CHANNEL_LABELS[ch]} Session` };

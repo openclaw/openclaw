@@ -244,7 +244,7 @@ describe("web search provider config", () => {
   it("does not warn for brave plugin config when bundled web search allowlist compat applies", () => {
     const res = validateConfigObjectWithPlugins({
       plugins: {
-        allow: ["bluebubbles", "memory-core"],
+        allow: ["imessage", "memory-core"],
         entries: {
           brave: {
             config: {
