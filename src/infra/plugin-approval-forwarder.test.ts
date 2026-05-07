@@ -178,7 +178,7 @@ describe("plugin approval forwarding", () => {
       expect(result).toBe(true);
       await flushPendingDelivery();
       const payload = firstDeliveredPayload(deliver);
-      expect(payload?.text).toContain("Reply with: /approve <id> allow-once|deny");
+      expect(payload?.text).toContain("Reply with: /approve plugin-req-1 allow-once|deny");
       expect(payload?.text).not.toContain("allow-always");
       expect(payload?.presentation).toEqual({
         blocks: [

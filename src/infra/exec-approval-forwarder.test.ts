@@ -602,7 +602,7 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("🔒 Exec approval required");
     expect(text).toContain("Command: `echo hello`");
     expect(text).toContain("Expires in: 5s");
-    expect(text).toContain("Reply with: /approve <id> allow-once|allow-always|deny");
+    expect(text).toContain("Reply with: /approve req-1 allow-once|allow-always|deny");
   });
 
   it("includes command analysis warnings in fallback delivery text", () => {
@@ -639,7 +639,7 @@ describe("exec approval forwarder", () => {
     ).resolves.toBe(true);
     await Promise.resolve();
     const text = getFirstDeliveryText(deliver);
-    expect(text).toContain("Reply with: /approve <id> allow-once|deny");
+    expect(text).toContain("Reply with: /approve req-1 allow-once|deny");
     expect(text).not.toContain("allow-once|allow-always|deny");
     expect(text).toContain("Allow Always is unavailable");
   });
