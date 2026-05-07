@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
 import {
+  applyMigrationPluginSelection,
   applyMigrationSelectedSkillItemIds,
   applyMigrationSkillSelection,
   getDefaultMigrationSkillSelectionValues,
   MIGRATION_SKILL_SELECTION_SKIP,
   MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
   MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
+  MIGRATION_PLUGIN_NOT_SELECTED_REASON,
   MIGRATION_SKILL_NOT_SELECTED_REASON,
   reconcileInteractiveMigrationShortcutValues,
   reconcileInteractiveMigrationSkillToggleValues,
@@ -30,6 +32,26 @@ function skillItem(params: {
     details: {
       skillName: params.name,
       sourceLabel: "Codex CLI skill",
+    },
+  };
+}
+
+function pluginItem(params: {
+  id: string;
+  name: string;
+  status?: MigrationItem["status"];
+}): MigrationItem {
+  return {
+    id: params.id,
+    kind: "plugin",
+    action: "install",
+    status: params.status ?? "planned",
+    source: `openai-curated/${params.name}`,
+    target: `plugins.entries.codex.config.codexPlugins.plugins.${params.name}`,
+    details: {
+      configKey: params.name,
+      marketplaceName: "openai-curated",
+      pluginName: params.name,
     },
   };
 }
@@ -298,5 +320,61 @@ describe("applyMigrationSkillSelection", () => {
         ["gamma"],
       ),
     ).toThrow('No migratable skill matched "gamma". Available skills: alpha, beta.');
+  });
+});
+
+describe("applyMigrationPluginSelection", () => {
+  it("keeps selected plugins and skips unselected plugin install items", () => {
+    const selected = applyMigrationPluginSelection(
+      plan([
+        pluginItem({ id: "plugin:google-calendar", name: "google-calendar" }),
+        pluginItem({ id: "plugin:gmail", name: "gmail" }),
+        {
+          id: "config:codex-plugins",
+          kind: "config",
+          action: "merge",
+          status: "planned",
+        },
+      ]),
+      ["google-calendar"],
+    );
+
+    expect(selected.summary).toMatchObject({ planned: 2, skipped: 1, conflicts: 0 });
+    expect(selected.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "plugin:google-calendar", status: "planned" }),
+        expect.objectContaining({
+          id: "plugin:gmail",
+          status: "skipped",
+          reason: MIGRATION_PLUGIN_NOT_SELECTED_REASON,
+        }),
+        expect.objectContaining({ id: "config:codex-plugins", status: "planned" }),
+      ]),
+    );
+  });
+
+  it("accepts item ids as non-interactive plugin selectors", () => {
+    const selected = applyMigrationPluginSelection(
+      plan([pluginItem({ id: "plugin:google-calendar", name: "google-calendar" })]),
+      ["plugin:google-calendar"],
+    );
+
+    expect(selected.items).toEqual([
+      expect.objectContaining({ id: "plugin:google-calendar", status: "planned" }),
+    ]);
+  });
+
+  it("rejects unknown explicit plugin selectors with available choices", () => {
+    expect(() =>
+      applyMigrationPluginSelection(
+        plan([
+          pluginItem({ id: "plugin:google-calendar", name: "google-calendar" }),
+          pluginItem({ id: "plugin:gmail", name: "gmail" }),
+        ]),
+        ["calendar"],
+      ),
+    ).toThrow(
+      'No migratable plugin matched "calendar". Available plugins: gmail, google-calendar.',
+    );
   });
 });

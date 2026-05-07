@@ -30,6 +30,51 @@ describe("Codex plugin activation", () => {
     expect(calls).toEqual(["plugin/list"]);
   });
 
+  it("can reinstall an already active plugin when migration explicitly applies it", async () => {
+    const calls: string[] = [];
+    const result = await ensureCodexPluginActivation({
+      identity: identity("google-calendar"),
+      installEvenIfActive: true,
+      request: async (method, params) => {
+        calls.push(method);
+        if (method === "plugin/list") {
+          return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+        }
+        if (method === "plugin/install") {
+          expect(params).toEqual({
+            marketplacePath: "/marketplaces/openai-curated",
+            pluginName: "google-calendar",
+          });
+          return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
+        }
+        if (method === "skills/list") {
+          return { data: [] } satisfies v2.SkillsListResponse;
+        }
+        if (method === "hooks/list") {
+          return { data: [] } satisfies v2.HooksListResponse;
+        }
+        if (method === "config/mcpServer/reload") {
+          return {};
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      reason: "already_active",
+      installAttempted: true,
+    });
+    expect(calls).toEqual([
+      "plugin/list",
+      "plugin/install",
+      "plugin/list",
+      "skills/list",
+      "hooks/list",
+      "config/mcpServer/reload",
+    ]);
+  });
+
   it("installs a migration-authorized local curated plugin and refreshes runtime state", async () => {
     const calls: Array<{ method: string; params: unknown }> = [];
     const appCache = new CodexAppInventoryCache();

@@ -43,6 +43,7 @@ export type EnsureCodexPluginActivationParams = {
   request: CodexPluginRuntimeRequest;
   appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
+  installEvenIfActive?: boolean;
 };
 
 export type CodexPluginRuntimeRefreshResult = {
@@ -73,7 +74,7 @@ export async function ensureCodexPluginActivation(
     });
   }
 
-  if (resolved.summary.installed && resolved.summary.enabled) {
+  if (resolved.summary.installed && resolved.summary.enabled && !params.installEvenIfActive) {
     return {
       identity: params.identity,
       ok: true,
@@ -119,7 +120,11 @@ export async function ensureCodexPluginActivation(
   return {
     identity: params.identity,
     ok: !authRequired,
-    reason: authRequired ? "auth_required" : "installed",
+    reason: authRequired
+      ? "auth_required"
+      : resolved.summary.installed && resolved.summary.enabled
+        ? "already_active"
+        : "installed",
     installed: true,
     enabled: !authRequired,
     installAttempted: true,
