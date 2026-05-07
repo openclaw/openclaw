@@ -119,7 +119,7 @@ describe("media-understanding provider registry", () => {
     const registry = buildMediaUnderstandingRegistry(undefined, cfg);
     const provider = getMediaUnderstandingProvider("audioProvider", registry);
 
-    expect(provider?.id).toBe("audioProvider");
+    expect(provider?.id).toBe("audioprovider");
     expect(provider?.capabilities).toContain("audio");
     expect(provider?.understandAudio).toBeDefined();
   });
@@ -138,7 +138,7 @@ describe("media-understanding provider registry", () => {
     const registry = buildMediaUnderstandingRegistry(undefined, cfg);
     const provider = getMediaUnderstandingProvider("videoProvider", registry);
 
-    expect(provider?.id).toBe("videoProvider");
+    expect(provider?.id).toBe("videoprovider");
     expect(provider?.capabilities).toContain("video");
     expect(provider?.understandVideo).toBeDefined();
   });
@@ -157,7 +157,7 @@ describe("media-understanding provider registry", () => {
     const registry = buildMediaUnderstandingRegistry(undefined, cfg);
     const provider = getMediaUnderstandingProvider("multiModal", registry);
 
-    expect(provider?.id).toBe("multiModal");
+    expect(provider?.id).toBe("multimodal");
     expect(provider?.capabilities).toContain("image");
     expect(provider?.capabilities).toContain("audio");
     expect(provider?.capabilities).toContain("video");
