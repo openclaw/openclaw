@@ -22,7 +22,10 @@ export {
   resolveModelDirectiveSelection,
   type ModelDirectiveSelection,
 } from "./model-selection-directive.js";
-import { resolveStoredModelOverride } from "./stored-model-override.js";
+import {
+  isStaleHeartbeatAutoFallbackOverride,
+  resolveStoredModelOverride,
+} from "./stored-model-override.js";
 
 type ModelCatalog = ModelCatalogEntry[];
 
@@ -95,6 +98,7 @@ export async function createModelSelectionState(params: {
   /** True when heartbeat.model was explicitly resolved for this run.
    *  In that case, skip session-stored overrides so the heartbeat selection wins. */
   hasResolvedHeartbeatModelOverride?: boolean;
+  isHeartbeat?: boolean;
 }): Promise<ModelSelectionState> {
   const timingEnabled = shouldLogModelSelectionTiming();
   const startMs = timingEnabled ? Date.now() : 0;
@@ -137,6 +141,17 @@ export async function createModelSelectionState(params: {
     overrideProvider: sessionEntry?.providerOverride,
     overrideModel: sessionEntry?.modelOverride,
   });
+  const directStoredModelOverride = directStoredOverride
+    ? { ...directStoredOverride, source: "session" as const }
+    : null;
+  const staleHeartbeatAutoFallbackOverride = isStaleHeartbeatAutoFallbackOverride({
+    isHeartbeat: params.isHeartbeat,
+    hasResolvedHeartbeatModelOverride: params.hasResolvedHeartbeatModelOverride,
+    sessionEntry,
+    storedOverride: directStoredModelOverride,
+    defaultProvider,
+    defaultModel,
+  });
 
   if (needsModelCatalog) {
     modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
@@ -172,13 +187,18 @@ export async function createModelSelectionState(params: {
     logStage("configured-catalog-ready", `entries=${configuredModelCatalog.length}`);
   }
 
-  if (sessionEntry && sessionStore && sessionKey && directStoredOverride) {
-    const normalizedOverride = normalizeModelRef(
-      directStoredOverride.provider,
-      directStoredOverride.model,
-    );
-    const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
-    if (allowedModelKeys.size > 0 && !allowedModelKeys.has(key)) {
+  const normalizedDirectStoredOverride = directStoredOverride
+    ? normalizeModelRef(directStoredOverride.provider, directStoredOverride.model)
+    : null;
+  const directStoredOverrideKey = normalizedDirectStoredOverride
+    ? modelKey(normalizedDirectStoredOverride.provider, normalizedDirectStoredOverride.model)
+    : undefined;
+
+  if (sessionEntry && sessionStore && sessionKey && directStoredOverrideKey) {
+    const shouldClearStoredOverride =
+      staleHeartbeatAutoFallbackOverride ||
+      (allowedModelKeys.size > 0 && !allowedModelKeys.has(directStoredOverrideKey));
+    if (shouldClearStoredOverride) {
       const { updated } = applyModelOverrideToSessionEntry({
         entry: sessionEntry,
         selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
@@ -195,8 +215,19 @@ export async function createModelSelectionState(params: {
       }
       resetModelOverride = updated;
       if (updated) {
-        resetModelOverrideRef = key;
+        resetModelOverrideRef = directStoredOverrideKey;
       }
+    }
+  }
+  if (staleHeartbeatAutoFallbackOverride && directStoredOverrideKey) {
+    const normalizedCurrentSelection = normalizeModelRef(provider, model);
+    const currentSelectionKey = modelKey(
+      normalizedCurrentSelection.provider,
+      normalizedCurrentSelection.model,
+    );
+    if (currentSelectionKey === directStoredOverrideKey) {
+      provider = defaultProvider;
+      model = defaultModel;
     }
   }
 
@@ -207,10 +238,12 @@ export async function createModelSelectionState(params: {
     parentSessionKey,
     defaultProvider,
   });
-  // Skip stored session model override only when an explicit heartbeat.model
-  // was resolved. Heartbeat runs without heartbeat.model should still inherit
-  // the regular session/parent model override behavior.
-  const skipStoredOverride = params.hasResolvedHeartbeatModelOverride === true;
+  // Explicit heartbeat.model always wins. Heartbeats without heartbeat.model
+  // still inherit normal overrides unless a direct auto-fallback override is
+  // stale for the current configured default.
+  const skipStoredOverride =
+    params.hasResolvedHeartbeatModelOverride === true ||
+    (staleHeartbeatAutoFallbackOverride && storedOverride?.source === "session");
 
   if (storedOverride?.model && !skipStoredOverride) {
     const normalizedStoredOverride = normalizeModelRef(
