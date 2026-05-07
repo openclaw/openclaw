@@ -30,6 +30,7 @@ function createListenerStub(messageId = "ok") {
     sendPoll: vi.fn(async () => createAcceptedWhatsAppSendResult("poll", messageId)),
     sendReaction: vi.fn(async () => createAcceptedWhatsAppSendResult("reaction", messageId)),
     sendComposingTo: vi.fn(async () => {}),
+    lookupPnLidEntry: vi.fn(async () => null),
   };
 }
 

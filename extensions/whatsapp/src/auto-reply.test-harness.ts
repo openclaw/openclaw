@@ -38,6 +38,7 @@ type MockWebListener = {
   sendSticker: () => Promise<WhatsAppSendResult>;
   sendReaction: () => Promise<WhatsAppSendResult>;
   sendComposingTo: () => Promise<void>;
+  lookupPnLidEntry: () => Promise<null>;
 };
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
@@ -285,6 +286,7 @@ export function createMockWebListener(): MockWebListener {
       createAcceptedWhatsAppSendResultForHarness("reaction", "reaction-1"),
     ),
     sendComposingTo: vi.fn(async () => undefined),
+    lookupPnLidEntry: vi.fn(async () => null),
   };
 }
 

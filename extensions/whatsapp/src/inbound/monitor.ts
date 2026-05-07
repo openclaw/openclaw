@@ -29,7 +29,7 @@ import { DEFAULT_RECONNECT_POLICY, computeBackoff, sleepWithAbort } from "../rec
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createWaSocket, formatError, getStatusCode, waitForWaConnection } from "../session.js";
 import { resolveWhatsAppSocketTiming } from "../socket-timing.js";
-import { resolveJidToE164 } from "../text-runtime.js";
+import { jidToE164, resolveJidToE164 } from "../text-runtime.js";
 import { checkInboundAccessControl } from "./access-control.js";
 import {
   claimRecentInboundMessageDelivery,
@@ -72,7 +72,7 @@ import {
 import { DisconnectReason, isJidGroup } from "./runtime-api.js";
 import { createWebSendApi } from "./send-api.js";
 import { normalizeWhatsAppSendResult } from "./send-result.js";
-import type { WebInboundMessageInput, WebInboundMessage, WebListenerCloseReason } from "./types.js";
+import type { PnLidEntryResult, WebInboundMessageInput, WebInboundMessage, WebListenerCloseReason } from "./types.js";
 
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 const RECONNECT_IN_PROGRESS_ERROR = "no active socket - reconnection in progress";
@@ -1354,6 +1354,63 @@ export async function attachWebInboxToSocket(
     authDir: options.authDir,
   });
 
+  const lookupPnLidEntry = async (phoneOrLid: string): Promise<PnLidEntryResult | null> => {
+    const isLid = /(@lid|@hosted\.lid)$/i.test(phoneOrLid);
+    const isPhoneJid = /@\/?s\.whatsapp\.net$/i.test(phoneOrLid);
+
+    let lid: string;
+    let phoneJid: string;
+
+    if (isLid) {
+      lid = phoneOrLid;
+      if (lidLookup) {
+        try {
+          const pnJid = await lidLookup.getPNForLID(lid);
+          if (pnJid) {
+            phoneJid = pnJid;
+          } else {
+            const localPhone = jidToE164(phoneOrLid, { authDir: options.authDir });
+            if (!localPhone) {
+              return null;
+            }
+            phoneJid = `${localPhone.replace(/^\+/, "")}@s.whatsapp.net`;
+          }
+        } catch (err) {
+          logWhatsAppVerbose(
+            options.verbose,
+            `LID lookup failed for ${lid}: ${String(err)}`,
+          );
+          const localPhone = jidToE164(phoneOrLid, { authDir: options.authDir });
+          if (!localPhone) {
+            return null;
+          }
+          phoneJid = `${localPhone.replace(/^\+/, "")}@s.whatsapp.net`;
+        }
+      } else {
+        const localPhone = jidToE164(phoneOrLid, { authDir: options.authDir });
+        if (!localPhone) {
+          return null;
+        }
+        phoneJid = `${localPhone.replace(/^\+/, "")}@s.whatsapp.net`;
+      }
+    } else if (isPhoneJid) {
+      phoneJid = phoneOrLid;
+      lid = "";
+    } else {
+      const e164 = jidToE164(phoneOrLid) ?? phoneOrLid;
+      lid = "";
+      phoneJid = `${e164.replace(/^\+/, "")}@s.whatsapp.net`;
+    }
+
+    const phoneNumber = jidToE164(phoneJid);
+
+    return {
+      lid,
+      phoneNumber,
+      contact: undefined,
+    };
+  };
+
   return {
     close: async () => {
       try {
@@ -1373,6 +1430,7 @@ export async function attachWebInboxToSocket(
     signalClose: (reason?: WebListenerCloseReason) => {
       resolveClose(reason ?? { status: undefined, isLoggedOut: false, error: "closed" });
     },
+    lookupPnLidEntry,
     sendComposingTo: sendApi.sendComposingTo,
     sendMessage: sendApi.sendMessage,
     sendPoll: sendApi.sendPoll,

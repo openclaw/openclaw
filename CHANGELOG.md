@@ -2045,6 +2045,8 @@ Docs: https://docs.openclaw.ai
 - Providers/Mistral: add `mistral-medium-3-5` to the bundled catalog with reasoning support. Thanks @sliekens.
 - Docs/Mistral: document Medium 3.5 setup, local infer smoke usage, adjustable reasoning, and the Mistral HTTP 400 caveat for `reasoning_effort="high"` with `temperature: 0`.
 
+- Agents/context engine: invalidate cached assembled context views when source history shrinks or assembly fails, preventing stale pre-reset history from being reused. Fixes #77968. (#78163) Thanks @brokemac79 and @ChrisBot2026.
+- WhatsApp/LID: add `lookupPnLidEntry` API to resolve WhatsApp LID (Linked ID) to phone number, mirroring WPPConnect's `getPnLidEntry`. Supports LID format (`123@lid`), phone JID (`123@s.whatsapp.net`), and plain E.164 (`+1234567890`) inputs. Thanks @hdzattain.
 ### Breaking
 
 - Channels/iMessage: remove the bundled BlueBubbles channel surface and deprecate BlueBubbles-backed iMessage setup in OpenClaw. Existing `channels.bluebubbles` configs must migrate to `channels.imessage` using `imsg` on a signed-in Mac or an SSH wrapper, and non-macOS default `imsg` configs now report remote-Mac wrapper guidance.
