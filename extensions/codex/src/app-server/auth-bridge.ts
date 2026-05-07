@@ -10,6 +10,7 @@ import {
   resolvePersistedAuthProfileOwnerAgentDir,
   saveAuthProfileStore,
   type AuthProfileCredential,
+  type AuthProfileStore,
   type OAuthCredential,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { CodexAppServerClient } from "./client.js";
@@ -91,6 +92,30 @@ export function resolveCodexAppServerAuthProfileIdForAgent(params: {
     store,
     config: params.config,
   });
+}
+
+export function resolveCodexAppServerAuthAccountCacheKey(params: {
+  authProfileId?: string;
+  authProfileStore?: AuthProfileStore;
+  agentDir?: string;
+  config?: AuthProfileOrderConfig;
+}): string | undefined {
+  const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
+  const store =
+    params.authProfileStore ?? ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+  const profileId = resolveCodexAppServerAuthProfileId({
+    authProfileId: params.authProfileId,
+    store,
+    config: params.config,
+  });
+  if (!profileId) {
+    return undefined;
+  }
+  const credential = store.profiles[profileId];
+  if (!credential || !isCodexAppServerAuthProvider(credential.provider, params.config)) {
+    return undefined;
+  }
+  return resolveChatgptAccountId(profileId, credential);
 }
 
 export function resolveCodexAppServerHomeDir(agentDir: string): string {

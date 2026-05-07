@@ -282,8 +282,23 @@ function shouldRecheckRecoverablePluginBinding(params: {
   if (expectedPluginConfigKeys.length === 0) {
     return false;
   }
-  const boundPluginConfigKeys = new Set(boundAppEntries.map((app) => app.configKey));
-  return expectedPluginConfigKeys.some((configKey) => !boundPluginConfigKeys.has(configKey));
+  const boundAppIdsByConfigKey = new Map<string, Set<string>>();
+  for (const app of boundAppEntries) {
+    const appIds = boundAppIdsByConfigKey.get(app.configKey) ?? new Set<string>();
+    appIds.add(app.appId);
+    boundAppIdsByConfigKey.set(app.configKey, appIds);
+  }
+  return expectedPluginConfigKeys.some((configKey) => {
+    const boundAppIds = boundAppIdsByConfigKey.get(configKey);
+    if (!boundAppIds || boundAppIds.size === 0) {
+      return true;
+    }
+    const expectedAppIds = policyContext.pluginAppIds[configKey];
+    if (!expectedAppIds) {
+      return true;
+    }
+    return expectedAppIds.some((appId) => !boundAppIds.has(appId));
+  });
 }
 
 export function buildThreadStartParams(

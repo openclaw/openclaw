@@ -33,6 +33,7 @@ export type PluginAppPolicyContextEntry = {
 export type PluginAppPolicyContext = {
   fingerprint: string;
   apps: Record<string, PluginAppPolicyContextEntry>;
+  pluginAppIds: Record<string, string[]>;
 };
 
 export type CodexPluginThreadConfigDiagnostic =
@@ -162,6 +163,7 @@ export async function buildCodexPluginThreadConfig(
     },
   };
   const policyApps: Record<string, PluginAppPolicyContextEntry> = {};
+  const pluginAppIds: Record<string, string[]> = {};
   for (const record of inventory.records) {
     if (record.activationRequired) {
       const activation = activationResults.find(
@@ -174,6 +176,7 @@ export async function buildCodexPluginThreadConfig(
     if (record.appOwnership !== "proven") {
       continue;
     }
+    pluginAppIds[record.identity.configKey] = [...record.ownedAppIds].toSorted();
     for (const app of record.apps) {
       if (!app.accessible || !app.enabled) {
         diagnostics.push({
@@ -202,7 +205,7 @@ export async function buildCodexPluginThreadConfig(
   }
 
   const configPatch = { apps };
-  const policyContext = buildPluginAppPolicyContext(policyApps);
+  const policyContext = buildPluginAppPolicyContext(policyApps, pluginAppIds);
   return {
     enabled: true,
     configPatch,
@@ -258,7 +261,7 @@ function emptyPluginThreadConfig(params: {
   enabled: boolean;
   inputFingerprint: string;
 }): CodexPluginThreadConfig {
-  const policyContext = buildPluginAppPolicyContext({});
+  const policyContext = buildPluginAppPolicyContext({}, {});
   return {
     enabled: params.enabled,
     fingerprint: fingerprintJson({
@@ -275,10 +278,12 @@ function emptyPluginThreadConfig(params: {
 
 function buildPluginAppPolicyContext(
   apps: Record<string, PluginAppPolicyContextEntry>,
+  pluginAppIds: Record<string, string[]>,
 ): PluginAppPolicyContext {
   return {
-    fingerprint: fingerprintJson({ version: 1, apps }),
+    fingerprint: fingerprintJson({ version: 1, apps, pluginAppIds }),
     apps,
+    pluginAppIds,
   };
 }
 

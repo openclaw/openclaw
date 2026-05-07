@@ -125,7 +125,20 @@ function createPluginAppPolicyContext(
         },
       ]),
     ),
+    pluginAppIds: Object.fromEntries(
+      apps.map((app) => [app.pluginName, appsForPlugin(apps, app.pluginName)]),
+    ),
   };
+}
+
+function appsForPlugin(
+  apps: Array<{ appId: string; pluginName: string; mcpServerNames: string[] }>,
+  pluginName: string,
+): string[] {
+  return apps
+    .filter((app) => app.pluginName === pluginName)
+    .map((app) => app.appId)
+    .toSorted();
 }
 
 describe("Codex app-server elicitation bridge", () => {

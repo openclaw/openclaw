@@ -413,6 +413,9 @@ function createPluginAppPolicyContext() {
         mcpServerNames: ["google-calendar"],
       },
     },
+    pluginAppIds: {
+      "google-calendar": ["google-calendar-app"],
+    },
   };
 }
 
@@ -444,6 +447,45 @@ function createTwoPluginAppPolicyContext() {
         allowDestructiveActions: false,
         mcpServerNames: ["gmail"],
       },
+    },
+    pluginAppIds: {
+      ...createPluginAppPolicyContext().pluginAppIds,
+      gmail: ["gmail-app"],
+    },
+  };
+}
+
+function createTwoCalendarAppConfigPatch() {
+  return {
+    apps: {
+      ...createPluginAppConfigPatch().apps,
+      "google-calendar-secondary-app": {
+        enabled: true,
+        destructive_enabled: true,
+        open_world_enabled: false,
+        default_tools_enabled: true,
+        default_tools_approval_mode: "prompt",
+      },
+    },
+  };
+}
+
+function createTwoCalendarAppPolicyContext() {
+  return {
+    fingerprint: "plugin-policy-calendar-2",
+    apps: {
+      ...createPluginAppPolicyContext().apps,
+      "google-calendar-secondary-app": {
+        appId: "google-calendar-secondary-app",
+        configKey: "google-calendar",
+        marketplaceName: "openai-curated",
+        pluginName: "google-calendar",
+        allowDestructiveActions: false,
+        mcpServerNames: ["google-calendar"],
+      },
+    },
+    pluginAppIds: {
+      "google-calendar": ["google-calendar-app", "google-calendar-secondary-app"],
     },
   };
 }
@@ -2652,6 +2694,157 @@ describe("runCodexAppServerAttempt", () => {
     await run;
   });
 
+  it("keys plugin app inventory by the resolved Codex account", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const agentDir = path.join(tempDir, "agent");
+    const authProfileId = "openai-codex:work";
+    const pluginConfig = {
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          "google-calendar": {
+            marketplaceName: "openai-curated",
+            pluginName: "google-calendar",
+          },
+        },
+      },
+    };
+    const appServer = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: readCodexPluginConfig(pluginConfig),
+    });
+    defaultCodexAppInventoryCache.clear();
+    await defaultCodexAppInventoryCache.refreshNow({
+      key: buildCodexAppInventoryCacheKey({
+        codexHome: resolveCodexAppServerHomeDir(agentDir),
+        endpoint: __testing.resolveCodexPluginAppCacheEndpoint(appServer),
+        authProfileId,
+        accountId: "account-work",
+      }),
+      request: async () => ({
+        data: [
+          {
+            id: "google-calendar-app",
+            name: "Google Calendar",
+            description: null,
+            logoUrl: null,
+            logoUrlDark: null,
+            distributionChannel: null,
+            branding: null,
+            appMetadata: null,
+            labels: null,
+            installUrl: null,
+            isAccessible: true,
+            isEnabled: true,
+            pluginDisplayNames: [],
+          },
+        ],
+        nextCursor: null,
+      }),
+    });
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(async (method) => {
+      if (method === "plugin/list") {
+        return {
+          marketplaces: [
+            {
+              name: "openai-curated",
+              path: "/marketplaces/openai-curated",
+              interface: null,
+              plugins: [
+                {
+                  id: "google-calendar",
+                  name: "google-calendar",
+                  source: { type: "remote" },
+                  installed: true,
+                  enabled: true,
+                  installPolicy: "AVAILABLE",
+                  authPolicy: "ON_USE",
+                  availability: "AVAILABLE",
+                  interface: null,
+                },
+              ],
+            },
+          ],
+          marketplaceLoadErrors: [],
+          featuredPluginIds: [],
+        };
+      }
+      if (method === "plugin/read") {
+        return {
+          plugin: {
+            marketplaceName: "openai-curated",
+            marketplacePath: "/marketplaces/openai-curated",
+            summary: {
+              id: "google-calendar",
+              name: "google-calendar",
+              source: { type: "remote" },
+              installed: true,
+              enabled: true,
+              installPolicy: "AVAILABLE",
+              authPolicy: "ON_USE",
+              availability: "AVAILABLE",
+              interface: null,
+            },
+            description: null,
+            skills: [],
+            apps: [
+              {
+                id: "google-calendar-app",
+                name: "Google Calendar",
+                description: null,
+                installUrl: null,
+                needsAuth: false,
+              },
+            ],
+            mcpServers: ["google-calendar"],
+          },
+        };
+      }
+      if (method === "app/list") {
+        throw new Error("app/list should use the account-keyed cache entry");
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = agentDir;
+    params.authProfileId = authProfileId;
+    params.authProfileStore = {
+      version: 1,
+      profiles: {
+        [authProfileId]: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+          accountId: "account-work",
+          email: "work@example.test",
+        },
+      },
+    };
+
+    const run = runCodexAppServerAttempt(params, { pluginConfig });
+    await waitForMethod("turn/start");
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(requests).toEqual(
+      expect.arrayContaining([
+        {
+          method: "thread/start",
+          params: expect.objectContaining({
+            config: expect.objectContaining({
+              apps: expect.objectContaining({
+                "google-calendar-app": expect.objectContaining({ enabled: true }),
+              }),
+            }),
+          }),
+        },
+      ]),
+    );
+    expect(requests.map((entry) => entry.method)).not.toContain("app/list");
+  });
+
   it("times out app-server startup before thread setup can hang forever", async () => {
     __testing.setCodexAppServerClientFactoryForTests(() => new Promise<never>(() => undefined));
     const params = createParams(
@@ -3188,7 +3381,7 @@ describe("runCodexAppServerAttempt", () => {
       dynamicToolsFingerprint: "[]",
       pluginAppsFingerprint: "plugin-apps-empty",
       pluginAppsInputFingerprint: "plugin-apps-input-1",
-      pluginAppPolicyContext: { fingerprint: "plugin-policy-empty", apps: {} },
+      pluginAppPolicyContext: { fingerprint: "plugin-policy-empty", apps: {}, pluginAppIds: {} },
     });
     const params = createParams(sessionFile, workspaceDir);
     const appServer = createThreadLifecycleAppServerOptions();
@@ -3240,7 +3433,7 @@ describe("runCodexAppServerAttempt", () => {
   it("keeps an empty plugin app binding when recovery still produces the same config", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    const emptyPolicyContext = { fingerprint: "plugin-policy-empty", apps: {} };
+    const emptyPolicyContext = { fingerprint: "plugin-policy-empty", apps: {}, pluginAppIds: {} };
     await writeExistingBinding(sessionFile, workspaceDir, {
       dynamicToolsFingerprint: "[]",
       pluginAppsFingerprint: "plugin-apps-empty",
@@ -3344,6 +3537,68 @@ describe("runCodexAppServerAttempt", () => {
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
       threadId: "thread-recovered",
       pluginAppsFingerprint: "plugin-apps-config-2",
+      pluginAppPolicyContext: recoveredPolicyContext,
+    });
+  });
+
+  it("rebuilds a partial plugin app binding after another app from the same plugin recovers", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      dynamicToolsFingerprint: "[]",
+      pluginAppsFingerprint: "plugin-apps-partial",
+      pluginAppsInputFingerprint: "plugin-apps-input-1",
+      pluginAppPolicyContext: {
+        ...createPluginAppPolicyContext(),
+        pluginAppIds: {
+          "google-calendar": ["google-calendar-app", "google-calendar-secondary-app"],
+        },
+      },
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-recovered");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const recoveredPolicyContext = createTwoCalendarAppPolicyContext();
+    const buildPluginThreadConfig = vi.fn(async () => ({
+      enabled: true,
+      configPatch: createTwoCalendarAppConfigPatch(),
+      fingerprint: "plugin-apps-config-calendar-2",
+      inputFingerprint: "plugin-apps-input-1",
+      policyContext: recoveredPolicyContext,
+      diagnostics: [],
+    }));
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-apps-input-1",
+        enabledPluginConfigKeys: ["google-calendar"],
+        build: buildPluginThreadConfig,
+      },
+    });
+
+    expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls).toEqual([
+      [
+        "thread/start",
+        expect.objectContaining({
+          config: createTwoCalendarAppConfigPatch(),
+        }),
+      ],
+    ]);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-recovered",
+      pluginAppsFingerprint: "plugin-apps-config-calendar-2",
       pluginAppPolicyContext: recoveredPolicyContext,
     });
   });

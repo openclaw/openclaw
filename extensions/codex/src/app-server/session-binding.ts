@@ -180,9 +180,23 @@ function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | un
       mcpServerNames: entry.mcpServerNames,
     };
   }
+  const parsedPluginAppIds: PluginAppPolicyContext["pluginAppIds"] = {};
+  const rawPluginAppIds = record.pluginAppIds;
+  if (rawPluginAppIds && (typeof rawPluginAppIds !== "object" || Array.isArray(rawPluginAppIds))) {
+    return undefined;
+  }
+  if (rawPluginAppIds && typeof rawPluginAppIds === "object") {
+    for (const [configKey, appIds] of Object.entries(rawPluginAppIds)) {
+      if (!Array.isArray(appIds) || appIds.some((appId) => typeof appId !== "string")) {
+        return undefined;
+      }
+      parsedPluginAppIds[configKey] = appIds;
+    }
+  }
   return {
     fingerprint: record.fingerprint,
     apps: parsedApps,
+    pluginAppIds: parsedPluginAppIds,
   };
 }
 
