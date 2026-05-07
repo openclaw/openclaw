@@ -7,6 +7,7 @@ import { withProgress } from "../progress.js";
 export type GatewayRpcOpts = {
   config?: OpenClawConfig;
   url?: string;
+  port?: string;
   token?: string;
   password?: string;
   timeout?: string;
@@ -17,11 +18,22 @@ export type GatewayRpcOpts = {
 export const gatewayCallOpts = (cmd: Command) =>
   cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
+    .option("--port <port>", "Gateway port on localhost (builds ws://127.0.0.1:<port>)")
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (password auth)")
     .option("--timeout <ms>", "Timeout in ms", "10000")
     .option("--expect-final", "Wait for final response (agent)", false)
     .option("--json", "Output JSON", false);
+
+function resolveGatewayUrl(opts: Pick<GatewayRpcOpts, "url" | "port">): string | undefined {
+  if (opts.url) {
+    return opts.url;
+  }
+  if (opts.port) {
+    return `ws://127.0.0.1:${opts.port}`;
+  }
+  return undefined;
+}
 
 export const callGatewayCli = async (method: string, opts: GatewayRpcOpts, params?: unknown) =>
   withProgress(
@@ -33,7 +45,7 @@ export const callGatewayCli = async (method: string, opts: GatewayRpcOpts, param
     async () =>
       await callGateway({
         config: opts.config,
-        url: opts.url,
+        url: resolveGatewayUrl(opts),
         token: opts.token,
         password: opts.password,
         method,

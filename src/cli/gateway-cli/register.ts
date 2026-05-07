@@ -601,6 +601,7 @@ export function registerGatewayCli(program: Command) {
       "Show gateway reachability, auth capability, and read-probe summary (local + remote)",
     )
     .option("--url <url>", "Explicit Gateway WebSocket URL (still probes localhost)")
+    .option("--port <port>", "Gateway port on localhost (builds ws://127.0.0.1:<port>)")
     .option("--ssh <target>", "SSH target for remote gateway tunnel (user@host or user@host:port)")
     .option("--ssh-identity <path>", "SSH identity file path")
     .option("--ssh-auto", "Try to derive an SSH target from Bonjour discovery", false)
@@ -612,7 +613,13 @@ export function registerGatewayCli(program: Command) {
       await runGatewayCommand(async () => {
         const rpcOpts = resolveGatewayRpcOptions(opts, command);
         const { gatewayStatusCommand } = await loadGatewayStatusModule();
-        await gatewayStatusCommand(rpcOpts, defaultRuntime);
+        await gatewayStatusCommand(
+          {
+            ...rpcOpts,
+            url: rpcOpts.url ?? (opts.port ? `ws://127.0.0.1:${opts.port}` : undefined),
+          },
+          defaultRuntime,
+        );
       });
     });
 
