@@ -1,4 +1,4 @@
-import type { LocaleMap } from "./types.js";
+import type { LocaleMap } from "../types.js";
 
 export const zhCN: LocaleMap = {
   // ===== setup.ts =====
@@ -115,4 +115,8 @@ export const zhCN: LocaleMap = {
   "Install missing skill dependencies": "安装缺失的技能依赖",
   "Show Homebrew install command?": "显示 Homebrew 安装命令？",
   "Preferred node manager for skill installs": "技能安装的首选包管理器",
+
+  // ===== setup.gateway-config.ts (secret mode options) =====
+  "Default": "默认",
+  "Store a reference instead of plaintext": "存储引用而非明文",
 };

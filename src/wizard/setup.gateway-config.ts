@@ -24,10 +24,10 @@ import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
 import { maskApiKey } from "../utils/mask-api-key.js";
+import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import type {
-import { t } from "./i18n/index.js";
   GatewayWizardSettings,
   QuickstartGatewayDefaults,
   WizardFlow,
@@ -176,10 +176,10 @@ export async function configureGatewayForSetup(
             explicitMode: opts.secretInputMode,
             copy: {
               modeMessage: t("How do you want to provide the gateway token?"),
-              plaintextLabel: "Generate/store plaintext token",
-              plaintextHint: "Default",
-              refLabel: "Use SecretRef",
-              refHint: "Store a reference instead of plaintext",
+              plaintextLabel: t("Generate/store plaintext token"),
+              plaintextHint: t("Default"),
+              refLabel: t("Use SecretRef"),
+              refHint: t("Store a reference instead of plaintext"),
             },
           });
     if (tokenMode === "ref") {
