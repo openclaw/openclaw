@@ -493,8 +493,8 @@ async function resolveTelegramCommandAuth(params: {
   const senderId = msg.from?.id ? String(msg.from.id) : "";
   const senderUsername = msg.from?.username ?? "";
   const groupAllowContext = await resolveTelegramGroupAllowFromContext({
-    chatId,
     cfg,
+    chatId,
     accountId,
     senderId,
     isGroup,

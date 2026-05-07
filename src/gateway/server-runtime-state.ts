@@ -254,6 +254,7 @@ export async function createGatewayRuntimeState(params: {
         httpServer,
         wss,
         handlePluginUpgrade,
+        shouldEnforcePluginGatewayAuth,
         resolvePluginNodeCapabilityRoute,
         clients,
         preauthConnectionBudget,

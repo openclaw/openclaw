@@ -170,8 +170,8 @@ export function withResolvedTelegramForumFlag<T extends { chat: object }>(
 }
 
 export async function resolveTelegramGroupAllowFromContext(params: {
-  chatId: string | number;
   cfg?: OpenClawConfig;
+  chatId: string | number;
   accountId?: string;
   senderId?: string;
   isGroup?: boolean;

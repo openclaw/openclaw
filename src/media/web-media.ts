@@ -75,9 +75,17 @@ async function resolveMediaStoreUriToPath(mediaUrl: string): Promise<string | nu
 async function resolveHostedPluginMediaUrl(mediaUrl: string): Promise<string | null> {
   const registry = getActivePluginRegistry();
   for (const entry of registry?.hostedMediaResolvers ?? []) {
-    const resolved = await entry.resolver(mediaUrl);
-    if (typeof resolved === "string" && resolved.trim()) {
-      return resolved;
+    try {
+      const resolved = await entry.resolver(mediaUrl);
+      if (typeof resolved === "string" && resolved.trim()) {
+        return resolved;
+      }
+    } catch (err) {
+      if (shouldLogVerbose()) {
+        logVerbose(
+          `Hosted media resolver failed (${entry.pluginId ?? "unknown"}): ${formatErrorMessage(err)}`,
+        );
+      }
     }
   }
   return null;
