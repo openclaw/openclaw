@@ -1,4 +1,9 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+} from "openclaw/plugin-sdk/text-runtime";
 
 const DISCORD_DIRECTORY_CACHE_MAX_ENTRIES = 4000;
 const DISCORD_DISCRIMINATOR_SUFFIX = /#\d{4}$/;
@@ -11,7 +16,7 @@ function normalizeAccountCacheKey(accountId?: string | null): string {
 }
 
 function normalizeSnowflake(value: string | number | bigint): string | null {
-  const text = String(value ?? "").trim();
+  const text = normalizeOptionalStringifiedId(value) ?? "";
   if (!/^\d+$/.test(text)) {
     return null;
   }
@@ -19,17 +24,17 @@ function normalizeSnowflake(value: string | number | bigint): string | null {
 }
 
 function normalizeHandleKey(raw: string): string | null {
-  let handle = raw.trim();
+  let handle = normalizeOptionalString(raw) ?? "";
   if (!handle) {
     return null;
   }
   if (handle.startsWith("@")) {
-    handle = handle.slice(1).trim();
+    handle = normalizeOptionalString(handle.slice(1)) ?? "";
   }
   if (!handle || /\s/.test(handle)) {
     return null;
   }
-  return handle.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(handle);
 }
 
 function ensureAccountCache(accountId?: string | null): Map<string, string> {

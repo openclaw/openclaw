@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "../shared/number-coercion.js";
 import { sleep } from "../utils.js";
 import { generateSecureFraction } from "./secure-random.js";
 
@@ -29,9 +30,6 @@ const DEFAULT_RETRY_CONFIG = {
   maxDelayMs: 30_000,
   jitter: 0,
 };
-
-const asFiniteNumber = (value: unknown): number | undefined =>
-  typeof value === "number" && Number.isFinite(value) ? value : undefined;
 
 const clampNumber = (value: unknown, fallback: number, min?: number, max?: number) => {
   const next = asFiniteNumber(value);

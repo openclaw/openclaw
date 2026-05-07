@@ -10,6 +10,7 @@
  * 6. Optionally sends a proactive follow-up to the user
  */
 
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import {
   dispatchReplyFromConfigWithSettledDispatcher,
   type OpenClawConfig,
@@ -30,7 +31,7 @@ import { buildConversationReference } from "./messenger.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 
-export type FeedbackEvent = {
+type FeedbackEvent = {
   type: "custom";
   event: "feedback";
   ts: number;
@@ -64,7 +65,7 @@ export function buildFeedbackEvent(params: {
   };
 }
 
-export type RunFeedbackReflectionParams = {
+type RunFeedbackReflectionParams = {
   cfg: OpenClawConfig;
   adapter: MSTeamsAdapter;
   appId: string;
@@ -241,7 +242,9 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
     log.debug?.("failed to store reflection learning", { error: formatUnknownError(err) });
   }
 
-  const conversationType = params.conversationRef.conversation?.conversationType?.toLowerCase();
+  const conversationType = normalizeOptionalLowercaseString(
+    params.conversationRef.conversation?.conversationType,
+  );
   const shouldNotify =
     conversationType === "personal" &&
     parsedReflection.followUp &&

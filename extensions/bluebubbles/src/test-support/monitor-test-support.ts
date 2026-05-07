@@ -1,6 +1,8 @@
-import type { HistoryEntry, PluginRuntime } from "openclaw/plugin-sdk/bluebubbles";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { vi } from "vitest";
-import { createPluginRuntimeMock } from "../../../../test/helpers/plugins/plugin-runtime-mock.js";
+import { _resetBlueBubblesInboundDedupForTest } from "../inbound-dedupe.js";
 import {
   _resetBlueBubblesShortIdState,
   clearBlueBubblesWebhookSecurityStateForTest,
@@ -118,6 +120,7 @@ export function resetBlueBubblesMonitorTestState(params: {
 }) {
   vi.clearAllMocks();
   _resetBlueBubblesShortIdState();
+  _resetBlueBubblesInboundDedupForTest();
   clearBlueBubblesWebhookSecurityStateForTest();
   params.extraReset?.();
   params.fetchHistoryMock.mockResolvedValue({ entries: [], resolved: true });

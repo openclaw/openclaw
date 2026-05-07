@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import type { HandleCommandsParams } from "./commands-types.js";
+import { parseInlineDirectives } from "./directive-handling.parse.js";
 
 const THREAD_CHANNEL = "thread-chat";
 const ROOM_CHANNEL = "room-chat";
@@ -17,6 +19,16 @@ type ResolveCommandConversationParams = {
 
 function firstText(values: Array<string | undefined>): string | undefined {
   return values.map((value) => value?.trim() ?? "").find(Boolean) || undefined;
+}
+
+function normalizeCommandContextText(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim().toLowerCase();
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value).trim().toLowerCase();
+  }
+  return "";
 }
 
 function resolveThreadTargetId(raw?: string): string | undefined {
@@ -183,6 +195,78 @@ vi.mock("../../plugins/runtime.js", () => {
   };
 });
 
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: (channelId: string) =>
+    hoisted.runtimeChannelRegistry.channels.find((entry) => entry.plugin.id === channelId)?.plugin,
+  getLoadedChannelPlugin: (channelId: string) =>
+    hoisted.runtimeChannelRegistry.channels.find((entry) => entry.plugin.id === channelId)?.plugin,
+  normalizeChannelId: (raw?: string | null) => {
+    const normalized = raw?.trim().toLowerCase();
+    return normalized || null;
+  },
+}));
+
+vi.mock("../../channels/plugins/conversation-bindings.js", () => ({
+  setChannelConversationBindingIdleTimeoutBySessionKey: (params: {
+    channelId: string;
+    targetSessionKey: string;
+    accountId?: string | null;
+    idleTimeoutMs: number;
+  }) => {
+    if (params.channelId === THREAD_CHANNEL) {
+      return hoisted.setThreadBindingIdleTimeoutBySessionKeyMock({
+        targetSessionKey: params.targetSessionKey,
+        accountId: params.accountId,
+        idleTimeoutMs: params.idleTimeoutMs,
+      });
+    }
+    if (params.channelId === ROOM_CHANNEL) {
+      return hoisted.setMatrixThreadBindingIdleTimeoutBySessionKeyMock({
+        targetSessionKey: params.targetSessionKey,
+        accountId: params.accountId,
+        idleTimeoutMs: params.idleTimeoutMs,
+      });
+    }
+    if (params.channelId === TOPIC_CHANNEL) {
+      return hoisted.setTelegramThreadBindingIdleTimeoutBySessionKeyMock({
+        targetSessionKey: params.targetSessionKey,
+        accountId: params.accountId,
+        idleTimeoutMs: params.idleTimeoutMs,
+      });
+    }
+    return [];
+  },
+  setChannelConversationBindingMaxAgeBySessionKey: (params: {
+    channelId: string;
+    targetSessionKey: string;
+    accountId?: string | null;
+    maxAgeMs: number;
+  }) => {
+    if (params.channelId === THREAD_CHANNEL) {
+      return hoisted.setThreadBindingMaxAgeBySessionKeyMock({
+        targetSessionKey: params.targetSessionKey,
+        accountId: params.accountId,
+        maxAgeMs: params.maxAgeMs,
+      });
+    }
+    if (params.channelId === ROOM_CHANNEL) {
+      return hoisted.setMatrixThreadBindingMaxAgeBySessionKeyMock({
+        targetSessionKey: params.targetSessionKey,
+        accountId: params.accountId,
+        maxAgeMs: params.maxAgeMs,
+      });
+    }
+    if (params.channelId === TOPIC_CHANNEL) {
+      return hoisted.setTelegramThreadBindingMaxAgeBySessionKeyMock({
+        targetSessionKey: params.targetSessionKey,
+        accountId: params.accountId,
+        maxAgeMs: params.maxAgeMs,
+      });
+    }
+    return [];
+  },
+}));
+
 vi.mock("../../infra/outbound/session-binding-service.js", () => {
   return {
     getSessionBindingService: () => ({
@@ -196,15 +280,63 @@ vi.mock("../../infra/outbound/session-binding-service.js", () => {
   };
 });
 
-const { handleSessionCommand } = await import("./commands-session.js");
-const { buildCommandTestParams } = await import("./commands.test-harness.js");
-
+let handleSessionCommand: (typeof import("./commands-session.js"))["handleSessionCommand"];
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
 } satisfies OpenClawConfig;
 
+function buildSessionCommandParams(
+  commandBody: string,
+  ctxOverrides?: Record<string, unknown>,
+): HandleCommandsParams {
+  const ctx = {
+    Body: commandBody,
+    CommandBody: commandBody,
+    CommandSource: "text",
+    CommandAuthorized: true,
+    Provider: "quietchat",
+    Surface: "quietchat",
+    From: "+1222",
+    To: "+1222",
+    SenderId: "user-1",
+    ...ctxOverrides,
+  } as HandleCommandsParams["ctx"];
+  const channel = normalizeCommandContextText(ctx.Provider ?? ctx.Surface);
+  const senderId = typeof ctx.SenderId === "string" ? ctx.SenderId : undefined;
+  return {
+    ctx,
+    cfg: baseCfg,
+    command: {
+      surface: normalizeCommandContextText(ctx.Surface ?? ctx.Provider),
+      channel,
+      channelId: channel,
+      ownerList: [],
+      senderIsOwner: false,
+      isAuthorizedSender: true,
+      senderId,
+      abortKey: senderId,
+      rawBodyNormalized: commandBody.trim(),
+      commandBodyNormalized: commandBody.trim().toLowerCase(),
+      from: typeof ctx.From === "string" ? ctx.From : undefined,
+      to: typeof ctx.To === "string" ? ctx.To : undefined,
+    },
+    directives: parseInlineDirectives(commandBody),
+    elevated: { enabled: true, allowed: true, failures: [] },
+    sessionKey: "agent:main:main",
+    workspaceDir: "/tmp",
+    defaultGroupActivation: () => "mention",
+    resolvedVerboseLevel: "off",
+    resolvedReasoningLevel: "off",
+    resolveDefaultThinkingLevel: async () => undefined,
+    provider: channel,
+    model: "test-model",
+    contextTokens: 0,
+    isGroup: false,
+  };
+}
+
 function createThreadCommandParams(commandBody: string, overrides?: Record<string, unknown>) {
-  return buildCommandTestParams(commandBody, baseCfg, {
+  return buildSessionCommandParams(commandBody, {
     Provider: THREAD_CHANNEL,
     Surface: THREAD_CHANNEL,
     OriginatingChannel: THREAD_CHANNEL,
@@ -216,7 +348,7 @@ function createThreadCommandParams(commandBody: string, overrides?: Record<strin
 }
 
 function createTopicCommandParams(commandBody: string, overrides?: Record<string, unknown>) {
-  return buildCommandTestParams(commandBody, baseCfg, {
+  return buildSessionCommandParams(commandBody, {
     Provider: TOPIC_CHANNEL,
     Surface: TOPIC_CHANNEL,
     OriginatingChannel: TOPIC_CHANNEL,
@@ -228,7 +360,7 @@ function createTopicCommandParams(commandBody: string, overrides?: Record<string
 }
 
 function createRoomThreadCommandParams(commandBody: string, overrides?: Record<string, unknown>) {
-  return buildCommandTestParams(commandBody, baseCfg, {
+  return buildSessionCommandParams(commandBody, {
     Provider: ROOM_CHANNEL,
     Surface: ROOM_CHANNEL,
     OriginatingChannel: ROOM_CHANNEL,
@@ -243,7 +375,7 @@ function createRoomTriggerThreadCommandParams(
   commandBody: string,
   overrides?: Record<string, unknown>,
 ) {
-  return buildCommandTestParams(commandBody, baseCfg, {
+  return buildSessionCommandParams(commandBody, {
     Provider: ROOM_CHANNEL,
     Surface: ROOM_CHANNEL,
     OriginatingChannel: ROOM_CHANNEL,
@@ -255,7 +387,7 @@ function createRoomTriggerThreadCommandParams(
 }
 
 function createRoomCommandParams(commandBody: string, overrides?: Record<string, unknown>) {
-  return buildCommandTestParams(commandBody, baseCfg, {
+  return buildSessionCommandParams(commandBody, {
     Provider: ROOM_CHANNEL,
     Surface: ROOM_CHANNEL,
     OriginatingChannel: ROOM_CHANNEL,
@@ -362,6 +494,12 @@ function expectIdleTimeoutSetReply(
 }
 
 describe("/session idle and /session max-age", () => {
+  beforeEach(async () => {
+    if (!handleSessionCommand) {
+      ({ handleSessionCommand } = await import("./commands-session.js"));
+    }
+  });
+
   beforeEach(() => {
     hoisted.setThreadBindingIdleTimeoutBySessionKeyMock.mockReset();
     hoisted.setThreadBindingMaxAgeBySessionKeyMock.mockReset();
@@ -631,7 +769,7 @@ describe("/session idle and /session max-age", () => {
   });
 
   it("is unavailable outside bindable channels", async () => {
-    const params = buildCommandTestParams("/session idle 2h", baseCfg);
+    const params = buildSessionCommandParams("/session idle 2h");
     const result = await handleSessionCommand(params, true);
     expect(result?.reply?.text).toContain(
       "currently available only on channels that support focused conversation bindings",

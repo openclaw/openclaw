@@ -1,12 +1,10 @@
+import { isRecord } from "openclaw/plugin-sdk/text-runtime";
+
 type JsonRecord = Record<string, unknown>;
 
 const LEGACY_PATH = "models.bedrockDiscovery";
 const TARGET_PATH = "plugins.entries.amazon-bedrock.config.discovery";
 const BLOCKED_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
-
-function isRecord(value: unknown): value is JsonRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isBlockedObjectKey(key: string): boolean {
   return BLOCKED_OBJECT_KEYS.has(key);

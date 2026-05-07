@@ -8,7 +8,7 @@ import {
 import { hasLineCredentials } from "./account-helpers.js";
 import { DEFAULT_ACCOUNT_ID, type ChannelPlugin, type ResolvedLineAccount } from "./channel-api.js";
 
-const loadLineChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
+const loadLineProbeRuntime = createLazyRuntimeModule(() => import("./probe.runtime.js"));
 
 const collectLineStatusIssues = createDependentCredentialStatusIssueCollector({
   channel: "line",
@@ -23,7 +23,7 @@ export const lineStatusAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["
     collectStatusIssues: collectLineStatusIssues,
     buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
     probeAccount: async ({ account, timeoutMs }) =>
-      await (await loadLineChannelRuntime()).probeLineBot(account.channelAccessToken, timeoutMs),
+      await (await loadLineProbeRuntime()).probeLineBot(account.channelAccessToken, timeoutMs),
     resolveAccountSnapshot: ({ account }) => ({
       accountId: account.accountId,
       name: account.name,

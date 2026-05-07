@@ -2,7 +2,8 @@ import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createHybridChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-message";
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import {
@@ -12,20 +13,14 @@ import {
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { tlonDoctor } from "./doctor.js";
 import { resolveTlonOutboundSessionRoute } from "./session-route.js";
-import {
-  applyTlonSetupConfig,
-  createTlonSetupWizardBase,
-  resolveTlonSetupConfigured,
-  tlonSetupAdapter,
-} from "./setup-core.js";
+import { createTlonSetupWizardBase, tlonSetupAdapter } from "./setup-core.js";
 import {
   formatTargetHint,
   normalizeShip,
   parseTlonTarget,
   resolveTlonOutboundTarget,
 } from "./targets.js";
-import { resolveTlonAccount, listTlonAccountIds } from "./types.js";
-import { validateUrbitBaseUrl } from "./urbit/base-url.js";
+import { listTlonAccountIds, resolveTlonAccount } from "./types.js";
 
 const TLON_CHANNEL_ID = "tlon" as const;
 
@@ -63,6 +58,31 @@ const tlonConfigAdapter = createHybridChannelConfigAdapter({
   resolveAllowFrom: (account) => account.dmAllowlist,
   formatAllowFrom: (allowFrom) =>
     allowFrom.map((entry) => normalizeShip(String(entry))).filter(Boolean),
+});
+
+const tlonChannelOutbound: ChannelOutboundAdapter = {
+  deliveryMode: "direct",
+  textChunkLimit: 10000,
+  resolveTarget: ({ to }) => resolveTlonOutboundTarget(to),
+  deliveryCapabilities: {
+    durableFinal: {
+      text: true,
+      media: true,
+      replyTo: true,
+      thread: true,
+      messageSendingHooks: true,
+    },
+  },
+  ...createRuntimeOutboundDelegates({
+    getRuntime: loadTlonChannelRuntime,
+    sendText: { resolve: (runtime) => runtime.tlonRuntimeOutbound.sendText },
+    sendMedia: { resolve: (runtime) => runtime.tlonRuntimeOutbound.sendMedia },
+  }),
+};
+
+const tlonMessageAdapter = createChannelMessageAdapterFromOutbound({
+  id: TLON_CHANNEL_ID,
+  outbound: tlonChannelOutbound,
 });
 
 export const tlonPlugin = createChatChannelPlugin({
@@ -103,6 +123,7 @@ export const tlonPlugin = createChatChannelPlugin({
     },
     doctor: tlonDoctor,
     messaging: {
+      targetPrefixes: ["tlon"],
       normalizeTarget: (target) => {
         const parsed = parseTlonTarget(target);
         if (!parsed) {
@@ -119,6 +140,7 @@ export const tlonPlugin = createChatChannelPlugin({
       },
       resolveOutboundSessionRoute: (params) => resolveTlonOutboundSessionRoute(params),
     },
+    message: tlonMessageAdapter,
     status: createComputedAccountStatusAdapter<ReturnType<typeof resolveTlonAccount>>({
       defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
       collectStatusIssues: (accounts) => {
@@ -166,14 +188,5 @@ export const tlonPlugin = createChatChannelPlugin({
         await (await loadTlonChannelRuntime()).startTlonGatewayAccount(ctx),
     },
   },
-  outbound: {
-    deliveryMode: "direct",
-    textChunkLimit: 10000,
-    resolveTarget: ({ to }) => resolveTlonOutboundTarget(to),
-    ...createRuntimeOutboundDelegates({
-      getRuntime: loadTlonChannelRuntime,
-      sendText: { resolve: (runtime) => runtime.tlonRuntimeOutbound.sendText },
-      sendMedia: { resolve: (runtime) => runtime.tlonRuntimeOutbound.sendMedia },
-    }),
-  },
+  outbound: tlonChannelOutbound,
 });

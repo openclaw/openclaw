@@ -1,5 +1,5 @@
-import * as http from "http";
-import * as Lark from "@larksuiteoapi/node-sdk";
+import * as http from "node:http";
+import type * as Lark from "@larksuiteoapi/node-sdk";
 import {
   createFixedWindowRateLimiter,
   createWebhookAnomalyTracker,
@@ -105,7 +105,9 @@ const feishuWebhookAnomalyTracker = createWebhookAnomalyTracker({
 });
 
 function closeWsClient(client: Lark.WSClient | undefined): void {
-  if (!client) return;
+  if (!client) {
+    return;
+  }
   try {
     client.close();
   } catch {

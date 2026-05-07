@@ -1,29 +1,20 @@
 import type { Command } from "commander";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
 import { danger, defaultRuntime, inheritOptionFromParent } from "./core-api.js";
 
 function resolveUrl(opts: { url?: string }, command: Command): string | undefined {
-  if (typeof opts.url === "string" && opts.url.trim()) {
-    return opts.url.trim();
-  }
-  const inherited = inheritOptionFromParent<string>(command, "url");
-  if (typeof inherited === "string" && inherited.trim()) {
-    return inherited.trim();
-  }
-  return undefined;
+  return (
+    normalizeOptionalString(opts.url) ??
+    normalizeOptionalString(inheritOptionFromParent<string>(command, "url"))
+  );
 }
 
 function resolveTargetId(rawTargetId: unknown, command: Command): string | undefined {
-  const local = typeof rawTargetId === "string" ? rawTargetId.trim() : "";
-  if (local) {
-    return local;
-  }
-  const inherited = inheritOptionFromParent<string>(command, "targetId");
-  if (typeof inherited !== "string") {
-    return undefined;
-  }
-  const trimmed = inherited.trim();
-  return trimmed ? trimmed : undefined;
+  return (
+    normalizeOptionalString(rawTargetId) ??
+    normalizeOptionalString(inheritOptionFromParent<string>(command, "targetId"))
+  );
 }
 
 async function runMutationRequest(params: {
@@ -155,7 +146,7 @@ export function registerBrowserCookiesAndStorageCommands(
               method: "GET",
               path: `/storage/${kind}`,
               query: {
-                key: key?.trim() || undefined,
+                key: normalizeOptionalString(key),
                 targetId,
                 profile,
               },

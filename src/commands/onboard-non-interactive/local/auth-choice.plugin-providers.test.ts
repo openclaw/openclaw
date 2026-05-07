@@ -6,6 +6,10 @@ const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(async () =>
 vi.mock("../../../plugins/provider-auth-choice-preference.js", () => ({
   resolvePreferredProviderForAuthChoice,
 }));
+const resolveManifestProviderAuthChoice = vi.hoisted(() => vi.fn(() => undefined));
+vi.mock("../../../plugins/provider-auth-choices.js", () => ({
+  resolveManifestProviderAuthChoice,
+}));
 
 const resolveOwningPluginIdsForProvider = vi.hoisted(() => vi.fn(() => undefined));
 const resolveProviderPluginChoice = vi.hoisted(() => vi.fn());
@@ -20,6 +24,11 @@ vi.mock("./auth-choice.plugin-providers.runtime.js", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resolvePreferredProviderForAuthChoice.mockResolvedValue(undefined);
+  resolveManifestProviderAuthChoice.mockReturnValue(undefined);
+  resolveOwningPluginIdsForProvider.mockReturnValue(undefined as never);
+  resolveProviderPluginChoice.mockReturnValue(undefined);
+  resolvePluginProviders.mockReturnValue([] as never);
 });
 
 function createRuntime() {
@@ -61,6 +70,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(resolvePluginProviders).toHaveBeenCalledWith(
       expect.objectContaining({
         onlyPluginIds: ["vllm"],
+        includeUntrustedWorkspacePlugins: false,
       }),
     );
     expect(resolveProviderPluginChoice).toHaveBeenCalledOnce();
@@ -68,7 +78,78 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(result).toEqual({ plugins: { allow: ["vllm"] } });
   });
 
-  it("enables owning plugin ids when they differ from the provider id", async () => {
+  it("fails explicitly when a provider-plugin auth choice resolves to no trusted setup provider", async () => {
+    const runtime = createRuntime();
+
+    const result = await applyNonInteractivePluginProviderChoice({
+      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      authChoice: "provider-plugin:workspace-provider:api-key",
+      opts: {} as never,
+      runtime: runtime as never,
+      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      resolveApiKey: vi.fn(),
+      toApiKeyCredential: vi.fn(),
+    });
+
+    expect(result).toBeNull();
+    expect(resolvePreferredProviderForAuthChoice).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Auth choice "provider-plugin:workspace-provider:api-key" was not matched to a trusted provider plugin.',
+      ),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("fails explicitly when a non-prefixed auth choice resolves only with untrusted providers", async () => {
+    const runtime = createRuntime();
+    resolvePreferredProviderForAuthChoice.mockResolvedValue(undefined);
+    resolveManifestProviderAuthChoice.mockReturnValueOnce(undefined).mockReturnValueOnce({
+      pluginId: "workspace-provider",
+      providerId: "workspace-provider",
+    } as never);
+
+    const result = await applyNonInteractivePluginProviderChoice({
+      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      authChoice: "workspace-provider-api-key",
+      opts: {} as never,
+      runtime: runtime as never,
+      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      resolveApiKey: vi.fn(),
+      toApiKeyCredential: vi.fn(),
+    });
+
+    expect(result).toBeNull();
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Auth choice "workspace-provider-api-key" matched a provider plugin that is not trusted or enabled for setup.',
+      ),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(resolvePluginProviders).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    );
+    expect(resolveProviderPluginChoice).toHaveBeenCalledTimes(1);
+    expect(resolvePluginProviders).toHaveBeenCalledTimes(1);
+    expect(resolveManifestProviderAuthChoice).toHaveBeenCalledWith(
+      "workspace-provider-api-key",
+      expect.objectContaining({
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    );
+    expect(resolveManifestProviderAuthChoice).toHaveBeenCalledWith(
+      "workspace-provider-api-key",
+      expect.objectContaining({
+        config: expect.objectContaining({ agents: { defaults: {} } }),
+        workspaceDir: expect.any(String),
+        includeUntrustedWorkspacePlugins: true,
+      }),
+    );
+  });
+
+  it("limits setup-provider resolution to owning plugin ids without pre-enabling them", async () => {
     const runtime = createRuntime();
     const runNonInteractive = vi.fn(async () => ({ plugins: { allow: ["demo-plugin"] } }));
     resolveOwningPluginIdsForProvider.mockReturnValue(["demo-plugin"] as never);
@@ -92,16 +173,9 @@ describe("applyNonInteractivePluginProviderChoice", () => {
 
     expect(resolvePluginProviders).toHaveBeenCalledWith(
       expect.objectContaining({
-        config: expect.objectContaining({
-          plugins: expect.objectContaining({
-            allow: expect.arrayContaining(["demo-provider", "demo-plugin"]),
-            entries: expect.objectContaining({
-              "demo-provider": expect.objectContaining({ enabled: true }),
-              "demo-plugin": expect.objectContaining({ enabled: true }),
-            }),
-          }),
-        }),
+        config: expect.objectContaining({ agents: { defaults: {} } }),
         onlyPluginIds: ["demo-plugin"],
+        includeUntrustedWorkspacePlugins: false,
       }),
     );
     expect(runNonInteractive).toHaveBeenCalledOnce();
@@ -125,6 +199,11 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(resolvePreferredProviderForAuthChoice).toHaveBeenCalledWith(
       expect.objectContaining({
         choice: "openai-api-key",
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    );
+    expect(resolvePluginProviders).toHaveBeenCalledWith(
+      expect.objectContaining({
         includeUntrustedWorkspacePlugins: false,
       }),
     );

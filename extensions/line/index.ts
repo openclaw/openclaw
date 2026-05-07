@@ -1,11 +1,10 @@
-import { defineChannelPluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/channel-core";
-import { linePlugin } from "./src/channel.js";
-import { setLineRuntime } from "./src/runtime.js";
+import {
+  defineBundledChannelEntry,
+  type OpenClawPluginCommandDefinition,
+  type OpenClawPluginApi,
+} from "openclaw/plugin-sdk/channel-entry-contract";
 
-export { linePlugin } from "./src/channel.js";
-export { setLineRuntime } from "./src/runtime.js";
-
-type RegisteredLineCardCommand = Parameters<OpenClawPluginApi["registerCommand"]>[0];
+type RegisteredLineCardCommand = OpenClawPluginCommandDefinition;
 
 let lineCardCommandPromise: Promise<RegisteredLineCardCommand> | null = null;
 
@@ -27,12 +26,19 @@ async function loadLineCardCommand(api: OpenClawPluginApi): Promise<RegisteredLi
   return await lineCardCommandPromise;
 }
 
-export default defineChannelPluginEntry({
+export default defineBundledChannelEntry({
   id: "line",
   name: "LINE",
   description: "LINE Messaging API channel plugin",
-  plugin: linePlugin,
-  setRuntime: setLineRuntime,
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./channel-plugin-api.js",
+    exportName: "linePlugin",
+  },
+  runtime: {
+    specifier: "./runtime-api.js",
+    exportName: "setLineRuntime",
+  },
   registerFull(api) {
     api.registerCommand({
       name: "card",

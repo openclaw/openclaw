@@ -1,6 +1,6 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { listCombinedAccountIds } from "openclaw/plugin-sdk/account-resolution";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
@@ -10,7 +10,7 @@ import { mergeDiscordAccountConfig, resolveDiscordAccountConfig } from "./accoun
 import type { DiscordAccountConfig } from "./runtime-api.js";
 import { resolveDiscordToken } from "./token.js";
 
-export type InspectedDiscordSetupAccount = {
+type InspectedDiscordSetupAccount = {
   accountId: string;
   enabled: boolean;
   token: string;

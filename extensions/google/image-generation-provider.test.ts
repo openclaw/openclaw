@@ -46,6 +46,7 @@ function installGoogleFetchMock(params?: {
 describe("Google image-generation provider", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("generates image buffers from the Gemini generateContent API", async () => {
@@ -278,6 +279,36 @@ describe("Google image-generation provider", () => {
     );
   });
 
+  it("honors configured private-network opt-in for Google image generation", async () => {
+    mockGoogleApiKeyAuth();
+    installGoogleFetchMock();
+    const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest");
+
+    const provider = buildGoogleImageGenerationProvider();
+    await provider.generateImage({
+      provider: "google",
+      model: "gemini-3.1-flash-image-preview",
+      prompt: "draw a fox",
+      cfg: {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+              request: { allowPrivateNetwork: true },
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(postJsonRequestSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowPrivateNetwork: true,
+      }),
+    );
+  });
+
   it("normalizes a configured bare Google host to the v1beta API root", async () => {
     mockGoogleApiKeyAuth();
     const fetchMock = installGoogleFetchMock();
@@ -292,6 +323,33 @@ describe("Google image-generation provider", () => {
           providers: {
             google: {
               baseUrl: "https://generativelanguage.googleapis.com",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent",
+      expect.any(Object),
+    );
+  });
+
+  it("strips a configured /openai suffix before calling the native Gemini image API", async () => {
+    mockGoogleApiKeyAuth();
+    const fetchMock = installGoogleFetchMock();
+
+    const provider = buildGoogleImageGenerationProvider();
+    await provider.generateImage({
+      provider: "google",
+      model: "gemini-3-pro-image-preview",
+      prompt: "draw a fox",
+      cfg: {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
               models: [],
             },
           },

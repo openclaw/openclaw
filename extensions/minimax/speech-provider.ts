@@ -1,3 +1,9 @@
+import { transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
+import {
+  isProviderAuthProfileConfigured,
+  type OpenClawConfig,
+  resolveProviderAuthProfileApiKey,
+} from "openclaw/plugin-sdk/provider-auth";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -5,6 +11,7 @@ import type {
   SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
+import { asFiniteNumber, asObject, trimToUndefined } from "openclaw/plugin-sdk/speech-core";
 import {
   DEFAULT_MINIMAX_TTS_BASE_URL,
   MINIMAX_TTS_MODELS,
@@ -12,6 +19,13 @@ import {
   minimaxTTS,
   normalizeMinimaxTtsBaseUrl,
 } from "./tts.js";
+
+const MINIMAX_PORTAL_PROVIDER_ID = "minimax-portal";
+const MINIMAX_TOKEN_PLAN_ENV_VARS = [
+  "MINIMAX_OAUTH_TOKEN",
+  "MINIMAX_CODE_PLAN_KEY",
+  "MINIMAX_CODING_API_KEY",
+] as const;
 
 type MinimaxTtsProviderConfig = {
   apiKey?: string;
@@ -31,22 +45,47 @@ type MinimaxTtsProviderOverrides = {
   pitch?: number;
 };
 
-function trimToUndefined(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+function resolveConfiguredPortalTtsBaseUrl(cfg: OpenClawConfig | undefined): string | undefined {
+  const providers = asObject(asObject(cfg?.models)?.providers);
+  const portalProvider = asObject(providers?.[MINIMAX_PORTAL_PROVIDER_ID]);
+  const portalBaseUrl = trimToUndefined(portalProvider?.baseUrl);
+  return portalBaseUrl ? normalizeMinimaxTtsBaseUrl(portalBaseUrl) : undefined;
 }
 
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+function resolveMinimaxTokenPlanEnvKey(): string | undefined {
+  for (const envVar of MINIMAX_TOKEN_PLAN_ENV_VARS) {
+    const value = trimToUndefined(process.env[envVar]);
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
 }
 
-function asObject(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+async function resolveMinimaxPortalProfileToken(
+  cfg: OpenClawConfig | undefined,
+): Promise<string | undefined> {
+  return await resolveProviderAuthProfileApiKey({
+    cfg,
+    provider: MINIMAX_PORTAL_PROVIDER_ID,
+  });
+}
+
+async function resolveMinimaxTtsApiKey(params: {
+  cfg: OpenClawConfig | undefined;
+  configApiKey?: string;
+}): Promise<string | undefined> {
+  return (
+    params.configApiKey ??
+    (await resolveMinimaxPortalProfileToken(params.cfg)) ??
+    resolveMinimaxTokenPlanEnvKey() ??
+    trimToUndefined(process.env.MINIMAX_API_KEY)
+  );
 }
 
 function normalizeMinimaxProviderConfig(
   rawConfig: Record<string, unknown>,
+  cfg?: OpenClawConfig,
 ): MinimaxTtsProviderConfig {
   const providers = asObject(rawConfig.providers);
   const raw = asObject(providers?.minimax) ?? asObject(rawConfig.minimax);
@@ -58,6 +97,7 @@ function normalizeMinimaxProviderConfig(
     baseUrl: normalizeMinimaxTtsBaseUrl(
       trimToUndefined(raw?.baseUrl) ??
         trimToUndefined(process.env.MINIMAX_API_HOST) ??
+        resolveConfiguredPortalTtsBaseUrl(cfg) ??
         DEFAULT_MINIMAX_TTS_BASE_URL,
     ),
     model:
@@ -68,22 +108,25 @@ function normalizeMinimaxProviderConfig(
       trimToUndefined(raw?.voiceId) ??
       trimToUndefined(process.env.MINIMAX_TTS_VOICE_ID) ??
       "English_expressive_narrator",
-    speed: asNumber(raw?.speed),
-    vol: asNumber(raw?.vol),
-    pitch: asNumber(raw?.pitch),
+    speed: asFiniteNumber(raw?.speed),
+    vol: asFiniteNumber(raw?.vol),
+    pitch: asFiniteNumber(raw?.pitch),
   };
 }
 
-function readMinimaxProviderConfig(config: SpeechProviderConfig): MinimaxTtsProviderConfig {
-  const normalized = normalizeMinimaxProviderConfig({});
+function readMinimaxProviderConfig(
+  config: SpeechProviderConfig,
+  cfg?: OpenClawConfig,
+): MinimaxTtsProviderConfig {
+  const normalized = normalizeMinimaxProviderConfig({}, cfg);
   return {
     apiKey: trimToUndefined(config.apiKey) ?? normalized.apiKey,
-    baseUrl: trimToUndefined(config.baseUrl) ?? normalized.baseUrl,
+    baseUrl: normalizeMinimaxTtsBaseUrl(trimToUndefined(config.baseUrl) ?? normalized.baseUrl),
     model: trimToUndefined(config.model) ?? normalized.model,
     voiceId: trimToUndefined(config.voiceId) ?? normalized.voiceId,
-    speed: asNumber(config.speed) ?? normalized.speed,
-    vol: asNumber(config.vol) ?? normalized.vol,
-    pitch: asNumber(config.pitch) ?? normalized.pitch,
+    speed: asFiniteNumber(config.speed) ?? normalized.speed,
+    vol: asFiniteNumber(config.vol) ?? normalized.vol,
+    pitch: asFiniteNumber(config.pitch) ?? normalized.pitch,
   };
 }
 
@@ -96,9 +139,9 @@ function readMinimaxOverrides(
   return {
     model: trimToUndefined(overrides.model),
     voiceId: trimToUndefined(overrides.voiceId),
-    speed: asNumber(overrides.speed),
-    vol: asNumber(overrides.vol),
-    pitch: asNumber(overrides.pitch),
+    speed: asFiniteNumber(overrides.speed),
+    vol: asFiniteNumber(overrides.vol),
+    pitch: asFiniteNumber(overrides.pitch),
   };
 }
 
@@ -170,7 +213,7 @@ export function buildMinimaxSpeechProvider(): SpeechProviderPlugin {
     autoSelectOrder: 40,
     models: MINIMAX_TTS_MODELS,
     voices: MINIMAX_TTS_VOICES,
-    resolveConfig: ({ rawConfig }) => normalizeMinimaxProviderConfig(rawConfig),
+    resolveConfig: ({ rawConfig, cfg }) => normalizeMinimaxProviderConfig(rawConfig, cfg),
     parseDirectiveToken,
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
       const base = normalizeMinimaxProviderConfig(baseTtsConfig);
@@ -193,15 +236,15 @@ export function buildMinimaxSpeechProvider(): SpeechProviderPlugin {
         ...(trimToUndefined(talkProviderConfig.voiceId) == null
           ? {}
           : { voiceId: trimToUndefined(talkProviderConfig.voiceId) }),
-        ...(asNumber(talkProviderConfig.speed) == null
+        ...(asFiniteNumber(talkProviderConfig.speed) == null
           ? {}
-          : { speed: asNumber(talkProviderConfig.speed) }),
-        ...(asNumber(talkProviderConfig.vol) == null
+          : { speed: asFiniteNumber(talkProviderConfig.speed) }),
+        ...(asFiniteNumber(talkProviderConfig.vol) == null
           ? {}
-          : { vol: asNumber(talkProviderConfig.vol) }),
-        ...(asNumber(talkProviderConfig.pitch) == null
+          : { vol: asFiniteNumber(talkProviderConfig.vol) }),
+        ...(asFiniteNumber(talkProviderConfig.pitch) == null
           ? {}
-          : { pitch: asNumber(talkProviderConfig.pitch) }),
+          : { pitch: asFiniteNumber(talkProviderConfig.pitch) }),
       };
     },
     resolveTalkOverrides: ({ params }) => ({
@@ -211,19 +254,27 @@ export function buildMinimaxSpeechProvider(): SpeechProviderPlugin {
       ...(trimToUndefined(params.modelId) == null
         ? {}
         : { model: trimToUndefined(params.modelId) }),
-      ...(asNumber(params.speed) == null ? {} : { speed: asNumber(params.speed) }),
-      ...(asNumber(params.vol) == null ? {} : { vol: asNumber(params.vol) }),
-      ...(asNumber(params.pitch) == null ? {} : { pitch: asNumber(params.pitch) }),
+      ...(asFiniteNumber(params.speed) == null ? {} : { speed: asFiniteNumber(params.speed) }),
+      ...(asFiniteNumber(params.vol) == null ? {} : { vol: asFiniteNumber(params.vol) }),
+      ...(asFiniteNumber(params.pitch) == null ? {} : { pitch: asFiniteNumber(params.pitch) }),
     }),
     listVoices: async () => MINIMAX_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
-    isConfigured: ({ providerConfig }) =>
-      Boolean(readMinimaxProviderConfig(providerConfig).apiKey || process.env.MINIMAX_API_KEY),
+    isConfigured: ({ cfg, providerConfig }) =>
+      Boolean(
+        readMinimaxProviderConfig(providerConfig, cfg).apiKey ||
+        isProviderAuthProfileConfigured({ cfg, provider: MINIMAX_PORTAL_PROVIDER_ID }) ||
+        resolveMinimaxTokenPlanEnvKey() ||
+        process.env.MINIMAX_API_KEY,
+      ),
     synthesize: async (req) => {
-      const config = readMinimaxProviderConfig(req.providerConfig);
+      const config = readMinimaxProviderConfig(req.providerConfig, req.cfg);
       const overrides = readMinimaxOverrides(req.providerOverrides);
-      const apiKey = config.apiKey || process.env.MINIMAX_API_KEY;
+      const apiKey = await resolveMinimaxTtsApiKey({
+        cfg: req.cfg,
+        configApiKey: config.apiKey,
+      });
       if (!apiKey) {
-        throw new Error("MiniMax API key missing");
+        throw new Error("MiniMax TTS auth missing");
       }
       const audioBuffer = await minimaxTTS({
         text: req.text,
@@ -236,6 +287,20 @@ export function buildMinimaxSpeechProvider(): SpeechProviderPlugin {
         pitch: overrides.pitch ?? config.pitch,
         timeoutMs: req.timeoutMs,
       });
+      if (req.target === "voice-note") {
+        const opusBuffer = await transcodeAudioBufferToOpus({
+          audioBuffer,
+          inputExtension: "mp3",
+          tempPrefix: "tts-minimax-",
+          timeoutMs: req.timeoutMs,
+        });
+        return {
+          audioBuffer: opusBuffer,
+          outputFormat: "opus",
+          fileExtension: ".opus",
+          voiceCompatible: true,
+        };
+      }
       return {
         audioBuffer,
         outputFormat: "mp3",

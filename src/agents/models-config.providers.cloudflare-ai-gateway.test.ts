@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
+import type { ApiKeyCredential } from "./auth-profiles/types.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
-import { resolveApiKeyFromCredential } from "./models-config.providers.secrets.js";
+import { resolveApiKeyFromCredential } from "./models-config.providers.secret-helpers.js";
 
 function expectedCloudflareGatewayBaseUrl(accountId: string, gatewayId: string): string {
   return `https://gateway.ai.cloudflare.com/v1/${accountId}/${gatewayId}/anthropic`;
@@ -9,21 +10,16 @@ function expectedCloudflareGatewayBaseUrl(accountId: string, gatewayId: string):
 
 function buildCloudflareAiGatewayCatalogProvider(params: {
   credential:
-    | Parameters<typeof resolveApiKeyFromCredential>[0]
-    | {
+    | (ApiKeyCredential & {
         metadata?: {
           accountId?: string;
           gatewayId?: string;
         };
-      }
+      })
     | undefined;
   envApiKey?: string;
 }) {
-  const apiKey =
-    params.envApiKey?.trim() ||
-    resolveApiKeyFromCredential(
-      params.credential as Parameters<typeof resolveApiKeyFromCredential>[0],
-    )?.apiKey;
+  const apiKey = params.envApiKey?.trim() || resolveApiKeyFromCredential(params.credential)?.apiKey;
   const accountId = params.credential?.metadata?.accountId?.trim();
   const gatewayId = params.credential?.metadata?.gatewayId?.trim();
   if (!apiKey || !accountId || !gatewayId) {

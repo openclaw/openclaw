@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   expectLifecyclePatch,
   expectPendingUntilAbort,
   startAccountAndTrackLifecycle,
   waitForStartedMocks,
-} from "../../../test/helpers/plugins/start-account-lifecycle.js";
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedZaloAccount } from "./accounts.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -27,6 +27,24 @@ vi.mock("./probe.js", () => {
     probeZalo: hoisted.probeZalo,
   };
 });
+
+vi.mock("./channel.runtime.js", () => ({
+  probeZaloAccount: hoisted.probeZalo,
+  startZaloGatewayAccount: async (ctx: {
+    account: ResolvedZaloAccount;
+    abortSignal: AbortSignal;
+    setStatus: (patch: Partial<ResolvedZaloAccount>) => void;
+  }) => {
+    await hoisted.probeZalo();
+    ctx.setStatus({ accountId: ctx.account.accountId });
+    return await hoisted.monitorZaloProvider({
+      token: ctx.account.token,
+      account: ctx.account,
+      abortSignal: ctx.abortSignal,
+      useWebhook: false,
+    });
+  },
+}));
 
 import { zaloPlugin } from "./channel.js";
 

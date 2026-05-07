@@ -1,20 +1,24 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { isChannelConfigured } from "./channel-configured.js";
 
+vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
+  getBootstrapChannelPlugin: () => undefined,
+}));
+
 describe("isChannelConfigured", () => {
-  it("detects Telegram env configuration through the channel plugin seam", () => {
+  it("detects Telegram env configuration through the package metadata seam", () => {
     expect(isChannelConfigured({}, "telegram", { TELEGRAM_BOT_TOKEN: "token" })).toBe(true);
   });
 
-  it("detects Discord env configuration through the channel plugin seam", () => {
+  it("detects Discord env configuration through the package metadata seam", () => {
     expect(isChannelConfigured({}, "discord", { DISCORD_BOT_TOKEN: "token" })).toBe(true);
   });
 
-  it("detects Slack env configuration through the channel plugin seam", () => {
+  it("detects Slack env configuration through the package metadata seam", () => {
     expect(isChannelConfigured({}, "slack", { SLACK_BOT_TOKEN: "xoxb-test" })).toBe(true);
   });
 
-  it("requires both IRC host and nick env vars through the channel plugin seam", () => {
+  it("requires both IRC host and nick env vars through the package metadata seam", () => {
     expect(isChannelConfigured({}, "irc", { IRC_HOST: "irc.example.com" })).toBe(false);
     expect(
       isChannelConfigured({}, "irc", {
@@ -38,5 +42,11 @@ describe("isChannelConfigured", () => {
         {},
       ),
     ).toBe(true);
+  });
+
+  it("does not treat persisted Matrix credentials as configured channel state", () => {
+    expect(
+      isChannelConfigured({}, "matrix", { OPENCLAW_STATE_DIR: "state-with-matrix-creds" }),
+    ).toBe(false);
   });
 });

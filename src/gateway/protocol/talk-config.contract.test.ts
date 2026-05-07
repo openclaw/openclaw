@@ -30,7 +30,7 @@ type TalkConfigContractFixture = {
   timeoutCases: TimeoutContractCase[];
 };
 
-const fixturePath = new URL("../../../test-fixtures/talk-config-contract.json", import.meta.url);
+const fixturePath = new URL("../../../test/fixtures/talk-config-contract.json", import.meta.url);
 const fixtures = JSON.parse(fs.readFileSync(fixturePath, "utf-8")) as TalkConfigContractFixture;
 
 describe("talk.config contract fixtures", () => {
@@ -47,20 +47,22 @@ describe("talk.config contract fixtures", () => {
         return;
       }
 
-      const talk = payload.config.talk as {
-        resolved?: {
-          provider?: string;
-          config?: {
-            voiceId?: string;
-            apiKey?: string;
-          };
-        };
-      };
-      expect(talk.resolved?.provider ?? fixture.defaultProvider).toBe(
+      const talk = payload.config.talk as
+        | {
+            resolved?: {
+              provider?: string;
+              config?: {
+                voiceId?: string;
+                apiKey?: string;
+              };
+            };
+          }
+        | undefined;
+      expect(talk?.resolved?.provider ?? fixture.defaultProvider).toBe(
         fixture.expectedSelection.provider,
       );
-      expect(talk.resolved?.config?.voiceId).toBe(fixture.expectedSelection.voiceId);
-      expect(talk.resolved?.config?.apiKey).toBe(fixture.expectedSelection.apiKey);
+      expect(talk?.resolved?.config?.voiceId).toBe(fixture.expectedSelection.voiceId);
+      expect(talk?.resolved?.config?.apiKey).toBe(fixture.expectedSelection.apiKey);
     });
   }
 

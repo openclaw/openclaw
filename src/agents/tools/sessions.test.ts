@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelMessagingAdapter } from "../../channels/plugins/types.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { extractAssistantText, sanitizeTextContent } from "./sessions-helpers.js";
 
@@ -13,7 +14,7 @@ type SessionsToolTestConfig = {
   session: { scope: "per-sender"; mainKey: string };
   tools: {
     agentToAgent: { enabled: boolean };
-    sessions?: { visibility: "all" | "own" };
+    sessions?: { visibility: "self" | "tree" | "agent" | "all" };
   };
 };
 
@@ -27,7 +28,7 @@ vi.mock("../../config/config.js", async () => {
     await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
   return {
     ...actual,
-    loadConfig: () => loadConfigMock() as never,
+    getRuntimeConfig: () => loadConfigMock() as never,
   };
 });
 vi.mock("./sessions-send-tool.a2a.js", () => ({
@@ -40,13 +41,22 @@ let resolveAnnounceTarget: (typeof import("./sessions-announce-target.js"))["res
 let setActivePluginRegistry: (typeof import("../../plugins/runtime.js"))["setActivePluginRegistry"];
 const MAIN_AGENT_SESSION_KEY = "agent:main:main";
 const MAIN_AGENT_CHANNEL = "whatsapp";
+const resolveSessionConversationStub: NonNullable<
+  ChannelMessagingAdapter["resolveSessionConversation"]
+> = ({ rawId }) => ({
+  id: rawId,
+});
+const resolveSessionTargetStub: NonNullable<ChannelMessagingAdapter["resolveSessionTarget"]> = ({
+  kind,
+  id,
+  threadId,
+}) => (threadId ? `${kind}:${id}:thread:${threadId}` : `${kind}:${id}`);
 
 type SessionsListResult = Awaited<
   ReturnType<ReturnType<typeof import("./sessions-list-tool.js").createSessionsListTool>["execute"]>
 >;
 
 beforeAll(async () => {
-  vi.resetModules();
   ({ createSessionsListTool } = await import("./sessions-list-tool.js"));
   ({ createSessionsSendTool } = await import("./sessions-send-tool.js"));
   ({ resolveAnnounceTarget } = await import("./sessions-announce-target.js"));
@@ -69,6 +79,9 @@ const installRegistry = async () => {
             blurb: "Discord test stub.",
           },
           capabilities: { chatTypes: ["direct", "channel", "thread"] },
+          messaging: {
+            resolveSessionTarget: resolveSessionTargetStub,
+          },
           config: {
             listAccountIds: () => ["default"],
             resolveAccount: () => ({}),
@@ -89,6 +102,34 @@ const installRegistry = async () => {
             preferSessionLookupForAnnounceTarget: true,
           },
           capabilities: { chatTypes: ["direct", "group"] },
+          messaging: {
+            resolveSessionConversation: resolveSessionConversationStub,
+            resolveSessionTarget: resolveSessionTargetStub,
+          },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+        },
+      },
+      {
+        pluginId: "slack",
+        source: "test",
+        plugin: {
+          id: "slack",
+          meta: {
+            id: "slack",
+            label: "Slack",
+            selectionLabel: "Slack",
+            docsPath: "/channels/slack",
+            blurb: "Slack test stub.",
+            preferSessionLookupForAnnounceTarget: true,
+          },
+          capabilities: { chatTypes: ["direct", "channel", "thread"] },
+          messaging: {
+            resolveSessionConversation: resolveSessionConversationStub,
+            resolveSessionTarget: resolveSessionTargetStub,
+          },
           config: {
             listAccountIds: () => ["default"],
             resolveAccount: () => ({}),
@@ -127,7 +168,7 @@ function expectWorkerTranscriptPath(
 ) {
   const session = getFirstListedSession(result);
   expect(session).toMatchObject({ key: "agent:worker:main" });
-  const transcriptPath = String(session?.transcriptPath ?? "");
+  const transcriptPath = session?.transcriptPath ?? "";
   expect(path.normalize(transcriptPath)).toContain(path.normalize(params.containsPath));
   expect(transcriptPath).toMatch(new RegExp(`${params.sessionId}\\.jsonl$`));
 }
@@ -154,6 +195,13 @@ describe("sanitizeTextContent", () => {
     expect(result).toBe("Hello  world");
     expect(result).not.toContain("invoke");
     expect(result).not.toContain("Tool Call");
+  });
+
+  it("strips tool_result XML via the shared assistant-visible sanitizer", () => {
+    const input = 'Prefix\n<tool_result>{"output":"hidden"}</tool_result>\nSuffix';
+    const result = sanitizeTextContent(input).trim();
+    expect(result).toBe("Prefix\n\nSuffix");
+    expect(result).not.toContain("tool_result");
   });
 
   it("strips thinking tags", () => {
@@ -218,6 +266,25 @@ describe("extractAssistantText", () => {
     };
     expect(extractAssistantText(message)).toBe("Handle payment required errors in your API.");
   });
+
+  it("prefers final_answer text when phased assistant history is present", () => {
+    const message = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "internal reasoning",
+          textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: "Done.",
+          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+        },
+      ],
+    };
+    expect(extractAssistantText(message)).toBe("Done.");
+  });
 });
 
 describe("resolveAnnounceTarget", () => {
@@ -244,6 +311,7 @@ describe("resolveAnnounceTarget", () => {
             channel: "whatsapp",
             to: "123@g.us",
             accountId: "work",
+            threadId: 99,
           },
         },
       ],
@@ -257,6 +325,7 @@ describe("resolveAnnounceTarget", () => {
       channel: "whatsapp",
       to: "123@g.us",
       accountId: "work",
+      threadId: "99",
     });
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     const first = callGatewayMock.mock.calls[0]?.[0] as { method?: string } | undefined;
@@ -274,6 +343,7 @@ describe("resolveAnnounceTarget", () => {
             accountId: "work",
           },
           lastTo: "123@g.us",
+          lastThreadId: 271,
         },
       ],
     });
@@ -286,6 +356,60 @@ describe("resolveAnnounceTarget", () => {
       channel: "whatsapp",
       to: "123@g.us",
       accountId: "work",
+      threadId: "271",
+    });
+  });
+
+  it("keeps threadId from sessions.list delivery context for announce delivery", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "agent:main:whatsapp:group:123@g.us",
+          deliveryContext: {
+            channel: "whatsapp",
+            to: "123@g.us",
+            accountId: "work",
+            threadId: "thread-77",
+          },
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:main:whatsapp:group:123@g.us",
+      displayKey: "agent:main:whatsapp:group:123@g.us",
+    });
+    expect(target).toEqual({
+      channel: "whatsapp",
+      to: "123@g.us",
+      accountId: "work",
+      threadId: "thread-77",
+    });
+  });
+
+  it("preserves threaded Slack session keys when sessions.list lacks stored thread metadata", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "agent:main:slack:channel:C123:thread:1710000000.000100",
+          deliveryContext: {
+            channel: "slack",
+            to: "channel:C123",
+            accountId: "workspace",
+          },
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:main:slack:channel:C123:thread:1710000000.000100",
+      displayKey: "agent:main:slack:channel:C123:thread:1710000000.000100",
+    });
+    expect(target).toEqual({
+      channel: "slack",
+      to: "channel:C123",
+      accountId: "workspace",
+      threadId: "1710000000.000100",
     });
   });
 });
@@ -293,13 +417,20 @@ describe("resolveAnnounceTarget", () => {
 describe("sessions_list gating", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
-    callGatewayMock.mockResolvedValue({
-      path: "/tmp/sessions.json",
-      sessions: [
-        { key: "agent:main:main", kind: "direct" },
-        { key: "agent:other:main", kind: "direct" },
-      ],
-    });
+    callGatewayMock.mockImplementation(
+      (request: { method?: string; params?: { spawnedBy?: string } }) => {
+        if (request.method === "sessions.list" && request.params?.spawnedBy) {
+          return Promise.resolve({ path: "/tmp/sessions.json", sessions: [] });
+        }
+        return Promise.resolve({
+          path: "/tmp/sessions.json",
+          sessions: [
+            { key: "agent:main:main", kind: "direct" },
+            { key: "agent:other:main", kind: "direct" },
+          ],
+        });
+      },
+    );
   });
 
   it("filters out other agents when tools.agentToAgent.enabled is false", async () => {
@@ -311,6 +442,62 @@ describe("sessions_list gating", () => {
     });
   });
 
+  it("keeps requester-owned cross-agent rows with tree visibility without a spawned lookup", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "tree" },
+      },
+    });
+    callGatewayMock.mockResolvedValueOnce({
+      path: "/tmp/sessions.json",
+      sessions: [
+        {
+          key: "agent:codex:acp:child-1",
+          kind: "direct",
+          spawnedBy: MAIN_AGENT_SESSION_KEY,
+        },
+      ],
+    });
+
+    const result = await createMainSessionsListTool().execute("call1", {});
+
+    expect(result.details).toMatchObject({
+      count: 1,
+      sessions: [{ key: "agent:codex:acp:child-1", spawnedBy: MAIN_AGENT_SESSION_KEY }],
+    });
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps requester-owned cross-agent rows with all visibility when a2a is disabled", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    });
+    callGatewayMock.mockResolvedValueOnce({
+      path: "/tmp/sessions.json",
+      sessions: [
+        {
+          key: "agent:codex:acp:child-1",
+          kind: "direct",
+          parentSessionKey: MAIN_AGENT_SESSION_KEY,
+        },
+      ],
+    });
+
+    const result = await createMainSessionsListTool().execute("call1", {});
+
+    expect(result.details).toMatchObject({
+      count: 1,
+      sessions: [{ key: "agent:codex:acp:child-1", parentSessionKey: MAIN_AGENT_SESSION_KEY }],
+    });
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps literal current keys for message previews", async () => {
     callGatewayMock.mockReset();
     callGatewayMock
@@ -318,7 +505,6 @@ describe("sessions_list gating", () => {
         path: "/tmp/sessions.json",
         sessions: [{ key: "current", kind: "direct" }],
       })
-      .mockResolvedValueOnce({ sessions: [{ key: "current" }] })
       .mockResolvedValueOnce({ messages: [{ role: "assistant", content: [] }] });
 
     await createMainSessionsListTool().execute("call1", { messageLimit: 1 });
@@ -354,7 +540,6 @@ describe("sessions_list transcriptPath resolution", () => {
           },
         ],
       });
-
       const result = await executeMainSessionsList();
       expectWorkerTranscriptPath(result, {
         containsPath: path.join("agents", "worker", "sessions"),
@@ -374,7 +559,6 @@ describe("sessions_list transcriptPath resolution", () => {
           },
         ],
       });
-
       const result = await executeMainSessionsList();
       expectWorkerTranscriptPath(result, {
         containsPath: path.join("agents", "worker", "sessions"),
@@ -395,7 +579,6 @@ describe("sessions_list transcriptPath resolution", () => {
           },
         ],
       });
-
       const result = await executeMainSessionsList();
       expectWorkerTranscriptPath(result, {
         containsPath: path.join("agents", "worker", "sessions"),
@@ -416,7 +599,6 @@ describe("sessions_list transcriptPath resolution", () => {
           },
         ],
       });
-
       const result = await executeMainSessionsList();
       expectWorkerTranscriptPath(result, {
         containsPath: path.join(stateDir, "agents", "worker", "sessions"),
@@ -438,7 +620,6 @@ describe("sessions_list transcriptPath resolution", () => {
         },
       ],
     });
-
     const result = await executeMainSessionsList();
     const expectedSessionsDir = path.dirname(templateStorePath.replace("{agentId}", "worker"));
     expectWorkerTranscriptPath(result, {
@@ -471,7 +652,6 @@ describe("sessions_list channel derivation", () => {
         },
       ],
     });
-
     const result = await executeMainSessionsList();
 
     expect(result.details).toMatchObject({
@@ -532,6 +712,62 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.list" });
     expect(result.details).toMatchObject({ status: "forbidden" });
+  });
+
+  it("rejects direct thread session targets before dispatching an agent run", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    });
+    const threadSessionKey = "agent:main:slack:channel:C123:thread:1710000000.000100";
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-thread-target", {
+      sessionKey: threadSessionKey,
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      sessionKey: threadSessionKey,
+    });
+    expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
+      "cannot target a thread session",
+    );
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects label targets that resolve to canonical thread sessions", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    });
+    const threadSessionKey = "agent:main:discord:channel:123456:thread:987654";
+    callGatewayMock.mockResolvedValueOnce({ key: threadSessionKey });
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-thread-label", {
+      label: "active thread",
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      sessionKey: threadSessionKey,
+    });
+    expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
+      "cannot target a thread session",
+    );
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.resolve" });
   });
 
   it("does not reuse a stale assistant reply when no new reply appears", async () => {

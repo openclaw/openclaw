@@ -155,7 +155,10 @@ describe("nextcloud talk setup", () => {
 
     const next = nextcloudTalkDmPolicy.setPolicy(base, "open");
     expect(next.channels?.["nextcloud-talk"]?.dmPolicy).toBe("disabled");
-    expect(next.channels?.["nextcloud-talk"]?.accounts?.work?.dmPolicy).toBe("open");
+    const workAccount = next.channels?.["nextcloud-talk"]?.accounts?.work as
+      | { dmPolicy?: string; allowFrom?: Array<string | number> }
+      | undefined;
+    expect(workAccount?.dmPolicy).toBe("open");
   });
 
   it('writes open DM policy to the named account and preserves inherited allowFrom with "*"', () => {
@@ -178,8 +181,11 @@ describe("nextcloud talk setup", () => {
     );
 
     expect(next.channels?.["nextcloud-talk"]?.dmPolicy).toBeUndefined();
-    expect(next.channels?.["nextcloud-talk"]?.accounts?.work?.dmPolicy).toBe("open");
-    expect(next.channels?.["nextcloud-talk"]?.accounts?.work?.allowFrom).toEqual(["alice", "*"]);
+    const workAccount = next.channels?.["nextcloud-talk"]?.accounts?.work as
+      | { dmPolicy?: string; allowFrom?: Array<string | number> }
+      | undefined;
+    expect(workAccount?.dmPolicy).toBe("open");
+    expect(workAccount?.allowFrom).toEqual(["alice", "*"]);
   });
 
   it("validates env/default-account constraints and applies config patches", () => {
@@ -210,7 +216,7 @@ describe("nextcloud talk setup", () => {
     ).toBe("Nextcloud Talk requires --base-url.");
 
     expect(
-      applyAccountConfig!({
+      applyAccountConfig({
         cfg: {
           channels: {
             "nextcloud-talk": {},
@@ -235,7 +241,7 @@ describe("nextcloud talk setup", () => {
     });
 
     expect(
-      applyAccountConfig!({
+      applyAccountConfig({
         cfg: {
           channels: {
             "nextcloud-talk": {

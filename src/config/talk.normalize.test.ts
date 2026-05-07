@@ -1,37 +1,22 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createConfigIO } from "./io.js";
+import { TALK_TEST_PROVIDER_ID } from "../test-utils/talk-test-provider.js";
 import { buildTalkConfigResponse, normalizeTalkSection } from "./talk.js";
-
-async function withTempConfig(
-  config: unknown,
-  run: (configPath: string) => Promise<void>,
-): Promise<void> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-talk-"));
-  const configPath = path.join(dir, "openclaw.json");
-  await fs.writeFile(configPath, JSON.stringify(config, null, 2));
-  try {
-    await run(configPath);
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
-}
 
 describe("talk normalization", () => {
   it("keeps core Talk normalization generic and ignores legacy provider-flat fields", () => {
     const normalized = normalizeTalkSection({
       voiceId: "voice-123",
-      voiceAliases: { Clawd: "EXAVITQu4vr4xnSDxMaL" }, // pragma: allowlist secret
+      voiceAliases: { Clawd: "VoiceAlias1234567890" },
       modelId: "eleven_v3",
       outputFormat: "pcm_44100",
       apiKey: "secret-key", // pragma: allowlist secret
+      speechLocale: " ru-RU ",
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
     } as unknown as never);
 
     expect(normalized).toEqual({
+      speechLocale: "ru-RU",
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
     });
@@ -46,6 +31,19 @@ describe("talk normalization", () => {
           custom: true,
         },
       },
+      realtime: {
+        provider: "openai",
+        providers: {
+          openai: {
+            model: "gpt-realtime",
+          },
+        },
+        model: "gpt-realtime",
+        voice: "alloy",
+        mode: "realtime",
+        transport: "webrtc",
+        brain: "agent-consult",
+      },
       interruptOnSpeech: true,
     });
 
@@ -57,7 +55,44 @@ describe("talk normalization", () => {
           custom: true,
         },
       },
+      realtime: {
+        provider: "openai",
+        providers: {
+          openai: {
+            model: "gpt-realtime",
+          },
+        },
+        model: "gpt-realtime",
+        voice: "alloy",
+        mode: "realtime",
+        transport: "webrtc",
+        brain: "agent-consult",
+      },
       interruptOnSpeech: true,
+    });
+  });
+
+  it("merges duplicate provider ids after trimming", () => {
+    const normalized = normalizeTalkSection({
+      provider: " elevenlabs ",
+      providers: {
+        " elevenlabs ": {
+          voiceId: "voice-123",
+        },
+        elevenlabs: {
+          apiKey: "secret-key",
+        },
+      },
+    });
+
+    expect(normalized).toEqual({
+      provider: "elevenlabs",
+      providers: {
+        elevenlabs: {
+          voiceId: "voice-123",
+          apiKey: "secret-key",
+        },
+      },
     });
   });
 
@@ -70,6 +105,7 @@ describe("talk normalization", () => {
           modelId: "acme-model",
         },
       },
+      speechLocale: "ru-RU",
       interruptOnSpeech: true,
     });
 
@@ -88,44 +124,77 @@ describe("talk normalization", () => {
           modelId: "acme-model",
         },
       },
+      speechLocale: "ru-RU",
       interruptOnSpeech: true,
+    });
+  });
+
+  it("does not report an active provider when the configured speech provider cannot resolve", () => {
+    const mismatchPayload = buildTalkConfigResponse({
+      provider: "acme",
+      providers: {
+        elevenlabs: {
+          voiceId: "voice-123",
+        },
+      },
+    });
+    expect(mismatchPayload).toEqual({
+      providers: {
+        elevenlabs: {
+          voiceId: "voice-123",
+        },
+      },
+    });
+
+    const ambiguousPayload = buildTalkConfigResponse({
+      providers: {
+        acme: {
+          voiceId: "voice-acme",
+        },
+        elevenlabs: {
+          voiceId: "voice-123",
+        },
+      },
+    });
+    expect(ambiguousPayload).toEqual({
+      providers: {
+        acme: {
+          voiceId: "voice-acme",
+        },
+        elevenlabs: {
+          voiceId: "voice-123",
+        },
+      },
     });
   });
 
   it("preserves SecretRef apiKey values during normalization", () => {
     const normalized = normalizeTalkSection({
-      provider: "elevenlabs",
+      provider: TALK_TEST_PROVIDER_ID,
       providers: {
-        elevenlabs: {
+        [TALK_TEST_PROVIDER_ID]: {
           apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
         },
       },
     });
 
     expect(normalized).toEqual({
-      provider: "elevenlabs",
+      provider: TALK_TEST_PROVIDER_ID,
       providers: {
-        elevenlabs: {
+        [TALK_TEST_PROVIDER_ID]: {
           apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
         },
       },
     });
   });
 
-  it("does not inject provider apiKey defaults during snapshot materialization", async () => {
-    await withTempConfig(
-      {
-        talk: {
-          voiceId: "voice-123",
-        },
-      },
-      async (configPath) => {
-        const io = createConfigIO({ configPath });
-        const snapshot = await io.readConfigFileSnapshot();
-        expect(snapshot.config.talk?.provider).toBeUndefined();
-        expect(snapshot.config.talk?.providers?.elevenlabs?.voiceId).toBe("voice-123");
-        expect(snapshot.config.talk?.providers?.elevenlabs?.apiKey).toBeUndefined();
-      },
-    );
+  it("does not inject provider apiKey defaults during snapshot materialization", () => {
+    const payload = buildTalkConfigResponse({
+      voiceId: "voice-123",
+    });
+
+    expect(payload?.provider).toBe("elevenlabs");
+    expect(payload?.resolved?.config.voiceId).toBe("voice-123");
+    expect(payload?.resolved?.config.apiKey).toBeUndefined();
   });
 });

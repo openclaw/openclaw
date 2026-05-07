@@ -1,1 +1,4 @@
-export { appendAssistantMessageToSessionTranscript } from "./transcript.js";
+export {
+  appendAssistantMessageToSessionTranscript,
+  appendExactAssistantMessageToSessionTranscript,
+} from "./transcript.js";

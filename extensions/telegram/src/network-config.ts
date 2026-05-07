@@ -1,6 +1,8 @@
+import * as dns from "node:dns";
 import process from "node:process";
-import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-types";
 import { isTruthyEnvValue, isWSL2Sync } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 
 export const TELEGRAM_DISABLE_AUTO_SELECT_FAMILY_ENV =
   "OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY";
@@ -65,12 +67,14 @@ export function resolveTelegramAutoSelectFamilyDecision(params?: {
  * Priority:
  * 1. Environment variable OPENCLAW_TELEGRAM_DNS_RESULT_ORDER
  * 2. Config: channels.telegram.network.dnsResultOrder
- * 3. Default: "ipv4first" on Node 22+ (to work around common IPv6 issues)
+ * 3. Process default: dns.getDefaultResultOrder()
+ * 4. Default: "ipv4first" on Node 22+ (to work around common IPv6 issues)
  */
 export function resolveTelegramDnsResultOrderDecision(params?: {
   network?: TelegramNetworkConfig;
   env?: NodeJS.ProcessEnv;
   nodeMajor?: number;
+  defaultResultOrder?: string | null;
 }): TelegramDnsResultOrderDecision {
   const env = params?.env ?? process.env;
   const nodeMajor =
@@ -79,17 +83,26 @@ export function resolveTelegramDnsResultOrderDecision(params?: {
       : Number(process.versions.node.split(".")[0]);
 
   // Check environment variable
-  const envValue = env[TELEGRAM_DNS_RESULT_ORDER_ENV]?.trim().toLowerCase();
+  const envValue = normalizeOptionalLowercaseString(env[TELEGRAM_DNS_RESULT_ORDER_ENV]);
   if (envValue === "ipv4first" || envValue === "verbatim") {
     return { value: envValue, source: `env:${TELEGRAM_DNS_RESULT_ORDER_ENV}` };
   }
 
   // Check config
-  const configValue = (params?.network as { dnsResultOrder?: string } | undefined)?.dnsResultOrder
-    ?.trim()
-    .toLowerCase();
+  const configValue = normalizeOptionalLowercaseString(
+    (params?.network as { dnsResultOrder?: string } | undefined)?.dnsResultOrder,
+  );
   if (configValue === "ipv4first" || configValue === "verbatim") {
     return { value: configValue, source: "config" };
+  }
+
+  const processDefaultValue = normalizeOptionalLowercaseString(
+    params && "defaultResultOrder" in params
+      ? params.defaultResultOrder
+      : dns.getDefaultResultOrder?.(),
+  );
+  if (processDefaultValue === "ipv4first" || processDefaultValue === "verbatim") {
+    return { value: processDefaultValue, source: "process-default" };
   }
 
   // Default to ipv4first on Node 22+ to avoid IPv6 issues

@@ -1,1 +1,1 @@
-export { redactCdpUrl } from "./src/browser/cdp.helpers.js";
+export { parseBrowserHttpUrl, redactCdpUrl } from "./src/browser/cdp.helpers.js";

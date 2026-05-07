@@ -1,4 +1,5 @@
 import { Cron } from "croner";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import type { CronSchedule } from "./types.js";
 
@@ -6,7 +7,7 @@ const CRON_EVAL_CACHE_MAX = 512;
 const cronEvalCache = new Map<string, Cron>();
 
 function resolveCronTimezone(tz?: string) {
-  const trimmed = typeof tz === "string" ? tz.trim() : "";
+  const trimmed = normalizeOptionalString(tz) ?? "";
   if (trimmed) {
     return trimmed;
   }
@@ -17,6 +18,9 @@ function resolveCachedCron(expr: string, timezone: string): Cron {
   const key = `${timezone}\u0000${expr}`;
   const cached = cronEvalCache.get(key);
   if (cached) {
+    // Move to end of Map iteration order for LRU eviction
+    cronEvalCache.delete(key);
+    cronEvalCache.set(key, cached);
     return cached;
   }
   if (cronEvalCache.size >= CRON_EVAL_CACHE_MAX) {
@@ -167,4 +171,12 @@ export function clearCronScheduleCacheForTest(): void {
 
 export function getCronScheduleCacheSizeForTest(): number {
   return cronEvalCache.size;
+}
+
+export function getCronScheduleCacheMaxForTest(): number {
+  return CRON_EVAL_CACHE_MAX;
+}
+
+export function hasCronInCacheForTest(expr: string, tz: string): boolean {
+  return cronEvalCache.has(`${tz}\u0000${expr}`);
 }

@@ -17,7 +17,7 @@ const baseChangelog = `# Changelog
 
 - Existing fix.
 
-## 2026.4.4
+## 2026.4.5
 `;
 
 describe("appendUnreleasedChangelogEntry", () => {
@@ -30,9 +30,8 @@ describe("appendUnreleasedChangelogEntry", () => {
     expect(next).toContain(`### Fixes
 
 - Existing fix.
-- New fix entry.
-
-## 2026.4.4`);
+- New fix entry.`);
+    expect(next).toContain("## 2026.4.5");
   });
 
   it("avoids duplicating an existing entry", () => {

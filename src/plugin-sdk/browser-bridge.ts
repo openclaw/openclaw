@@ -1,5 +1,5 @@
 import type { Server } from "node:http";
-import type { ResolvedBrowserConfig } from "./browser-config.js";
+import type { ResolvedBrowserConfig } from "./browser-profiles.js";
 import { loadActivatedBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 
 export type BrowserBridge = {

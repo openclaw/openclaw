@@ -1,4 +1,8 @@
 import crypto from "node:crypto";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { PlivoConfig, WebhookSecurityConfig } from "../config.js";
 import { getHeader } from "../http-headers.js";
 import type {
@@ -129,7 +133,7 @@ export class PlivoProvider implements VoiceCallProvider {
     ctx: WebhookContext,
     options?: WebhookParseOptions,
   ): ProviderWebhookParseResult {
-    const flow = typeof ctx.query?.flow === "string" ? ctx.query.flow.trim() : "";
+    const flow = normalizeOptionalString(ctx.query?.flow) ?? "";
 
     const parsed = this.parseBody(ctx.rawBody);
     if (!parsed) {
@@ -480,7 +484,7 @@ export class PlivoProvider implements VoiceCallProvider {
 
   private static normalizeNumber(numberOrSip: string): string {
     const trimmed = numberOrSip.trim();
-    if (trimmed.toLowerCase().startsWith("sip:")) {
+    if (normalizeLowercaseStringOrEmpty(trimmed).startsWith("sip:")) {
       return trimmed;
     }
     return trimmed.replace(/[^\d+]/g, "");
@@ -517,10 +521,7 @@ export class PlivoProvider implements VoiceCallProvider {
   }
 
   private getCallIdFromQuery(ctx: WebhookContext): string | undefined {
-    const callId =
-      typeof ctx.query?.callId === "string" && ctx.query.callId.trim()
-        ? ctx.query.callId.trim()
-        : undefined;
+    const callId = normalizeOptionalString(ctx.query?.callId);
     return callId || undefined;
   }
 

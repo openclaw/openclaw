@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { withFastReplyConfig } from "./reply/get-reply-fast-path.js";
+import { loadGetReplyModuleForTest } from "./reply/get-reply.test-loader.js";
 import { createMockTypingController } from "./reply/reply.test-helpers.js";
 import type { MsgContext } from "./templating.js";
 
@@ -42,7 +44,7 @@ vi.mock("../channels/model-overrides.js", () => ({
   resolveChannelModelOverride: vi.fn(() => undefined),
 }));
 vi.mock("../config/config.js", () => ({
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
 }));
 vi.mock("../runtime.js", () => ({
   defaultRuntime: { log: vi.fn(), error: vi.fn(), warn: vi.fn(), info: vi.fn() },
@@ -86,8 +88,7 @@ vi.mock("./reply/get-reply-run.js", () => ({
 let getReplyFromConfig: typeof import("./reply/get-reply.js").getReplyFromConfig;
 
 async function loadFreshGetReplyModuleForTest() {
-  vi.resetModules();
-  ({ getReplyFromConfig } = await import("./reply/get-reply.js"));
+  ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
 }
 
 function createTelegramMessage(messageSid: string): MsgContext {
@@ -103,16 +104,21 @@ function createTelegramMessage(messageSid: string): MsgContext {
 }
 
 function createReplyConfig(streamMode?: "block"): OpenClawConfig {
-  return {
+  return withFastReplyConfig({
     agents: {
       defaults: {
         model: { primary: "anthropic/claude-opus-4-6" },
         workspace: "/tmp/workspace",
       },
     },
-    channels: { telegram: { allowFrom: ["*"], ...(streamMode ? { streaming: streamMode } : {}) } },
+    channels: {
+      telegram: {
+        allowFrom: ["*"],
+        ...(streamMode ? { streaming: { mode: streamMode } } : {}),
+      },
+    },
     session: { store: "/tmp/sessions.json" },
-  };
+  } as OpenClawConfig);
 }
 
 function createContinueDirectivesResult() {

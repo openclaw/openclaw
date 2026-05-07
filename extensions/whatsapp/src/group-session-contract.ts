@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+
 export function resolveLegacyGroupSessionKey(ctx: { From?: string }): {
   key: string;
   channel: string;
@@ -5,10 +7,10 @@ export function resolveLegacyGroupSessionKey(ctx: { From?: string }): {
   chatType: "group";
 } | null {
   const from = typeof ctx.From === "string" ? ctx.From.trim() : "";
-  if (!from || from.includes(":") || !from.toLowerCase().endsWith("@g.us")) {
+  const normalized = normalizeLowercaseStringOrEmpty(from);
+  if (!from || from.includes(":") || !normalized.endsWith("@g.us")) {
     return null;
   }
-  const normalized = from.toLowerCase();
   return {
     key: `whatsapp:group:${normalized}`,
     channel: "whatsapp",

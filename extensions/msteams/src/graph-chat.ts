@@ -7,8 +7,6 @@
  * @see https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/bots-filesv4
  */
 
-import type { DriveItemProperties } from "./graph-upload.js";
-
 /**
  * Build a native Teams file card attachment for Bot Framework.
  *
@@ -19,6 +17,9 @@ import type { DriveItemProperties } from "./graph-upload.js";
  * @param file - DriveItem properties from getDriveItemProperties()
  * @returns Attachment object for Bot Framework sendActivity()
  */
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import type { DriveItemProperties } from "./graph-upload.js";
+
 export function buildTeamsFileInfoCard(file: DriveItemProperties): {
   contentType: string;
   contentUrl: string;
@@ -39,7 +40,8 @@ export function buildTeamsFileInfoCard(file: DriveItemProperties): {
 
   // Extract file extension from filename
   const lastDot = file.name.lastIndexOf(".");
-  const fileType = lastDot >= 0 ? file.name.slice(lastDot + 1).toLowerCase() : "";
+  const fileType =
+    lastDot >= 0 ? normalizeLowercaseStringOrEmpty(file.name.slice(lastDot + 1)) : "";
 
   return {
     contentType: "application/vnd.microsoft.teams.card.file.info",

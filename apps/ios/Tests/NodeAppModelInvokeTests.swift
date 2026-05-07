@@ -46,14 +46,35 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         transport: "sendMessage")
     var sendError: Error?
     var lastSent: (id: String, params: OpenClawWatchNotifyParams)?
+    var lastSentExecApprovalPrompt: OpenClawWatchExecApprovalPromptMessage?
+    var lastSentExecApprovalResolved: OpenClawWatchExecApprovalResolvedMessage?
+    var lastSentExecApprovalExpired: OpenClawWatchExecApprovalExpiredMessage?
+    var lastSentExecApprovalSnapshot: OpenClawWatchExecApprovalSnapshotMessage?
+    private var statusHandler: (@Sendable (WatchMessagingStatus) -> Void)?
     private var replyHandler: (@Sendable (WatchQuickReplyEvent) -> Void)?
+    private var execApprovalResolveHandler: (@Sendable (WatchExecApprovalResolveEvent) -> Void)?
+    private var execApprovalSnapshotRequestHandler: (@Sendable (WatchExecApprovalSnapshotRequestEvent) -> Void)?
 
     func status() async -> WatchMessagingStatus {
         self.currentStatus
     }
 
+    func setStatusHandler(_ handler: (@Sendable (WatchMessagingStatus) -> Void)?) {
+        self.statusHandler = handler
+    }
+
     func setReplyHandler(_ handler: (@Sendable (WatchQuickReplyEvent) -> Void)?) {
         self.replyHandler = handler
+    }
+
+    func setExecApprovalResolveHandler(_ handler: (@Sendable (WatchExecApprovalResolveEvent) -> Void)?) {
+        self.execApprovalResolveHandler = handler
+    }
+
+    func setExecApprovalSnapshotRequestHandler(
+        _ handler: (@Sendable (WatchExecApprovalSnapshotRequestEvent) -> Void)?)
+    {
+        self.execApprovalSnapshotRequestHandler = handler
     }
 
     func sendNotification(id: String, params: OpenClawWatchNotifyParams) async throws -> WatchNotificationSendResult {
@@ -64,8 +85,56 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         return self.nextSendResult
     }
 
+    func sendExecApprovalPrompt(
+        _ message: OpenClawWatchExecApprovalPromptMessage) async throws -> WatchNotificationSendResult
+    {
+        self.lastSentExecApprovalPrompt = message
+        if let sendError = self.sendError {
+            throw sendError
+        }
+        return self.nextSendResult
+    }
+
+    func sendExecApprovalResolved(
+        _ message: OpenClawWatchExecApprovalResolvedMessage) async throws -> WatchNotificationSendResult
+    {
+        self.lastSentExecApprovalResolved = message
+        if let sendError = self.sendError {
+            throw sendError
+        }
+        return self.nextSendResult
+    }
+
+    func sendExecApprovalExpired(
+        _ message: OpenClawWatchExecApprovalExpiredMessage) async throws -> WatchNotificationSendResult
+    {
+        self.lastSentExecApprovalExpired = message
+        if let sendError = self.sendError {
+            throw sendError
+        }
+        return self.nextSendResult
+    }
+
+    func syncExecApprovalSnapshot(
+        _ message: OpenClawWatchExecApprovalSnapshotMessage) async throws -> WatchNotificationSendResult
+    {
+        self.lastSentExecApprovalSnapshot = message
+        if let sendError = self.sendError {
+            throw sendError
+        }
+        return self.nextSendResult
+    }
+
     func emitReply(_ event: WatchQuickReplyEvent) {
         self.replyHandler?(event)
+    }
+
+    func emitExecApprovalResolve(_ event: WatchExecApprovalResolveEvent) {
+        self.execApprovalResolveHandler?(event)
+    }
+
+    func emitExecApprovalSnapshotRequest(_ event: WatchExecApprovalSnapshotRequestEvent) {
+        self.execApprovalSnapshotRequestHandler?(event)
     }
 }
 
@@ -184,6 +253,118 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         #expect(prompt.id == "approval-active")
     }
 
+    @Test @MainActor func presentingExecApprovalPromptSyncsWatchPrompt() async throws {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        let prompt = try #require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-watch-sync",
+                commandText: "npm publish",
+                allowedDecisions: ["allow-once", "deny"],
+                host: "gateway",
+                nodeId: "node-1",
+                agentId: "main",
+                expiresAtMs: 1234))
+
+        appModel._test_presentExecApprovalPrompt(prompt)
+        await Task.yield()
+
+        let sent = try #require(watchService.lastSentExecApprovalPrompt)
+        #expect(sent.approval.id == "approval-watch-sync")
+        #expect(sent.approval.allowedDecisions == [.allowOnce, .deny])
+        #expect(sent.approval.host == "gateway")
+        #expect(sent.approval.risk == nil)
+        #expect(sent.resetResolvingState != true)
+    }
+
+    @Test @MainActor func watchExecApprovalSnapshotRequestPublishesCachedApprovalsInBackground() async throws {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        let futureExpiryMs = Int(Date().timeIntervalSince1970 * 1000) + 60_000
+        appModel._test_presentExecApprovalPrompt(
+            try #require(
+                NodeAppModel._test_makeExecApprovalPrompt(
+                    id: "approval-watch-snapshot",
+                    commandText: "echo from watch",
+                    allowedDecisions: ["allow-once", "deny"],
+                    host: "gateway",
+                    nodeId: nil,
+                    agentId: nil,
+                    expiresAtMs: futureExpiryMs)))
+        await Task.yield()
+
+        appModel.setScenePhase(.background)
+        watchService.emitExecApprovalSnapshotRequest(
+            WatchExecApprovalSnapshotRequestEvent(
+                requestId: "snapshot-1",
+                sentAtMs: 111,
+                transport: "sendMessage"))
+        await Task.yield()
+
+        let snapshot = try #require(watchService.lastSentExecApprovalSnapshot)
+        #expect(snapshot.approvals.map(\.id) == ["approval-watch-snapshot"])
+    }
+
+    @Test @MainActor func watchExecApprovalSnapshotRequestSkipsForegroundRecovery() async throws {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        let futureExpiryMs = Int(Date().timeIntervalSince1970 * 1000) + 60_000
+        appModel._test_presentExecApprovalPrompt(
+            try #require(
+                NodeAppModel._test_makeExecApprovalPrompt(
+                    id: "approval-watch-foreground-skip",
+                    commandText: "echo foreground",
+                    allowedDecisions: ["allow-once", "deny"],
+                    host: "gateway",
+                    nodeId: nil,
+                    agentId: nil,
+                    expiresAtMs: futureExpiryMs)))
+        await Task.yield()
+        watchService.lastSentExecApprovalSnapshot = nil
+
+        watchService.emitExecApprovalSnapshotRequest(
+            WatchExecApprovalSnapshotRequestEvent(
+                requestId: "snapshot-foreground",
+                sentAtMs: 222,
+                transport: "sendMessage"))
+        await Task.yield()
+
+        #expect(watchService.lastSentExecApprovalSnapshot == nil)
+    }
+
+    @Test @MainActor func pendingWatchRecoveryIDsAreIncludedWithoutDeliveredNotifications() async {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+
+        let appModel = NodeAppModel(notificationCenter: MockBootstrapNotificationCenter())
+        appModel._test_recordPendingWatchExecApprovalRecoveryID("approval-watch-recovery")
+
+        let ids = await appModel._test_pendingExecApprovalIDsForWatchRecovery()
+        #expect(ids == ["approval-watch-recovery"])
+    }
+
+    @Test @MainActor func presentingExecApprovalPromptClearsPendingWatchRecoveryID() throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+
+        let appModel = NodeAppModel(notificationCenter: MockBootstrapNotificationCenter())
+        appModel._test_recordPendingWatchExecApprovalRecoveryID("approval-watch-clear")
+        #expect(appModel._test_pendingWatchExecApprovalRecoveryIDs() == ["approval-watch-clear"])
+
+        appModel._test_presentExecApprovalPrompt(
+            try #require(
+                NodeAppModel._test_makeExecApprovalPrompt(
+                    id: "approval-watch-clear",
+                    commandText: "echo clear",
+                    allowedDecisions: ["allow-once", "deny"],
+                    host: "gateway",
+                    nodeId: nil,
+                    agentId: nil,
+                    expiresAtMs: Int(Date().timeIntervalSince1970 * 1000) + 60_000)))
+
+        #expect(appModel._test_pendingWatchExecApprovalRecoveryIDs().isEmpty)
+    }
+
     @Test func approvalNotificationErrorClassificationPrefersStructuredDetails() {
         let staleError = GatewayResponseError(
             method: "exec.approval.get",
@@ -198,6 +379,48 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
 
         #expect(NodeAppModel._test_isApprovalNotificationStaleError(staleError))
         #expect(NodeAppModel._test_isApprovalNotificationUnavailableError(unavailableError))
+    }
+
+    @Test func backgroundAwareExecApprovalReconnectCoversWatchAndPushPaths() {
+        #expect(
+            NodeAppModel._test_shouldUseBackgroundAwareExecApprovalReconnect(
+                sourceReason: "watch_request",
+                isBackgrounded: true)
+        )
+        #expect(
+            NodeAppModel._test_shouldUseBackgroundAwareExecApprovalReconnect(
+                sourceReason: "push_request",
+                isBackgrounded: true)
+        )
+        #expect(
+            NodeAppModel._test_shouldUseBackgroundAwareExecApprovalReconnect(
+                sourceReason: "watch_resolve",
+                isBackgrounded: true)
+        )
+        #expect(
+            !NodeAppModel._test_shouldUseBackgroundAwareExecApprovalReconnect(
+                sourceReason: "direct",
+                isBackgrounded: true)
+        )
+        #expect(
+            !NodeAppModel._test_shouldUseBackgroundAwareExecApprovalReconnect(
+                sourceReason: "watch_request",
+                isBackgrounded: false)
+        )
+    }
+
+    @Test func watchExecApprovalHydrateFetchesOnlyMissingIDs() {
+        let idsToFetch = NodeAppModel._test_watchExecApprovalIDsNeedingFetch(
+            candidateIDs: ["cached", "pending", "cached", "other", "", "  pending  "],
+            cachedApprovalIDs: ["cached", "also-cached"])
+
+        #expect(idsToFetch == ["pending", "other"])
+    }
+
+    @Test func watchExecApprovalRetryPromptResetsResolvingStateOnlyForRetryReason() {
+        #expect(NodeAppModel._test_shouldResetWatchExecApprovalResolvingStateOnPrompt(reason: "resolve_retry"))
+        #expect(!NodeAppModel._test_shouldResetWatchExecApprovalResolvingStateOnPrompt(reason: "push_request"))
+        #expect(!NodeAppModel._test_shouldResetWatchExecApprovalResolvingStateOnPrompt(reason: "present_prompt"))
     }
 
     @Test func operatorLoopWaitsForBootstrapHandoffBeforeUsingStoredToken() {
@@ -590,6 +813,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
                 note: nil,
                 sentAtMs: 1234,
                 transport: "transferUserInfo"))
+        await Task.yield()
         #expect(appModel._test_queuedWatchReplyCount() == 1)
     }
 

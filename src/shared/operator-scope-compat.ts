@@ -70,3 +70,22 @@ export function resolveMissingRequestedScope(params: {
   }
   return null;
 }
+
+export function resolveScopeOutsideRequestedRoles(params: {
+  requestedRoles: readonly string[];
+  requestedScopes: readonly string[];
+}): string | null {
+  for (const scope of params.requestedScopes) {
+    const matchesRequestedRole = params.requestedRoles.some((role) =>
+      roleScopesAllow({
+        role,
+        requestedScopes: [scope],
+        allowedScopes: [scope],
+      }),
+    );
+    if (!matchesRequestedRole) {
+      return scope;
+    }
+  }
+  return null;
+}

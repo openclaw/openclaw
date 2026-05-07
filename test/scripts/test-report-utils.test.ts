@@ -95,7 +95,7 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
 
     expect(
       runVitestJsonReport({
-        config: "vitest.unit.config.ts",
+        config: "test/vitest/vitest.unit.config.ts",
         reportPath,
       }),
     ).toBe(reportPath);
@@ -107,7 +107,7 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
         "vitest",
         "run",
         "--config",
-        "vitest.unit.config.ts",
+        "test/vitest/vitest.unit.config.ts",
         "--reporter=json",
         "--outputFile",
         reportPath,

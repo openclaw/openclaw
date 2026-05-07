@@ -4,11 +4,12 @@ import {
   isChannelExecApprovalTargetRecipient,
 } from "openclaw/plugin-sdk/approval-client-runtime";
 import { doesApprovalRequestMatchChannelAccount } from "openclaw/plugin-sdk/approval-native-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { normalizeStringifiedOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveSlackAccount } from "./accounts.js";
 
 export function normalizeSlackApproverId(value: string | number): string | undefined {
-  const trimmed = String(value).trim();
+  const trimmed = normalizeStringifiedOptionalString(value);
   if (!trimmed) {
     return undefined;
   }

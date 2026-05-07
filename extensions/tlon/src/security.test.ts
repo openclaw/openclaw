@@ -533,7 +533,9 @@ describe("Security: Sender Role Identification", () => {
 
   // Helper to compute sender role (mirrors logic in monitor/index.ts)
   function getSenderRole(senderShip: string, ownerShip: string | null): "owner" | "user" {
-    if (!ownerShip) return "user";
+    if (!ownerShip) {
+      return "user";
+    }
     return normalizeShip(senderShip) === normalizeShip(ownerShip) ? "owner" : "user";
   }
 

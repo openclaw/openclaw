@@ -1,19 +1,16 @@
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import {
   applyTlonSetupConfig,
   createTlonSetupWizardBase,
   resolveTlonSetupConfigured,
   resolveTlonSetupStatusLines,
-  type TlonSetupInput,
-  tlonSetupAdapter,
 } from "./setup-core.js";
 import { normalizeShip } from "./targets.js";
-import { listTlonAccountIds, resolveTlonAccount, type TlonResolvedAccount } from "./types.js";
+import { resolveTlonAccount, type TlonResolvedAccount } from "./types.js";
 import { isBlockedUrbitHostname, validateUrbitBaseUrl } from "./urbit/base-url.js";
 
-const channel = "tlon" as const;
+const _channel = "tlon" as const;
 
-function isConfigured(account: TlonResolvedAccount): boolean {
+function _isConfigured(account: TlonResolvedAccount): boolean {
   return Boolean(account.ship && account.url && account.code);
 }
 
@@ -23,8 +20,6 @@ function parseList(value: string): string[] {
     .map((entry) => entry.trim())
     .filter(Boolean);
 }
-
-export { tlonSetupAdapter } from "./setup-core.js";
 
 export const tlonSetupWizard = createTlonSetupWizardBase({
   resolveConfigured: async ({ cfg, accountId }) => await resolveTlonSetupConfigured(cfg, accountId),
@@ -69,7 +64,7 @@ export const tlonSetupWizard = createTlonSetupWizardBase({
       next = applyTlonSetupConfig({
         cfg: next,
         accountId,
-        input: { groupChannels: parseList(String(entry ?? "")) },
+        input: { groupChannels: parseList(entry ?? "") },
       });
     }
 
@@ -88,7 +83,7 @@ export const tlonSetupWizard = createTlonSetupWizardBase({
         cfg: next,
         accountId,
         input: {
-          dmAllowlist: parseList(String(entry ?? "")).map((ship) => normalizeShip(ship)),
+          dmAllowlist: parseList(entry ?? "").map((ship) => normalizeShip(ship)),
         },
       });
     }

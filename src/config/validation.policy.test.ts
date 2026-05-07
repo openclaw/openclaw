@@ -1,5 +1,45 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { validateConfigObjectRaw } from "./validation.js";
+
+vi.mock("../channels/plugins/legacy-config.js", () => ({
+  collectChannelLegacyConfigRules: () => [],
+}));
+
+vi.mock("../plugins/doctor-contract-registry.js", () => ({
+  collectRelevantDoctorPluginIds: () => [],
+  listPluginDoctorLegacyConfigRules: () => [],
+}));
+
+vi.mock("../secrets/unsupported-surface-policy.js", async () => {
+  const { isRecord } = await import("../utils.js");
+
+  return {
+    collectUnsupportedSecretRefConfigCandidates: (raw: unknown) => {
+      if (!isRecord(raw)) {
+        return [];
+      }
+      const candidates: Array<{ path: string; value: unknown }> = [];
+
+      const hooks = isRecord(raw.hooks) ? raw.hooks : null;
+      if (hooks) {
+        candidates.push({ path: "hooks.token", value: hooks.token });
+      }
+
+      const channels = isRecord(raw.channels) ? raw.channels : null;
+      const discord = channels && isRecord(channels.discord) ? channels.discord : null;
+      const threadBindings =
+        discord && isRecord(discord.threadBindings) ? discord.threadBindings : null;
+      if (threadBindings) {
+        candidates.push({
+          path: "channels.discord.threadBindings.webhookToken",
+          value: threadBindings.webhookToken,
+        });
+      }
+
+      return candidates;
+    },
+  };
+});
 
 describe("config validation SecretRef policy guards", () => {
   it("surfaces a policy error for hooks.token SecretRef objects", () => {
@@ -52,6 +92,35 @@ describe("config validation SecretRef policy guards", () => {
     const result = validateConfigObjectRaw({
       hooks: {
         token: "${HOOK_TOKEN}",
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("leaves legacy secretref-env marker migration to doctor", () => {
+    const result = validateConfigObjectRaw({
+      secrets: {
+        defaults: {
+          env: "gateway-env",
+        },
+      },
+      channels: {
+        discord: {
+          token: "secretref-env:DISCORD_BOT_TOKEN",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("does not reject invalid legacy secretref-env markers during raw validation", () => {
+    const result = validateConfigObjectRaw({
+      channels: {
+        discord: {
+          token: "secretref-env:not-valid",
+        },
       },
     });
 

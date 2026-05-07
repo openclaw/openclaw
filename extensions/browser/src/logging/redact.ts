@@ -1,1 +1,1 @@
-export { redactSensitiveText } from "openclaw/plugin-sdk/browser-support";
+export { redactSensitiveText } from "../sdk-security-runtime.js";

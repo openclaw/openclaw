@@ -1,12 +1,18 @@
-import { listBundledChannelPlugins, listBundledChannelSetupPlugins } from "./bundled.js";
-import type { ChannelId, ChannelPlugin } from "./types.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { listBundledChannelPluginIdsForRoot } from "./bundled-ids.js";
+import { resolveBundledChannelRootScope } from "./bundled-root.js";
+import {
+  getBundledChannelPlugin,
+  getBundledChannelSecrets,
+  getBundledChannelSetupPlugin,
+  getBundledChannelSetupSecrets,
+} from "./bundled.js";
+import type { ChannelPlugin } from "./types.plugin.js";
+import type { ChannelId } from "./types.public.js";
 
-type CachedBootstrapPlugins = {
-  sorted: ChannelPlugin[];
-  byId: Map<string, ChannelPlugin>;
-};
-
-let cachedBootstrapPlugins: CachedBootstrapPlugins | null = null;
+function resolveBootstrapChannelId(id: ChannelId): string {
+  return normalizeOptionalString(id) ?? "";
+}
 
 function mergePluginSection<T>(
   runtimeValue: T | undefined,
@@ -18,9 +24,16 @@ function mergePluginSection<T>(
     typeof runtimeValue === "object" &&
     typeof setupValue === "object"
   ) {
-    return {
+    const merged = {
       ...(runtimeValue as Record<string, unknown>),
-      ...(setupValue as Record<string, unknown>),
+    };
+    for (const [key, value] of Object.entries(setupValue as Record<string, unknown>)) {
+      if (value !== undefined) {
+        merged[key] = value;
+      }
+    }
+    return {
+      ...merged,
     } as T;
   }
   return setupValue ?? runtimeValue;
@@ -46,36 +59,50 @@ function mergeBootstrapPlugin(
   } as ChannelPlugin;
 }
 
-function buildBootstrapPlugins(): CachedBootstrapPlugins {
-  const byId = new Map<string, ChannelPlugin>();
-  for (const plugin of listBundledChannelPlugins()) {
-    byId.set(plugin.id, plugin);
-  }
-  for (const plugin of listBundledChannelSetupPlugins()) {
-    const runtimePlugin = byId.get(plugin.id);
-    byId.set(plugin.id, runtimePlugin ? mergeBootstrapPlugin(runtimePlugin, plugin) : plugin);
-  }
-  const sorted = [...byId.values()].toSorted((left, right) => left.id.localeCompare(right.id));
-  return { sorted, byId };
+export function listBootstrapChannelPluginIds(): readonly string[] {
+  const rootScope = resolveBundledChannelRootScope();
+  return listBundledChannelPluginIdsForRoot(rootScope.cacheKey);
 }
 
-function getBootstrapPlugins(): CachedBootstrapPlugins {
-  cachedBootstrapPlugins ??= buildBootstrapPlugins();
-  return cachedBootstrapPlugins;
-}
-
-export function listBootstrapChannelPlugins(): readonly ChannelPlugin[] {
-  return getBootstrapPlugins().sorted;
+export function* iterateBootstrapChannelPlugins(): IterableIterator<ChannelPlugin> {
+  for (const id of listBootstrapChannelPluginIds()) {
+    const plugin = getBootstrapChannelPlugin(id);
+    if (plugin) {
+      yield plugin;
+    }
+  }
 }
 
 export function getBootstrapChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
-  const resolvedId = String(id).trim();
+  const resolvedId = resolveBootstrapChannelId(id);
   if (!resolvedId) {
     return undefined;
   }
-  return getBootstrapPlugins().byId.get(resolvedId);
+  let runtimePlugin: ChannelPlugin | undefined;
+  let setupPlugin: ChannelPlugin | undefined;
+  try {
+    runtimePlugin = getBundledChannelPlugin(resolvedId);
+    setupPlugin = getBundledChannelSetupPlugin(resolvedId);
+  } catch {
+    return undefined;
+  }
+  const merged =
+    runtimePlugin && setupPlugin
+      ? mergeBootstrapPlugin(runtimePlugin, setupPlugin)
+      : (setupPlugin ?? runtimePlugin);
+  return merged;
 }
 
-export function clearBootstrapChannelPluginCache(): void {
-  cachedBootstrapPlugins = null;
+export function getBootstrapChannelSecrets(id: ChannelId): ChannelPlugin["secrets"] | undefined {
+  const resolvedId = resolveBootstrapChannelId(id);
+  if (!resolvedId) {
+    return undefined;
+  }
+  try {
+    const runtimeSecrets = getBundledChannelSecrets(resolvedId);
+    const setupSecrets = getBundledChannelSetupSecrets(resolvedId);
+    return mergePluginSection(runtimeSecrets, setupSecrets);
+  } catch {
+    return undefined;
+  }
 }

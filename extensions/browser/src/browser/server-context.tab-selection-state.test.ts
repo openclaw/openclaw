@@ -1,15 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withFetchPreconnect } from "../../test-support.js";
+import { withBrowserFetchPreconnect } from "../../test-fetch.js";
 
 vi.hoisted(() => {
   vi.resetModules();
 });
 
 import "./server-context.chrome-test-harness.js";
+import * as cdpHelpersModule from "./cdp.helpers.js";
 import * as cdpModule from "./cdp.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
-import { createBrowserRouteContext } from "./server-context.js";
 import {
+  createTestBrowserRouteContext,
   makeManagedTabsWithNew,
   makeState,
   originalFetch,
@@ -81,10 +82,10 @@ async function openManagedTabWithRunningProfile(params: {
   fetchMock: ReturnType<typeof vi.fn>;
   url?: string;
 }) {
-  global.fetch = withFetchPreconnect(params.fetchMock);
+  global.fetch = withBrowserFetchPreconnect(params.fetchMock);
   const state = makeState("openclaw");
   seedRunningProfileState(state);
-  const ctx = createBrowserRouteContext({ getState: () => state });
+  const ctx = createTestBrowserRouteContext({ getState: () => state });
   const openclaw = ctx.forProfile("openclaw");
   return await openclaw.openTab(params.url ?? "http://127.0.0.1:3009");
 }
@@ -114,9 +115,9 @@ describe("browser server-context tab selection state", () => {
       } as unknown as Response;
     });
 
-    global.fetch = withFetchPreconnect(fetchMock);
+    global.fetch = withBrowserFetchPreconnect(fetchMock);
     const state = makeState("openclaw");
-    const ctx = createBrowserRouteContext({ getState: () => state });
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
     const opened = await openclaw.openTab("http://127.0.0.1:8080");
@@ -125,7 +126,51 @@ describe("browser server-context tab selection state", () => {
     expect(createTargetViaCdp).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18800",
       url: "http://127.0.0.1:8080",
-      ssrfPolicy: { allowPrivateNetwork: true },
+      ssrfPolicy: undefined,
+    });
+  });
+
+  it("can bootstrap a managed loopback tab under strict SSRF because CDP control stays local", async () => {
+    const createTargetViaCdp = vi
+      .spyOn(cdpModule, "createTargetViaCdp")
+      .mockResolvedValue({ targetId: "CREATED" });
+
+    let listCount = 0;
+    const fetchMock = vi.fn(async (url: unknown) => {
+      const u = String(url);
+      if (!u.includes("/json/list")) {
+        throw new Error(`unexpected fetch: ${u}`);
+      }
+      listCount += 1;
+      return {
+        ok: true,
+        json: async () =>
+          listCount === 1
+            ? []
+            : [
+                {
+                  id: "CREATED",
+                  title: "New Tab",
+                  url: "about:blank",
+                  webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/CREATED",
+                  type: "page",
+                },
+              ],
+      } as unknown as Response;
+    });
+
+    global.fetch = withBrowserFetchPreconnect(fetchMock);
+    const state = makeState("openclaw");
+    state.resolved.ssrfPolicy = {};
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
+    const openclaw = ctx.forProfile("openclaw");
+
+    const selected = await openclaw.ensureTabAvailable();
+    expect(selected.targetId).toBe("CREATED");
+    expect(createTargetViaCdp).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18800",
+      url: "about:blank",
+      ssrfPolicy: undefined,
     });
   });
 
@@ -180,10 +225,10 @@ describe("browser server-context tab selection state", () => {
       throw new Error(`unexpected fetch: ${value}`);
     });
 
-    global.fetch = withFetchPreconnect(fetchMock);
+    global.fetch = withBrowserFetchPreconnect(fetchMock);
     const state = makeState("openclaw");
     seedRunningProfileState(state);
-    const ctx = createBrowserRouteContext({ getState: () => state });
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
     const opened = await openclaw.openTab("http://127.0.0.1:3009");
@@ -200,10 +245,10 @@ describe("browser server-context tab selection state", () => {
       },
     });
 
-    global.fetch = withFetchPreconnect(fetchMock);
+    global.fetch = withBrowserFetchPreconnect(fetchMock);
     const state = makeState("openclaw");
     state.resolved.attachOnly = true;
-    const ctx = createBrowserRouteContext({ getState: () => state });
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
     const opened = await openclaw.openTab("http://127.0.0.1:3009");
@@ -242,14 +287,48 @@ describe("browser server-context tab selection state", () => {
       throw new Error("unexpected fetch");
     });
 
-    global.fetch = withFetchPreconnect(fetchMock);
+    global.fetch = withBrowserFetchPreconnect(fetchMock);
     const state = makeState("openclaw");
-    const ctx = createBrowserRouteContext({ getState: () => state });
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
     await expect(openclaw.openTab("file:///etc/passwd")).rejects.toBeInstanceOf(
       InvalidBrowserNavigationUrlError,
     );
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the loopback CDP control policy for /json/new fallback requests", async () => {
+    vi.spyOn(cdpModule, "createTargetViaCdp").mockRejectedValue(new Error("cdp unavailable"));
+    const fetchJson = vi.spyOn(cdpHelpersModule, "fetchJson");
+    fetchJson.mockRejectedValueOnce(new Error("HTTP 405")).mockResolvedValueOnce({
+      id: "NEW",
+      title: "New Tab",
+      url: "https://example.com",
+      webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/NEW",
+      type: "page",
+    });
+
+    const state = makeState("openclaw");
+    state.resolved.ssrfPolicy = {};
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
+    const openclaw = ctx.forProfile("openclaw");
+
+    const opened = await openclaw.openTab("https://example.com");
+    expect(opened.targetId).toBe("NEW");
+    expect(fetchJson).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("/json/new"),
+      expect.any(Number),
+      { method: "PUT" },
+      undefined,
+    );
+    expect(fetchJson).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("/json/new"),
+      expect.any(Number),
+      undefined,
+      undefined,
+    );
   });
 });

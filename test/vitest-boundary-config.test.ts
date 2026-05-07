@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
 import {
   createBoundaryVitestConfig,
   loadBoundaryIncludePatternsFromEnv,
-} from "../vitest.boundary.config.ts";
-import { boundaryTestFiles } from "../vitest.unit-paths.mjs";
+} from "./vitest/vitest.boundary.config.ts";
+import { boundaryTestFiles } from "./vitest/vitest.unit-paths.mjs";
 
 describe("loadBoundaryIncludePatternsFromEnv", () => {
   it("returns null when no include file is configured", () => {
@@ -16,9 +17,9 @@ describe("boundary vitest config", () => {
     const config = createBoundaryVitestConfig({});
 
     expect(config.test?.isolate).toBe(false);
-    expect(config.test?.runner).toBe("./test/non-isolated-runner.ts");
+    expect(normalizeConfigPath(config.test?.runner)).toBe("test/non-isolated-runner.ts");
     expect(config.test?.include).toEqual(boundaryTestFiles);
-    expect(config.test?.setupFiles).toEqual(["test/setup.ts"]);
+    expect(normalizeConfigPaths(config.test?.setupFiles)).toEqual(["test/setup.ts"]);
   });
 
   it("narrows boundary includes to matching CLI file filters", () => {

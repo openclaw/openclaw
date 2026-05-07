@@ -1,7 +1,9 @@
-import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { listBundledChannelCatalogEntries } from "./bundled-channel-catalog-read.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "./ids.js";
-import type { ChannelMeta } from "./plugins/types.js";
+import { buildManifestChannelMeta } from "./plugins/channel-meta.js";
+import type { ChannelMeta } from "./plugins/types.core.js";
 
 export type ChatChannelMeta = ChannelMeta;
 
@@ -11,71 +13,31 @@ function toChatChannelMeta(params: {
   id: ChatChannelId;
   channel: PluginPackageChannel;
 }): ChatChannelMeta {
-  const label = params.channel.label?.trim();
+  const label = normalizeOptionalString(params.channel.label);
   if (!label) {
     throw new Error(`Missing label for bundled chat channel "${params.id}"`);
   }
 
-  return {
+  return buildManifestChannelMeta({
     id: params.id,
+    channel: params.channel,
     label,
-    selectionLabel: params.channel.selectionLabel?.trim() || label,
-    docsPath: params.channel.docsPath?.trim() || `/channels/${params.id}`,
-    docsLabel: params.channel.docsLabel?.trim() || undefined,
-    blurb: params.channel.blurb?.trim() || "",
-    ...(params.channel.aliases?.length ? { aliases: params.channel.aliases } : {}),
-    ...(params.channel.order !== undefined ? { order: params.channel.order } : {}),
-    ...(params.channel.selectionDocsPrefix !== undefined
-      ? { selectionDocsPrefix: params.channel.selectionDocsPrefix }
-      : {}),
-    ...(params.channel.selectionDocsOmitLabel !== undefined
-      ? { selectionDocsOmitLabel: params.channel.selectionDocsOmitLabel }
-      : {}),
-    ...(params.channel.selectionExtras?.length
-      ? { selectionExtras: params.channel.selectionExtras }
-      : {}),
-    ...(params.channel.detailLabel?.trim()
-      ? { detailLabel: params.channel.detailLabel.trim() }
-      : {}),
-    ...(params.channel.systemImage?.trim()
-      ? { systemImage: params.channel.systemImage.trim() }
-      : {}),
-    ...(params.channel.markdownCapable !== undefined
-      ? { markdownCapable: params.channel.markdownCapable }
-      : {}),
-    ...(params.channel.showConfigured !== undefined
-      ? { showConfigured: params.channel.showConfigured }
-      : {}),
-    ...(params.channel.quickstartAllowFrom !== undefined
-      ? { quickstartAllowFrom: params.channel.quickstartAllowFrom }
-      : {}),
-    ...(params.channel.forceAccountBinding !== undefined
-      ? { forceAccountBinding: params.channel.forceAccountBinding }
-      : {}),
-    ...(params.channel.preferSessionLookupForAnnounceTarget !== undefined
-      ? {
-          preferSessionLookupForAnnounceTarget: params.channel.preferSessionLookupForAnnounceTarget,
-        }
-      : {}),
-    ...(params.channel.preferOver?.length ? { preferOver: params.channel.preferOver } : {}),
-  };
+    selectionLabel: normalizeOptionalString(params.channel.selectionLabel) || label,
+    docsPath: normalizeOptionalString(params.channel.docsPath) || `/channels/${params.id}`,
+    docsLabel: normalizeOptionalString(params.channel.docsLabel),
+    blurb: normalizeOptionalString(params.channel.blurb) || "",
+    detailLabel: normalizeOptionalString(params.channel.detailLabel),
+    systemImage: normalizeOptionalString(params.channel.systemImage),
+    arrayFieldMode: "non-empty",
+    selectionDocsPrefixMode: "defined",
+  });
 }
 
 export function buildChatChannelMetaById(): Record<ChatChannelId, ChatChannelMeta> {
   const entries = new Map<ChatChannelId, ChatChannelMeta>();
 
-  for (const entry of listBundledPluginMetadata({
-    includeChannelConfigs: true,
-    includeSyntheticChannelConfigs: false,
-  })) {
-    const channel =
-      entry.packageManifest && "channel" in entry.packageManifest
-        ? entry.packageManifest.channel
-        : undefined;
-    if (!channel) {
-      continue;
-    }
-    const rawId = channel?.id?.trim();
+  for (const entry of listBundledChannelCatalogEntries()) {
+    const rawId = normalizeOptionalString(entry.id);
     if (!rawId || !CHAT_CHANNEL_ID_SET.has(rawId)) {
       continue;
     }
@@ -84,7 +46,7 @@ export function buildChatChannelMetaById(): Record<ChatChannelId, ChatChannelMet
       id,
       toChatChannelMeta({
         id,
-        channel,
+        channel: entry.channel,
       }),
     );
   }

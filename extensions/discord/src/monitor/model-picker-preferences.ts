@@ -1,10 +1,11 @@
 import os from "node:os";
 import path from "node:path";
 import { normalizeAccountId as normalizeSharedAccountId } from "openclaw/plugin-sdk/account-id";
-import { normalizeProviderId } from "openclaw/plugin-sdk/agent-runtime";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 const MODEL_PICKER_PREFERENCES_LOCK_OPTIONS = {
   retries: {
@@ -29,6 +30,28 @@ type ModelPickerPreferencesStore = {
   entries: Record<string, ModelPickerPreferencesEntry>;
 };
 
+function sanitizePreferenceEntries(entries: unknown): Record<string, ModelPickerPreferencesEntry> {
+  if (!entries || typeof entries !== "object") {
+    return {};
+  }
+  const normalizedEntries: Record<string, ModelPickerPreferencesEntry> = {};
+  for (const [key, value] of Object.entries(entries)) {
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+    const typedValue = value as {
+      recent?: unknown;
+      updatedAt?: unknown;
+    };
+    const recent = Array.isArray(typedValue.recent)
+      ? typedValue.recent.filter((item: unknown): item is string => typeof item === "string")
+      : [];
+    const updatedAt = typeof typedValue.updatedAt === "string" ? typedValue.updatedAt : "";
+    normalizedEntries[key] = { recent, updatedAt };
+  }
+  return normalizedEntries;
+}
+
 export type DiscordModelPickerPreferenceScope = {
   accountId?: string;
   guildId?: string;
@@ -41,7 +64,7 @@ function resolvePreferencesStorePath(env: NodeJS.ProcessEnv = process.env): stri
 }
 
 function normalizeId(value?: string): string {
-  return value?.trim() ?? "";
+  return normalizeOptionalString(value) ?? "";
 }
 
 export function buildDiscordModelPickerPreferenceKey(
@@ -94,16 +117,16 @@ function sanitizeRecentModels(models: string[] | undefined, limit: number): stri
 }
 
 async function readPreferencesStore(filePath: string): Promise<ModelPickerPreferencesStore> {
-  const { value } = await readJsonFileWithFallback<ModelPickerPreferencesStore>(filePath, {
+  const { value } = await readJsonFileWithFallback(filePath, {
     version: 1,
-    entries: {},
+    entries: {} as Record<string, ModelPickerPreferencesEntry>,
   });
   if (!value || typeof value !== "object" || value.version !== 1) {
     return { version: 1, entries: {} };
   }
   return {
     version: 1,
-    entries: value.entries && typeof value.entries === "object" ? value.entries : {},
+    entries: sanitizePreferenceEntries(value.entries),
   };
 }
 

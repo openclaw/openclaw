@@ -3,19 +3,22 @@
 export type { OpenClawConfig } from "../config/config.js";
 export type { DmPolicy, GroupPolicy } from "../config/types.js";
 export type { SecretInput } from "../config/types.secrets.js";
-export type { WizardPrompter } from "../wizard/prompts.js";
+export type {
+  WizardMultiSelectParams,
+  WizardProgress,
+  WizardPrompter,
+  WizardSelectParams,
+} from "../wizard/prompts.js";
 export { WizardCancelledError } from "../wizard/prompts.js";
 export type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
 export type { ChannelSetupInput } from "../channels/plugins/types.core.js";
 export type {
   ChannelSetupDmPolicy,
   ChannelSetupWizardAdapter,
-} from "../channels/plugins/setup-wizard-types.js";
-export type {
   ChannelSetupWizard,
   ChannelSetupWizardAllowFromEntry,
   ChannelSetupWizardTextInput,
-} from "../channels/plugins/setup-wizard.js";
+} from "../channels/plugins/setup-wizard-types.js";
 
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export { formatCliCommand } from "../cli/command-format.js";

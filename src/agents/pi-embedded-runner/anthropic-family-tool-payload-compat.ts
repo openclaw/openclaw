@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 type AnthropicToolSchemaMode = "openai-functions";
 type AnthropicToolChoiceMode = "openai-string-modes";
 
@@ -70,7 +71,7 @@ function normalizeOpenAiFunctionAnthropicToolDefinition(
     return toolObj;
   }
 
-  const rawName = typeof toolObj.name === "string" ? toolObj.name.trim() : "";
+  const rawName = normalizeOptionalString(toolObj.name) ?? "";
   if (!rawName) {
     return toolObj;
   }

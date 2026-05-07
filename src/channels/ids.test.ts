@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
+import { listBundledChannelCatalogEntries } from "./bundled-channel-catalog-read.js";
 import {
   CHAT_CHANNEL_ALIASES,
   CHAT_CHANNEL_ORDER,
@@ -7,26 +7,16 @@ import {
   type ChatChannelId,
 } from "./ids.js";
 
-function collectBundledChatChannelAliases(): Record<string, ChatChannelId> {
+function collectChatChannelAliases(): Record<string, ChatChannelId> {
   const aliases = new Map<string, ChatChannelId>();
 
-  for (const entry of listBundledPluginMetadata({
-    includeChannelConfigs: true,
-    includeSyntheticChannelConfigs: false,
-  })) {
-    const channel =
-      entry.packageManifest && "channel" in entry.packageManifest
-        ? entry.packageManifest.channel
-        : undefined;
-    const rawId = channel?.id?.trim();
+  for (const entry of listBundledChannelCatalogEntries()) {
+    const rawId = entry.id.trim();
     if (!rawId || !CHAT_CHANNEL_ORDER.includes(rawId)) {
       continue;
     }
     const channelId = rawId;
-    if (!channel) {
-      continue;
-    }
-    for (const alias of channel.aliases ?? []) {
+    for (const alias of entry.aliases ?? []) {
       const normalizedAlias = alias.trim().toLowerCase();
       if (!normalizedAlias) {
         continue;
@@ -51,7 +41,7 @@ describe("channel ids", () => {
     expect(normalizeChatChannelId("nope")).toBeNull();
   });
 
-  it("matches bundled built-in channel alias metadata", () => {
-    expect(CHAT_CHANNEL_ALIASES).toEqual(collectBundledChatChannelAliases());
+  it("matches channel catalog alias metadata", () => {
+    expect(CHAT_CHANNEL_ALIASES).toEqual(collectChatChannelAliases());
   });
 });

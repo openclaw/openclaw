@@ -10,7 +10,9 @@ export * from "../markdown/render-aware-chunking.js";
 export * from "../markdown/render.js";
 export * from "../markdown/tables.js";
 export * from "../shared/global-singleton.js";
+export * from "../shared/record-coerce.js";
 export * from "../shared/scoped-expiring-id-cache.js";
+export * from "../shared/string-coerce.js";
 export * from "../shared/string-normalization.js";
 export * from "../shared/string-sample.js";
 export * from "../shared/text/assistant-visible-text.js";
@@ -25,6 +27,17 @@ export * from "../utils/chunk-items.js";
 export * from "../utils/fetch-timeout.js";
 export * from "../utils/reaction-level.js";
 export * from "../utils/with-timeout.js";
+export {
+  hasNonEmptyString,
+  localeLowercasePreservingWhitespace,
+  lowercasePreservingWhitespace,
+  normalizeLowercaseStringOrEmpty,
+  normalizeNullableString,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+  readStringValue,
+} from "../shared/string-coerce.js";
 export {
   CONFIG_DIR,
   clamp,

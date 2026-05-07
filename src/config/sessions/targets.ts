@@ -7,6 +7,7 @@ import {
   resolveAgentSessionDirsFromAgentsDirSync,
 } from "../../agents/session-dirs.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveStateDir } from "../paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentsDirFromSessionStorePath, resolveStorePath } from "./paths.js";
@@ -54,7 +55,9 @@ function shouldSkipDiscoveredAgentDirName(dirName: string, agentId: string): boo
   // Avoid collapsing arbitrary directory names like "###" into the default main agent.
   // Human-friendly names like "Retired Agent" are still allowed because they normalize to
   // a non-default stable id and preserve the intended retired-store discovery behavior.
-  return agentId === DEFAULT_AGENT_ID && dirName.trim().toLowerCase() !== DEFAULT_AGENT_ID;
+  return (
+    agentId === DEFAULT_AGENT_ID && normalizeLowercaseStringOrEmpty(dirName) !== DEFAULT_AGENT_ID
+  );
 }
 
 function resolveValidatedDiscoveredStorePathSync(params: {
@@ -206,6 +209,91 @@ export function resolveAllAgentSessionStoreTargetsSync(
   return dedupeTargetsByStorePath([...validatedConfiguredTargets, ...discoveredTargets]);
 }
 
+export function resolveAgentSessionStoreTargetsSync(
+  cfg: OpenClawConfig,
+  agentId: string,
+  params: { env?: NodeJS.ProcessEnv } = {},
+): SessionStoreTarget[] {
+  const env = params.env ?? process.env;
+  const requested = normalizeAgentId(agentId);
+  const storePaths = new Set<string>([
+    resolveStorePath(cfg.session?.store, { agentId: requested, env }),
+    resolveStorePath(undefined, { agentId: requested, env }),
+  ]);
+  const targets: SessionStoreTarget[] = [];
+  const realAgentsRoots = new Map<string, string | undefined>();
+  const getRealAgentsRoot = (agentsRoot: string): string | undefined => {
+    if (realAgentsRoots.has(agentsRoot)) {
+      return realAgentsRoots.get(agentsRoot);
+    }
+    try {
+      const realAgentsRoot = fsSync.realpathSync.native(agentsRoot);
+      realAgentsRoots.set(agentsRoot, realAgentsRoot);
+      return realAgentsRoot;
+    } catch (err) {
+      if (shouldSkipDiscoveryError(err)) {
+        realAgentsRoots.set(agentsRoot, undefined);
+        return undefined;
+      }
+      throw err;
+    }
+  };
+
+  for (const storePath of storePaths) {
+    const agentsRoot = resolveAgentsDirFromSessionStorePath(storePath);
+    if (!agentsRoot) {
+      targets.push({ agentId: requested, storePath });
+      continue;
+    }
+    const realAgentsRoot = getRealAgentsRoot(agentsRoot);
+    if (!realAgentsRoot) {
+      continue;
+    }
+    const validatedStorePath = resolveValidatedDiscoveredStorePathSync({
+      sessionsDir: path.dirname(storePath),
+      agentsRoot,
+      realAgentsRoot,
+    });
+    if (validatedStorePath) {
+      targets.push({ agentId: requested, storePath: validatedStorePath });
+    }
+  }
+
+  const { agentsRoots } = resolveSessionStoreDiscoveryState(cfg, env);
+  for (const agentsDir of agentsRoots) {
+    try {
+      const realAgentsRoot = getRealAgentsRoot(agentsDir);
+      if (!realAgentsRoot) {
+        continue;
+      }
+      for (const sessionsDir of resolveAgentSessionDirsFromAgentsDirSync(agentsDir)) {
+        const target = toDiscoveredSessionStoreTarget(
+          sessionsDir,
+          path.join(sessionsDir, "sessions.json"),
+        );
+        if (!target || normalizeAgentId(target.agentId) !== requested) {
+          continue;
+        }
+        const validatedStorePath = resolveValidatedDiscoveredStorePathSync({
+          sessionsDir,
+          agentsRoot: agentsDir,
+          realAgentsRoot,
+        });
+        if (validatedStorePath) {
+          targets.push({ ...target, storePath: validatedStorePath });
+        }
+      }
+    } catch (err) {
+      if (shouldSkipDiscoveryError(err)) {
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  return dedupeTargetsByStorePath(targets);
+}
+
 export async function resolveAllAgentSessionStoreTargets(
   cfg: OpenClawConfig,
   params: { env?: NodeJS.ProcessEnv } = {},
@@ -245,7 +333,9 @@ export async function resolveAllAgentSessionStoreTargets(
           agentsRoot,
           realAgentsRoot,
         });
-        return validatedStorePath ? { ...target, storePath: validatedStorePath } : undefined;
+        return validatedStorePath
+          ? Object.assign({}, target, { storePath: validatedStorePath })
+          : undefined;
       }),
     )
   ).filter((target): target is SessionStoreTarget => Boolean(target));

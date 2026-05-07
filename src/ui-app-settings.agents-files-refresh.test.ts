@@ -44,7 +44,7 @@ vi.mock("../ui/src/ui/controllers/channels.ts", () => ({
 }));
 
 vi.mock("../ui/src/ui/controllers/cron.ts", () => ({
-  loadCronJobs: vi.fn(async () => undefined),
+  loadCronJobsPage: vi.fn(async () => undefined),
   loadCronRuns: vi.fn(async () => undefined),
   loadCronStatus: vi.fn(async () => undefined),
 }));
@@ -90,6 +90,10 @@ function createHost(agentsPanel: AgentsPanel): Parameters<typeof refreshActiveTa
     dreamingStatusError: null,
     dreamingStatus: null,
     dreamingModeSaving: false,
+    dreamDiaryLoading: false,
+    dreamDiaryError: null,
+    dreamDiaryPath: null,
+    dreamDiaryContent: null,
   } as Parameters<typeof refreshActiveTab>[0];
 }
 

@@ -11,12 +11,15 @@ import {
 } from "../status.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import { resolveChannelAccountId } from "./channel-context.js";
-import { buildContextReply } from "./commands-context-report.js";
+import { rejectNonOwnerCommand, rejectUnauthorizedCommand } from "./command-gates.js";
 import { buildExportSessionReply } from "./commands-export-session.js";
+import { buildExportTrajectoryCommandReply } from "./commands-export-trajectory.js";
 import { buildStatusReply } from "./commands-status.js";
 import type { CommandHandler } from "./commands-types.js";
 import { extractExplicitGroupId } from "./group-id.js";
 import { resolveReplyToMode } from "./reply-threading.js";
+export { handleContextCommand } from "./commands-context-command.js";
+export { handleWhoamiCommand } from "./commands-whoami.js";
 
 export const handleHelpCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
@@ -50,11 +53,14 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
     );
     return { shouldContinue: false };
   }
+  const agentId = params.sessionKey
+    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+    : params.agentId;
   const skillCommands =
     params.skillCommands ??
     listSkillCommandsForAgents({
       cfg: params.cfg,
-      agentIds: params.agentId ? [params.agentId] : undefined,
+      agentIds: agentId ? [agentId] : undefined,
     });
   const surface = params.ctx.Surface;
   const commandPlugin = surface ? getChannelPlugin(surface) : null;
@@ -65,7 +71,7 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
   const channelData = commandPlugin?.commands?.buildCommandsListChannelData?.({
     currentPage: paginated.currentPage,
     totalPages: paginated.totalPages,
-    agentId: params.agentId,
+    agentId,
   });
   if (channelData) {
     return {
@@ -111,9 +117,11 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       ctx: params.ctx,
       command: params.command,
     });
-    const agentId =
-      params.agentId ??
-      resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
+    const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+    const sessionBound = Boolean(params.sessionKey);
+    const agentId = sessionBound
+      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+      : params.agentId;
     const threadingContext = buildThreadingToolContext({
       sessionCtx: params.ctx,
       config: params.cfg,
@@ -124,7 +132,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       agentId,
       sessionKey: params.sessionKey,
       workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
+      agentDir: sessionBound ? undefined : params.agentDir,
       modelProvider: params.provider,
       modelId: params.model,
       messageProvider: params.command.channel,
@@ -141,10 +149,10 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
           ? String(params.ctx.MessageThreadId)
           : undefined,
       currentMessageId: threadingContext.currentMessageId,
-      groupId: params.sessionEntry?.groupId ?? extractExplicitGroupId(params.ctx.From),
+      groupId: targetSessionEntry?.groupId ?? extractExplicitGroupId(params.ctx.From),
       groupChannel:
-        params.sessionEntry?.groupChannel ?? params.ctx.GroupChannel ?? params.ctx.GroupSubject,
-      groupSpace: params.sessionEntry?.space ?? params.ctx.GroupSpace,
+        targetSessionEntry?.groupChannel ?? params.ctx.GroupChannel ?? params.ctx.GroupSubject,
+      groupSpace: targetSessionEntry?.space ?? params.ctx.GroupSpace,
       replyToMode: resolveReplyToMode(
         params.cfg,
         params.ctx.OriginatingChannel ?? params.ctx.Provider,
@@ -183,17 +191,21 @@ export const handleStatusCommand: CommandHandler = async (params, allowTextComma
     );
     return { shouldContinue: false };
   }
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
   const reply = await buildStatusReply({
     cfg: params.cfg,
     command: params.command,
-    sessionEntry: params.sessionEntry,
+    sessionEntry: targetSessionEntry,
     sessionKey: params.sessionKey,
-    parentSessionKey: params.ctx.ParentSessionKey,
+    parentSessionKey: targetSessionEntry?.parentSessionKey ?? params.ctx.ParentSessionKey,
     sessionScope: params.sessionScope,
+    storePath: params.storePath,
     provider: params.provider,
     model: params.model,
     contextTokens: params.contextTokens,
+    workspaceDir: params.workspaceDir,
     resolvedThinkLevel: params.resolvedThinkLevel,
+    resolvedFastMode: params.resolvedFastMode,
     resolvedVerboseLevel: params.resolvedVerboseLevel,
     resolvedReasoningLevel: params.resolvedReasoningLevel,
     resolvedElevatedLevel: params.resolvedElevatedLevel,
@@ -203,23 +215,6 @@ export const handleStatusCommand: CommandHandler = async (params, allowTextComma
     mediaDecisions: params.ctx.MediaUnderstandingDecisions,
   });
   return { shouldContinue: false, reply };
-};
-
-export const handleContextCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-  const normalized = params.command.commandBodyNormalized;
-  if (normalized !== "/context" && !normalized.startsWith("/context ")) {
-    return null;
-  }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /context from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
-  }
-  return { shouldContinue: false, reply: await buildContextReply(params) };
 };
 
 export const handleExportSessionCommand: CommandHandler = async (params, allowTextCommands) => {
@@ -244,37 +239,26 @@ export const handleExportSessionCommand: CommandHandler = async (params, allowTe
   return { shouldContinue: false, reply: await buildExportSessionReply(params) };
 };
 
-export const handleWhoamiCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleExportTrajectoryCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
   }
-  if (params.command.commandBodyNormalized !== "/whoami") {
+  const normalized = params.command.commandBodyNormalized;
+  if (
+    normalized !== "/export-trajectory" &&
+    !normalized.startsWith("/export-trajectory ") &&
+    normalized !== "/trajectory" &&
+    !normalized.startsWith("/trajectory ")
+  ) {
     return null;
   }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /whoami from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
+  const unauthorized = rejectUnauthorizedCommand(params, "/export-trajectory");
+  if (unauthorized) {
+    return unauthorized;
   }
-  const senderId = params.ctx.SenderId ?? "";
-  const senderUsername = params.ctx.SenderUsername ?? "";
-  const lines = ["🧭 Identity", `Channel: ${params.command.channel}`];
-  if (senderId) {
-    lines.push(`User id: ${senderId}`);
+  const nonOwner = rejectNonOwnerCommand(params, "/export-trajectory");
+  if (nonOwner) {
+    return nonOwner;
   }
-  if (senderUsername) {
-    const handle = senderUsername.startsWith("@") ? senderUsername : `@${senderUsername}`;
-    lines.push(`Username: ${handle}`);
-  }
-  if (params.ctx.ChatType === "group" && params.ctx.From) {
-    lines.push(`Chat: ${params.ctx.From}`);
-  }
-  if (params.ctx.MessageThreadId != null) {
-    lines.push(`Thread: ${params.ctx.MessageThreadId}`);
-  }
-  if (senderId) {
-    lines.push(`AllowFrom: ${senderId}`);
-  }
-  return { shouldContinue: false, reply: { text: lines.join("\n") } };
+  return { shouldContinue: false, reply: await buildExportTrajectoryCommandReply(params) };
 };

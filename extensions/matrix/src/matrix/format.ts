@@ -1,5 +1,6 @@
 import MarkdownIt from "markdown-it";
-import { isAutoLinkedFileRef } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isAutoLinkedFileRef } from "openclaw/plugin-sdk/text-autolink-runtime";
 import type { MatrixClient } from "./sdk.js";
 import { isMatrixQualifiedUserId } from "./target-ids.js";
 
@@ -30,7 +31,7 @@ type MatrixMentionCandidate = {
 };
 
 const ESCAPED_MENTION_SENTINEL = "\uE000";
-const MENTION_PATTERN = /@[A-Za-z0-9._=+\-/:\[\]]+/g;
+const MENTION_PATTERN = /@[A-Za-z0-9._=+\-/:[\]]+/g;
 const MATRIX_MENTION_USER_ID_PATTERN =
   /^@[A-Za-z0-9._=+\-/]+:(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::\d+)?$/;
 const TRIMMABLE_MENTION_SUFFIX = /[),.!?:;\]]/;
@@ -147,7 +148,7 @@ function buildMentionCandidate(raw: string, start: number): MatrixMentionCandida
   if (!normalized) {
     return null;
   }
-  const kind = normalized.raw.toLowerCase() === "@room" ? "room" : "user";
+  const kind = normalizeLowercaseStringOrEmpty(normalized.raw) === "@room" ? "room" : "user";
   const base: MatrixMentionCandidate = {
     raw: normalized.raw,
     start,
@@ -309,9 +310,59 @@ function mutateInlineTokensWithMentions(params: {
   return { children: nextChildren, roomMentioned };
 }
 
+// Compact loose lists by hiding a list item's single wrapper paragraph,
+// mirroring what markdown-it already does for tight lists. Without this
+// Element renders <p> margins inside <li>, splitting numbers from content.
+//
+// Keep multi-paragraph items visible so separate paragraphs do not collapse
+// together inside the same list item.
+function compactLooseListTokens(tokens: MarkdownToken[]): void {
+  const listItemStack: Array<{
+    level: number;
+    immediateParagraphOpenIndexes: number[];
+    immediateParagraphCloseIndexes: number[];
+  }> = [];
+
+  for (const [index, token] of tokens.entries()) {
+    if (token.type === "list_item_open") {
+      listItemStack.push({
+        level: token.level,
+        immediateParagraphOpenIndexes: [],
+        immediateParagraphCloseIndexes: [],
+      });
+      continue;
+    }
+
+    if (token.type === "list_item_close") {
+      const item = listItemStack.pop();
+      if (
+        item &&
+        item.immediateParagraphOpenIndexes.length === 1 &&
+        item.immediateParagraphCloseIndexes.length === 1
+      ) {
+        tokens[item.immediateParagraphOpenIndexes[0]].hidden = true;
+        tokens[item.immediateParagraphCloseIndexes[0]].hidden = true;
+      }
+      continue;
+    }
+
+    const currentItem = listItemStack.at(-1);
+    if (!currentItem || token.level !== currentItem.level + 1) {
+      continue;
+    }
+
+    if (token.type === "paragraph_open") {
+      currentItem.immediateParagraphOpenIndexes.push(index);
+    } else if (token.type === "paragraph_close") {
+      currentItem.immediateParagraphCloseIndexes.push(index);
+    }
+  }
+}
+
 export function markdownToMatrixHtml(markdown: string): string {
-  const rendered = md.render(markdown ?? "");
-  return rendered.trimEnd();
+  const tokens = md.parse(markdown ?? "", {});
+  compactLooseListTokens(tokens);
+  return md.renderer.render(tokens, md.options, {}).trimEnd();
 }
 
 async function resolveMarkdownMentionState(params: {
@@ -366,6 +417,7 @@ export async function renderMarkdownToMatrixHtmlWithMentions(params: {
   client: MatrixClient;
 }): Promise<{ html?: string; mentions: MatrixMentions }> {
   const state = await resolveMarkdownMentionState(params);
+  compactLooseListTokens(state.tokens);
   const html = md.renderer.render(state.tokens, md.options, {}).trimEnd();
   return {
     html: html || undefined,

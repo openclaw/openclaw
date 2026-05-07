@@ -1,4 +1,5 @@
-import { loadConfig } from "../config/config.js";
+import { applyOwnerOnlyToolPolicy } from "../agents/tool-policy.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildMcpToolSchema,
   type McpLoopbackTool,
@@ -9,32 +10,30 @@ import { resolveGatewayScopedTools } from "./tool-resolution.js";
 const TOOL_CACHE_TTL_MS = 30_000;
 const NATIVE_TOOL_EXCLUDE = new Set(["read", "write", "edit", "apply_patch", "exec", "process"]);
 
-export type McpLoopbackRuntime = {
-  port: number;
-  token: string;
-};
-
 type CachedScopedTools = {
+  agentId: string | undefined;
   tools: McpLoopbackTool[];
   toolSchema: McpToolSchemaEntry[];
-  configRef: ReturnType<typeof loadConfig>;
+  configRef: OpenClawConfig;
   time: number;
 };
-
-let activeRuntime: McpLoopbackRuntime | undefined;
 
 export class McpLoopbackToolCache {
   #entries = new Map<string, CachedScopedTools>();
 
   resolve(params: {
-    cfg: ReturnType<typeof loadConfig>;
+    cfg: OpenClawConfig;
     sessionKey: string;
     messageProvider: string | undefined;
     accountId: string | undefined;
+    senderIsOwner: boolean | undefined;
   }): CachedScopedTools {
-    const cacheKey = [params.sessionKey, params.messageProvider ?? "", params.accountId ?? ""].join(
-      "\u0000",
-    );
+    const cacheKey = [
+      params.sessionKey,
+      params.messageProvider ?? "",
+      params.accountId ?? "",
+      params.senderIsOwner === true ? "owner" : "non-owner",
+    ].join("\u0000");
     const now = Date.now();
     const cached = this.#entries.get(cacheKey);
     if (cached && cached.configRef === params.cfg && now - cached.time < TOOL_CACHE_TTL_MS) {
@@ -46,11 +45,15 @@ export class McpLoopbackToolCache {
       sessionKey: params.sessionKey,
       messageProvider: params.messageProvider,
       accountId: params.accountId,
+      senderIsOwner: params.senderIsOwner,
+      surface: "loopback",
       excludeToolNames: NATIVE_TOOL_EXCLUDE,
     });
+    const tools = applyOwnerOnlyToolPolicy(next.tools, params.senderIsOwner === true);
     const nextEntry: CachedScopedTools = {
-      tools: next.tools,
-      toolSchema: buildMcpToolSchema(next.tools),
+      agentId: next.agentId,
+      tools,
+      toolSchema: buildMcpToolSchema(tools),
       configRef: params.cfg,
       time: now,
     };
@@ -62,36 +65,4 @@ export class McpLoopbackToolCache {
     }
     return nextEntry;
   }
-}
-
-export function getActiveMcpLoopbackRuntime(): McpLoopbackRuntime | undefined {
-  return activeRuntime ? { ...activeRuntime } : undefined;
-}
-
-export function setActiveMcpLoopbackRuntime(runtime: McpLoopbackRuntime): void {
-  activeRuntime = { ...runtime };
-}
-
-export function clearActiveMcpLoopbackRuntime(token: string): void {
-  if (activeRuntime?.token === token) {
-    activeRuntime = undefined;
-  }
-}
-
-export function createMcpLoopbackServerConfig(port: number) {
-  return {
-    mcpServers: {
-      openclaw: {
-        type: "http",
-        url: `http://127.0.0.1:${port}/mcp`,
-        headers: {
-          Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
-          "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
-          "x-openclaw-agent-id": "${OPENCLAW_MCP_AGENT_ID}",
-          "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
-          "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
-        },
-      },
-    },
-  };
 }

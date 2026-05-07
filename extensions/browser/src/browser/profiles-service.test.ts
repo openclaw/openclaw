@@ -1,17 +1,25 @@
 import fs from "node:fs";
 import path from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadConfig, writeConfigFile } from "../config/config.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getRuntimeConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
 import type { BrowserRouteContext, BrowserServerState } from "./server-context.js";
 import { movePathToTrash } from "./trash.js";
+
+const configMocks = vi.hoisted(() => ({
+  writeConfigFile: vi.fn<(cfg: OpenClawConfig) => Promise<void>>(async (_cfg) => {}),
+}));
+const writeConfigFile = configMocks.writeConfigFile;
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    loadConfig: vi.fn(),
-    writeConfigFile: vi.fn(async () => {}),
+    getRuntimeConfig: vi.fn(),
+    replaceConfigFile: vi.fn(async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
+      await configMocks.writeConfigFile(nextConfig);
+    }),
   };
 });
 
@@ -23,8 +31,10 @@ vi.mock("./chrome.js", () => ({
   resolveOpenClawUserDataDir: vi.fn(() => "/tmp/openclaw-test/openclaw/user-data"),
 }));
 
-let resolveBrowserConfig: typeof import("./config.js").resolveBrowserConfig;
-let createBrowserProfilesService: typeof import("./profiles-service.js").createBrowserProfilesService;
+const [{ resolveBrowserConfig }, { createBrowserProfilesService }] = await Promise.all([
+  import("./config.js"),
+  import("./profiles-service.js"),
+]);
 
 function createCtx(resolved: BrowserServerState["resolved"]) {
   const state: BrowserServerState = {
@@ -50,18 +60,13 @@ async function createWorkProfileWithConfig(params: {
   browserConfig: Record<string, unknown>;
 }) {
   const { ctx, state } = createCtx(params.resolved);
-  vi.mocked(loadConfig).mockReturnValue({ browser: params.browserConfig });
+  vi.mocked(getRuntimeConfig).mockReturnValue({ browser: params.browserConfig });
   const service = createBrowserProfilesService(ctx);
   const result = await service.createProfile({ name: "work" });
   return { result, state };
 }
 
 describe("BrowserProfilesService", () => {
-  beforeAll(async () => {
-    ({ resolveBrowserConfig } = await import("./config.js"));
-    ({ createBrowserProfilesService } = await import("./profiles-service.js"));
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -114,10 +119,12 @@ describe("BrowserProfilesService", () => {
   });
 
   it("accepts per-profile cdpUrl for remote Chrome", async () => {
-    const resolved = resolveBrowserConfig({});
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+    });
     const { ctx } = createCtx(resolved);
 
-    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
+    vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
 
     const service = createBrowserProfilesService(ctx);
     const result = await service.createProfile({
@@ -147,7 +154,7 @@ describe("BrowserProfilesService", () => {
     });
     const { ctx } = createCtx(resolved);
 
-    vi.mocked(loadConfig).mockReturnValue({
+    vi.mocked(getRuntimeConfig).mockReturnValue({
       browser: {
         ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
         profiles: {},
@@ -168,7 +175,7 @@ describe("BrowserProfilesService", () => {
   it("creates existing-session profiles as attach-only local entries", async () => {
     const resolved = resolveBrowserConfig({});
     const { ctx, state } = createCtx(resolved);
-    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
+    vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
 
     const service = createBrowserProfilesService(ctx);
     const result = await service.createProfile({
@@ -203,7 +210,7 @@ describe("BrowserProfilesService", () => {
   it("rejects driver=existing-session when cdpUrl is provided", async () => {
     const resolved = resolveBrowserConfig({});
     const { ctx } = createCtx(resolved);
-    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
+    vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
 
     const service = createBrowserProfilesService(ctx);
 
@@ -219,7 +226,7 @@ describe("BrowserProfilesService", () => {
   it("creates existing-session profiles with an explicit userDataDir", async () => {
     const resolved = resolveBrowserConfig({});
     const { ctx, state } = createCtx(resolved);
-    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
+    vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
 
     const tempDir = fs.mkdtempSync(path.join("/tmp", "openclaw-profile-"));
     const userDataDir = path.join(tempDir, "BraveSoftware", "Brave-Browser");
@@ -245,7 +252,7 @@ describe("BrowserProfilesService", () => {
   it("rejects userDataDir for non-existing-session profiles", async () => {
     const resolved = resolveBrowserConfig({});
     const { ctx } = createCtx(resolved);
-    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
+    vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
 
     const tempDir = fs.mkdtempSync(path.join("/tmp", "openclaw-profile-"));
     const userDataDir = path.join(tempDir, "BraveSoftware", "Brave-Browser");
@@ -269,7 +276,7 @@ describe("BrowserProfilesService", () => {
     });
     const { ctx } = createCtx(resolved);
 
-    vi.mocked(loadConfig).mockReturnValue({
+    vi.mocked(getRuntimeConfig).mockReturnValue({
       browser: {
         defaultProfile: "openclaw",
         profiles: {
@@ -295,7 +302,7 @@ describe("BrowserProfilesService", () => {
     });
     const { ctx } = createCtx(resolved);
 
-    vi.mocked(loadConfig).mockReturnValue({
+    vi.mocked(getRuntimeConfig).mockReturnValue({
       browser: {
         defaultProfile: "openclaw",
         profiles: {
@@ -330,7 +337,7 @@ describe("BrowserProfilesService", () => {
     });
     const { ctx } = createCtx(resolved);
 
-    vi.mocked(loadConfig).mockReturnValue({
+    vi.mocked(getRuntimeConfig).mockReturnValue({
       browser: {
         defaultProfile: "openclaw",
         profiles: {

@@ -1,16 +1,18 @@
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../test/helpers/import-fresh.ts";
-import type { BundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 
-const listBundledPluginMetadataMock = vi.hoisted(() =>
-  vi.fn<(options?: unknown) => readonly BundledPluginMetadata[]>(() => []),
-);
+const loadPluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
+const collectBundledChannelConfigsMock = vi.hoisted(() => vi.fn());
 
 describe("ChannelsSchema bundled runtime loading", () => {
   beforeEach(() => {
-    listBundledPluginMetadataMock.mockClear();
-    vi.doMock("../plugins/bundled-plugin-metadata.js", () => ({
-      listBundledPluginMetadata: (options?: unknown) => listBundledPluginMetadataMock(options),
+    loadPluginMetadataSnapshotMock.mockClear();
+    collectBundledChannelConfigsMock.mockClear();
+    vi.doMock("../plugins/plugin-metadata-snapshot.js", () => ({
+      loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
+    }));
+    vi.doMock("../plugins/bundled-channel-config-metadata.js", () => ({
+      collectBundledChannelConfigs: collectBundledChannelConfigsMock,
     }));
   });
 
@@ -32,28 +34,11 @@ describe("ChannelsSchema bundled runtime loading", () => {
     });
 
     expect(parsed?.defaults?.groupPolicy).toBe("open");
-    expect(listBundledPluginMetadataMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        includeChannelConfigs: true,
-      }),
-    );
+    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(collectBundledChannelConfigsMock).not.toHaveBeenCalled();
   });
 
-  it("loads bundled channel runtime discovery only when plugin-owned channel config is present", async () => {
-    listBundledPluginMetadataMock.mockReturnValueOnce([
-      {
-        manifest: {
-          channelConfigs: {
-            discord: {
-              runtime: {
-                safeParse: (value: unknown) => ({ success: true, data: value }),
-              },
-            },
-          },
-        },
-      } as unknown as BundledPluginMetadata,
-    ]);
-
+  it("does not discover bundled channel runtime metadata during raw schema parsing", async () => {
     const runtime = await importFreshModule<typeof import("./zod-schema.providers.js")>(
       import.meta.url,
       "./zod-schema.providers.js?scope=channels-plugin-owned",
@@ -63,11 +48,7 @@ describe("ChannelsSchema bundled runtime loading", () => {
       discord: {},
     });
 
-    expect(listBundledPluginMetadataMock.mock.calls).toContainEqual([
-      expect.objectContaining({
-        includeChannelConfigs: true,
-        includeSyntheticChannelConfigs: true,
-      }),
-    ]);
+    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(collectBundledChannelConfigsMock).not.toHaveBeenCalled();
   });
 });

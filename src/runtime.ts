@@ -103,14 +103,6 @@ export function createNonExitingRuntime(): OutputRuntimeEnv {
   };
 }
 
-export function writeRuntimeStdout(runtime: RuntimeEnv | OutputRuntimeEnv, value: string): void {
-  if (hasRuntimeOutputWriter(runtime)) {
-    runtime.writeStdout(value);
-    return;
-  }
-  runtime.log(value);
-}
-
 export function writeRuntimeJson(
   runtime: RuntimeEnv | OutputRuntimeEnv,
   value: unknown,

@@ -8,16 +8,14 @@ read_when:
 title: "OAuth"
 ---
 
-# OAuth
+OpenClaw supports "subscription auth" via OAuth for providers that offer it
+(notably **OpenAI Codex (ChatGPT OAuth)**). For Anthropic, the practical split
+is now:
 
-OpenClaw supports “subscription auth” via OAuth for providers that offer it
-(notably **OpenAI Codex (ChatGPT OAuth)**). For Anthropic subscriptions, new
-setup should use the local **Claude CLI** login path on the gateway host, but
-Anthropic distinguishes between direct Claude Code usage and OpenClaw's reuse
-path. Anthropic's public Claude Code docs say direct Claude Code use stays
-inside Claude subscription limits. Separately, Anthropic notified OpenClaw
-users on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that OpenClaw counts as
-a third-party harness and now requires **Extra Usage** for that traffic.
+- **Anthropic API key**: normal Anthropic API billing
+- **Anthropic Claude CLI / subscription auth inside OpenClaw**: Anthropic staff
+  told us this usage is allowed again
+
 OpenAI Codex OAuth is explicitly supported for use in external tools like
 OpenClaw. This page explains:
 
@@ -27,7 +25,7 @@ For Anthropic in production, API key auth is the safer recommended path.
 - where tokens are **stored** (and why)
 - how to handle **multiple accounts** (profiles + per-session overrides)
 
-OpenClaw also supports **provider plugins** that ship their own OAuth or API‑key
+OpenClaw also supports **provider plugins** that ship their own OAuth or API-key
 flows. Run them via:
 
 ```bash
@@ -40,19 +38,23 @@ OAuth providers commonly mint a **new refresh token** during login/refresh flows
 
 Practical symptom:
 
-- you log in via OpenClaw _and_ via Claude Code / Codex CLI → one of them randomly gets “logged out” later
+- you log in via OpenClaw _and_ via Claude Code / Codex CLI → one of them randomly gets "logged out" later
 
 To reduce that, OpenClaw treats `auth-profiles.json` as a **token sink**:
 
 - the runtime reads credentials from **one place**
 - we can keep multiple profiles and route them deterministically
-- when credentials are reused from an external CLI like Codex CLI, OpenClaw
-  mirrors them with provenance and re-reads that external source instead of
-  rotating the refresh token itself
+- external CLI reuse is provider-specific: Codex CLI can bootstrap an empty
+  `openai-codex:default` profile, but once OpenClaw has a local OAuth profile,
+  the local refresh token is canonical; other integrations can remain
+  externally managed and re-read their CLI auth store
+- status and startup paths that already know the configured provider set scope
+  external CLI discovery to that set, so an unrelated CLI login store is not
+  probed for a single-provider setup
 
 ## Storage (where tokens live)
 
-Secrets are stored **per-agent**:
+Secrets are stored in agent auth stores:
 
 - Auth profiles (OAuth + API keys + optional value-level refs): `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
 - Legacy compatibility file: `~/.openclaw/agents/<agentId>/agent/auth.json`
@@ -66,16 +68,21 @@ All of the above also respect `$OPENCLAW_STATE_DIR` (state dir override). Full r
 
 For static secret refs and runtime snapshot activation behavior, see [Secrets Management](/gateway/secrets).
 
+When a secondary agent has no local auth profile, OpenClaw uses read-through
+inheritance from the default/main agent store. It does not clone the main
+agent's `auth-profiles.json` on read. OAuth refresh tokens are especially
+sensitive: normal copy flows skip them by default because some providers rotate
+or invalidate refresh tokens after use. Configure a separate OAuth login for an
+agent when it needs an independent account.
+
 ## Anthropic legacy token compatibility
 
 <Warning>
 Anthropic's public Claude Code docs say direct Claude Code use stays within
-Claude subscription limits. Separately, Anthropic told OpenClaw users on
-**April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that **OpenClaw counts as a
-third-party harness**. Existing Anthropic token profiles remain technically
-usable in OpenClaw, but Anthropic says the OpenClaw path now requires **Extra
-Usage** (pay-as-you-go billed separately from the subscription) for that
-traffic.
+Claude subscription limits, and Anthropic staff told us OpenClaw-style Claude
+CLI usage is allowed again. OpenClaw therefore treats Claude CLI reuse and
+`claude -p` usage as sanctioned for this integration unless Anthropic
+publishes a new policy.
 
 For Anthropic's current direct-Claude-Code plan docs, see [Using Claude Code
 with your Pro or Max
@@ -89,69 +96,25 @@ Plan](/providers/qwen), [MiniMax Coding Plan](/providers/minimax),
 and [Z.AI / GLM Coding Plan](/providers/glm).
 </Warning>
 
-OpenClaw now exposes Anthropic setup-token again as a legacy/manual path.
-Anthropic's OpenClaw-specific billing notice still applies to that path, so
-use it with the expectation that Anthropic requires **Extra Usage** for
-OpenClaw-driven Claude-login traffic.
+OpenClaw also exposes Anthropic setup-token as a supported token-auth path, but it now prefers Claude CLI reuse and `claude -p` when available.
 
 ## Anthropic Claude CLI migration
 
-If Claude CLI is already installed and signed in on the gateway host, you can
-switch Anthropic model selection over to the local CLI backend. This is a
-supported OpenClaw path when you want to reuse a local Claude CLI login on the
-same host.
-
-Prerequisites:
-
-- the `claude` binary is installed on the gateway host
-- Claude CLI is already authenticated there via `claude auth login`
-
-Migration command:
-
-```bash
-openclaw models auth login --provider anthropic --method cli --set-default
-```
-
-Onboarding shortcut:
-
-```bash
-openclaw onboard --auth-choice anthropic-cli
-```
-
-This keeps existing Anthropic auth profiles for rollback, but rewrites the main
-default-model path from `anthropic/...` to `claude-cli/...`, rewrites matching
-Anthropic Claude fallbacks, and adds matching `claude-cli/...` allowlist
-entries under `agents.defaults.models`.
-
-Verify:
-
-```bash
-openclaw models status
-```
+OpenClaw supports Anthropic Claude CLI reuse again. If you already have a local
+Claude login on the host, onboarding/configure can reuse it directly.
 
 ## OAuth exchange (how login works)
 
-OpenClaw’s interactive login flows are implemented in `@mariozechner/pi-ai` and wired into the wizards/commands.
+OpenClaw's interactive login flows are implemented in `@mariozechner/pi-ai` and wired into the wizards/commands.
 
-### Anthropic Claude CLI
+### Anthropic setup-token
 
 Flow shape:
 
-Claude CLI path:
-
-1. sign in with `claude auth login` on the gateway host
-2. run `openclaw models auth login --provider anthropic --method cli --set-default`
-3. store no new auth profile; switch model selection to `claude-cli/...`
-4. keep existing Anthropic auth profiles for rollback
-
-Anthropic's public Claude Code docs describe this direct Claude subscription
-login flow for `claude` itself. OpenClaw can reuse that local login, but
-Anthropic separately classifies the OpenClaw-controlled path as third-party
-harness usage for billing purposes.
-
-Interactive assistant path:
-
-- `openclaw onboard` / `openclaw configure` → auth choice `anthropic-cli`
+1. start Anthropic setup-token or paste-token from OpenClaw
+2. OpenClaw stores the resulting Anthropic credential in an auth profile
+3. model selection stays on `anthropic/...`
+4. existing Anthropic auth profiles remain available for rollback/order control
 
 ### OpenAI Codex (ChatGPT OAuth)
 
@@ -162,7 +125,7 @@ Flow shape (PKCE):
 1. generate PKCE verifier/challenge + random `state`
 2. open `https://auth.openai.com/oauth/authorize?...`
 3. try to capture callback on `http://127.0.0.1:1455/auth/callback`
-4. if callback can’t bind (or you’re remote/headless), paste the redirect URL/code
+4. if callback can't bind (or you're remote/headless), paste the redirect URL/code
 5. exchange at `https://auth.openai.com/oauth/token`
 6. extract `accountId` from the access token and store `{ access, refresh, expires, accountId }`
 
@@ -176,8 +139,14 @@ At runtime:
 
 - if `expires` is in the future → use the stored access token
 - if expired → refresh (under a file lock) and overwrite the stored credentials
-- exception: reused external CLI credentials stay externally managed; OpenClaw
-  re-reads the CLI auth store and never spends the copied refresh token itself
+- if a secondary agent reads an inherited main-agent OAuth profile, refresh
+  writes back to the main agent store instead of copying the refresh token into
+  the secondary agent store
+- exception: some external CLI credentials stay externally managed; OpenClaw
+  re-reads those CLI auth stores instead of spending copied refresh tokens.
+  Codex CLI bootstrap is intentionally narrower: it seeds an empty
+  `openai-codex:default` profile, then OpenClaw-owned refreshes keep the local
+  profile canonical.
 
 The refresh flow is automatic; you generally don't need to manage tokens manually.
 
@@ -187,7 +156,7 @@ Two patterns:
 
 ### 1) Preferred: separate agents
 
-If you want “personal” and “work” to never interact, use isolated agents (separate sessions + credentials + workspace):
+If you want "personal" and "work" to never interact, use isolated agents (separate sessions + credentials + workspace):
 
 ```bash
 openclaw agents add work
@@ -215,11 +184,11 @@ How to see what profile IDs exist:
 
 Related docs:
 
-- [/concepts/model-failover](/concepts/model-failover) (rotation + cooldown rules)
-- [/tools/slash-commands](/tools/slash-commands) (command surface)
+- [Model failover](/concepts/model-failover) (rotation + cooldown rules)
+- [Slash commands](/tools/slash-commands) (command surface)
 
 ## Related
 
-- [Authentication](/gateway/authentication) — model provider auth overview
-- [Secrets](/gateway/secrets) — credential storage and SecretRef
-- [Configuration Reference](/gateway/configuration-reference#auth-storage) — auth config keys
+- [Authentication](/gateway/authentication) - model provider auth overview
+- [Secrets](/gateway/secrets) - credential storage and SecretRef
+- [Configuration Reference](/gateway/configuration-reference#auth-storage) - auth config keys

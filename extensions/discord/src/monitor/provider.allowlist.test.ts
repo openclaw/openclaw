@@ -1,6 +1,5 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createNonExitingTypedRuntimeEnv } from "../../../../test/helpers/plugins/runtime-env.js";
 import * as resolveChannelsModule from "../resolve-channels.js";
 import * as resolveUsersModule from "../resolve-users.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
@@ -29,7 +28,7 @@ describe("resolveDiscordAllowlistConfig", () => {
   });
 
   it("canonicalizes resolved user names to ids in runtime config", async () => {
-    const runtime = createNonExitingTypedRuntimeEnv<RuntimeEnv>();
+    const runtime = createNonExitingRuntimeEnv();
     const result = await resolveDiscordAllowlistConfig({
       token: "token",
       allowFrom: ["Alice", "111", "*"],
@@ -63,7 +62,7 @@ describe("resolveDiscordAllowlistConfig", () => {
         channelName: "missing-room",
       },
     ]);
-    const runtime = createNonExitingTypedRuntimeEnv<RuntimeEnv>();
+    const runtime = createNonExitingRuntimeEnv();
 
     await resolveDiscordAllowlistConfig({
       token: "token",
@@ -86,5 +85,65 @@ describe("resolveDiscordAllowlistConfig", () => {
       "discord channels unresolved: 145/c404 (guild:Ops; channel:missing-room)",
     );
     expect(logs).toContain("discord users resolved: 387→Peter (id:387)");
+  });
+
+  it("groups resolved discord channel aliases under one target line", async () => {
+    vi.spyOn(resolveChannelsModule, "resolveDiscordChannelAllowlist").mockResolvedValueOnce([
+      {
+        input: "1456350064065904867/1464953333713473657",
+        resolved: true,
+        guildId: "1456350064065904867",
+        guildName: "Friends of the Crustacean 🦞🤝",
+        channelId: "1464953333713473657",
+        channelName: "dev",
+      },
+      {
+        input: "1456350064065904867/1456744319972282449",
+        resolved: true,
+        guildId: "1456350064065904867",
+        guildName: "Friends of the Crustacean 🦞🤝",
+        channelId: "1456744319972282449",
+        channelName: "maintainers",
+      },
+      {
+        input: "friends-of-the-crustacean/1464953333713473657",
+        resolved: true,
+        guildId: "1456350064065904867",
+        guildName: "Friends of the Crustacean 🦞🤝",
+        channelId: "1464953333713473657",
+        channelName: "dev",
+      },
+    ]);
+
+    const runtime = createNonExitingRuntimeEnv();
+
+    await resolveDiscordAllowlistConfig({
+      token: "token",
+      allowFrom: [],
+      guildEntries: {
+        "1456350064065904867": {
+          channels: {
+            "1464953333713473657": {},
+            "1456744319972282449": {},
+          },
+        },
+        "friends-of-the-crustacean": {
+          channels: {
+            "1464953333713473657": {},
+          },
+        },
+      },
+      fetcher: vi.fn() as unknown as typeof fetch,
+      runtime,
+    });
+
+    const logs = (runtime.log as ReturnType<typeof vi.fn>).mock.calls
+      .map(([line]) => String(line))
+      .join("\n");
+    expect(logs.match(/1456350064065904867\/1464953333713473657/g)?.length).toBe(1);
+    expect(logs).toContain("aliases:friends-of-the-crustacean/1464953333713473657");
+    expect(logs).toContain(
+      "1456350064065904867/1456744319972282449 (guild:Friends of the Crustacean 🦞🤝; channel:maintainers)",
+    );
   });
 });

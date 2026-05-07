@@ -27,7 +27,13 @@ describe("mattermost doctor", () => {
     expect(result.config.channels?.mattermost?.network).toEqual({
       dangerouslyAllowPrivateNetwork: true,
     });
-    expect(result.config.channels?.mattermost?.accounts?.work?.network).toEqual({
+    expect(
+      (
+        result.config.channels?.mattermost?.accounts?.work as
+          | { network?: Record<string, unknown> }
+          | undefined
+      )?.network,
+    ).toEqual({
       dangerouslyAllowPrivateNetwork: false,
     });
   });

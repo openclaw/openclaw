@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import {
+  clearMemoryPluginState,
+  registerMemoryCorpusSupplement,
+} from "openclaw/plugin-sdk/memory-host-core";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   getMemorySearchManagerMockCalls,
@@ -11,7 +14,8 @@ import {
   setMemorySearchImpl,
   setMemoryWorkspaceDir,
   type MemoryReadParams,
-} from "../../../test/helpers/memory-tool-manager-mock.js";
+} from "./memory-tool-manager-mock.js";
+import { createMemoryCoreTestHarness } from "./test-helpers.js";
 import {
   asOpenClawConfig,
   createAutoCitationsMemorySearchTool,
@@ -20,6 +24,8 @@ import {
   createMemorySearchToolOrThrow,
   expectUnavailableMemorySearchDetails,
 } from "./tools.test-helpers.js";
+
+const { createTempWorkspace } = createMemoryCoreTestHarness();
 
 async function waitFor<T>(task: () => Promise<T>, timeoutMs: number = 1500): Promise<T> {
   const startedAt = Date.now();
@@ -41,6 +47,7 @@ async function waitFor<T>(task: () => Promise<T>, timeoutMs: number = 1500): Pro
 }
 
 beforeEach(() => {
+  clearMemoryPluginState();
   resetMemoryToolMockState({
     backend: "builtin",
     searchImpl: async () => [
@@ -53,7 +60,12 @@ beforeEach(() => {
         source: "memory" as const,
       },
     ],
-    readFileImpl: async (params: MemoryReadParams) => ({ text: "", path: params.relPath }),
+    readFileImpl: async (params: MemoryReadParams) => ({
+      text: "",
+      path: params.relPath,
+      from: params.from ?? 1,
+      lines: params.lines ?? 120,
+    }),
   });
 });
 
@@ -148,7 +160,7 @@ describe("memory tools", () => {
 
   it("returns empty text without error when file does not exist (ENOENT)", async () => {
     setMemoryReadFileImpl(async (_params: MemoryReadParams) => {
-      return { text: "", path: "memory/2026-02-19.md" };
+      return { text: "", path: "memory/2026-02-19.md", from: 1, lines: 0 };
     });
 
     const tool = createMemoryGetToolOrThrow();
@@ -157,6 +169,8 @@ describe("memory tools", () => {
     expect(result.details).toEqual({
       text: "",
       path: "memory/2026-02-19.md",
+      from: 1,
+      lines: 0,
     });
   });
 
@@ -169,13 +183,39 @@ describe("memory tools", () => {
     expect(result.details).toEqual({
       text: "",
       path: "memory/2026-02-19.md",
+      from: 1,
+      lines: 120,
     });
     expect(getReadAgentMemoryFileMockCalls()).toBe(1);
     expect(getMemorySearchManagerMockCalls()).toBe(0);
   });
 
+  it("returns truncation metadata and a continuation notice for partial memory_get results", async () => {
+    setMemoryBackend("builtin");
+    setMemoryReadFileImpl(async (params: MemoryReadParams) => ({
+      path: params.relPath,
+      text: "alpha\nbeta\n\n[More content available. Use from=41 to continue.]",
+      from: params.from ?? 1,
+      lines: 40,
+      truncated: true,
+      nextFrom: 41,
+    }));
+
+    const tool = createMemoryGetToolOrThrow();
+    const result = await tool.execute("call_partial", { path: "memory/partial.md" });
+
+    expect(result.details).toEqual({
+      path: "memory/partial.md",
+      text: "alpha\nbeta\n\n[More content available. Use from=41 to continue.]",
+      from: 1,
+      lines: 40,
+      truncated: true,
+      nextFrom: 41,
+    });
+  });
+
   it("persists short-term recall events from memory_search tool hits", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-tools-recall-"));
+    const workspaceDir = await createTempWorkspace("memory-tools-recall-");
     try {
       setMemoryBackend("builtin");
       setMemoryWorkspaceDir(workspaceDir);
@@ -207,5 +247,178 @@ describe("memory tools", () => {
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
+  });
+
+  it("searches registered wiki corpus supplements without calling memory search", async () => {
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [
+        {
+          corpus: "wiki",
+          path: "entities/alpha.md",
+          title: "Alpha",
+          kind: "entity",
+          score: 4,
+          snippet: "Alpha wiki entry",
+        },
+      ],
+      get: async () => null,
+    });
+
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("call_wiki_only", { query: "alpha", corpus: "wiki" });
+
+    expect(result.details).toMatchObject({
+      results: [
+        {
+          corpus: "wiki",
+          path: "entities/alpha.md",
+          title: "Alpha",
+          kind: "entity",
+          score: 4,
+          snippet: "Alpha wiki entry",
+        },
+      ],
+    });
+    expect(getMemorySearchManagerMockCalls()).toBe(0);
+  });
+
+  it("includes memory results in corpus=all even when wiki scores are numerically higher (#77337)", async () => {
+    // Wiki uses integer point scores (up to ~100+); memory uses cosine similarity (0-1).
+    // Raw-score sort would starve memory hits when maxResults <= number of wiki hits.
+    setMemorySearchImpl(async () => [
+      {
+        path: "memory/note-a.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.9,
+        snippet: "Memory result A",
+        source: "memory" as const,
+      },
+    ]);
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [
+        {
+          corpus: "wiki",
+          path: "w1.md",
+          title: "W1",
+          kind: "entity",
+          score: 50,
+          snippet: "wiki 1",
+        },
+        {
+          corpus: "wiki",
+          path: "w2.md",
+          title: "W2",
+          kind: "entity",
+          score: 40,
+          snippet: "wiki 2",
+        },
+        {
+          corpus: "wiki",
+          path: "w3.md",
+          title: "W3",
+          kind: "entity",
+          score: 30,
+          snippet: "wiki 3",
+        },
+        {
+          corpus: "wiki",
+          path: "w4.md",
+          title: "W4",
+          kind: "entity",
+          score: 20,
+          snippet: "wiki 4",
+        },
+        {
+          corpus: "wiki",
+          path: "w5.md",
+          title: "W5",
+          kind: "entity",
+          score: 10,
+          snippet: "wiki 5",
+        },
+      ],
+      get: async () => null,
+    });
+
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("call_all_starvation", {
+      query: "note",
+      corpus: "all",
+      maxResults: 5,
+    });
+    const details = result.details as { results: Array<{ corpus: string; path: string }> };
+    const corpora = details.results.map((r) => r.corpus);
+
+    // Memory results must appear despite lower numeric scores, and the spare
+    // memory quota should be backfilled by the remaining wiki result.
+    expect(corpora).toContain("memory");
+    expect(corpora).toContain("wiki");
+    expect(details.results).toHaveLength(5);
+    expect(
+      details.results.filter((entry) => entry.corpus === "wiki").map((entry) => entry.path),
+    ).toEqual(["w1.md", "w2.md", "w3.md", "w4.md"]);
+  });
+
+  it("merges memory and wiki corpus search results for corpus=all", async () => {
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [
+        {
+          corpus: "wiki",
+          path: "entities/alpha.md",
+          title: "Alpha",
+          kind: "entity",
+          score: 1.1,
+          snippet: "Alpha wiki entry",
+        },
+      ],
+      get: async () => null,
+    });
+
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("call_all_corpus", { query: "alpha", corpus: "all" });
+    const details = result.details as { results: Array<{ corpus: string; path: string }> };
+
+    expect(details.results.map((entry) => [entry.corpus, entry.path])).toEqual([
+      ["wiki", "entities/alpha.md"],
+      ["memory", "MEMORY.md"],
+    ]);
+    expect(getMemorySearchManagerMockCalls()).toBe(1);
+  });
+
+  it("falls back to a wiki corpus supplement for memory_get corpus=all", async () => {
+    setMemoryReadFileImpl(async () => {
+      throw new Error("path required");
+    });
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [],
+      get: async () => ({
+        corpus: "wiki",
+        path: "entities/alpha.md",
+        title: "Alpha",
+        kind: "entity",
+        content: "Alpha wiki entry",
+        fromLine: 3,
+        lineCount: 5,
+      }),
+    });
+
+    const tool = createMemoryGetToolOrThrow();
+    const result = await tool.execute("call_get_all_fallback", {
+      path: "entities/alpha.md",
+      from: 3,
+      lines: 5,
+      corpus: "all",
+    });
+
+    expect(result.details).toEqual({
+      corpus: "wiki",
+      path: "entities/alpha.md",
+      title: "Alpha",
+      kind: "entity",
+      text: "Alpha wiki entry",
+      fromLine: 3,
+      lineCount: 5,
+    });
   });
 });

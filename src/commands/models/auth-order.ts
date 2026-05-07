@@ -1,7 +1,9 @@
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   type AuthProfileStore,
+  externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
+  resolveAuthStatePathForDisplay,
   setAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
@@ -47,9 +49,9 @@ export async function modelsAuthOrderGetCommand(
   opts: { provider: string; agent?: string; json?: boolean },
   runtime: RuntimeEnv,
 ) {
-  const { agentId, agentDir, provider } = await resolveAuthOrderContext(opts, runtime);
+  const { cfg, agentId, agentDir, provider } = await resolveAuthOrderContext(opts, runtime);
   const store = ensureAuthProfileStore(agentDir, {
-    allowKeychainPrompt: false,
+    externalCli: externalCliDiscoveryForProviderAuth({ cfg, provider }),
   });
   const order = describeOrder(store, provider);
 
@@ -58,7 +60,7 @@ export async function modelsAuthOrderGetCommand(
       agentId,
       agentDir,
       provider,
-      authStorePath: shortenHomePath(`${agentDir}/auth-profiles.json`),
+      authStatePath: shortenHomePath(resolveAuthStatePathForDisplay(agentDir)),
       order: order.length > 0 ? order : null,
     });
     return;
@@ -66,7 +68,7 @@ export async function modelsAuthOrderGetCommand(
 
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
-  runtime.log(`Auth file: ${shortenHomePath(`${agentDir}/auth-profiles.json`)}`);
+  runtime.log(`Auth state file: ${shortenHomePath(resolveAuthStatePathForDisplay(agentDir))}`);
   runtime.log(order.length > 0 ? `Order override: ${order.join(", ")}` : "Order override: (none)");
 }
 
@@ -81,7 +83,7 @@ export async function modelsAuthOrderClearCommand(
     order: null,
   });
   if (!updated) {
-    throw new Error("Failed to update auth-profiles.json (lock busy?).");
+    throw new Error("Failed to update auth-state.json (lock busy?).");
   }
 
   runtime.log(`Agent: ${agentId}`);
@@ -93,10 +95,10 @@ export async function modelsAuthOrderSetCommand(
   opts: { provider: string; agent?: string; order: string[] },
   runtime: RuntimeEnv,
 ) {
-  const { agentId, agentDir, provider } = await resolveAuthOrderContext(opts, runtime);
+  const { cfg, agentId, agentDir, provider } = await resolveAuthOrderContext(opts, runtime);
 
   const store = ensureAuthProfileStore(agentDir, {
-    allowKeychainPrompt: false,
+    externalCli: externalCliDiscoveryForProviderAuth({ cfg, provider }),
   });
   const providerKey = provider;
   const requested = normalizeStringEntries(opts.order ?? []);
@@ -120,7 +122,7 @@ export async function modelsAuthOrderSetCommand(
     order: requested,
   });
   if (!updated) {
-    throw new Error("Failed to update auth-profiles.json (lock busy?).");
+    throw new Error("Failed to update auth-state.json (lock busy?).");
   }
 
   runtime.log(`Agent: ${agentId}`);

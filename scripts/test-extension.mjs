@@ -1,38 +1,8 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
-import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { formatErrorMessage } from "./lib/error-format.mjs";
 import { resolveExtensionTestPlan } from "./lib/extension-test-plan.mjs";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, "..");
-const pnpm = "pnpm";
-
-async function runVitestBatch(params) {
-  return await new Promise((resolve, reject) => {
-    const child = spawn(
-      pnpm,
-      ["exec", "vitest", "run", "--config", params.config, ...params.targets, ...params.args],
-      {
-        cwd: repoRoot,
-        stdio: "inherit",
-        shell: process.platform === "win32",
-        env: params.env,
-      },
-    );
-
-    child.on("error", reject);
-    child.on("exit", (code, signal) => {
-      if (signal) {
-        process.kill(process.pid, signal);
-        return;
-      }
-      resolve(code ?? 1);
-    });
-  });
-}
+import { isDirectScriptRun, runVitestBatch } from "./lib/vitest-batch-runner.mjs";
 
 function printUsage() {
   console.error("Usage: pnpm test:extension <extension-name|path> [vitest args...]");
@@ -62,7 +32,7 @@ async function run() {
     plan = resolveExtensionTestPlan({ cwd: process.cwd(), targetArg });
   } catch (error) {
     printUsage();
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(formatErrorMessage(error));
     process.exit(1);
   }
 
@@ -81,8 +51,6 @@ async function run() {
   process.exit(exitCode);
 }
 
-const entryHref = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : "";
-
-if (import.meta.url === entryHref) {
+if (isDirectScriptRun(import.meta.url)) {
   await run();
 }

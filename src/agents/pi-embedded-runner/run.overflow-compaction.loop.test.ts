@@ -98,6 +98,89 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
+  it("continues from transcript after compaction when the current inbound message was persisted", async () => {
+    const overflowError = makeOverflowError();
+
+    mockedRunEmbeddedAttempt
+      .mockImplementationOnce(async (attemptParams) => {
+        (
+          attemptParams as {
+            onUserMessagePersisted?: (message: { role: "user"; content: string }) => void;
+          }
+        ).onUserMessagePersisted?.({ role: "user", content: baseParams.prompt });
+        return makeAttemptResult({ promptError: overflowError });
+      })
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted session",
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 150000,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...baseParams,
+      currentMessageId: "telegram-msg-51024",
+    });
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        prompt: expect.stringContaining("Continue from the current transcript"),
+        suppressNextUserMessagePersistence: true,
+      }),
+    );
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ prompt: baseParams.prompt }),
+    );
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("does not suppress the next user turn when precheck overflow never persisted it", async () => {
+    const overflowError = makeOverflowError(
+      "Context overflow: prompt too large for the model (precheck).",
+    );
+
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: overflowError,
+          promptErrorSource: "precheck",
+          preflightRecovery: { route: "compact_only" },
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted before prompt submission",
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 150000,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...baseParams,
+      currentMessageId: "telegram-msg-51025",
+    });
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        prompt: baseParams.prompt,
+        suppressNextUserMessagePersistence: false,
+      }),
+    );
+    expect(result.meta.error).toBeUndefined();
+  });
+
   it("retries after successful compaction on likely-overflow promptError variants", async () => {
     const overflowHintError = new Error("Context window exceeded: requested 12000 tokens");
 
@@ -168,6 +251,232 @@ describe("overflow compaction in run loop", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(mockedLog.info).toHaveBeenCalledWith(
       expect.stringContaining("Truncated 1 tool result(s)"),
+    );
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("retries after fallback truncation for a mixed oversized-plus-aggregate tool tail", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: makeOverflowError(),
+          messagesSnapshot: [
+            {
+              role: "toolResult",
+              content: [{ type: "text", text: "x".repeat(80_000) }],
+            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+            {
+              role: "toolResult",
+              content: [{ type: "text", text: "alpha beta gamma delta ".repeat(800) }],
+            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+            {
+              role: "toolResult",
+              content: [{ type: "text", text: "alpha beta gamma delta ".repeat(800) }],
+            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedCompactDirect.mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "nothing to compact",
+    });
+    mockedSessionLikelyHasOversizedToolResults.mockReturnValue(true);
+    mockedTruncateOversizedToolResultsInSession.mockResolvedValueOnce({
+      truncated: true,
+      truncatedCount: 2,
+    });
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedSessionLikelyHasOversizedToolResults).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ role: "toolResult" }),
+          expect.objectContaining({ role: "toolResult" }),
+          expect.objectContaining({ role: "toolResult" }),
+        ]),
+      }),
+    );
+    expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionFile: "/tmp/session.json" }),
+    );
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedLog.info).toHaveBeenCalledWith(
+      expect.stringContaining("Truncated 2 tool result(s)"),
+    );
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("retries without hitting compaction when attempt-level preflight truncation already handled the overflow", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: null,
+          preflightRecovery: {
+            route: "truncate_tool_results_only",
+            handled: true,
+            truncatedCount: 2,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(mockedTruncateOversizedToolResultsInSession).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedLog.info).toHaveBeenCalledWith(
+      expect.stringContaining("early recovery route=truncate_tool_results_only"),
+    );
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("continues from the transcript after mid-turn precheck truncation handled the overflow", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: null,
+          preflightRecovery: {
+            route: "truncate_tool_results_only",
+            source: "mid-turn",
+            handled: true,
+            truncatedCount: 2,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        prompt: expect.stringContaining("Continue from the current transcript"),
+        suppressNextUserMessagePersistence: true,
+      }),
+    );
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ prompt: baseParams.prompt }),
+    );
+    expect(mockedLog.info).toHaveBeenCalledWith(
+      expect.stringContaining("retrying from current transcript"),
+    );
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("falls back to compaction when early truncate-only recovery does not help", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: makeOverflowError(
+            "Context overflow: prompt too large for the model (precheck).",
+          ),
+          preflightRecovery: { route: "compact_only" },
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted after failed early truncation",
+        firstKeptEntryId: "entry-7",
+        tokensBefore: 155000,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedTruncateOversizedToolResultsInSession).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "context overflow detected (attempt 1/3); attempting auto-compaction",
+      ),
+    );
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("continues from the transcript after mid-turn precheck compaction", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: makeOverflowError(
+            "Context overflow: prompt too large for the model (mid-turn precheck).",
+          ),
+          promptErrorSource: "precheck",
+          preflightRecovery: { route: "compact_only", source: "mid-turn" },
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted after mid-turn precheck",
+        firstKeptEntryId: "entry-8",
+        tokensBefore: 155000,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        prompt: expect.stringContaining("Continue from the current transcript"),
+        suppressNextUserMessagePersistence: true,
+      }),
+    );
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ prompt: baseParams.prompt }),
+    );
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("runs post-compaction tool-result truncation before retry for mixed precheck routes", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: makeOverflowError(
+            "Context overflow: prompt too large for the model (precheck).",
+          ),
+          preflightRecovery: { route: "compact_then_truncate" },
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted session",
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 150000,
+      }),
+    );
+    mockedTruncateOversizedToolResultsInSession.mockResolvedValueOnce({
+      truncated: true,
+      truncatedCount: 2,
+    });
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionFile: "/tmp/session.json" }),
+    );
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedLog.info).toHaveBeenCalledWith(
+      expect.stringContaining("post-compaction tool-result truncation succeeded"),
     );
     expect(result.meta.error).toBeUndefined();
   });
@@ -324,6 +633,26 @@ describe("overflow compaction in run loop", () => {
 
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("timed out");
+  });
+
+  it("returns a timeout payload instead of a partial assistant fragment after stream timeout", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        aborted: true,
+        timedOut: true,
+        timedOutDuringCompaction: false,
+        assistantTexts: ["# Current Tasks\n\nLast updated:"],
+        lastAssistant: undefined,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("timed out");
+    expect(
+      result.payloads?.some((payload) => (payload.text ?? "").includes("# Current Tasks")),
+    ).toBe(false);
   });
 
   it("sets promptTokens from the latest model call usage, not accumulated attempt usage", async () => {

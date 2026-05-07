@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildProviderReplayFamilyHooks } from "./provider-model-shared.js";
+import {
+  ANTHROPIC_BY_MODEL_REPLAY_HOOKS,
+  buildProviderReplayFamilyHooks,
+  NATIVE_ANTHROPIC_REPLAY_HOOKS,
+  OPENAI_COMPATIBLE_REPLAY_HOOKS,
+  PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+  resolveClaudeThinkingProfile,
+} from "./provider-model-shared.js";
 
 describe("buildProviderReplayFamilyHooks", () => {
   it("covers the replay family matrix", async () => {
@@ -28,8 +35,28 @@ describe("buildProviderReplayFamilyHooks", () => {
         },
         match: {
           validateAnthropicTurns: true,
-          dropThinkingBlocks: true,
+          // Sonnet 4.6 preserves thinking blocks (no dropThinkingBlocks)
         },
+        absent: ["dropThinkingBlocks"],
+        hasSanitizeReplayHistory: false,
+        reasoningMode: undefined,
+      },
+      {
+        family: "native-anthropic-by-model" as const,
+        ctx: {
+          provider: "anthropic",
+          modelApi: "anthropic-messages",
+          modelId: "claude-sonnet-4-6",
+        },
+        match: {
+          sanitizeMode: "full",
+          preserveNativeAnthropicToolUseIds: true,
+          preserveSignatures: true,
+          repairToolUseResultPairing: true,
+          validateAnthropicTurns: true,
+          allowSyntheticToolResults: true,
+        },
+        absent: ["dropThinkingBlocks"],
         hasSanitizeReplayHistory: false,
         reasoningMode: undefined,
       },
@@ -78,8 +105,9 @@ describe("buildProviderReplayFamilyHooks", () => {
         },
         match: {
           validateAnthropicTurns: true,
-          dropThinkingBlocks: true,
+          // Sonnet 4.6 preserves thinking blocks even with flag set
         },
+        absent: ["dropThinkingBlocks"],
         hasSanitizeReplayHistory: false,
         reasoningMode: undefined,
       },
@@ -95,7 +123,13 @@ describe("buildProviderReplayFamilyHooks", () => {
           : { family: testCase.family },
       );
 
-      expect(hooks.buildReplayPolicy?.(testCase.ctx as never)).toMatchObject(testCase.match);
+      const policy = hooks.buildReplayPolicy?.(testCase.ctx as never);
+      expect(policy).toMatchObject(testCase.match);
+      if ((testCase as { absent?: string[] }).absent) {
+        for (const key of (testCase as { absent: string[] }).absent) {
+          expect(policy).not.toHaveProperty(key);
+        }
+      }
       expect(Boolean(hooks.sanitizeReplayHistory)).toBe(testCase.hasSanitizeReplayHistory);
       expect(hooks.resolveReasoningOutputMode?.(testCase.ctx as never)).toBe(
         testCase.reasoningMode,
@@ -143,5 +177,99 @@ describe("buildProviderReplayFamilyHooks", () => {
         modelId: "amazon.nova-pro-v1",
       } as never),
     ).not.toHaveProperty("dropThinkingBlocks");
+  });
+
+  it("exposes canonical replay hooks for reused provider families", () => {
+    expect(
+      OPENAI_COMPATIBLE_REPLAY_HOOKS.buildReplayPolicy?.({
+        provider: "xai",
+        modelApi: "openai-completions",
+        modelId: "google/gemma-4-26b-a4b-it",
+      } as never),
+    ).toMatchObject({
+      sanitizeToolCallIds: true,
+      applyAssistantFirstOrderingFix: true,
+      validateGeminiTurns: true,
+      dropReasoningFromHistory: true,
+    });
+
+    const nativeIdsHooks = buildProviderReplayFamilyHooks({
+      family: "openai-compatible",
+      sanitizeToolCallIds: false,
+    });
+    const nativeIdsPolicy = nativeIdsHooks.buildReplayPolicy?.({
+      provider: "moonshot",
+      modelApi: "openai-completions",
+      modelId: "kimi-k2.6",
+    } as never);
+    expect(nativeIdsPolicy).toMatchObject({
+      applyAssistantFirstOrderingFix: true,
+      validateGeminiTurns: true,
+      validateAnthropicTurns: true,
+    });
+    expect(nativeIdsPolicy).not.toHaveProperty("sanitizeToolCallIds");
+    expect(nativeIdsPolicy).not.toHaveProperty("toolCallIdMode");
+
+    expect(
+      PASSTHROUGH_GEMINI_REPLAY_HOOKS.buildReplayPolicy?.({
+        provider: "openrouter",
+        modelApi: "openai-completions",
+        modelId: "gemini-2.5-pro",
+      } as never),
+    ).toMatchObject({
+      applyAssistantFirstOrderingFix: false,
+      validateGeminiTurns: false,
+      validateAnthropicTurns: false,
+      sanitizeThoughtSignatures: {
+        allowBase64Only: true,
+        includeCamelCase: true,
+      },
+    });
+
+    expect(
+      ANTHROPIC_BY_MODEL_REPLAY_HOOKS.buildReplayPolicy?.({
+        provider: "amazon-bedrock",
+        modelApi: "bedrock-converse-stream",
+        modelId: "claude-sonnet-4-6",
+      } as never),
+    ).toMatchObject({
+      validateAnthropicTurns: true,
+      repairToolUseResultPairing: true,
+    });
+
+    expect(
+      NATIVE_ANTHROPIC_REPLAY_HOOKS.buildReplayPolicy?.({
+        provider: "anthropic",
+        modelApi: "anthropic-messages",
+        modelId: "claude-sonnet-4-6",
+      } as never),
+    ).toMatchObject({
+      preserveNativeAnthropicToolUseIds: true,
+      preserveSignatures: true,
+      validateAnthropicTurns: true,
+    });
+  });
+});
+
+describe("resolveClaudeThinkingProfile", () => {
+  it("exposes Opus 4.7 thinking levels for direct and proxied Claude providers", () => {
+    expect(resolveClaudeThinkingProfile("claude-opus-4-7")).toMatchObject({
+      levels: expect.arrayContaining([{ id: "xhigh" }, { id: "adaptive" }, { id: "max" }]),
+      defaultLevel: "off",
+    });
+    expect(resolveClaudeThinkingProfile("claude-opus-4.7-20260219")).toMatchObject({
+      levels: expect.arrayContaining([{ id: "xhigh" }, { id: "adaptive" }, { id: "max" }]),
+      defaultLevel: "off",
+    });
+  });
+
+  it("keeps adaptive-only Claude variants from advertising xhigh or max", () => {
+    const profile = resolveClaudeThinkingProfile("claude-sonnet-4-6");
+
+    expect(profile).toMatchObject({
+      levels: expect.arrayContaining([{ id: "adaptive" }]),
+      defaultLevel: "adaptive",
+    });
+    expect(profile.levels.some((level) => level.id === "xhigh" || level.id === "max")).toBe(false);
   });
 });

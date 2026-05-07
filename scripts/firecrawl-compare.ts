@@ -1,5 +1,6 @@
 import { fetchFirecrawlContent } from "../extensions/firecrawl/api.ts";
 import { extractReadableContent } from "../src/agents/tools/web-tools.js";
+import { formatErrorMessage } from "../src/infra/errors.ts";
 
 const DEFAULT_URLS = [
   "https://en.wikipedia.org/wiki/Web_scraping",
@@ -88,7 +89,7 @@ async function run() {
       }
     } catch (error) {
       localStatus = "error";
-      localError = error instanceof Error ? error.message : String(error);
+      localError = formatErrorMessage(error);
     }
 
     console.log(`local: ${localStatus} len=${localText.length} title=${truncate(localTitle, 80)}`);
@@ -125,7 +126,7 @@ async function run() {
           console.log(`firecrawl sample: ${truncate(firecrawl.text)}`);
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = formatErrorMessage(error);
         console.log(`firecrawl: error ${message}`);
       }
     }

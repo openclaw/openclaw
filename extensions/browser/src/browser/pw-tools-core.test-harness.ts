@@ -7,11 +7,13 @@ let pageState: {
   armIdUpload: number;
   armIdDialog: number;
   armIdDownload: number;
+  downloadWaiterDepth: number;
 } = {
   console: [],
   armIdUpload: 0,
   armIdDialog: 0,
   armIdDownload: 0,
+  downloadWaiterDepth: 0,
 };
 
 const sessionMocks = vi.hoisted(() => ({
@@ -42,10 +44,26 @@ const sessionMocks = vi.hoisted(() => ({
   rememberRoleRefsForTarget: vi.fn(() => {}),
 }));
 
+const navigationGuardMocks = vi.hoisted(() => ({
+  assertBrowserNavigationResultAllowed: vi.fn(async () => {}),
+  withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => ({ ssrfPolicy })),
+}));
+
 vi.mock("./pw-session.js", () => sessionMocks);
+vi.mock("./navigation-guard.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    ...navigationGuardMocks,
+  };
+});
 
 export function getPwToolsCoreSessionMocks() {
   return sessionMocks;
+}
+
+export function getPwToolsCoreNavigationGuardMocks() {
+  return navigationGuardMocks;
 }
 
 export function setPwToolsCoreCurrentPage(page: Record<string, unknown> | null) {
@@ -65,9 +83,13 @@ export function installPwToolsCoreTestHooks() {
       armIdUpload: 0,
       armIdDialog: 0,
       armIdDownload: 0,
+      downloadWaiterDepth: 0,
     };
 
     for (const fn of Object.values(sessionMocks)) {
+      fn.mockClear();
+    }
+    for (const fn of Object.values(navigationGuardMocks)) {
       fn.mockClear();
     }
   });

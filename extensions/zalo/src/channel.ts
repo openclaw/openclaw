@@ -13,6 +13,7 @@ import {
   createChatChannelPlugin,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
+import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-message";
 import {
   buildOpenGroupPolicyRestrictSendersWarning,
   buildOpenGroupPolicyWarning,
@@ -23,7 +24,7 @@ import {
   createRawChannelSendResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import { buildTokenChannelStatusSummary } from "openclaw/plugin-sdk/channel-status";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { createStaticReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { listResolvedDirectoryUserEntriesFromAllowFrom } from "openclaw/plugin-sdk/directory-runtime";
@@ -36,6 +37,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import {
   listZaloAccountIds,
   resolveDefaultZaloAccountId,
@@ -71,22 +73,6 @@ function normalizeZaloMessagingTarget(raw: string): string | undefined {
   return trimmed.replace(/^(zalo|zl):/i, "").trim();
 }
 
-function chunkTextForOutbound(text: string, limit: number): string[] {
-  const chunks: string[] = [];
-  let remaining = text;
-  while (remaining.length > limit) {
-    const window = remaining.slice(0, limit);
-    const splitAt = Math.max(window.lastIndexOf("\n"), window.lastIndexOf(" "));
-    const breakAt = splitAt > 0 ? splitAt : limit;
-    chunks.push(remaining.slice(0, breakAt).trimEnd());
-    remaining = remaining.slice(breakAt).trimStart();
-  }
-  if (remaining.length > 0 || text.length === 0) {
-    chunks.push(remaining);
-  }
-  return chunks;
-}
-
 const loadZaloChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
 const zaloSetupWizard = createZaloSetupWizardProxy(
   async () => (await import("./setup-surface.js")).zaloSetupWizard,
@@ -114,6 +100,38 @@ const zaloRawSendResultAdapter = createRawChannelSendResultAdapter({
       mediaUrl,
       cfg,
     }),
+});
+
+export const zaloMessageAdapter = defineChannelMessageAdapter({
+  id: "zalo",
+  durableFinal: {
+    capabilities: {
+      text: true,
+      media: true,
+      messageSendingHooks: true,
+    },
+  },
+  send: {
+    text: async ({ to, text, accountId, cfg }) =>
+      await (
+        await loadZaloChannelRuntime()
+      ).sendZaloText({
+        to,
+        text,
+        accountId: accountId ?? undefined,
+        cfg,
+      }),
+    media: async ({ to, text, mediaUrl, accountId, cfg }) =>
+      await (
+        await loadZaloChannelRuntime()
+      ).sendZaloText({
+        to,
+        text,
+        accountId: accountId ?? undefined,
+        mediaUrl,
+        cfg,
+      }),
+  },
 });
 
 const zaloConfigAdapter = createScopedChannelConfigAdapter<ResolvedZaloAccount>({
@@ -201,7 +219,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
             },
           }),
       },
-      auth: zaloApprovalAuth,
+      approvalCapability: zaloApprovalAuth,
       secrets: {
         secretTargetRegistryEntries,
         collectRuntimeConfigAssignments,
@@ -211,6 +229,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
       },
       actions: zaloMessageActions,
       messaging: {
+        targetPrefixes: ["zalo", "zl"],
         normalizeTarget: normalizeZaloMessagingTarget,
         resolveOutboundSessionRoute: (params) => resolveZaloOutboundSessionRoute(params),
         targetResolver: {
@@ -253,6 +272,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
         startAccount: async (ctx) =>
           await (await loadZaloChannelRuntime()).startZaloGatewayAccount(ctx),
       },
+      message: zaloMessageAdapter,
     },
     security: {
       resolveDmPolicy: resolveZaloDmPolicy,

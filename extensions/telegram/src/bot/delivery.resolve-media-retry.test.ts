@@ -1,15 +1,22 @@
 import type { Message } from "@grammyjs/types";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { retryAsync } from "../../../../src/infra/retry.js";
 import { resolveMedia } from "./delivery.resolve-media.js";
 import type { TelegramContext } from "./types.js";
 
 const saveMediaBuffer = vi.fn();
 const fetchRemoteMedia = vi.fn();
-const readFileWithinRoot = vi.fn();
+const rootRead = vi.fn();
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
-  readFileWithinRoot: (...args: unknown[]) => readFileWithinRoot(...args),
+vi.mock("openclaw/plugin-sdk/file-access-runtime", () => ({
+  root: async (rootDir: string) => ({
+    read: async (relativePath: string, options?: { maxBytes?: number }) =>
+      await rootRead({
+        rootDir,
+        relativePath,
+        maxBytes: options?.maxBytes,
+      }),
+  }),
 }));
 
 vi.mock("./delivery.resolve-media.runtime.js", () => {
@@ -201,7 +208,7 @@ describe("resolveMedia getFile retry", () => {
     vi.useFakeTimers();
     fetchRemoteMedia.mockReset();
     saveMediaBuffer.mockReset();
-    readFileWithinRoot.mockReset();
+    rootRead.mockReset();
   });
 
   afterEach(() => {
@@ -332,11 +339,20 @@ describe("resolveMedia getFile retry", () => {
   it("uses caller-provided fetch impl for file downloads", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
     const callerFetch = vi.fn() as unknown as typeof fetch;
-    const dispatcherAttempts = [{ dispatcherPolicy: { mode: "direct" as const } }];
+    const dispatcherAttempts = [
+      {
+        dispatcherPolicy: {
+          mode: "explicit-proxy" as const,
+          proxyUrl: "http://localhost:6152",
+          allowPrivateProxy: true,
+        },
+      },
+    ];
     const callerTransport = {
       fetch: callerFetch,
       sourceFetch: callerFetch,
       dispatcherAttempts,
+      close: async () => {},
     };
     fetchRemoteMedia.mockResolvedValueOnce({
       buffer: Buffer.from("pdf-data"),
@@ -357,6 +373,7 @@ describe("resolveMedia getFile retry", () => {
       expect.objectContaining({
         fetchImpl: callerFetch,
         dispatcherAttempts,
+        trustExplicitProxyDns: true,
         shouldRetryFetchError: expect.any(Function),
         readIdleTimeoutMs: 30_000,
         ssrfPolicy: {
@@ -370,7 +387,7 @@ describe("resolveMedia getFile retry", () => {
   it("uses caller-provided fetch impl for sticker downloads", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "stickers/file_0.webp" });
     const callerFetch = vi.fn() as unknown as typeof fetch;
-    const callerTransport = { fetch: callerFetch, sourceFetch: callerFetch };
+    const callerTransport = { fetch: callerFetch, sourceFetch: callerFetch, close: async () => {} };
     fetchRemoteMedia.mockResolvedValueOnce({
       buffer: Buffer.from("sticker-data"),
       contentType: "image/webp",
@@ -425,7 +442,7 @@ describe("resolveMedia getFile retry", () => {
 
   it("copies trusted local absolute file paths into inbound media storage for media downloads", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/file.pdf" });
-    readFileWithinRoot.mockResolvedValueOnce({
+    rootRead.mockResolvedValueOnce({
       buffer: Buffer.from("pdf-data"),
       realPath: "/var/lib/telegram-bot-api/file.pdf",
       stat: { size: 8 },
@@ -441,7 +458,7 @@ describe("resolveMedia getFile retry", () => {
     );
 
     expect(fetchRemoteMedia).not.toHaveBeenCalled();
-    expect(readFileWithinRoot).toHaveBeenCalledWith({
+    expect(rootRead).toHaveBeenCalledWith({
       rootDir: "/var/lib/telegram-bot-api",
       relativePath: "file.pdf",
       maxBytes: MAX_MEDIA_BYTES,
@@ -466,7 +483,7 @@ describe("resolveMedia getFile retry", () => {
     const getFile = vi
       .fn()
       .mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/sticker.webp" });
-    readFileWithinRoot.mockResolvedValueOnce({
+    rootRead.mockResolvedValueOnce({
       buffer: Buffer.from("sticker-data"),
       realPath: "/var/lib/telegram-bot-api/sticker.webp",
       stat: { size: 12 },
@@ -481,7 +498,7 @@ describe("resolveMedia getFile retry", () => {
     });
 
     expect(fetchRemoteMedia).not.toHaveBeenCalled();
-    expect(readFileWithinRoot).toHaveBeenCalledWith({
+    expect(rootRead).toHaveBeenCalledWith({
       rootDir: "/var/lib/telegram-bot-api",
       relativePath: "sticker.webp",
       maxBytes: MAX_MEDIA_BYTES,
@@ -503,7 +520,7 @@ describe("resolveMedia getFile retry", () => {
 
   it("maps trusted local absolute path read failures to MediaFetchError", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/file.pdf" });
-    readFileWithinRoot.mockRejectedValueOnce(new Error("file not found"));
+    rootRead.mockRejectedValueOnce(new Error("file not found"));
 
     await expect(
       resolveMediaWithDefaults(makeCtx("document", getFile, { mime_type: "application/pdf" }), {
@@ -520,7 +537,7 @@ describe("resolveMedia getFile retry", () => {
 
   it("maps oversized trusted local absolute path reads to MediaFetchError", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/file.pdf" });
-    readFileWithinRoot.mockRejectedValueOnce(new Error("file exceeds limit"));
+    rootRead.mockRejectedValueOnce(new Error("file exceeds limit"));
 
     await expect(
       resolveMediaWithDefaults(makeCtx("document", getFile, { mime_type: "application/pdf" }), {
@@ -548,7 +565,7 @@ describe("resolveMedia getFile retry", () => {
       }),
     );
 
-    expect(readFileWithinRoot).not.toHaveBeenCalled();
+    expect(rootRead).not.toHaveBeenCalled();
     expect(fetchRemoteMedia).not.toHaveBeenCalled();
   });
 });

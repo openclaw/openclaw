@@ -4,8 +4,9 @@ import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
-export function handleAutoCompactionStart(ctx: EmbeddedPiSubscribeContext) {
+export function handleCompactionStart(ctx: EmbeddedPiSubscribeContext) {
   ctx.state.compactionInFlight = true;
+  ctx.state.livenessState = "paused";
   ctx.ensureCompactionPromise();
   ctx.log.debug(`embedded run compaction start: runId=${ctx.params.runId}`);
   emitAgentEvent({
@@ -38,7 +39,7 @@ export function handleAutoCompactionStart(ctx: EmbeddedPiSubscribeContext) {
   }
 }
 
-export function handleAutoCompactionEnd(
+export function handleCompactionEnd(
   ctx: EmbeddedPiSubscribeContext,
   evt: AgentEvent & { willRetry?: unknown; result?: unknown; aborted?: unknown },
 ) {
@@ -52,6 +53,11 @@ export function handleAutoCompactionEnd(
   const wasAborted = Boolean(evt.aborted);
   if (hasResult && !wasAborted) {
     ctx.incrementCompactionCount();
+    const tokensAfter =
+      typeof evt.result === "object" && evt.result
+        ? (evt.result as { tokensAfter?: unknown }).tokensAfter
+        : undefined;
+    ctx.noteCompactionTokensAfter(tokensAfter);
     const observedCompactionCount = ctx.getCompactionCount();
     void reconcileSessionStoreCompactionCountAfterSuccess({
       sessionKey: ctx.params.sessionKey,
@@ -67,6 +73,9 @@ export function handleAutoCompactionEnd(
     ctx.resetForCompactionRetry();
     ctx.log.debug(`embedded run compaction retry: runId=${ctx.params.runId}`);
   } else {
+    if (!wasAborted) {
+      ctx.state.livenessState = "working";
+    }
     ctx.maybeResolveCompactionWait();
     clearStaleAssistantUsageOnSessionMessages(ctx);
   }

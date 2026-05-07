@@ -5,9 +5,13 @@ import {
   generateSummary as piGenerateSummary,
 } from "@mariozechner/pi-coding-agent";
 import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { retryAsync } from "../infra/retry.js";
+import { isAbortError } from "../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
+import { isTimeoutError } from "./failover-error.js";
+import { stripRuntimeContextCustomMessages } from "./internal-runtime-context.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
@@ -34,7 +38,7 @@ const MERGE_SUMMARIES_INSTRUCTIONS = [
 ].join("\n");
 const IDENTIFIER_PRESERVATION_INSTRUCTIONS =
   "Preserve all opaque identifiers exactly as written (no shortening or reconstruction), " +
-  "including UUIDs, hashes, IDs, tokens, API keys, hostnames, IPs, ports, URLs, and file names.";
+  "including UUIDs, hashes, IDs, hostnames, IPs, ports, URLs, and file names.";
 
 export type CompactionSummarizationInstructions = {
   identifierPolicy?: AgentCompactionIdentifierPolicy;
@@ -98,8 +102,8 @@ export function buildCompactionSummarizationInstructions(
 }
 
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
-  // SECURITY: toolResult.details can contain untrusted/verbose payloads; never include in LLM-facing compaction.
-  const safe = stripToolResultDetails(messages);
+  // SECURITY: toolResult.details and runtime-context transcript entries must never enter LLM-facing compaction.
+  const safe = stripToolResultDetails(stripRuntimeContextCustomMessages(messages));
   return safe.reduce((sum, message) => sum + estimateTokens(message), 0);
 }
 
@@ -173,7 +177,12 @@ export function splitMessagesByTokenShare(
       const stopReason = (message as { stopReason?: unknown }).stopReason;
       const keepsPending =
         stopReason !== "aborted" && stopReason !== "error" && toolCalls.length > 0;
-      pendingToolCallIds = keepsPending ? new Set(toolCalls.map((t) => t.id)) : new Set();
+      pendingToolCallIds = new Set();
+      if (keepsPending) {
+        for (const toolCall of toolCalls) {
+          pendingToolCallIds.add(toolCall.id);
+        }
+      }
       pendingChunkStartIndex = keepsPending ? current.length - 1 : null;
     } else if (message.role === "toolResult" && pendingToolCallIds.size > 0) {
       const resultId = extractToolResultId(message);
@@ -302,8 +311,8 @@ async function summarizeChunks(params: {
     return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
   }
 
-  // SECURITY: never feed toolResult.details into summarization prompts.
-  const safeMessages = stripToolResultDetails(params.messages);
+  // SECURITY: never feed toolResult.details or runtime-context transcript entries into summarization prompts.
+  const safeMessages = stripToolResultDetails(stripRuntimeContextCustomMessages(params.messages));
   const chunks = chunkMessagesByMaxTokens(safeMessages, params.maxChunkTokens);
   let summary = params.previousSummary;
   const effectiveInstructions = buildCompactionSummarizationInstructions(
@@ -329,7 +338,7 @@ async function summarizeChunks(params: {
         maxDelayMs: 5000,
         jitter: 0.2,
         label: "compaction/generateSummary",
-        shouldRetry: (err) => !(err instanceof Error && err.name === "AbortError"),
+        shouldRetry: (err) => !isAbortError(err) && !isTimeoutError(err),
       },
     );
   }
@@ -397,11 +406,7 @@ export async function summarizeWithFallback(params: {
   try {
     return await summarizeChunks(params);
   } catch (fullError) {
-    log.warn(
-      `Full summarization failed, trying partial: ${
-        fullError instanceof Error ? fullError.message : String(fullError)
-      }`,
-    );
+    log.warn(`Full summarization failed: ${formatErrorMessage(fullError)}`);
   }
 
   // Fallback 1: Summarize only small messages, note oversized ones
@@ -420,7 +425,9 @@ export async function summarizeWithFallback(params: {
     }
   }
 
-  if (smallMessages.length > 0) {
+  // When nothing was oversized, `smallMessages` is the same transcript as the full attempt.
+  // Re-summarizing it would duplicate the same failing API work (and duplicate warn logs).
+  if (smallMessages.length > 0 && smallMessages.length !== messages.length) {
     try {
       const partialSummary = await summarizeChunks({
         ...params,
@@ -429,11 +436,7 @@ export async function summarizeWithFallback(params: {
       const notes = oversizedNotes.length > 0 ? `\n\n${oversizedNotes.join("\n")}` : "";
       return partialSummary + notes;
     } catch (partialError) {
-      log.warn(
-        `Partial summarization also failed: ${
-          partialError instanceof Error ? partialError.message : String(partialError)
-        }`,
-      );
+      log.warn(`Partial summarization also failed: ${formatErrorMessage(partialError)}`);
     }
   }
 

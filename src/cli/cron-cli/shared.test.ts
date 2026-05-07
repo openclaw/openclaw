@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../cron/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { getCronChannelOptions, printCronList } from "./shared.js";
+import {
+  coerceCronDeliveryPreviews,
+  getCronChannelOptions,
+  parseCronToolsAllow,
+  printCronList,
+} from "./shared.js";
 
 const hoisted = vi.hoisted(() => ({
   listChannelPluginsMock: vi.fn(),
@@ -73,6 +78,22 @@ describe("printCronList", () => {
     expect(logs.some((line) => line.includes("isolated"))).toBe(true);
   });
 
+  it("tolerates malformed rows in human-readable output", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const malformedJob = {
+      id: "malformed-job",
+      name: undefined,
+      enabled: true,
+      sessionTarget: undefined,
+      payload: undefined,
+      schedule: undefined,
+      state: undefined,
+    } as unknown as CronJob;
+
+    expect(() => printCronList([malformedJob], runtime)).not.toThrow();
+    expect(logs.some((line) => line.includes("malformed-job"))).toBe(true);
+  });
+
   it("shows stagger label for cron schedules", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const job = createBaseJob({
@@ -120,6 +141,32 @@ describe("printCronList", () => {
     expect(logs[0]).toContain("Model");
     const dataLine = logs[1] ?? "";
     expect(dataLine).toContain("sonnet");
+  });
+
+  it("shows delivery preview when provided", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({
+      id: "delivery-job",
+      name: "Delivery",
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "hello" },
+    });
+
+    printCronList([job], runtime, {
+      deliveryPreviews: new Map([
+        [
+          "delivery-job",
+          {
+            label: "announce -> telegram:-100",
+            detail: "resolved from last, main session",
+          },
+        ],
+      ]),
+    });
+
+    expect(logs[0]).toContain("Delivery");
+    expect(logs[1]).toContain("announce -> telegram:-100");
+    expect(logs[1]).toContain("resolved from last");
   });
 
   it("shows dash in Model column for systemEvent jobs", () => {
@@ -188,7 +235,45 @@ describe("getCronChannelOptions", () => {
   });
 
   it("lists discovered channel plugin ids when plugins are available", () => {
-    hoisted.listChannelPluginsMock.mockReturnValue([{ id: "telegram" }, { id: "signal" }]);
-    expect(getCronChannelOptions()).toBe("last|telegram|signal");
+    hoisted.listChannelPluginsMock.mockReturnValue([{ id: "quietchat" }, { id: "forum" }]);
+    expect(getCronChannelOptions()).toBe("last|quietchat|forum");
+  });
+});
+
+describe("parseCronToolsAllow", () => {
+  it.each([
+    { input: "exec,read,write", expected: ["exec", "read", "write"] },
+    { input: "exec, read, write", expected: ["exec", "read", "write"] },
+    { input: "exec read write", expected: ["exec", "read", "write"] },
+    { input: " exec  read,write ", expected: ["exec", "read", "write"] },
+    { input: ["exec", "read", "write"], expected: ["exec", "read", "write"] },
+  ])("parses $input", ({ input, expected }) => {
+    expect(parseCronToolsAllow(input)).toEqual(expected);
+  });
+
+  it("returns undefined for empty input", () => {
+    expect(parseCronToolsAllow(" ,  ")).toBeUndefined();
+  });
+});
+
+describe("coerceCronDeliveryPreviews", () => {
+  it("keeps gateway-provided preview entries", () => {
+    expect(
+      coerceCronDeliveryPreviews({
+        deliveryPreviews: {
+          job1: { label: "announce -> telegram:123", detail: "explicit" },
+        },
+      }).get("job1"),
+    ).toEqual({ label: "announce -> telegram:123", detail: "explicit" });
+  });
+
+  it("drops malformed preview entries", () => {
+    expect(
+      coerceCronDeliveryPreviews({
+        deliveryPreviews: {
+          job1: { label: "announce -> telegram:123" },
+        },
+      }).size,
+    ).toBe(0);
   });
 });

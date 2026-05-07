@@ -3,8 +3,8 @@ import type {
   ChannelId,
   ChannelThreadingAdapter,
   ChannelThreadingToolContext,
-} from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+} from "../../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   OutboundSessionRoute,
   ResolveOutboundSessionRouteParams,
@@ -39,6 +39,79 @@ export function resolveAndApplyOutboundThreadId(
   return resolved ?? undefined;
 }
 
+function isSameConversationTarget(
+  actionParams: Record<string, unknown>,
+  channel: ChannelId,
+  toolContext?: ChannelThreadingToolContext,
+): boolean {
+  const currentChannelId = toolContext?.currentChannelId?.trim();
+  if (!currentChannelId) {
+    return false;
+  }
+  const currentChannelProvider = toolContext?.currentChannelProvider?.trim();
+  if (currentChannelProvider && currentChannelProvider !== channel) {
+    return false;
+  }
+  const explicitTarget =
+    readStringParam(actionParams, "target") ??
+    readStringParam(actionParams, "to") ??
+    readStringParam(actionParams, "channelId");
+  if (!explicitTarget) {
+    return true;
+  }
+  return explicitTarget.trim() === currentChannelId;
+}
+
+export function resolveAndApplyOutboundReplyToId(
+  actionParams: Record<string, unknown>,
+  context: {
+    channel: ChannelId;
+    toolContext?: ChannelThreadingToolContext;
+  },
+): string | undefined {
+  const explicitReplyToId = readStringParam(actionParams, "replyTo");
+  if (explicitReplyToId) {
+    if (context.toolContext?.replyToMode === "first") {
+      const hasRepliedRef = context.toolContext.hasRepliedRef;
+      if (hasRepliedRef) {
+        hasRepliedRef.value = true;
+      }
+    }
+    return explicitReplyToId;
+  }
+  if (!isSameConversationTarget(actionParams, context.channel, context.toolContext)) {
+    return undefined;
+  }
+
+  const currentMessageId = context.toolContext?.currentMessageId;
+  if (currentMessageId == null) {
+    return undefined;
+  }
+
+  const mode = context.toolContext?.replyToMode ?? "off";
+  if (mode === "off" || mode === "batched") {
+    return undefined;
+  }
+
+  if (mode === "first") {
+    const hasRepliedRef = context.toolContext?.hasRepliedRef;
+    if (hasRepliedRef?.value) {
+      return undefined;
+    }
+    if (hasRepliedRef) {
+      hasRepliedRef.value = true;
+    }
+  }
+
+  const resolvedReplyToId =
+    typeof currentMessageId === "number" ? String(currentMessageId) : currentMessageId.trim();
+  if (!resolvedReplyToId) {
+    return undefined;
+  }
+  actionParams.replyTo = resolvedReplyToId;
+  return resolvedReplyToId;
+}
+
 export async function prepareOutboundMirrorRoute(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -47,6 +120,7 @@ export async function prepareOutboundMirrorRoute(params: {
   accountId?: string | null;
   toolContext?: ChannelThreadingToolContext;
   agentId?: string;
+  currentSessionKey?: string;
   dryRun?: boolean;
   resolvedTarget?: ResolvedMessagingTarget;
   resolveAutoThreadId?: ResolveAutoThreadId;
@@ -55,7 +129,6 @@ export async function prepareOutboundMirrorRoute(params: {
   ) => Promise<OutboundSessionRoute | null>;
   ensureOutboundSessionEntry: (params: {
     cfg: OpenClawConfig;
-    agentId: string;
     channel: ChannelId;
     accountId?: string | null;
     route: OutboundSessionRoute;
@@ -80,6 +153,7 @@ export async function prepareOutboundMirrorRoute(params: {
           agentId: params.agentId,
           accountId: params.accountId,
           target: params.to,
+          currentSessionKey: params.currentSessionKey,
           resolvedTarget: params.resolvedTarget,
           replyToId,
           threadId: resolvedThreadId,
@@ -88,7 +162,6 @@ export async function prepareOutboundMirrorRoute(params: {
   if (outboundRoute && params.agentId && !params.dryRun) {
     await params.ensureOutboundSessionEntry({
       cfg: params.cfg,
-      agentId: params.agentId,
       channel: params.channel,
       accountId: params.accountId,
       route: outboundRoute,

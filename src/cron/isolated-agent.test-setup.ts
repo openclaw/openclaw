@@ -2,7 +2,10 @@ import { vi } from "vitest";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
-import type { ChannelOutboundAdapter, ChannelOutboundContext } from "../channels/plugins/types.js";
+import type {
+  ChannelOutboundAdapter,
+  ChannelOutboundContext,
+} from "../channels/plugins/types.adapters.js";
 import { callGateway } from "../gateway/call.js";
 import { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -88,6 +91,7 @@ function resolveTestSender(
 
 const telegramOutboundForTest: ChannelOutboundAdapter = {
   deliveryMode: "direct",
+  preferFinalAssistantVisibleText: true,
   sendText: async () => ({ channel: "telegram", messageId: "telegram-msg" }),
   resolveTarget: ({ to }) => {
     const resolved = resolveRequiredTarget("Telegram", to);

@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { withTempDir } from "./test-helpers/temp-dir.js";
 import {
   ensureDir,
   resolveConfigDir,
@@ -12,21 +12,9 @@ import {
   sleep,
 } from "./utils.js";
 
-async function withTempDir<T>(
-  prefix: string,
-  run: (dir: string) => T | Promise<T>,
-): Promise<Awaited<T>> {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  try {
-    return await run(dir);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-}
-
 describe("ensureDir", () => {
   it("creates nested directory", async () => {
-    await withTempDir("openclaw-test-", async (tmp) => {
+    await withTempDir({ prefix: "openclaw-test-" }, async (tmp) => {
       const target = path.join(tmp, "nested", "dir");
       await ensureDir(target);
       expect(fs.existsSync(target)).toBe(true);
@@ -37,24 +25,24 @@ describe("ensureDir", () => {
 describe("sleep", () => {
   it("resolves after delay using fake timers", async () => {
     vi.useFakeTimers();
-    const promise = sleep(1000);
-    vi.advanceTimersByTime(1000);
-    await expect(promise).resolves.toBeUndefined();
-    vi.useRealTimers();
+    try {
+      const promise = sleep(1000);
+      vi.advanceTimersByTime(1000);
+      await expect(promise).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
 describe("resolveConfigDir", () => {
   it("prefers ~/.openclaw when legacy dir is missing", async () => {
-    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-config-dir-"));
-    try {
+    await withTempDir({ prefix: "openclaw-config-dir-" }, async (root) => {
       const newDir = path.join(root, ".openclaw");
       await fs.promises.mkdir(newDir, { recursive: true });
       const resolved = resolveConfigDir({} as NodeJS.ProcessEnv, () => root);
       expect(resolved).toBe(newDir);
-    } finally {
-      await fs.promises.rm(root, { recursive: true, force: true });
-    }
+    });
   });
 
   it("expands OPENCLAW_STATE_DIR using the provided env", () => {
@@ -65,16 +53,26 @@ describe("resolveConfigDir", () => {
 
     expect(resolveConfigDir(env)).toBe(path.resolve("/tmp/openclaw-home", "state"));
   });
+
+  it("falls back to the config file directory when only OPENCLAW_CONFIG_PATH is set", () => {
+    const env = {
+      HOME: "/tmp/openclaw-home",
+      OPENCLAW_CONFIG_PATH: "~/profiles/dev/openclaw.json",
+    } as NodeJS.ProcessEnv;
+
+    expect(resolveConfigDir(env)).toBe(path.resolve("/tmp/openclaw-home", "profiles", "dev"));
+  });
 });
 
 describe("resolveHomeDir", () => {
   it("prefers OPENCLAW_HOME over HOME", () => {
     vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
     vi.stubEnv("HOME", "/home/other");
-
-    expect(resolveHomeDir()).toBe(path.resolve("/srv/openclaw-home"));
-
-    vi.unstubAllEnvs();
+    try {
+      expect(resolveHomeDir()).toBe(path.resolve("/srv/openclaw-home"));
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 
@@ -82,12 +80,13 @@ describe("shortenHomePath", () => {
   it("uses $OPENCLAW_HOME prefix when OPENCLAW_HOME is set", () => {
     vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
     vi.stubEnv("HOME", "/home/other");
-
-    expect(shortenHomePath(`${path.resolve("/srv/openclaw-home")}/.openclaw/openclaw.json`)).toBe(
-      "$OPENCLAW_HOME/.openclaw/openclaw.json",
-    );
-
-    vi.unstubAllEnvs();
+    try {
+      expect(shortenHomePath(`${path.resolve("/srv/openclaw-home")}/.openclaw/openclaw.json`)).toBe(
+        "$OPENCLAW_HOME/.openclaw/openclaw.json",
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 
@@ -95,12 +94,15 @@ describe("shortenHomeInString", () => {
   it("uses $OPENCLAW_HOME replacement when OPENCLAW_HOME is set", () => {
     vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
     vi.stubEnv("HOME", "/home/other");
-
-    expect(
-      shortenHomeInString(`config: ${path.resolve("/srv/openclaw-home")}/.openclaw/openclaw.json`),
-    ).toBe("config: $OPENCLAW_HOME/.openclaw/openclaw.json");
-
-    vi.unstubAllEnvs();
+    try {
+      expect(
+        shortenHomeInString(
+          `config: ${path.resolve("/srv/openclaw-home")}/.openclaw/openclaw.json`,
+        ),
+      ).toBe("config: $OPENCLAW_HOME/.openclaw/openclaw.json");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 
@@ -122,10 +124,11 @@ describe("resolveUserPath", () => {
   it("prefers OPENCLAW_HOME for tilde expansion", () => {
     vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
     vi.stubEnv("HOME", "/home/other");
-
-    expect(resolveUserPath("~/openclaw")).toBe(path.resolve("/srv/openclaw-home", "openclaw"));
-
-    vi.unstubAllEnvs();
+    try {
+      expect(resolveUserPath("~/openclaw")).toBe(path.resolve("/srv/openclaw-home", "openclaw"));
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("uses the provided env for tilde expansion", () => {

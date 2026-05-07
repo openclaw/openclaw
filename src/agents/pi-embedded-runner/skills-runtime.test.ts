@@ -97,6 +97,46 @@ describe("resolveEmbeddedRunSkillEntries", () => {
     });
   });
 
+  it("prefers caller config when the active runtime snapshot still contains raw skill SecretRefs", () => {
+    const sourceConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          diffs: {
+            apiKey: {
+              source: "file",
+              provider: "default",
+              id: "/skills/entries/diffs/apiKey",
+            },
+          },
+        },
+      },
+    };
+    const runtimeConfig: OpenClawConfig = structuredClone(sourceConfig);
+    const callerConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          diffs: {
+            apiKey: "resolved-key",
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    resolveEmbeddedRunSkillEntries({
+      workspaceDir: "/tmp/workspace",
+      config: callerConfig,
+      skillsSnapshot: {
+        prompt: "skills prompt",
+        skills: [],
+      },
+    });
+
+    expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledWith("/tmp/workspace", {
+      config: callerConfig,
+    });
+  });
+
   it("skips skill entry loading when resolved snapshot skills are present", () => {
     const snapshot: SkillSnapshot = {
       prompt: "skills prompt",

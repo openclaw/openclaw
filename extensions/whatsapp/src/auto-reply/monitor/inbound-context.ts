@@ -21,7 +21,7 @@ export type GroupHistoryEntry = {
 
 type ContextVisibilityMode = "all" | "allowlist" | "allowlist_quote";
 
-export function isWhatsAppSupplementalSenderAllowed(params: {
+function isWhatsAppSupplementalSenderAllowed(params: {
   allowFrom: string[];
   sender?: WhatsAppIdentity | null;
 }): boolean {
@@ -33,7 +33,7 @@ export function isWhatsAppSupplementalSenderAllowed(params: {
     return false;
   }
   for (const entry of params.allowFrom) {
-    const rawEntry = String(entry).trim();
+    const rawEntry = entry.trim();
     if (!rawEntry) {
       continue;
     }

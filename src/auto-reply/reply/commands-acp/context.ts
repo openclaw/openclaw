@@ -1,4 +1,6 @@
 import { normalizeConversationText } from "../../../acp/conversation-id.js";
+import { normalizeConversationTargetRef } from "../../../infra/outbound/session-binding-normalization.js";
+import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import type { HandleCommandsParams } from "../commands-types.js";
 import {
   resolveConversationBindingAccountIdFromMessage,
@@ -9,7 +11,7 @@ import {
 
 export function resolveAcpCommandChannel(params: HandleCommandsParams): string {
   const resolved = resolveConversationBindingChannelFromMessage(params.ctx, params.command.channel);
-  return normalizeConversationText(resolved).toLowerCase();
+  return normalizeLowercaseStringOrEmpty(normalizeConversationText(resolved));
 }
 
 export function resolveAcpCommandAccountId(params: HandleCommandsParams): string {
@@ -32,12 +34,10 @@ function resolveAcpCommandConversationRef(params: HandleCommandsParams): {
   if (!resolved) {
     return null;
   }
-  return {
+  return normalizeConversationTargetRef({
     conversationId: resolved.conversationId,
-    ...(resolved.parentConversationId && resolved.parentConversationId !== resolved.conversationId
-      ? { parentConversationId: resolved.parentConversationId }
-      : {}),
-  };
+    parentConversationId: resolved.parentConversationId,
+  });
 }
 
 export function resolveAcpCommandConversationId(params: HandleCommandsParams): string | undefined {

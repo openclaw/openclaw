@@ -1,12 +1,5 @@
 import type { FailoverReason } from "../../pi-embedded-helpers.js";
 
-export type RunFailoverDecisionAction =
-  | "continue_normal"
-  | "rotate_profile"
-  | "fallback_model"
-  | "surface_error"
-  | "return_error_payload";
-
 export type RunFailoverDecision =
   | {
       action: "continue_normal";
@@ -47,6 +40,7 @@ type RetryLimitDecisionParams = {
 type PromptDecisionParams = {
   stage: "prompt";
   aborted: boolean;
+  externalAbort: boolean;
   fallbackConfigured: boolean;
   failoverFailure: boolean;
   failoverReason: FailoverReason | null;
@@ -56,11 +50,13 @@ type PromptDecisionParams = {
 type AssistantDecisionParams = {
   stage: "assistant";
   aborted: boolean;
+  externalAbort: boolean;
   fallbackConfigured: boolean;
   failoverFailure: boolean;
   failoverReason: FailoverReason | null;
   timedOut: boolean;
   timedOutDuringCompaction: boolean;
+  timedOutDuringToolExecution: boolean;
   profileRotated: boolean;
 };
 
@@ -86,7 +82,7 @@ function shouldRotatePrompt(params: PromptDecisionParams): boolean {
 function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
   return (
     (!params.aborted && (params.failoverFailure || params.failoverReason !== null)) ||
-    (params.timedOut && !params.timedOutDuringCompaction)
+    (params.timedOut && !params.timedOutDuringCompaction && !params.timedOutDuringToolExecution)
   );
 }
 
@@ -120,6 +116,12 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
   }
 
   if (params.stage === "prompt") {
+    if (params.externalAbort) {
+      return {
+        action: "surface_error",
+        reason: params.failoverReason,
+      };
+    }
     if (!params.profileRotated && shouldRotatePrompt(params)) {
       return {
         action: "rotate_profile",
@@ -138,6 +140,12 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
     };
   }
 
+  if (params.externalAbort) {
+    return {
+      action: "surface_error",
+      reason: params.failoverReason,
+    };
+  }
   const assistantShouldRotate = shouldRotateAssistant(params);
   if (!params.profileRotated && assistantShouldRotate) {
     return {

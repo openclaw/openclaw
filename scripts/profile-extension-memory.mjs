@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { formatErrorMessage } from "./lib/error-format.mjs";
 
 const DEFAULT_CONCURRENCY = 6;
 const DEFAULT_TIMEOUT_MS = 90_000;
@@ -354,6 +355,6 @@ async function main() {
 try {
   await main();
 } catch (error) {
-  console.error(`[extension-memory] ${error instanceof Error ? error.message : String(error)}`);
+  console.error(`[extension-memory] ${formatErrorMessage(error)}`);
   process.exit(1);
 }

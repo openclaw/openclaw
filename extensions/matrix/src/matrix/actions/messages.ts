@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchMatrixPollMessageSummary, resolveMatrixPollRootEventId } from "../poll-summary.js";
 import { isPollEventType } from "../poll-types.js";
 import { editMessageMatrix, sendMessageMatrix } from "../send.js";
@@ -21,6 +22,9 @@ export async function sendMatrixMessage(
     audioAsVoice?: boolean;
   } = {},
 ) {
+  if (!opts.cfg) {
+    throw new Error("Matrix message actions require a resolved runtime config.");
+  }
   return await sendMessageMatrix(to, content, {
     cfg: opts.cfg,
     mediaUrl: opts.mediaUrl,
@@ -40,6 +44,9 @@ export async function editMatrixMessage(
   content: string,
   opts: MatrixActionClientOpts = {},
 ) {
+  if (!opts.cfg) {
+    throw new Error("Matrix message actions require a resolved runtime config.");
+  }
   const trimmed = content.trim();
   if (!trimmed) {
     throw new Error("Matrix edit requires content");
@@ -77,7 +84,7 @@ export async function readMatrixMessages(
 }> {
   return await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
     const limit = resolveMatrixActionLimit(opts.limit, 20);
-    const token = opts.before?.trim() || opts.after?.trim() || undefined;
+    const token = normalizeOptionalString(opts.before) ?? normalizeOptionalString(opts.after);
     const dir = opts.after ? "f" : "b";
     // Room history is queried via the low-level endpoint for compatibility.
     const res = (await client.doRequest(

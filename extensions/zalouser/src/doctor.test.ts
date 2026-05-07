@@ -2,6 +2,29 @@ import { describe, expect, it } from "vitest";
 import { zalouserDoctor } from "./doctor.js";
 
 describe("zalouser doctor", () => {
+  it("warns when mutable group names rely on disabled name matching", () => {
+    expect(
+      zalouserDoctor.collectMutableAllowlistWarnings?.({
+        cfg: {
+          channels: {
+            zalouser: {
+              groups: {
+                "group:trusted": {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        } as never,
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("mutable allowlist entry across zalouser"),
+        expect.stringContaining("channels.zalouser.groups: group:trusted"),
+      ]),
+    );
+  });
+
   it("normalizes legacy group allow aliases to enabled", () => {
     const normalize = zalouserDoctor.normalizeCompatibilityConfig;
     expect(normalize).toBeDefined();
@@ -35,7 +58,13 @@ describe("zalouser doctor", () => {
     expect(result.config.channels?.zalouser?.groups?.["group:trusted"]).toEqual({
       enabled: true,
     });
-    expect(result.config.channels?.zalouser?.accounts?.work?.groups?.["group:legacy"]).toEqual({
+    expect(
+      (
+        result.config.channels?.zalouser?.accounts?.work as
+          | { groups?: Record<string, unknown> }
+          | undefined
+      )?.groups?.["group:legacy"],
+    ).toEqual({
       enabled: false,
     });
     expect(result.changes).toEqual(

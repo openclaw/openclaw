@@ -14,6 +14,7 @@ const REGISTRY_IDS = [
   "models.providers.openai.apiKey",
   "messages.tts.providers.openai.apiKey",
   "plugins.entries.firecrawl.config.webFetch.apiKey",
+  "plugins.entries.exa.config.webSearch.apiKey",
   "skills.entries.demo.apiKey",
   "tools.web.search.apiKey",
 ] as const;
@@ -53,16 +54,38 @@ vi.mock("../secrets/target-registry.js", () => ({
 
 import {
   getAgentRuntimeCommandSecretTargetIds,
+  getModelsCommandSecretTargetIds,
+  getQrRemoteCommandSecretTargetIds,
   getScopedChannelsCommandSecretTargets,
   getSecurityAuditCommandSecretTargetIds,
 } from "./command-secret-targets.js";
 
 describe("command secret target ids", () => {
+  it("keeps static qr remote targets out of the registry path", () => {
+    const ids = getQrRemoteCommandSecretTargetIds();
+    expect(ids).toEqual(new Set(["gateway.remote.token", "gateway.remote.password"]));
+  });
+
+  it("keeps static model targets out of the registry path", () => {
+    const ids = getModelsCommandSecretTargetIds();
+    expect(ids.has("models.providers.*.apiKey")).toBe(true);
+    expect(ids.has("models.providers.*.request.tls.key")).toBe(true);
+    expect(ids.has("channels.discord.token")).toBe(false);
+  });
+
   it("includes memorySearch remote targets for agent runtime commands", () => {
     const ids = getAgentRuntimeCommandSecretTargetIds();
     expect(ids.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
     expect(ids.has("agents.list[].memorySearch.remote.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(true);
+    expect(ids.has("plugins.entries.exa.config.webSearch.apiKey")).toBe(true);
+    expect(ids.has("channels.discord.token")).toBe(false);
+  });
+
+  it("includes channel targets for agent runtime when delivery needs them", () => {
+    const ids = getAgentRuntimeCommandSecretTargetIds({ includeChannelTargets: true });
+    expect(ids.has("channels.discord.token")).toBe(true);
+    expect(ids.has("channels.telegram.botToken")).toBe(true);
   });
 
   it("includes gateway auth and channel targets for security audit", () => {

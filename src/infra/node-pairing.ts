@@ -1,18 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
+import { normalizeArrayBackedTrimmedStringList } from "../shared/string-normalization.js";
 import { type NodeApprovalScope, resolveNodePairApprovalScopes } from "./node-pairing-authz.js";
 import {
   createAsyncLock,
   pruneExpiredPending,
-  readJsonFile,
+  readJsonIfExists,
   reconcilePendingPairingRequests,
+  coercePairingStateRecord,
   resolvePairingPaths,
-  writeJsonAtomic,
+  writeJson,
 } from "./pairing-files.js";
 import { rejectPendingPairingRequest } from "./pairing-pending.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
-export type NodeDeclaredSurface = {
+type NodeDeclaredSurface = {
   nodeId: string;
   displayName?: string;
   platform?: string;
@@ -27,7 +29,7 @@ export type NodeDeclaredSurface = {
   remoteIp?: string;
 };
 
-export type NodeApprovedSurface = NodeDeclaredSurface;
+type NodeApprovedSurface = NodeDeclaredSurface;
 
 export type NodePairingRequestInput = NodeDeclaredSurface & {
   silent?: boolean;
@@ -39,7 +41,7 @@ export type NodePairingPendingRequest = NodePairingRequestInput & {
   ts: number;
 };
 
-export type NodePairingPendingEntry = NodePairingPendingRequest & {
+type NodePairingPendingEntry = NodePairingPendingRequest & {
   requiredApproveScopes: NodeApprovalScope[];
 };
 
@@ -49,9 +51,11 @@ export type NodePairingPairedNode = NodeApprovedSurface & {
   createdAtMs: number;
   approvedAtMs: number;
   lastConnectedAtMs?: number;
+  lastSeenAtMs?: number;
+  lastSeenReason?: string;
 };
 
-export type NodePairingList = {
+type NodePairingList = {
   pending: NodePairingPendingEntry[];
   paired: NodePairingPairedNode[];
 };
@@ -65,14 +69,6 @@ const PENDING_TTL_MS = 5 * 60 * 1000;
 const OPERATOR_ROLE = "operator";
 
 const withLock = createAsyncLock();
-
-function normalizeStringList(values?: string[]): string[] | undefined {
-  if (!Array.isArray(values)) {
-    return undefined;
-  }
-  const normalized = values.map((value) => value.trim()).filter(Boolean);
-  return normalized.length > 0 ? normalized : [];
-}
 
 function buildPendingNodePairingRequest(params: {
   requestId?: string;
@@ -88,8 +84,8 @@ function buildPendingNodePairingRequest(params: {
     uiVersion: params.req.uiVersion,
     deviceFamily: params.req.deviceFamily,
     modelIdentifier: params.req.modelIdentifier,
-    caps: normalizeStringList(params.req.caps),
-    commands: normalizeStringList(params.req.commands),
+    caps: normalizeArrayBackedTrimmedStringList(params.req.caps),
+    commands: normalizeArrayBackedTrimmedStringList(params.req.commands),
     permissions: params.req.permissions,
     remoteIp: params.req.remoteIp,
     silent: params.req.silent,
@@ -110,8 +106,8 @@ function refreshPendingNodePairingRequest(
     uiVersion: incoming.uiVersion ?? existing.uiVersion,
     deviceFamily: incoming.deviceFamily ?? existing.deviceFamily,
     modelIdentifier: incoming.modelIdentifier ?? existing.modelIdentifier,
-    caps: normalizeStringList(incoming.caps) ?? existing.caps,
-    commands: normalizeStringList(incoming.commands) ?? existing.commands,
+    caps: normalizeArrayBackedTrimmedStringList(incoming.caps) ?? existing.caps,
+    commands: normalizeArrayBackedTrimmedStringList(incoming.commands) ?? existing.commands,
     permissions: incoming.permissions ?? existing.permissions,
     remoteIp: incoming.remoteIp ?? existing.remoteIp,
     // Preserve interactive visibility if either request needs attention.
@@ -141,12 +137,12 @@ type ApproveNodePairingResult = ApprovedNodePairingResult | ForbiddenNodePairing
 async function loadState(baseDir?: string): Promise<NodePairingStateFile> {
   const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "nodes");
   const [pending, paired] = await Promise.all([
-    readJsonFile<Record<string, NodePairingPendingRequest>>(pendingPath),
-    readJsonFile<Record<string, NodePairingPairedNode>>(pairedPath),
+    readJsonIfExists<unknown>(pendingPath),
+    readJsonIfExists<unknown>(pairedPath),
   ]);
   const state: NodePairingStateFile = {
-    pendingById: pending ?? {},
-    pairedByNodeId: paired ?? {},
+    pendingById: coercePairingStateRecord<NodePairingPendingRequest>(pending),
+    pairedByNodeId: coercePairingStateRecord<NodePairingPairedNode>(paired),
   };
   pruneExpiredPending(state.pendingById, Date.now(), PENDING_TTL_MS);
   return state;
@@ -155,8 +151,8 @@ async function loadState(baseDir?: string): Promise<NodePairingStateFile> {
 async function persistState(state: NodePairingStateFile, baseDir?: string) {
   const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "nodes");
   await Promise.all([
-    writeJsonAtomic(pendingPath, state.pendingById),
-    writeJsonAtomic(pairedPath, state.pairedByNodeId),
+    writeJson(pendingPath, state.pendingById),
+    writeJson(pairedPath, state.pairedByNodeId),
   ]);
 }
 
@@ -294,6 +290,22 @@ export async function rejectNodePairing(
   });
 }
 
+export async function removePairedNode(
+  nodeId: string,
+  baseDir?: string,
+): Promise<{ nodeId: string } | null> {
+  return await withLock(async () => {
+    const state = await loadState(baseDir);
+    const normalized = normalizeNodeId(nodeId);
+    if (!normalized || !state.pairedByNodeId[normalized]) {
+      return null;
+    }
+    delete state.pairedByNodeId[normalized];
+    await persistState(state, baseDir);
+    return { nodeId: normalized };
+  });
+}
+
 export async function verifyNodeToken(
   nodeId: string,
   token: string,
@@ -312,13 +324,13 @@ export async function updatePairedNodeMetadata(
   nodeId: string,
   patch: Partial<Omit<NodePairingPairedNode, "nodeId" | "token" | "createdAtMs" | "approvedAtMs">>,
   baseDir?: string,
-) {
-  await withLock(async () => {
+): Promise<boolean> {
+  return await withLock(async () => {
     const state = await loadState(baseDir);
     const normalized = normalizeNodeId(nodeId);
     const existing = state.pairedByNodeId[normalized];
     if (!existing) {
-      return;
+      return false;
     }
 
     const next: NodePairingPairedNode = {
@@ -336,10 +348,13 @@ export async function updatePairedNodeMetadata(
       bins: patch.bins ?? existing.bins,
       permissions: patch.permissions ?? existing.permissions,
       lastConnectedAtMs: patch.lastConnectedAtMs ?? existing.lastConnectedAtMs,
+      lastSeenAtMs: patch.lastSeenAtMs ?? existing.lastSeenAtMs,
+      lastSeenReason: patch.lastSeenReason ?? existing.lastSeenReason,
     };
 
     state.pairedByNodeId[normalized] = next;
     await persistState(state, baseDir);
+    return true;
   });
 }
 

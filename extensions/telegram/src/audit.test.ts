@@ -10,6 +10,13 @@ vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
   fetchWithTimeout: fetchWithTimeoutMock,
   isRecord: (value: unknown): value is Record<string, unknown> =>
     typeof value === "object" && value !== null,
+  normalizeOptionalString: (value: unknown) => {
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    const trimmed = value.trim();
+    return trimmed ? trimmed : undefined;
+  },
 }));
 
 function mockGetChatMemberStatus(status: string) {

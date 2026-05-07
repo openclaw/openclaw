@@ -7,12 +7,13 @@ const TEST_LIKE_SEGMENT_RE =
 const TEST_LIKE_FILENAME_RE =
   /(^|\/)[^/]*test-(?:support|helpers|fixtures|harness)\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u;
 const TEST_SHARED_FILENAME_RE = /(^|\/)[^/]*\.test-[^/]*\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u;
+const TEST_CANARY_FILENAME_RE = /(^|\/)__rootdir_boundary_canary__\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u;
 const SNAPSHOT_FILE_RE = /\.snap$/u;
 const SUFFIX_SKIP_RE = /\.(?:test|spec|fixture)\./u;
 const INFRA_DIR_RE = /(^|\/)(?:coverage|dist|node_modules)(?:\/|$)/u;
 const INFRA_NAME_RE = /(test-harness|test-support|test-helpers|test-fixtures)/u;
 
-export function normalizeExtensionSourcePath(filePath) {
+function normalizeExtensionSourcePath(filePath) {
   return filePath.replaceAll("\\", "/");
 }
 
@@ -25,6 +26,7 @@ export function classifyBundledExtensionSourcePath(filePath) {
     TEST_LIKE_SEGMENT_RE.test(normalizedPath) ||
     TEST_LIKE_FILENAME_RE.test(normalizedPath) ||
     TEST_SHARED_FILENAME_RE.test(normalizedPath) ||
+    TEST_CANARY_FILENAME_RE.test(normalizedPath) ||
     SUFFIX_SKIP_RE.test(normalizedPath) ||
     SNAPSHOT_FILE_RE.test(normalizedPath) ||
     INFRA_NAME_RE.test(normalizedPath);

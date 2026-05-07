@@ -1,24 +1,17 @@
+import { asOptionalRecord, readStringField } from "openclaw/plugin-sdk/text-runtime";
 import type { VoiceCallConfig } from "./config.js";
 import { VoiceCallConfigSchema } from "./config.js";
 
 export const VOICE_CALL_LEGACY_CONFIG_REMOVAL_VERSION = "2026.6.0";
 
-export type VoiceCallLegacyConfigIssue = {
+type VoiceCallLegacyConfigIssue = {
   path: string;
   replacement: string;
   message: string;
 };
 
-function asObject(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function getString(obj: Record<string, unknown> | undefined, key: string): string | undefined {
-  const value = obj?.[key];
-  return typeof value === "string" ? value : undefined;
-}
+const asObject = asOptionalRecord;
+const getString = readStringField;
 
 function getNumber(obj: Record<string, unknown> | undefined, key: string): number | undefined {
   const value = obj?.[key];
@@ -115,7 +108,7 @@ export function formatVoiceCallLegacyConfigWarnings(params: {
   }
 
   return [
-    `[voice-call] legacy config keys detected under ${params.configPathPrefix}; runtime fallback remains for now but will be removed in ${VOICE_CALL_LEGACY_CONFIG_REMOVAL_VERSION}. Run "${params.doctorFixCommand}".`,
+    `[voice-call] legacy config keys detected under ${params.configPathPrefix}; runtime loading will not rewrite them, and support for the legacy shape will be removed in ${VOICE_CALL_LEGACY_CONFIG_REMOVAL_VERSION}. Run "${params.doctorFixCommand}".`,
     ...issues.map(
       (issue) => `[voice-call] ${params.configPathPrefix}.${issue.path}: ${issue.message}`,
     ),

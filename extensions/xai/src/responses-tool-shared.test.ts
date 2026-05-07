@@ -40,6 +40,35 @@ describe("xai responses tool helpers", () => {
     });
   });
 
+  it("ignores malformed output, content, and annotation entries", () => {
+    expect(
+      __testing.extractXaiWebSearchContent({
+        output: [
+          null,
+          {
+            type: "message",
+            content: [
+              null,
+              {
+                type: "output_text",
+                text: "Found it",
+                annotations: [
+                  null,
+                  { type: "url_citation", url: "https://example.com/a" },
+                  { type: "url_citation", url: "https://example.com/a" },
+                  { type: "url_citation" },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      text: "Found it",
+      annotationCitations: ["https://example.com/a"],
+    });
+  });
+
   it("prefers explicit top-level citations when present", () => {
     expect(
       __testing.resolveXaiResponseTextAndCitations({
@@ -49,6 +78,24 @@ describe("xai responses tool helpers", () => {
     ).toEqual({
       content: "Done",
       citations: ["https://example.com/b"],
+    });
+  });
+
+  it("includes inline citations only when enabled", () => {
+    const data = {
+      output_text: "Done",
+      citations: ["https://example.com/b"],
+      inline_citations: [{ start_index: 0, end_index: 4, url: "https://example.com/b" }],
+    };
+    expect(__testing.resolveXaiResponseTextCitationsAndInline(data, true)).toEqual({
+      content: "Done",
+      citations: ["https://example.com/b"],
+      inlineCitations: [{ start_index: 0, end_index: 4, url: "https://example.com/b" }],
+    });
+    expect(__testing.resolveXaiResponseTextCitationsAndInline(data, false)).toEqual({
+      content: "Done",
+      citations: ["https://example.com/b"],
+      inlineCitations: undefined,
     });
   });
 });

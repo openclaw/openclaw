@@ -1,7 +1,7 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:child_process", async () => {
-  const { mockNodeBuiltinModule } = await import("../../../../test/helpers/node-builtin-mocks.js");
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
     {
@@ -10,7 +10,7 @@ vi.mock("node:child_process", async () => {
   );
 });
 vi.mock("node:fs", async () => {
-  const { mockNodeBuiltinModule } = await import("../../../../test/helpers/node-builtin-mocks.js");
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   const existsSync = vi.fn();
   const readFileSync = vi.fn();
   return mockNodeBuiltinModule(
@@ -20,7 +20,7 @@ vi.mock("node:fs", async () => {
   );
 });
 vi.mock("node:os", async () => {
-  const { mockNodeBuiltinModule } = await import("../../../../test/helpers/node-builtin-mocks.js");
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   const homedir = vi.fn();
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:os")>("node:os"),
@@ -31,11 +31,11 @@ vi.mock("node:os", async () => {
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import os from "node:os";
+const { resolveBrowserExecutableForPlatform } = await import("./chrome.executables.js");
 
 describe("browser default executable detection", () => {
   const launchServicesPlist = "com.apple.launchservices.secure.plist";
   const chromeExecutablePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-  let resolveBrowserExecutableForPlatform: typeof import("./chrome.executables.js").resolveBrowserExecutableForPlatform;
 
   function mockMacDefaultBrowser(bundleId: string, appPath = ""): void {
     vi.mocked(execFileSync).mockImplementation((cmd, args) => {
@@ -62,10 +62,6 @@ describe("browser default executable detection", () => {
       return value.includes(chromeExecutablePath);
     });
   }
-
-  beforeAll(async () => {
-    ({ resolveBrowserExecutableForPlatform } = await import("./chrome.executables.js"));
-  });
 
   beforeEach(() => {
     vi.clearAllMocks();

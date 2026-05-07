@@ -4,9 +4,12 @@
 export {
   closeDispatcher,
   createPinnedDispatcher,
+  SsrFBlockedError,
   isBlockedHostnameOrIp,
+  isPrivateIpAddress,
   resolvePinnedHostname,
   resolvePinnedHostnameWithPolicy,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
   type LookupFn,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
@@ -15,8 +18,10 @@ export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 export {
   assertHttpUrlTargetsPrivateNetwork,
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
+  createLegacyPrivateNetworkDoctorContract,
   hasLegacyFlatAllowPrivateNetworkAlias,
   isPrivateNetworkOptInEnabled,
+  mergeSsrFPolicies,
   migrateLegacyFlatAllowPrivateNetworkAlias,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
   ssrfPolicyFromPrivateNetworkOptIn,

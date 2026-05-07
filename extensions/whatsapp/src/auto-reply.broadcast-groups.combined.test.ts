@@ -1,11 +1,12 @@
 import "./test-helpers.js";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it, vi } from "vitest";
 import {
   monitorWebChannelWithCapture,
   sendWebDirectInboundAndCollectSessionKeys,
 } from "./auto-reply.broadcast-groups.test-harness.js";
 import {
+  createAcceptedWhatsAppSendResult,
   installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
   resetLoadConfigMock,
@@ -138,6 +139,57 @@ describe("broadcast groups", () => {
     resetLoadConfigMock();
   });
 
+  it("keeps named-account group broadcast routes on the scoped session key", async () => {
+    setLoadConfigMock({
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+          accounts: {
+            work: {
+              allowFrom: ["*"],
+            },
+          },
+        },
+      },
+      agents: {
+        defaults: { maxConcurrent: 10 },
+        list: [{ id: "alfred" }, { id: "baerbel" }],
+      },
+      broadcast: {
+        strategy: "sequential",
+        "123@g.us": ["alfred", "baerbel"],
+      },
+    } satisfies OpenClawConfig);
+
+    const seen: string[] = [];
+    const resolver = vi.fn(async (ctx: { SessionKey?: unknown }) => {
+      seen.push(String(ctx.SessionKey));
+      return { text: "ok" };
+    });
+
+    const { spies, onMessage } = await monitorWebChannelWithCapture(resolver);
+
+    await sendWebGroupInboundMessage({
+      onMessage,
+      spies,
+      body: "@bot ping",
+      id: "g-work-1",
+      senderE164: "+111",
+      senderName: "Alice",
+      mentionedJids: ["999@s.whatsapp.net"],
+      selfE164: "+999",
+      selfJid: "999@s.whatsapp.net",
+      accountId: "work",
+    });
+
+    expect(resolver).toHaveBeenCalledTimes(2);
+    expect(seen).toEqual([
+      "agent:alfred:whatsapp:group:123@g.us:thread:whatsapp-account-work",
+      "agent:baerbel:whatsapp:group:123@g.us:thread:whatsapp-account-work",
+    ]);
+    resetLoadConfigMock();
+  });
+
   it("broadcasts in parallel by default", async () => {
     setLoadConfigMock({
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -151,8 +203,8 @@ describe("broadcast groups", () => {
       },
     } satisfies OpenClawConfig);
 
-    const sendMedia = vi.fn();
-    const reply = vi.fn().mockResolvedValue(undefined);
+    const sendMedia = vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("media", "m1"));
+    const reply = vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("text", "r1"));
     const sendComposing = vi.fn();
 
     let started = 0;

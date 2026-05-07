@@ -1,9 +1,21 @@
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { applyModelDefaults } from "./defaults.js";
 import type { OpenClawConfig } from "./types.js";
 
 describe("applyModelDefaults", () => {
+  beforeEach(() => {
+    vi.stubEnv(
+      "OPENCLAW_BUNDLED_PLUGINS_DIR",
+      path.resolve(import.meta.dirname, "../../extensions"),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   function buildProxyProviderConfig(overrides?: { contextWindow?: number; maxTokens?: number }) {
     return {
       models: {
@@ -63,7 +75,7 @@ describe("applyModelDefaults", () => {
       agents: {
         defaults: {
           models: {
-            "anthropic/claude-opus-4-6": {},
+            "anthropic/claude-opus-4-7": {},
             "openai/gpt-5.4": {},
           },
         },
@@ -71,7 +83,7 @@ describe("applyModelDefaults", () => {
     } satisfies OpenClawConfig;
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.alias).toBe("opus");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-7"]?.alias).toBe("opus");
     expect(next.agents?.defaults?.models?.["openai/gpt-5.4"]?.alias).toBe("gpt");
   });
 
@@ -80,7 +92,7 @@ describe("applyModelDefaults", () => {
       agents: {
         defaults: {
           models: {
-            "anthropic/claude-opus-4-6": { alias: "Opus" },
+            "anthropic/claude-opus-4-7": { alias: "Opus" },
           },
         },
       },
@@ -88,7 +100,7 @@ describe("applyModelDefaults", () => {
 
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.alias).toBe("Opus");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-7"]?.alias).toBe("Opus");
   });
 
   it("respects explicit empty alias disables", () => {

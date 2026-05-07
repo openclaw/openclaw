@@ -1,10 +1,10 @@
 import type {
-  BlockStreamingCoalesceConfig,
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
   ReplyToMode,
+  SlackChannelStreamingConfig,
 } from "./types.base.js";
 import type {
   ChannelHealthMonitorConfig,
@@ -96,6 +96,23 @@ export type SlackThreadConfig = {
   inheritParent?: boolean;
   /** Maximum number of thread messages to fetch as context when starting a new thread session (default: 20). Set to 0 to disable thread history fetching. */
   initialHistoryLimit?: number;
+  /**
+   * If true, require explicit @mention even inside threads where the bot has
+   * previously participated. By default (false), replying in a thread where
+   * the bot is a participant counts as an implicit mention and bypasses
+   * requireMention gating. Set to true to suppress implicit thread mentions
+   * so only explicit @bot mentions trigger replies in threads.
+   */
+  requireExplicitMention?: boolean;
+};
+
+export type SlackSocketModeConfig = {
+  /** Slack SDK pong timeout in milliseconds. Socket Mode only. Default: 15000. */
+  clientPingTimeout?: number;
+  /** Slack SDK server ping timeout in milliseconds. Socket Mode only. */
+  serverPingTimeout?: number;
+  /** Enable Slack SDK ping/pong transport logging. Socket Mode only. */
+  pingPongLoggingEnabled?: boolean;
 };
 
 export type SlackAccountConfig = {
@@ -103,6 +120,8 @@ export type SlackAccountConfig = {
   name?: string;
   /** Slack connection mode (socket|http). Default: socket. */
   mode?: "socket" | "http";
+  /** Slack SDK Socket Mode transport options. Ignored in HTTP mode. */
+  socketMode?: SlackSocketModeConfig;
   /** Slack signing secret (required for HTTP mode). */
   signingSecret?: string;
   /** Slack Events API webhook path (default: /slack/events). */
@@ -149,30 +168,14 @@ export type SlackAccountConfig = {
   /** Per-DM config overrides keyed by user ID. */
   dms?: Record<string, DmConfig>;
   textChunkLimit?: number;
-  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
-  chunkMode?: "length" | "newline";
-  blockStreaming?: boolean;
-  /** Merge streamed block replies before sending. */
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
-  /**
-   * Stream preview mode:
-   * - "off": disable live preview streaming
-   * - "partial": replace preview text with the latest partial output (default)
-   * - "block": append chunked preview updates
-   * - "progress": show progress status, then send final text
-   */
-  streaming?: SlackStreamingMode;
-  /**
-   * Slack native text streaming toggle (`chat.startStream` / `chat.appendStream` / `chat.stopStream`).
-   * Used when `streaming` is `partial`. Default: true.
-   */
-  nativeStreaming?: boolean;
+  /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
+  streaming?: SlackChannelStreamingConfig;
   mediaMaxMb?: number;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: SlackReactionNotificationMode;
   /** Allowlist for reaction notifications when mode is allowlist. */
   reactionAllowlist?: Array<string | number>;
-  /** Control reply threading when reply tags are present (off|first|all). */
+  /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
   /**
    * Optional per-chat-type reply threading overrides.
@@ -184,12 +187,12 @@ export type SlackAccountConfig = {
   actions?: SlackActionConfig;
   slashCommand?: SlackSlashCommandConfig;
   /**
-   * Alias for dm.policy (prefer this so it inherits cleanly via base->account shallow merge).
+   * Canonical DM policy key. Doctor migrates legacy channels.slack.dm.policy here.
    * Legacy key: channels.slack.dm.policy.
    */
   dmPolicy?: DmPolicy;
   /**
-   * Alias for dm.allowFrom (prefer this so it inherits cleanly via base->account shallow merge).
+   * Canonical DM allowlist. Doctor migrates legacy channels.slack.dm.allowFrom here.
    * Legacy key: channels.slack.dm.allowFrom.
    */
   allowFrom?: Array<string | number>;

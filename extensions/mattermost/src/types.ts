@@ -1,11 +1,15 @@
+import type {
+  ChannelPreviewStreamingConfig,
+  StreamingMode,
+} from "openclaw/plugin-sdk/channel-streaming";
 import type { BlockStreamingCoalesceConfig, DmPolicy, GroupPolicy } from "./runtime-api.js";
 import type { SecretInput } from "./secret-input.js";
 
-export type MattermostReplyToMode = "off" | "first" | "all";
+export type MattermostReplyToMode = "off" | "first" | "all" | "batched";
 export type MattermostChatTypeKey = "direct" | "channel" | "group";
 
 export type MattermostChatMode = "oncall" | "onmessage" | "onchar";
-export type MattermostNetworkConfig = {
+type MattermostNetworkConfig = {
   /** Dangerous opt-in for self-hosted Mattermost on trusted private/internal hosts. */
   dangerouslyAllowPrivateNetwork?: boolean;
 };
@@ -51,6 +55,8 @@ export type MattermostAccountConfig = {
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
+  /** Preview streaming mode/config. */
+  streaming?: StreamingMode | boolean | ChannelPreviewStreamingConfig;
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */

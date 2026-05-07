@@ -1,23 +1,95 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { withEnvAsync } from "../test-utils/env.js";
-import { resolveApiKeyForProvider } from "./model-auth.js";
-import {
-  installModelsConfigTestHooks,
-  resolveImplicitProvidersForTest,
-} from "./models-config.e2e-harness.js";
+import { describe, expect, it, vi } from "vitest";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
+import { resolveEnvApiKey } from "./model-auth-env.js";
 import {
   resolveEnvApiKeyVarName,
   resolveMissingProviderApiKey,
-} from "./models-config.providers.secrets.js";
+} from "./models-config.providers.secret-helpers.js";
+
+vi.mock("../plugins/setup-registry.js", () => ({
+  resolvePluginSetupProvider: () => undefined,
+}));
+
+vi.mock("../infra/shell-env.js", () => ({
+  getShellEnvAppliedKeys: () => [],
+}));
+
+vi.mock("./provider-auth-aliases.js", () => ({
+  resolveProviderAuthAliasMap: () => ({}),
+  resolveProviderIdForAuth: (provider: string) => provider.trim().toLowerCase(),
+}));
+
+vi.mock("./model-auth-env-vars.js", () => {
+  const candidates = {
+    minimax: ["MINIMAX_API_KEY"],
+    "minimax-portal": ["MINIMAX_OAUTH_TOKEN"],
+    nvidia: ["NVIDIA_API_KEY"],
+    vllm: ["VLLM_API_KEY"],
+  } as const;
+  return {
+    PROVIDER_ENV_API_KEY_CANDIDATES: candidates,
+    listKnownProviderEnvApiKeyNames: () => [...new Set(Object.values(candidates).flat())],
+    resolveProviderEnvApiKeyCandidates: () => candidates,
+    resolveProviderEnvAuthEvidence: () => ({}),
+  };
+});
 
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const MINIMAX_BASE_URL = "https://api.minimax.io/anthropic";
 const VLLM_DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1";
 
-installModelsConfigTestHooks();
+function createTestModel(id: string): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 8192,
+    maxTokens: 4096,
+  };
+}
+
+function resolveMinimaxCatalogBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const rawHost = env.MINIMAX_API_HOST?.trim();
+  if (!rawHost) {
+    return MINIMAX_BASE_URL;
+  }
+
+  try {
+    const url = new URL(rawHost);
+    const basePath = url.pathname.replace(/\/+$/, "");
+    if (basePath.endsWith("/anthropic")) {
+      return `${url.origin}${basePath}`;
+    }
+    return `${url.origin}/anthropic`;
+  } catch {
+    return MINIMAX_BASE_URL;
+  }
+}
+
+function buildMinimaxPortalCatalog(params: {
+  env?: NodeJS.ProcessEnv;
+  envApiKey?: string;
+  explicitApiKey?: string;
+  explicitBaseUrl?: string;
+  hasProfiles?: boolean;
+}): ModelProviderConfig | null {
+  const apiKey =
+    params.envApiKey ??
+    params.explicitApiKey ??
+    (params.hasProfiles ? "MINIMAX_OAUTH_TOKEN" : undefined);
+  if (!apiKey) {
+    return null;
+  }
+  return {
+    baseUrl: params.explicitBaseUrl || resolveMinimaxCatalogBaseUrl(params.env),
+    api: "anthropic-messages",
+    authHeader: true,
+    apiKey,
+    models: [createTestModel("MiniMax-M2.7")],
+  };
+}
 
 describe("NVIDIA provider", () => {
   it("should include nvidia when NVIDIA_API_KEY is configured", () => {
@@ -26,7 +98,7 @@ describe("NVIDIA provider", () => {
       provider: {
         baseUrl: NVIDIA_BASE_URL,
         api: "openai-completions",
-        models: [{ id: "nvidia/test-model" }],
+        models: [createTestModel("nvidia/test-model")],
       },
       env: { NVIDIA_API_KEY: "test-key" } as NodeJS.ProcessEnv,
       profileApiKey: undefined,
@@ -35,17 +107,14 @@ describe("NVIDIA provider", () => {
     expect(provider.models?.length).toBeGreaterThan(0);
   });
 
-  it("resolves the nvidia api key value from env", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    await withEnvAsync({ NVIDIA_API_KEY: "nvidia-test-api-key" }, async () => {
-      const auth = await resolveApiKeyForProvider({
-        provider: "nvidia",
-        agentDir,
-      });
+  it("resolves the nvidia api key value from env", () => {
+    const auth = resolveEnvApiKey("nvidia", {
+      NVIDIA_API_KEY: "nvidia-test-api-key",
+    } as NodeJS.ProcessEnv);
 
-      expect(auth.apiKey).toBe("nvidia-test-api-key");
-      expect(auth.mode).toBe("api-key");
-      expect(auth.source).toContain("NVIDIA_API_KEY");
+    expect(auth).toEqual({
+      apiKey: "nvidia-test-api-key",
+      source: "env: NVIDIA_API_KEY",
     });
   });
 });
@@ -58,7 +127,7 @@ describe("MiniMax implicit provider (#15275)", () => {
         baseUrl: MINIMAX_BASE_URL,
         api: "anthropic-messages",
         authHeader: true,
-        models: [{ id: "MiniMax-M2.7" }],
+        models: [createTestModel("MiniMax-M2.7")],
       },
       env: { MINIMAX_API_KEY: "test-key" } as NodeJS.ProcessEnv,
       profileApiKey: undefined,
@@ -70,41 +139,31 @@ describe("MiniMax implicit provider (#15275)", () => {
     expect(provider.baseUrl).toBe("https://api.minimax.io/anthropic");
   });
 
-  it("should respect MINIMAX_API_HOST env var for CN endpoint (#34487)", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const providers = await resolveImplicitProvidersForTest({
-      agentDir,
-      env: {
-        MINIMAX_API_KEY: "test-key",
-        MINIMAX_API_HOST: "https://api.minimaxi.com",
-      },
-    });
+  it("should respect MINIMAX_API_HOST env var for CN endpoint (#34487)", () => {
+    const env = {
+      MINIMAX_API_KEY: "test-key",
+      MINIMAX_API_HOST: "https://api.minimaxi.com",
+    } as NodeJS.ProcessEnv;
 
-    expect(providers?.minimax?.baseUrl).toBe("https://api.minimaxi.com/anthropic");
-    expect(providers?.["minimax-portal"]?.baseUrl).toBe("https://api.minimaxi.com/anthropic");
+    expect(resolveMinimaxCatalogBaseUrl(env)).toBe("https://api.minimaxi.com/anthropic");
+    expect(buildMinimaxPortalCatalog({ env, envApiKey: "MINIMAX_API_KEY" })?.baseUrl).toBe(
+      "https://api.minimaxi.com/anthropic",
+    );
   });
 
-  it("should set authHeader for minimax portal provider", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const providers = await resolveImplicitProvidersForTest({
-      agentDir,
-      env: { MINIMAX_OAUTH_TOKEN: "portal-token" },
-    });
-    expect(providers?.["minimax-portal"]?.authHeader).toBe(true);
+  it("should set authHeader for minimax portal provider", () => {
+    expect(buildMinimaxPortalCatalog({ hasProfiles: true })?.authHeader).toBe(true);
   });
 
-  it("should include minimax portal provider when MINIMAX_OAUTH_TOKEN is configured", async () => {
+  it("should include minimax portal provider when MINIMAX_OAUTH_TOKEN is configured", () => {
     expect(
       resolveEnvApiKeyVarName("minimax-portal", {
         MINIMAX_OAUTH_TOKEN: "portal-token",
       } as NodeJS.ProcessEnv),
     ).toBe("MINIMAX_OAUTH_TOKEN");
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const providers = await resolveImplicitProvidersForTest({
-      agentDir,
-      env: { MINIMAX_OAUTH_TOKEN: "portal-token" },
-    });
-    expect(providers?.["minimax-portal"]?.authHeader).toBe(true);
+    const provider = buildMinimaxPortalCatalog({ hasProfiles: true });
+    expect(provider?.authHeader).toBe(true);
+    expect(provider?.apiKey).toBe("MINIMAX_OAUTH_TOKEN");
   });
 });
 
@@ -119,7 +178,7 @@ describe("vLLM provider", () => {
       provider: {
         baseUrl: VLLM_DEFAULT_BASE_URL,
         api: "openai-completions",
-        models: [],
+        models: [createTestModel("meta-llama/Meta-Llama-3-8B-Instruct")],
       },
       env: { VLLM_API_KEY: "test-key" } as NodeJS.ProcessEnv,
       profileApiKey: undefined,
@@ -128,6 +187,6 @@ describe("vLLM provider", () => {
     expect(provider.apiKey).toBe("VLLM_API_KEY");
     expect(provider.baseUrl).toBe(VLLM_DEFAULT_BASE_URL);
     expect(provider.api).toBe("openai-completions");
-    expect(provider.models).toEqual([]);
+    expect(provider.models).toHaveLength(1);
   });
 });

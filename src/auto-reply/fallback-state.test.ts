@@ -78,6 +78,20 @@ describe("fallback-state", () => {
     expect(resolved.reasonSummary).toBe("rate limit burst");
   });
 
+  it("prefers formatted transient error details over generic rate-limit labels", () => {
+    const resolved = resolveDemoFallbackTransition({
+      attempts: [
+        {
+          ...baseAttempt,
+          error: "429 Too Many Requests: Claude Max usage limit reached, try again in 6 minutes.",
+        },
+      ],
+    });
+
+    expect(resolved.reasonSummary).toContain("HTTP 429: Too Many Requests");
+    expect(resolved.reasonSummary).toContain("Claude Max usage limit reached");
+  });
+
   it("refreshes reason when fallback remains active with same model pair", () => {
     const resolved = resolveDemoFallbackTransition({
       attempts: [{ ...baseAttempt, reason: "timeout" }],

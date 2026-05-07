@@ -1,5 +1,8 @@
+import { createEmbeddedRunReplayState } from "./pi-embedded-runner/replay-state.js";
+
 export function createBaseToolHandlerState() {
   return {
+    replayState: createEmbeddedRunReplayState(),
     toolMetaById: new Map<string, unknown>(),
     toolMetas: [] as Array<{ toolName?: string; meta?: string }>,
     toolSummaryById: new Set<string>(),
@@ -12,6 +15,8 @@ export function createBaseToolHandlerState() {
     pendingMessagingMediaUrls: new Map<string, string[]>(),
     pendingToolMediaUrls: [] as string[],
     pendingToolAudioAsVoice: false,
+    pendingToolTrustedLocalMedia: false,
+    deterministicApprovalPromptPending: false,
     messagingToolSentTexts: [] as string[],
     messagingToolSentTextsNormalized: [] as string[],
     messagingToolSentMediaUrls: [] as string[],

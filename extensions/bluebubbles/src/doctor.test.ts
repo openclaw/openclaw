@@ -27,7 +27,13 @@ describe("bluebubbles doctor", () => {
     expect(result.config.channels?.bluebubbles?.network).toEqual({
       dangerouslyAllowPrivateNetwork: true,
     });
-    expect(result.config.channels?.bluebubbles?.accounts?.default?.network).toEqual({
+    expect(
+      (
+        result.config.channels?.bluebubbles?.accounts?.default as {
+          network?: { dangerouslyAllowPrivateNetwork?: boolean };
+        }
+      )?.network,
+    ).toEqual({
       dangerouslyAllowPrivateNetwork: false,
     });
   });

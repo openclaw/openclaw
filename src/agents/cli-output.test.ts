@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { parseCliJson, parseCliJsonl } from "./cli-output.js";
+import {
+  createCliJsonlStreamingParser,
+  extractCliErrorMessage,
+  parseCliJson,
+  parseCliJsonl,
+} from "./cli-output.js";
+import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
 
 describe("parseCliJson", () => {
   it("recovers mixed-output Claude session metadata from embedded JSON objects", () => {
@@ -118,6 +124,95 @@ describe("parseCliJson", () => {
       },
     });
   });
+
+  it("unwraps nested Claude result JSON from JSON output", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        session_id: "session-nested-json",
+        result: JSON.stringify({
+          type: "result",
+          result: JSON.stringify({
+            type: "result",
+            subtype: "success",
+            result: "actual response text",
+          }),
+        }),
+      }),
+      {
+        command: "claude",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "actual response text",
+      sessionId: "session-nested-json",
+      usage: undefined,
+    });
+  });
+
+  it("does not unwrap nested result-shaped JSON for non-claude json backends", () => {
+    const nestedResult = JSON.stringify({
+      type: "result",
+      result: JSON.stringify({
+        type: "result",
+        result: "actual response text",
+      }),
+    });
+    const result = parseCliJson(
+      JSON.stringify({
+        session_id: "gemini-session-nested-json",
+        result: nestedResult,
+      }),
+      {
+        command: "gemini",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+      "gemini",
+    );
+
+    expect(result).toEqual({
+      text: nestedResult,
+      sessionId: "gemini-session-nested-json",
+      usage: undefined,
+    });
+  });
+
+  it("parses nested OpenAI-style cached token details from CLI json payloads", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        session_id: "openai-session-123",
+        response: "OpenAI says hello",
+        usage: {
+          input_tokens: 15,
+          output_tokens: 4,
+          input_tokens_details: {
+            cached_tokens: 6,
+          },
+        },
+      }),
+      {
+        command: "codex",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+    );
+
+    expect(result).toEqual({
+      text: "OpenAI says hello",
+      sessionId: "openai-session-123",
+      usage: {
+        input: 9,
+        output: 4,
+        cacheRead: 6,
+        cacheWrite: undefined,
+        total: undefined,
+      },
+    });
+  });
 });
 
 describe("parseCliJsonl", () => {
@@ -154,6 +249,33 @@ describe("parseCliJsonl", () => {
         cacheWrite: undefined,
         total: undefined,
       },
+    });
+  });
+
+  it("parses Claude stream-json result events for an explicit backend dialect", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "init", session_id: "session-dialect" }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-dialect",
+          result: "dialect says hello",
+          usage: { input_tokens: 5, output_tokens: 2 },
+        }),
+      ].join("\n"),
+      {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      "local-cli",
+    );
+
+    expect(result).toMatchObject({
+      text: "dialect says hello",
+      sessionId: "session-dialect",
+      usage: { input: 5, output: 2 },
     });
   });
 
@@ -229,6 +351,38 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  it("unwraps nested Claude agent result JSON from stream-json output", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "init", session_id: "session-nested-jsonl" }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-nested-jsonl",
+          result: JSON.stringify({
+            type: "result",
+            result: JSON.stringify({
+              type: "result",
+              subtype: "success",
+              result: "actual response text",
+            }),
+          }),
+        }),
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "actual response text",
+      sessionId: "session-nested-jsonl",
+      usage: undefined,
+    });
+  });
+
   it("parses multiple JSON objects embedded on the same line", () => {
     const result = parseCliJsonl(
       '{"type":"init","session_id":"session-999"} {"type":"result","session_id":"session-999","result":"done"}',
@@ -245,5 +399,46 @@ describe("parseCliJsonl", () => {
       sessionId: "session-999",
       usage: undefined,
     });
+  });
+
+  it("extracts nested Claude API errors from failed stream-json output", () => {
+    const { message, jsonl } = createClaudeApiErrorFixture();
+    const result = extractCliErrorMessage(jsonl);
+
+    expect(result).toBe(message);
+  });
+});
+
+describe("createCliJsonlStreamingParser", () => {
+  it("streams Claude stream-json deltas for an explicit backend dialect", () => {
+    const deltas: Array<{ text: string; delta: string; sessionId?: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: (delta) => deltas.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-stream" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "hello" },
+          },
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(deltas).toEqual([
+      { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
+    ]);
   });
 });

@@ -1,15 +1,15 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { createIMessageRpcClient } from "../client.js";
+import type { IMessageRpcClient } from "../client.js";
 import { sendMessageIMessage } from "../send.js";
 import {
   chunkTextWithMode,
   convertMarkdownTables,
-  loadConfig,
   resolveChunkMode,
   resolveMarkdownTableMode,
 } from "./deliver.runtime.js";
@@ -17,9 +17,10 @@ import type { SentMessageCache } from "./echo-cache.js";
 import { sanitizeOutboundText } from "./sanitize-outbound.js";
 
 export async function deliverReplies(params: {
+  cfg: OpenClawConfig;
   replies: ReplyPayload[];
   target: string;
-  client: Awaited<ReturnType<typeof createIMessageRpcClient>>;
+  client: IMessageRpcClient;
   accountId?: string;
   runtime: RuntimeEnv;
   maxBytes: number;
@@ -29,7 +30,7 @@ export async function deliverReplies(params: {
   const { replies, target, client, runtime, maxBytes, textLimit, accountId, sentMessageCache } =
     params;
   const scope = `${accountId ?? ""}:${target}`;
-  const cfg = loadConfig();
+  const { cfg } = params;
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "imessage",
@@ -47,6 +48,7 @@ export async function deliverReplies(params: {
       chunkText: (value) => chunkTextWithMode(value, textLimit, chunkMode),
       sendText: async (chunk) => {
         const sent = await sendMessageIMessage(target, chunk, {
+          config: params.cfg,
           maxBytes,
           client,
           accountId,
@@ -60,6 +62,7 @@ export async function deliverReplies(params: {
       },
       sendMedia: async ({ mediaUrl, caption }) => {
         const sent = await sendMessageIMessage(target, caption ?? "", {
+          config: params.cfg,
           mediaUrl,
           maxBytes,
           client,
@@ -76,4 +79,24 @@ export async function deliverReplies(params: {
       runtime.log?.(`imessage: delivered reply to ${target}`);
     }
   }
+}
+
+export function createIMessageEchoCachingSend(params: {
+  client: IMessageRpcClient;
+  accountId?: string;
+  sentMessageCache?: Pick<SentMessageCache, "remember">;
+}): typeof sendMessageIMessage {
+  return async (target, text, opts) => {
+    const sanitizedText = sanitizeOutboundText(text);
+    const sent = await sendMessageIMessage(target, sanitizedText, {
+      ...opts,
+      client: params.client,
+    });
+    const scope = `${params.accountId ?? opts.accountId ?? ""}:${target}`;
+    params.sentMessageCache?.remember(scope, {
+      text: sent.sentText || undefined,
+      messageId: sent.messageId,
+    });
+    return sent;
+  };
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
@@ -55,15 +55,37 @@ describe("normalizePluginsConfig", () => {
   });
 
   it.each([
+    [{}, undefined],
+    [{ slots: { contextEngine: "lossless-claw" } }, "lossless-claw"],
+    [{ slots: { contextEngine: "none" } }, null],
+    [{ slots: { contextEngine: "  cortex  " } }, "cortex"],
+    [{ slots: { contextEngine: "" } }, undefined],
+  ] as const)("preserves contextEngine slot for %o (#64170)", (config, expected) => {
+    expect(normalizePluginsConfig(config).slots.contextEngine).toBe(expected);
+  });
+
+  it.each([
     {
       name: "normalizes plugin hook policy flags",
       entry: {
         hooks: {
           allowPromptInjection: false,
+          allowConversationAccess: true,
+          timeoutMs: 250,
+          timeouts: {
+            before_prompt_build: 90_000,
+            agent_end: 60_000,
+          },
         },
       },
       expectedHooks: {
         allowPromptInjection: false,
+        allowConversationAccess: true,
+        timeoutMs: 250,
+        timeouts: {
+          before_prompt_build: 90_000,
+          agent_end: 60_000,
+        },
       },
     },
     {
@@ -71,7 +93,12 @@ describe("normalizePluginsConfig", () => {
       entry: {
         hooks: {
           allowPromptInjection: "nope",
-        } as unknown as { allowPromptInjection: boolean },
+          allowConversationAccess: "nope",
+          timeoutMs: 0,
+          timeouts: {
+            before_prompt_build: 900_000,
+          },
+        } as unknown as { allowPromptInjection: boolean; allowConversationAccess: boolean },
       },
       expectedHooks: undefined,
     },
@@ -84,12 +111,12 @@ describe("normalizePluginsConfig", () => {
       name: "normalizes plugin subagent override policy settings",
       subagent: {
         allowModelOverride: true,
-        allowedModels: [" anthropic/claude-sonnet-4-6 ", "", "openai/gpt-5.4"],
+        allowedModels: [" anthropic/claude-sonnet-4-6 ", "", "openai/gpt-5.5"],
       },
       expected: {
         allowModelOverride: true,
         hasAllowedModelsConfig: true,
-        allowedModels: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4"],
+        allowedModels: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
       },
     },
     {
@@ -140,6 +167,79 @@ describe("normalizePluginsConfig", () => {
     expect(result.entries.openai?.enabled).toBe(true);
     expect(result.entries.google?.enabled).toBe(true);
     expect(result.entries.minimax?.enabled).toBe(false);
+  });
+
+  it("normalizes unknown plugin ids without loading discovery", async () => {
+    vi.resetModules();
+    const discovery = await import("./discovery.js");
+    const discoverPlugins = vi.spyOn(discovery, "discoverOpenClawPlugins");
+    const { normalizePluginsConfig: normalizeFreshPluginsConfig } =
+      await import("./config-state.js");
+    discoverPlugins.mockClear();
+
+    const result = normalizeFreshPluginsConfig({
+      allow: ["unknown-plugin-one", "unknown-plugin-two"],
+      deny: ["unknown-plugin-three"],
+      entries: {
+        "unknown-plugin-four": {
+          enabled: true,
+        },
+      },
+    });
+
+    expect(result.allow).toEqual(["unknown-plugin-one", "unknown-plugin-two"]);
+    expect(result.deny).toEqual(["unknown-plugin-three"]);
+    expect(result.entries["unknown-plugin-four"]?.enabled).toBe(true);
+    expect(discoverPlugins).not.toHaveBeenCalled();
+  });
+
+  it("does not load discovery or manifests for alias lookup", async () => {
+    vi.resetModules();
+    const discovery = await import("./discovery.js");
+    const manifest = await import("./manifest.js");
+    const discoverPlugins = vi.spyOn(discovery, "discoverOpenClawPlugins").mockReturnValue({
+      candidates: [
+        {
+          idHint: "anthropic",
+          source: "/tmp/openclaw-bundled-anthropic/index.js",
+          rootDir: "/tmp/openclaw-bundled-anthropic",
+          origin: "bundled",
+          bundledManifest: {
+            id: "anthropic",
+            configSchema: {},
+            providers: ["anthropic"],
+          },
+        },
+        {
+          idHint: "external-anthropic",
+          source: "/tmp/openclaw-global-anthropic/index.js",
+          rootDir: "/tmp/openclaw-global-anthropic",
+          origin: "global",
+        },
+      ],
+      diagnostics: [],
+    });
+    const loadManifest = vi.spyOn(manifest, "loadPluginManifest").mockReturnValue({
+      ok: true,
+      manifestPath: "/tmp/openclaw-global-anthropic/openclaw.plugin.json",
+      manifest: {
+        id: "external-anthropic",
+        configSchema: {},
+        providers: ["anthropic"],
+      },
+    });
+    const { normalizePluginsConfig: normalizeFreshPluginsConfig } =
+      await import("./config-state.js");
+    discoverPlugins.mockClear();
+    loadManifest.mockClear();
+
+    const result = normalizeFreshPluginsConfig({
+      deny: ["anthropic"],
+    });
+
+    expect(result.deny).toEqual(["anthropic"]);
+    expect(discoverPlugins).not.toHaveBeenCalled();
+    expect(loadManifest).not.toHaveBeenCalled();
   });
 });
 
@@ -432,6 +532,32 @@ describe("resolveEffectivePluginActivationState", () => {
       reason: "enabled by effective config",
     });
   });
+
+  it("treats an explicitly selected workspace context engine as explicit activation", () => {
+    const rawConfig = {
+      plugins: {
+        slots: {
+          contextEngine: "lossless-claw",
+        },
+      },
+    };
+
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "lossless-claw",
+        origin: "workspace",
+        config: normalizePluginsConfig(rawConfig.plugins),
+        rootConfig: rawConfig,
+        activationSource: createPluginActivationSource({ config: rawConfig }),
+      }),
+    ).toEqual({
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: true,
+      source: "explicit",
+      reason: "selected context engine slot",
+    });
+  });
 });
 
 describe("resolveEnableState", () => {
@@ -522,6 +648,20 @@ describe("resolveEnableState", () => {
       expected: {
         enabled: false,
         reason: "workspace plugin (disabled by default)",
+      },
+    });
+  });
+
+  it("keeps an explicitly selected workspace context engine enabled when omitted from plugins.allow", () => {
+    expectNormalizedEnableState({
+      id: "lossless-claw",
+      origin: "workspace",
+      config: {
+        allow: ["telegram"],
+        slots: { contextEngine: "lossless-claw" },
+      },
+      expected: {
+        enabled: true,
       },
     });
   });

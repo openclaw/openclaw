@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sendBlueBubblesMedia } from "./media-send.js";
 import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
 import { setBlueBubblesRuntime } from "./runtime.js";
@@ -22,6 +22,13 @@ vi.mock("./send.js", () => ({
 vi.mock("./monitor-reply-cache.js", () => ({
   resolveBlueBubblesMessageId: resolveBlueBubblesMessageIdMock,
 }));
+
+afterAll(() => {
+  vi.doUnmock("./attachments.js");
+  vi.doUnmock("./send.js");
+  vi.doUnmock("./monitor-reply-cache.js");
+  vi.resetModules();
+});
 
 type RuntimeMocks = {
   detectMime: ReturnType<typeof vi.fn>;
@@ -322,5 +329,28 @@ describe("sendBlueBubblesMedia local-path hardening", () => {
       expect.objectContaining({ url: "https://example.com/file.png" }),
     );
     expect(sendBlueBubblesAttachmentMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes asVoice through to attachment delivery", async () => {
+    runtimeMocks.fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: new Uint8Array([1, 2, 3]),
+      contentType: "audio/mpeg",
+      fileName: "voice.mp3",
+    });
+
+    await sendBlueBubblesMedia({
+      cfg: createConfig(),
+      to: "chat:123",
+      mediaUrl: "https://example.com/voice.mp3",
+      asVoice: true,
+    });
+
+    expect(sendBlueBubblesAttachmentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        asVoice: true,
+        contentType: "audio/mpeg",
+        filename: "voice.mp3",
+      }),
+    );
   });
 });

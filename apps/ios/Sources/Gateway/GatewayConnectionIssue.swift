@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 
 enum GatewayConnectionIssue: Equatable {
     case none
@@ -18,15 +19,46 @@ enum GatewayConnectionIssue: Equatable {
     var needsAuthToken: Bool {
         switch self {
         case .tokenMissing, .unauthorized:
-            return true
+            true
         default:
-            return false
+            false
         }
     }
 
     var needsPairing: Bool {
         if case .pairingRequired = self { return true }
         return false
+    }
+
+    static func detect(problem: GatewayConnectionProblem?) -> Self {
+        guard let problem else { return .none }
+        if problem.needsPairingApproval {
+            return .pairingRequired(requestId: problem.requestId)
+        }
+        if problem.needsCredentialUpdate {
+            return problem.kind == .gatewayAuthTokenMissing ? .tokenMissing : .unauthorized
+        }
+        switch problem.kind {
+        case .deviceIdentityRequired,
+             .deviceSignatureExpired,
+             .deviceNonceRequired,
+             .deviceNonceMismatch,
+             .deviceSignatureInvalid,
+             .devicePublicKeyInvalid,
+             .deviceIdMismatch,
+             .tailscaleIdentityMissing,
+             .tailscaleProxyMissing,
+             .tailscaleWhoisFailed,
+             .tailscaleIdentityMismatch,
+             .authRateLimited:
+            return .unauthorized
+        case .timeout, .connectionRefused, .reachabilityFailed, .websocketCancelled:
+            return .network
+        case .unknown:
+            return .unknown(problem.message)
+        default:
+            return .none
+        }
     }
 
     static func detect(from statusText: String) -> Self {

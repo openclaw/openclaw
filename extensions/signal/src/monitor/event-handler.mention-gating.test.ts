@@ -1,7 +1,7 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { buildDispatchInboundCaptureMock } from "openclaw/plugin-sdk/channel-contract-testing";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildDispatchInboundCaptureMock } from "../../../../src/channels/plugins/contracts/inbound-testkit.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type SignalMsgContext = Pick<MsgContext, "Body" | "WasMentioned"> & {
   Body?: string;
@@ -23,10 +23,15 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
   });
 });
 
-let createBaseSignalEventHandlerDeps: typeof import("./event-handler.test-harness.js").createBaseSignalEventHandlerDeps;
-let createSignalReceiveEvent: typeof import("./event-handler.test-harness.js").createSignalReceiveEvent;
-let createSignalEventHandler: typeof import("./event-handler.js").createSignalEventHandler;
-let renderSignalMentions: typeof import("./mentions.js").renderSignalMentions;
+const [
+  { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
+  { createSignalEventHandler },
+  { renderSignalMentions },
+] = await Promise.all([
+  import("./event-handler.test-harness.js"),
+  import("./event-handler.js"),
+  import("./mentions.js"),
+]);
 
 type GroupEventOpts = {
   message?: string;
@@ -102,13 +107,6 @@ async function expectSkippedGroupHistory(opts: GroupEventOpts, expectedBody: str
 }
 
 describe("signal mention gating", () => {
-  beforeAll(async () => {
-    ({ createBaseSignalEventHandlerDeps, createSignalReceiveEvent } =
-      await import("./event-handler.test-harness.js"));
-    ({ createSignalEventHandler } = await import("./event-handler.js"));
-    ({ renderSignalMentions } = await import("./mentions.js"));
-  });
-
   beforeEach(() => {
     capturedCtx = undefined;
   });
@@ -130,6 +128,32 @@ describe("signal mention gating", () => {
 
   it("sets WasMentioned=false for group messages without mention when requireMention is off", async () => {
     const handler = createMentionHandler({ requireMention: false });
+
+    await handler(makeGroupEvent({ message: "hello everyone" }));
+    expect(capturedCtx).toBeTruthy();
+    expect(getCapturedCtx()?.WasMentioned).toBe(false);
+  });
+
+  it("allows explicitly configured Signal groups by group id without a mention", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: {
+            inbound: { debounceMs: 0 },
+            groupChat: { mentionPatterns: ["@bot"] },
+          },
+          channels: {
+            signal: {
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["group:g1"],
+              groups: { g1: {} },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["group:g1"],
+      }),
+    );
 
     await handler(makeGroupEvent({ message: "hello everyone" }));
     expect(capturedCtx).toBeTruthy();
@@ -234,7 +258,7 @@ describe("signal mention gating", () => {
     );
 
     expect(capturedCtx).toBeTruthy();
-    const body = String(getCapturedCtx()?.Body ?? "");
+    const body = getCapturedCtx()?.Body ?? "";
     expect(body).toContain("@123e4567 hi @+15550002222");
     expect(body).not.toContain(placeholder);
   });
@@ -257,7 +281,7 @@ describe("signal mention gating", () => {
     );
 
     expect(capturedCtx).toBeTruthy();
-    expect(String(getCapturedCtx()?.Body ?? "")).toContain("@123e4567");
+    expect(getCapturedCtx()?.Body ?? "").toContain("@123e4567");
     expect(getCapturedCtx()?.WasMentioned).toBe(true);
   });
 });

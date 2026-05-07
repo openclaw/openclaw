@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { RuntimeEnv } from "../runtime-api.js";
 import { waitForAbortableDelay } from "./async.js";
 import { fetchBotIdentityForMonitor, type FeishuMonitorBotIdentity } from "./monitor.startup.js";
@@ -6,14 +7,14 @@ import type { ResolvedFeishuAccount } from "./types.js";
 
 // Delays must be >= PROBE_ERROR_TTL_MS (60s) so each retry makes a real network request
 // instead of silently hitting the probe error cache.
-export const BOT_IDENTITY_RETRY_DELAYS_MS = [60_000, 120_000, 300_000, 600_000, 900_000];
+const BOT_IDENTITY_RETRY_DELAYS_MS = [60_000, 120_000, 300_000, 600_000, 900_000];
 
 export function applyBotIdentityState(
   accountId: string,
   identity: FeishuMonitorBotIdentity,
 ): { botOpenId?: string; botName?: string } {
-  const botOpenId = identity.botOpenId?.trim() || undefined;
-  const botName = identity.botName?.trim() || undefined;
+  const botOpenId = normalizeOptionalString(identity.botOpenId);
+  const botName = normalizeOptionalString(identity.botName);
 
   botOpenIds.set(accountId, botOpenId ?? "");
   if (botName) {

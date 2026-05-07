@@ -7,6 +7,7 @@ vi.mock("../gateway/call.js", () => ({
 
 import {
   __testing,
+  isRecoverableAgentWaitError,
   readLatestAssistantReply,
   readLatestAssistantReplySnapshot,
   waitForAgentRun,
@@ -73,6 +74,63 @@ describe("readLatestAssistantReply", () => {
     expect(result.text).toBe("new output");
     expect(result.fingerprint).toContain('"timestamp":42');
   });
+
+  it("reads only final_answer text from phased assistant history", async () => {
+    callGatewayMock.mockResolvedValue({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Need fix line quoting properly.",
+              textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
+            },
+            {
+              type: "text",
+              text: "Fixed the quoting issue.",
+              textSignature: JSON.stringify({ v: 1, id: "final", phase: "final_answer" }),
+            },
+          ],
+        },
+      ],
+    });
+
+    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
+
+    expect(result).toBe("Fixed the quoting issue.");
+  });
+
+  it("preserves spaces across split final_answer history blocks", async () => {
+    callGatewayMock.mockResolvedValue({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Need fix line quoting properly.",
+              textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
+            },
+            {
+              type: "text",
+              text: "Hi ",
+              textSignature: JSON.stringify({ v: 1, id: "final_1", phase: "final_answer" }),
+            },
+            {
+              type: "text",
+              text: "there",
+              textSignature: JSON.stringify({ v: 1, id: "final_2", phase: "final_answer" }),
+            },
+          ],
+        },
+      ],
+    });
+
+    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
+
+    expect(result).toBe("Hi there");
+  });
 });
 
 describe("waitForAgentRun", () => {
@@ -92,6 +150,26 @@ describe("waitForAgentRun", () => {
       status: "timeout",
       error: "gateway timeout while waiting",
     });
+  });
+
+  it("keeps transport-close wait failures as errors for generic callers", async () => {
+    callGatewayMock.mockRejectedValue(new Error("gateway closed (1006): transport close"));
+
+    const result = await waitForAgentRun({ runId: "run-interrupted", timeoutMs: 500 });
+
+    expect(result).toEqual({
+      status: "error",
+      error: "gateway closed (1006): transport close",
+    });
+    expect(isRecoverableAgentWaitError(result.error)).toBe(true);
+  });
+
+  it("preserves pending agent.wait status", async () => {
+    callGatewayMock.mockResolvedValue({ status: "pending" });
+
+    const result = await waitForAgentRun({ runId: "run-pending", timeoutMs: 500 });
+
+    expect(result).toEqual({ status: "pending" });
   });
 
   it("preserves timing metadata from agent.wait", async () => {

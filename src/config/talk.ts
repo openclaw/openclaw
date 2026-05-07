@@ -1,23 +1,14 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { isRecord } from "../utils.js";
 import type {
   ResolvedTalkConfig,
   TalkConfig,
   TalkConfigResponse,
   TalkProviderConfig,
+  TalkRealtimeConfig,
 } from "./types.gateway.js";
-import type { OpenClawConfig } from "./types.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 import { coerceSecretRef } from "./types.secrets.js";
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function normalizeString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
 
 function normalizeTalkSecretInput(value: unknown): TalkProviderConfig["apiKey"] | undefined {
   if (typeof value === "string") {
@@ -34,8 +25,24 @@ function normalizeSilenceTimeoutMs(value: unknown): number | undefined {
   return value;
 }
 
+function buildLegacyTalkProviderCompat(
+  value: Record<string, unknown>,
+): TalkProviderConfig | undefined {
+  const provider: TalkProviderConfig = {};
+  for (const key of ["voiceId", "voiceAliases", "modelId", "outputFormat"] as const) {
+    if (value[key] !== undefined) {
+      provider[key] = value[key];
+    }
+  }
+  const apiKey = normalizeTalkSecretInput(value.apiKey);
+  if (apiKey !== undefined) {
+    provider.apiKey = apiKey;
+  }
+  return Object.keys(provider).length > 0 ? provider : undefined;
+}
+
 function normalizeTalkProviderConfig(value: unknown): TalkProviderConfig | undefined {
-  if (!isPlainObject(value)) {
+  if (!isRecord(value)) {
     return undefined;
   }
 
@@ -58,12 +65,12 @@ function normalizeTalkProviderConfig(value: unknown): TalkProviderConfig | undef
 }
 
 function normalizeTalkProviders(value: unknown): Record<string, TalkProviderConfig> | undefined {
-  if (!isPlainObject(value)) {
+  if (!isRecord(value)) {
     return undefined;
   }
   const providers: Record<string, TalkProviderConfig> = {};
   for (const [rawProviderId, providerConfig] of Object.entries(value)) {
-    const providerId = normalizeString(rawProviderId);
+    const providerId = normalizeOptionalString(rawProviderId);
     if (!providerId) {
       continue;
     }
@@ -71,13 +78,60 @@ function normalizeTalkProviders(value: unknown): Record<string, TalkProviderConf
     if (!normalizedProvider) {
       continue;
     }
-    providers[providerId] = normalizedProvider;
+    providers[providerId] = {
+      ...providers[providerId],
+      ...normalizedProvider,
+    };
   }
   return Object.keys(providers).length > 0 ? providers : undefined;
 }
 
+function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const source = value;
+  const normalized: TalkRealtimeConfig = {};
+
+  const provider = normalizeOptionalString(source.provider);
+  if (provider) {
+    normalized.provider = provider;
+  }
+  const providers = normalizeTalkProviders(source.providers);
+  if (providers) {
+    normalized.providers = providers;
+  }
+  const model = normalizeOptionalString(source.model);
+  if (model) {
+    normalized.model = model;
+  }
+  const voice = normalizeOptionalString(source.voice);
+  if (voice) {
+    normalized.voice = voice;
+  }
+  if (source.mode === "realtime" || source.mode === "stt-tts" || source.mode === "transcription") {
+    normalized.mode = source.mode;
+  }
+  if (
+    source.transport === "webrtc" ||
+    source.transport === "provider-websocket" ||
+    source.transport === "gateway-relay" ||
+    source.transport === "managed-room"
+  ) {
+    normalized.transport = source.transport;
+  }
+  if (
+    source.brain === "agent-consult" ||
+    source.brain === "direct-tools" ||
+    source.brain === "none"
+  ) {
+    normalized.brain = source.brain;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 function activeProviderFromTalk(talk: TalkConfig): string | undefined {
-  const provider = normalizeString(talk.provider);
+  const provider = normalizeOptionalString(talk.provider);
   const providers = talk.providers;
   if (provider) {
     if (providers && !(provider in providers)) {
@@ -90,12 +144,16 @@ function activeProviderFromTalk(talk: TalkConfig): string | undefined {
 }
 
 export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig | undefined {
-  if (!isPlainObject(value)) {
+  if (!isRecord(value)) {
     return undefined;
   }
 
   const source = value as Record<string, unknown>;
   const normalized: TalkConfig = {};
+  const speechLocale = normalizeOptionalString(source.speechLocale);
+  if (speechLocale) {
+    normalized.speechLocale = speechLocale;
+  }
   if (typeof source.interruptOnSpeech === "boolean") {
     normalized.interruptOnSpeech = source.interruptOnSpeech;
   }
@@ -105,9 +163,13 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
   }
 
   const providers = normalizeTalkProviders(source.providers);
-  const provider = normalizeString(source.provider);
+  const realtime = normalizeTalkRealtimeConfig(source.realtime);
+  const provider = normalizeOptionalString(source.provider);
   if (providers) {
     normalized.providers = providers;
+  }
+  if (realtime) {
+    normalized.realtime = realtime;
   }
   if (provider) {
     normalized.provider = provider;
@@ -147,27 +209,36 @@ export function resolveActiveTalkProviderConfig(
 }
 
 export function buildTalkConfigResponse(value: unknown): TalkConfigResponse | undefined {
-  if (!isPlainObject(value)) {
+  if (!isRecord(value)) {
     return undefined;
   }
   const normalized = normalizeTalkSection(value as TalkConfig);
-  if (!normalized) {
+  const legacyCompat = buildLegacyTalkProviderCompat(value);
+  if (!normalized && !legacyCompat) {
     return undefined;
   }
 
   const payload: TalkConfigResponse = {};
-  if (typeof normalized.interruptOnSpeech === "boolean") {
+  if (typeof normalized?.interruptOnSpeech === "boolean") {
     payload.interruptOnSpeech = normalized.interruptOnSpeech;
   }
-  if (typeof normalized.silenceTimeoutMs === "number") {
+  if (typeof normalized?.silenceTimeoutMs === "number") {
     payload.silenceTimeoutMs = normalized.silenceTimeoutMs;
   }
-  if (normalized.providers && Object.keys(normalized.providers).length > 0) {
+  if (typeof normalized?.speechLocale === "string") {
+    payload.speechLocale = normalized.speechLocale;
+  }
+  if (normalized?.providers && Object.keys(normalized.providers).length > 0) {
     payload.providers = normalized.providers;
   }
+  if (normalized?.realtime && Object.keys(normalized.realtime).length > 0) {
+    payload.realtime = normalized.realtime;
+  }
 
-  const resolved = resolveActiveTalkProviderConfig(normalized);
-  const activeProvider = normalizeString(normalized.provider) ?? resolved?.provider;
+  const resolved =
+    resolveActiveTalkProviderConfig(normalized) ??
+    (legacyCompat ? { provider: "elevenlabs", config: legacyCompat } : undefined);
+  const activeProvider = resolved?.provider;
   if (activeProvider) {
     payload.provider = activeProvider;
   }

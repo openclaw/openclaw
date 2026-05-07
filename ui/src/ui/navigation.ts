@@ -1,5 +1,6 @@
 import { t } from "../i18n/index.ts";
 import type { IconName } from "./icons.js";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 export const TAB_GROUPS = [
   { label: "chat", tabs: ["chat"] },
@@ -63,10 +64,17 @@ const TAB_PATHS: Record<Tab, string> = {
   aiAgents: "/ai-agents",
   debug: "/debug",
   logs: "/logs",
-  dreams: "/dreams",
+  dreams: "/dreaming",
 };
 
-const PATH_TO_TAB = new Map(Object.entries(TAB_PATHS).map(([tab, path]) => [path, tab as Tab]));
+const PATH_ALIASES: Record<string, Tab> = {
+  "/dreams": "dreams",
+};
+
+const PATH_TO_TAB = new Map<string, Tab>([
+  ...Object.entries(TAB_PATHS).map(([tab, path]) => [path, tab as Tab] as const),
+  ...Object.entries(PATH_ALIASES),
+]);
 
 export function normalizeBasePath(basePath: string): string {
   if (!basePath) {
@@ -115,7 +123,7 @@ export function tabFromPath(pathname: string, basePath = ""): Tab | null {
       path = path.slice(base.length);
     }
   }
-  let normalized = normalizePath(path).toLowerCase();
+  let normalized = normalizeLowercaseStringOrEmpty(normalizePath(path));
   if (normalized.endsWith("/index.html")) {
     normalized = "/";
   }
@@ -138,7 +146,7 @@ export function inferBasePathFromPathname(pathname: string): string {
     return "";
   }
   for (let i = 0; i < segments.length; i++) {
-    const candidate = `/${segments.slice(i).join("/")}`.toLowerCase();
+    const candidate = normalizeLowercaseStringOrEmpty(`/${segments.slice(i).join("/")}`);
     if (PATH_TO_TAB.has(candidate)) {
       const prefix = segments.slice(0, i);
       return prefix.length ? `/${prefix.join("/")}` : "";

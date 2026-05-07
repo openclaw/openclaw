@@ -31,6 +31,19 @@ export const bluebubblesMeta = {
 export const bluebubblesCapabilities: ChannelPlugin<ResolvedBlueBubblesAccount>["capabilities"] = {
   chatTypes: ["direct", "group"],
   media: true,
+  tts: {
+    voice: {
+      synthesisTarget: "audio-file",
+      audioFileFormats: ["mp3", "caf", "audio/mpeg", "audio/x-caf"],
+      // Prefer CAF when the host can pre-transcode (afconvert on macOS).
+      // The BlueBubbles server otherwise races a CAF→MP3 conversion against
+      // the upload write completing and silently falls back to a generic
+      // attachment send when its conversion fails. Pre-encoding to CAF
+      // bypasses that race so iMessage renders the result as a native voice
+      // memo bubble (waveform UI) instead of a plain audio attachment.
+      preferAudioFileFormat: "caf",
+    },
+  },
   reactions: true,
   edit: true,
   unsend: true,

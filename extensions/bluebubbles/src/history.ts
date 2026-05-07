@@ -1,15 +1,15 @@
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
+import { createBlueBubblesClientFromParts } from "./client.js";
 import type { OpenClawConfig } from "./runtime-api.js";
-import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
 
-export type BlueBubblesHistoryEntry = {
+type BlueBubblesHistoryEntry = {
   sender: string;
   body: string;
   timestamp?: number;
   messageId?: string;
 };
 
-export type BlueBubblesHistoryFetchResult = {
+type BlueBubblesHistoryFetchResult = {
   entries: BlueBubblesHistoryEntry[];
   /**
    * True when at least one API path returned a recognized response shape.
@@ -18,7 +18,7 @@ export type BlueBubblesHistoryFetchResult = {
   resolved: boolean;
 };
 
-export type BlueBubblesMessageData = {
+type BlueBubblesMessageData = {
   guid?: string;
   text?: string;
   handle_id?: string;
@@ -32,7 +32,7 @@ export type BlueBubblesMessageData = {
   };
 };
 
-export type BlueBubblesChatOpts = {
+type BlueBubblesChatOpts = {
   serverUrl?: string;
   password?: string;
   accountId?: string;
@@ -89,7 +89,12 @@ export async function fetchBlueBubblesHistory(
   } catch {
     return { entries: [], resolved: false };
   }
-  const ssrfPolicy = allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
+  const client = createBlueBubblesClientFromParts({
+    baseUrl,
+    password,
+    allowPrivateNetwork,
+    timeoutMs: opts.timeoutMs ?? 10000,
+  });
 
   // Try different common API patterns for fetching messages
   const possiblePaths = [
@@ -100,13 +105,11 @@ export async function fetchBlueBubblesHistory(
 
   for (const path of possiblePaths) {
     try {
-      const url = buildBlueBubblesApiUrl({ baseUrl, path, password });
-      const res = await blueBubblesFetchWithTimeout(
-        url,
-        { method: "GET" },
-        opts.timeoutMs ?? 10000,
-        ssrfPolicy,
-      );
+      const res = await client.request({
+        method: "GET",
+        path,
+        timeoutMs: opts.timeoutMs ?? 10000,
+      });
 
       if (!res.ok) {
         continue; // Try next path
@@ -169,7 +172,7 @@ export async function fetchBlueBubblesHistory(
         entries: historyEntries.slice(0, effectiveLimit), // Ensure we don't exceed the requested limit
         resolved: true,
       };
-    } catch (error) {
+    } catch {
       // Continue to next path
       continue;
     }

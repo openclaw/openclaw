@@ -1,1 +1,1 @@
-export * from "./src/runtime-heavy-api.js";
+export * from "./src/matrix-migration.runtime.js";

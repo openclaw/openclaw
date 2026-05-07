@@ -1,10 +1,12 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
 export const ExecApprovalsAllowlistEntrySchema = Type.Object(
   {
     id: Type.Optional(NonEmptyString),
     pattern: Type.String(),
+    source: Type.Optional(Type.Literal("allow-always")),
+    commandText: Type.Optional(Type.String()),
     argPattern: Type.Optional(Type.String()),
     lastUsedAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastUsedCommand: Type.Optional(Type.String()),
@@ -130,6 +132,7 @@ export const ExecApprovalRequestParamsSchema = Type.Object(
     host: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     security: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     ask: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    warningText: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     agentId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     resolvedPath: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     sessionKey: Type.Optional(Type.Union([Type.String(), Type.Null()])),
