@@ -1716,6 +1716,7 @@
     "jiti": "^2.6.1",
     "json5": "^2.2.3",
     "jszip": "^3.10.1",
+    "kysely": "0.28.17",
     "linkedom": "^0.18.12",
     "markdown-it": "14.1.1",
     "minimatch": "10.2.5",
@@ -1775,7 +1776,7 @@
     "uuid": "14.0.0"
   },
   "engines": {
-    "node": ">=22.14.0"
+    "node": ">=22.16.0"
   },
   "packageManager": "pnpm@10.33.2+sha512.a90faf6feeab71ad6c6e57f94e0fe1a12f5dcc22cd754db40ae9593eb6a3e0b6b12e3540218bb37ae083404b1f2ce6db2a4121e979829b4aff94b99f49da1cf8",
   "pnpm": {

@@ -161,6 +161,9 @@ importers:
       jszip:
         specifier: ^3.10.1
         version: 3.10.1
+      kysely:
+        specifier: 0.28.17
+        version: 0.28.17
       linkedom:
         specifier: ^0.18.12
         version: 0.18.12
@@ -6016,6 +6019,10 @@ packages:
 
   koffi@2.16.1:
     resolution: {integrity: sha512-0Ie6CfD026dNfWSosDw9dPxPzO9Rlyo0N8m5r05S8YjytIpuilzMFDMY4IDy/8xQsTwpuVinhncD+S8n3bcYZQ==}
+
+  kysely@0.28.17:
+    resolution: {integrity: sha512-nbD8lB9EB3wNdMhOCdx5Li8DxnLbvKByylRLcJ1h+4SkrowVeECAyZlyiKMThF7xFdRz0jSQ2MoJr+wXux2y0Q==}
+    engines: {node: '>=20.0.0'}
 
   lie@3.3.0:
     resolution: {integrity: sha512-UaiMJzeWRlEujzAuw5LokY1L5ecNQYZKfmyZ9L7wDHb/p5etKaxXhohBcrw0EYby+G/NA52vRSN4N39dxHAIwQ==}
@@ -13099,6 +13106,8 @@ snapshots:
 
   koffi@2.16.1:
     optional: true
+
+  kysely@0.28.17: {}
 
   lie@3.3.0:
     dependencies:

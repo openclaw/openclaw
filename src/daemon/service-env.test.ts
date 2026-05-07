@@ -704,11 +704,11 @@ describe("buildServiceEnvironment", () => {
       env: { HOME: "/Users/user", VOLTA_HOME: "/Users/user/.volta" },
       port: 18789,
       platform: "darwin",
-      extraPathDirs: ["/opt/homebrew/Cellar/node/22.14.0/bin"],
+      extraPathDirs: ["/opt/homebrew/Cellar/node/22.16.0/bin"],
     });
 
     expect(env.PATH).toBe(
-      "/opt/homebrew/Cellar/node/22.14.0/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+      "/opt/homebrew/Cellar/node/22.16.0/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
     );
   });
 });
