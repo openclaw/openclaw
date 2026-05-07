@@ -353,6 +353,33 @@ describe("createWebSendApi", () => {
     );
   });
 
+  it("resolves PN to LID for sendLocation when authDir is provided", async () => {
+    const tempAuthDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-wa-lid-"));
+    fs.writeFileSync(
+      path.join(tempAuthDir, "lid-mapping-15555550000.json"),
+      JSON.stringify("987654"),
+    );
+    try {
+      const api = createWebSendApi({
+        sock: { sendMessage, sendPresenceUpdate },
+        defaultAccountId: "main",
+        authDir: tempAuthDir,
+      });
+      await api.sendLocation("+15555550000", 28.2723, -16.6424);
+      expect(sendMessage).toHaveBeenCalledWith(
+        "987654@lid",
+        expect.objectContaining({
+          location: expect.objectContaining({
+            degreesLatitude: 28.2723,
+            degreesLongitude: -16.6424,
+          }),
+        }),
+      );
+    } finally {
+      fs.rmSync(tempAuthDir, { recursive: true, force: true });
+    }
+  });
+
   it("omits undefined optional location fields from payload", async () => {
     await api.sendLocation("+1555", 0, 0);
     expect(sendMessage).toHaveBeenCalledWith(

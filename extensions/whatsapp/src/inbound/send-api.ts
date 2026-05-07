@@ -179,7 +179,7 @@ export function createWebSendApi(params: {
       longitude: number,
       options?: { locationName?: string; locationAddress?: string; accuracyInMeters?: number },
     ): Promise<WhatsAppSendResult> => {
-      const jid = toWhatsappJid(to);
+      const jid = resolveOutboundJid(to);
       const locationPayload: Record<string, unknown> = {
         degreesLatitude: latitude,
         degreesLongitude: longitude,

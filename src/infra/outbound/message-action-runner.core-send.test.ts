@@ -124,6 +124,47 @@ describe("runMessageAction core send routing", () => {
     );
   });
 
+  it("rejects mixed location and message payloads", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "testchat",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "testchat",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: vi.fn(),
+            },
+          }),
+        },
+      ]),
+    );
+    const cfg = {
+      channels: {
+        testchat: {
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      runMessageAction({
+        cfg,
+        action: "send",
+        params: {
+          channel: "testchat",
+          target: "channel:abc",
+          latitude: 28.2723,
+          longitude: -16.6424,
+          message: "hello",
+          media: "https://example.com/file.txt",
+        },
+        dryRun: false,
+      }),
+    ).rejects.toThrow("location sends cannot include text or media payloads");
+  });
+
   it("accepts Telegram numeric forum topic targets through plugin-owned grammar", async () => {
     setActivePluginRegistry(
       createTestRegistry([
