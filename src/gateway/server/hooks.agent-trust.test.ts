@@ -199,6 +199,46 @@ describe("dispatchAgentHook trust handling", () => {
     );
   });
 
+  it("preserves successful hook summaries over non-fatal diagnostics", async () => {
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+      status: "ok",
+      summary: "agent completed successfully",
+      diagnostics: {
+        summary: "tool emitted a warning",
+        entries: [
+          {
+            ts: 1,
+            source: "tool",
+            severity: "warning",
+            message: "tool emitted a warning",
+          },
+        ],
+      },
+      delivered: false,
+      deliveryAttempted: false,
+    });
+
+    expect(capturedDispatchAgentHook).toBeDefined();
+    capturedDispatchAgentHook?.({
+      ...buildAgentPayload("Fallback delivery"),
+      deliver: true,
+    });
+
+    await vi.waitFor(() =>
+      expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+        "Hook Fallback delivery: agent completed successfully",
+        {
+          sessionKey: "agent:main:main",
+          trusted: false,
+        },
+      ),
+    );
+    expect(enqueueSystemEventMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("tool emitted a warning"),
+      expect.anything(),
+    );
+  });
+
   it("announces skipped deliver:false hook results as non-ok status events", async () => {
     runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
       status: "skipped",

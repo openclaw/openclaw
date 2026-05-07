@@ -38,8 +38,10 @@ function shouldAnnounceHookRunResult(params: {
 }
 
 function resolveHookRunSummary(result: RunCronAgentTurnResult): string {
+  const diagnosticsSummary =
+    result.status !== "ok" ? normalizeOptionalString(result.diagnostics?.summary) : undefined;
   return (
-    normalizeOptionalString(result.diagnostics?.summary) ||
+    diagnosticsSummary ||
     normalizeOptionalString(result.summary) ||
     normalizeOptionalString(result.error) ||
     result.status
