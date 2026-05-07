@@ -215,6 +215,29 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
 
     const pendingBatch = Array.from(pendingWakes.values());
     pendingWakes.clear();
+    // ALWAYS-ON instrumentation (openclaw-tak): batch composition just before
+    // serial dispatch. If we see a single batch with N wakes for the same
+    // agentId, that explains a flood-guard trip with N stamps in <1s.
+    if (pendingBatch.length > 0) {
+      try {
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[hb-instrument] BATCH-START " +
+            JSON.stringify({
+              size: pendingBatch.length,
+              targets: pendingBatch.map((w) => ({
+                agentId: w.agentId ?? null,
+                sessionKey: w.sessionKey ?? null,
+                source: w.source,
+                intent: w.intent,
+                reason: w.reason,
+              })),
+            }),
+        );
+      } catch {
+        // best-effort
+      }
+    }
     running = true;
     try {
       for (const pendingWake of pendingBatch) {
@@ -314,6 +337,32 @@ export function requestHeartbeat(opts: {
   sessionKey?: string;
   heartbeat?: { target?: string };
 }) {
+  // ALWAYS-ON instrumentation (openclaw-tak): identifies every wake source
+  // entering the heartbeat-wake queue. Caller hint comes from a captured
+  // stack frame so we can attribute wakes to plugins / runtime paths in the
+  // 60s before a flood-guard trip.
+  // eslint-disable-next-line no-console
+  try {
+    const stack = new Error().stack ?? "";
+    const frames = stack
+      .split("\n")
+      .slice(2, 4)
+      .map((s) => s.trim());
+    console.warn(
+      "[hb-instrument] WAKE-REQ " +
+        JSON.stringify({
+          source: opts.source,
+          intent: opts.intent,
+          reason: opts.reason ?? null,
+          agentId: opts.agentId ?? null,
+          sessionKey: opts.sessionKey ?? null,
+          coalesceMs: opts.coalesceMs ?? null,
+          caller: frames,
+        }),
+    );
+  } catch {
+    // best-effort; never throw from instrumentation
+  }
   queuePendingWakeReason({
     source: opts.source,
     intent: opts.intent,

@@ -1999,10 +1999,30 @@ export function startHeartbeatRunner(opts: {
     });
     if (decision.defer && decision.reason === "flood") {
       if (!agent.floodLoggedSinceLastRun) {
+        // ALWAYS-ON detail log: identifies actual in-window count + buffer
+        // contents at the moment of trip. Released by openclaw-tak. Cheap;
+        // bounded buffer of <=6 entries. Without this we cannot tell whether
+        // "recentRunCount: 6" reflects 6 in-window stamps or just a filled
+        // bounded buffer.
+        const floodWindowMs = 60_000;
+        const windowStart = now - floodWindowMs;
+        const buf = agent.recentRunStarts;
+        let inWindow = 0;
+        for (let i = buf.length - 1; i >= 0; i--) {
+          const ts = buf[i];
+          if (ts === undefined || ts < windowStart) break;
+          inWindow += 1;
+        }
         log.warn("heartbeat: flood guard tripped, deferring wake", {
           agentId: agent.agentId,
           reason: reason ?? "(none)",
+          intent,
           recentRunCount: agent.recentRunStarts.length,
+          inWindow,
+          windowStart,
+          now,
+          bufferAgesMs: buf.map((ts) => now - ts),
+          bufferContents: buf.slice(),
         });
         agent.floodLoggedSinceLastRun = true;
       }
@@ -2012,10 +2032,32 @@ export function startHeartbeatRunner(opts: {
 
   // Called immediately before `runOnce` actually executes. Updates the
   // bookkeeping that the cooldown gate consults on the next wake.
-  const recordRunBookkeeping = (agent: HeartbeatAgentState, now: number) => {
+  const recordRunBookkeeping = (
+    agent: HeartbeatAgentState,
+    now: number,
+    diag?: {
+      reason?: string;
+      intent?: HeartbeatWakeIntent;
+      sessionKey?: string;
+      source?: HeartbeatWakeSource;
+    },
+  ) => {
     agent.lastRunStartedAtMs = now;
     recordRunStart(agent.recentRunStarts, now);
     agent.floodLoggedSinceLastRun = false;
+    // ALWAYS-ON stamp log: every successful wake that stamps the flood
+    // ledger emits one line. Released by openclaw-tak. Lets us reconstruct
+    // exactly which wake sources populated the buffer in the 60s before a
+    // future flood trip. Bounded by run rate (typically <=10/min/agent).
+    log.warn("heartbeat: stamp recorded", {
+      agentId: agent.agentId,
+      ts: now,
+      reason: diag?.reason ?? "(none)",
+      intent: diag?.intent ?? "(none)",
+      source: diag?.source ?? "(none)",
+      sessionKey: diag?.sessionKey ?? "(none)",
+      bufferContents: agent.recentRunStarts.slice(),
+    });
   };
 
   const scheduleNext = () => {
@@ -2199,7 +2241,12 @@ export function startHeartbeatRunner(opts: {
           }
           // Non-retryable outcome (ran, disabled, failed-but-not-busy). Record
           // bookkeeping so subsequent wakes within the cooldown window defer.
-          recordRunBookkeeping(targetAgent, now);
+          recordRunBookkeeping(targetAgent, now, {
+            reason,
+            intent,
+            source: params.source,
+            sessionKey: requestedSessionKey,
+          });
           if (res.status !== "skipped" || res.reason !== "disabled") {
             advanceAgentSchedule(targetAgent, now, reason);
           }
@@ -2212,7 +2259,12 @@ export function startHeartbeatRunner(opts: {
           // Throw counts as a non-retryable terminal attempt for cooldown
           // purposes — record bookkeeping so the wake layer doesn't tight-loop
           // on the same reason.
-          recordRunBookkeeping(targetAgent, now);
+          recordRunBookkeeping(targetAgent, now, {
+            reason: `${reason ?? "(none)"}/threw`,
+            intent,
+            source: params.source,
+            sessionKey: requestedSessionKey,
+          });
           advanceAgentSchedule(targetAgent, now, reason);
           return { status: "failed", reason: errMsg };
         }
@@ -2240,7 +2292,11 @@ export function startHeartbeatRunner(opts: {
           log.error(`heartbeat runner: runOnce threw unexpectedly: ${errMsg}`, { error: errMsg });
           // Throw counts as a non-retryable terminal attempt — see comment in
           // targeted branch above.
-          recordRunBookkeeping(agent, now);
+          recordRunBookkeeping(agent, now, {
+            reason: `${reason ?? "(none)"}/threw"`,
+            intent,
+            source: params.source,
+          });
           advanceAgentSchedule(agent, now, reason);
           continue;
         }
@@ -2253,7 +2309,7 @@ export function startHeartbeatRunner(opts: {
           return res;
         }
         // Non-retryable outcome — record bookkeeping for cooldown gates.
-        recordRunBookkeeping(agent, now);
+        recordRunBookkeeping(agent, now, { reason, intent, source: params.source });
         if (res.status !== "skipped" || res.reason !== "disabled") {
           advanceAgentSchedule(agent, now, reason);
         }
