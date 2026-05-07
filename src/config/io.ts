@@ -152,6 +152,7 @@ type ShippedPluginInstallConfigReadMigration = {
 
 const CONFIG_HEALTH_STATE_FILENAME = "config-health.json";
 const loggedInvalidConfigs = new Set<string>();
+const loggedLegacyAgentLlmTimeoutWarnings = new Set<string>();
 const warnedFutureTouchedVersions = new Set<string>();
 
 type ConfigHealthFingerprint = {
@@ -885,6 +886,69 @@ function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">)
   }
 }
 
+function readLegacyAgentLlmIdleTimeoutSeconds(sourceRaw: unknown): number | null {
+  if (!isRecord(sourceRaw)) {
+    return null;
+  }
+  const agents = sourceRaw.agents;
+  if (!isRecord(agents)) {
+    return null;
+  }
+  const defaults = agents.defaults;
+  if (!isRecord(defaults)) {
+    return null;
+  }
+  const llm = defaults.llm;
+  if (!isRecord(llm)) {
+    return null;
+  }
+  const idleTimeoutSeconds = llm.idleTimeoutSeconds;
+  return typeof idleTimeoutSeconds === "number" && Number.isFinite(idleTimeoutSeconds)
+    ? idleTimeoutSeconds
+    : null;
+}
+
+function hasLegacyAgentLlmConfig(sourceRaw: unknown): boolean {
+  if (!isRecord(sourceRaw)) {
+    return false;
+  }
+  const agents = sourceRaw.agents;
+  if (!isRecord(agents)) {
+    return false;
+  }
+  const defaults = agents.defaults;
+  if (!isRecord(defaults)) {
+    return false;
+  }
+  return isRecord(defaults.llm);
+}
+
+function warnOnLegacyAgentLlmTimeoutConfig(params: {
+  configPath: string;
+  sourceRaw: unknown;
+  logger: Pick<typeof console, "warn">;
+}): void {
+  if (!hasLegacyAgentLlmConfig(params.sourceRaw)) {
+    return;
+  }
+  const idleTimeoutSeconds = readLegacyAgentLlmIdleTimeoutSeconds(params.sourceRaw);
+  const warningKey = `${params.configPath}:agents.defaults.llm:${idleTimeoutSeconds ?? "unknown"}`;
+  if (loggedLegacyAgentLlmTimeoutWarnings.has(warningKey)) {
+    return;
+  }
+  loggedLegacyAgentLlmTimeoutWarnings.add(warningKey);
+
+  const replacement =
+    idleTimeoutSeconds !== null
+      ? `set models.providers.<id>.timeoutSeconds: ${idleTimeoutSeconds} for slow providers`
+      : "set models.providers.<id>.timeoutSeconds for slow providers";
+  params.logger.warn(
+    `Config legacy compatibility warning:\n- agents.defaults.llm${
+      idleTimeoutSeconds !== null ? ".idleTimeoutSeconds" : ""
+    }: legacy config no longer controls model idle timeouts; ${replacement} or run "openclaw doctor --fix".`,
+  );
+}
+
 function stampConfigVersion(cfg: OpenClawConfig): OpenClawConfig {
   const now = new Date().toISOString();
   return {
@@ -1520,6 +1584,11 @@ export function createConfigIO(
         );
       }
       warnOnConfigMiskeys(validationConfigRaw, deps.logger);
+      warnOnLegacyAgentLlmTimeoutConfig({
+        configPath,
+        sourceRaw: validationConfigRaw,
+        logger: deps.logger,
+      });
       if (typeof validationConfigRaw !== "object" || validationConfigRaw === null) {
         observeLoadConfigSnapshot({
           ...createConfigFileSnapshot({

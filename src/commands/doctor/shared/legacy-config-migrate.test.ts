@@ -299,20 +299,30 @@ describe("legacy migrate sandbox scope aliases", () => {
     const res = migrateLegacyConfigForTest({
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-5.4" },
+          model: { primary: "mlx/slow-local" },
           llm: {
-            idleTimeoutSeconds: 120,
+            idleTimeoutSeconds: 180,
+          },
+        },
+      },
+      models: {
+        providers: {
+          mlx: {
+            baseUrl: "http://127.0.0.1:8080/v1",
+            api: "openai-completions",
+            models: [{ id: "slow-local", name: "mlx/slow-local" }],
           },
         },
       },
     });
 
     expect(res.changes).toContain(
-      "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds.",
+      "Removed agents.defaults.llm.idleTimeoutSeconds: 180; to preserve this behavior, set models.providers.<id>.timeoutSeconds: 180 for slow providers. Configured providers: mlx.",
     );
     expect(res.config?.agents?.defaults).toEqual({
-      model: { primary: "openai/gpt-5.4" },
+      model: { primary: "mlx/slow-local" },
     });
+    expect(res.config?.models?.providers?.mlx?.timeoutSeconds).toBeUndefined();
   });
 
   it("moves legacy embeddedHarness runtime policy into agentRuntime", () => {
