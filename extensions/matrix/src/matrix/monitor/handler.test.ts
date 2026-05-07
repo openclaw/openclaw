@@ -1930,6 +1930,17 @@ describe("matrix monitor handler live allowlist reload", () => {
       .channels?.matrix;
     return matrix?.dangerouslyAllowNameMatching === true;
   };
+  type LiveNameMatchingResolveParams = {
+    cfg: unknown;
+    entries?: ReadonlyArray<string | number>;
+  };
+  const countLiveAllowlistCallsForEntries = (
+    calls: Array<[LiveNameMatchingResolveParams]>,
+    entries: string[],
+  ): number =>
+    calls.filter(
+      ([params]) => JSON.stringify((params.entries ?? []).map(String)) === JSON.stringify(entries),
+    ).length;
 
   it("accepts a DM sender added to live dm.allowFrom", async () => {
     const dispatchReplyFromConfig = createDispatchReplyFromConfig();
@@ -2164,7 +2175,7 @@ describe("matrix monitor handler live allowlist reload", () => {
 
   it("refreshes cached live display-name allowlists when name matching is disabled", async () => {
     const dispatchReplyFromConfig = createDispatchReplyFromConfig();
-    const resolveLiveUserAllowlist = vi.fn(async (params: { cfg: unknown }) =>
+    const resolveLiveUserAllowlist = vi.fn(async (params: LiveNameMatchingResolveParams) =>
       isLiveNameMatchingEnabled(params.cfg) ? ["@alice:example.org"] : [],
     );
     const cfg = {
@@ -2199,13 +2210,15 @@ describe("matrix monitor handler live allowlist reload", () => {
       body: "hello again",
     });
 
-    expect(resolveLiveUserAllowlist).toHaveBeenCalledTimes(2);
+    expect(countLiveAllowlistCallsForEntries(resolveLiveUserAllowlist.mock.calls, ["Alice"])).toBe(
+      2,
+    );
     expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes cached live display-name allowlists when name matching is enabled", async () => {
     const dispatchReplyFromConfig = createDispatchReplyFromConfig();
-    const resolveLiveUserAllowlist = vi.fn(async (params: { cfg: unknown }) =>
+    const resolveLiveUserAllowlist = vi.fn(async (params: LiveNameMatchingResolveParams) =>
       isLiveNameMatchingEnabled(params.cfg) ? ["@alice:example.org"] : [],
     );
     const cfg = {
@@ -2240,7 +2253,9 @@ describe("matrix monitor handler live allowlist reload", () => {
       body: "hello again",
     });
 
-    expect(resolveLiveUserAllowlist).toHaveBeenCalledTimes(2);
+    expect(countLiveAllowlistCallsForEntries(resolveLiveUserAllowlist.mock.calls, ["Alice"])).toBe(
+      2,
+    );
     expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
