@@ -139,7 +139,7 @@ is available, then fall back to `latest`.
 
     Use `npm:<package>` when you want to make npm resolution explicit. Bare package specs also install directly from npm during the launch cutover.
 
-    Bare specs and `@latest` stay on the stable track. OpenClaw date-stamped correction versions such as `2026.5.3-1` are stable releases for this check. If npm resolves either of those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a prerelease tag such as `@beta`/`@rc` or an exact prerelease version such as `@1.2.3-beta.4`.
+    Bare specs and `@latest` stay on the stable track. Legacy OpenClaw correction versions such as `2026.5.3-1` are still treated as stable releases for this check so older packages keep updating safely. New monthly support-line work is planned to use normal SemVer patch numbers instead of hyphen correction suffixes. If npm resolves a default-line spec to a prerelease, OpenClaw stops and asks you to opt in explicitly with a prerelease tag such as `@beta`/`@rc` or an exact prerelease version such as `@1.2.3-beta.4`.
 
     If a bare install spec matches an official plugin id (for example `diffs`), OpenClaw installs the catalog entry directly. To install an npm package with the same name, use an explicit scoped spec (for example `@scope/diffs`).
 
@@ -336,6 +336,8 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
   </Accordion>
   <Accordion title="Beta channel updates">
     `openclaw plugins update` reuses the tracked plugin spec unless you pass a new spec. `openclaw update` additionally knows the active OpenClaw update channel: on the beta channel, default-line npm and ClawHub plugin records try `@beta` first, then fall back to the recorded default/latest spec if no plugin beta release exists. Exact versions and explicit tags stay pinned to that selector.
+
+    OpenClaw does not yet expose LTS or monthly support plugin channels. Planned support-line work will need plugin package and ClawHub tags to follow the same support line as the core package.
 
   </Accordion>
   <Accordion title="Version checks and integrity drift">

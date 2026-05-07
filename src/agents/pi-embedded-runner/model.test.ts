@@ -157,7 +157,12 @@ vi.mock("./openrouter-model-capabilities.js", () => ({
 import type { OpenClawConfig } from "../../config/config.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { buildForwardCompatTemplate } from "./model.forward-compat.test-support.js";
-import { buildInlineProviderModels, resolveModel, resolveModelAsync } from "./model.js";
+import {
+  buildInlineProviderModels,
+  resolveModel,
+  resolveModelAsync,
+  resolveModelWithRegistry,
+} from "./model.js";
 import {
   buildOpenAICodexForwardCompatExpectation,
   makeModel,
@@ -1949,6 +1954,60 @@ describe("resolveModel", () => {
       id: "gpt-5.4",
       contextWindow: 1_050_000,
       contextTokens: 272_000,
+    });
+  });
+
+  it("passes configured workspaceDir through direct registry dynamic hooks", () => {
+    const runProviderDynamicModel = vi.fn(
+      (params: {
+        workspaceDir?: string;
+        context: { workspaceDir?: string; provider: string; modelId: string };
+      }) =>
+        params.workspaceDir === "/tmp/workspace" &&
+        params.context.workspaceDir === "/tmp/workspace" &&
+        params.context.provider === "openai-codex" &&
+        params.context.modelId === "gpt-5.4"
+          ? ({
+              ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+              name: "GPT-5.4",
+            } as ReturnType<typeof buildOpenAICodexForwardCompatExpectation>)
+          : undefined,
+    );
+    const runtimeHooks = {
+      ...createRuntimeHooks(),
+      runProviderDynamicModel,
+    };
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: "/tmp/workspace",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModelWithRegistry({
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      agentDir: "/tmp/agent-state",
+      cfg,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent-state"),
+      runtimeHooks,
+    });
+
+    expect(runProviderDynamicModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace",
+        context: expect.objectContaining({
+          workspaceDir: "/tmp/workspace",
+          agentDir: "/tmp/agent-state",
+          modelId: "gpt-5.4",
+          provider: "openai-codex",
+        }),
+      }),
+    );
+    expect(result).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
     });
   });
 

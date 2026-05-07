@@ -909,8 +909,9 @@ function resolveRestartLifecycleError(
   const pending = [err];
   const seen = new Set<unknown>();
 
-  while (pending.length > 0) {
-    const candidate = pending.shift();
+  let pendingIndex = 0;
+  while (pendingIndex < pending.length) {
+    const candidate = pending[pendingIndex++];
     if (!candidate || seen.has(candidate)) {
       continue;
     }

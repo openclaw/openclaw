@@ -760,4 +760,49 @@ describe("installContextEngineLoopHook", () => {
     expect(retryResult).toBe(compactedView);
     expect(engine.assemble).toHaveBeenCalledTimes(1);
   });
+
+  it("clears the cached assembled view when the source history shrinks", async () => {
+    const agent = makeGuardableAgent();
+    const compactedView = [makeUser("compacted")];
+    const engine = makeMockEngine({
+      assemble: async () => ({ messages: compactedView, estimatedTokens: 0 }),
+    });
+    installHook(agent, engine);
+
+    const { transformed: firstResult } = await callAfterInitialToolResult(agent, {
+      includeSecondUser: false,
+      firstResultText: "r",
+    });
+    expect(firstResult).toBe(compactedView);
+
+    const postResetMessages = [makeUser("fresh post-reset turn")];
+    const postResetResult = await callTransform(agent, postResetMessages);
+    expect(postResetResult).toBe(postResetMessages);
+  });
+
+  it("clears the cached assembled view when assemble fails", async () => {
+    const agent = makeGuardableAgent();
+    const compactedView = [makeUser("compacted")];
+    const engine = makeMockEngine({
+      assemble: async () => ({ messages: compactedView, estimatedTokens: 0 }),
+    });
+    installHook(agent, engine);
+
+    const { withNew, transformed: firstResult } = await callAfterInitialToolResult(agent, {
+      includeSecondUser: false,
+      firstResultText: "r",
+    });
+    expect(firstResult).toBe(compactedView);
+
+    const afterFailureMessages = [...withNew, makeUser("after failure")];
+    engine.assemble.mockImplementationOnce(async () => {
+      throw new Error("engine assemble boom");
+    });
+
+    const failureResult = await callTransform(agent, afterFailureMessages);
+    expect(failureResult).toBe(afterFailureMessages);
+
+    const retryResult = await callTransform(agent, afterFailureMessages);
+    expect(retryResult).toBe(afterFailureMessages);
+  });
 });
