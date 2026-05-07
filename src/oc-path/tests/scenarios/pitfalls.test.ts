@@ -125,7 +125,7 @@ describe('wave-23 pitfalls — predicate content', () => {
     ).ast;
     const out = findOcPaths(ast, parseOcPath('oc://wf/steps/[id=foo/bar]/cmd'));
     expect(out).toHaveLength(1);
-    if (out[0]!.match.kind === 'leaf') {expect(out[0]!.match.valueText).toBe('x');}
+    if (out[0].match.kind === 'leaf') {expect(out[0].match.valueText).toBe('x');}
   });
 
   it('P-013 predicate value containing `.` round-trips', () => {
@@ -139,7 +139,7 @@ describe('wave-23 pitfalls — predicate content', () => {
     ).ast;
     const out = findOcPaths(ast, parseOcPath('oc://wf/steps/[id=1.0]/cmd'));
     expect(out).toHaveLength(1);
-    if (out[0]!.match.kind === 'leaf') {expect(out[0]!.match.valueText).toBe('x');}
+    if (out[0].match.kind === 'leaf') {expect(out[0].match.valueText).toBe('x');}
   });
 });
 

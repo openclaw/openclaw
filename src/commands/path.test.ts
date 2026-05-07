@@ -1,0 +1,244 @@
+/**
+ * Smoke tests for the `openclaw path` CLI handlers.
+ *
+ * Tests invoke each subcommand handler directly with a capturing
+ * `OutputRuntimeEnv` — no commander wiring, no child process spawn.
+ * Assertions inspect captured stdout/stderr and the exit code the
+ * handler set on the runtime.
+ */
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OutputRuntimeEnv } from "../runtime.js";
+import {
+  pathEmitCommand,
+  pathFindCommand,
+  pathResolveCommand,
+  pathSetCommand,
+  pathValidateCommand,
+} from "./path.js";
+
+interface TestRuntime extends OutputRuntimeEnv {
+  readonly stdout: string[];
+  readonly stderr: string[];
+  exitCode: number;
+}
+
+function createTestRuntime(): TestRuntime {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const runtime: TestRuntime = {
+    stdout,
+    stderr,
+    exitCode: 0,
+    log: (...args) => {
+      stdout.push(args.map((a) => (typeof a === "string" ? a : String(a))).join(" "));
+    },
+    error: (...args) => {
+      stderr.push(args.map((a) => (typeof a === "string" ? a : String(a))).join(" "));
+    },
+    writeStdout: (value) => {
+      stdout.push(value);
+    },
+    writeJson: (value, space = 2) => {
+      stdout.push(JSON.stringify(value, null, space > 0 ? space : undefined));
+    },
+    exit: (code) => {
+      runtime.exitCode = code;
+    },
+  };
+  return runtime;
+}
+
+const stdoutText = (rt: TestRuntime): string => rt.stdout.join("\n");
+const stderrText = (rt: TestRuntime): string => rt.stderr.join("\n");
+
+describe("openclaw path CLI", () => {
+  let workspaceDir: string;
+
+  beforeEach(() => {
+    workspaceDir = mkdtempSync(join(tmpdir(), "oc-path-cli-"));
+  });
+  afterEach(() => {
+    // mkdtemp leaves a small dir; OS will GC it. Skip cleanup to keep
+    // the test deterministic on Windows where rmdir flakes.
+  });
+
+  describe("validate", () => {
+    it("CLI-V01 accepts a well-formed path with --json", () => {
+      const rt = createTestRuntime();
+      pathValidateCommand("oc://AGENTS.md/Tools/-1", { json: true }, rt);
+      expect(rt.exitCode).toBe(0);
+      const out = JSON.parse(stdoutText(rt));
+      expect(out.valid).toBe(true);
+      expect(out.structure.file).toBe("AGENTS.md");
+      expect(out.structure.section).toBe("Tools");
+    });
+
+    it("CLI-V02 rejects a malformed path with code 1", () => {
+      const rt = createTestRuntime();
+      pathValidateCommand("oc://X/a\x00b", { json: true }, rt);
+      expect(rt.exitCode).toBe(1);
+      const out = JSON.parse(stdoutText(rt));
+      expect(out.valid).toBe(false);
+    });
+
+    it("CLI-V03 missing argument returns 2", () => {
+      const rt = createTestRuntime();
+      pathValidateCommand(undefined, { json: true }, rt);
+      expect(rt.exitCode).toBe(2);
+      expect(stderrText(rt)).toContain("missing");
+    });
+  });
+
+  describe("resolve", () => {
+    it("CLI-R01 finds a leaf in jsonc and prints it", async () => {
+      const filePath = join(workspaceDir, "gateway.jsonc");
+      writeFileSync(filePath, '{ "version": "1.0" }', "utf-8");
+      const rt = createTestRuntime();
+      await pathResolveCommand(
+        "oc://gateway.jsonc/version",
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
+      expect(rt.exitCode).toBe(0);
+      const out = JSON.parse(stdoutText(rt));
+      expect(out.resolved).toBe(true);
+      expect(out.match.kind).toBe("leaf");
+      expect(out.match.valueText).toBe("1.0");
+    });
+
+    it("CLI-R02 returns 1 for not-found path", async () => {
+      const filePath = join(workspaceDir, "gateway.jsonc");
+      writeFileSync(filePath, '{ "version": "1.0" }', "utf-8");
+      const rt = createTestRuntime();
+      await pathResolveCommand(
+        "oc://gateway.jsonc/missing",
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
+      expect(rt.exitCode).toBe(1);
+      const out = JSON.parse(stdoutText(rt));
+      expect(out.resolved).toBe(false);
+    });
+
+    it("CLI-R03 missing argument returns 2", async () => {
+      const rt = createTestRuntime();
+      await pathResolveCommand(undefined, { json: true }, rt);
+      expect(rt.exitCode).toBe(2);
+      expect(stderrText(rt)).toContain("missing");
+    });
+  });
+
+  describe("set", () => {
+    it("CLI-S01 writes new bytes when path resolves", async () => {
+      const filePath = join(workspaceDir, "gateway.jsonc");
+      writeFileSync(filePath, '{ "version": "1.0" }', "utf-8");
+      const rt = createTestRuntime();
+      await pathSetCommand(
+        "oc://gateway.jsonc/version",
+        "2.0",
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
+      expect(rt.exitCode).toBe(0);
+      const after = readFileSync(filePath, "utf-8");
+      expect(after).toContain('"2.0"');
+    });
+
+    it("CLI-S02 --dry-run does not write to disk", async () => {
+      const filePath = join(workspaceDir, "gateway.jsonc");
+      const before = '{ "version": "1.0" }';
+      writeFileSync(filePath, before, "utf-8");
+      const rt = createTestRuntime();
+      await pathSetCommand(
+        "oc://gateway.jsonc/version",
+        "2.0",
+        { cwd: workspaceDir, json: true, dryRun: true },
+        rt,
+      );
+      expect(rt.exitCode).toBe(0);
+      const out = JSON.parse(stdoutText(rt));
+      expect(out.dryRun).toBe(true);
+      expect(out.bytes).toContain('"2.0"');
+      // File on disk unchanged.
+      expect(readFileSync(filePath, "utf-8")).toBe(before);
+    });
+
+    it("CLI-S03 sentinel-bearing value is refused at emit", async () => {
+      const filePath = join(workspaceDir, "gateway.jsonc");
+      writeFileSync(filePath, '{ "token": "x" }', "utf-8");
+      const rt = createTestRuntime();
+      await expect(
+        pathSetCommand(
+          "oc://gateway.jsonc/token",
+          "__OPENCLAW_REDACTED__",
+          { cwd: workspaceDir, json: true },
+          rt,
+        ),
+      ).rejects.toThrow();
+    });
+
+    it("CLI-S04 missing args returns 2", async () => {
+      const rt = createTestRuntime();
+      await pathSetCommand(undefined, undefined, { json: true }, rt);
+      expect(rt.exitCode).toBe(2);
+      expect(stderrText(rt)).toContain("requires");
+    });
+  });
+
+  describe("find", () => {
+    it("CLI-F01 enumerates wildcard matches", async () => {
+      const filePath = join(workspaceDir, "config.jsonc");
+      writeFileSync(filePath, '{ "items": [ { "id": "a" }, { "id": "b" } ] }', "utf-8");
+      const rt = createTestRuntime();
+      await pathFindCommand(
+        "oc://config.jsonc/items/*/id",
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
+      expect(rt.exitCode).toBe(0);
+      const out = JSON.parse(stdoutText(rt));
+      expect(out.count).toBe(2);
+    });
+
+    it("CLI-F02 returns 1 when zero matches", async () => {
+      const filePath = join(workspaceDir, "gateway.jsonc");
+      writeFileSync(filePath, "{}", "utf-8");
+      const rt = createTestRuntime();
+      await pathFindCommand(
+        "oc://gateway.jsonc/nope/*",
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
+      expect(rt.exitCode).toBe(1);
+    });
+  });
+
+  describe("emit", () => {
+    it("CLI-E01 round-trips jsonc bytes verbatim (byte-fidelity proof)", async () => {
+      const filePath = join(workspaceDir, "gateway.jsonc");
+      const before = '// keep this comment\n{\n  "v": 1\n}\n';
+      writeFileSync(filePath, before, "utf-8");
+      const rt = createTestRuntime();
+      await pathEmitCommand(filePath, { json: true }, rt);
+      expect(rt.exitCode).toBe(0);
+      const out = JSON.parse(stdoutText(rt));
+      expect(out.kind).toBe("jsonc");
+      expect(out.bytes).toBe(before);
+    });
+
+    it("CLI-E02 round-trips md verbatim", async () => {
+      const filePath = join(workspaceDir, "AGENTS.md");
+      const before = "## Tools\n- gh\n## Boundaries\n- never rm -rf\n";
+      writeFileSync(filePath, before, "utf-8");
+      const rt = createTestRuntime();
+      await pathEmitCommand(filePath, { json: true }, rt);
+      expect(rt.exitCode).toBe(0);
+      const out = JSON.parse(stdoutText(rt));
+      expect(out.kind).toBe("md");
+      expect(out.bytes).toBe(before);
+    });
+  });
+});

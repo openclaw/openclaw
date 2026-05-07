@@ -266,7 +266,7 @@ describe('setOcPath — jsonl leaf', () => {
     expect(r.ok).toBe(true);
     if (r.ok) {
       const out = emitJsonl(r.ast as Parameters<typeof emitJsonl>[0]);
-      expect(JSON.parse(out.split('\n')[0]!)).toEqual({ event: 'start', n: 42 });
+      expect(JSON.parse(out.split('\n')[0])).toEqual({ event: 'start', n: 42 });
     }
   });
 
@@ -276,7 +276,7 @@ describe('setOcPath — jsonl leaf', () => {
     expect(r.ok).toBe(true);
     if (r.ok) {
       const out = emitJsonl(r.ast as Parameters<typeof emitJsonl>[0]);
-      expect(JSON.parse(out.split('\n')[0]!)).toEqual({ event: 'replaced' });
+      expect(JSON.parse(out.split('\n')[0])).toEqual({ event: 'replaced' });
     }
   });
 
@@ -416,7 +416,7 @@ describe('setOcPath — jsonl insertion (session append)', () => {
       const out = emitJsonl(r.ast as Parameters<typeof emitJsonl>[0]);
       const lines = out.split('\n').filter((l) => l.length > 0);
       expect(lines).toHaveLength(2);
-      expect(JSON.parse(lines[1]!)).toEqual({ event: 'step', n: 1 });
+      expect(JSON.parse(lines[1])).toEqual({ event: 'step', n: 1 });
     }
   });
 

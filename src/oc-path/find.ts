@@ -212,7 +212,7 @@ function walkYaml(
     return;
   }
   if (node === null) {return;}
-  let cur = subs[i]!;
+  let cur = subs[i];
 
   // Union `{a,b,c}` — fan out into one walk per alternative. Each
   // alternative replaces `cur.value` with the chosen literal.
@@ -315,7 +315,7 @@ function walkYaml(
     const idx = Number(literal);
     if (!Number.isInteger(idx) || idx < 0 || idx >= (node as { items: Node[] }).items.length) {return;}
     walkYaml(
-      (node as { items: Node[] }).items[idx]!,
+      (node as { items: Node[] }).items[idx],
       subs,
       i + 1,
       [...walked, { slot: cur.slot, value: cur.value }],
@@ -345,7 +345,7 @@ function walkJsonc(
     onMatch(walked);
     return;
   }
-  let cur = subs[i]!;
+  let cur = subs[i];
 
   if (isUnionSeg(cur.value)) {
     const alts = parseUnionSeg(cur.value);
@@ -425,7 +425,7 @@ function walkJsonc(
   if (node.kind === 'array') {
     const idx = Number(cur.value);
     if (!Number.isInteger(idx) || idx < 0 || idx >= node.items.length) {return;}
-    walkJsonc(node.items[idx]!, subs, i + 1, [...walked, { slot: cur.slot, value: cur.value }], onMatch);
+    walkJsonc(node.items[idx], subs, i + 1, [...walked, { slot: cur.slot, value: cur.value }], onMatch);
   }
 }
 
@@ -442,7 +442,7 @@ function walkJsonl(
     onMatch(walked);
     return;
   }
-  const cur = subs[i]!;
+  const cur = subs[i];
 
   // Line-address slot — `*` enumerates every value line; `**` adds a
   // 0-segment skip in addition to enumerating; literal matches `Lnnn`
@@ -517,7 +517,7 @@ function pickLine(ast: JsonlAst, addr: string): JsonlLine | null {
   if (/^-\d+$/.test(addr)) {
     const valueLines = ast.lines.filter((l): l is Extract<JsonlLine, { kind: 'value' }> => l.kind === 'value');
     const n = valueLines.length + Number(addr);
-    return n >= 0 && n < valueLines.length ? valueLines[n]! : null;
+    return n >= 0 && n < valueLines.length ? valueLines[n] : null;
   }
   const m = /^L(\d+)$/.exec(addr);
   if (m === null || m[1] === undefined) {return null;}
@@ -570,7 +570,9 @@ function yamlChildFieldText(node: Node | null, key: string): string | null {
     if (isScalar(v)) {
       const sv = v.value;
       if (sv === null) {return 'null';}
-      return String(sv);
+      if (typeof sv === 'string') {return sv;}
+      if (typeof sv === 'number' || typeof sv === 'boolean') {return String(sv);}
+      return JSON.stringify(sv) ?? 'null';
     }
     return null;
   }
@@ -606,7 +608,7 @@ function walkMd(
     onMatch(walked);
     return;
   }
-  const cur = subs[i]!;
+  const cur = subs[i];
 
   // Frontmatter addressing: literal `[frontmatter]` in section slot.
   if (walked.length === 0 && cur.value === '[frontmatter]') {
@@ -683,7 +685,7 @@ function walkMdInsideBlock(
     onMatch(walked);
     return;
   }
-  const cur = subs[i]!;
+  const cur = subs[i];
 
   // Item slot.
   if (cur.value === WILDCARD_SINGLE || cur.value === WILDCARD_RECURSIVE) {
@@ -744,7 +746,7 @@ function walkMdInsideItem(
     onMatch(walked);
     return;
   }
-  const cur = subs[i]!;
+  const cur = subs[i];
   // Field slot — addresses kv.key (case-insensitive).
   if (item.kv === undefined) {return;}
   if (cur.value === WILDCARD_SINGLE || cur.value === WILDCARD_RECURSIVE) {

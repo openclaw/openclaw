@@ -96,7 +96,7 @@ function detectFrontmatter(
 
   const entries: FrontmatterEntry[] = [];
   for (let i = 1; i < closeIndex; i++) {
-    const line = lines[i]!;
+    const line = lines[i];
     if (line.trim().length === 0) {continue;}
     const m = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*)$/.exec(line);
     if (m === null) {
@@ -107,8 +107,8 @@ function detectFrontmatter(
       continue;
     }
     entries.push({
-      key: m[1]!,
-      value: unquote(m[2]!.trim()),
+      key: m[1],
+      value: unquote(m[2].trim()),
       line: i + 1,
     });
   }
@@ -141,7 +141,7 @@ function splitH2Blocks(
   const headings: { line: number; text: string }[] = [];
 
   for (let i = 0; i < bodyLines.length; i++) {
-    const line = bodyLines[i]!;
+    const line = bodyLines[i];
     if (line.startsWith('```')) {
       inCode = !inCode;
       continue;
@@ -149,7 +149,7 @@ function splitH2Blocks(
     if (inCode) {continue;}
     const m = /^##\s+(\S.*?)\s*$/.exec(line);
     if (m !== null) {
-      headings.push({ line: i, text: m[1]! });
+      headings.push({ line: i, text: m[1] });
     }
   }
 
@@ -160,13 +160,13 @@ function splitH2Blocks(
     };
   }
 
-  const preamble = bodyLines.slice(0, headings[0]!.line).join('\n');
+  const preamble = bodyLines.slice(0, headings[0].line).join('\n');
   const blocks: AstBlock[] = [];
 
   for (let h = 0; h < headings.length; h++) {
-    const start = headings[h]!.line;
-    const end = h + 1 < headings.length ? headings[h + 1]!.line : bodyLines.length;
-    const headingText = headings[h]!.text;
+    const start = headings[h].line;
+    const end = h + 1 < headings.length ? headings[h + 1].line : bodyLines.length;
+    const headingText = headings[h].text;
     const blockBodyLines = bodyLines.slice(start + 1, end);
     const bodyText = blockBodyLines.join('\n');
     const headingLineNum = bodyStartLineNum + start;
@@ -203,7 +203,7 @@ function extractItems(
   let inCode = false;
 
   for (let i = 0; i < blockBodyLines.length; i++) {
-    const line = blockBodyLines[i]!;
+    const line = blockBodyLines[i];
     if (line.startsWith('```')) {
       inCode = !inCode;
       continue;
@@ -211,14 +211,14 @@ function extractItems(
     if (inCode) {continue;}
     const m = BULLET_RE.exec(line);
     if (m === null) {continue;}
-    const text = m[1]!;
+    const text = m[1];
     const kvMatch = KV_RE.exec(text);
     const item: AstItem = {
       text,
-      slug: kvMatch ? slugify(kvMatch[1]!) : slugify(text),
+      slug: kvMatch ? slugify(kvMatch[1]) : slugify(text),
       line: startLineNum + i,
       ...(kvMatch !== null
-        ? { kv: { key: kvMatch[1]!.trim(), value: kvMatch[2]!.trim() } }
+        ? { kv: { key: kvMatch[1].trim(), value: kvMatch[2].trim() } }
         : {}),
     };
     items.push(item);
@@ -236,7 +236,7 @@ function extractTables(
   const tables: AstTable[] = [];
   let i = 0;
   while (i < blockBodyLines.length) {
-    const headerLine = blockBodyLines[i]!;
+    const headerLine = blockBodyLines[i];
     const sepLine = blockBodyLines[i + 1];
     if (
       headerLine.trim().startsWith('|') &&
@@ -246,8 +246,8 @@ function extractTables(
       const headers = splitTableRow(headerLine);
       const rows: string[][] = [];
       let j = i + 2;
-      while (j < blockBodyLines.length && blockBodyLines[j]!.trim().startsWith('|')) {
-        rows.push(splitTableRow(blockBodyLines[j]!));
+      while (j < blockBodyLines.length && blockBodyLines[j].trim().startsWith('|')) {
+        rows.push(splitTableRow(blockBodyLines[j]));
         j++;
       }
       tables.push({ headers, rows, line: startLineNum + i });
@@ -273,15 +273,15 @@ function extractCodeBlocks(
   const codeBlocks: AstCodeBlock[] = [];
   let i = 0;
   while (i < blockBodyLines.length) {
-    const open = blockBodyLines[i]!;
+    const open = blockBodyLines[i];
     if (open.startsWith('```')) {
       const lang = open.slice(3).trim();
       const langField = lang.length > 0 ? lang : null;
       const startLine = startLineNum + i;
       let j = i + 1;
       const bodyLines: string[] = [];
-      while (j < blockBodyLines.length && !blockBodyLines[j]!.startsWith('```')) {
-        bodyLines.push(blockBodyLines[j]!);
+      while (j < blockBodyLines.length && !blockBodyLines[j].startsWith('```')) {
+        bodyLines.push(blockBodyLines[j]);
         j++;
       }
       codeBlocks.push({ lang: langField, text: bodyLines.join('\n'), line: startLine });

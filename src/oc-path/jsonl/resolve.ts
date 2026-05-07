@@ -134,7 +134,7 @@ function pickLine(ast: JsonlAst, addr: string): JsonlLine | null {
   if (/^-\d+$/.test(addr)) {
     const valueLines = ast.lines.filter((l): l is Extract<JsonlLine, { kind: 'value' }> => l.kind === 'value');
     const n = valueLines.length + Number(addr);
-    return n >= 0 && n < valueLines.length ? valueLines[n]! : null;
+    return n >= 0 && n < valueLines.length ? valueLines[n] : null;
   }
   const m = /^L(\d+)$/.exec(addr);
   if (m === null || m[1] === undefined) {return null;}

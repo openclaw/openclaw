@@ -99,7 +99,7 @@ function generateCorpus(count: number): string[] {
     seed = (seed * 1664525 + 1013904223) % 2 ** 32;
     return seed / 2 ** 32;
   };
-  const choose = <T>(arr: readonly T[]): T => arr[Math.floor(rand() * arr.length)]!;
+  const choose = <T>(arr: readonly T[]): T => arr[Math.floor(rand() * arr.length)];
 
   const headings = ['Boundaries', 'Tools', 'Memory', 'Identity', 'User', 'Heartbeat', 'Skills'];
   const fmKeys = ['name', 'description', 'tier', 'enabled', 'timeout', 'url'];

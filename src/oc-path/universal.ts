@@ -135,7 +135,7 @@ export function detectInsertion(path: OcPath): InsertionInfo | null {
   if (path.field !== undefined) {segments.push({ slot: 'field', value: path.field });}
   if (segments.length === 0) {return null;}
 
-  const last = segments[segments.length - 1]!;
+  const last = segments[segments.length - 1];
   if (!last.value.startsWith('+')) {return null;}
 
   const rest = last.value.slice(1);
@@ -184,6 +184,7 @@ export function resolveOcPath(ast: OcAst, path: OcPath): OcMatch | null {
     case 'yaml':
       return resolveYamlToUniversal(ast, path);
   }
+  return null;
 }
 
 function resolveYamlToUniversal(ast: YamlAst, path: OcPath): OcMatch | null {
@@ -202,7 +203,11 @@ function resolveYamlToUniversal(ast: YamlAst, path: OcPath): OcMatch | null {
     if (typeof v === 'string') {return { kind: 'leaf', valueText: v, leafType: 'string', line };}
     if (typeof v === 'number') {return { kind: 'leaf', valueText: String(v), leafType: 'number', line };}
     if (typeof v === 'boolean') {return { kind: 'leaf', valueText: String(v), leafType: 'boolean', line };}
-    return { kind: 'leaf', valueText: String(v), leafType: 'string', line };
+    // Anything else (Date / BigInt / collection) — JSON-stringify so we
+    // don't end up with `[object Object]` in the leaf text. Falls back
+    // to literal "null" if JSON.stringify yields undefined.
+    const valueText = JSON.stringify(v) ?? 'null';
+    return { kind: 'leaf', valueText, leafType: 'string', line };
   }
   return null;
 }
@@ -222,7 +227,7 @@ function locateYamlLine(ast: YamlAst, path: OcPath): number {
     if (Array.isArray(n.items)) {
       // Map or seq.
       const items = n.items;
-      const isMap = items.length > 0 && typeof items[0] === 'object' && items[0] !== null && 'key' in (items[0] as object);
+      const isMap = items.length > 0 && typeof items[0] === 'object' && items[0] !== null && 'key' in (items[0]);
       if (isMap) {
         const pair = (items as { key: { value?: unknown }; value: unknown }[]).find((p) => {
           const k = p.key !== null && typeof p.key === 'object' && 'value' in p.key ? p.key.value : p.key;
@@ -260,6 +265,7 @@ function resolveMdToUniversal(ast: MdAst, path: OcPath): OcMatch | null {
     case 'item-field':
       return { kind: 'leaf', valueText: m.value, leafType: 'string', line: m.node.line };
   }
+  return null;
 }
 
 function resolveJsoncToUniversal(ast: JsoncAst, path: OcPath): OcMatch | null {
@@ -288,6 +294,7 @@ function jsoncValueToMatch(value: JsoncValue, line: number): OcMatch {
     case 'null':
       return { kind: 'leaf', valueText: 'null', leafType: 'null', line };
   }
+  throw new Error(`unreachable: jsoncValueToMatch kind`);
 }
 
 function resolveJsonlToUniversal(ast: JsonlAst, path: OcPath): OcMatch | null {
@@ -316,6 +323,7 @@ function resolveInsertion(ast: OcAst, info: InsertionInfo): OcMatch | null {
     case 'yaml':
       return resolveYamlInsertion(ast, info);
   }
+  return null;
 }
 
 function resolveYamlInsertion(ast: YamlAst, info: InsertionInfo): OcMatch | null {
@@ -383,7 +391,7 @@ function resolveJsonlInsertion(ast: JsonlAst, info: InsertionInfo): OcMatch | nu
   if (info.parentPath.section !== undefined) {return null;}
   // The only insertion point for jsonl is "after the last line" — the
   // line surfaced is `lastLine + 1` so consumers can render correctly.
-  const lastLine = ast.lines.length > 0 ? ast.lines[ast.lines.length - 1]!.line : 0;
+  const lastLine = ast.lines.length > 0 ? ast.lines[ast.lines.length - 1].line : 0;
   return { kind: 'insertion-point', container: 'jsonl-file', line: lastLine + 1 };
 }
 
@@ -428,6 +436,7 @@ export function setOcPath(ast: OcAst, path: OcPath, value: string): SetResult {
     case 'yaml':
       return setYamlLeaf(ast, path, value);
   }
+  throw new Error(`unreachable: setOcPath kind`);
 }
 
 function setYamlLeaf(ast: YamlAst, path: OcPath, value: string): SetResult {
@@ -520,6 +529,7 @@ function setInsertion(ast: OcAst, info: InsertionInfo, value: string): SetResult
     case 'yaml':
       return setYamlInsertion(ast, info, value);
   }
+  throw new Error(`unreachable: setInsertion kind`);
 }
 
 function setYamlInsertion(ast: YamlAst, info: InsertionInfo, value: string): SetResult {
@@ -583,15 +593,15 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): SetResu
     }
     const blockIdx = ast.blocks.findIndex((b) => b.slug === p.section!.toLowerCase());
     if (blockIdx === -1) {return { ok: false, reason: 'unresolved' };}
-    const block = ast.blocks[blockIdx]!;
+    const block = ast.blocks[blockIdx];
     const kvMatch = /^([^:]+?)\s*:\s*(.+)$/.exec(value);
     const itemLine = `- ${value}`;
     const newItem = {
       text: value,
-      slug: slugifyHeading(kvMatch ? kvMatch[1]! : value),
+      slug: slugifyHeading(kvMatch ? kvMatch[1] : value),
       line: 0,
       ...(kvMatch !== null
-        ? { kv: { key: kvMatch[1]!.trim(), value: kvMatch[2]!.trim() } }
+        ? { kv: { key: kvMatch[1].trim(), value: kvMatch[2].trim() } }
         : {}),
     };
     const newBodyText = block.bodyText.length === 0
@@ -768,7 +778,7 @@ function mutateAt(
     const lookupKey = isQuotedSeg(seg) ? unquoteSeg(seg) : seg;
     const idx = current.entries.findIndex((e) => e.key === lookupKey);
     if (idx === -1) {return null;}
-    const child = current.entries[idx]!;
+    const child = current.entries[idx];
     const replaced = mutateAt(child.value, segments, i + 1, mutate);
     if (replaced === null) {return null;}
     const newEntries = current.entries.slice();
@@ -782,7 +792,7 @@ function mutateAt(
   if (current.kind === 'array') {
     const idx = Number(seg);
     if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) {return null;}
-    const child = current.items[idx]!;
+    const child = current.items[idx];
     const replaced = mutateAt(child, segments, i + 1, mutate);
     if (replaced === null) {return null;}
     const newItems = current.items.slice();
