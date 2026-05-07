@@ -28,7 +28,6 @@ import type {
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import {
-  beginTelegramInboundTurnDeliveryCorrelation,
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/outbound-runtime";
@@ -81,6 +80,7 @@ import {
 } from "./error-policy.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { markdownToTelegramChunks, renderTelegramHtmlText } from "./format.js";
+import { beginTelegramInboundTurnDeliveryCorrelation } from "./inbound-turn-delivery.js";
 import {
   createLaneDeliveryStateTracker,
   createLaneTextDeliverer,

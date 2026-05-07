@@ -77,7 +77,6 @@ import { stripInternalRuntimeScaffolding } from "./sanitize-text.js";
 import { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
-import { notifyTelegramInboundTurnOutboundSuccess } from "./telegram-inbound-turn-delivery.js";
 
 export type { OutboundDeliveryResult } from "./deliver-types.js";
 export type { NormalizedOutboundPayload } from "./payloads.js";
@@ -943,13 +942,6 @@ function createMessageSentEmitter(params: {
   const hasMessageSentHooks = params.hookRunner?.hasHooks("message_sent") ?? false;
   const canEmitInternalHook = Boolean(params.sessionKeyForInternalHooks);
   const emitMessageSent = (event: MessageSentEvent) => {
-    notifyTelegramInboundTurnOutboundSuccess({
-      sessionKey: params.sessionKeyForInternalHooks,
-      channelId: params.channel,
-      to: params.to,
-      accountId: params.accountId,
-      success: event.success,
-    });
     if (!hasMessageSentHooks && !canEmitInternalHook) {
       return;
     }

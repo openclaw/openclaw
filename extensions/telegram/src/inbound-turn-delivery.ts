@@ -1,5 +1,3 @@
-/** Correlate telegram outbound deliveries with the active inbound turn (#78685). */
-
 export type TelegramInboundTurnDeliveryEnd = () => void;
 
 type ActiveTurn = {
@@ -26,15 +24,14 @@ export function beginTelegramInboundTurnDeliveryCorrelation(
 
 export function notifyTelegramInboundTurnOutboundSuccess(params: {
   sessionKey: string | undefined;
-  channelId: string;
   to: string;
   accountId?: string | null;
-  success: boolean;
 }): void {
-  if (!params.success || params.channelId !== "telegram" || !params.sessionKey?.trim()) {
+  const key = params.sessionKey?.trim();
+  if (!key) {
     return;
   }
-  const turn = registry.get(params.sessionKey);
+  const turn = registry.get(key);
   if (!turn || turn.outboundTo !== params.to) {
     return;
   }
