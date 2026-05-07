@@ -10,6 +10,9 @@ function formatTarget(channel?: string, to?: string | null): string {
     return "last";
   }
   if (to) {
+    if (to.toLowerCase().startsWith(`${channel.toLowerCase()}:`)) {
+      return to;
+    }
     return `${channel}:${to}`;
   }
   return channel;
