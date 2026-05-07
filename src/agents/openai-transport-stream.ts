@@ -1648,7 +1648,28 @@ function normalizeStructuredDeltaContent(content: unknown): CompletionsReasoning
 
 function extractStringField(obj: Record<string, unknown>, field: string): string {
   const value = obj[field];
-  return typeof value === "string" ? value : "";
+  if (typeof value === "string") return value;
+  // Flatten nested array of typed text blocks (documented Mistral structure:
+  // {type: "thinking", thinking: [{type: "text", text: "..."}]})
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object") {
+          const r = item as Record<string, unknown>;
+          return typeof r.text === "string"
+            ? r.text
+            : typeof r.content === "string"
+            ? r.content
+            : typeof r.thinking === "string"
+            ? r.thinking
+            : "";
+        }
+        return "";
+      })
+      .join("");
+  }
+  return "";
 }
 
 type CompletionsReasoningDelta =

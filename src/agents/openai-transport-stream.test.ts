@@ -4385,6 +4385,60 @@ describe("normalizeStructuredDeltaContent", () => {
   it("returns empty for unrecognized single object with no string fields", () => {
     expect(normalize({ type: "unknown", data: [1, 2, 3] })).toEqual([]);
   });
+
+  // Nested array thinking blocks — documented Mistral structure where the
+  // `thinking` field is itself an array of typed sub-blocks rather than a string.
+  // extractStringField must flatten these or they silently drop to empty string
+  // and no thinking delta is emitted.
+  it("flattens nested array in thinking field to a single thinking delta", () => {
+    const content = [
+      {
+        type: "thinking",
+        thinking: [
+          { type: "text", text: "Step one of reasoning." },
+          { type: "text", text: " Step two." },
+        ],
+      },
+      { type: "text", text: "Final answer." },
+    ];
+    expect(normalize(content)).toEqual([
+      { kind: "thinking", signature: "reasoning_content", text: "Step one of reasoning. Step two." },
+      { kind: "text", text: "Final answer." },
+    ]);
+  });
+
+  it("flattens nested array in thinking field using content sub-field", () => {
+    const content = [
+      {
+        type: "thinking",
+        thinking: [{ type: "text", content: "Nested content field." }],
+      },
+    ];
+    expect(normalize(content)).toEqual([
+      { kind: "thinking", signature: "reasoning_content", text: "Nested content field." },
+    ]);
+  });
+
+  it("does not emit [object Object] when thinking field is a nested array", () => {
+    const content = [
+      {
+        type: "thinking",
+        thinking: [{ type: "text", text: "Nested thinking" }],
+      },
+    ];
+    const result = normalize(content);
+    expect(result).toHaveLength(1);
+    expect(result[0].text).not.toContain("[object Object]");
+    expect(result[0].text).toBe("Nested thinking");
+  });
+
+  it("handles mixed string and nested-array thinking fields without corruption", () => {
+    // Some Mistral versions send a plain string; others send nested arrays.
+    // Both must produce clean thinking deltas.
+    const flat = normalize([{ type: "thinking", thinking: "plain string" }]);
+    const nested = normalize([{ type: "thinking", thinking: [{ type: "text", text: "plain string" }] }]);
+    expect(flat).toEqual(nested);
+  });
 });
 
 describe("processOpenAICompletionsStream — Mistral structured delta.content", () => {
