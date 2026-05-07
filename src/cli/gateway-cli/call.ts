@@ -18,21 +18,25 @@ export type GatewayRpcOpts = {
 export const gatewayCallOpts = (cmd: Command) =>
   cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
-    .option("--port <port>", "Gateway port on localhost (builds ws://127.0.0.1:<port>)")
+    .option("--port <port>", "Gateway port on localhost (same as gateway.port in config)")
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (password auth)")
     .option("--timeout <ms>", "Timeout in ms", "10000")
     .option("--expect-final", "Wait for final response (agent)", false)
     .option("--json", "Output JSON", false);
 
-function resolveGatewayUrl(opts: Pick<GatewayRpcOpts, "url" | "port">): string | undefined {
-  if (opts.url) {
-    return opts.url;
+function applyPortOverride(
+  config: OpenClawConfig | undefined,
+  port: string | undefined,
+): OpenClawConfig | undefined {
+  if (!port) {
+    return config;
   }
-  if (opts.port) {
-    return `ws://127.0.0.1:${opts.port}`;
+  const parsed = Number(port);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return config;
   }
-  return undefined;
+  return { ...config, gateway: { ...config?.gateway, port: parsed } };
 }
 
 export const callGatewayCli = async (method: string, opts: GatewayRpcOpts, params?: unknown) =>
@@ -44,8 +48,8 @@ export const callGatewayCli = async (method: string, opts: GatewayRpcOpts, param
     },
     async () =>
       await callGateway({
-        config: opts.config,
-        url: resolveGatewayUrl(opts),
+        config: applyPortOverride(opts.config, opts.port),
+        url: opts.url,
         token: opts.token,
         password: opts.password,
         method,
