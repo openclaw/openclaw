@@ -21,7 +21,7 @@ type AgentListEntry = {
   model?: string;
   agentRuntime?: {
     id: string;
-    source: "env" | "agent" | "defaults" | "implicit";
+    source: "session" | "env" | "agent" | "defaults" | "implicit";
   };
 };
 
