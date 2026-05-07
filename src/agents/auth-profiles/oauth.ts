@@ -24,7 +24,10 @@ import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { clearLastGoodProfileWithLock } from "./profiles.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
-import { loadAuthProfileStoreForSecretsRuntime } from "./store.js";
+import {
+  loadAuthProfileStoreForSecretsRuntime,
+  resolvePersistedAuthProfileOwnerAgentDir,
+} from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 export {
@@ -363,10 +366,14 @@ export async function resolveApiKeyForProfile(
         ? error
         : surfacedCause;
     if (isRefreshTokenReusedError(surfacedCause)) {
+      const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
+        agentDir: params.agentDir,
+        profileId,
+      });
       await clearLastGoodProfileWithLock({
         provider: cred.provider,
         profileId,
-        agentDir: params.agentDir,
+        agentDir: ownerAgentDir,
       });
     }
     const fallbackProfileId = suggestOAuthProfileIdForLegacyDefault({
