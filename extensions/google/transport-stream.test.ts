@@ -539,7 +539,6 @@ describe("google transport stream", () => {
           errorMessage: "Google Generative AI API error (400)",
           timestamp: 5,
           content: [{ type: "text", text: "[assistant turn failed before producing content]" }],
-          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         },
         {
           role: "assistant",
