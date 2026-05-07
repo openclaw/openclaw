@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Fixes
+
+- Feishu: fix topic session splitting for both native `topic_group` and normal groups using topic message format. Hydrate now queries the replied-to message (`rootId`) instead of the newly sent message, expands the hydrate condition to cover `chat_type="group"` groups with Feishu topic messaging, and suppresses stale `rootId` after successful hydration so the canonical `omt_*` topic ID is used consistently. Refs #78262. Thanks @joeyzenghuan.
+
 ### Changes
 
 - Discord/voice: stream ElevenLabs TTS directly into Discord playback and send ElevenLabs latency optimization as the documented query parameter so spoken replies can start sooner.
