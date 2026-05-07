@@ -148,7 +148,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Webhooks plugin: reject `run_task.childSessionKey` values outside the configured route session tree so webhook-owned TaskFlows cannot attach or cancel unrelated sessions. Fixes #79038.
 - Compute plugin callback authorization dynamically [AI]. (#78866) Thanks @pgondhi987.
 - fix(active-memory): require admin scope for global toggles [AI]. (#78863) Thanks @pgondhi987.
 - Honor owner enforcement for native commands [AI]. (#78864) Thanks @pgondhi987.
