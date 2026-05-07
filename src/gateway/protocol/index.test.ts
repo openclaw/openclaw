@@ -168,7 +168,7 @@ describe("validateTalkClientCreateParams", () => {
       validateTalkClientCreateParams({
         sessionKey: "agent:main:main",
         provider: "openai",
-        model: "gpt-realtime-1.5",
+        model: "gpt-realtime-2",
         voice: "alloy",
         mode: "realtime",
         transport: "webrtc",
@@ -270,7 +270,7 @@ describe("validateTalkSession", () => {
       validateTalkSessionCreateParams({
         sessionKey: "agent:main:main",
         provider: "openai",
-        model: "gpt-realtime-1.5",
+        model: "gpt-realtime-2",
         voice: "alloy",
         mode: "realtime",
         transport: "managed-room",
@@ -284,7 +284,7 @@ describe("validateTalkSession", () => {
         roomUrl: "/talk/rooms/talk_handoff-1",
         sessionKey: "agent:main:main",
         provider: "openai",
-        model: "gpt-realtime-1.5",
+        model: "gpt-realtime-2",
         voice: "alloy",
         mode: "realtime",
         transport: "managed-room",

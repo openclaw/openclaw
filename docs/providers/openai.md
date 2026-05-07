@@ -641,15 +641,15 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
 
     | Setting | Config path | Default |
     |---------|------------|---------|
-    | Model | `plugins.entries.voice-call.config.realtime.providers.openai.model` | `gpt-realtime-1.5` |
+    | Model | `plugins.entries.voice-call.config.realtime.providers.openai.model` | `gpt-realtime-2` |
     | Voice | `...openai.voice` | `alloy` |
-    | Temperature | `...openai.temperature` | `0.8` |
+    | Temperature (Azure deployment bridge) | `...openai.temperature` | `0.8` |
     | VAD threshold | `...openai.vadThreshold` | `0.5` |
     | Silence duration | `...openai.silenceDurationMs` | `500` |
     | API key | `...openai.apiKey` | Falls back to `OPENAI_API_KEY` |
 
     <Note>
-    Supports Azure OpenAI via `azureEndpoint` and `azureDeployment` config keys for backend realtime bridges. Supports bidirectional tool calling. Uses G.711 u-law audio format.
+    Backend OpenAI realtime bridges use the GA Realtime WebSocket session shape, which does not accept `session.temperature`. Azure OpenAI deployments remain available via `azureEndpoint` and `azureDeployment` and keep the deployment-compatible session shape. Supports bidirectional tool calling and G.711 u-law audio.
     </Note>
 
     <Note>
@@ -657,9 +657,8 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
     ephemeral client secret and a direct browser WebRTC SDP exchange against the
     OpenAI Realtime API. Maintainer live verification is available with
     `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts`;
-    the OpenAI leg mints a client secret in Node, generates a browser SDP offer
-    with fake microphone media, posts it to OpenAI, and applies the SDP answer
-    without logging secrets.
+    the OpenAI legs verify both the backend WebSocket bridge and the browser
+    WebRTC SDP exchange without logging secrets.
     </Note>
 
   </Accordion>
