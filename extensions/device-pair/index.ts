@@ -175,11 +175,11 @@ function parseNormalizedGatewayUrl(raw: string): string | null {
 function describeSecureMobilePairingFix(source?: string): string {
   const sourceNote = source ? ` Resolved source: ${source}.` : "";
   return (
-    "Mobile pairing over non-loopback networks requires a secure gateway URL (wss://) or Tailscale Serve/Funnel." +
+    "Tailscale and public mobile pairing require a secure gateway URL (wss://) or Tailscale Serve/Funnel." +
     sourceNote +
-    " Fix: prefer gateway.tailscale.mode=serve, or set " +
+    " Fix: use a private LAN address, prefer gateway.tailscale.mode=serve, or set " +
     "gateway.remote.url / plugins.entries.device-pair.config.publicUrl to a wss:// URL. " +
-    "ws:// setup codes are only valid for localhost/loopback or the Android emulator."
+    "ws:// setup codes are only valid for localhost/loopback, private LAN addresses, .local hosts, or the Android emulator."
   );
 }
 
@@ -256,6 +256,21 @@ function isPrivateIPv4(address: string): boolean {
   return false;
 }
 
+function isPrivateLanCleartextHost(host: string): boolean {
+  const normalized = normalizeHostForIpCheck(host);
+  if (normalized.endsWith(".local")) {
+    return true;
+  }
+  if (isPrivateIPv4(normalized)) {
+    return true;
+  }
+  const octets = parseIPv4Octets(normalized);
+  if (!octets) {
+    return false;
+  }
+  return octets[0] === 169 && octets[1] === 254;
+}
+
 function isTailnetIPv4(address: string): boolean {
   const octets = parseIPv4Octets(address);
   if (!octets) {
@@ -267,7 +282,9 @@ function isTailnetIPv4(address: string): boolean {
 
 function isMobilePairingCleartextAllowedHost(host: string): boolean {
   const normalized = normalizeHostForIpCheck(host);
-  return isLoopbackHost(normalized) || normalized === "10.0.2.2";
+  return (
+    isLoopbackHost(normalized) || normalized === "10.0.2.2" || isPrivateLanCleartextHost(normalized)
+  );
 }
 
 function validateMobilePairingUrl(url: string, source?: string): string | null {
@@ -579,20 +596,6 @@ function resolveQrReplyTarget(ctx: QrCommandContext): string {
   );
 }
 
-const PAIR_SETUP_NON_ISSUING_ACTIONS = new Set([
-  "approve",
-  "cleanup",
-  "clear",
-  "notify",
-  "pending",
-  "revoke",
-  "status",
-]);
-
-function issuesPairSetupCode(action: string): boolean {
-  return !action || action === "qr" || !PAIR_SETUP_NON_ISSUING_ACTIONS.has(action);
-}
-
 async function issueSetupPayload(url: string): Promise<SetupPayload> {
   const { issueDeviceBootstrapToken, PAIRING_SETUP_BOOTSTRAP_PROFILE } =
     await loadDevicePairApiModule();
@@ -661,6 +664,7 @@ export default definePluginEntry({
       name: "pair",
       description: "Generate setup codes and approve device pairing requests.",
       acceptsArgs: true,
+      requiredScopes: ["operator.pairing"],
       handler: async (ctx) => {
         const args = normalizeOptionalString(ctx.args) ?? "";
         const tokens = args.split(/\s+/).filter(Boolean);
@@ -673,12 +677,17 @@ export default definePluginEntry({
         const authState = resolvePairingCommandAuthState({
           channel: ctx.channel,
           gatewayClientScopes,
+          senderIsOwner: ctx.senderIsOwner,
         });
         api.logger.info?.(
           `device-pair: /pair invoked channel=${ctx.channel} sender=${ctx.senderId ?? "unknown"} action=${
             action || "new"
           }`,
         );
+
+        if (authState.isMissingPairingPrivilege) {
+          return buildMissingPairingScopeReply();
+        }
 
         if (action === "status" || action === "pending") {
           const [{ listDevicePairing }, { formatPendingRequests }] = await Promise.all([
@@ -700,9 +709,6 @@ export default definePluginEntry({
         }
 
         if (action === "approve") {
-          if (authState.isMissingInternalPairingPrivilege) {
-            return buildMissingPairingScopeReply();
-          }
           const [
             { listDevicePairing },
             { approvePendingPairingRequest, selectPendingApprovalRequest },
@@ -726,9 +732,6 @@ export default definePluginEntry({
         }
 
         if (action === "cleanup" || action === "clear" || action === "revoke") {
-          if (authState.isMissingInternalPairingPrivilege) {
-            return buildMissingPairingScopeReply();
-          }
           const { clearDeviceBootstrapTokens } = await loadDevicePairApiModule();
           const cleared = await clearDeviceBootstrapTokens();
           return {
@@ -743,10 +746,6 @@ export default definePluginEntry({
         if (authLabelResult.error) {
           return { text: `Error: ${authLabelResult.error}` };
         }
-        if (issuesPairSetupCode(action) && authState.isMissingInternalPairingPrivilege) {
-          return buildMissingPairingScopeReply();
-        }
-
         const urlResult = await resolveMobilePairingGatewayUrl(api);
         if (!urlResult.url) {
           return { text: `Error: ${urlResult.error ?? "Gateway URL unavailable."}` };

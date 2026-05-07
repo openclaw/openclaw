@@ -9,7 +9,8 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
@@ -662,16 +663,12 @@ function resolveBundledPackageRootForCache(stockRoot?: string): string | undefin
 }
 
 function readPackageVersionForCache(packageJsonPath: string): string {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return "unknown";
-    }
-    const version = (parsed as { version?: unknown }).version;
-    return typeof version === "string" && version.trim() ? version.trim() : "unknown";
-  } catch {
+  const parsed = tryReadJsonSync(packageJsonPath);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return "unknown";
   }
+  const version = (parsed as { version?: unknown }).version;
+  return typeof version === "string" && version.trim() ? version.trim() : "unknown";
 }
 
 const bundledPackageCacheIdentityByStockRoot = new Map<
@@ -1739,6 +1736,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           rootDir: candidate.rootDir,
           origin: candidate.origin,
           workspaceDir: candidate.workspaceDir,
+          trustedOfficialInstall: manifestRecord.trustedOfficialInstall,
           enabled: false,
           compat: collectPluginManifestCompatCodes(manifestRecord),
           activationState,
@@ -1777,6 +1775,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         rootDir: candidate.rootDir,
         origin: candidate.origin,
         workspaceDir: candidate.workspaceDir,
+        trustedOfficialInstall: manifestRecord.trustedOfficialInstall,
         enabled: enableState.enabled,
         compat: collectPluginManifestCompatCodes(manifestRecord),
         activationState,
@@ -2003,7 +2002,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           : runtimeCandidateEntry;
       const moduleLoadSource = resolveCanonicalDistRuntimeSource(loadEntry.source);
       const moduleRoot = resolveCanonicalDistRuntimeSource(loadEntry.rootDir);
-      const opened = openBoundaryFileSync({
+      const opened = openRootFileSync({
         absolutePath: moduleLoadSource,
         rootPath: moduleRoot,
         boundaryLabel: "plugin root",
@@ -2094,7 +2093,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             const runtimeModuleRoot = resolveCanonicalDistRuntimeSource(
               runtimeCandidateEntry.rootDir,
             );
-            const runtimeOpened = openBoundaryFileSync({
+            const runtimeOpened = openRootFileSync({
               absolutePath: runtimeModuleSource,
               rootPath: runtimeModuleRoot,
               boundaryLabel: "plugin root",
@@ -2563,6 +2562,7 @@ export async function loadOpenClawPluginCliRegistry(
         rootDir: candidate.rootDir,
         origin: candidate.origin,
         workspaceDir: candidate.workspaceDir,
+        trustedOfficialInstall: manifestRecord.trustedOfficialInstall,
         enabled: false,
         compat: collectPluginManifestCompatCodes(manifestRecord),
         activationState,
@@ -2601,6 +2601,7 @@ export async function loadOpenClawPluginCliRegistry(
       rootDir: candidate.rootDir,
       origin: candidate.origin,
       workspaceDir: candidate.workspaceDir,
+      trustedOfficialInstall: manifestRecord.trustedOfficialInstall,
       enabled: enableState.enabled,
       compat: collectPluginManifestCompatCodes(manifestRecord),
       activationState,
@@ -2673,7 +2674,7 @@ export async function loadOpenClawPluginCliRegistry(
       seenIds.set(pluginId, candidate.origin);
       continue;
     }
-    const opened = openBoundaryFileSync({
+    const opened = openRootFileSync({
       absolutePath: sourceForCliMetadata,
       rootPath: pluginRoot,
       boundaryLabel: "plugin root",

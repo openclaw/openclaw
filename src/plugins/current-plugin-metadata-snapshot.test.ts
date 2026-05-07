@@ -87,6 +87,19 @@ describe("current plugin metadata snapshot", () => {
     expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
   });
 
+  it("can opt into reusing the stored workspace scope for unscoped control-plane readers", () => {
+    const config = { plugins: { allow: ["demo"] } };
+    const snapshot = createSnapshot({ config, workspaceDir: "/workspace/a" });
+    setCurrentPluginMetadataSnapshot(snapshot, { config });
+
+    expect(
+      getCurrentPluginMetadataSnapshot({
+        config,
+        allowWorkspaceScopedSnapshot: true,
+      }),
+    ).toBe(snapshot);
+  });
+
   it("rejects a current snapshot when plugin load paths change", () => {
     const config = { plugins: { load: { paths: ["/plugins/one"] } } };
     const snapshot = createSnapshot({ config });
@@ -145,6 +158,27 @@ describe("current plugin metadata snapshot", () => {
 
     expect(getCurrentPluginMetadataSnapshot({ config: sourceConfig })).toBe(snapshot);
     expect(getCurrentPluginMetadataSnapshot({ config: autoEnabledConfig })).toBeUndefined();
+  });
+
+  it("accepts explicit compatible configs for gateway runtime reuse", () => {
+    const sourceConfig = { channels: { telegram: { botToken: "token" } } };
+    const runtimeConfig = {
+      ...sourceConfig,
+      plugins: { allow: ["telegram"] },
+    };
+    const snapshot = createSnapshot({ config: sourceConfig, workspaceDir: "/workspace" });
+    setCurrentPluginMetadataSnapshot(snapshot, {
+      config: sourceConfig,
+      compatibleConfigs: [runtimeConfig],
+      workspaceDir: "/workspace",
+    });
+
+    expect(
+      getCurrentPluginMetadataSnapshot({ config: sourceConfig, workspaceDir: "/workspace" }),
+    ).toBe(snapshot);
+    expect(
+      getCurrentPluginMetadataSnapshot({ config: runtimeConfig, workspaceDir: "/workspace" }),
+    ).toBe(snapshot);
   });
 
   it("clears the current snapshot", () => {

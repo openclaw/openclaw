@@ -4,12 +4,14 @@ import type { ChannelMessageCapability } from "../../channels/plugins/message-ca
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
 type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
+type CreateOpenClawTools = typeof import("../openclaw-tools.js").createOpenClawTools;
 type ResetPluginRuntimeStateForTest =
   typeof import("../../plugins/runtime.js").resetPluginRuntimeStateForTest;
 type SetActivePluginRegistry = typeof import("../../plugins/runtime.js").setActivePluginRegistry;
 type CreateTestRegistry = typeof import("../../test-utils/channel-plugins.js").createTestRegistry;
 
 let createMessageTool: CreateMessageTool;
+let createOpenClawTools: CreateOpenClawTools;
 let resetPluginRuntimeStateForTest: ResetPluginRuntimeStateForTest;
 let setActivePluginRegistry: SetActivePluginRegistry;
 let createTestRegistry: CreateTestRegistry;
@@ -101,6 +103,19 @@ const mocks = vi.hoisted(() => ({
   ),
 }));
 
+const openClawToolsFactoryMocks = vi.hoisted(() => {
+  const tool = (name: string) => ({
+    name,
+    displaySummary: `${name} test stub`,
+    description: `${name} test stub`,
+    parameters: { type: "object", properties: {} },
+    execute: vi.fn(async () => ({ type: "json", data: { ok: true } })),
+  });
+  return {
+    tool,
+  };
+});
+
 vi.mock("../../infra/outbound/message-action-runner.js", async () => {
   const actual = await vi.importActual<
     typeof import("../../infra/outbound/message-action-runner.js")
@@ -126,6 +141,82 @@ vi.mock("../../cli/command-secret-gateway.js", () => ({
 
 vi.mock("../../cli/command-secret-targets.js", () => ({
   getScopedChannelsCommandSecretTargets: mocks.getScopedChannelsCommandSecretTargets,
+}));
+
+vi.mock("../../channels/plugins/message-tool-api.js", () => ({
+  resolveBundledChannelMessageToolDiscoveryAdapter: () => ({
+    describeMessageTool: () => ({ actions: ["send"], capabilities: [] }),
+  }),
+}));
+
+vi.mock("./agents-list-tool.js", () => ({
+  createAgentsListTool: () => openClawToolsFactoryMocks.tool("agents"),
+}));
+vi.mock("./canvas-tool.js", () => ({
+  createCanvasTool: () => openClawToolsFactoryMocks.tool("canvas"),
+}));
+vi.mock("./cron-tool.js", () => ({
+  createCronTool: () => openClawToolsFactoryMocks.tool("cron"),
+}));
+vi.mock("./gateway-tool.js", () => ({
+  createGatewayTool: () => openClawToolsFactoryMocks.tool("gateway"),
+}));
+vi.mock("./heartbeat-response-tool.js", () => ({
+  createHeartbeatResponseTool: () => openClawToolsFactoryMocks.tool("heartbeat_response"),
+}));
+vi.mock("./image-generate-tool.js", () => ({
+  createImageGenerateTool: () => null,
+}));
+vi.mock("./image-tool.js", () => ({
+  createImageTool: () => null,
+}));
+vi.mock("./manifest-capability-availability.js", () => ({
+  hasSnapshotCapabilityAvailability: () => false,
+  hasSnapshotProviderEnvAvailability: () => false,
+  loadCapabilityMetadataSnapshot: () => ({ index: {}, plugins: [] }),
+}));
+vi.mock("./music-generate-tool.js", () => ({
+  createMusicGenerateTool: () => null,
+}));
+vi.mock("./nodes-tool.js", () => ({
+  createNodesTool: () => openClawToolsFactoryMocks.tool("nodes"),
+}));
+vi.mock("./pdf-tool.js", () => ({
+  createPdfTool: () => null,
+}));
+vi.mock("./session-status-tool.js", () => ({
+  createSessionStatusTool: () => openClawToolsFactoryMocks.tool("session_status"),
+}));
+vi.mock("./sessions-history-tool.js", () => ({
+  createSessionsHistoryTool: () => openClawToolsFactoryMocks.tool("sessions_history"),
+}));
+vi.mock("./sessions-list-tool.js", () => ({
+  createSessionsListTool: () => openClawToolsFactoryMocks.tool("sessions_list"),
+}));
+vi.mock("./sessions-send-tool.js", () => ({
+  createSessionsSendTool: () => openClawToolsFactoryMocks.tool("sessions_send"),
+}));
+vi.mock("./sessions-spawn-tool.js", () => ({
+  createSessionsSpawnTool: () => openClawToolsFactoryMocks.tool("sessions_spawn"),
+}));
+vi.mock("./sessions-yield-tool.js", () => ({
+  createSessionsYieldTool: () => openClawToolsFactoryMocks.tool("sessions_yield"),
+}));
+vi.mock("./subagents-tool.js", () => ({
+  createSubagentsTool: () => openClawToolsFactoryMocks.tool("subagents"),
+}));
+vi.mock("./tts-tool.js", () => ({
+  createTtsTool: () => openClawToolsFactoryMocks.tool("tts"),
+}));
+vi.mock("./update-plan-tool.js", () => ({
+  createUpdatePlanTool: () => openClawToolsFactoryMocks.tool("update_plan"),
+}));
+vi.mock("./video-generate-tool.js", () => ({
+  createVideoGenerateTool: () => null,
+}));
+vi.mock("./web-tools.js", () => ({
+  createWebFetchTool: () => openClawToolsFactoryMocks.tool("web_fetch"),
+  createWebSearchTool: () => openClawToolsFactoryMocks.tool("web_search"),
 }));
 
 function mockSendResult(overrides: { channel?: string; to?: string } = {}) {
@@ -154,6 +245,7 @@ beforeAll(async () => {
     await import("../../plugins/runtime.js"));
   ({ createTestRegistry } = await import("../../test-utils/channel-plugins.js"));
   ({ createMessageTool } = await import("./message-tool.js"));
+  ({ createOpenClawTools } = await import("../openclaw-tools.js"));
 });
 
 beforeEach(() => {
@@ -357,6 +449,79 @@ describe("message tool agent routing", () => {
     const call = mocks.runMessageAction.mock.calls[0]?.[0];
     expect(call?.agentId).toBe("alpha");
     expect(call?.sessionKey).toBe("agent:alpha:main");
+  });
+
+  it("uses agentThreadId as ambient thread context when currentThreadTs is absent", async () => {
+    mockSendResult({ channel: "slack", to: "channel:C123" });
+
+    const tool = createMessageTool({
+      agentSessionKey: "agent:main:slack:channel:c123:thread:111.222",
+      config: {} as never,
+      currentChannelProvider: "slack",
+      currentChannelId: "channel:C123",
+      agentThreadId: "111.222",
+      runMessageAction: mocks.runMessageAction as never,
+    });
+
+    await tool.execute("1", {
+      action: "send",
+      channel: "slack",
+      message: "stay in thread",
+    });
+
+    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    expect(call?.toolContext?.currentThreadTs).toBe("111.222");
+    expect(call?.toolContext?.replyToMode).toBe("all");
+  });
+
+  it("keeps explicit reply mode opt-out when agentThreadId is present", async () => {
+    mockSendResult({ channel: "slack", to: "channel:C123" });
+
+    const tool = createMessageTool({
+      agentSessionKey: "agent:main:slack:channel:c123:thread:111.222",
+      config: {} as never,
+      currentChannelProvider: "slack",
+      currentChannelId: "channel:C123",
+      agentThreadId: "111.222",
+      replyToMode: "off",
+      runMessageAction: mocks.runMessageAction as never,
+    });
+
+    await tool.execute("1", {
+      action: "send",
+      channel: "slack",
+      message: "send at channel level",
+    });
+
+    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    expect(call?.toolContext?.currentThreadTs).toBe("111.222");
+    expect(call?.toolContext?.replyToMode).toBe("off");
+  });
+
+  it("forwards agentThreadId through createOpenClawTools to the message tool", async () => {
+    mockSendResult({ channel: "slack", to: "channel:C123" });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:slack:channel:c123:thread:111.222",
+      config: {} as never,
+      agentChannel: "slack",
+      currentChannelId: "channel:C123",
+      agentThreadId: "111.222",
+    }).find((candidate) => candidate.name === "message");
+
+    if (!tool) {
+      throw new Error("message tool not found");
+    }
+
+    await tool.execute("1", {
+      action: "send",
+      channel: "slack",
+      message: "stay in thread",
+    });
+
+    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    expect(call?.toolContext?.currentThreadTs).toBe("111.222");
+    expect(call?.toolContext?.replyToMode).toBe("all");
   });
 });
 

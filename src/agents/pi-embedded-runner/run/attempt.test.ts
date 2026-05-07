@@ -10,7 +10,6 @@ import {
   buildAfterTurnRuntimeContextFromUsage,
   composeSystemPromptWithHookContext,
   decodeHtmlEntitiesInObject,
-  applyEmbeddedAttemptToolsAllow,
   isPrimaryBootstrapRun,
   mergeOrphanedTrailingUserPrompt,
   normalizeMessagesForLlmBoundary,
@@ -21,8 +20,7 @@ import {
   resolveAttemptFsWorkspaceOnly,
   resolveEmbeddedAgentStreamFn,
   resolveUnknownToolGuardThreshold,
-  shouldCreateBundleMcpRuntimeForAttempt,
-  shouldBuildCoreCodingToolsForAllowlist,
+  shouldRunLlmOutputHooksForAttempt,
   resolveAttemptToolPolicyMessageProvider,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
@@ -66,33 +64,6 @@ async function invokeWrappedTestStream(
   return await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
 }
 
-describe("applyEmbeddedAttemptToolsAllow", () => {
-  it("keeps explicit toolsAllow authoritative after force-added tools are built", () => {
-    const tools = [{ name: "exec" }, { name: "read" }, { name: "message" }];
-
-    expect(
-      applyEmbeddedAttemptToolsAllow(tools, ["exec", "read"]).map((tool) => tool.name),
-    ).toEqual(["exec", "read"]);
-  });
-
-  it("normalizes explicit toolsAllow entries before filtering", () => {
-    const tools = [{ name: "cron" }, { name: "read" }, { name: "message" }];
-
-    expect(
-      applyEmbeddedAttemptToolsAllow(tools, [" cron ", "READ"]).map((tool) => tool.name),
-    ).toEqual(["cron", "read"]);
-  });
-
-  it("keeps plugin-only allowlists on the shared tool policy path", () => {
-    const tools = [{ name: "memory_search" }, { name: "plugin_extra" }];
-
-    expect(shouldBuildCoreCodingToolsForAllowlist(["memory_search"])).toBe(false);
-    expect(
-      applyEmbeddedAttemptToolsAllow(tools, ["memory_search"]).map((tool) => tool.name),
-    ).toEqual(["memory_search"]);
-  });
-});
-
 describe("buildEmbeddedAttemptToolRunContext", () => {
   it("carries runtime toolsAllow into coding tool construction", () => {
     expect(
@@ -127,15 +98,22 @@ describe("normalizeMessagesForLlmBoundary", () => {
 
     const output = normalizeMessagesForLlmBoundary(
       input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
-    ) as Array<Record<string, unknown>>;
+    ) as unknown as Array<Record<string, unknown>>;
 
     expect(output[0]).not.toHaveProperty("details");
     expect(output[0]?.content).toEqual([{ type: "text", text: "visible output" }]);
     expect(input[0]).toHaveProperty("details");
   });
 
-  it("keeps runtime-context transcript entries out of the LLM boundary", () => {
+  it("keeps historical runtime-context transcript entries out of the LLM boundary", () => {
     const input = [
+      {
+        role: "custom",
+        customType: "openclaw.runtime-context",
+        content: "old secret runtime context",
+        display: false,
+        timestamp: 0,
+      },
       {
         role: "user",
         content: [{ type: "text", text: "visible ask" }],
@@ -159,49 +137,55 @@ describe("normalizeMessagesForLlmBoundary", () => {
 
     const output = normalizeMessagesForLlmBoundary(
       input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
-    ) as Array<Record<string, unknown>>;
+    ) as unknown as Array<Record<string, unknown>>;
 
-    expect(output).toHaveLength(2);
+    expect(output).toHaveLength(3);
     expect(output).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ customType: "openclaw.runtime-context" })]),
+      expect.arrayContaining([expect.objectContaining({ content: "old secret runtime context" })]),
+    );
+    expect(output).toEqual(
+      expect.arrayContaining([expect.objectContaining({ content: "secret runtime context" })]),
     );
     expect(output).toEqual(
       expect.arrayContaining([expect.objectContaining({ customType: "other-extension-context" })]),
     );
   });
-});
 
-describe("shouldCreateBundleMcpRuntimeForAttempt", () => {
-  it("skips bundle MCP when tools are disabled or unavailable", () => {
-    expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: false })).toBe(false);
-    expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true, disableTools: true })).toBe(
-      false,
-    );
-  });
+  it("keeps only safe blocked metadata at the LLM boundary", () => {
+    const input = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+          },
+        ],
+        timestamp: 1,
+        __openclaw: {
+          beforeAgentRunBlocked: {
+            blockedBy: "policy-plugin",
+            blockedAt: 1,
+          },
+        },
+      },
+    ];
 
-  it("creates bundle MCP only when the allowlist can reach bundle MCP tool names", () => {
-    expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true })).toBe(true);
-    expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true, toolsAllow: [] })).toBe(
-      true,
-    );
-    expect(
-      shouldCreateBundleMcpRuntimeForAttempt({
-        toolsEnabled: true,
-        toolsAllow: ["memory_search", "memory_get"],
-      }),
-    ).toBe(false);
-    expect(
-      shouldCreateBundleMcpRuntimeForAttempt({
-        toolsEnabled: true,
-        toolsAllow: ["bundle-mcp"],
-      }),
-    ).toBe(true);
-    expect(
-      shouldCreateBundleMcpRuntimeForAttempt({
-        toolsEnabled: true,
-        toolsAllow: ["strict__strict_probe"],
-      }),
-    ).toBe(true);
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as Array<Record<string, unknown>>;
+
+    expect(output[0]?.content).toEqual([
+      {
+        type: "text",
+        text: "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+      },
+    ]);
+    expect(output[0]).toHaveProperty("__openclaw.beforeAgentRunBlocked");
+    expect(output[0]).not.toHaveProperty("__openclaw.beforeAgentRunBlocked.reason");
+    expect(JSON.stringify(output)).not.toContain("secret prompt");
+    expect(JSON.stringify(output)).not.toContain("matched secret prompt");
+    expect(input[0]).toHaveProperty("__openclaw");
   });
 });
 
@@ -217,6 +201,16 @@ describe("resolveAttemptToolPolicyMessageProvider", () => {
 
   it("falls back to message channel when provider is omitted", () => {
     expect(resolveAttemptToolPolicyMessageProvider({ messageChannel: "discord" })).toBe("discord");
+  });
+});
+
+describe("shouldRunLlmOutputHooksForAttempt", () => {
+  it("skips llm_output after before_agent_run blocks before model submission", () => {
+    expect(shouldRunLlmOutputHooksForAttempt({ promptErrorSource: "hook:before_agent_run" })).toBe(
+      false,
+    );
+    expect(shouldRunLlmOutputHooksForAttempt({ promptErrorSource: "prompt" })).toBe(true);
+    expect(shouldRunLlmOutputHooksForAttempt({ promptErrorSource: null })).toBe(true);
   });
 });
 

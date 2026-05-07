@@ -365,7 +365,7 @@ describe("buildOpenAIProvider", () => {
     );
   });
 
-  it("keeps modern live selection on OpenAI 5.2+ and Codex 5.2+", () => {
+  it("keeps modern live selection on OpenAI 5.2+ and current Codex models", () => {
     const provider = buildOpenAIProvider();
     const codexProvider = buildOpenAICodexProviderPlugin();
 
@@ -411,7 +411,7 @@ describe("buildOpenAIProvider", () => {
         provider: "openai-codex",
         modelId: "gpt-5.2-codex",
       } as never),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       codexProvider.isModernModelRef?.({
         provider: "openai-codex",
@@ -508,9 +508,9 @@ describe("buildOpenAIProvider", () => {
     });
 
     expect(extraParams).toMatchObject({
-      transport: "auto",
-      openaiWsWarmup: true,
+      transport: "sse",
     });
+    expect(extraParams?.openaiWsWarmup).toBeUndefined();
     expect(result.payload.store).toBe(true);
     expect(result.payload.context_management).toEqual([
       { type: "compaction", compact_threshold: 140_000 },

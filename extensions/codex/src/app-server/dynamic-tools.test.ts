@@ -314,7 +314,7 @@ describe("createCodexDynamicToolBridge", () => {
       details: { status: "failed", exitCode: 1 },
     });
 
-    await bridge.handleToolCall({
+    const result = await bridge.handleToolCall({
       threadId: "thread-1",
       turnId: "turn-1",
       callId: "call-1",
@@ -323,6 +323,10 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { command: "false" },
     });
 
+    expect(result).toEqual({
+      success: false,
+      contentItems: [{ type: "inputText", text: "failed output" }],
+    });
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({ isError: true }),
       expect.objectContaining({ runtime: "codex" }),
@@ -412,6 +416,92 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(result).toEqual(expectInputText("legacy compacted"));
+  });
+
+  it("keeps config out of Codex tool-result contexts", async () => {
+    const config = { session: { store: "/tmp/openclaw-session-store.json" } };
+    const registry = createEmptyPluginRegistry();
+    const middlewareContexts: Record<string, unknown>[] = [];
+    const legacyContexts: Record<string, unknown>[] = [];
+    const middleware = vi.fn(async (_event: unknown, ctx: Record<string, unknown>) => {
+      middlewareContexts.push(ctx);
+      return undefined;
+    });
+    const factory = async (codex: {
+      on: (
+        event: "tool_result",
+        handler: (
+          event: unknown,
+          ctx: Record<string, unknown>,
+        ) => Promise<{ result: AgentToolResult<unknown> } | void>,
+      ) => void;
+    }) => {
+      codex.on("tool_result", async (_event, ctx) => {
+        legacyContexts.push(ctx);
+      });
+    };
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "tokenjuice",
+      pluginName: "Tokenjuice",
+      rawHandler: middleware,
+      handler: middleware,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    registry.codexAppServerExtensionFactories.push({
+      pluginId: "legacy",
+      pluginName: "Legacy",
+      rawFactory: factory,
+      factory,
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+
+    const execute = vi.fn(async () => textToolResult("done"));
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "exec", execute })],
+      signal: new AbortController().signal,
+      hookContext: {
+        agentId: "agent-1",
+        config: config as never,
+        sessionId: "session-1",
+        sessionKey: "agent:agent-1:session-1",
+        runId: "run-1",
+      },
+    });
+
+    await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "exec",
+      arguments: { command: "pwd" },
+    });
+
+    expect(execute).toHaveBeenCalledWith(
+      "call-1",
+      { command: "pwd" },
+      expect.any(AbortSignal),
+      undefined,
+    );
+    expect(middlewareContexts).toHaveLength(1);
+    expect(middlewareContexts[0]).toMatchObject({
+      runtime: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:agent-1:session-1",
+      runId: "run-1",
+    });
+    expect(middlewareContexts[0]).not.toHaveProperty("config");
+    expect(legacyContexts).toHaveLength(1);
+    expect(legacyContexts[0]).toMatchObject({
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:agent-1:session-1",
+      runId: "run-1",
+    });
+    expect(legacyContexts[0]).not.toHaveProperty("config");
   });
 
   it("fires after_tool_call for successful codex tool executions", async () => {
@@ -555,7 +645,7 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(result).toEqual({
-      success: true,
+      success: false,
       contentItems: [{ type: "inputText", text: "blocked by policy" }],
     });
     expect(execute).not.toHaveBeenCalled();

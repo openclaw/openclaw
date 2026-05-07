@@ -253,6 +253,44 @@ describe("config plugin validation", () => {
     }
   });
 
+  it("reports catalog install hints for missing configured official external plugins", async () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          entries: { brave: { enabled: true } },
+          allow: ["brave"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    const message =
+      "plugin not installed: brave — install the official external plugin with: openclaw plugins install @openclaw/brave-plugin";
+    expect(res.warnings ?? []).toEqual(
+      expect.arrayContaining([
+        { path: "plugins.entries.brave", message },
+        { path: "plugins.allow", message },
+      ]),
+    );
+    expect(
+      (res.warnings ?? []).some(
+        (warning) =>
+          (warning.path === "plugins.entries.brave" || warning.path === "plugins.allow") &&
+          warning.message.includes("remove it from plugins config"),
+      ),
+    ).toBe(false);
+  });
+
   it.runIf(process.platform !== "win32")(
     "reports configured blocked plugins without stale not-found wording",
     async () => {
@@ -445,6 +483,55 @@ describe("config plugin validation", () => {
     });
   });
 
+  it("warns instead of failing for installable channel plugins that are not available", async () => {
+    const catalogPath = path.join(fixtureRoot, "channel-catalog.json");
+    await fs.writeFile(
+      catalogPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@acme/openclaw-chat",
+            openclaw: {
+              plugin: { id: "acme-chat" },
+              channel: {
+                id: "acme-chat",
+                label: "Acme Chat",
+              },
+              install: {
+                npmSpec: "@acme/openclaw-chat",
+              },
+            },
+          },
+        ],
+      }),
+      "utf-8",
+    );
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        channels: {
+          "acme-chat": { token: "configured" },
+        },
+      },
+      {
+        env: {
+          ...suiteEnv(),
+          OPENCLAW_PLUGIN_CATALOG_PATHS: catalogPath,
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.warnings).toContainEqual({
+      path: "channels.acme-chat",
+      message:
+        'channel plugin is not available: acme-chat (install or enable plugin "acme-chat", then run openclaw doctor --fix)',
+    });
+  });
+
   it("keeps unknown channel typos fatal when there is no stale plugin evidence", async () => {
     const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },
@@ -493,7 +580,7 @@ describe("config plugin validation", () => {
     expect(res.warnings ?? []).toContainEqual({
       path: "plugins.allow",
       message:
-        "plugin not found: discord (stale config entry ignored; remove it from plugins config)",
+        "plugin not installed: discord — install the official external plugin with: openclaw plugins install @openclaw/discord",
     });
   });
 

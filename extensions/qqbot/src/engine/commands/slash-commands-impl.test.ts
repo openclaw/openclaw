@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { resolveQQBotCommandsAllowFrom, resolveSlashCommandAuth } from "./slash-command-auth.js";
 import { getWrittenQQBotConfig, installCommandRuntime } from "./slash-command-test-support.js";
 import { getFrameworkCommands, matchSlashCommand } from "./slash-commands-impl.js";
-import type { SlashCommandContext } from "./slash-commands.js";
+import { SlashCommandRegistry, type SlashCommandContext } from "./slash-commands.js";
 
 function createStreamingContext(overrides: Partial<SlashCommandContext> = {}): SlashCommandContext {
   return {
@@ -29,8 +29,39 @@ function createStreamingContext(overrides: Partial<SlashCommandContext> = {}): S
 }
 
 describe("QQBot framework slash commands", () => {
-  it("routes bot-approve through the auth-gated framework registry", () => {
-    expect(getFrameworkCommands().map((command) => command.name)).toContain("bot-approve");
+  it("exposes private-only admin commands with private-chat metadata", () => {
+    const commands = getFrameworkCommands();
+    const names = commands.map((command) => command.name);
+
+    expect(names).toEqual(
+      expect.arrayContaining(["bot-approve", "bot-clear-storage", "bot-logs", "bot-streaming"]),
+    );
+    for (const commandName of ["bot-approve", "bot-clear-storage", "bot-logs", "bot-streaming"]) {
+      expect(commands.find((command) => command.name === commandName)?.c2cOnly).toBe(true);
+    }
+  });
+
+  it("preserves private-only auth metadata for framework registration", () => {
+    const registry = new SlashCommandRegistry();
+    registry.register({
+      name: "private-admin",
+      description: "private admin command",
+      requireAuth: true,
+      c2cOnly: true,
+      handler: () => "ok",
+    });
+    registry.register({
+      name: "shared-admin",
+      description: "shared admin command",
+      requireAuth: true,
+      handler: () => "ok",
+    });
+
+    const commands = registry.getFrameworkCommands();
+
+    expect(commands.map((command) => command.name)).toEqual(["private-admin", "shared-admin"]);
+    expect(commands.find((command) => command.name === "private-admin")?.c2cOnly).toBe(true);
+    expect(commands.find((command) => command.name === "shared-admin")?.c2cOnly).toBeUndefined();
   });
 
   it("routes bot-streaming through the auth-gated framework registry", () => {
