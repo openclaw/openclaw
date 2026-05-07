@@ -42,10 +42,19 @@ export type ResolveCronModelSelectionResult =
       error: string;
     };
 
-function formatCronPayloadModelRejection(modelOverride: string, error: string): string {
+export function formatCronPayloadModelRejection(
+  modelOverride: string,
+  error: string,
+  allowedModelKeys?: string[],
+): string {
   if (error.startsWith("model not allowed:")) {
-    const modelRef = error.slice("model not allowed:".length).trim();
-    return `cron payload.model '${modelOverride}' rejected by agents.defaults.models allowlist: ${modelRef}`;
+    const resolvedKey = error.slice("model not allowed:".length).trim();
+    const resolvedNote = resolvedKey !== modelOverride ? ` (resolved: '${resolvedKey}')` : "";
+    const allowedNote =
+      allowedModelKeys && allowedModelKeys.length > 0
+        ? ` Allowed: ${allowedModelKeys.join(", ")}.`
+        : "";
+    return `cron payload.model '${modelOverride}'${resolvedNote} is not in the agents.defaults.models allowlist.${allowedNote}`;
   }
   return `cron payload.model '${modelOverride}' rejected: ${error}`;
 }
@@ -120,9 +129,16 @@ export async function resolveCronModelSelection(
       defaultModel: resolvedDefault.model,
     });
     if ("error" in resolvedOverride) {
+      const allowedModelKeys = Object.keys(
+        params.cfgWithAgentDefaults.agents?.defaults?.models ?? {},
+      );
       return {
         ok: false,
-        error: formatCronPayloadModelRejection(modelOverride, resolvedOverride.error),
+        error: formatCronPayloadModelRejection(
+          modelOverride,
+          resolvedOverride.error,
+          allowedModelKeys,
+        ),
       };
     }
     provider = resolvedOverride.ref.provider;
