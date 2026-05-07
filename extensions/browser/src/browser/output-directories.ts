@@ -1,46 +1,35 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isNotFoundPathError, pathScope } from "../sdk-security-runtime.js";
+import { ensureAbsoluteDirectory } from "../sdk-security-runtime.js";
 
-async function findExistingAncestor(dirPath: string): Promise<{
-  ancestorDir: string;
-  relativeDir: string;
-}> {
-  let current = path.resolve(dirPath);
-  const missingSegments: string[] = [];
-
-  while (true) {
+async function resolveSystemDirectoryAlias(dirPath: string): Promise<string> {
+  // macOS exposes /tmp and /var as fixed system symlinks into /private.
+  // Canonicalize only those roots before rejecting symlinks below them.
+  for (const aliasRoot of ["/tmp", "/var"]) {
+    if (dirPath !== aliasRoot && !dirPath.startsWith(`${aliasRoot}${path.sep}`)) {
+      continue;
+    }
     try {
-      const stat = await fs.lstat(current);
-      if (!stat.isDirectory() || stat.isSymbolicLink()) {
-        throw new Error("Invalid path: output directory must be a real directory");
+      const stat = await fs.lstat(aliasRoot);
+      if (!stat.isSymbolicLink()) {
+        return dirPath;
       }
-      return {
-        ancestorDir: current,
-        relativeDir: missingSegments.length === 0 ? "." : path.join(...missingSegments.reverse()),
-      };
-    } catch (error) {
-      if (!isNotFoundPathError(error)) {
-        throw error;
-      }
-      const parentDir = path.dirname(current);
-      if (parentDir === current) {
-        throw error;
-      }
-      missingSegments.push(path.basename(current));
-      current = parentDir;
+      return path.join(await fs.realpath(aliasRoot), path.relative(aliasRoot, dirPath));
+    } catch {
+      return dirPath;
     }
   }
+  return dirPath;
 }
 
 export async function ensureOutputDirectory(dirPath: string): Promise<void> {
-  const resolvedDir = path.resolve(dirPath);
-  const { ancestorDir, relativeDir } = await findExistingAncestor(resolvedDir);
-  if (relativeDir === ".") {
-    return;
-  }
-  const result = await pathScope(ancestorDir, { label: "output directory" }).ensureDir(relativeDir);
+  const result = await ensureAbsoluteDirectory(
+    await resolveSystemDirectoryAlias(path.resolve(dirPath)),
+    {
+      scopeLabel: "output directory",
+    },
+  );
   if (!result.ok) {
-    throw new Error(result.error);
+    throw result.error;
   }
 }

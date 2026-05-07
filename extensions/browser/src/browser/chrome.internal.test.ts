@@ -587,38 +587,31 @@ describe("chrome.ts internal", () => {
     });
 
     it("uses the configured local launch timeout while waiting for CDP discovery", async () => {
-      vi.useFakeTimers();
-      try {
-        const executablePath = path.join(tmpDir, "chrome");
-        await fsp.writeFile(executablePath, "");
-        const existsSync = fs.existsSync.bind(fs);
-        vi.spyOn(fs, "existsSync").mockImplementation((p) => {
-          const s = String(p);
-          if (s.endsWith("Local State") || s.endsWith("Preferences")) {
-            return true;
-          }
-          return existsSync(p);
-        });
-        const fakeProc = makeFakeProc();
-        spawnMock.mockReturnValue(fakeProc);
-        vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
+      const executablePath = path.join(tmpDir, "chrome");
+      await fsp.writeFile(executablePath, "");
+      const existsSync = fs.existsSync.bind(fs);
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (s.endsWith("Local State") || s.endsWith("Preferences")) {
+          return true;
+        }
+        return existsSync(p);
+      });
+      const fakeProc = makeFakeProc();
+      spawnMock.mockReturnValue(fakeProc);
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
 
-        const resolved = {
-          ...makeResolved(),
-          executablePath,
-          localLaunchTimeoutMs: 1,
-        };
-        const profile = makeProfile(55556);
-        const rejection = expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
-          /Failed to start Chrome CDP/,
-        );
+      const resolved = {
+        ...makeResolved(),
+        executablePath,
+        localLaunchTimeoutMs: 1,
+      };
+      const profile = makeProfile(55556);
 
-        await vi.advanceTimersByTimeAsync(10);
-        await rejection;
-        expect(fakeProc.kill).toHaveBeenCalledWith("SIGKILL");
-      } finally {
-        vi.useRealTimers();
-      }
+      await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
+        /Failed to start Chrome CDP/,
+      );
+      expect(fakeProc.kill).toHaveBeenCalledWith("SIGKILL");
     });
   });
 
