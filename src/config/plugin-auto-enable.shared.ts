@@ -966,6 +966,7 @@ export function resolvePluginAutoEnableManifestRegistry(params: {
       const snapshot = getCurrentPluginMetadataSnapshot({
         env: params.env,
         allowWorkspaceScopedSnapshot: true,
+        requireDefaultDiscoveryContext: true,
       });
       return snapshot?.policyHash === resolveInstalledPluginIndexPolicyHash(params.config)
         ? snapshot

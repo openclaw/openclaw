@@ -45,6 +45,22 @@ function canReuseUnscopedCurrentPluginMetadataSnapshot(config: OpenClawConfig): 
   return normalizePluginsConfigWithResolver(config.plugins).loadPaths.length === 0;
 }
 
+function resolveUnscopedCurrentPluginMetadataSnapshot(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  workspaceDir?: string;
+}): PluginMetadataSnapshot | undefined {
+  if (!canReuseUnscopedCurrentPluginMetadataSnapshot(params.config)) {
+    return undefined;
+  }
+  return getCurrentPluginMetadataSnapshot({
+    env: params.env,
+    workspaceDir: params.workspaceDir,
+    allowWorkspaceScopedSnapshot: true,
+    requireDefaultDiscoveryContext: true,
+  });
+}
+
 function loadBundleSettingsFile(params: {
   rootDir: string;
   relativePath: string;
@@ -94,13 +110,11 @@ export function loadEnabledBundlePiSettingsSnapshot(params: {
           env,
           workspaceDir,
         }) ??
-        (canReuseUnscopedCurrentPluginMetadataSnapshot(config)
-          ? getCurrentPluginMetadataSnapshot({
-              env,
-              workspaceDir,
-              allowWorkspaceScopedSnapshot: true,
-            })
-          : undefined) ??
+        resolveUnscopedCurrentPluginMetadataSnapshot({
+          config,
+          env,
+          workspaceDir,
+        }) ??
         loadPluginMetadataSnapshot({
           workspaceDir,
           config,

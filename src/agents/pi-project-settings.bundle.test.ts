@@ -364,6 +364,64 @@ describe("loadEnabledBundlePiSettingsSnapshot", () => {
     expect(pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
   });
 
+  it("does not reuse a load-path current snapshot for a config with default load paths", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-workspace-");
+    const pluginRoot = await createWorkspaceBundle({ workspaceDir });
+    const resolvedPluginRoot = await fs.realpath(pluginRoot);
+    await fs.writeFile(
+      path.join(pluginRoot, "settings.json"),
+      JSON.stringify({ hideThinkingBlock: true }),
+      "utf-8",
+    );
+    const staleSnapshot = {
+      policyHash: "policy",
+      manifestRegistry: {
+        diagnostics: [],
+        plugins: [
+          {
+            id: "claude-bundle",
+            origin: "workspace",
+            format: "bundle",
+            bundleFormat: "claude",
+            settingsFiles: ["settings.json"],
+            rootDir: resolvedPluginRoot,
+          },
+        ],
+      },
+      normalizePluginId: (id: string) => id.trim(),
+    };
+    pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot.mockImplementation(
+      (params: { config?: unknown; requireDefaultDiscoveryContext?: boolean }) => {
+        if (params.config || params.requireDefaultDiscoveryContext) {
+          return undefined;
+        }
+        return staleSnapshot;
+      },
+    );
+    pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot.mockClear();
+
+    const snapshot = loadEnabledBundlePiSettingsSnapshot({
+      cwd: workspaceDir,
+      cfg: {
+        plugins: {
+          entries: {
+            "claude-bundle": { enabled: true },
+          },
+        },
+      },
+    });
+
+    expect(snapshot.hideThinkingBlock).toBe(true);
+    expect(pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledTimes(2);
+    expect(pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot).toHaveBeenLastCalledWith({
+      env: process.env,
+      workspaceDir,
+      allowWorkspaceScopedSnapshot: true,
+      requireDefaultDiscoveryContext: true,
+    });
+    expect(pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
+  });
+
   it("loads sanitized settings and MCP defaults from enabled bundle plugins", async () => {
     const workspaceDir = await tempDirs.make("openclaw-workspace-");
     const pluginRoot = await createWorkspaceBundle({ workspaceDir });

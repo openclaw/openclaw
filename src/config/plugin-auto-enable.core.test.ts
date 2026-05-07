@@ -146,6 +146,7 @@ describe("applyPluginAutoEnable core", () => {
       }),
       {
         config: snapshotConfig,
+        env,
         workspaceDir: "/tmp/workspace",
       },
     );
@@ -179,6 +180,7 @@ describe("applyPluginAutoEnable core", () => {
       }),
       {
         config: snapshotConfig,
+        env,
         workspaceDir: "/tmp/workspace",
       },
     );
@@ -188,6 +190,40 @@ describe("applyPluginAutoEnable core", () => {
         plugins: {
           allow: ["existing"],
           load: { paths: ["/tmp/changed-plugin-root"] },
+          entries: {
+            "load-path-chat": { config: { token: "x" } },
+          },
+        },
+      },
+      env,
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["existing"]);
+    expect(result.changes).not.toContain(
+      "load-path-chat plugin config present, added to plugin allowlist.",
+    );
+  });
+
+  it("does not reuse a load-path current manifest registry for a config with default load paths", () => {
+    const manifestRegistry = makeRegistry([{ id: "load-path-chat", channels: ["load-path-chat"] }]);
+    const snapshotConfig: OpenClawConfig = {
+      plugins: {
+        allow: ["existing"],
+        load: { paths: ["/tmp/custom-plugin-root"] },
+      },
+    };
+    setCurrentPluginMetadataSnapshot(
+      createPluginMetadataSnapshot({
+        config: snapshotConfig,
+        manifestRegistry,
+      }),
+      { config: snapshotConfig, env },
+    );
+
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          allow: ["existing"],
           entries: {
             "load-path-chat": { config: { token: "x" } },
           },

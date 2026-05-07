@@ -70,6 +70,7 @@ export function getCurrentPluginMetadataSnapshot(
     env?: NodeJS.ProcessEnv;
     workspaceDir?: string;
     allowWorkspaceScopedSnapshot?: boolean;
+    requireDefaultDiscoveryContext?: boolean;
   } = {},
 ): PluginMetadataSnapshot | undefined {
   const {
@@ -106,6 +107,25 @@ export function getCurrentPluginMetadataSnapshot(
       configFingerprint === requestedConfigFingerprint ||
       snapshot.configFingerprint === requestedConfigFingerprint ||
       compatibleFingerprints.has(requestedConfigFingerprint);
+    if (!fingerprintMatches) {
+      return undefined;
+    }
+  }
+  if (params.requireDefaultDiscoveryContext === true) {
+    const defaultDiscoveryConfigFingerprint = resolvePluginMetadataControlPlaneFingerprint(
+      {},
+      {
+        env: params.env,
+        index: snapshot.index,
+        policyHash: snapshot.policyHash,
+        workspaceDir: requestedWorkspaceDir,
+      },
+    );
+    const compatibleFingerprints = new Set(compatibleConfigFingerprints ?? []);
+    const fingerprintMatches =
+      configFingerprint === defaultDiscoveryConfigFingerprint ||
+      snapshot.configFingerprint === defaultDiscoveryConfigFingerprint ||
+      compatibleFingerprints.has(defaultDiscoveryConfigFingerprint);
     if (!fingerprintMatches) {
       return undefined;
     }
