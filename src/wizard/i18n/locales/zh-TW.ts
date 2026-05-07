@@ -75,9 +75,44 @@ export const zhTW: LocaleMap = {
   "Target workspace directory": "目標工作區目錄",
   "Apply this migration now?": "立即執行此移轉？",
 
-  // ===== Additional translations =====
-  "Token": "令牌",
-  "Password": "密碼",
-  "Back": "返回",
-  "Return to section menu": "返回章節選單",
+  // ===== onboard-remote.ts =====
+  "Connection method": "連線方式",
+  "Discover gateway on LAN (Bonjour)?": "在區域網路中發現 Gateway（Bonjour）？",
+  "Select gateway": "選擇 Gateway",
+  "Enter URL manually": "手動輸入 URL",
+  "Gateway WebSocket URL": "Gateway WebSocket 位址",
+  "SSH tunnel (loopback)": "SSH 隧道（迴環）",
+  "No auth": "無需認證",
+  "Token (recommended)": "令牌（建議）",
+
+  // ===== onboard-custom.ts =====
+  "OpenAI-compatible": "相容 OpenAI",
+  "Anthropic-compatible": "相容 Anthropic",
+  "Unknown (detect automatically)": "未知（自動偵測）",
+  "Endpoint compatibility": "端點相容性",
+  "API Base URL": "API 基礎位址",
+  "Change base URL": "修改基礎位址",
+  "Change model": "修改模型",
+  "Change base URL and model": "修改基礎位址和模型",
+  "What would you like to change?": "您想修改什麼？",
+  "Model ID": "模型 ID",
+  "Model alias (optional)": "模型別名（選填）",
+  "Endpoint ID": "端點 ID",
+  "Does this model support image input?": "此模型支援圖片輸入嗎？",
+
+  // ===== onboard-channels.ts =====
+  "Select a channel": "選擇頻道",
+  "Select channel (QuickStart)": "選擇頻道（快速開始）",
+
+  // ===== onboard-search.ts =====
+  "Keep default": "保留預設值",
+
+  // ===== onboard-hooks.ts =====
+  "Enable hooks?": "啟用鉤子？",
+
+  // ===== onboard-skills.ts =====
+  "Configure skills now? (recommended)": "立即設定技能？（建議）",
+  "Install missing skill dependencies": "安裝缺少的技能依賴",
+  "Show Homebrew install command?": "顯示 Homebrew 安裝指令？",
+  "Preferred node manager for skill installs": "技能安裝的偏好套件管理器",
 };

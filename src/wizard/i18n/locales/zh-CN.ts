@@ -48,6 +48,16 @@ export const zhCN: LocaleMap = {
   "Auto (Loopback → LAN)": "自动（回环 → 局域网）",
   "Tailscale exposure": "Tailscale 对外暴露",
   "Reset Tailscale serve/funnel on exit?": "退出时重置 Tailscale 服务/隧道？",
+  "How do you want to provide the gateway token?": "您要如何提供 Gateway 令牌？",
+  "How do you want to provide the gateway password?": "您要如何提供 Gateway 密码？",
+  "Where is this gateway token stored?": "此 Gateway 令牌存储在哪里？",
+  "Where is this gateway password stored?": "此 Gateway 密码存储在哪里？",
+  "Generate/store plaintext token": "生成/存储明文令牌",
+  "Use SecretRef": "使用 SecretRef",
+  "Enter password now": "立即输入密码",
+  "Token": "令牌",
+  "Password": "密码",
+  "Use existing gateway token": "使用现有 Gateway 令牌",
 
   // ===== setup.official-plugins.ts =====
   "Install optional plugins": "安装可选插件",
@@ -56,15 +66,14 @@ export const zhCN: LocaleMap = {
   // ===== setup.plugin-config.ts =====
   "Configure plugins (select to set up now, or skip)": "配置插件（选择立即设置，或跳过）",
   "Select plugin to configure": "选择要配置的插件",
+  "Back": "返回",
+  "Return to section menu": "返回分区菜单",
 
   // ===== setup.migration-import.ts =====
   "Migration source": "迁移来源",
   "Source agent home": "来源 Agent 目录",
   "Target workspace directory": "目标工作区目录",
   "Apply this migration now?": "立即执行此迁移？",
-
-  // ===== setup.security-note.ts (strings used in setup.ts) =====
-  // Security note strings are imported as constants, need separate handling
 
   // ===== onboard-remote.ts =====
   "Connection method": "连接方式",
@@ -75,7 +84,6 @@ export const zhCN: LocaleMap = {
   "SSH tunnel (loopback)": "SSH 隧道（回环）",
   "No auth": "无需认证",
   "Token (recommended)": "令牌（推荐）",
-  "Password": "密码",
 
   // ===== onboard-custom.ts =====
   "OpenAI-compatible": "兼容 OpenAI",
@@ -107,13 +115,4 @@ export const zhCN: LocaleMap = {
   "Install missing skill dependencies": "安装缺失的技能依赖",
   "Show Homebrew install command?": "显示 Homebrew 安装命令？",
   "Preferred node manager for skill installs": "技能安装的首选包管理器",
-}
-  // ===== Additional translations for missed strings =====
-  "Local gateway (this machine)": "本地网关（本机）",
-  "Remote gateway (info-only)": "远程网关（仅查看）",
-  "Token": "令牌",
-  "Password": "密码",
-  "Back": "返回",
-  "Return to section menu": "返回分区菜单",
-
-;
+};
