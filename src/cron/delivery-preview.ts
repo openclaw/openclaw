@@ -10,7 +10,11 @@ function formatTarget(channel?: string, to?: string | null): string {
     return "last";
   }
   if (to) {
-    return `${channel}:${to}`;
+    const trimmedTo = to.trim();
+    if (trimmedTo.toLowerCase().startsWith(`${channel.toLowerCase()}:`)) {
+      return trimmedTo;
+    }
+    return `${channel}:${trimmedTo}`;
   }
   return channel;
 }

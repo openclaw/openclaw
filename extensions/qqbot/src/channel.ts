@@ -26,6 +26,7 @@ import { clearAccountCredentials } from "./engine/config/credentials.js";
 import {
   normalizeTarget as coreNormalizeTarget,
   looksLikeQQBotTarget,
+  parseTarget as coreParseTarget,
 } from "./engine/messaging/target-parser.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 
@@ -191,6 +192,41 @@ function shouldSuppressLocalQQBotApprovalPrompt(params: {
   return EXEC_APPROVAL_COMMAND_RE.test(text);
 }
 
+function toQQBotChatType(type: "c2c" | "group" | "channel"): "direct" | "group" | "channel" {
+  if (type === "c2c") {
+    return "direct";
+  }
+  return type;
+}
+
+function parseQQBotExplicitTarget(raw: string) {
+  try {
+    const parsed = coreParseTarget(raw);
+    return {
+      to: `${parsed.type}:${parsed.id}`,
+      chatType: toQQBotChatType(parsed.type),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function resolveQQBotOutboundTarget(params: { to?: string }) {
+  const raw = params.to?.trim();
+  if (!raw) {
+    return { ok: false as const, error: new Error("QQ Bot target is required") };
+  }
+  try {
+    const parsed = coreParseTarget(raw);
+    return { ok: true as const, to: `${parsed.type}:${parsed.id}` };
+  } catch (err) {
+    return {
+      ok: false as const,
+      error: err instanceof Error ? err : new Error(String(err)),
+    };
+  }
+}
+
 export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
   id: "qqbot",
   setupWizard: qqbotSetupWizard,
@@ -234,6 +270,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     targetPrefixes: ["qqbot"],
     /** Normalize common QQ Bot target formats into the canonical qqbot:... form. */
     normalizeTarget: coreNormalizeTarget,
+    parseExplicitTarget: ({ raw }) => parseQQBotExplicitTarget(raw),
     targetResolver: {
       /** Return true when the id looks like a QQ Bot target. */
       looksLikeId: looksLikeQQBotTarget,
@@ -242,6 +279,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
   },
   outbound: {
     deliveryMode: "direct",
+    resolveTarget: ({ to }) => resolveQQBotOutboundTarget({ to }),
     chunker: (text, limit) => getQQBotRuntime().channel.text.chunkMarkdownText(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 5000,

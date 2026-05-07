@@ -22,6 +22,23 @@ const cfg = {
 } as OpenClawConfig;
 
 describe("qqbot message adapter", () => {
+  it("normalizes explicit delivery targets before outbound delivery", () => {
+    expect(qqbotPlugin.messaging?.parseExplicitTarget?.({ raw: "qqbot:c2c:USER_OPENID" })).toEqual({
+      to: "c2c:USER_OPENID",
+      chatType: "direct",
+    });
+    expect(qqbotPlugin.outbound?.resolveTarget?.({ to: "qqbot:c2c:USER_OPENID" })).toEqual({
+      ok: true,
+      to: "c2c:USER_OPENID",
+    });
+    expect(qqbotPlugin.outbound?.resolveTarget?.({ to: "qqbot:qqbot:c2c:USER_OPENID" })).toEqual({
+      ok: false,
+      error: expect.objectContaining({
+        message: expect.stringContaining("repeated qqbot: provider prefix"),
+      }),
+    });
+  });
+
   it("declares durable text, media, and reply target capabilities with receipt proofs", async () => {
     sendTextMock.mockResolvedValue({ messageId: "qq-text-1" });
     sendMediaMock.mockResolvedValue({ messageId: "qq-media-1" });
