@@ -108,6 +108,8 @@ vi.mock("./doctor-gateway-auth-token.js", () => ({
   resolveGatewayAuthTokenForService: mocks.resolveGatewayAuthTokenForService,
 }));
 
+import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
+import { needsNodeRuntimeMigration } from "../daemon/service-audit.js";
 import {
   maybeRepairGatewayServiceConfig,
   maybeScanExtraGatewayServices,
@@ -988,6 +990,68 @@ describe("maybeRepairGatewayServiceConfig", () => {
       } finally {
         await fs.rm(root, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe("Gateway runtime node warning panels", () => {
+    const bunGatewayProgramArguments = [
+      "/usr/bin/bun",
+      "/usr/local/bin/openclaw",
+      "gateway",
+      "--port",
+      "18789",
+    ];
+
+    beforeEach(() => {
+      mocks.readCommand.mockResolvedValue({
+        programArguments: bunGatewayProgramArguments,
+        environment: {},
+      });
+      mocks.auditGatewayServiceConfig.mockResolvedValue({ ok: true, issues: [] });
+      mocks.buildGatewayInstallPlan.mockResolvedValue({
+        programArguments: bunGatewayProgramArguments,
+        environment: {},
+      });
+    });
+
+    it("emits only the old-node warning and not the not-found note when system Node is present but unsupported", async () => {
+      vi.mocked(needsNodeRuntimeMigration).mockReturnValue(true);
+      vi.mocked(resolveSystemNodeInfo).mockResolvedValue({
+        path: "/usr/bin/node",
+        version: "20.20.2",
+        supported: false,
+      });
+      vi.mocked(renderSystemNodeWarning).mockReturnValue(
+        "System Node 20.20.2 at /usr/bin/node is below the required Node 22.14+. Install Node 24 (recommended) or Node 22 LTS from nodejs.org or Homebrew.",
+      );
+
+      await runRepair({ gateway: {} });
+
+      expect(mocks.note).toHaveBeenCalledWith(
+        expect.stringContaining("System Node 20.20.2"),
+        "Gateway runtime",
+      );
+      expect(mocks.note).not.toHaveBeenCalledWith(
+        expect.stringContaining("not found"),
+        "Gateway runtime",
+      );
+    });
+
+    it("emits only the not-found note when no system Node is found at all", async () => {
+      vi.mocked(needsNodeRuntimeMigration).mockReturnValue(true);
+      vi.mocked(resolveSystemNodeInfo).mockResolvedValue(null);
+      vi.mocked(renderSystemNodeWarning).mockReturnValue(null);
+
+      await runRepair({ gateway: {} });
+
+      expect(mocks.note).toHaveBeenCalledWith(
+        expect.stringContaining("not found"),
+        "Gateway runtime",
+      );
+      expect(mocks.note).not.toHaveBeenCalledWith(
+        expect.stringContaining("is below the required Node"),
+        "Gateway runtime",
+      );
     });
   });
 });
