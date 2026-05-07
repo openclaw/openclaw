@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Capture every call to postTrustedWebToolsJson so we can assert on extraHeaders.
 const postTrustedWebToolsJson = vi.fn();
@@ -29,15 +29,16 @@ describe("tavily client X-Client-Source header", () => {
   let runTavilySearch: typeof import("./tavily-client.js").runTavilySearch;
   let runTavilyExtract: typeof import("./tavily-client.js").runTavilyExtract;
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ runTavilySearch, runTavilyExtract } = await import("./tavily-client.js"));
+  });
+
+  beforeEach(() => {
     postTrustedWebToolsJson.mockReset();
     postTrustedWebToolsJson.mockImplementation(
       async (_params: unknown, parse: (r: Response) => Promise<unknown>) =>
         parse(Response.json({ results: [] })),
     );
-
-    ({ runTavilySearch, runTavilyExtract } = await import("./tavily-client.js"));
   });
 
   it("runTavilySearch sends X-Client-Source: openclaw", async () => {

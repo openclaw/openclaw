@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { writeConfigDocBaselineStatefile } from "../src/config/doc-baseline.js";
+import { writeConfigDocBaselineArtifacts } from "../src/config/doc-baseline.js";
 
 const args = new Set(process.argv.slice(2));
 const checkOnly = args.has("--check");
@@ -12,24 +12,21 @@ if (checkOnly && args.has("--write")) {
 }
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const result = await writeConfigDocBaselineStatefile({
+const result = await writeConfigDocBaselineArtifacts({
   repoRoot,
   check: checkOnly,
 });
 
 if (checkOnly) {
   if (!result.changed) {
-    console.log(
-      `OK ${path.relative(repoRoot, result.jsonPath)} ${path.relative(repoRoot, result.statefilePath)}`,
-    );
+    console.log(`OK ${path.relative(repoRoot, result.hashPath)}`);
     process.exit(0);
   }
   console.error(
     [
       "Config baseline drift detected.",
-      `Expected current: ${path.relative(repoRoot, result.jsonPath)}`,
-      `Expected current: ${path.relative(repoRoot, result.statefilePath)}`,
-      "If this config-surface change is intentional, run `pnpm config:docs:gen` and commit the updated baseline files.",
+      `Hash mismatch: ${path.relative(repoRoot, result.hashPath)}`,
+      "If this config-surface change is intentional, run `pnpm config:docs:gen` and commit the updated hash file.",
       "If not intentional, treat this as docs drift or a possible breaking config change and fix the schema/help changes first.",
     ].join("\n"),
   );
@@ -38,7 +35,10 @@ if (checkOnly) {
 
 console.log(
   [
-    `Wrote ${path.relative(repoRoot, result.jsonPath)}`,
-    `Wrote ${path.relative(repoRoot, result.statefilePath)}`,
+    `Wrote ${path.relative(repoRoot, result.hashPath)}`,
+    `Wrote ${path.relative(repoRoot, result.jsonPaths.combined)} (gitignored, local only)`,
+    `Wrote ${path.relative(repoRoot, result.jsonPaths.core)} (gitignored, local only)`,
+    `Wrote ${path.relative(repoRoot, result.jsonPaths.channel)} (gitignored, local only)`,
+    `Wrote ${path.relative(repoRoot, result.jsonPaths.plugin)} (gitignored, local only)`,
   ].join("\n"),
 );

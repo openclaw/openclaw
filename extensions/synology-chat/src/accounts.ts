@@ -9,7 +9,7 @@ import {
   resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
-import { resolveDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
+import { resolveDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import type {
   SynologyChatChannelConfig,
   ResolvedSynologyChatAccount,
@@ -18,7 +18,7 @@ import type {
 
 /** Extract the channel config from the full OpenClaw config object. */
 function getChannelConfig(cfg: OpenClawConfig): SynologyChatChannelConfig | undefined {
-  return cfg?.channels?.["synology-chat"];
+  return cfg?.channels?.["synology-chat"] as SynologyChatChannelConfig | undefined;
 }
 
 function resolveImplicitAccountId(channelCfg: SynologyChatChannelConfig): string | undefined {
@@ -55,8 +55,12 @@ function resolveWebhookPathSource(params: {
 
 /** Parse allowedUserIds from string or array to string[]. */
 function parseAllowedUserIds(raw: string | string[] | undefined): string[] {
-  if (!raw) return [];
-  if (Array.isArray(raw)) return raw.filter(Boolean);
+  if (!raw) {
+    return [];
+  }
+  if (Array.isArray(raw)) {
+    return raw.filter(Boolean);
+  }
   return raw
     .split(",")
     .map((s) => s.trim())

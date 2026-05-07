@@ -7,10 +7,6 @@ read_when:
 title: "GCP"
 ---
 
-# OpenClaw on GCP Compute Engine (Docker, Production VPS Guide)
-
-## Goal
-
 Run a persistent OpenClaw Gateway on a GCP Compute Engine VM using Docker, with durable state, baked-in binaries, and safe restart behavior.
 
 If you want "OpenClaw 24/7 for ~$5-12/mo", this is a reliable setup on Google Cloud.
@@ -24,6 +20,9 @@ Pricing varies by machine type and region; pick the smallest VM that fits your w
 - Start the OpenClaw Gateway in Docker
 - Persist `~/.openclaw` + `~/.openclaw/workspace` on the host (survives restarts/rebuilds)
 - Access the Control UI from your laptop via an SSH tunnel
+
+That mounted `~/.openclaw` state includes `openclaw.json`, per-agent
+`agents/<agentId>/agent/auth-profiles.json`, and `.env`.
 
 The Gateway can be accessed via:
 
@@ -210,24 +209,32 @@ For the generic Docker flow, see [Docker](/install/docker).
 
     ```bash
     OPENCLAW_IMAGE=openclaw:latest
-    OPENCLAW_GATEWAY_TOKEN=change-me-now
+    OPENCLAW_GATEWAY_TOKEN=
     OPENCLAW_GATEWAY_BIND=lan
     OPENCLAW_GATEWAY_PORT=18789
 
     OPENCLAW_CONFIG_DIR=/home/$USER/.openclaw
     OPENCLAW_WORKSPACE_DIR=/home/$USER/.openclaw/workspace
 
-    GOG_KEYRING_PASSWORD=change-me-now
+    GOG_KEYRING_PASSWORD=
     XDG_CONFIG_HOME=/home/node/.openclaw
     ```
 
-    Generate strong secrets:
+    Set `OPENCLAW_GATEWAY_TOKEN` when you want to manage the stable gateway
+    token through `.env`; otherwise configure `gateway.auth.token` before
+    relying on clients across restarts. If neither source exists, OpenClaw uses
+    a runtime-only token for that startup. Generate a keyring password and paste
+    it into `GOG_KEYRING_PASSWORD`:
 
     ```bash
     openssl rand -hex 32
     ```
 
     **Do not commit this file.**
+
+    This `.env` file is for container/runtime env such as `OPENCLAW_GATEWAY_TOKEN`.
+    Stored provider OAuth/API-key auth lives in the mounted
+    `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`.
 
   </Step>
 
@@ -310,13 +317,16 @@ For the generic Docker flow, see [Docker](/install/docker).
 
     `http://127.0.0.1:18789/`
 
-    Fetch a fresh tokenized dashboard link:
+    Reprint a clean dashboard link:
 
     ```bash
     docker compose run --rm openclaw-cli dashboard --no-open
     ```
 
-    Paste the token from that URL.
+    If the UI prompts for shared-secret auth, paste the configured token or
+    password into Control UI settings. This Docker flow writes a token by
+    default; if you switch the container config to password auth, use that
+    password instead.
 
     If Control UI shows `unauthorized` or `disconnected (1008): pairing required`, approve the browser device:
 
@@ -400,3 +410,9 @@ See [https://cloud.google.com/iam/docs/understanding-roles](https://cloud.google
 - Set up messaging channels: [Channels](/channels)
 - Pair local devices as nodes: [Nodes](/nodes)
 - Configure the Gateway: [Gateway configuration](/gateway/configuration)
+
+## Related
+
+- [Install overview](/install)
+- [Azure](/install/azure)
+- [VPS hosting](/vps)

@@ -6,7 +6,7 @@ const SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE = "openclaw.sessions_yield";
 const SESSIONS_YIELD_ABORT_SETTLE_TIMEOUT_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 250 : 2_000;
 
 // Persist a hidden context reminder so the next turn knows why the runner stopped.
-export function buildSessionsYieldContextMessage(message: string): string {
+function buildSessionsYieldContextMessage(message: string): string {
   return `${message}\n\n[Context: The previous turn ended intentionally via sessions_yield while waiting for a follow-up event.]`;
 }
 
@@ -147,7 +147,7 @@ export async function persistSessionsYieldContextMessage(
 // Remove the synthetic yield interrupt + aborted assistant entry from the live transcript.
 export function stripSessionsYieldArtifacts(activeSession: {
   messages: AgentMessage[];
-  agent: { replaceMessages: (messages: AgentMessage[]) => void };
+  agent: { state: { messages: AgentMessage[] } };
   sessionManager?: unknown;
 }) {
   const strippedMessages = activeSession.messages.slice();
@@ -170,7 +170,7 @@ export function stripSessionsYieldArtifacts(activeSession: {
     break;
   }
   if (strippedMessages.length !== activeSession.messages.length) {
-    activeSession.agent.replaceMessages(strippedMessages);
+    activeSession.agent.state.messages = strippedMessages;
   }
 
   const sessionManager = activeSession.sessionManager as

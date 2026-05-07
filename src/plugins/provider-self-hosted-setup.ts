@@ -5,10 +5,15 @@ import {
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "../agents/self-hosted-provider-defaults.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { isReasoningModelHeuristic } from "../plugin-sdk/provider-reasoning.js";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "../shared/string-coerce.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
@@ -33,6 +38,30 @@ type OpenAICompatModelsResponse = {
   }>;
 };
 
+function isReasoningModelHeuristic(modelId: string): boolean {
+  return /r1|reasoning|think|reason/i.test(modelId);
+}
+
+const SELF_HOSTED_ALWAYS_BLOCKED_HOSTNAMES = new Set(["metadata.google.internal"]);
+
+function buildSelfHostedBaseUrlSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
+  try {
+    const parsed = new URL(baseUrl.trim());
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    if (SELF_HOSTED_ALWAYS_BLOCKED_HOSTNAMES.has(parsed.hostname.toLowerCase())) {
+      return undefined;
+    }
+    return {
+      hostnameAllowlist: [parsed.hostname],
+      allowPrivateNetwork: true,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export async function discoverOpenAICompatibleLocalModels(params: {
   baseUrl: string;
   apiKey?: string;
@@ -50,37 +79,45 @@ export async function discoverOpenAICompatibleLocalModels(params: {
   const url = `${trimmedBaseUrl}/models`;
 
   try {
-    const trimmedApiKey = params.apiKey?.trim();
-    const response = await fetch(url, {
-      headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
-      signal: AbortSignal.timeout(5000),
+    const trimmedApiKey = normalizeOptionalString(params.apiKey);
+    const { response, release } = await fetchWithSsrFGuard({
+      url,
+      init: {
+        headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
+      },
+      policy: buildSelfHostedBaseUrlSsrFPolicy(trimmedBaseUrl),
+      timeoutMs: 5000,
     });
-    if (!response.ok) {
-      log.warn(`Failed to discover ${params.label} models: ${response.status}`);
-      return [];
-    }
-    const data = (await response.json()) as OpenAICompatModelsResponse;
-    const models = data.data ?? [];
-    if (models.length === 0) {
-      log.warn(`No ${params.label} models found on local instance`);
-      return [];
-    }
+    try {
+      if (!response.ok) {
+        log.warn(`Failed to discover ${params.label} models: ${response.status}`);
+        return [];
+      }
+      const data = (await response.json()) as OpenAICompatModelsResponse;
+      const models = data.data ?? [];
+      if (models.length === 0) {
+        log.warn(`No ${params.label} models found on local instance`);
+        return [];
+      }
 
-    return models
-      .map((model) => ({ id: typeof model.id === "string" ? model.id.trim() : "" }))
-      .filter((model) => Boolean(model.id))
-      .map((model) => {
-        const modelId = model.id;
-        return {
-          id: modelId,
-          name: modelId,
-          reasoning: isReasoningModelHeuristic(modelId),
-          input: ["text"],
-          cost: SELF_HOSTED_DEFAULT_COST,
-          contextWindow: params.contextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
-          maxTokens: params.maxTokens ?? SELF_HOSTED_DEFAULT_MAX_TOKENS,
-        } satisfies ModelDefinitionConfig;
-      });
+      return models
+        .map((model) => ({ id: normalizeOptionalString(model.id) ?? "" }))
+        .filter((model) => Boolean(model.id))
+        .map((model) => {
+          const modelId = model.id;
+          return {
+            id: modelId,
+            name: modelId,
+            reasoning: isReasoningModelHeuristic(modelId),
+            input: ["text"],
+            cost: SELF_HOSTED_DEFAULT_COST,
+            contextWindow: params.contextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+            maxTokens: params.maxTokens ?? SELF_HOSTED_DEFAULT_MAX_TOKENS,
+          } satisfies ModelDefinitionConfig;
+        });
+    } finally {
+      await release();
+    }
   } catch (error) {
     log.warn(`Failed to discover ${params.label} models: ${String(error)}`);
     return [];
@@ -205,6 +242,7 @@ export async function promptAndConfigureOpenAICompatibleSelfHostedProvider(
     message: `${params.providerLabel} API key`,
     placeholder: "sk-... (or any non-empty string)",
     validate: (value) => (value?.trim() ? undefined : "Required"),
+    sensitive: true,
   });
   const modelIdRaw = await params.prompter.text({
     message: `${params.providerLabel} model`,
@@ -212,11 +250,9 @@ export async function promptAndConfigureOpenAICompatibleSelfHostedProvider(
     validate: (value) => (value?.trim() ? undefined : "Required"),
   });
 
-  const baseUrl = String(baseUrlRaw ?? "")
-    .trim()
-    .replace(/\/+$/, "");
-  const apiKey = String(apiKeyRaw ?? "").trim();
-  const modelId = String(modelIdRaw ?? "").trim();
+  const baseUrl = (baseUrlRaw ?? "").trim().replace(/\/+$/, "");
+  const apiKey = normalizeStringifiedOptionalString(apiKeyRaw) ?? "";
+  const modelId = normalizeStringifiedOptionalString(modelIdRaw) ?? "";
   const credential: AuthProfileCredential = {
     type: "api_key",
     provider: params.providerId,

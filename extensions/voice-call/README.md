@@ -40,6 +40,7 @@ Put under `plugins.entries.voice-call.config`:
   provider: "twilio", // or "telnyx" | "plivo" | "mock"
   fromNumber: "+15550001234",
   toNumber: "+15550005678",
+  sessionScope: "per-phone", // or "per-call"
 
   twilio: {
     accountSid: "ACxxxxxxxx",
@@ -74,9 +75,20 @@ Put under `plugins.entries.voice-call.config`:
     defaultMode: "notify", // or "conversation"
   },
 
+  // Optional response agent workspace. Defaults to "main".
+  agentId: "main",
+
   streaming: {
     enabled: true,
+    // optional; if omitted, Voice Call picks the first registered
+    // realtime-transcription provider by autoSelectOrder
+    provider: "<realtime-transcription-provider-id>",
     streamPath: "/voice/stream",
+    providers: {
+      "<realtime-transcription-provider-id>": {
+        // provider-owned options
+      },
+    },
     preStartTimeoutMs: 5000,
     maxPendingConnections: 32,
     maxPendingConnectionsPerIp: 4,
@@ -90,7 +102,10 @@ Notes:
 - Twilio/Telnyx/Plivo require a **publicly reachable** webhook URL.
 - `mock` is a local dev provider (no network calls).
 - Telnyx requires `telnyx.publicKey` (or `TELNYX_PUBLIC_KEY`) unless `skipSignatureVerification` is true.
+- If older configs still use `provider: "log"`, `twilio.from`, or legacy `streaming.*` OpenAI keys, run `openclaw doctor --fix` to rewrite them.
 - advanced webhook, streaming, and tunnel notes: `https://docs.openclaw.ai/plugins/voice-call`
+- `responseModel` is optional. When unset, voice responses use the runtime default model.
+- `sessionScope` defaults to `per-phone`, preserving caller memory across calls. Use `per-call` for reception, booking, IVR, and bridge flows where each carrier call should start fresh.
 
 ## Stale call reaper
 
@@ -110,6 +125,7 @@ openclaw voicecall call --to "+15555550123" --message "Hello from OpenClaw"
 openclaw voicecall continue --call-id <id> --message "Any questions?"
 openclaw voicecall speak --call-id <id> --message "One moment"
 openclaw voicecall end --call-id <id>
+openclaw voicecall status --json
 openclaw voicecall status --call-id <id>
 openclaw voicecall tail
 openclaw voicecall expose --mode funnel
@@ -145,4 +161,5 @@ Actions:
 - While a Twilio stream is active, playback does not fall back to TwiML `<Say>`; stream-TTS failures fail the playback request.
 - Outbound conversation calls suppress barge-in only while the initial greeting is actively speaking, then re-enable normal interruption.
 - Twilio stream disconnect auto-end uses a short grace window so quick reconnects do not end the call.
-- Media streaming requires `ws` and OpenAI Realtime API key.
+- Realtime provider selection is generic. Configure `streaming.provider` / `realtime.provider` and put provider-owned options under `providers.<id>`.
+- Runtime fallback still accepts the old voice-call keys for now, but migration is a doctor step and the compat shim is scheduled to go away in a future release.

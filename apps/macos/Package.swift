@@ -15,13 +15,13 @@ let package = Package(
         .executable(name: "openclaw-mac", targets: ["OpenClawMacCLI"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/orchetect/MenuBarExtraAccess", exact: "1.2.2"),
+        .package(url: "https://github.com/orchetect/MenuBarExtraAccess", exact: "1.3.0"),
         .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "0.4.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.10.1"),
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.0"),
-        .package(url: "https://github.com/steipete/Peekaboo.git", branch: "main"),
+        .package(url: "https://github.com/steipete/Peekaboo.git", exact: "3.0.0-beta4"),
         .package(path: "../shared/OpenClawKit"),
-        .package(path: "../../Swabble"),
+        .package(path: "../swabble"),
     ],
     targets: [
         .target(

@@ -1,3 +1,5 @@
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW } from "./sandbox-tool-policy.js";
 import {
   expandToolGroups,
   normalizeToolList,
@@ -15,9 +17,11 @@ export {
 } from "./tool-policy-shared.js";
 export type { ToolProfileId } from "./tool-policy-shared.js";
 
+export type OwnerOnlyToolApprovalClass = "control_plane" | "exec_capable" | "interactive";
+
 // Keep tool-policy browser-safe: do not import tools/common at runtime.
-function wrapOwnerOnlyToolExecution(tool: AnyAgentTool, senderIsOwner: boolean): AnyAgentTool {
-  if (tool.ownerOnly !== true || senderIsOwner || !tool.execute) {
+function wrapOwnerOnlyToolExecution(tool: AnyAgentTool, authorized: boolean): AnyAgentTool {
+  if (tool.ownerOnly !== true || authorized || !tool.execute) {
     return tool;
   }
   return {
@@ -28,37 +32,56 @@ function wrapOwnerOnlyToolExecution(tool: AnyAgentTool, senderIsOwner: boolean):
   };
 }
 
-const OWNER_ONLY_TOOL_NAME_FALLBACKS = new Set<string>([
-  "whatsapp_login",
-  "cron",
-  "gateway",
-  "nodes",
+const OWNER_ONLY_TOOL_APPROVAL_CLASS_FALLBACKS = new Map<string, OwnerOnlyToolApprovalClass>([
+  ["cron", "control_plane"],
+  ["gateway", "control_plane"],
+  ["nodes", "exec_capable"],
 ]);
 
+export function resolveOwnerOnlyToolApprovalClass(
+  name: string,
+): OwnerOnlyToolApprovalClass | undefined {
+  return OWNER_ONLY_TOOL_APPROVAL_CLASS_FALLBACKS.get(normalizeToolName(name));
+}
+
 export function isOwnerOnlyToolName(name: string) {
-  return OWNER_ONLY_TOOL_NAME_FALLBACKS.has(normalizeToolName(name));
+  return resolveOwnerOnlyToolApprovalClass(name) !== undefined;
 }
 
 function isOwnerOnlyTool(tool: AnyAgentTool) {
   return tool.ownerOnly === true || isOwnerOnlyToolName(tool.name);
 }
 
-export function applyOwnerOnlyToolPolicy(tools: AnyAgentTool[], senderIsOwner: boolean) {
+/**
+ * Filters owner-only tools unless the sender is an owner or a server-side
+ * runtime grant authorizes a specific owner-only tool for this run.
+ */
+export function applyOwnerOnlyToolPolicy(
+  tools: AnyAgentTool[],
+  senderIsOwner: boolean,
+  ownerOnlyToolAllowlist?: string[],
+) {
+  const allowedOwnerOnlyTools = new Set(
+    ownerOnlyToolAllowlist?.map((name) => normalizeToolName(name)) ?? [],
+  );
+  const isAuthorized = (tool: AnyAgentTool) =>
+    senderIsOwner || allowedOwnerOnlyTools.has(normalizeToolName(tool.name));
   const withGuard = tools.map((tool) => {
     if (!isOwnerOnlyTool(tool)) {
       return tool;
     }
-    return wrapOwnerOnlyToolExecution(tool, senderIsOwner);
+    return wrapOwnerOnlyToolExecution(tool, isAuthorized(tool));
   });
   if (senderIsOwner) {
     return withGuard;
   }
-  return withGuard.filter((tool) => !isOwnerOnlyTool(tool));
+  return withGuard.filter((tool) => !isOwnerOnlyTool(tool) || isAuthorized(tool));
 }
 
 export type ToolPolicyLike = {
   allow?: string[];
   deny?: string[];
+  [IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW]?: true;
 };
 
 export type PluginToolGroups = {
@@ -69,8 +92,10 @@ export type PluginToolGroups = {
 export type AllowlistResolution = {
   policy: ToolPolicyLike | undefined;
   unknownAllowlist: string[];
-  strippedAllowlist: boolean;
+  pluginOnlyAllowlist: boolean;
 };
+
+export const DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY = "__openclaw_default_plugin_tools__";
 
 export function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefined>): string[] {
   const entries: string[] = [];
@@ -79,6 +104,31 @@ export function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefi
       continue;
     }
     for (const value of policy.allow) {
+      if (typeof value !== "string") {
+        continue;
+      }
+      const trimmed = value.trim();
+      if (trimmed === "*" && policy[IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW] === true) {
+        continue;
+      }
+      if (trimmed) {
+        entries.push(trimmed);
+      }
+    }
+    if (policy[IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW] === true) {
+      entries.push(DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY);
+    }
+  }
+  return Array.from(new Set(entries));
+}
+
+export function collectExplicitDenylist(policies: Array<ToolPolicyLike | undefined>): string[] {
+  const entries: string[] = [];
+  for (const policy of policies) {
+    if (!policy?.deny) {
+      continue;
+    }
+    for (const value of policy.deny) {
       if (typeof value !== "string") {
         continue;
       }
@@ -104,7 +154,10 @@ export function buildPluginToolGroups<T extends { name: string }>(params: {
     }
     const name = normalizeToolName(tool.name);
     all.push(name);
-    const pluginId = meta.pluginId.toLowerCase();
+    const pluginId = normalizeOptionalLowercaseString(meta.pluginId);
+    if (!pluginId) {
+      continue;
+    }
     const list = byPlugin.get(pluginId) ?? [];
     list.push(name);
     byPlugin.set(pluginId, list);
@@ -153,49 +206,43 @@ export function expandPolicyWithPluginGroups(
   };
 }
 
-export function stripPluginOnlyAllowlist(
+export function analyzeAllowlistByToolType(
   policy: ToolPolicyLike | undefined,
   groups: PluginToolGroups,
   coreTools: Set<string>,
 ): AllowlistResolution {
   if (!policy?.allow || policy.allow.length === 0) {
-    return { policy, unknownAllowlist: [], strippedAllowlist: false };
+    return { policy, unknownAllowlist: [], pluginOnlyAllowlist: false };
   }
   const normalized = normalizeToolList(policy.allow);
   if (normalized.length === 0) {
-    return { policy, unknownAllowlist: [], strippedAllowlist: false };
+    return { policy, unknownAllowlist: [], pluginOnlyAllowlist: false };
   }
   const pluginIds = new Set(groups.byPlugin.keys());
   const pluginTools = new Set(groups.all);
   const unknownAllowlist: string[] = [];
-  let hasCoreEntry = false;
+  let hasOnlyPluginEntries = true;
   for (const entry of normalized) {
     if (entry === "*") {
-      hasCoreEntry = true;
+      hasOnlyPluginEntries = false;
       continue;
     }
     const isPluginEntry =
       entry === "group:plugins" || pluginIds.has(entry) || pluginTools.has(entry);
     const expanded = expandToolGroups([entry]);
     const isCoreEntry = expanded.some((tool) => coreTools.has(tool));
-    if (isCoreEntry) {
-      hasCoreEntry = true;
+    if (!isPluginEntry) {
+      hasOnlyPluginEntries = false;
     }
     if (!isCoreEntry && !isPluginEntry) {
       unknownAllowlist.push(entry);
     }
   }
-  const strippedAllowlist = !hasCoreEntry;
-  // When an allowlist contains only plugin tools, we strip it to avoid accidentally
-  // disabling core tools. Users who want additive behavior should prefer `tools.alsoAllow`.
-  if (strippedAllowlist) {
-    // Note: logging happens in the caller (pi-tools/tools-invoke) after this function returns.
-    // We keep this note here for future maintainers.
-  }
+  const pluginOnlyAllowlist = hasOnlyPluginEntries;
   return {
-    policy: strippedAllowlist ? { ...policy, allow: undefined } : policy,
+    policy,
     unknownAllowlist: Array.from(new Set(unknownAllowlist)),
-    strippedAllowlist,
+    pluginOnlyAllowlist,
   };
 }
 

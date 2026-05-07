@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { probeIrc } from "./probe.js";
 
 const resolveIrcAccountMock = vi.hoisted(() => vi.fn());
 const buildIrcConnectOptionsMock = vi.hoisted(() => vi.fn());
@@ -16,15 +17,18 @@ vi.mock("./client.js", () => ({
   connectIrcClient: connectIrcClientMock,
 }));
 
-let probeIrc: typeof import("./probe.js").probeIrc;
+afterAll(() => {
+  vi.doUnmock("./accounts.js");
+  vi.doUnmock("./connect-options.js");
+  vi.doUnmock("./client.js");
+  vi.resetModules();
+});
 
 describe("probeIrc", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     resolveIrcAccountMock.mockReset();
     buildIrcConnectOptionsMock.mockReset();
     connectIrcClientMock.mockReset();
-    ({ probeIrc } = await import("./probe.js"));
   });
 
   afterEach(() => {

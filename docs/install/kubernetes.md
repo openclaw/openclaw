@@ -6,8 +6,6 @@ read_when:
 title: "Kubernetes"
 ---
 
-# OpenClaw on Kubernetes
-
 A minimal starting point for running OpenClaw on Kubernetes — not a production-ready deployment. It covers the core resources and is meant to be adapted to your environment.
 
 ## Why not Helm?
@@ -31,7 +29,8 @@ kubectl port-forward svc/openclaw 18789:18789 -n openclaw
 open http://localhost:18789
 ```
 
-Retrieve the gateway token and paste it into the Control UI:
+Retrieve the configured shared secret for the Control UI. This deploy script
+creates token auth by default:
 
 ```bash
 kubectl get secret openclaw-secrets -n openclaw -o jsonpath='{.data.OPENCLAW_GATEWAY_TOKEN}' | base64 -d
@@ -189,3 +188,9 @@ scripts/k8s/
     ├── pvc.yaml                # 10Gi persistent storage
     └── service.yaml            # ClusterIP on 18789
 ```
+
+## Related
+
+- [Docker](/install/docker)
+- [Docker VM runtime](/install/docker-vm-runtime)
+- [Install overview](/install)

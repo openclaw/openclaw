@@ -1,3 +1,4 @@
+import type { MatrixSyncState } from "../sync-state.js";
 import type {
   MatrixVerificationRequestLike,
   MatrixVerificationSummary,
@@ -11,6 +12,7 @@ export type MatrixRawEvent = {
   content: Record<string, unknown>;
   unsigned?: {
     age?: number;
+    "m.relations"?: Record<string, unknown>;
     redacted_because?: unknown;
   };
   state_key?: string;
@@ -31,6 +33,8 @@ export type MatrixClientEventMap = {
   "room.failed_decryption": [roomId: string, event: MatrixRawEvent, error: Error];
   "room.invite": [roomId: string, event: MatrixRawEvent];
   "room.join": [roomId: string, event: MatrixRawEvent];
+  "sync.state": [state: MatrixSyncState, prevState: string | null, error?: unknown];
+  "sync.unexpected_error": [error: Error];
   "verification.summary": [summary: MatrixVerificationSummary];
 };
 
@@ -126,7 +130,7 @@ export type MatrixDeviceVerificationStatusLike = {
   signedByOwner?: boolean;
 };
 
-export type MatrixKeyBackupInfo = {
+type MatrixKeyBackupInfo = {
   algorithm: string;
   auth_data: Record<string, unknown>;
   count?: number;
@@ -134,24 +138,24 @@ export type MatrixKeyBackupInfo = {
   version?: string;
 };
 
-export type MatrixKeyBackupTrustInfo = {
+type MatrixKeyBackupTrustInfo = {
   trusted: boolean;
   matchesDecryptionKey: boolean;
 };
 
-export type MatrixRoomKeyBackupRestoreResult = {
+type MatrixRoomKeyBackupRestoreResult = {
   total: number;
   imported: number;
 };
 
-export type MatrixImportRoomKeyProgress = {
+type MatrixImportRoomKeyProgress = {
   stage: string;
   successes?: number;
   failures?: number;
   total?: number;
 };
 
-export type MatrixSecretStorageKeyDescription = {
+type MatrixSecretStorageKeyDescription = {
   passphrase?: unknown;
   name?: string;
   [key: string]: unknown;
@@ -200,7 +204,7 @@ export type MatrixCryptoBootstrapApi = {
   }) => Promise<void>;
   createRecoveryKeyFromPassphrase?: (password?: string) => Promise<MatrixGeneratedSecretStorageKey>;
   getSecretStorageStatus?: () => Promise<MatrixSecretStorageStatus>;
-  requestOwnUserVerification: () => Promise<unknown | null>;
+  requestOwnUserVerification: () => Promise<MatrixVerificationRequestLike | null>;
   findVerificationRequestDMInProgress?: (
     roomId: string,
     userId: string,
@@ -228,6 +232,14 @@ export type MatrixCryptoBootstrapApi = {
   }) => Promise<MatrixRoomKeyBackupRestoreResult>;
   setDeviceVerified?: (userId: string, deviceId: string, verified?: boolean) => Promise<void>;
   crossSignDevice?: (deviceId: string) => Promise<void>;
+  getOwnIdentity?: () => Promise<
+    | {
+        free?: () => void;
+        isVerified?: () => boolean;
+        verify?: () => Promise<unknown>;
+      }
+    | undefined
+  >;
   isCrossSigningReady?: () => Promise<boolean>;
   userHasCrossSigningKeys?: (userId?: string, downloadUncached?: boolean) => Promise<boolean>;
 };

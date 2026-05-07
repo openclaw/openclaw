@@ -2,15 +2,25 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { parseReleaseVersion, resolveNpmPublishPlan } from "../openclaw-npm-release-check.ts";
+import { normalizeOptionalString } from "../../src/shared/string-coerce.ts";
+import { parseReleaseVersion } from "../openclaw-npm-release-check.ts";
+import { resolveNpmPublishPlan } from "./npm-publish-plan.mjs";
 
 export type PluginPackageJson = {
   name?: string;
   version?: string;
   private?: boolean;
+  repository?:
+    | string
+    | {
+        type?: string;
+        url?: string;
+      };
   openclaw?: {
     extensions?: string[];
     install?: {
+      defaultChoice?: string;
+      minHostVersion?: string;
       npmSpec?: string;
     };
     release?: {
@@ -24,8 +34,8 @@ export type PublishablePluginPackage = {
   packageDir: string;
   packageName: string;
   version: string;
-  channel: "stable" | "beta";
-  publishTag: "latest" | "beta";
+  channel: "stable" | "alpha" | "beta";
+  publishTag: "latest" | "alpha" | "beta";
   installNpmSpec?: string;
 };
 
@@ -54,14 +64,68 @@ export type ParsedPluginReleaseArgs = {
   headRef?: string;
 };
 
-type PublishablePluginPackageCandidate = {
+export type PublishablePluginPackageCandidate<
+  TPackageJson extends PluginPackageJson = PluginPackageJson,
+> = {
   extensionId: string;
   packageDir: string;
-  packageJson: PluginPackageJson;
+  packageJson: TPackageJson;
 };
 
-function readPluginPackageJson(path: string): PluginPackageJson {
-  return JSON.parse(readFileSync(path, "utf8")) as PluginPackageJson;
+export const OPENCLAW_PLUGIN_NPM_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
+
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Release helper preserves caller-specific package.json shape.
+function readPluginPackageJson<TPackageJson extends PluginPackageJson = PluginPackageJson>(
+  path: string,
+): TPackageJson {
+  return JSON.parse(readFileSync(path, "utf8")) as TPackageJson;
+}
+
+export function collectExtensionPackageJsonCandidates<
+  TPackageJson extends PluginPackageJson = PluginPackageJson,
+>(rootDir = resolve(".")): PublishablePluginPackageCandidate<TPackageJson>[] {
+  const extensionsDir = join(rootDir, "extensions");
+  const dirs = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
+    entry.isDirectory(),
+  );
+
+  const candidates: PublishablePluginPackageCandidate<TPackageJson>[] = [];
+  for (const dir of dirs) {
+    const packageDir = `extensions/${dir.name}`;
+    const absolutePackageDir = join(extensionsDir, dir.name);
+    const packageJsonPath = join(absolutePackageDir, "package.json");
+    try {
+      candidates.push({
+        extensionId: dir.name,
+        packageDir,
+        packageJson: readPluginPackageJson<TPackageJson>(packageJsonPath),
+      });
+    } catch {
+      continue;
+    }
+  }
+
+  return candidates;
+}
+
+export function resolvePublishablePluginVersion(params: {
+  extensionId: string;
+  packageJson: Pick<PluginPackageJson, "version">;
+  validationErrors: string[];
+}): { version: string; parsedVersion: NonNullable<ReturnType<typeof parseReleaseVersion>> } | null {
+  const version = params.packageJson.version?.trim() ?? "";
+  const parsedVersion = parseReleaseVersion(version);
+  if (parsedVersion === null) {
+    params.validationErrors.push(
+      `${params.extensionId}: package.json version must match YYYY.M.D, YYYY.M.D-N, YYYY.M.D-alpha.N, or YYYY.M.D-beta.N; found "${version}".`,
+    );
+    return null;
+  }
+  return { version, parsedVersion };
+}
+
+function normalizeGitDiffPath(path: string): string {
+  return path.trim().replaceAll("\\", "/");
 }
 
 export function parsePluginReleaseSelection(value: string | undefined): string[] {
@@ -156,6 +220,11 @@ export function collectPublishablePluginPackageErrors(
   const errors: string[] = [];
   const packageName = packageJson.name?.trim() ?? "";
   const packageVersion = packageJson.version?.trim() ?? "";
+  const installNpmSpec = normalizeOptionalString(packageJson.openclaw?.install?.npmSpec);
+  const repositoryUrl =
+    typeof packageJson.repository === "string"
+      ? packageJson.repository.trim()
+      : (packageJson.repository?.url?.trim() ?? "");
   const extensions = packageJson.openclaw?.extensions ?? [];
 
   if (!packageName.startsWith("@openclaw/")) {
@@ -166,11 +235,16 @@ export function collectPublishablePluginPackageErrors(
   if (packageJson.private === true) {
     errors.push("package.json private must not be true.");
   }
+  if (repositoryUrl !== OPENCLAW_PLUGIN_NPM_REPOSITORY_URL) {
+    errors.push(
+      `package.json repository.url must be "${OPENCLAW_PLUGIN_NPM_REPOSITORY_URL}" so npm provenance can validate GitHub trusted publishing; found "${repositoryUrl || "<missing>"}".`,
+    );
+  }
   if (!packageVersion) {
     errors.push("package.json version must be non-empty.");
   } else if (parseReleaseVersion(packageVersion) === null) {
     errors.push(
-      `package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "${packageVersion}".`,
+      `package.json version must match YYYY.M.D, YYYY.M.D-N, YYYY.M.D-alpha.N, or YYYY.M.D-beta.N; found "${packageVersion}".`,
     );
   }
   if (!Array.isArray(extensions) || extensions.length === 0) {
@@ -179,64 +253,66 @@ export function collectPublishablePluginPackageErrors(
   if (extensions.some((entry) => typeof entry !== "string" || !entry.trim())) {
     errors.push("openclaw.extensions must contain only non-empty strings.");
   }
+  if (!installNpmSpec) {
+    errors.push("openclaw.install.npmSpec must be a non-empty string for publishable plugins.");
+  }
 
   return errors;
 }
 
+export type PublishablePluginPackageFilters = {
+  extensionIds?: readonly string[];
+  packageNames?: readonly string[];
+};
+
 export function collectPublishablePluginPackages(
   rootDir = resolve("."),
+  filters: PublishablePluginPackageFilters = {},
 ): PublishablePluginPackage[] {
-  const extensionsDir = join(rootDir, "extensions");
-  const dirs = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
-    entry.isDirectory(),
-  );
-
   const publishable: PublishablePluginPackage[] = [];
   const validationErrors: string[] = [];
+  const selectedExtensionIds = new Set(filters.extensionIds ?? []);
+  const selectedPackageNames = new Set(filters.packageNames ?? []);
+  const hasSelectedExtensionIds = Array.isArray(filters.extensionIds);
+  const hasSelectedPackageNames = Array.isArray(filters.packageNames);
 
-  for (const dir of dirs) {
-    const packageDir = join("extensions", dir.name);
-    const absolutePackageDir = join(extensionsDir, dir.name);
-    const packageJsonPath = join(absolutePackageDir, "package.json");
-    let packageJson: PluginPackageJson;
-    try {
-      packageJson = readPluginPackageJson(packageJsonPath);
-    } catch {
+  for (const candidate of collectExtensionPackageJsonCandidates(rootDir)) {
+    const { extensionId, packageDir, packageJson } = candidate;
+    if (hasSelectedExtensionIds && !selectedExtensionIds.has(extensionId)) {
       continue;
     }
-
+    const packageName = packageJson.name?.trim() ?? "";
+    if (hasSelectedPackageNames && !selectedPackageNames.has(packageName)) {
+      continue;
+    }
     if (packageJson.openclaw?.release?.publishToNpm !== true) {
       continue;
     }
 
-    const candidate = {
-      extensionId: dir.name,
-      packageDir,
-      packageJson,
-    } satisfies PublishablePluginPackageCandidate;
     const errors = collectPublishablePluginPackageErrors(candidate);
     if (errors.length > 0) {
-      validationErrors.push(...errors.map((error) => `${dir.name}: ${error}`));
+      validationErrors.push(...errors.map((error) => `${extensionId}: ${error}`));
       continue;
     }
 
-    const version = packageJson.version!.trim();
-    const parsedVersion = parseReleaseVersion(version);
-    if (parsedVersion === null) {
-      validationErrors.push(
-        `${dir.name}: package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "${version}".`,
-      );
+    const resolvedVersion = resolvePublishablePluginVersion({
+      extensionId,
+      packageJson,
+      validationErrors,
+    });
+    if (!resolvedVersion) {
       continue;
     }
+    const { version, parsedVersion } = resolvedVersion;
 
     publishable.push({
-      extensionId: dir.name,
+      extensionId,
       packageDir,
-      packageName: packageJson.name!.trim(),
+      packageName,
       version,
       channel: parsedVersion.channel,
       publishTag: resolveNpmPublishPlan(version).publishTag,
-      installNpmSpec: packageJson.openclaw?.install?.npmSpec?.trim() || undefined,
+      installNpmSpec: normalizeOptionalString(packageJson.openclaw?.install?.npmSpec),
     });
   }
 
@@ -295,9 +371,39 @@ function isNullGitRef(ref: string | undefined): boolean {
   return !ref || /^0+$/.test(ref);
 }
 
-export function collectChangedExtensionIdsFromGitRange(params: {
+function assertSafeGitRef(ref: string, label: string): string {
+  const trimmed = ref.trim();
+  if (!trimmed || isNullGitRef(trimmed)) {
+    throw new Error(`${label} is required.`);
+  }
+  if (
+    trimmed.startsWith("-") ||
+    trimmed.includes("\u0000") ||
+    trimmed.includes("\r") ||
+    trimmed.includes("\n")
+  ) {
+    throw new Error(`${label} must be a normal git ref or commit SHA.`);
+  }
+  return trimmed;
+}
+
+export function resolveGitCommitSha(rootDir: string, ref: string, label: string): string {
+  const safeRef = assertSafeGitRef(ref, label);
+  try {
+    return execFileSync("git", ["rev-parse", "--verify", "--quiet", `${safeRef}^{commit}`], {
+      cwd: rootDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  } catch {
+    throw new Error(`${label} is not a valid git commit ref: ${safeRef}`);
+  }
+}
+
+export function collectChangedPathsFromGitRange(params: {
   rootDir?: string;
   gitRange: GitRangeSelection;
+  pathspecs: readonly string[];
 }): string[] {
   const rootDir = params.rootDir ?? resolve(".");
   const { baseRef, headRef } = params.gitRange;
@@ -306,9 +412,12 @@ export function collectChangedExtensionIdsFromGitRange(params: {
     return [];
   }
 
-  const changedPaths = execFileSync(
+  const baseSha = resolveGitCommitSha(rootDir, baseRef, "baseRef");
+  const headSha = resolveGitCommitSha(rootDir, headRef, "headRef");
+
+  return execFileSync(
     "git",
-    ["diff", "--name-only", "--diff-filter=ACMR", baseRef, headRef, "--", "extensions"],
+    ["diff", "--name-only", "--diff-filter=ACMR", baseSha, headSha, "--", ...params.pathspecs],
     {
       cwd: rootDir,
       encoding: "utf8",
@@ -317,9 +426,21 @@ export function collectChangedExtensionIdsFromGitRange(params: {
   )
     .split("\n")
     .map((line) => line.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((path) => normalizeGitDiffPath(path));
+}
 
-  return collectChangedExtensionIdsFromPaths(changedPaths);
+export function collectChangedExtensionIdsFromGitRange(params: {
+  rootDir?: string;
+  gitRange: GitRangeSelection;
+}): string[] {
+  return collectChangedExtensionIdsFromPaths(
+    collectChangedPathsFromGitRange({
+      rootDir: params.rootDir,
+      gitRange: params.gitRange,
+      pathspecs: ["extensions"],
+    }),
+  );
 }
 
 export function resolveChangedPublishablePluginPackages(params: {
@@ -334,7 +455,7 @@ export function resolveChangedPublishablePluginPackages(params: {
   return params.plugins.filter((plugin) => changed.has(plugin.extensionId));
 }
 
-export function isPluginVersionPublished(packageName: string, version: string): boolean {
+function isPluginVersionPublished(packageName: string, version: string): boolean {
   const tempDir = mkdtempSync(join(tmpdir(), "openclaw-plugin-npm-view-"));
   const userconfigPath = join(tempDir, "npmrc");
   writeFileSync(userconfigPath, "");
@@ -362,7 +483,19 @@ export function collectPluginReleasePlan(params?: {
   selectionMode?: PluginReleaseSelectionMode;
   gitRange?: GitRangeSelection;
 }): PluginReleasePlan {
-  const allPublishable = collectPublishablePluginPackages(params?.rootDir);
+  const changedExtensionIds = params?.gitRange
+    ? collectChangedExtensionIdsFromGitRange({
+        rootDir: params.rootDir,
+        gitRange: params.gitRange,
+      })
+    : [];
+  const allPublishable = collectPublishablePluginPackages(params?.rootDir, {
+    extensionIds:
+      params?.selectionMode === "all-publishable" || !params?.gitRange
+        ? undefined
+        : changedExtensionIds,
+    packageNames: params?.selection && params.selection.length > 0 ? params.selection : undefined,
+  });
   const selectedPublishable =
     params?.selectionMode === "all-publishable"
       ? allPublishable
@@ -374,17 +507,15 @@ export function collectPluginReleasePlan(params?: {
         : params?.gitRange
           ? resolveChangedPublishablePluginPackages({
               plugins: allPublishable,
-              changedExtensionIds: collectChangedExtensionIdsFromGitRange({
-                rootDir: params.rootDir,
-                gitRange: params.gitRange,
-              }),
+              changedExtensionIds,
             })
           : allPublishable;
 
-  const all = selectedPublishable.map((plugin) => ({
-    ...plugin,
-    alreadyPublished: isPluginVersionPublished(plugin.packageName, plugin.version),
-  }));
+  const all = selectedPublishable.map((plugin) =>
+    Object.assign({}, plugin, {
+      alreadyPublished: isPluginVersionPublished(plugin.packageName, plugin.version),
+    }),
+  );
 
   return {
     all,

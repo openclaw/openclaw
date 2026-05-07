@@ -22,7 +22,7 @@ export type ExecHostRunResult = {
   error?: string | null;
 };
 
-export type ExecHostError = {
+type ExecHostError = {
   code: string;
   message: string;
   reason?: string;
@@ -61,7 +61,7 @@ export async function requestExecHostViaSocket(params: {
 
   return await requestJsonlSocket({
     socketPath,
-    payload,
+    requestLine: payload,
     timeoutMs,
     accept: (value) => {
       const msg = value as { type?: string; ok?: boolean; payload?: unknown; error?: unknown };

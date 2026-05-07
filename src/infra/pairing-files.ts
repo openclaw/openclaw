@@ -1,7 +1,7 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 
-export { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
+export { createAsyncLock, readJsonIfExists, tryReadJson, writeJson } from "./json-files.js";
 
 export function resolvePairingPaths(baseDir: string | undefined, subdir: string) {
   const root = baseDir ?? resolveStateDir();
@@ -11,6 +11,13 @@ export function resolvePairingPaths(baseDir: string | undefined, subdir: string)
     pendingPath: path.join(dir, "pending.json"),
     pairedPath: path.join(dir, "paired.json"),
   };
+}
+
+export function coercePairingStateRecord<T>(value: unknown): Record<string, T> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, T>;
 }
 
 export function pruneExpiredPending<T extends { ts: number }>(

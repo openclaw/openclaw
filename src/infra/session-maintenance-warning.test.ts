@@ -4,7 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 const mocks = vi.hoisted(() => ({
   resolveSessionAgentId: vi.fn(() => "agent-from-key"),
   deliveryContextFromSession: vi.fn(() => ({
-    channel: "whatsapp",
+    channel: "mobilechat",
     to: "+15550001",
     accountId: "acct-1",
     threadId: "thread-1",
@@ -45,7 +45,6 @@ describe("deliverSessionMaintenanceWarning", () => {
   let prevNodeEnv: string | undefined;
 
   beforeAll(async () => {
-    vi.resetModules();
     vi.doMock("../agents/agent-scope.js", () => ({
       resolveSessionAgentId: mocks.resolveSessionAgentId,
     }));
@@ -53,7 +52,7 @@ describe("deliverSessionMaintenanceWarning", () => {
       normalizeMessageChannel: mocks.normalizeMessageChannel,
       isDeliverableMessageChannel: mocks.isDeliverableMessageChannel,
     }));
-    vi.doMock("../utils/delivery-context.js", () => ({
+    vi.doMock("../utils/delivery-context.shared.js", () => ({
       deliveryContextFromSession: mocks.deliveryContextFromSession,
     }));
     vi.doMock("./outbound/deliver-runtime.js", () => ({
@@ -102,7 +101,7 @@ describe("deliverSessionMaintenanceWarning", () => {
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "whatsapp",
+        channel: "mobilechat",
         to: "+15550001",
         session: { key: "agent:main:main", agentId: "agent-from-key" },
       }),

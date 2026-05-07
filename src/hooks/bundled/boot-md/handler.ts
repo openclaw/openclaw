@@ -1,6 +1,7 @@
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import { createDefaultDeps } from "../../../cli/deps.js";
 import { runBootOnce } from "../../../gateway/boot.js";
+import { runStartupTasks, type StartupTask } from "../../../gateway/startup-tasks.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { HookHandler } from "../../hooks.js";
 import { isGatewayStartupEvent } from "../../internal-hooks.js";
@@ -18,27 +19,27 @@ const runBootChecklist: HookHandler = async (event) => {
 
   const cfg = event.context.cfg;
   const deps = event.context.deps ?? createDefaultDeps();
-  const agentIds = listAgentIds(cfg);
+  const seenWorkspaces = new Set<string>();
+  const tasks: StartupTask[] = listAgentIds(cfg)
+    .map((agentId) => {
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+      return { agentId, workspaceDir };
+    })
+    .filter(({ workspaceDir }) => {
+      if (seenWorkspaces.has(workspaceDir)) {
+        return false;
+      }
+      seenWorkspaces.add(workspaceDir);
+      return true;
+    })
+    .map(({ agentId, workspaceDir }) => ({
+      source: "boot-md" as const,
+      agentId,
+      workspaceDir,
+      run: () => runBootOnce({ cfg, deps, workspaceDir, agentId }),
+    }));
 
-  for (const agentId of agentIds) {
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    const result = await runBootOnce({ cfg, deps, workspaceDir, agentId });
-    if (result.status === "failed") {
-      log.warn("boot-md failed for agent startup run", {
-        agentId,
-        workspaceDir,
-        reason: result.reason,
-      });
-      continue;
-    }
-    if (result.status === "skipped") {
-      log.debug("boot-md skipped for agent startup run", {
-        agentId,
-        workspaceDir,
-        reason: result.reason,
-      });
-    }
-  }
+  await runStartupTasks({ tasks, log });
 };
 
 export default runBootChecklist;

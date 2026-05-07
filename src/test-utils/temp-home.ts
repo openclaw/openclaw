@@ -17,8 +17,35 @@ export type TempHomeEnv = {
   restore: () => Promise<void>;
 };
 
+const prefixRoots = new Map<string, string>();
+const pendingPrefixRoots = new Map<string, Promise<string>>();
+let nextHomeIndex = 0;
+
+async function ensurePrefixRoot(prefix: string): Promise<string> {
+  const cached = prefixRoots.get(prefix);
+  if (cached) {
+    return cached;
+  }
+  const pending = pendingPrefixRoots.get(prefix);
+  if (pending) {
+    return await pending;
+  }
+  const create = fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  pendingPrefixRoots.set(prefix, create);
+  try {
+    const root = await create;
+    prefixRoots.set(prefix, root);
+    return root;
+  } finally {
+    pendingPrefixRoots.delete(prefix);
+  }
+}
+
 export async function createTempHomeEnv(prefix: string): Promise<TempHomeEnv> {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  const prefixRoot = await ensurePrefixRoot(prefix);
+  const home = path.join(prefixRoot, `home-${String(nextHomeIndex)}`);
+  nextHomeIndex += 1;
+  await fs.rm(home, { recursive: true, force: true });
   await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
 
   const snapshot = captureEnv([...HOME_ENV_KEYS]);

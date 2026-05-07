@@ -2,28 +2,9 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerDirectoryCli } from "./directory-cli.js";
 
-const runtimeState = vi.hoisted(() => {
-  const runtimeLogs: string[] = [];
-  const runtimeErrors: string[] = [];
-  const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
-  const defaultRuntime = {
-    log: vi.fn((...args: unknown[]) => {
-      runtimeLogs.push(stringifyArgs(args));
-    }),
-    error: vi.fn((...args: unknown[]) => {
-      runtimeErrors.push(stringifyArgs(args));
-    }),
-    writeStdout: vi.fn((value: string) => {
-      defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
-    }),
-    writeJson: vi.fn((value: unknown, space = 2) => {
-      defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
-    }),
-    exit: vi.fn((code: number) => {
-      throw new Error(`exit:${code}`);
-    }),
-  };
-  return { defaultRuntime, runtimeLogs, runtimeErrors };
+const runtimeState = await vi.hoisted(async () => {
+  const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
+  return createCliRuntimeMock(vi, { exitPrefix: "exit" });
 });
 
 const mocks = vi.hoisted(() => ({
@@ -38,6 +19,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: mocks.loadConfig,
   loadConfig: mocks.loadConfig,
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
   replaceConfigFile: mocks.replaceConfigFile,
@@ -176,5 +158,111 @@ describe("registerDirectoryCli", () => {
       nextConfig: autoEnabledConfig,
       baseHash: "config-1",
     });
+  });
+
+  it("prefers live directory list readers when available", async () => {
+    const listPeers = vi.fn().mockResolvedValue([{ id: "user:config", kind: "user" }]);
+    const listPeersLive = vi.fn().mockResolvedValue([{ id: "user:live", kind: "user" }]);
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: { slack: {} } },
+      channelId: "slack",
+      plugin: {
+        id: "slack",
+        directory: { listPeers, listPeersLive },
+      },
+      configChanged: false,
+    });
+
+    const program = new Command().name("openclaw");
+    registerDirectoryCli(program);
+
+    await program.parseAsync(
+      [
+        "directory",
+        "peers",
+        "list",
+        "--channel",
+        "slack",
+        "--query",
+        "ada",
+        "--limit",
+        "5",
+        "--json",
+      ],
+      { from: "user" },
+    );
+
+    expect(listPeersLive).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        query: "ada",
+        limit: 5,
+      }),
+    );
+    expect(listPeers).not.toHaveBeenCalled();
+    expect(runtimeState.defaultRuntime.log).toHaveBeenCalledWith(
+      JSON.stringify([{ id: "user:live", kind: "user" }], null, 2),
+    );
+  });
+
+  it("falls back to config-backed directory list readers when live readers are absent", async () => {
+    const listGroups = vi.fn().mockResolvedValue([{ id: "channel:config", kind: "group" }]);
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: { slack: {} } },
+      channelId: "slack",
+      plugin: {
+        id: "slack",
+        directory: { listGroups },
+      },
+      configChanged: false,
+    });
+
+    const program = new Command().name("openclaw");
+    registerDirectoryCli(program);
+
+    await program.parseAsync(["directory", "groups", "list", "--channel", "slack", "--json"], {
+      from: "user",
+    });
+
+    expect(listGroups).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+      }),
+    );
+    expect(runtimeState.defaultRuntime.log).toHaveBeenCalledWith(
+      JSON.stringify([{ id: "channel:config", kind: "group" }], null, 2),
+    );
+  });
+
+  it("reports unsupported directory capability instead of continuing setup for installed plugins", async () => {
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: { "openclaw-weixin": {} } },
+      channelId: "openclaw-weixin",
+      plugin: {
+        id: "openclaw-weixin",
+      },
+      configChanged: false,
+      pluginInstalled: false,
+    });
+
+    const program = new Command().name("openclaw");
+    registerDirectoryCli(program);
+
+    await expect(
+      program.parseAsync(["directory", "peers", "list", "--channel", "openclaw-weixin"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("exit:1");
+
+    expect(mocks.resolveInstallableChannelPlugin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rawChannel: "openclaw-weixin",
+        allowInstall: true,
+      }),
+    );
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(runtimeState.defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Channel openclaw-weixin does not support directory peers"),
+    );
   });
 });

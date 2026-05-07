@@ -5,6 +5,7 @@ export {
   CLOUDFLARE_AI_GATEWAY_PROVIDER_ID,
   resolveCloudflareAiGatewayBaseUrl,
 } from "./models.js";
+export { buildCloudflareAiGatewayCatalogProvider } from "./catalog-provider.js";
 
 export {
   applyCloudflareAiGatewayConfig,

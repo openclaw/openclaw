@@ -1,12 +1,13 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { SlackChannelConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { SlackChannelConfig } from "openclaw/plugin-sdk/config-types";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 type SlackChannels = Record<string, SlackChannelConfig>;
 
 type MigrationScope = "account" | "global";
 
-export type SlackChannelMigrationResult = {
+type SlackChannelMigrationResult = {
   migrated: boolean;
   skippedExisting: boolean;
   scopes: MigrationScope[];
@@ -29,7 +30,7 @@ function resolveAccountChannels(
     return { channels: exact.channels };
   }
   const matchKey = Object.keys(accounts).find(
-    (key) => key.toLowerCase() === normalized.toLowerCase(),
+    (key) => normalizeLowercaseStringOrEmpty(key) === normalizeLowercaseStringOrEmpty(normalized),
   );
   return { channels: matchKey ? accounts[matchKey]?.channels : undefined };
 }

@@ -29,13 +29,17 @@ function resolveTelegramRequireMention(params: {
   cfg: ChannelGroupContext["cfg"];
   chatId?: string;
   topicId?: string;
+  accountId?: string | null;
 }): boolean | undefined {
-  const { cfg, chatId, topicId } = params;
+  const { cfg, chatId, topicId, accountId } = params;
   if (!chatId) {
     return undefined;
   }
-  const groupConfig = cfg.channels?.telegram?.groups?.[chatId];
-  const groupDefault = cfg.channels?.telegram?.groups?.["*"];
+  const scopedGroups =
+    (accountId ? cfg.channels?.telegram?.accounts?.[accountId]?.groups : undefined) ??
+    cfg.channels?.telegram?.groups;
+  const groupConfig = scopedGroups?.[chatId];
+  const groupDefault = scopedGroups?.["*"];
   const topicConfig = topicId && groupConfig?.topics ? groupConfig.topics[topicId] : undefined;
   const defaultTopicConfig =
     topicId && groupDefault?.topics ? groupDefault.topics[topicId] : undefined;
@@ -62,6 +66,7 @@ export function resolveTelegramGroupRequireMention(
     cfg: params.cfg,
     chatId,
     topicId,
+    accountId: params.accountId,
   });
   if (typeof requireMention === "boolean") {
     return requireMention;

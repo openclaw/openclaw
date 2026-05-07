@@ -1,8 +1,10 @@
+import path from "node:path";
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { detectBinary } from "openclaw/plugin-sdk/setup";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { createIMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 
@@ -16,6 +18,7 @@ export type IMessageProbe = BaseProbeResult & {
 export type IMessageProbeOptions = {
   cliPath?: string;
   dbPath?: string;
+  platform?: NodeJS.Platform;
   runtime?: RuntimeEnv;
 };
 
@@ -27,6 +30,21 @@ type RpcSupportResult = {
 
 const rpcSupportCache = new Map<string, RpcSupportResult>();
 
+function isDefaultLocalIMessageCliPath(cliPath: string): boolean {
+  const trimmed = cliPath.trim();
+  return trimmed === "imsg" || (!trimmed.includes("/") && path.basename(trimmed) === "imsg");
+}
+
+export function resolveIMessageNonMacHostError(
+  cliPath: string,
+  platform: NodeJS.Platform = process.platform,
+): string | undefined {
+  if (platform === "darwin" || !isDefaultLocalIMessageCliPath(cliPath)) {
+    return undefined;
+  }
+  return "iMessage via the default imsg CLI must run on macOS. Run OpenClaw on the signed-in Messages Mac, or set channels.imessage.cliPath to an SSH wrapper that runs imsg on that Mac.";
+}
+
 async function probeRpcSupport(cliPath: string, timeoutMs: number): Promise<RpcSupportResult> {
   const cached = rpcSupportCache.get(cliPath);
   if (cached) {
@@ -35,7 +53,7 @@ async function probeRpcSupport(cliPath: string, timeoutMs: number): Promise<RpcS
   try {
     const result = await runCommandWithTimeout([cliPath, "rpc", "--help"], { timeoutMs });
     const combined = `${result.stdout}\n${result.stderr}`.trim();
-    const normalized = combined.toLowerCase();
+    const normalized = normalizeLowercaseStringOrEmpty(combined);
     if (normalized.includes("unknown command") && normalized.includes("rpc")) {
       const fatal = {
         supported: false,
@@ -68,12 +86,17 @@ export async function probeIMessage(
   timeoutMs?: number,
   opts: IMessageProbeOptions = {},
 ): Promise<IMessageProbe> {
-  const cfg = opts.cliPath || opts.dbPath ? undefined : loadConfig();
+  const cfg = opts.cliPath || opts.dbPath ? undefined : getRuntimeConfig();
   const cliPath = opts.cliPath?.trim() || cfg?.channels?.imessage?.cliPath?.trim() || "imsg";
   const dbPath = opts.dbPath?.trim() || cfg?.channels?.imessage?.dbPath?.trim();
   // Use explicit timeout if provided, otherwise fall back to config, then default
   const effectiveTimeout =
     timeoutMs ?? cfg?.channels?.imessage?.probeTimeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS;
+
+  const nonMacHostError = resolveIMessageNonMacHostError(cliPath, opts.platform);
+  if (nonMacHostError) {
+    return { ok: false, fatal: true, error: nonMacHostError };
+  }
 
   const detected = await detectBinary(cliPath);
   if (!detected) {

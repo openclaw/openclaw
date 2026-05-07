@@ -1,5 +1,5 @@
-import OpenClawKit
 import Foundation
+import OpenClawKit
 
 // NOTE: keep this file lightweight; decode must be resilient to varying transcript formats.
 
@@ -269,8 +269,30 @@ public struct OpenClawChatEventPayload: Codable, Sendable {
     public let errorMessage: String?
 }
 
+public struct OpenClawSessionMessageEventPayload: Codable, Sendable {
+    public let sessionKey: String?
+    public let message: OpenClawChatMessage?
+    public let messageId: String?
+    public let messageSeq: Int?
+
+    public init(
+        sessionKey: String?,
+        message: OpenClawChatMessage?,
+        messageId: String?,
+        messageSeq: Int?)
+    {
+        self.sessionKey = sessionKey
+        self.message = message
+        self.messageId = messageId
+        self.messageSeq = messageSeq
+    }
+}
+
 public struct OpenClawAgentEventPayload: Codable, Sendable, Identifiable {
-    public var id: String { "\(self.runId)-\(self.seq ?? -1)" }
+    public var id: String {
+        "\(self.runId)-\(self.seq ?? -1)"
+    }
+
     public let runId: String
     public let seq: Int?
     public let stream: String
@@ -279,7 +301,10 @@ public struct OpenClawAgentEventPayload: Codable, Sendable, Identifiable {
 }
 
 public struct OpenClawChatPendingToolCall: Identifiable, Hashable, Sendable {
-    public var id: String { self.toolCallId }
+    public var id: String {
+        self.toolCallId
+    }
+
     public let toolCallId: String
     public let name: String
     public let args: AnyCodable?

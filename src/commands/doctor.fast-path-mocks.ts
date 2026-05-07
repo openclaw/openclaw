@@ -12,16 +12,24 @@ vi.mock("./doctor-browser.js", () => ({
   noteChromeMcpBrowserReadiness: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("./doctor-claude-cli.js", () => ({
+  noteClaudeCliHealth: vi.fn(),
+}));
+
 vi.mock("./doctor-gateway-daemon-flow.js", () => ({
   maybeRepairGatewayDaemon: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./doctor-gateway-health.js", () => ({
   checkGatewayHealth: vi.fn().mockResolvedValue({ healthOk: false }),
-  probeGatewayMemoryStatus: vi.fn().mockResolvedValue({ checked: false, ready: false }),
+  probeGatewayMemoryStatus: vi
+    .fn()
+    .mockResolvedValue({ checked: false, ready: false, skipped: false }),
 }));
 
 vi.mock("./doctor-memory-search.js", () => ({
+  maybeRepairMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
+  noteMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
   noteMemorySearchHealth: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -33,6 +41,7 @@ vi.mock("./doctor-platform-notes.js", () => ({
 
 vi.mock("./doctor-sandbox.js", () => ({
   maybeRepairSandboxImages: vi.fn(async (cfg: unknown) => cfg),
+  maybeRepairSandboxRegistryFiles: vi.fn().mockResolvedValue(undefined),
   noteSandboxScopeWarnings: vi.fn(),
 }));
 
@@ -42,6 +51,10 @@ vi.mock("./doctor-security.js", () => ({
 
 vi.mock("./doctor-session-locks.js", () => ({
   noteSessionLockHealth: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor-session-transcripts.js", () => ({
+  noteSessionTranscriptHealth: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./doctor-state-integrity.js", () => ({

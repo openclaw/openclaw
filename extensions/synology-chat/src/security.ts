@@ -2,30 +2,25 @@
  * Security module: token validation, rate limiting, input sanitization, user allowlist.
  */
 
-import * as crypto from "node:crypto";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   createFixedWindowRateLimiter,
   type FixedWindowRateLimiter,
 } from "openclaw/plugin-sdk/webhook-ingress";
 
-export type DmAuthorizationResult =
+type DmAuthorizationResult =
   | { allowed: true }
   | { allowed: false; reason: "disabled" | "allowlist-empty" | "not-allowlisted" };
 
 /**
  * Validate webhook token using constant-time comparison.
- * Prevents timing attacks that could leak token bytes.
+ * Reject empty tokens explicitly; use shared constant-time comparison otherwise.
  */
 export function validateToken(received: string, expected: string): boolean {
-  if (!received || !expected) return false;
-
-  // Use HMAC to normalize lengths before comparison,
-  // preventing timing side-channel on token length.
-  const key = "openclaw-token-cmp";
-  const a = crypto.createHmac("sha256", key).update(received).digest();
-  const b = crypto.createHmac("sha256", key).update(expected).digest();
-
-  return crypto.timingSafeEqual(a, b);
+  if (!received || !expected) {
+    return false;
+  }
+  return safeEqualSecret(received, expected);
 }
 
 /**
@@ -33,7 +28,12 @@ export function validateToken(received: string, expected: string): boolean {
  * Allowlist mode must be explicit; empty lists should not match any user.
  */
 export function checkUserAllowed(userId: string, allowedUserIds: string[]): boolean {
-  if (allowedUserIds.length === 0) return false;
+  if (allowedUserIds.length === 0) {
+    return false;
+  }
+  if (allowedUserIds.includes("*")) {
+    return true;
+  }
   return allowedUserIds.includes(userId);
 }
 
@@ -50,7 +50,9 @@ export function authorizeUserForDm(
     return { allowed: false, reason: "disabled" };
   }
   if (dmPolicy === "open") {
-    return { allowed: true };
+    return checkUserAllowed(userId, allowedUserIds)
+      ? { allowed: true }
+      : { allowed: false, reason: "not-allowlisted" };
   }
   if (allowedUserIds.length === 0) {
     return { allowed: false, reason: "allowlist-empty" };

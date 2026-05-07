@@ -1,4 +1,5 @@
 import type { SessionEntry } from "../config/sessions.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type ModelOverrideSelection = {
   provider: string;
@@ -11,9 +12,12 @@ export function applyModelOverrideToSessionEntry(params: {
   selection: ModelOverrideSelection;
   profileOverride?: string;
   profileOverrideSource?: "auto" | "user";
+  selectionSource?: "auto" | "user";
+  markLiveSwitchPending?: boolean;
 }): { updated: boolean } {
   const { entry, selection, profileOverride } = params;
   const profileOverrideSource = params.profileOverrideSource ?? "user";
+  const selectionSource = params.selectionSource ?? "user";
   let updated = false;
   let selectionUpdated = false;
 
@@ -28,6 +32,10 @@ export function applyModelOverrideToSessionEntry(params: {
       updated = true;
       selectionUpdated = true;
     }
+    if (entry.modelOverrideSource) {
+      delete entry.modelOverrideSource;
+      updated = true;
+    }
   } else {
     if (entry.providerOverride !== selection.provider) {
       entry.providerOverride = selection.provider;
@@ -39,13 +47,17 @@ export function applyModelOverrideToSessionEntry(params: {
       updated = true;
       selectionUpdated = true;
     }
+    if (entry.modelOverrideSource !== selectionSource) {
+      entry.modelOverrideSource = selectionSource;
+      updated = true;
+    }
   }
 
   // Model overrides supersede previously recorded runtime model identity.
   // If runtime fields are stale (or the override changed), clear them so status
   // surfaces reflect the selected model immediately.
-  const runtimeModel = typeof entry.model === "string" ? entry.model.trim() : "";
-  const runtimeProvider = typeof entry.modelProvider === "string" ? entry.modelProvider.trim() : "";
+  const runtimeModel = normalizeOptionalString(entry.model) ?? "";
+  const runtimeProvider = normalizeOptionalString(entry.modelProvider) ?? "";
   const runtimePresent = runtimeModel.length > 0 || runtimeProvider.length > 0;
   const runtimeAligned =
     runtimeModel === selection.model &&
@@ -102,6 +114,9 @@ export function applyModelOverrideToSessionEntry(params: {
 
   // Clear stale fallback notice when the user explicitly switches models.
   if (updated) {
+    if (selectionUpdated && params.markLiveSwitchPending) {
+      entry.liveModelSwitchPending = true;
+    }
     delete entry.fallbackNoticeSelectedModel;
     delete entry.fallbackNoticeActiveModel;
     delete entry.fallbackNoticeReason;

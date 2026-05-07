@@ -28,7 +28,7 @@ describe("plugin-sdk/approval-renderers", () => {
               },
               {
                 label: "Allow Always",
-                value: "/approve plugin:approval-123 always",
+                value: "/approve plugin:approval-123 allow-always",
                 style: "primary",
               },
               {
@@ -75,7 +75,7 @@ describe("plugin-sdk/approval-renderers", () => {
               },
               {
                 label: "Allow Always",
-                value: "/approve plugin-approval-123 always",
+                value: "/approve plugin-approval-123 allow-always",
                 style: "primary",
               },
               {
@@ -89,13 +89,64 @@ describe("plugin-sdk/approval-renderers", () => {
       },
       channelDataExpected: {
         execApproval: {
+          agentId: undefined,
           approvalId: "plugin-approval-123",
+          approvalKind: "plugin",
           approvalSlug: "custom-slug",
           allowedDecisions: ["allow-once", "allow-always", "deny"],
+          sessionKey: undefined,
           state: "pending",
         },
         telegram: {
           quoteText: "quoted",
+        },
+      },
+    },
+    {
+      name: "builds plugin pending payloads with request-scoped decisions",
+      payload: buildPluginApprovalPendingReplyPayload({
+        request: {
+          id: "plugin-approval-123",
+          request: {
+            title: "Sensitive action",
+            description: "Needs approval",
+            allowedDecisions: ["allow-once", "deny"],
+          },
+          createdAtMs: 1_000,
+          expiresAtMs: 61_000,
+        },
+        nowMs: 1_000,
+      }),
+      textExpected: (text: string) =>
+        expect(text).toContain("Reply with: /approve <id> allow-once|deny"),
+      interactiveExpected: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Allow Once",
+                value: "/approve plugin-approval-123 allow-once",
+                style: "success",
+              },
+              {
+                label: "Deny",
+                value: "/approve plugin-approval-123 deny",
+                style: "danger",
+              },
+            ],
+          },
+        ],
+      },
+      channelDataExpected: {
+        execApproval: {
+          agentId: undefined,
+          approvalId: "plugin-approval-123",
+          approvalKind: "plugin",
+          approvalSlug: "plugin-a",
+          allowedDecisions: ["allow-once", "deny"],
+          sessionKey: undefined,
+          state: "pending",
         },
       },
     },

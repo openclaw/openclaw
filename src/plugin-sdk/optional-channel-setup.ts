@@ -1,4 +1,4 @@
-import type { ChannelSetupWizard } from "../channels/plugins/setup-wizard.js";
+import type { ChannelSetupWizard } from "../channels/plugins/setup-wizard-types.js";
 import type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { formatDocsLink } from "../terminal/links.js";

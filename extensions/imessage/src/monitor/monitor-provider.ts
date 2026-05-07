@@ -4,47 +4,47 @@ import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { waitForTransportReady } from "openclaw/plugin-sdk/channel-runtime";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
-  resolveOpenProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-  warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/config-runtime";
-import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
+  deliverInboundReplyWithMessageSendContext,
+  createChannelMessageReplyPipeline,
+} from "openclaw/plugin-sdk/channel-message";
+import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
-import {
-  isInboundPathAllowed,
-  resolveIMessageAttachmentRoots,
-  resolveIMessageRemoteAttachmentRoots,
-} from "openclaw/plugin-sdk/media-runtime";
-import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
-import {
-  clearHistoryEntriesIfEnabled,
-  DEFAULT_GROUP_HISTORY_LIMIT,
-  type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-history";
+import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
+import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
+import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, shouldLogVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
+import {
+  resolveOpenProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
+import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
-import { createIMessageRpcClient } from "../client.js";
+import { createIMessageRpcClient, type IMessageRpcClient } from "../client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "../constants.js";
+import {
+  resolveIMessageAttachmentRoots,
+  resolveIMessageRemoteAttachmentRoots,
+} from "../media-contract.js";
 import { probeIMessage } from "../probe.js";
 import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
-import { deliverReplies } from "./deliver.js";
+import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import {
   buildIMessageInboundContext,
@@ -55,6 +55,10 @@ import { parseIMessageNotification } from "./parse-notification.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
+import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
+
+const WATCH_SUBSCRIBE_MAX_ATTEMPTS = 3;
+const WATCH_SUBSCRIBE_RETRY_DELAY_MS = 1_000;
 
 /**
  * Try to detect remote host from an SSH wrapper script like:
@@ -84,9 +88,36 @@ async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | un
   }
 }
 
+function isRetriableWatchSubscribeStartupError(error: unknown): boolean {
+  return /imsg rpc timeout \(watch\.subscribe\)|imsg rpc (closed|exited|not running)/i.test(
+    String(error),
+  );
+}
+
+async function waitForWatchSubscribeRetryDelay(params: {
+  ms: number;
+  abortSignal?: AbortSignal;
+}): Promise<void> {
+  if (params.ms <= 0) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      params.abortSignal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, params.ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      params.abortSignal?.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    params.abortSignal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): Promise<void> {
   const runtime = resolveRuntime(opts);
-  const cfg = opts.config ?? loadConfig();
+  const cfg = opts.config ?? getRuntimeConfig();
   const accountInfo = resolveIMessageAccount({
     cfg,
     accountId: opts.accountId,
@@ -204,6 +235,15 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     },
   });
 
+  let client: IMessageRpcClient | undefined;
+  let detachAbortHandler = () => {};
+  const getActiveClient = () => {
+    if (!client) {
+      throw new Error("imessage monitor client not initialized");
+    }
+    return client;
+  };
+
   async function handleMessageNow(message: IMessagePayload) {
     const messageText = (message.text ?? "").trim();
 
@@ -313,7 +353,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         },
         sendPairingReply: async (text) => {
           await sendMessageIMessage(sender, text, {
-            client,
+            config: cfg,
+            client: getActiveClient(),
             maxBytes: mediaMaxBytes,
             accountId: accountInfo.accountId,
             ...(chatId ? { chatId } : {}),
@@ -355,46 +396,16 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       allowFrom,
       normalizeEntry: normalizeIMessageHandle,
     });
-    await recordInboundSession({
-      storePath,
-      sessionKey: ctxPayload.SessionKey ?? decision.route.sessionKey,
-      ctx: ctxPayload,
-      updateLastRoute:
-        !decision.isGroup && updateTarget
-          ? {
-              sessionKey: decision.route.mainSessionKey,
-              channel: "imessage",
-              to: updateTarget,
-              accountId: decision.route.accountId,
-              mainDmOwnerPin:
-                pinnedMainDmOwner && decision.senderNormalized
-                  ? {
-                      ownerRecipient: pinnedMainDmOwner,
-                      senderRecipient: decision.senderNormalized,
-                      onSkip: ({ ownerRecipient, senderRecipient }) => {
-                        logVerbose(
-                          `imessage: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                        );
-                      },
-                    }
-                  : undefined,
-            }
-          : undefined,
-      onRecordError: (err) => {
-        logVerbose(`imessage: failed updating session meta: ${String(err)}`);
-      },
-    });
-
     if (shouldLogVerbose()) {
-      const preview = truncateUtf16Safe(String(ctxPayload.Body ?? ""), 200).replace(/\n/g, "\\n");
+      const preview = truncateUtf16Safe(ctxPayload.Body ?? "", 200).replace(/\n/g, "\\n");
       logVerbose(
         `imessage inbound: chatId=${chatId ?? "unknown"} from=${ctxPayload.From} len=${
-          String(ctxPayload.Body ?? "").length
+          (ctxPayload.Body ?? "").length
         } preview="${preview}"`,
       );
     }
 
-    const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+    const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
       cfg,
       agentId: decision.route.agentId,
       channel: "imessage",
@@ -404,16 +415,40 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const dispatcher = createReplyDispatcher({
       ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(cfg, decision.route.agentId),
-      deliver: async (payload) => {
+      deliver: async (payload, info) => {
         const target = ctxPayload.To;
         if (!target) {
           runtime.error?.(danger("imessage: missing delivery target"));
           return;
         }
+        const durable = await deliverInboundReplyWithMessageSendContext({
+          cfg,
+          channel: "imessage",
+          accountId: accountInfo.accountId,
+          agentId: decision.route.agentId,
+          ctxPayload,
+          payload,
+          info,
+          to: target,
+          deps: {
+            imessage: createIMessageEchoCachingSend({
+              client: getActiveClient(),
+              accountId: accountInfo.accountId,
+              sentMessageCache,
+            }),
+          },
+        });
+        if (durable.status === "failed") {
+          throw durable.error;
+        }
+        if (durable.status === "handled_visible" || durable.status === "handled_no_send") {
+          return;
+        }
         await deliverReplies({
+          cfg,
           replies: [payload],
           target,
-          client,
+          client: getActiveClient(),
           accountId: accountInfo.accountId,
           runtime,
           maxBytes: mediaMaxBytes,
@@ -426,36 +461,75 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       },
     });
 
-    const { queuedFinal } = await dispatchInboundMessage({
-      ctx: ctxPayload,
-      cfg,
-      dispatcher,
-      replyOptions: {
-        disableBlockStreaming:
-          typeof accountInfo.config.blockStreaming === "boolean"
-            ? !accountInfo.config.blockStreaming
-            : undefined,
-        onModelSelected,
+    await runInboundReplyTurn({
+      channel: "imessage",
+      accountId: decision.route.accountId,
+      raw: decision,
+      adapter: {
+        ingest: () => ({
+          id: ctxPayload.MessageSid ?? `${ctxPayload.From}:${Date.now()}`,
+          timestamp: typeof ctxPayload.Timestamp === "number" ? ctxPayload.Timestamp : undefined,
+          rawText: ctxPayload.RawBody ?? "",
+          textForAgent: ctxPayload.BodyForAgent,
+          textForCommands: ctxPayload.CommandBody,
+          raw: decision,
+        }),
+        resolveTurn: () => ({
+          channel: "imessage",
+          accountId: decision.route.accountId,
+          routeSessionKey: decision.route.sessionKey,
+          storePath,
+          ctxPayload,
+          recordInboundSession,
+          record: {
+            updateLastRoute:
+              !decision.isGroup && updateTarget
+                ? {
+                    sessionKey: decision.route.mainSessionKey,
+                    channel: "imessage",
+                    to: updateTarget,
+                    accountId: decision.route.accountId,
+                    mainDmOwnerPin:
+                      pinnedMainDmOwner && decision.senderNormalized
+                        ? {
+                            ownerRecipient: pinnedMainDmOwner,
+                            senderRecipient: decision.senderNormalized,
+                            onSkip: ({ ownerRecipient, senderRecipient }) => {
+                              logVerbose(
+                                `imessage: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                              );
+                            },
+                          }
+                        : undefined,
+                  }
+                : undefined,
+            onRecordError: (err) => {
+              logVerbose(`imessage: failed updating session meta: ${String(err)}`);
+            },
+          },
+          history: {
+            isGroup: decision.isGroup,
+            historyKey: decision.historyKey,
+            historyMap: groupHistories,
+            limit: historyLimit,
+          },
+          onPreDispatchFailure: () => settleReplyDispatcher({ dispatcher }),
+          runDispatch: () =>
+            dispatchInboundMessage({
+              ctx: ctxPayload,
+              cfg,
+              dispatcher,
+              replyOptions: {
+                disableBlockStreaming:
+                  typeof accountInfo.config.blockStreaming === "boolean"
+                    ? !accountInfo.config.blockStreaming
+                    : undefined,
+                onModelSelected,
+              },
+            }),
+        }),
       },
     });
-
-    if (!queuedFinal) {
-      if (decision.isGroup && decision.historyKey) {
-        clearHistoryEntriesIfEnabled({
-          historyMap: groupHistories,
-          historyKey: decision.historyKey,
-          limit: historyLimit,
-        });
-      }
-      return;
-    }
-    if (decision.isGroup && decision.historyKey) {
-      clearHistoryEntriesIfEnabled({
-        historyMap: groupHistories,
-        historyKey: decision.historyKey,
-        limit: historyLimit,
-      });
-    }
   }
 
   const handleMessage = async (raw: unknown) => {
@@ -490,36 +564,104 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   if (opts.abortSignal?.aborted) {
     return;
   }
-
-  const client = await createIMessageRpcClient({
-    cliPath,
-    dbPath,
-    runtime,
-    onNotification: (msg) => {
-      if (msg.method === "message") {
-        void handleMessage(msg.params).catch((err) => {
-          runtime.error?.(`imessage: handler failed: ${String(err)}`);
-        });
-      } else if (msg.method === "error") {
-        runtime.error?.(`imessage: watch error ${JSON.stringify(msg.params)}`);
-      }
-    },
-  });
-
-  let subscriptionId: number | null = null;
   const abort = opts.abortSignal;
-  const detachAbortHandler = attachIMessageMonitorAbortHandler({
-    abortSignal: abort,
-    client,
-    getSubscriptionId: () => subscriptionId,
-  });
+  const createWatchClient = async () =>
+    await createIMessageRpcClient({
+      cliPath,
+      dbPath,
+      runtime,
+      onNotification: (msg) => {
+        if (msg.method === "message") {
+          void handleMessage(msg.params).catch((err) => {
+            runtime.error?.(`imessage: handler failed: ${String(err)}`);
+          });
+        } else if (msg.method === "error") {
+          runtime.error?.(
+            `imessage: watch error ${JSON.stringify(sanitizeIMessageWatchErrorPayload(msg.params))}`,
+          );
+        }
+      },
+    });
+
+  const requireWatchClient = (
+    watchClient: IMessageRpcClient | null | undefined,
+  ): IMessageRpcClient => {
+    if (!watchClient) {
+      throw new Error("imessage monitor client not initialized");
+    }
+    return watchClient;
+  };
+
+  for (let attempt = 1; attempt <= WATCH_SUBSCRIBE_MAX_ATTEMPTS; attempt++) {
+    if (abort?.aborted) {
+      return;
+    }
+    let attemptClient: IMessageRpcClient | undefined;
+    let attemptDetachAbortHandler = () => {};
+    let keepAttemptClient = false;
+    try {
+      attemptClient = requireWatchClient(await createWatchClient());
+      let attemptSubscriptionId: number | null = null;
+      attemptDetachAbortHandler = attachIMessageMonitorAbortHandler({
+        abortSignal: abort,
+        client: attemptClient,
+        getSubscriptionId: () => attemptSubscriptionId,
+      });
+      const result = await attemptClient.request<{ subscription?: number }>(
+        "watch.subscribe",
+        {
+          attachments: includeAttachments,
+        },
+        { timeoutMs: probeTimeoutMs },
+      );
+      attemptSubscriptionId = result?.subscription ?? null;
+      client = attemptClient;
+      detachAbortHandler = attemptDetachAbortHandler;
+      keepAttemptClient = true;
+      break;
+    } catch (err) {
+      if (abort?.aborted) {
+        return;
+      }
+      const shouldRetry =
+        attempt < WATCH_SUBSCRIBE_MAX_ATTEMPTS && isRetriableWatchSubscribeStartupError(err);
+      if (!shouldRetry) {
+        runtime.error?.(danger(`imessage: monitor failed: ${String(err)}`));
+        throw err;
+      }
+      runtime.log?.(
+        warn(
+          `imessage: watch.subscribe startup failed (attempt ${attempt}/${WATCH_SUBSCRIBE_MAX_ATTEMPTS}): ${String(err)}; retrying`,
+        ),
+      );
+      // Tear down the failed client before waiting so a slow subscribe attempt
+      // cannot keep emitting notifications into the next retry window.
+      attemptDetachAbortHandler();
+      attemptDetachAbortHandler = () => {};
+      await attemptClient?.stop();
+      attemptClient = undefined;
+      await waitForWatchSubscribeRetryDelay({
+        ms: WATCH_SUBSCRIBE_RETRY_DELAY_MS,
+        abortSignal: abort,
+      });
+      if (abort?.aborted) {
+        return;
+      }
+    } finally {
+      if (!keepAttemptClient) {
+        attemptDetachAbortHandler();
+        await attemptClient?.stop();
+      }
+    }
+  }
+
+  const activeClient = client;
+  if (!activeClient) {
+    return;
+  }
 
   try {
-    const result = await client.request<{ subscription?: number }>("watch.subscribe", {
-      attachments: includeAttachments,
-    });
-    subscriptionId = result?.subscription ?? null;
-    await client.waitForClose();
+    await activeClient.waitForClose();
   } catch (err) {
     if (abort?.aborted) {
       return;
@@ -528,13 +670,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     throw err;
   } finally {
     detachAbortHandler();
-    await client.stop();
+    await activeClient.stop();
   }
 }
-
-export const __testing = {
-  resolveIMessageRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-};
-
-export const resolveIMessageRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;

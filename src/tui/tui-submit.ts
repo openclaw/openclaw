@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+
 export function createEditorSubmitHandler(params: {
   editor: {
     setText: (value: string) => void;
@@ -44,7 +46,7 @@ export function shouldEnableWindowsGitBashPasteFallback(params?: {
 }): boolean {
   const platform = params?.platform ?? process.platform;
   const env = params?.env ?? process.env;
-  const termProgram = (env.TERM_PROGRAM ?? "").toLowerCase();
+  const termProgram = normalizeLowercaseStringOrEmpty(env.TERM_PROGRAM);
 
   // Some macOS terminals emit multiline paste as rapid single-line submits.
   // Enable burst coalescing so pasted blocks stay as one user message.
@@ -64,7 +66,7 @@ export function shouldEnableWindowsGitBashPasteFallback(params?: {
   if (msystem.startsWith("MINGW") || msystem.startsWith("MSYS")) {
     return true;
   }
-  if (shell.toLowerCase().includes("bash")) {
+  if (normalizeLowercaseStringOrEmpty(shell).includes("bash")) {
     return true;
   }
   return termProgram.includes("mintty");

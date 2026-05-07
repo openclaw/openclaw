@@ -26,7 +26,6 @@ let enabledServer: Awaited<ReturnType<typeof startServer>>;
 let enabledPort: number;
 
 beforeAll(async () => {
-  vi.resetModules();
   ({ clearMemoryEmbeddingProviders, registerMemoryEmbeddingProvider } =
     await import("../plugins/memory-embedding-providers.js"));
   createEmbeddingProviderMock = vi.fn(

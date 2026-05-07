@@ -1,3 +1,5 @@
+import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { parseSlackTarget } from "./targets.js";
 
 export function resolveSlackAutoThreadId(params: {
@@ -5,7 +7,7 @@ export function resolveSlackAutoThreadId(params: {
   toolContext?: {
     currentChannelId?: string;
     currentThreadTs?: string;
-    replyToMode?: "off" | "first" | "all";
+    replyToMode?: "off" | "first" | "all" | "batched";
     hasRepliedRef?: { value: boolean };
   };
 }): string | undefined {
@@ -13,17 +15,20 @@ export function resolveSlackAutoThreadId(params: {
   if (!context?.currentThreadTs || !context.currentChannelId) {
     return undefined;
   }
-  if (context.replyToMode !== "all" && context.replyToMode !== "first") {
+  if (context.replyToMode !== "all" && !isSingleUseReplyToMode(context.replyToMode ?? "off")) {
     return undefined;
   }
   const parsedTarget = parseSlackTarget(params.to, { defaultKind: "channel" });
   if (!parsedTarget || parsedTarget.kind !== "channel") {
     return undefined;
   }
-  if (parsedTarget.id.toLowerCase() !== context.currentChannelId.toLowerCase()) {
+  if (
+    normalizeLowercaseStringOrEmpty(parsedTarget.id) !==
+    normalizeLowercaseStringOrEmpty(context.currentChannelId)
+  ) {
     return undefined;
   }
-  if (context.replyToMode === "first" && context.hasRepliedRef?.value) {
+  if (isSingleUseReplyToMode(context.replyToMode ?? "off") && context.hasRepliedRef?.value) {
     return undefined;
   }
   return context.currentThreadTs;

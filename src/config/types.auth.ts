@@ -1,12 +1,13 @@
 export type AuthProfileConfig = {
   provider: string;
   /**
-   * Credential type expected in auth-profiles.json for this profile id.
+   * Auth route selected by this profile id.
    * - api_key: static provider API key
    * - oauth: refreshable OAuth credentials (access+refresh+expires)
    * - token: static bearer-style token (optionally expiring; no refresh)
+   * - aws-sdk: AWS SDK default credential chain (no secret in auth-profiles.json)
    */
-  mode: "api_key" | "oauth" | "token";
+  mode: "api_key" | "aws-sdk" | "oauth" | "token";
   email?: string;
   displayName?: string;
 };
@@ -21,6 +22,15 @@ export type AuthConfig = {
     billingBackoffHoursByProvider?: Record<string, number>;
     /** Billing backoff cap (hours). Default: 24. */
     billingMaxHours?: number;
+    /**
+     * Base backoff for high-confidence permanent-auth failures (minutes).
+     * Default: 10.
+     */
+    authPermanentBackoffMinutes?: number;
+    /**
+     * Cap for high-confidence permanent-auth backoff (minutes). Default: 60.
+     */
+    authPermanentMaxMinutes?: number;
     /**
      * Failure window for backoff counters (hours). If no failures occur within
      * this window, counters reset. Default: 24.

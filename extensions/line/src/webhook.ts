@@ -1,13 +1,17 @@
-import type { WebhookRequestBody } from "@line/bot-sdk";
+import type { webhook } from "@line/bot-sdk";
 import type { NextFunction, Request, Response } from "express";
-import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import {
+  createMessageReceiveContext,
+  type MessageReceiveContext,
+} from "openclaw/plugin-sdk/channel-message";
+import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
 const LINE_WEBHOOK_MAX_RAW_BODY_BYTES = 64 * 1024;
 
 export interface LineWebhookOptions {
   channelSecret: string;
-  onEvents: (body: WebhookRequestBody) => Promise<void>;
+  onEvents: (body: webhook.CallbackRequest) => Promise<void>;
   runtime?: RuntimeEnv;
 }
 
@@ -21,7 +25,7 @@ function readRawBody(req: Request): string | null {
   return Buffer.isBuffer(rawBody) ? rawBody.toString("utf-8") : rawBody;
 }
 
-function parseWebhookBody(rawBody?: string | null): WebhookRequestBody | null {
+function parseWebhookBody(rawBody?: string | null): webhook.CallbackRequest | null {
   if (!rawBody) {
     return null;
   }
@@ -34,6 +38,7 @@ export function createLineWebhookMiddleware(
   const { channelSecret, onEvents, runtime } = options;
 
   return async (req: Request, res: Response, _next: NextFunction): Promise<void> => {
+    let receiveContext: MessageReceiveContext<webhook.CallbackRequest> | undefined;
     try {
       const signature = req.headers["x-line-signature"];
 
@@ -66,13 +71,27 @@ export function createLineWebhookMiddleware(
         return;
       }
 
+      receiveContext = createMessageReceiveContext({
+        id: `${Date.now()}:line:webhook`,
+        channel: "line",
+        message: body,
+        ackPolicy: body.events?.length ? "after_agent_dispatch" : "after_receive_record",
+        onAck: () => {
+          res.status(200).json({ status: "ok" });
+        },
+      });
+
       if (body.events && body.events.length > 0) {
         logVerbose(`line: received ${body.events.length} webhook events`);
         await onEvents(body);
       }
 
-      res.status(200).json({ status: "ok" });
+      const ackStage = body.events?.length ? "agent_dispatch" : "receive_record";
+      if (receiveContext.shouldAckAfter(ackStage)) {
+        await receiveContext.ack();
+      }
     } catch (err) {
+      await receiveContext?.nack(err);
       runtime?.error?.(danger(`line webhook error: ${String(err)}`));
       if (!res.headersSent) {
         res.status(500).json({ error: "Internal server error" });
@@ -83,7 +102,7 @@ export function createLineWebhookMiddleware(
 
 export interface StartLineWebhookOptions {
   channelSecret: string;
-  onEvents: (body: WebhookRequestBody) => Promise<void>;
+  onEvents: (body: webhook.CallbackRequest) => Promise<void>;
   runtime?: RuntimeEnv;
   path?: string;
 }

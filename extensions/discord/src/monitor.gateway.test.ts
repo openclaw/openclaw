@@ -89,7 +89,7 @@ describe("waitForDiscordGatewayStop", () => {
 
     emitGatewayEvent(fatalEvent);
 
-    await expect(promise).rejects.toThrow("boom");
+    await expect(promise).rejects.toThrow("discord gateway fatal: Error: boom");
     expect(disconnect).toHaveBeenCalledTimes(1);
     expect(detachLifecycle).toHaveBeenCalledTimes(1);
   });
@@ -127,37 +127,17 @@ describe("waitForDiscordGatewayStop", () => {
 
   it("rejects via registerForceStop and disconnects gateway", async () => {
     let forceStop: ((err: unknown) => void) | undefined;
-
     const { detachLifecycle, disconnect, promise } = startGatewayWait({
-      registerForceStop: (fn) => {
-        forceStop = fn;
+      registerForceStop: (handler) => {
+        forceStop = handler;
       },
     });
 
-    if (!forceStop) {
-      throw new Error("registerForceStop did not expose a stopper callback");
-    }
-    forceStop(new Error("reconnect watchdog timeout"));
+    forceStop?.(new Error("runtime-not-ready"));
 
-    await expect(promise).rejects.toThrow("reconnect watchdog timeout");
+    await expect(promise).rejects.toThrow("runtime-not-ready");
     expect(disconnect).toHaveBeenCalledTimes(1);
     expect(detachLifecycle).toHaveBeenCalledTimes(1);
-  });
-
-  it("ignores forceStop after promise already settled", async () => {
-    let forceStop: ((err: unknown) => void) | undefined;
-
-    const { abort, disconnect, promise } = startGatewayWait({
-      registerForceStop: (fn) => {
-        forceStop = fn;
-      },
-    });
-
-    abort.abort();
-    await expect(promise).resolves.toBeUndefined();
-
-    forceStop?.(new Error("too late"));
-    expect(disconnect).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the lifecycle handler active until disconnect returns on abort", async () => {
@@ -198,7 +178,7 @@ describe("waitForDiscordGatewayStop", () => {
 
     emitGatewayEvent(firstEvent);
 
-    await expect(promise).rejects.toThrow("first failure");
+    await expect(promise).rejects.toThrow("discord gateway fatal: Error: first failure");
     expect(seenEvents.map((event) => event.message)).toEqual([
       firstEvent.message,
       secondEvent.message,

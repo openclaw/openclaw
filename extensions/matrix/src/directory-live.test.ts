@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { matrixAuthedHttpClientCtorMock, requestJsonMock } = vi.hoisted(() => ({
   matrixAuthedHttpClientCtorMock: vi.fn(),
@@ -28,11 +28,13 @@ let resolveMatrixAuth: typeof import("./matrix/client.js").resolveMatrixAuth;
 describe("matrix directory live", () => {
   const cfg = { channels: { matrix: {} } };
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } =
       await import("./directory-live.js"));
     ({ resolveMatrixAuth } = await import("./matrix/client.js"));
+  });
+
+  beforeEach(() => {
     vi.mocked(resolveMatrixAuth).mockReset();
     vi.mocked(resolveMatrixAuth).mockResolvedValue({
       accountId: "assistant",

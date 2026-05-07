@@ -1,4 +1,4 @@
-import { jidToE164, normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+import { jidToE164, normalizeE164 } from "./text-runtime.js";
 
 const WHATSAPP_LID_RE = /@(lid|hosted\.lid)$/i;
 
@@ -50,7 +50,7 @@ type LegacyMentionsLike = {
   mentionedJids?: string[];
 };
 
-export function normalizeDeviceScopedJid(jid: string | null | undefined): string | null {
+function normalizeDeviceScopedJid(jid: string | null | undefined): string | null {
   return jid ? jid.replace(/:\d+/, "") : null;
 }
 
@@ -148,7 +148,7 @@ export function getReplyContext(
   };
 }
 
-export function getMentionJids(msg: LegacyMentionsLike): string[] {
+function getMentionJids(msg: LegacyMentionsLike): string[] {
   return msg.mentions ?? msg.mentionedJids ?? [];
 }
 

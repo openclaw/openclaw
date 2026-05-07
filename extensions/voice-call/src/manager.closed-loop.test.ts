@@ -55,7 +55,7 @@ describe("CallManager closed-loop turns", () => {
       "How can I help?",
       "Please check status",
     ]);
-    const metadata = (call.metadata ?? {}) as Record<string, unknown>;
+    const metadata = call.metadata ?? {};
     expect(typeof metadata.lastTurnLatencyMs).toBe("number");
     expect(typeof metadata.lastTurnListenWaitMs).toBe("number");
     expect(metadata.turnCount).toBe(1);
@@ -192,7 +192,7 @@ describe("CallManager closed-loop turns", () => {
       "Second question",
       "Second answer",
     ]);
-    const metadata = (call.metadata ?? {}) as Record<string, unknown>;
+    const metadata = call.metadata ?? {};
     expect(metadata.turnCount).toBe(2);
     expect(typeof metadata.lastTurnLatencyMs).toBe("number");
     expect(typeof metadata.lastTurnListenWaitMs).toBe("number");
@@ -228,7 +228,7 @@ describe("CallManager closed-loop turns", () => {
     }
 
     const call = requireCall(manager, started.callId);
-    const metadata = (call.metadata ?? {}) as Record<string, unknown>;
+    const metadata = call.metadata ?? {};
     expect(metadata.turnCount).toBe(5);
     expect(provider.startListeningCalls).toHaveLength(5);
     expect(provider.stopListeningCalls).toHaveLength(5);

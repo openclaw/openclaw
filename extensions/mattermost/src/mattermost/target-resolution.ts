@@ -1,3 +1,5 @@
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,
@@ -39,7 +41,7 @@ export function parseMattermostApiStatus(err: unknown): number | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
-  const msg = "message" in err ? String((err as { message?: unknown }).message ?? "") : "";
+  const msg = "message" in err && typeof err.message === "string" ? err.message : "";
   const match = /Mattermost API (\d{3})\b/.exec(msg);
   if (!match) {
     return undefined;
@@ -64,7 +66,7 @@ export async function resolveMattermostOpaqueTarget(params: {
     params.cfg && (!params.token || !params.baseUrl)
       ? resolveMattermostAccount({ cfg: params.cfg, accountId: params.accountId })
       : null;
-  const token = params.token?.trim() || account?.botToken?.trim();
+  const token = normalizeOptionalString(params.token) ?? normalizeOptionalString(account?.botToken);
   const baseUrl = normalizeMattermostBaseUrl(params.baseUrl ?? account?.baseUrl);
   if (!token || !baseUrl) {
     return null;
@@ -82,7 +84,7 @@ export async function resolveMattermostOpaqueTarget(params: {
   const client = createMattermostClient({
     baseUrl,
     botToken: token,
-    allowPrivateNetwork: account?.config?.allowPrivateNetwork === true,
+    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account?.config),
   });
   try {
     await fetchMattermostUser(client, input);

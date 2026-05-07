@@ -41,6 +41,23 @@ describe("resolveEmbeddedRunSkillEntries", () => {
     expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledWith("/tmp/workspace", { config });
   });
 
+  it("threads agentId through live skill loading", () => {
+    resolveEmbeddedRunSkillEntries({
+      workspaceDir: "/tmp/workspace",
+      config: {},
+      agentId: "writer",
+      skillsSnapshot: {
+        prompt: "skills prompt",
+        skills: [],
+      },
+    });
+
+    expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledWith("/tmp/workspace", {
+      config: {},
+      agentId: "writer",
+    });
+  });
+
   it("prefers the active runtime snapshot when caller config still contains SecretRefs", () => {
     const sourceConfig: OpenClawConfig = {
       skills: {
@@ -77,6 +94,46 @@ describe("resolveEmbeddedRunSkillEntries", () => {
 
     expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledWith("/tmp/workspace", {
       config: runtimeConfig,
+    });
+  });
+
+  it("prefers caller config when the active runtime snapshot still contains raw skill SecretRefs", () => {
+    const sourceConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          diffs: {
+            apiKey: {
+              source: "file",
+              provider: "default",
+              id: "/skills/entries/diffs/apiKey",
+            },
+          },
+        },
+      },
+    };
+    const runtimeConfig: OpenClawConfig = structuredClone(sourceConfig);
+    const callerConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          diffs: {
+            apiKey: "resolved-key",
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    resolveEmbeddedRunSkillEntries({
+      workspaceDir: "/tmp/workspace",
+      config: callerConfig,
+      skillsSnapshot: {
+        prompt: "skills prompt",
+        skills: [],
+      },
+    });
+
+    expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledWith("/tmp/workspace", {
+      config: callerConfig,
     });
   });
 

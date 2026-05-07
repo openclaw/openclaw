@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const evaluateSenderGroupAccessForPolicy = vi.hoisted(() => vi.fn());
 const isDangerousNameMatchingEnabled = vi.hoisted(() => vi.fn());
@@ -15,8 +15,23 @@ vi.mock("./runtime-api.js", () => ({
 }));
 
 describe("mattermost monitor auth", () => {
+  let authorizeMattermostCommandInvocation: typeof import("./monitor-auth.js").authorizeMattermostCommandInvocation;
+  let isMattermostSenderAllowed: typeof import("./monitor-auth.js").isMattermostSenderAllowed;
+  let normalizeMattermostAllowEntry: typeof import("./monitor-auth.js").normalizeMattermostAllowEntry;
+  let normalizeMattermostAllowList: typeof import("./monitor-auth.js").normalizeMattermostAllowList;
+  let resolveMattermostEffectiveAllowFromLists: typeof import("./monitor-auth.js").resolveMattermostEffectiveAllowFromLists;
+
+  beforeAll(async () => {
+    ({
+      authorizeMattermostCommandInvocation,
+      isMattermostSenderAllowed,
+      normalizeMattermostAllowEntry,
+      normalizeMattermostAllowList,
+      resolveMattermostEffectiveAllowFromLists,
+    } = await import("./monitor-auth.js"));
+  });
+
   beforeEach(() => {
-    vi.resetModules();
     evaluateSenderGroupAccessForPolicy.mockReset();
     isDangerousNameMatchingEnabled.mockReset();
     resolveAllowlistMatchSimple.mockReset();
@@ -24,17 +39,11 @@ describe("mattermost monitor auth", () => {
     resolveEffectiveAllowFromLists.mockReset();
   });
 
-  it("normalizes allowlist entries and resolves effective lists", async () => {
+  it("normalizes allowlist entries and resolves effective lists", () => {
     resolveEffectiveAllowFromLists.mockReturnValue({
       effectiveAllowFrom: ["alice"],
       effectiveGroupAllowFrom: ["team"],
     });
-
-    const {
-      normalizeMattermostAllowEntry,
-      normalizeMattermostAllowList,
-      resolveMattermostEffectiveAllowFromLists,
-    } = await import("./monitor-auth.js");
 
     expect(normalizeMattermostAllowEntry(" @Alice ")).toBe("alice");
     expect(normalizeMattermostAllowEntry("mattermost:Bob")).toBe("bob");
@@ -62,10 +71,8 @@ describe("mattermost monitor auth", () => {
     });
   });
 
-  it("checks sender allowlists against normalized ids and names", async () => {
+  it("checks sender allowlists against normalized ids and names", () => {
     resolveAllowlistMatchSimple.mockReturnValue({ allowed: true });
-
-    const { isMattermostSenderAllowed } = await import("./monitor-auth.js");
     expect(
       isMattermostSenderAllowed({
         senderId: "@Alice",
@@ -82,7 +89,7 @@ describe("mattermost monitor auth", () => {
     });
   });
 
-  it("authorizes direct messages in open mode and blocks disabled/group-restricted channels", async () => {
+  it("requires open direct messages to match the effective allowlist", async () => {
     isDangerousNameMatchingEnabled.mockReturnValue(false);
     resolveEffectiveAllowFromLists.mockReturnValue({
       effectiveAllowFrom: [],
@@ -98,8 +105,6 @@ describe("mattermost monitor auth", () => {
     });
     resolveAllowlistMatchSimple.mockReturnValue({ allowed: false });
 
-    const { authorizeMattermostCommandInvocation } = await import("./monitor-auth.js");
-
     expect(
       authorizeMattermostCommandInvocation({
         account: {
@@ -114,10 +119,34 @@ describe("mattermost monitor auth", () => {
         hasControlCommand: false,
       }),
     ).toMatchObject({
+      ok: false,
+      denyReason: "unauthorized",
+      kind: "direct",
+    });
+
+    resolveEffectiveAllowFromLists.mockReturnValue({
+      effectiveAllowFrom: ["*"],
+      effectiveGroupAllowFrom: [],
+    });
+    resolveAllowlistMatchSimple.mockReturnValue({ allowed: true });
+
+    expect(
+      authorizeMattermostCommandInvocation({
+        account: {
+          config: { dmPolicy: "open", allowFrom: ["*"] },
+        } as never,
+        cfg: {} as never,
+        senderId: "alice",
+        senderName: "Alice",
+        channelId: "dm-1",
+        channelInfo: { type: "D", name: "alice", display_name: "Alice" } as never,
+        allowTextCommands: false,
+        hasControlCommand: false,
+      }),
+    ).toMatchObject({
       ok: true,
       commandAuthorized: true,
       kind: "direct",
-      roomLabel: "#alice",
     });
 
     expect(

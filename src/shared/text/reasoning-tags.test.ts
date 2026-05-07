@@ -51,6 +51,11 @@ describe("stripReasoningTagsFromText", () => {
         expected: "X  Y",
       },
       {
+        name: "strips antml namespaced thinking tags",
+        input: "Before <antml:thinking>secret</antml:thinking> after",
+        expected: "Before  after",
+      },
+      {
         name: "strips multiple reasoning blocks",
         input: "<think>first</think>A<think>second</think>B",
         expected: "AB",
@@ -116,6 +121,14 @@ describe("stripReasoningTagsFromText", () => {
         expected: "You can start with <think and then close with",
       },
       {
+        input: "Internal reasoning </think> final answer",
+        expected: "final answer",
+      },
+      {
+        input: "Use `<think>` to open and `</think>` to close. Final sentence.",
+        expected: "Use `<think>` to open and `</think>` to close. Final sentence.",
+      },
+      {
         input: "A < think >content< /think > B",
         expected: "A  B",
       },
@@ -163,7 +176,7 @@ describe("stripReasoningTagsFromText", () => {
     it.each([
       {
         input: "<think>outer <think>inner</think> still outer</think>visible",
-        expected: "still outervisible",
+        expected: "visible",
       },
       {
         input: "A<final>1</final>B<final>2</final>C",
@@ -194,6 +207,10 @@ describe("stripReasoningTagsFromText", () => {
         input: "A <THINK>hidden</THINK> <Thinking>also hidden</Thinking> B",
         expected: "A   B",
       },
+      {
+        input: "A <ANTML:THINKING hidden='1'>secret</ANTML:THINKING> B",
+        expected: "A  B",
+      },
     ] as const)("handles unicode/attributes/case-insensitive names: %j", (testCase) => {
       expectStrippedCase(testCase);
     });
@@ -213,9 +230,21 @@ describe("stripReasoningTagsFromText", () => {
   describe("strict vs preserve mode", () => {
     it.each([
       {
-        name: "applies strict mode to unclosed tags",
+        name: "keeps strict mode from leaking unclosed trailing reasoning after visible text",
         input: "Before <think>unclosed content after",
         expected: "Before",
+        opts: { mode: "strict" as const },
+      },
+      {
+        name: "recovers fully wrapped unclosed tags that would otherwise deliver empty text",
+        input: "<think>Answer after malformed opening tag",
+        expected: "Answer after malformed opening tag",
+        opts: { mode: "strict" as const },
+      },
+      {
+        name: "does not recover fully closed reasoning-only blocks in strict mode",
+        input: "<think>hidden reasoning only</think>",
+        expected: "",
         opts: { mode: "strict" as const },
       },
       {

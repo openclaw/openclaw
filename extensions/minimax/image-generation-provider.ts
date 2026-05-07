@@ -1,7 +1,14 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
+import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import {
+  assertOkOrThrowHttpError,
+  postJsonRequest,
+  resolveProviderHttpRequestConfig,
+} from "openclaw/plugin-sdk/provider-http";
 
 const DEFAULT_MINIMAX_IMAGE_BASE_URL = "https://api.minimax.io";
+const CN_MINIMAX_IMAGE_BASE_URL = "https://api.minimaxi.com";
 const DEFAULT_MODEL = "image-01";
 const DEFAULT_OUTPUT_MIME = "image/png";
 const MINIMAX_SUPPORTED_ASPECT_RATIOS = [
@@ -30,20 +37,37 @@ type MinimaxImageApiResponse = {
   };
 };
 
+function isMinimaxCnHost(value: string | undefined): boolean {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const candidate = /^[a-z][a-z\d+.-]*:\/\//iu.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const hostname = new URL(candidate).hostname.toLowerCase();
+    return hostname === "minimaxi.com" || hostname.endsWith(".minimaxi.com");
+  } catch {
+    return false;
+  }
+}
+
 function resolveMinimaxImageBaseUrl(
   cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"],
   providerId: string,
 ): string {
-  const direct = cfg?.models?.providers?.[providerId]?.baseUrl?.trim();
-  if (!direct) {
-    return DEFAULT_MINIMAX_IMAGE_BASE_URL;
+  // MiniMax image generation uses dedicated endpoints that are separate from
+  // the text/chat API endpoints. First check MINIMAX_API_HOST env var,
+  // then fall back to the provider's configured baseUrl to determine region.
+  const apiHost = process.env.MINIMAX_API_HOST;
+  if (isMinimaxCnHost(apiHost)) {
+    return CN_MINIMAX_IMAGE_BASE_URL;
   }
-  // Extract origin from the configured base URL (which may include path like /anthropic)
-  try {
-    return new URL(direct).origin;
-  } catch {
-    return DEFAULT_MINIMAX_IMAGE_BASE_URL;
+  // CN onboarding stores region in provider config without requiring env var
+  const providerBaseUrl = cfg?.models?.providers?.[providerId]?.baseUrl;
+  if (isMinimaxCnHost(providerBaseUrl)) {
+    return CN_MINIMAX_IMAGE_BASE_URL;
   }
+  return DEFAULT_MINIMAX_IMAGE_BASE_URL;
 }
 
 function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider {
@@ -52,6 +76,11 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
     label: "MiniMax",
     defaultModel: DEFAULT_MODEL,
     models: [DEFAULT_MODEL],
+    isConfigured: ({ agentDir }) =>
+      isProviderApiKeyConfigured({
+        provider: providerId,
+        agentDir,
+      }),
     capabilities: {
       generate: {
         maxCount: 9,
@@ -83,6 +112,23 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
       }
 
       const baseUrl = resolveMinimaxImageBaseUrl(req.cfg, providerId);
+      const {
+        baseUrl: resolvedBaseUrl,
+        allowPrivateNetwork,
+        headers,
+        dispatcherPolicy,
+      } = resolveProviderHttpRequestConfig({
+        baseUrl,
+        defaultBaseUrl: DEFAULT_MINIMAX_IMAGE_BASE_URL,
+        allowPrivateNetwork: false,
+        defaultHeaders: {
+          Authorization: `Bearer ${auth.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        provider: providerId,
+        capability: "image",
+        transport: "http",
+      });
 
       const body: Record<string, unknown> = {
         model: req.model || DEFAULT_MODEL,
@@ -102,67 +148,55 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
         const dataUrl = `data:${mime};base64,${ref.buffer.toString("base64")}`;
         body.subject_reference = [{ type: "character", image_file: dataUrl }];
       }
-
-      const controller = new AbortController();
-      const timeoutMs = req.timeoutMs;
-      const timeout =
-        typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-          ? setTimeout(() => controller.abort(), timeoutMs)
-          : undefined;
-
-      const response = await fetch(`${baseUrl}/v1/image_generation`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${auth.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      }).finally(() => {
-        clearTimeout(timeout);
+      const { response, release } = await postJsonRequest({
+        url: `${resolvedBaseUrl}/v1/image_generation`,
+        headers,
+        body,
+        timeoutMs: req.timeoutMs,
+        fetchFn: fetch,
+        allowPrivateNetwork,
+        dispatcherPolicy,
       });
+      try {
+        await assertOkOrThrowHttpError(response, "MiniMax image generation failed");
 
-      if (!response.ok) {
-        const text = await response.text().catch(() => "");
-        throw new Error(
-          `MiniMax image generation failed (${response.status}): ${text || response.statusText}`,
-        );
+        const data = (await response.json()) as MinimaxImageApiResponse;
+
+        const baseResp = data.base_resp;
+        if (baseResp && typeof baseResp.status_code === "number" && baseResp.status_code !== 0) {
+          const msg = baseResp.status_msg ?? "";
+          throw new Error(`MiniMax image generation API error (${baseResp.status_code}): ${msg}`);
+        }
+
+        const base64Images = data.data?.image_base64 ?? [];
+        const failedCount = data.metadata?.failed_count ?? 0;
+
+        if (base64Images.length === 0) {
+          const reason =
+            failedCount > 0 ? `${failedCount} image(s) failed to generate` : "no images returned";
+          throw new Error(`MiniMax image generation returned no images: ${reason}`);
+        }
+
+        const images = base64Images
+          .map((b64, index) => {
+            if (!b64) {
+              return null;
+            }
+            return {
+              buffer: Buffer.from(b64, "base64"),
+              mimeType: DEFAULT_OUTPUT_MIME,
+              fileName: `image-${index + 1}.png`,
+            };
+          })
+          .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+
+        return {
+          images,
+          model: req.model || DEFAULT_MODEL,
+        };
+      } finally {
+        await release();
       }
-
-      const data = (await response.json()) as MinimaxImageApiResponse;
-
-      const baseResp = data.base_resp;
-      if (baseResp && typeof baseResp.status_code === "number" && baseResp.status_code !== 0) {
-        const msg = baseResp.status_msg ?? "";
-        throw new Error(`MiniMax image generation API error (${baseResp.status_code}): ${msg}`);
-      }
-
-      const base64Images = data.data?.image_base64 ?? [];
-      const failedCount = data.metadata?.failed_count ?? 0;
-
-      if (base64Images.length === 0) {
-        const reason =
-          failedCount > 0 ? `${failedCount} image(s) failed to generate` : "no images returned";
-        throw new Error(`MiniMax image generation returned no images: ${reason}`);
-      }
-
-      const images = base64Images
-        .map((b64, index) => {
-          if (!b64) {
-            return null;
-          }
-          return {
-            buffer: Buffer.from(b64, "base64"),
-            mimeType: DEFAULT_OUTPUT_MIME,
-            fileName: `image-${index + 1}.png`,
-          };
-        })
-        .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
-
-      return {
-        images,
-        model: req.model || DEFAULT_MODEL,
-      };
     },
   };
 }

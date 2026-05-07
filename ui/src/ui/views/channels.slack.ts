@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import type { SlackStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
@@ -22,27 +23,27 @@ export function renderSlackCard(params: {
     subtitle: "Socket mode status and channel configuration.",
     accountCountLabel,
     statusRows: [
-      { label: "Configured", value: formatNullableBoolean(configured) },
-      { label: "Running", value: slack?.running ? "Yes" : "No" },
+      { label: t("common.configured"), value: formatNullableBoolean(configured) },
+      { label: t("common.running"), value: slack?.running ? t("common.yes") : t("common.no") },
       {
-        label: "Last start",
-        value: slack?.lastStartAt ? formatRelativeTimestamp(slack.lastStartAt) : "n/a",
+        label: t("common.lastStart"),
+        value: slack?.lastStartAt ? formatRelativeTimestamp(slack.lastStartAt) : t("common.na"),
       },
       {
-        label: "Last probe",
-        value: slack?.lastProbeAt ? formatRelativeTimestamp(slack.lastProbeAt) : "n/a",
+        label: t("common.lastProbe"),
+        value: slack?.lastProbeAt ? formatRelativeTimestamp(slack.lastProbeAt) : t("common.na"),
       },
     ],
     lastError: slack?.lastError,
     secondaryCallout: slack?.probe
       ? html`<div class="callout" style="margin-top: 12px;">
-          Probe ${slack.probe.ok ? "ok" : "failed"} · ${slack.probe.status ?? ""}
-          ${slack.probe.error ?? ""}
+          ${slack.probe.ok ? t("common.probeOk") : t("common.probeFailed")} ·
+          ${slack.probe.status ?? ""} ${slack.probe.error ?? ""}
         </div>`
       : nothing,
     configSection: renderChannelConfigSection({ channelId: "slack", props }),
     footer: html`<div class="row" style="margin-top: 12px;">
-      <button class="btn" @click=${() => props.onRefresh(true)}>Probe</button>
+      <button class="btn" @click=${() => props.onRefresh(true)}>${t("common.probe")}</button>
     </div>`,
   });
 }

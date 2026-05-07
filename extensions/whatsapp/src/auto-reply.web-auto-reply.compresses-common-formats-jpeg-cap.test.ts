@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
 import sharp from "sharp";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createMockWebListener,
+  createAcceptedWhatsAppSendResult,
   installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
   resetLoadConfigMock,
@@ -12,7 +13,7 @@ import type { WebInboundMessage } from "./inbound.js";
 
 installWebAutoReplyTestHomeHooks();
 
-let monitorWebChannel: typeof import("./auto-reply.js").monitorWebChannel;
+let monitorWebChannel: typeof import("./auto-reply/monitor.js").monitorWebChannel;
 
 describe("web auto-reply", () => {
   installWebAutoReplyUnitTestHooks({ pinDns: true });
@@ -21,7 +22,7 @@ describe("web auto-reply", () => {
   const SMALL_MEDIA_CAP_BYTES = Math.floor(SMALL_MEDIA_CAP_MB * 1024 * 1024);
 
   beforeAll(async () => {
-    ({ monitorWebChannel } = await import("./auto-reply.js"));
+    ({ monitorWebChannel } = await import("./auto-reply/monitor.js"));
   });
 
   async function setupSingleInboundMessage(params: {
@@ -29,7 +30,8 @@ describe("web auto-reply", () => {
     sendMedia: ReturnType<typeof vi.fn>;
     reply?: ReturnType<typeof vi.fn>;
   }) {
-    const reply = params.reply ?? vi.fn().mockResolvedValue(undefined);
+    const reply =
+      params.reply ?? vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("text", "r1"));
     const sendComposing = vi.fn(async () => undefined);
     const resolver = vi.fn().mockResolvedValue(params.resolverValue);
 
@@ -169,10 +171,9 @@ describe("web auto-reply", () => {
     const sharedRaw = crypto.randomBytes(width * height * 3);
 
     const renderedFormats = await Promise.all(
-      formats.map(async (fmt) => ({
-        ...fmt,
-        image: await fmt.make(sharedRaw, { width, height }),
-      })),
+      formats.map(async (fmt) =>
+        Object.assign({}, fmt, { image: await fmt.make(sharedRaw, { width, height }) }),
+      ),
     );
 
     await withMediaCap(SMALL_MEDIA_CAP_MB, async () => {
@@ -294,20 +295,14 @@ describe("web auto-reply", () => {
       resetLoadConfigMock();
     }
   });
-  it("falls back to text when media is unsupported", async () => {
+  it("sends PDF media as a document", async () => {
     const sendMedia = vi.fn();
     const { reply, dispatch } = await setupSingleInboundMessage({
       resolverValue: { text: "hi", mediaUrl: "https://example.com/file.pdf" },
       sendMedia,
     });
 
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: true,
-      body: true,
-      arrayBuffer: async () => Buffer.from("%PDF-1.4").buffer,
-      headers: { get: () => "application/pdf" },
-      status: 200,
-    } as unknown as Response);
+    const fetchMock = mockFetchMediaBuffer(Buffer.from("%PDF-1.4"), "application/pdf");
 
     await dispatch("msg-pdf");
 
@@ -386,12 +381,12 @@ describe("web auto-reply", () => {
     const fallback = reply.mock.calls[0]?.[0] as string;
     expect(fallback).toContain("caption");
     expect(fallback).toContain("Media failed");
-    expect(fallback).toContain("404");
+    expect(fallback).not.toContain("404");
 
     fetchMock.mockRestore();
   });
   it("sends media with a caption when delivery succeeds", async () => {
-    const sendMedia = vi.fn().mockResolvedValue(undefined);
+    const sendMedia = vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("media", "m1"));
     const { reply, dispatch } = await setupSingleInboundMessage({
       resolverValue: {
         text: "hi",

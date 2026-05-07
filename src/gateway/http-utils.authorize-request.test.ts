@@ -6,7 +6,17 @@ vi.mock("./auth.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: vi.fn(() => ({
+  getRuntimeConfig: vi.fn(() => ({
+    gateway: {
+      controlUi: {
+        allowedOrigins: ["https://control.example.com"],
+      },
+    },
+  })),
+}));
+
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: vi.fn(() => ({
     gateway: {
       controlUi: {
         allowedOrigins: ["https://control.example.com"],
@@ -17,6 +27,7 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("./http-common.js", () => ({
   sendGatewayAuthFailure: vi.fn(),
+  sendJson: vi.fn(),
 }));
 
 const { authorizeHttpGatewayConnect } = await import("./auth.js");

@@ -1,12 +1,11 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import { usesMoonshotThinkingPayloadCompatStatic } from "../moonshot-provider-compat.js";
-import { normalizeProviderId } from "../provider-id.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 export {
   createMoonshotThinkingWrapper,
+  resolveMoonshotThinkingKeep,
   resolveMoonshotThinkingType,
 } from "./moonshot-thinking-stream-wrappers.js";
 
@@ -19,24 +18,6 @@ export function shouldApplySiliconFlowThinkingOffCompat(params: {
     params.provider === "siliconflow" &&
     params.thinkingLevel === "off" &&
     params.modelId.startsWith("Pro/")
-  );
-}
-
-export function shouldApplyMoonshotPayloadCompat(params: {
-  provider: string;
-  modelId: string;
-}): boolean {
-  const normalizedProvider = normalizeProviderId(params.provider);
-  const normalizedModelId = params.modelId.trim().toLowerCase();
-
-  if (usesMoonshotThinkingPayloadCompatStatic(normalizedProvider)) {
-    return true;
-  }
-
-  return (
-    normalizedProvider === "ollama" &&
-    normalizedModelId.startsWith("kimi-k") &&
-    normalizedModelId.includes(":cloud")
   );
 }
 

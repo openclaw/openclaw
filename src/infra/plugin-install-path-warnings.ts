@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
-export type PluginInstallPathIssue = {
+type PluginInstallPathIssue = {
   kind: "custom-path" | "missing-path";
   pluginId: string;
   path: string;
@@ -16,7 +17,7 @@ function resolvePluginInstallCandidatePaths(
   }
 
   return [install.sourcePath, install.installPath]
-    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .map((value) => normalizeOptionalString(value) ?? "")
     .filter(Boolean);
 }
 

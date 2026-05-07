@@ -7,17 +7,25 @@ export type ReplyDirectiveParseResult = {
   mediaUrls?: string[];
   mediaUrl?: string;
   replyToId?: string;
-  replyToCurrent: boolean;
+  replyToCurrent?: boolean;
   replyToTag: boolean;
   audioAsVoice?: boolean;
   isSilent: boolean;
 };
 
+export type ReplyDirectiveParseOptions = {
+  currentMessageId?: string;
+  silentToken?: string;
+  extractMarkdownImages?: boolean;
+};
+
 export function parseReplyDirectives(
   raw: string,
-  options: { currentMessageId?: string; silentToken?: string } = {},
+  options: ReplyDirectiveParseOptions = {},
 ): ReplyDirectiveParseResult {
-  const split = splitMediaFromOutput(raw);
+  const split = splitMediaFromOutput(raw, {
+    extractMarkdownImages: options.extractMarkdownImages,
+  });
   let text = split.text ?? "";
 
   const replyParsed = parseInlineDirectives(text, {
@@ -41,7 +49,7 @@ export function parseReplyDirectives(
     mediaUrls: split.mediaUrls,
     mediaUrl: split.mediaUrl,
     replyToId: replyParsed.replyToId,
-    replyToCurrent: replyParsed.replyToCurrent,
+    replyToCurrent: replyParsed.replyToCurrent || undefined,
     replyToTag: replyParsed.hasReplyTag,
     audioAsVoice: split.audioAsVoice,
     isSilent,

@@ -1,6 +1,8 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { chromium } from "playwright-core";
 import type { OpenClawConfig } from "../api.js";
 import type { DiffRenderOptions, DiffTheme } from "./types.js";
@@ -60,7 +62,6 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
     theme: DiffTheme;
     image: DiffRenderOptions["image"];
   }): Promise<string> {
-    await fs.mkdir(path.dirname(params.outputPath), { recursive: true });
     const lease = await acquireSharedBrowser({
       config: this.config,
       idleMs: this.browserIdleMs,
@@ -188,16 +189,22 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
             throw new Error(IMAGE_SIZE_LIMIT_ERROR);
           }
 
-          await page.pdf({
-            path: params.outputPath,
-            width: `${pdfWidth}px`,
-            height: `${pdfHeight}px`,
-            printBackground: true,
-            margin: {
-              top: "0",
-              right: "0",
-              bottom: "0",
-              left: "0",
+          const pageForPdf = page;
+          await writeExternalArtifactFile({
+            outputPath: params.outputPath,
+            write: async (tempPath) => {
+              await pageForPdf.pdf({
+                path: tempPath,
+                width: `${pdfWidth}px`,
+                height: `${pdfHeight}px`,
+                printBackground: true,
+                margin: {
+                  top: "0",
+                  right: "0",
+                  bottom: "0",
+                  left: "0",
+                },
+              });
             },
           });
           return params.outputPath;
@@ -237,15 +244,21 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
           throw new Error(IMAGE_SIZE_LIMIT_ERROR);
         }
 
-        await page.screenshot({
-          path: params.outputPath,
-          type: "png",
-          scale: "device",
-          clip: {
-            x,
-            y,
-            width: cssWidth,
-            height: cssHeight,
+        const pageForScreenshot = page;
+        await writeExternalArtifactFile({
+          outputPath: params.outputPath,
+          write: async (tempPath) => {
+            await pageForScreenshot.screenshot({
+              path: tempPath,
+              type: "png",
+              scale: "device",
+              clip: {
+                x,
+                y,
+                width: cssWidth,
+                height: cssHeight,
+              },
+            });
           },
         });
         return params.outputPath;
@@ -255,15 +268,29 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
       if (error instanceof Error && error.message === IMAGE_SIZE_LIMIT_ERROR) {
         throw error;
       }
-      const reason = error instanceof Error ? error.message : String(error);
+      const reason = formatErrorMessage(error);
       throw new Error(
         `Diff PNG/PDF rendering requires a Chromium-compatible browser. Set browser.executablePath or install Chrome/Chromium. ${reason}`,
+        { cause: error },
       );
     } finally {
       await page?.close().catch(() => {});
       await lease.release();
     }
   }
+}
+
+async function writeExternalArtifactFile(params: {
+  outputPath: string;
+  write: (tempPath: string) => Promise<void>;
+}): Promise<void> {
+  const rootDir = path.dirname(params.outputPath);
+  await fs.mkdir(rootDir, { recursive: true });
+  await writeExternalFileWithinRoot({
+    rootDir,
+    path: path.basename(params.outputPath),
+    write: params.write,
+  });
 }
 
 export async function resetSharedBrowserStateForTests(): Promise<void> {

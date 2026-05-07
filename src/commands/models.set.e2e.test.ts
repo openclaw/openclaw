@@ -5,12 +5,12 @@ const mocks = vi.hoisted(() => ({
   writtenConfig: undefined as Record<string, unknown> | undefined,
 }));
 
-vi.mock("./models/shared.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./models/shared.js")>();
+vi.mock("./models/shared.js", async () => {
+  const actual = await vi.importActual<typeof import("./models/shared.js")>("./models/shared.js");
   return {
     ...actual,
     updateConfig: async (mutator: (cfg: Record<string, unknown>) => Record<string, unknown>) => {
-      const next = mutator(JSON.parse(JSON.stringify(mocks.currentConfig)));
+      const next = mutator(structuredClone(mocks.currentConfig));
       mocks.writtenConfig = next;
       return next;
     },

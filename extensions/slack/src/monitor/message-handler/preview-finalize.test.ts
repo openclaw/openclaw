@@ -1,5 +1,5 @@
 import type { WebClient } from "@slack/web-api";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const editSlackMessageMock = vi.fn();
 
@@ -24,10 +24,12 @@ function createClient(overrides?: {
 }
 
 describe("finalizeSlackPreviewEdit", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    editSlackMessageMock.mockReset();
+  beforeAll(async () => {
     ({ finalizeSlackPreviewEdit, __testing } = await import("./preview-finalize.js"));
+  });
+
+  beforeEach(() => {
+    editSlackMessageMock.mockReset();
   });
 
   it("treats a thrown edit as success when history readback already matches", async () => {
@@ -105,5 +107,42 @@ describe("finalizeSlackPreviewEdit", () => {
         >[0]["blocks"],
       }),
     ).toBe("*Done*");
+  });
+
+  it("matches truncated fallback text for long blocks-only edit readback", async () => {
+    const longContextText = "a".repeat(3000);
+    const blocks = [
+      {
+        type: "context",
+        elements: [
+          { type: "mrkdwn", text: longContextText },
+          { type: "mrkdwn", text: longContextText },
+          { type: "mrkdwn", text: longContextText },
+        ],
+      },
+    ] as const;
+    const expectedText = __testing.buildExpectedSlackEditText({
+      text: "",
+      blocks: blocks as unknown as Parameters<
+        typeof __testing.buildExpectedSlackEditText
+      >[0]["blocks"],
+    });
+    const client = createClient({
+      historyMessages: [{ ts: "171234.567", text: expectedText, blocks }],
+    });
+
+    expect(expectedText).toHaveLength(8000);
+    await expect(
+      __testing.didSlackPreviewEditApplyAfterError({
+        client,
+        token: "xoxb-test",
+        channelId: "C123",
+        messageId: "171234.567",
+        text: "",
+        blocks: blocks as unknown as Parameters<
+          typeof __testing.didSlackPreviewEditApplyAfterError
+        >[0]["blocks"],
+      }),
+    ).resolves.toBe(true);
   });
 });

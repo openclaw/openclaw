@@ -5,10 +5,18 @@ import type { DiffViewerPayload } from "./types.js";
 const PASSTHROUGH_LANGUAGE_HINTS = new Set<SupportedLanguages>(["ansi", "text"]);
 type DiffPayloadFile = FileContents | FileDiffMetadata;
 
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 export async function normalizeSupportedLanguageHint(
   value?: string,
 ): Promise<SupportedLanguages | undefined> {
-  const normalized = value?.trim();
+  const normalized = normalizeOptionalString(value);
   if (!normalized) {
     return undefined;
   }

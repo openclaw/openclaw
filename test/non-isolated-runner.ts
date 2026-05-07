@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { TestRunner, type RunnerTestSuite, vi } from "vitest";
 
 type EvaluatedModuleNode = {
@@ -11,6 +12,15 @@ type EvaluatedModuleNode = {
 type EvaluatedModules = {
   idToModuleMap: Map<string, EvaluatedModuleNode>;
 };
+
+const SHARED_TEST_SETUP = Symbol.for("openclaw.sharedTestSetup");
+
+function getSharedTestHome(): string | undefined {
+  const globalState = globalThis as typeof globalThis & {
+    [SHARED_TEST_SETUP]?: { tempHome?: string };
+  };
+  return globalState[SHARED_TEST_SETUP]?.tempHome ?? process.env.OPENCLAW_TEST_HOME;
+}
 
 function resetEvaluatedModules(modules: EvaluatedModules, resetMocks: boolean) {
   const skipPaths = [
@@ -31,9 +41,29 @@ function resetEvaluatedModules(modules: EvaluatedModules, resetMocks: boolean) {
   });
 }
 
+function restoreSharedTestHomeAfterEnvUnstub(testHomeRaw: string | undefined): void {
+  const testHome = testHomeRaw?.trim();
+  if (!testHome) {
+    return;
+  }
+
+  process.env.HOME = testHome;
+  process.env.USERPROFILE = testHome;
+  process.env.OPENCLAW_TEST_HOME = testHome;
+  delete process.env.OPENCLAW_CONFIG_PATH;
+  delete process.env.OPENCLAW_STATE_DIR;
+  delete process.env.OPENCLAW_AGENT_DIR;
+  delete process.env.PI_CODING_AGENT_DIR;
+  process.env.XDG_CONFIG_HOME = path.join(testHome, ".config");
+  process.env.XDG_DATA_HOME = path.join(testHome, ".local", "share");
+  process.env.XDG_STATE_HOME = path.join(testHome, ".local", "state");
+  process.env.XDG_CACHE_HOME = path.join(testHome, ".cache");
+}
+
 export default class OpenClawNonIsolatedRunner extends TestRunner {
   override onCollectStart(file: { filepath: string }) {
     super.onCollectStart(file);
+    restoreSharedTestHomeAfterEnvUnstub(getSharedTestHome());
     const orderLogPath = process.env.OPENCLAW_VITEST_FILE_ORDER_LOG?.trim();
     if (orderLogPath) {
       fs.appendFileSync(orderLogPath, `START ${file.filepath}\n`);
@@ -59,7 +89,9 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     }
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    const testHome = getSharedTestHome();
     vi.unstubAllEnvs();
+    restoreSharedTestHomeAfterEnvUnstub(testHome);
     vi.clearAllMocks();
     vi.resetModules();
     this.moduleRunner?.mocker?.reset?.();

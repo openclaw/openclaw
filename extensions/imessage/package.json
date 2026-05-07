@@ -1,9 +1,12 @@
 {
   "name": "@openclaw/imessage",
-  "version": "2026.4.1",
+  "version": "2026.5.6",
   "private": true,
-  "description": "OpenClaw iMessage channel plugin",
+  "description": "OpenClaw iMessage channel plugin using imsg on a signed-in Mac",
   "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
@@ -16,11 +19,25 @@
       "detailLabel": "iMessage",
       "docsPath": "/channels/imessage",
       "docsLabel": "imessage",
-      "blurb": "this is still a work in progress.",
+      "blurb": "iMessage via the imsg CLI on a signed-in Mac or SSH wrapper.",
       "aliases": [
         "imsg"
       ],
-      "systemImage": "message.fill"
+      "systemImage": "message.fill",
+      "cliAddOptions": [
+        {
+          "flags": "--db-path <path>",
+          "description": "iMessage database path"
+        },
+        {
+          "flags": "--service <service>",
+          "description": "iMessage service (imessage|sms|auto)"
+        },
+        {
+          "flags": "--region <region>",
+          "description": "iMessage region (for SMS)"
+        }
+      ]
     }
   }
 }

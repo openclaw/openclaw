@@ -24,13 +24,12 @@ import {
   createMSTeamsTokenProvider,
   loadMSTeamsSdkWithAuth,
 } from "./sdk.js";
+import { createMSTeamsSsoTokenStoreFs } from "./sso-token-store.js";
+import type { MSTeamsSsoDeps } from "./sso.js";
 import { resolveMSTeamsCredentials } from "./token.js";
-import {
-  applyMSTeamsWebhookTimeouts,
-  type ApplyMSTeamsWebhookTimeoutsOpts,
-} from "./webhook-timeouts.js";
+import { applyMSTeamsWebhookTimeouts } from "./webhook-timeouts.js";
 
-export type MonitorMSTeamsOpts = {
+type MonitorMSTeamsOpts = {
   cfg: OpenClawConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
@@ -38,7 +37,7 @@ export type MonitorMSTeamsOpts = {
   pollStore?: MSTeamsPollStore;
 };
 
-export type MonitorMSTeamsResult = {
+type MonitorMSTeamsResult = {
   app: unknown;
   shutdown: () => Promise<void>;
 };
@@ -104,9 +103,8 @@ export async function monitorMSTeamsProvider(
 
   try {
     const allowEntries =
-      allowFrom
-        ?.map((entry) => cleanAllowEntry(String(entry)))
-        .filter((entry) => entry && entry !== "*") ?? [];
+      allowFrom?.map((entry) => cleanAllowEntry(entry)).filter((entry) => entry && entry !== "*") ??
+      [];
     if (allowEntries.length > 0) {
       const { additions } = await resolveAllowlistUsers("msteams users", allowEntries);
       allowFrom = mergeAllowlist({ existing: allowFrom, additions });
@@ -114,7 +112,7 @@ export async function monitorMSTeamsProvider(
 
     if (Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0) {
       const groupEntries = groupAllowFrom
-        .map((entry) => cleanAllowEntry(String(entry)))
+        .map((entry) => cleanAllowEntry(entry))
         .filter((entry) => entry && entry !== "*");
       if (groupEntries.length > 0) {
         const { additions } = await resolveAllowlistUsers("msteams group users", groupEntries);
@@ -196,7 +194,11 @@ export async function monitorMSTeamsProvider(
       }
     }
   } catch (err) {
-    runtime.log?.(`msteams resolve failed; using config entries. ${String(err)}`);
+    // Log at error (not log) — allowlist resolution failures leave the bot in a
+    // degraded state where Graph-resolved IDs are missing (#77674).
+    runtime?.error(
+      `msteams resolve failed; falling back to raw config entries — allowlist members resolved via Graph may be missing. ${formatUnknownError(err)}`,
+    );
   }
 
   msteamsCfg = {
@@ -236,6 +238,22 @@ export async function monitorMSTeamsProvider(
 
   const adapter = createMSTeamsAdapter(app, sdk);
 
+  // Build SSO deps when the operator has opted in and a connection name
+  // is configured. Leaving `sso` undefined matches the pre-SSO behavior
+  // (the plugin will still ack signin invokes, but will not attempt a
+  // Bot Framework token exchange or persist anything).
+  let ssoDeps: MSTeamsSsoDeps | undefined;
+  if (msteamsCfg.sso?.enabled && msteamsCfg.sso.connectionName) {
+    ssoDeps = {
+      tokenProvider,
+      tokenStore: createMSTeamsSsoTokenStoreFs(),
+      connectionName: msteamsCfg.sso.connectionName,
+    };
+    log.debug?.("msteams sso enabled", {
+      connectionName: msteamsCfg.sso.connectionName,
+    });
+  }
+
   // Build a simple ActivityHandler-compatible object
   const handler = buildActivityHandler();
   registerMSTeamsHandlers(handler, {
@@ -249,6 +267,7 @@ export async function monitorMSTeamsProvider(
     conversationStore,
     pollStore,
     log,
+    sso: ssoDeps,
   });
 
   // Create Express server
@@ -285,7 +304,23 @@ export async function monitorMSTeamsProvider(
         next();
       })
       .catch((err) => {
-        log.debug?.(`JWT validation error: ${String(err)}`);
+        // Network-level failures (DNS, firewall, TLS toward login.botframework.com)
+        // are rethrown by the validator so we can log them visibly. Without this,
+        // they look identical to a bad credential at default log levels (#77674).
+        const isNetworkFailure =
+          err instanceof Error &&
+          /ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|ETIMEDOUT|ECONNRESET/i.test(
+            (err as NodeJS.ErrnoException).code ?? err.message,
+          );
+        if (isNetworkFailure) {
+          // Network failure fetching JWKS keys — log visibly so operators can
+          // identify egress blocks to login.botframework.com (#77674).
+          runtime?.error(
+            `msteams: JWKS key fetch failed — check egress to login.botframework.com:443 (firewall or DNS may be blocking it). Bot will 401 all inbound requests until this is resolved. Error: ${formatUnknownError(err)}`,
+          );
+        } else {
+          log.debug?.(`JWT validation error: ${formatUnknownError(err)}`);
+        }
         res.status(401).json({ error: "Unauthorized" });
       });
   });
@@ -330,7 +365,7 @@ export async function monitorMSTeamsProvider(
     };
     const onError = (err: unknown) => {
       httpServer.off("listening", onListening);
-      log.error("msteams server error", { error: String(err) });
+      log.error("msteams server error", { error: formatUnknownError(err) });
       reject(err);
     };
     httpServer.once("listening", onListening);
@@ -339,7 +374,7 @@ export async function monitorMSTeamsProvider(
   applyMSTeamsWebhookTimeouts(httpServer);
 
   httpServer.on("error", (err) => {
-    log.error("msteams server error", { error: String(err) });
+    log.error("msteams server error", { error: formatUnknownError(err) });
   });
 
   const shutdown = async () => {
@@ -347,7 +382,7 @@ export async function monitorMSTeamsProvider(
     return new Promise<void>((resolve) => {
       httpServer.close((err) => {
         if (err) {
-          log.debug?.("msteams server close error", { error: String(err) });
+          log.debug?.("msteams server close error", { error: formatUnknownError(err) });
         }
         resolve();
       });

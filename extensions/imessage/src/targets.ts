@@ -1,4 +1,5 @@
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   createAllowedChatSenderMatcher,
   type ChatSenderAllowParams,
@@ -32,7 +33,7 @@ export function normalizeIMessageHandle(raw: string): string {
   if (!trimmed) {
     return "";
   }
-  const lowered = trimmed.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
   if (lowered.startsWith("imessage:")) {
     return normalizeIMessageHandle(trimmed.slice(9));
   }
@@ -64,7 +65,7 @@ export function normalizeIMessageHandle(raw: string): string {
   }
 
   if (trimmed.includes("@")) {
-    return trimmed.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(trimmed);
   }
   const normalized = normalizeE164(trimmed);
   if (normalized) {
@@ -78,7 +79,7 @@ export function parseIMessageTarget(raw: string): IMessageTarget {
   if (!trimmed) {
     throw new Error("iMessage target is required");
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
 
   const servicePrefixed = resolveServicePrefixedChatTarget({
     trimmed,
@@ -112,7 +113,7 @@ export function looksLikeIMessageExplicitTargetId(raw: string): boolean {
   if (!trimmed) {
     return false;
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (/^(imessage:|sms:|auto:)/.test(lower)) {
     return true;
   }
@@ -140,7 +141,7 @@ export function parseIMessageAllowTarget(raw: string): IMessageAllowTarget {
   if (!trimmed) {
     return { kind: "handle", handle: "" };
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
 
   const servicePrefixed = resolveServicePrefixedOrChatAllowTarget({
     trimmed,

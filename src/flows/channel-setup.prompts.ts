@@ -7,13 +7,13 @@ import type {
   ChannelSetupWizardAdapter,
 } from "../commands/channel-setup/types.js";
 import type { ChannelChoice } from "../commands/onboard-types.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { DmPolicy } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { formatDocsLink } from "../terminal/links.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 
-export type ConfiguredChannelAction = "update" | "disable" | "delete" | "skip";
+type ConfiguredChannelAction = "update" | "disable" | "delete" | "skip";
 
 export function formatAccountLabel(accountId: string): string {
   return accountId === DEFAULT_ACCOUNT_ID ? "default (primary)" : accountId;

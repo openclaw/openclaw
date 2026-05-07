@@ -1,13 +1,14 @@
+import { createTestWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
-import { capturePluginRegistration } from "openclaw/plugin-sdk/testing";
-import { describe, expect, it, vi } from "vitest";
-import { withEnv } from "../../test/helpers/plugins/env.js";
-import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
-import xaiPlugin from "./index.js";
+import { withEnv, withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveXaiCatalogEntry } from "./model-definitions.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
-import { __testing, createXaiWebSearchProvider } from "./web-search.js";
+import { resolveFallbackXaiAuth } from "./src/tool-auth-shared.js";
+import { wrapXaiWebSearchError } from "./src/web-search-shared.js";
+import { __testing } from "./test-api.js";
+import { createXaiWebSearchProvider } from "./web-search.js";
 
 const {
   extractXaiWebSearchContent,
@@ -15,7 +16,31 @@ const {
   resolveXaiToolSearchConfig,
   resolveXaiWebSearchCredential,
   resolveXaiWebSearchModel,
+  resolveXaiWebSearchTimeoutSeconds,
 } = __testing;
+
+function installXaiWebSearchFetch() {
+  const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+    Promise.resolve({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          output: [
+            {
+              type: "message",
+              content: [{ type: "output_text", text: "Grounded Grok answer" }],
+            },
+          ],
+        }),
+    } as Response),
+  );
+  global.fetch = withFetchPreconnect(mockFetch);
+  return mockFetch;
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("xai web search config resolution", () => {
   it("prefers configured api keys and resolves grok scoped defaults", () => {
@@ -78,8 +103,8 @@ describe("xai web search config resolution", () => {
     expect(resolveXaiWebSearchModel(searchConfig)).toBe("grok-4-fast");
   });
 
-  it("treats unresolved non-env SecretRefs as missing credentials instead of throwing", async () => {
-    await withEnv({ XAI_API_KEY: undefined }, async () => {
+  it("treats unresolved non-env SecretRefs as missing credentials instead of using env fallback", async () => {
+    await withEnvAsync({ XAI_API_KEY: "ambient-xai-test-key" }, async () => {
       const provider = createXaiWebSearchProvider();
       const maybeTool = provider.createTool({
         config: {
@@ -108,14 +133,15 @@ describe("xai web search config resolution", () => {
 
       await expect(maybeTool.execute({ query: "OpenClaw" })).resolves.toMatchObject({
         error: "missing_xai_api_key",
+        message: expect.stringContaining("use web_fetch for a specific URL or the browser tool"),
       });
     });
   });
 
-  it("offers plugin-owned x_search setup after Grok is selected", async () => {
+  it("offers plugin-owned xSearch setup after Grok is selected", async () => {
     const provider = createXaiWebSearchProvider();
     const select = vi.fn().mockResolvedValueOnce("yes").mockResolvedValueOnce("grok-4-1-fast");
-    const prompter = createWizardPrompter({
+    const prompter = createTestWizardPrompter({
       select: select as never,
     });
 
@@ -146,28 +172,36 @@ describe("xai web search config resolution", () => {
       prompter,
     });
 
-    expect(next?.tools?.web?.x_search).toMatchObject({
+    expect(next?.plugins?.entries?.xai?.config?.xSearch).toMatchObject({
       enabled: true,
       model: "grok-4-1-fast",
     });
   });
 
-  it("keeps explicit x_search disablement untouched during provider-owned setup", async () => {
+  it("keeps explicit xSearch disablement untouched during provider-owned setup", async () => {
     const provider = createXaiWebSearchProvider();
     const config = {
+      plugins: {
+        entries: {
+          xai: {
+            config: {
+              xSearch: {
+                enabled: false,
+              },
+            },
+          },
+        },
+      },
       tools: {
         web: {
           search: {
             provider: "grok",
             enabled: true,
           },
-          x_search: {
-            enabled: false,
-          },
         },
       },
     };
-    const prompter = createWizardPrompter({});
+    const prompter = createTestWizardPrompter();
 
     const next = await provider.runSetup?.({
       config,
@@ -180,84 +214,63 @@ describe("xai web search config resolution", () => {
   });
 
   it("reuses the plugin web search api key for provider auth fallback", () => {
-    const captured = capturePluginRegistration(xaiPlugin);
-    const provider = captured.providers[0];
     expect(
-      provider?.resolveSyntheticAuth?.({
-        config: {
-          plugins: {
-            entries: {
-              xai: {
-                config: {
-                  webSearch: {
-                    apiKey: "xai-provider-fallback", // pragma: allowlist secret
-                  },
+      resolveFallbackXaiAuth({
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-provider-fallback", // pragma: allowlist secret
                 },
               },
             },
           },
         },
-        provider: "xai",
-        providerConfig: undefined,
-      }),
+      } as never),
     ).toEqual({
       apiKey: "xai-provider-fallback",
       source: "plugins.entries.xai.config.webSearch.apiKey",
-      mode: "api-key",
     });
   });
 
   it("reuses the legacy grok web search api key for provider auth fallback", () => {
-    const captured = capturePluginRegistration(xaiPlugin);
-    const provider = captured.providers[0];
     expect(
-      provider?.resolveSyntheticAuth?.({
-        config: {
-          tools: {
-            web: {
-              search: {
-                grok: {
-                  apiKey: "xai-legacy-fallback", // pragma: allowlist secret
-                },
+      resolveFallbackXaiAuth({
+        tools: {
+          web: {
+            search: {
+              grok: {
+                apiKey: "xai-legacy-fallback", // pragma: allowlist secret
               },
             },
           },
         },
-        provider: "xai",
-        providerConfig: undefined,
-      }),
+      } as never),
     ).toEqual({
       apiKey: "xai-legacy-fallback",
       source: "tools.web.search.grok.apiKey",
-      mode: "api-key",
     });
   });
 
   it("returns a managed marker for SecretRef-backed plugin auth fallback", () => {
-    const captured = capturePluginRegistration(xaiPlugin);
-    const provider = captured.providers[0];
     expect(
-      provider?.resolveSyntheticAuth?.({
-        config: {
-          plugins: {
-            entries: {
-              xai: {
-                config: {
-                  webSearch: {
-                    apiKey: { source: "file", provider: "vault", id: "/xai/api-key" },
-                  },
+      resolveFallbackXaiAuth({
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: { source: "file", provider: "vault", id: "/xai/api-key" },
                 },
               },
             },
           },
         },
-        provider: "xai",
-        providerConfig: undefined,
-      }),
+      } as never),
     ).toEqual({
       apiKey: NON_ENV_SECRETREF_MARKER,
       source: "plugins.entries.xai.config.webSearch.apiKey",
-      mode: "api-key",
     });
   });
 
@@ -266,10 +279,42 @@ describe("xai web search config resolution", () => {
     expect(resolveXaiWebSearchModel(undefined)).toBe("grok-4-1-fast");
   });
 
+  it("uses a Grok-specific 60s default timeout while preserving overrides", () => {
+    expect(resolveXaiWebSearchTimeoutSeconds({})).toBe(60);
+    expect(resolveXaiWebSearchTimeoutSeconds(undefined)).toBe(60);
+    expect(resolveXaiWebSearchTimeoutSeconds({ timeoutSeconds: 15 })).toBe(15);
+  });
+
   it("uses config model when provided", () => {
     expect(resolveXaiWebSearchModel({ grok: { model: "grok-4-fast-reasoning" } })).toBe(
       "grok-4-fast",
     );
+  });
+
+  it("routes Grok web search through plugin webSearch.baseUrl", async () => {
+    const mockFetch = installXaiWebSearchFetch();
+    const provider = createXaiWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-config-test",
+                  baseUrl: "https://api.x.ai/proxy/v1/",
+                },
+              },
+            },
+          },
+        },
+      },
+      searchConfig: { provider: "grok" },
+    });
+
+    await tool?.execute({ query: "OpenClaw Grok proxy test" });
+
+    expect(String(mockFetch.mock.calls[0]?.[0])).toBe("https://api.x.ai/proxy/v1/responses");
   });
 
   it("normalizes deprecated grok 4.20 beta model ids to GA ids", () => {
@@ -313,6 +358,20 @@ describe("xai web search config resolution", () => {
       citations: ["https://a.test"],
       externalContent: expect.objectContaining({ wrapped: true }),
     });
+  });
+
+  it("converts internal xAI timeout aborts into structured tool errors", () => {
+    const abort = new DOMException("This operation was aborted", "AbortError");
+
+    expect(() => wrapXaiWebSearchError(abort, 60)).toThrow("xAI web search timed out after 60s");
+
+    try {
+      wrapXaiWebSearchError(abort, 60);
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).name).toBe("Error");
+      expect((error as Error).cause).toBe(abort);
+    }
   });
 });
 
@@ -382,6 +441,17 @@ describe("xai web search response parsing", () => {
 });
 
 describe("xai provider models", () => {
+  it("publishes Grok 4.3 as the default chat model", () => {
+    expect(resolveXaiCatalogEntry("grok-4.3")).toMatchObject({
+      id: "grok-4.3",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      maxTokens: 64_000,
+      cost: { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
+    });
+  });
+
   it("publishes the newer Grok fast and code models in the bundled catalog", () => {
     expect(resolveXaiCatalogEntry("grok-4-1-fast")).toMatchObject({
       id: "grok-4-1-fast",
@@ -443,6 +513,7 @@ describe("xai provider models", () => {
   });
 
   it("marks current Grok families as modern while excluding multi-agent ids", () => {
+    expect(isModernXaiModel("grok-4.3")).toBe(true);
     expect(isModernXaiModel("grok-4.20-beta-latest-reasoning")).toBe(true);
     expect(isModernXaiModel("grok-code-fast-1")).toBe(true);
     expect(isModernXaiModel("grok-3-mini-fast")).toBe(true);
@@ -474,6 +545,18 @@ describe("xai provider models", () => {
         },
       },
     });
+    const grok43Alias = resolveXaiForwardCompatModel({
+      providerId: "xai",
+      ctx: {
+        provider: "xai",
+        modelId: "grok-4.3-latest",
+        modelRegistry: { find: () => null } as never,
+        providerConfig: {
+          api: "openai-responses",
+          baseUrl: "https://api.x.ai/v1",
+        },
+      },
+    });
     const grok3Mini = resolveXaiForwardCompatModel({
       providerId: "xai",
       ctx: {
@@ -495,6 +578,24 @@ describe("xai provider models", () => {
       reasoning: true,
       contextWindow: 2_000_000,
       maxTokens: 30_000,
+    });
+    expect(grok43Alias).toMatchObject({
+      provider: "xai",
+      id: "grok-4.3-latest",
+      api: "openai-responses",
+      baseUrl: "https://api.x.ai/v1",
+      reasoning: true,
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: null,
+        medium: null,
+        high: null,
+        xhigh: null,
+      },
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      maxTokens: 64_000,
     });
     expect(grok420).toMatchObject({
       provider: "xai",

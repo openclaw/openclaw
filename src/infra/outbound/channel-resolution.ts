@@ -1,23 +1,20 @@
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
-import { resolveRuntimePluginRegistry } from "../../plugins/loader.js";
-import {
-  getActivePluginRegistry,
-  getActivePluginChannelRegistryVersion,
-} from "../../plugins/runtime.js";
+import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
+import { getChannelPlugin, getLoadedChannelPlugin } from "../../channels/plugins/index.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
   type DeliverableMessageChannel,
 } from "../../utils/message-channel.js";
-
-const bootstrapAttempts = new Set<string>();
+import {
+  bootstrapOutboundChannelPlugin,
+  resetOutboundChannelBootstrapStateForTests,
+} from "./channel-bootstrap.runtime.js";
 
 export function resetOutboundChannelResolutionStateForTest(): void {
-  bootstrapAttempts.clear();
+  resetOutboundChannelBootstrapStateForTests();
 }
 
 export function normalizeDeliverableOutboundChannel(
@@ -34,40 +31,7 @@ function maybeBootstrapChannelPlugin(params: {
   channel: DeliverableMessageChannel;
   cfg?: OpenClawConfig;
 }): void {
-  const cfg = params.cfg;
-  if (!cfg) {
-    return;
-  }
-
-  const activeRegistry = getActivePluginRegistry();
-  const activeHasRequestedChannel = activeRegistry?.channels?.some(
-    (entry) => entry?.plugin?.id === params.channel,
-  );
-  if (activeHasRequestedChannel) {
-    return;
-  }
-
-  const attemptKey = `${getActivePluginChannelRegistryVersion()}:${params.channel}`;
-  if (bootstrapAttempts.has(attemptKey)) {
-    return;
-  }
-  bootstrapAttempts.add(attemptKey);
-
-  const autoEnabled = applyPluginAutoEnable({ config: cfg }).config;
-  const defaultAgentId = resolveDefaultAgentId(autoEnabled);
-  const workspaceDir = resolveAgentWorkspaceDir(autoEnabled, defaultAgentId);
-  try {
-    resolveRuntimePluginRegistry({
-      config: autoEnabled,
-      workspaceDir,
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-    });
-  } catch {
-    // Allow a follow-up resolution attempt if bootstrap failed transiently.
-    bootstrapAttempts.delete(attemptKey);
-  }
+  bootstrapOutboundChannelPlugin(params);
 }
 
 function resolveDirectFromActiveRegistry(
@@ -89,14 +53,16 @@ function resolveDirectFromActiveRegistry(
 export function resolveOutboundChannelPlugin(params: {
   channel: string;
   cfg?: OpenClawConfig;
+  allowBootstrap?: boolean;
 }): ChannelPlugin | undefined {
   const normalized = normalizeDeliverableOutboundChannel(params.channel);
   if (!normalized) {
     return undefined;
   }
 
+  const resolveLoaded = () => getLoadedChannelPlugin(normalized);
   const resolve = () => getChannelPlugin(normalized);
-  const current = resolve();
+  const current = resolveLoaded();
   if (current) {
     return current;
   }
@@ -105,6 +71,18 @@ export function resolveOutboundChannelPlugin(params: {
     return directCurrent;
   }
 
+  if (params.allowBootstrap !== true) {
+    return resolve();
+  }
+
   maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
-  return resolve() ?? resolveDirectFromActiveRegistry(normalized);
+  return resolveLoaded() ?? resolveDirectFromActiveRegistry(normalized) ?? resolve();
+}
+
+export function resolveOutboundChannelMessageAdapter(params: {
+  channel: string;
+  cfg?: OpenClawConfig;
+  allowBootstrap?: boolean;
+}): ChannelMessageAdapterShape | undefined {
+  return resolveOutboundChannelPlugin(params)?.message;
 }

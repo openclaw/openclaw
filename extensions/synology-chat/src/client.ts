@@ -6,10 +6,18 @@
 import * as http from "node:http";
 import * as https from "node:https";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import {
+  formatErrorMessage,
+  resolvePinnedHostnameWithPolicy,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
 
 const MIN_SEND_INTERVAL_MS = 500;
 let lastSendTime = 0;
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
 
 // --- Chat user_id resolution ---
 // Synology Chat uses two different user_id spaces:
@@ -82,7 +90,7 @@ export async function sendMessage(
   incomingUrl: string,
   text: string,
   userId?: string | number,
-  allowInsecureSsl = true,
+  allowInsecureSsl = false,
 ): Promise<boolean> {
   // Synology Chat API requires user_ids (numeric) to specify the recipient
   // The @mention is optional but user_ids is mandatory
@@ -103,13 +111,15 @@ export async function sendMessage(
     try {
       const ok = await doPost(incomingUrl, body, allowInsecureSsl);
       lastSendTime = Date.now();
-      if (ok) return true;
+      if (ok) {
+        return true;
+      }
     } catch {
       // will retry
     }
 
     if (attempt < maxRetries - 1) {
-      await sleep(baseDelay * Math.pow(2, attempt));
+      await sleep(baseDelay * 2 ** attempt);
     }
   }
 
@@ -123,11 +133,18 @@ export async function sendFileUrl(
   incomingUrl: string,
   fileUrl: string,
   userId?: string | number,
-  allowInsecureSsl = true,
+  allowInsecureSsl = false,
 ): Promise<boolean> {
-  const body = buildWebhookBody({ file_url: fileUrl }, userId);
-
   try {
+    const safeFileUrl = await assertSafeWebhookFileUrl(fileUrl);
+    const body = buildWebhookBody({ file_url: safeFileUrl }, userId);
+
+    const now = Date.now();
+    const elapsed = now - lastSendTime;
+    if (elapsed < MIN_SEND_INTERVAL_MS) {
+      await sleep(MIN_SEND_INTERVAL_MS - elapsed);
+    }
+
     const ok = await doPost(incomingUrl, body, allowInsecureSsl);
     lastSendTime = Date.now();
     return ok;
@@ -145,7 +162,7 @@ export async function sendFileUrl(
  */
 export async function fetchChatUsers(
   incomingUrl: string,
-  allowInsecureSsl = true,
+  allowInsecureSsl = false,
   log?: { warn: (...args: unknown[]) => void },
 ): Promise<ChatUser[]> {
   const now = Date.now();
@@ -165,9 +182,11 @@ export async function fetchChatUsers(
       return;
     }
     const transport = parsedUrl.protocol === "https:" ? https : http;
+    const requestOptions: http.RequestOptions | https.RequestOptions =
+      parsedUrl.protocol === "https:" ? { rejectUnauthorized: !allowInsecureSsl } : {};
 
     transport
-      .get(listUrl, { rejectUnauthorized: !allowInsecureSsl } as any, (res) => {
+      .get(listUrl, requestOptions, (res) => {
         let data = "";
         res.on("data", (c: Buffer) => {
           data += c.toString();
@@ -201,6 +220,22 @@ export async function fetchChatUsers(
   });
 }
 
+async function assertSafeWebhookFileUrl(fileUrl: string): Promise<string> {
+  let parsed: URL;
+  try {
+    parsed = new URL(fileUrl);
+  } catch (err) {
+    throw new Error(`Invalid Synology Chat file URL: ${formatErrorMessage(err)}`, { cause: err });
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Synology Chat file URL must use HTTP or HTTPS");
+  }
+
+  await resolvePinnedHostnameWithPolicy(parsed.hostname);
+  return parsed.toString();
+}
+
 /**
  * Resolve a mutable webhook username/nickname to the correct Chat API user_id.
  *
@@ -217,15 +252,19 @@ export async function resolveLegacyWebhookNameToChatUserId(params: {
   log?: { warn: (...args: unknown[]) => void };
 }): Promise<number | undefined> {
   const users = await fetchChatUsers(params.incomingUrl, params.allowInsecureSsl, params.log);
-  const lower = params.mutableWebhookUsername.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(params.mutableWebhookUsername);
 
   // Match by nickname first (webhook "username" field = Chat "nickname")
-  const byNickname = users.find((u) => u.nickname.toLowerCase() === lower);
-  if (byNickname) return byNickname.user_id;
+  const byNickname = users.find((u) => normalizeLowercaseStringOrEmpty(u.nickname) === lower);
+  if (byNickname) {
+    return byNickname.user_id;
+  }
 
   // Then by username
-  const byUsername = users.find((u) => u.username.toLowerCase() === lower);
-  if (byUsername) return byUsername.user_id;
+  const byUsername = users.find((u) => normalizeLowercaseStringOrEmpty(u.username) === lower);
+  if (byUsername) {
+    return byUsername.user_id;
+  }
 
   return undefined;
 }
@@ -242,11 +281,11 @@ function parseNumericUserId(userId?: string | number): number | undefined {
   if (userId === undefined) {
     return undefined;
   }
-  const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
+  const numericId = typeof userId === "number" ? userId : Number.parseInt(userId, 10);
   return Number.isNaN(numericId) ? undefined : numericId;
 }
 
-function doPost(url: string, body: string, allowInsecureSsl = true): Promise<boolean> {
+function doPost(url: string, body: string, allowInsecureSsl = false): Promise<boolean> {
   return new Promise((resolve, reject) => {
     let parsedUrl: URL;
     try {

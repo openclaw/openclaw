@@ -6,8 +6,6 @@ read_when:
 title: "ClawDock"
 ---
 
-# ClawDock
-
 ClawDock is a small shell-helper layer for Docker-based OpenClaw installs.
 
 It gives you short commands like `clawdock-start`, `clawdock-dashboard`, and `clawdock-fix-token` instead of longer `docker compose ...` invocations.
@@ -93,13 +91,22 @@ clawdock-approve <request-id>
 ClawDock works with the same Docker config split described in [Docker](/install/docker):
 
 - `<project>/.env` for Docker-specific values like image name, ports, and the gateway token
-- `~/.openclaw/.env` for provider keys and bot tokens
+- `~/.openclaw/.env` for env-backed provider keys and bot tokens
+- `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` for stored provider OAuth/API-key auth
 - `~/.openclaw/openclaw.json` for behavior config
 
-Use `clawdock-show-config` when you want to inspect those files quickly. It redacts `.env` values in its printed output.
+Use `clawdock-show-config` when you want to inspect the `.env` files and `openclaw.json` quickly. It redacts `.env` values in its printed output.
 
-## Related pages
+## Related
 
-- [Docker](/install/docker)
-- [Docker VM Runtime](/install/docker-vm-runtime)
-- [Updating](/install/updating)
+<CardGroup cols={2}>
+  <Card title="Docker" href="/install/docker" icon="docker">
+    Canonical Docker install for OpenClaw.
+  </Card>
+  <Card title="Docker VM runtime" href="/install/docker-vm-runtime" icon="cube">
+    Docker-managed VM runtime for hardened isolation.
+  </Card>
+  <Card title="Updating" href="/install/updating" icon="arrow-up-right-from-square">
+    Updating the OpenClaw package and managed services.
+  </Card>
+</CardGroup>

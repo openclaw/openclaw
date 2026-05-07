@@ -5,7 +5,10 @@ import java.net.URI
 object CanvasActionTrust {
   const val scaffoldAssetUrl: String = "file:///android_asset/CanvasScaffold/scaffold.html"
 
-  fun isTrustedCanvasActionUrl(rawUrl: String?, trustedA2uiUrls: List<String>): Boolean {
+  fun isTrustedCanvasActionUrl(
+    rawUrl: String?,
+    trustedA2uiUrls: List<String>,
+  ): Boolean {
     val candidate = rawUrl?.trim().orEmpty()
     if (candidate.isEmpty()) return false
     if (candidate == scaffoldAssetUrl) return true
@@ -14,30 +17,38 @@ object CanvasActionTrust {
     if (candidateUri.scheme.equals("file", ignoreCase = true)) {
       return false
     }
+    val normalizedCandidate = normalizeTrustedRemoteA2uiUri(candidateUri) ?: return false
 
     return trustedA2uiUrls.any { trusted ->
-      isTrustedA2uiPage(candidateUri, trusted)
+      matchesTrustedRemoteA2uiUrlExact(normalizedCandidate, trusted)
     }
   }
 
-  private fun isTrustedA2uiPage(candidateUri: URI, trustedUrl: String): Boolean {
+  private fun matchesTrustedRemoteA2uiUrlExact(
+    candidateUri: URI,
+    trustedUrl: String,
+  ): Boolean {
     val trustedUri = parseUri(trustedUrl) ?: return false
-    if (!candidateUri.scheme.equals(trustedUri.scheme, ignoreCase = true)) return false
-    if (candidateUri.host?.equals(trustedUri.host, ignoreCase = true) != true) return false
-    if (effectivePort(candidateUri) != effectivePort(trustedUri)) return false
-
-    val trustedPath = trustedUri.rawPath?.takeIf { it.isNotBlank() } ?: return false
-    val candidatePath = candidateUri.rawPath?.takeIf { it.isNotBlank() } ?: return false
-    val trustedPrefix = if (trustedPath.endsWith("/")) trustedPath else "$trustedPath/"
-    return candidatePath == trustedPath || candidatePath.startsWith(trustedPrefix)
+    val normalizedTrusted = normalizeTrustedRemoteA2uiUri(trustedUri) ?: return false
+    return candidateUri == normalizedTrusted
   }
 
-  private fun effectivePort(uri: URI): Int {
-    if (uri.port >= 0) return uri.port
-    return when (uri.scheme?.lowercase()) {
-      "https" -> 443
-      "http" -> 80
-      else -> -1
+  private fun normalizeTrustedRemoteA2uiUri(uri: URI): URI? {
+    // Keep Android trust normalization aligned with iOS ScreenController:
+    // exact remote URL match, scheme/host normalized, fragment ignored.
+    val scheme = uri.scheme?.lowercase() ?: return null
+    if (scheme != "http" && scheme != "https") return null
+
+    val host =
+      uri.host
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?.lowercase() ?: return null
+
+    return try {
+      URI(scheme, uri.userInfo, host, uri.port, uri.rawPath, uri.rawQuery, null)
+    } catch (_: Throwable) {
+      null
     }
   }
 

@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type {
@@ -55,7 +56,7 @@ export async function fetchGeminiUsage(
   let hasFlash = false;
 
   for (const [model, frac] of Object.entries(quotas)) {
-    const lower = model.toLowerCase();
+    const lower = normalizeLowercaseStringOrEmpty(model);
     if (lower.includes("pro")) {
       hasPro = true;
       if (frac < proMin) {

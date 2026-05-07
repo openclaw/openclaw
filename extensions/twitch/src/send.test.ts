@@ -104,6 +104,21 @@ describe("send", () => {
 
       expect(result.ok).toBe(true);
       expect(result.messageId).toBe("twitch-msg-123");
+      expect(result.receipt).toMatchObject({
+        primaryPlatformMessageId: "twitch-msg-123",
+        platformMessageIds: ["twitch-msg-123"],
+        parts: [
+          {
+            platformMessageId: "twitch-msg-123",
+            kind: "text",
+            raw: {
+              channel: "twitch",
+              conversationId: "testchannel",
+              messageId: "twitch-msg-123",
+            },
+          },
+        ],
+      });
     });
 
     it("should strip markdown when enabled", async () => {
@@ -192,6 +207,8 @@ describe("send", () => {
 
       expect(result.ok).toBe(true);
       expect(result.messageId).toBe("skipped");
+      expect(result.receipt.platformMessageIds).toEqual([]);
+      expect(result.receipt.parts).toEqual([]);
     });
 
     it("should return error when client manager not found", async () => {
@@ -256,6 +273,53 @@ describe("send", () => {
         "Hello!",
         mockConfig,
         "default",
+      );
+    });
+
+    it("uses the configured default account when accountId is omitted", async () => {
+      const secondaryAccount = {
+        ...mockAccount,
+        username: "secondary-user",
+        channel: "secondary-channel",
+      };
+      vi.mocked(resolveTwitchAccountContext).mockImplementation((_cfg, accountId) => ({
+        accountId: accountId?.trim() || "secondary",
+        account: secondaryAccount,
+        tokenResolution: { source: "config", token: secondaryAccount.accessToken ?? "" },
+        configured: true,
+        availableAccountIds: ["default", "secondary"],
+      }));
+      const mockSend = vi.fn().mockResolvedValue({
+        ok: true,
+        messageId: "twitch-msg-secondary",
+      });
+      vi.mocked(getClientManager).mockReturnValue({
+        sendMessage: mockSend,
+      } as unknown as ReturnType<typeof getClientManager>);
+
+      const result = await sendMessageTwitchInternal(
+        "",
+        "Hello!",
+        {
+          channels: {
+            twitch: {
+              defaultAccount: "secondary",
+            },
+          },
+        } as never,
+        undefined,
+        false,
+        mockLogger as unknown as Console,
+      );
+
+      expect(result.ok).toBe(true);
+      expect(getClientManager).toHaveBeenCalledWith("secondary");
+      expect(mockSend).toHaveBeenCalledWith(
+        secondaryAccount,
+        "secondary-channel",
+        "Hello!",
+        expect.any(Object),
+        "secondary",
       );
     });
   });

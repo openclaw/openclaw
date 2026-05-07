@@ -3,7 +3,6 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import * as tar from "tar";
 import {
   buildBackupArchiveBasename,
   buildBackupArchivePath,
@@ -14,6 +13,16 @@ import {
 import { isPathWithin } from "../commands/cleanup-utils.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { writeJson } from "./json-files.js";
+
+type TarRuntime = typeof import("tar");
+
+let tarRuntimePromise: Promise<TarRuntime> | undefined;
+
+function loadTarRuntime(): Promise<TarRuntime> {
+  tarRuntimePromise ??= import("tar");
+  return tarRuntimePromise;
+}
 
 export type BackupCreateOptions = {
   output?: string;
@@ -269,6 +278,24 @@ function remapArchiveEntryPath(params: {
   return buildBackupArchivePath(params.archiveRoot, normalizedEntry);
 }
 
+function normalizeBackupFilterPath(value: string): string {
+  return value.replaceAll("\\", "/").replace(/\/+$/u, "");
+}
+
+export function buildExtensionsNodeModulesFilter(stateDir: string): (filePath: string) => boolean {
+  const normalizedStateDir = normalizeBackupFilterPath(stateDir);
+  const extensionsPrefix = `${normalizedStateDir}/extensions/`;
+
+  return (filePath: string): boolean => {
+    const normalizedFilePath = normalizeBackupFilterPath(filePath);
+    if (!normalizedFilePath.startsWith(extensionsPrefix)) {
+      return true;
+    }
+
+    return !normalizedFilePath.slice(extensionsPrefix.length).split("/").includes("node_modules");
+  };
+}
+
 export async function createBackupArchive(
   opts: BackupCreateOptions = {},
 ): Promise<BackupCreateResult> {
@@ -340,11 +367,15 @@ export async function createBackupArchive(
       oauthDir: plan.oauthDir,
       workspaceDirs: plan.workspaceDirs,
     });
-    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    await writeJson(manifestPath, manifest, { trailingNewline: true });
 
+    const tar = await loadTarRuntime();
+    const stateAsset = result.assets.find((asset) => asset.kind === "state");
+    const filter = stateAsset ? buildExtensionsNodeModulesFilter(stateAsset.sourcePath) : undefined;
     await tar.c(
       {
         file: tempArchivePath,
+        ...(filter ? { filter } : {}),
         gzip: true,
         portable: true,
         preservePaths: true,

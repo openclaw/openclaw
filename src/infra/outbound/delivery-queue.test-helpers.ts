@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, vi } from "vitest";
+import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import type { DeliverFn, RecoveryLogger } from "./delivery-queue.js";
 
 export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => string } {
@@ -10,7 +10,7 @@ export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => stri
   let fixtureCount = 0;
 
   beforeAll(() => {
-    fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-dq-suite-"));
+    fixtureRoot = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-dq-suite-"));
   });
 
   beforeEach(() => {
@@ -40,7 +40,13 @@ export function readQueuedEntry(tmpDir: string, id: string): Record<string, unkn
 export function setQueuedEntryState(
   tmpDir: string,
   id: string,
-  state: { retryCount: number; lastAttemptAt?: number; enqueuedAt?: number },
+  state: {
+    retryCount: number;
+    lastAttemptAt?: number;
+    enqueuedAt?: number;
+    platformSendStartedAt?: number;
+    recoveryState?: "send_attempt_started" | "unknown_after_send";
+  },
 ): void {
   const filePath = path.join(tmpDir, "delivery-queue", `${id}.json`);
   const entry = readQueuedEntry(tmpDir, id);
@@ -52,6 +58,12 @@ export function setQueuedEntryState(
   }
   if (state.enqueuedAt !== undefined) {
     entry.enqueuedAt = state.enqueuedAt;
+  }
+  if (state.platformSendStartedAt !== undefined) {
+    entry.platformSendStartedAt = state.platformSendStartedAt;
+  }
+  if (state.recoveryState !== undefined) {
+    entry.recoveryState = state.recoveryState;
   }
   fs.writeFileSync(filePath, JSON.stringify(entry), "utf-8");
 }

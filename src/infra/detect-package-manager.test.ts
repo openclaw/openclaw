@@ -1,27 +1,32 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import { detectPackageManager } from "./detect-package-manager.js";
 
-async function createPackageManagerRoot(
+async function withPackageManagerRoot<T>(
   files: Array<{ path: string; content: string }>,
-): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-detect-pm-"));
-  for (const file of files) {
-    await fs.writeFile(path.join(root, file.path), file.content, "utf8");
-  }
-  return root;
+  run: (root: string) => Promise<T>,
+): Promise<T> {
+  return await withTempDir({ prefix: "openclaw-detect-pm-" }, async (root) => {
+    for (const file of files) {
+      await fs.writeFile(path.join(root, file.path), file.content, "utf8");
+    }
+    return await run(root);
+  });
 }
 
 describe("detectPackageManager", () => {
   it("prefers packageManager from package.json when supported", async () => {
-    const root = await createPackageManagerRoot([
-      { path: "package.json", content: JSON.stringify({ packageManager: "pnpm@10.8.1" }) },
-      { path: "package-lock.json", content: "" },
-    ]);
-
-    await expect(detectPackageManager(root)).resolves.toBe("pnpm");
+    await withPackageManagerRoot(
+      [
+        { path: "package.json", content: JSON.stringify({ packageManager: "pnpm@10.8.1" }) },
+        { path: "package-lock.json", content: "" },
+      ],
+      async (root) => {
+        await expect(detectPackageManager(root)).resolves.toBe("pnpm");
+      },
+    );
   });
 
   it.each([
@@ -44,14 +49,17 @@ describe("detectPackageManager", () => {
       expected: "npm",
     },
   ])("falls back to lockfiles when $name", async ({ files, expected }) => {
-    await expect(detectPackageManager(await createPackageManagerRoot(files))).resolves.toBe(
-      expected,
-    );
+    await withPackageManagerRoot(files, async (root) => {
+      await expect(detectPackageManager(root)).resolves.toBe(expected);
+    });
   });
 
   it("returns null when no package manager markers exist", async () => {
-    const root = await createPackageManagerRoot([{ path: "package.json", content: "{not-json}" }]);
-
-    await expect(detectPackageManager(root)).resolves.toBeNull();
+    await withPackageManagerRoot(
+      [{ path: "package.json", content: "{not-json}" }],
+      async (root) => {
+        await expect(detectPackageManager(root)).resolves.toBeNull();
+      },
+    );
   });
 });

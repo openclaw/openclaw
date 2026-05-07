@@ -6,6 +6,8 @@ read_when:
 title: "Render"
 ---
 
+# Render
+
 Deploy OpenClaw on Render using Infrastructure as Code. The included `render.yaml` Blueprint defines your entire stack declaratively, service, disk, environment variables, so you can deploy with a single click and version your infrastructure alongside your code.
 
 ## Prerequisites
@@ -68,8 +70,9 @@ Key Blueprint features used:
 | Starter   | Never             | 1GB+          | Personal use, small teams     |
 | Standard+ | Never             | 1GB+          | Production, multiple channels |
 
-The Blueprint defaults to `starter`. To use free tier, change `plan: free` in your fork's
-`render.yaml` (but note: no persistent disk means config resets on each deploy).
+The Blueprint defaults to `starter`. To use free tier, change `plan: free` in
+your fork's `render.yaml` (but note: no persistent disk means OpenClaw state
+resets on each deploy).
 
 ## After deployment
 
@@ -77,7 +80,10 @@ The Blueprint defaults to `starter`. To use free tier, change `plan: free` in yo
 
 The web dashboard is available at `https://<your-service>.onrender.com/`.
 
-Connect using the `OPENCLAW_GATEWAY_TOKEN` value that was auto-generated during deploy (find it in **Dashboard → your service → Environment**).
+Connect using the configured shared secret. This deploy template auto-generates
+`OPENCLAW_GATEWAY_TOKEN` (find it in **Dashboard → your service →
+Environment**); if you replace it with password auth, use that password
+instead.
 
 ## Render Dashboard features
 
@@ -119,13 +125,15 @@ For OpenClaw, vertical scaling is usually sufficient. Horizontal scaling require
 
 ## Backups and migration
 
-Export your configuration and workspace at any time using the shell access in the Render Dashboard:
+Export your state, config, auth profiles, and workspace at any time using the
+shell access in the Render Dashboard:
 
 ```bash
 openclaw backup create
 ```
 
-This creates a portable backup archive you can restore on any OpenClaw host. See [Backup](/cli/backup) for details.
+This creates a portable backup archive with OpenClaw state plus any configured
+workspace. See [Backup](/cli/backup) for details.
 
 ## Troubleshooting
 
@@ -143,7 +151,7 @@ Free tier services spin down after 15 minutes of inactivity. The first request a
 ### Data loss after redeploy
 
 This happens on free tier (no persistent disk). Upgrade to a paid plan, or
-regularly export your config via `openclaw backup create` in the Render shell.
+regularly export a full backup via `openclaw backup create` in the Render shell.
 
 ### Health check failures
 

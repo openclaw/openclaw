@@ -18,7 +18,6 @@ describe("searxng web search provider", () => {
   let plugin: typeof import("../index.js").default;
 
   beforeAll(async () => {
-    vi.resetModules();
     ({ createSearxngWebSearchProvider } = await import("./searxng-search-provider.js"));
     ({ default: plugin } = await import("../index.js"));
   });
@@ -144,6 +143,13 @@ describe("searxng web search provider", () => {
 
     expect(resolveSearxngCategories(config)).toBe("general,news");
     expect(resolveSearxngLanguage(config)).toBe("de");
+  });
+
+  it("exposes a credentialNote with JSON format guidance", () => {
+    const provider = createSearxngWebSearchProvider();
+
+    expect(provider.credentialNote).toContain("json format enabled");
+    expect(provider.credentialNote).toContain("search.formats");
   });
 
   it("persists base URL to plugin config via setConfiguredCredentialValue", () => {

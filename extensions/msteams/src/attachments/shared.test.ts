@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   applyAuthorizationHeaderForUrl,
+  encodeGraphShareId,
+  extractInlineImageCandidates,
+  isGraphSharedLinkUrl,
   isPrivateOrReservedIP,
   isUrlAllowed,
   resolveAndValidateIP,
@@ -10,6 +13,7 @@ import {
   resolveMediaSsrfPolicy,
   safeFetch,
   safeFetchWithPolicy,
+  tryBuildGraphSharesUrlForSharedLink,
 } from "./shared.js";
 
 const publicResolve = async () => ({ address: "13.107.136.10" });
@@ -216,7 +220,9 @@ describe("safeFetch", () => {
     const rebindingResolve = async () => {
       callCount++;
       // First call (initial URL) resolves to public IP
-      if (callCount === 1) return { address: "13.107.136.10" };
+      if (callCount === 1) {
+        return { address: "13.107.136.10" };
+      }
       // Second call (redirect target) resolves to private IP
       return { address: "169.254.169.254" };
     };
@@ -243,6 +249,18 @@ describe("safeFetch", () => {
         allowHosts: ["sharepoint.com"],
         fetchFn: fetchMock as unknown as typeof fetch,
         resolveFn: privateResolve("10.0.0.1"),
+      }),
+    ).rejects.toThrow("Initial download URL blocked");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks private hosts with the default resolver", async () => {
+    const fetchMock = vi.fn();
+    await expect(
+      safeFetch({
+        url: "https://localhost/file.pdf",
+        allowHosts: ["localhost"],
+        fetchFn: fetchMock as unknown as typeof fetch,
       }),
     ).rejects.toThrow("Initial download URL blocked");
     expect(fetchMock).not.toHaveBeenCalled();
@@ -389,5 +407,124 @@ describe("attachment fetch auth helpers", () => {
     });
     expect(res.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+});
+
+describe("Graph shared-link helpers", () => {
+  it.each([
+    ["https://contoso.sharepoint.com/personal/user/Documents/report.pdf", true],
+    ["https://contoso.sharepoint.us/sites/team/file.docx", true],
+    ["https://contoso.sharepoint.cn/file", true],
+    ["https://tenant-my.sharepoint.com/:b:/g/personal/file", true],
+    ["https://1drv.ms/b/s!AkxYabc", true],
+    ["https://onedrive.live.com/view.aspx?resid=ABC", true],
+    ["https://onedrive.com/share/abc", true],
+    ["https://graph.microsoft.com/v1.0/me", false],
+    ["https://smba.trafficmanager.net/amer/v3", false],
+    ["https://example.com/file.pdf", false],
+    ["not-a-url", false],
+  ])("isGraphSharedLinkUrl(%s) === %s", (url, expected) => {
+    expect(isGraphSharedLinkUrl(url)).toBe(expected);
+  });
+
+  it("encodeGraphShareId uses u! + base64url without padding", () => {
+    // Graph docs example: encoding "https://onedrive.live.com/redir?resid=..."
+    // should yield u!aHR0cHM6... (base64url, no '+', '/', or trailing '=').
+    const url = "https://contoso.sharepoint.com/sites/a/Shared Documents/file.pdf";
+    const shareId = encodeGraphShareId(url);
+    expect(shareId.startsWith("u!")).toBe(true);
+    const encoded = shareId.slice(2);
+    // base64url alphabet is A-Z, a-z, 0-9, '-', '_' (no padding).
+    expect(encoded).toMatch(/^[A-Za-z0-9_-]+$/);
+    // Round-trip check: decoding yields the original URL.
+    const decoded = Buffer.from(encoded, "base64url").toString("utf8");
+    expect(decoded).toBe(url);
+  });
+
+  it("encodeGraphShareId swaps '+' and '/' for '-' and '_'", () => {
+    // A URL whose standard base64 contains '+' and '/' chars.
+    // Choose an input that base64 encodes with those characters.
+    const url = "https://host.sharepoint.com/sites/path?x=???";
+    const shareId = encodeGraphShareId(url);
+    const encoded = shareId.slice(2);
+    expect(encoded).not.toContain("+");
+    expect(encoded).not.toContain("/");
+    expect(encoded).not.toContain("=");
+  });
+
+  it("tryBuildGraphSharesUrlForSharedLink rewrites SharePoint URLs", () => {
+    const url = "https://contoso.sharepoint.com/personal/user/Documents/report.pdf";
+    const result = tryBuildGraphSharesUrlForSharedLink(url);
+    expect(result).toBeDefined();
+    expect(result).toMatch(
+      /^https:\/\/graph\.microsoft\.com\/v1\.0\/shares\/u![A-Za-z0-9_-]+\/driveItem\/content$/,
+    );
+  });
+
+  it("tryBuildGraphSharesUrlForSharedLink rewrites OneDrive URLs", () => {
+    const url = "https://1drv.ms/b/s!AkxYabcdefg";
+    const result = tryBuildGraphSharesUrlForSharedLink(url);
+    expect(result).toBeDefined();
+    expect(result).toMatch(
+      /^https:\/\/graph\.microsoft\.com\/v1\.0\/shares\/u![A-Za-z0-9_-]+\/driveItem\/content$/,
+    );
+  });
+
+  it("tryBuildGraphSharesUrlForSharedLink returns undefined for non-shared URLs", () => {
+    expect(
+      tryBuildGraphSharesUrlForSharedLink("https://graph.microsoft.com/v1.0/me"),
+    ).toBeUndefined();
+    expect(tryBuildGraphSharesUrlForSharedLink("https://example.com/file.pdf")).toBeUndefined();
+    expect(tryBuildGraphSharesUrlForSharedLink("not-a-url")).toBeUndefined();
+  });
+});
+
+describe("msteams inline image limits", () => {
+  const smallPngDataUrl = "data:image/png;base64,aGVsbG8="; // "hello" (5 bytes)
+
+  it("rejects inline data images above per-image limit", () => {
+    const attachments = [
+      {
+        contentType: "text/html",
+        content: `<img src="${smallPngDataUrl}" />`,
+      },
+    ];
+    const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 4 });
+    expect(out).toEqual([]);
+  });
+
+  it("accepts inline data images within limit", () => {
+    const attachments = [
+      {
+        contentType: "text/html",
+        content: `<img src="${smallPngDataUrl}" />`,
+      },
+    ];
+    const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 10 });
+    expect(out.length).toBe(1);
+    expect(out[0]?.kind).toBe("data");
+    if (out[0]?.kind === "data") {
+      expect(out[0].data.byteLength).toBeGreaterThan(0);
+      expect(out[0].contentType).toBe("image/png");
+    }
+  });
+
+  it("enforces cumulative inline size limit across attachments", () => {
+    const attachments = [
+      {
+        contentType: "text/html",
+        content: `<img src="${smallPngDataUrl}" />`,
+      },
+      {
+        contentType: "text/html",
+        content: `<img src="${smallPngDataUrl}" />`,
+      },
+    ];
+    const out = extractInlineImageCandidates(attachments, {
+      maxInlineBytes: 10,
+      maxInlineTotalBytes: 6,
+    });
+    expect(out.length).toBe(1);
+    expect(out[0]?.kind).toBe("data");
   });
 });

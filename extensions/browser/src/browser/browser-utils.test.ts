@@ -37,6 +37,21 @@ describe("browser target id resolution", () => {
     expect(res).toEqual({ ok: true, targetId: "FULL" });
   });
 
+  it("resolves exact tab ids and labels", () => {
+    expect(
+      resolveTargetIdFromTabs("t2", [
+        { targetId: "AAA", tabId: "t1" },
+        { targetId: "BBB", suggestedTargetId: "docs", tabId: "t2", label: "docs" },
+      ]),
+    ).toEqual({ ok: true, targetId: "BBB" });
+    expect(
+      resolveTargetIdFromTabs("docs", [
+        { targetId: "AAA", tabId: "t1" },
+        { targetId: "BBB", tabId: "t2", label: "docs" },
+      ]),
+    ).toEqual({ ok: true, targetId: "BBB" });
+  });
+
   it("resolves unique prefixes (case-insensitive)", () => {
     const res = resolveTargetIdFromTabs("57a01309", [
       { targetId: "57A01309E14B5DEE0FB41F908515A2FC" },
@@ -202,7 +217,7 @@ describe("fetchBrowserJson loopback auth (bridge auth registry)", () => {
       candidate === port ? { token: "registry-token" } : undefined,
     );
     const init = __test.withLoopbackBrowserAuth(`http://127.0.0.1:${port}/`, undefined, {
-      loadConfig: () => ({}),
+      getRuntimeConfig: () => ({}),
       resolveBrowserControlAuth: () => ({}),
       getBridgeAuthForPort,
     });

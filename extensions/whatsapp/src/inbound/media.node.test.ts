@@ -1,10 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  mockExtractMessageContent,
-  mockGetContentType,
-  mockIsJidGroup,
-  mockNormalizeMessageContent,
-} from "../../../../test/mocks/baileys.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockNormalizeMessageContent } from "../../../../test/mocks/baileys.js";
 
 type MockMessageInput = Parameters<typeof mockNormalizeMessageContent>[0];
 
@@ -13,14 +8,9 @@ const { normalizeMessageContent, downloadMediaMessage } = vi.hoisted(() => ({
   downloadMediaMessage: vi.fn().mockResolvedValue(Buffer.from("fake-media-data")),
 }));
 
-vi.mock("@whiskeysockets/baileys", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@whiskeysockets/baileys")>();
+vi.mock("@whiskeysockets/baileys", async () => {
   return {
-    ...actual,
-    DisconnectReason: actual.DisconnectReason ?? { loggedOut: 401 },
-    extractMessageContent: vi.fn((message: MockMessageInput) => mockExtractMessageContent(message)),
-    getContentType: vi.fn((message: MockMessageInput) => mockGetContentType(message)),
-    isJidGroup: vi.fn((jid: string | undefined | null) => mockIsJidGroup(jid)),
+    DisconnectReason: { loggedOut: 401 },
     normalizeMessageContent,
     downloadMediaMessage,
   };
@@ -40,9 +30,11 @@ async function expectMimetype(message: Record<string, unknown>, expected: string
 }
 
 describe("downloadInboundMedia", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ downloadInboundMedia } = await import("./media.js"));
+  });
+
+  beforeEach(() => {
     normalizeMessageContent.mockClear();
     downloadMediaMessage.mockClear();
     mockSock.updateMediaMessage.mockClear();

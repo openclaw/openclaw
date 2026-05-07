@@ -7,7 +7,7 @@ export class AssistantMessageComponent extends Container {
 
   constructor(text: string) {
     super();
-    this.body = new HyperlinkMarkdown(text, 1, 0, markdownTheme, {
+    this.body = new HyperlinkMarkdown(text, 0, 0, markdownTheme, {
       // Keep assistant body text in terminal default foreground so contrast
       // follows the user's terminal theme (dark or light).
       color: (line) => theme.assistantText(line),

@@ -34,6 +34,14 @@ const SYNOLOGY_ALLOW_FROM_HELP_LINES = [
   `Docs: ${formatDocsLink("/channels/synology-chat", "channels/synology-chat")}`,
 ];
 
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
 function getChannelConfig(cfg: OpenClawConfig): SynologyChatChannelConfig {
   return (cfg.channels?.[channel] as SynologyChatChannelConfig | undefined) ?? {};
 }
@@ -72,11 +80,8 @@ function patchSynologyChatAccountConfig(params: {
     };
   }
 
-  const nextAccounts = { ...(channelConfig.accounts ?? {}) } as Record<
-    string,
-    Record<string, unknown>
-  >;
-  const nextAccountConfig = { ...(nextAccounts[params.accountId] ?? {}) };
+  const nextAccounts = { ...channelConfig.accounts } as Record<string, Record<string, unknown>>;
+  const nextAccountConfig = { ...nextAccounts[params.accountId] };
   for (const field of params.clearFields ?? []) {
     delete nextAccountConfig[field];
   }
@@ -125,16 +130,28 @@ function validateWebhookPath(value: string): string | undefined {
 }
 
 function parseSynologyUserId(value: string): string | null {
-  const cleaned = value.replace(/^synology-chat:/i, "").trim();
+  const cleaned = value.replace(/^synology(?:[-_]?chat)?:/i, "").trim();
   return /^\d+$/.test(cleaned) ? cleaned : null;
+}
+
+function normalizeSynologyAllowedUserId(value: unknown): string {
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return `${value}`.trim();
+  }
+  return "";
 }
 
 function resolveExistingAllowedUserIds(cfg: OpenClawConfig, accountId: string): string[] {
   const raw = getRawAccountConfig(cfg, accountId).allowedUserIds;
   if (Array.isArray(raw)) {
-    return raw.map((value) => String(value).trim()).filter(Boolean);
+    return raw.map(normalizeSynologyAllowedUserId).filter(Boolean);
   }
-  return String(raw ?? "")
+  return normalizeSynologyAllowedUserId(raw)
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
@@ -186,8 +203,12 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
     configuredScore: 1,
     unconfiguredScore: 0,
     includeStatusLine: true,
-    resolveConfigured: ({ cfg }) =>
-      listAccountIds(cfg).some((accountId) => isSynologyChatConfigured(cfg, accountId)),
+    resolveConfigured: ({ cfg, accountId }) =>
+      accountId
+        ? isSynologyChatConfigured(cfg, accountId)
+        : listAccountIds(cfg).some((candidateAccountId) =>
+            isSynologyChatConfigured(cfg, candidateAccountId),
+          ),
     resolveExtraStatusLines: ({ cfg }) => [`Accounts: ${listAccountIds(cfg).length || 0}`],
   }),
   introNote: {
@@ -211,11 +232,11 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
         const raw = getRawAccountConfig(cfg, accountId);
         return {
           accountConfigured: isSynologyChatConfigured(cfg, accountId),
-          hasConfiguredValue: Boolean(raw.token?.trim()),
-          resolvedValue: account.token.trim() || undefined,
+          hasConfiguredValue: Boolean(normalizeOptionalString(raw.token)),
+          resolvedValue: normalizeOptionalString(account.token),
           envValue:
             accountId === DEFAULT_ACCOUNT_ID
-              ? process.env.SYNOLOGY_CHAT_TOKEN?.trim() || undefined
+              ? normalizeOptionalString(process.env.SYNOLOGY_CHAT_TOKEN)
               : undefined,
         };
       },
@@ -308,7 +329,7 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
     title: "Synology Chat access control",
     lines: [
       `Default outgoing webhook path: ${DEFAULT_WEBHOOK_PATH}`,
-      'Set allowed user IDs, or manually switch `channels.synology-chat.dmPolicy` to `"open"` for public DMs.',
+      'Set allowed user IDs, or manually switch `channels.synology-chat.dmPolicy` to `"open"` with `allowedUserIds: ["*"]` for public DMs.',
       'With `dmPolicy="allowlist"`, an empty allowedUserIds list blocks the route from starting.',
       `Docs: ${formatDocsLink("/channels/synology-chat", "channels/synology-chat")}`,
     ],

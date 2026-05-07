@@ -1,61 +1,126 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
 } from "./provider-registry.js";
+import type { MediaUnderstandingProvider } from "./types.js";
+
+const resolvePluginCapabilityProvidersMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../plugins/capability-provider-runtime.js", () => ({
+  resolvePluginCapabilityProviders: resolvePluginCapabilityProvidersMock,
+}));
+
+function createMediaProvider(
+  params: Pick<MediaUnderstandingProvider, "id" | "capabilities"> &
+    Partial<MediaUnderstandingProvider>,
+): MediaUnderstandingProvider {
+  return params;
+}
 
 describe("media-understanding provider registry", () => {
-  afterEach(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
+  beforeEach(() => {
+    resolvePluginCapabilityProvidersMock.mockReset();
+    resolvePluginCapabilityProvidersMock.mockReturnValue([]);
   });
 
-  it("returns no providers by default when no active registry is present", () => {
+  it("loads media providers from the capability runtime", () => {
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({ id: "groq", capabilities: ["image", "audio"] }),
+      createMediaProvider({ id: "deepgram", capabilities: ["audio"] }),
+    ]);
+
     const registry = buildMediaUnderstandingRegistry();
-    expect(getMediaUnderstandingProvider("groq", registry)).toBeUndefined();
-    expect(getMediaUnderstandingProvider("deepgram", registry)).toBeUndefined();
+
+    expect(getMediaUnderstandingProvider("groq", registry)?.id).toBe("groq");
+    expect(getMediaUnderstandingProvider("deepgram", registry)?.id).toBe("deepgram");
+    expect(resolvePluginCapabilityProvidersMock).toHaveBeenCalledWith({
+      key: "mediaUnderstandingProviders",
+      cfg: undefined,
+    });
   });
 
-  it("merges plugin-registered media providers into the active registry", async () => {
-    const pluginRegistry = createEmptyPluginRegistry();
-    pluginRegistry.mediaUnderstandingProviders.push({
-      pluginId: "google",
-      pluginName: "Google Plugin",
-      source: "test",
-      provider: {
+  it("keeps provider id normalization behavior for capability providers", () => {
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({ id: "google", capabilities: ["image", "audio", "video"] }),
+    ]);
+
+    const registry = buildMediaUnderstandingRegistry();
+
+    expect(getMediaUnderstandingProvider("gemini", registry)?.id).toBe("google");
+  });
+
+  it("auto-registers media-understanding for config providers with image-capable models (#51392)", () => {
+    const cfg = {
+      models: {
+        providers: {
+          glm: {
+            models: [{ id: "glm-4.6v", input: ["text", "image"] }],
+          },
+          textOnly: {
+            models: [{ id: "text-model", input: ["text"] }],
+          },
+        },
+      },
+    } as never;
+    const registry = buildMediaUnderstandingRegistry(undefined, cfg);
+    const glmProvider = getMediaUnderstandingProvider("glm", registry);
+    const textOnlyProvider = getMediaUnderstandingProvider("textOnly", registry);
+
+    expect(glmProvider?.id).toBe("glm");
+    expect(glmProvider?.capabilities).toEqual(["image"]);
+    expect(glmProvider?.describeImage).toBeDefined();
+    expect(glmProvider?.describeImages).toBeDefined();
+    expect(textOnlyProvider).toBeUndefined();
+  });
+
+  it("does not override capability providers when config also has image-capable models", async () => {
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({
         id: "google",
         capabilities: ["image", "audio", "video"],
         describeImage: async () => ({ text: "plugin image" }),
         transcribeAudio: async () => ({ text: "plugin audio" }),
-        describeVideo: async () => ({ text: "plugin video" }),
+      }),
+    ]);
+    const cfg = {
+      models: {
+        providers: {
+          google: {
+            models: [{ id: "custom-gemini", input: ["text", "image"] }],
+          },
+        },
       },
+    } as never;
+
+    const registry = buildMediaUnderstandingRegistry(undefined, cfg);
+    const provider = getMediaUnderstandingProvider("google", registry);
+
+    expect(provider?.capabilities).toEqual(["image", "audio", "video"]);
+    expect(await provider?.describeImage?.({} as never)).toEqual({ text: "plugin image" });
+    expect(await provider?.transcribeAudio?.({} as never)).toEqual({ text: "plugin audio" });
+    expect(resolvePluginCapabilityProvidersMock).toHaveBeenCalledWith({
+      key: "mediaUnderstandingProviders",
+      cfg,
     });
-    setActivePluginRegistry(pluginRegistry);
-
-    const registry = buildMediaUnderstandingRegistry();
-    const provider = getMediaUnderstandingProvider("gemini", registry);
-
-    expect(provider?.id).toBe("google");
-    expect(await provider?.describeVideo?.({} as never)).toEqual({ text: "plugin video" });
   });
 
-  it("keeps provider id normalization behavior for plugin-owned providers", () => {
-    const pluginRegistry = createEmptyPluginRegistry();
-    pluginRegistry.mediaUnderstandingProviders.push({
-      pluginId: "google",
-      pluginName: "Google Plugin",
-      source: "test",
-      provider: {
-        id: "google",
-        capabilities: ["image", "audio", "video"],
+  it("does not auto-register providers with audio or video only inputs", () => {
+    const cfg = {
+      models: {
+        providers: {
+          avOnly: {
+            models: [
+              { id: "audio-model", input: ["text", "audio"] },
+              { id: "video-model", input: ["text", "video"] },
+            ],
+          },
+        },
       },
-    });
-    setActivePluginRegistry(pluginRegistry);
+    } as never;
 
-    const registry = buildMediaUnderstandingRegistry();
-    const provider = getMediaUnderstandingProvider("gemini", registry);
+    const registry = buildMediaUnderstandingRegistry(undefined, cfg);
 
-    expect(provider?.id).toBe("google");
+    expect(getMediaUnderstandingProvider("avOnly", registry)).toBeUndefined();
   });
 });

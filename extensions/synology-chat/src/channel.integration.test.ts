@@ -1,63 +1,78 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildChannelTurnContextMock,
   dispatchReplyWithBufferedBlockDispatcher,
   finalizeInboundContextMock,
   registerPluginHttpRouteMock,
   resolveAgentRouteMock,
+  setSynologyRuntimeConfigForTest,
 } from "./channel.test-mocks.js";
 import { makeFormBody, makeReq, makeRes } from "./test-http-utils.js";
 
-type RegisteredRoute = {
+type _RegisteredRoute = {
   path: string;
   accountId: string;
   handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 };
 
 let createSynologyChatPlugin: typeof import("./channel.js").createSynologyChatPlugin;
-const freshChannelModulePath: string = "./channel.js?channel-integration-test";
+
+function makeStartContext<T>(cfg: T, accountId: string, abortSignal: AbortSignal) {
+  setSynologyRuntimeConfigForTest(cfg);
+  return {
+    cfg,
+    accountId,
+    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    abortSignal,
+  };
+}
+
 describe("Synology channel wiring integration", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ createSynologyChatPlugin } = await import(freshChannelModulePath));
+  beforeAll(async () => {
+    ({ createSynologyChatPlugin } = await import("./channel.js"));
+  });
+
+  beforeEach(() => {
     registerPluginHttpRouteMock.mockClear();
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    buildChannelTurnContextMock.mockClear();
     finalizeInboundContextMock.mockClear();
     resolveAgentRouteMock.mockClear();
+    setSynologyRuntimeConfigForTest({});
   });
 
   it("registers real webhook handler with resolved account config and enforces allowlist", async () => {
     const plugin = createSynologyChatPlugin();
     const abortController = new AbortController();
-    const ctx = {
-      cfg: {
-        channels: {
-          "synology-chat": {
-            enabled: true,
-            accounts: {
-              alerts: {
-                enabled: true,
-                token: "valid-token",
-                incomingUrl: "https://nas.example.com/incoming",
-                webhookPath: "/webhook/synology-alerts",
-                dmPolicy: "allowlist",
-                allowedUserIds: ["456"],
-              },
+    const cfg = {
+      channels: {
+        "synology-chat": {
+          enabled: true,
+          accounts: {
+            alerts: {
+              enabled: true,
+              token: "valid-token",
+              incomingUrl: "https://nas.example.com/incoming",
+              webhookPath: "/webhook/synology-alerts",
+              dmPolicy: "allowlist",
+              allowedUserIds: ["456"],
             },
           },
         },
       },
-      accountId: "alerts",
-      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      abortSignal: abortController.signal,
     };
 
-    const started = plugin.gateway.startAccount(ctx);
+    const started = plugin.gateway.startAccount(
+      makeStartContext(cfg, "alerts", abortController.signal),
+    );
     expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(1);
 
     const firstCall = registerPluginHttpRouteMock.mock.calls[0];
     expect(firstCall).toBeTruthy();
-    if (!firstCall) throw new Error("Expected registerPluginHttpRoute to be called");
+    if (!firstCall) {
+      throw new Error("Expected registerPluginHttpRoute to be called");
+    }
     const registered = firstCall[0];
     expect(registered.path).toBe("/webhook/synology-alerts");
     expect(registered.accountId).toBe("alerts");
@@ -96,6 +111,7 @@ describe("Synology channel wiring integration", () => {
               incomingUrl: "https://nas.example.com/incoming-alpha",
               webhookPath: "/webhook/synology-alpha",
               dmPolicy: "open",
+              allowedUserIds: ["*"],
             },
             beta: {
               enabled: true,
@@ -103,6 +119,7 @@ describe("Synology channel wiring integration", () => {
               incomingUrl: "https://nas.example.com/incoming-beta",
               webhookPath: "/webhook/synology-beta",
               dmPolicy: "open",
+              allowedUserIds: ["*"],
             },
           },
         },
@@ -112,18 +129,12 @@ describe("Synology channel wiring integration", () => {
       },
     };
 
-    const alphaStarted = plugin.gateway.startAccount({
-      cfg,
-      accountId: "alpha",
-      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      abortSignal: alphaAbortController.signal,
-    });
-    const betaStarted = plugin.gateway.startAccount({
-      cfg,
-      accountId: "beta",
-      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      abortSignal: betaAbortController.signal,
-    });
+    const alphaStarted = plugin.gateway.startAccount(
+      makeStartContext(cfg, "alpha", alphaAbortController.signal),
+    );
+    const betaStarted = plugin.gateway.startAccount(
+      makeStartContext(cfg, "beta", betaAbortController.signal),
+    );
 
     expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(2);
     const alphaRoute = registerPluginHttpRouteMock.mock.calls[0]?.[0];

@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -52,7 +53,7 @@ async function runPostCompactionSessionMemorySync(params: {
       sessionFiles: [sessionFile],
     });
   } catch (err) {
-    log.warn(`memory sync skipped (post-compaction): ${String(err)}`);
+    log.warn(`memory sync skipped (post-compaction): ${formatErrorMessage(err)}`);
   }
 }
 
@@ -87,7 +88,7 @@ export async function runPostCompactionSideEffects(params: {
   if (!sessionFile) {
     return;
   }
-  emitSessionTranscriptUpdate(sessionFile);
+  emitSessionTranscriptUpdate({ sessionFile, sessionKey: params.sessionKey });
   await syncPostCompactionSessionMemory({
     config: params.config,
     sessionKey: params.sessionKey,
@@ -177,6 +178,12 @@ export async function runBeforeCompactionHooks(params: {
   workspaceDir: string;
   messageProvider?: string;
   metrics: ReturnType<typeof buildBeforeCompactionHookMetrics>;
+  onHookMessages?: (payload: {
+    phase: "before";
+    messages: string[];
+    sessionId: string;
+    sessionKey: string;
+  }) => void | Promise<void>;
 }) {
   const missingSessionKey = !params.sessionKey || !params.sessionKey.trim();
   const hookSessionKey = params.sessionKey?.trim() || params.sessionId;
@@ -190,9 +197,17 @@ export async function runBeforeCompactionHooks(params: {
       tokenCountOriginal: params.metrics.tokenCountOriginal,
     });
     await triggerInternalHook(hookEvent);
+    if (hookEvent.messages.length > 0) {
+      await params.onHookMessages?.({
+        phase: "before",
+        messages: hookEvent.messages.slice(),
+        sessionId: params.sessionId,
+        sessionKey: hookSessionKey,
+      });
+    }
   } catch (err) {
     log.warn("session:compact:before hook failed", {
-      errorMessage: err instanceof Error ? err.message : String(err),
+      errorMessage: formatErrorMessage(err),
       errorStack: err instanceof Error ? err.stack : undefined,
     });
   }
@@ -213,7 +228,7 @@ export async function runBeforeCompactionHooks(params: {
       );
     } catch (err) {
       log.warn("before_compaction hook failed", {
-        errorMessage: err instanceof Error ? err.message : String(err),
+        errorMessage: formatErrorMessage(err),
         errorStack: err instanceof Error ? err.stack : undefined,
       });
     }
@@ -260,6 +275,12 @@ export async function runAfterCompactionHooks(params: {
   summaryLength?: number;
   tokensBefore?: number;
   firstKeptEntryId?: string;
+  onHookMessages?: (payload: {
+    phase: "after";
+    messages: string[];
+    sessionId: string;
+    sessionKey: string;
+  }) => void | Promise<void>;
 }) {
   try {
     const hookEvent = createInternalHookEvent("session", "compact:after", params.hookSessionKey, {
@@ -274,9 +295,17 @@ export async function runAfterCompactionHooks(params: {
       firstKeptEntryId: params.firstKeptEntryId,
     });
     await triggerInternalHook(hookEvent);
+    if (hookEvent.messages.length > 0) {
+      await params.onHookMessages?.({
+        phase: "after",
+        messages: hookEvent.messages.slice(),
+        sessionId: params.sessionId,
+        sessionKey: params.hookSessionKey,
+      });
+    }
   } catch (err) {
     log.warn("session:compact:after hook failed", {
-      errorMessage: err instanceof Error ? err.message : String(err),
+      errorMessage: formatErrorMessage(err),
       errorStack: err instanceof Error ? err.stack : undefined,
     });
   }
@@ -299,7 +328,7 @@ export async function runAfterCompactionHooks(params: {
       );
     } catch (err) {
       log.warn("after_compaction hook failed", {
-        errorMessage: err instanceof Error ? err.message : String(err),
+        errorMessage: formatErrorMessage(err),
         errorStack: err instanceof Error ? err.stack : undefined,
       });
     }

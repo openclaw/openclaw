@@ -1,5 +1,6 @@
 import { resolveEmbeddedSessionLane } from "../../../agents/pi-embedded-runner/lanes.js";
 import { clearCommandLane } from "../../../process/command-queue.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { clearFollowupDrainCallback } from "./drain.js";
 import { clearFollowupQueue } from "./state.js";
 
@@ -57,7 +58,7 @@ export function clearSessionQueues(keys: Array<string | undefined>): ClearSessio
   const clearLane = resolveQueueCleanupLaneClearer();
 
   for (const key of keys) {
-    const cleaned = key?.trim();
+    const cleaned = normalizeOptionalString(key);
     if (!cleaned || seen.has(cleaned)) {
       continue;
     }

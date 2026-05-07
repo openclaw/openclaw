@@ -14,7 +14,7 @@ metadata: { "openclaw": { "emoji": "⏰", "requires": { "config": ["channels.qqb
 
 ---
 
-## 推荐流程（优先使用 `qqbot_remind` 工具）
+## 推荐流程（使用 `qqbot_remind` 工具）
 
 **第一步**：调用 `qqbot_remind` 工具，传入简单参数：
 
@@ -26,38 +26,36 @@ metadata: { "openclaw": { "emoji": "⏰", "requires": { "config": ["channels.qqb
 | `time`    | 时间（相对时间或 cron 表达式）               | `"5m"` / `"1h30m"` / `"0 8 * * *"` |
 | `jobId`   | 任务 ID（仅 remove）                         | `"xxx"`                            |
 
-**第二步**：`qqbot_remind` 会返回 `cronParams`，你必须**立即**将 `cronParams` 的值作为参数调用 `cron` 工具。
-
-**第三步**：根据 `cron` 工具的返回结果，回复用户。
+**第二步**：根据 `qqbot_remind` 的返回结果，回复用户。`qqbot_remind` 会直接创建、查询或取消 Gateway cron 任务；成功后不要再调用 `cron` 工具。
 
 ### 示例
 
 用户说："5分钟后提醒我喝水"
 
 1. 调用 `qqbot_remind`：`{ "action": "add", "content": "喝水", "time": "5m" }`
-2. 收到返回的 `cronParams` → 立即调用 `cron` 工具，参数为该 `cronParams`
-3. 回复用户：`⏰ 好的，5分钟后提醒你喝水~`
+2. 工具返回成功后，回复用户：`⏰ 好的，5分钟后提醒你喝水~`
 
 ---
 
 ## 备用方案（直接使用 `cron` 工具）
 
-> 仅当 `qqbot_remind` 工具不可用时使用以下方式。
+> 仅当 `qqbot_remind` 工具不可用但 `cron` 工具可用时使用以下方式。
 
 ### 核心规则
 
 > **payload.kind 必须是 `"agentTurn"`，绝对不能用 `"systemEvent"`！**
 > `systemEvent` 只在 AI 会话内部注入文本，用户收不到 QQ 消息。
 
-**5 个不可更改字段**：
+**不可更改字段**：
 
-| 字段              | 固定值        | 原因                         |
-| ----------------- | ------------- | ---------------------------- |
-| `payload.kind`    | `"agentTurn"` | `systemEvent` 不会发 QQ 消息 |
-| `payload.deliver` | `true`        | 否则不投递                   |
-| `payload.channel` | `"qqbot"`     | QQ 通道标识                  |
-| `payload.to`      | 用户 openid   | 从 `To` 字段获取             |
-| `sessionTarget`   | `"isolated"`  | 隔离会话避免污染             |
+| 字段                 | 固定值        | 原因                         |
+| -------------------- | ------------- | ---------------------------- |
+| `payload.kind`       | `"agentTurn"` | `systemEvent` 不会发 QQ 消息 |
+| `delivery.mode`      | `"announce"`  | 主动投递模式                 |
+| `delivery.channel`   | `"qqbot"`     | QQ 通道标识                  |
+| `delivery.to`        | 目标地址      | 从当前会话上下文获取         |
+| `delivery.accountId` | 当前账户 ID   | 多账号场景下不可省略         |
+| `sessionTarget`      | `"isolated"`  | 隔离会话避免污染             |
 
 > `schedule.atMs` 必须是**绝对毫秒时间戳**（如 `1770733800000`），不支持 `"5m"` 等相对字符串。
 > 计算方式：`当前时间戳ms + 延迟毫秒`。
@@ -75,10 +73,13 @@ metadata: { "openclaw": { "emoji": "⏰", "requires": { "config": ["channels.qqb
     "deleteAfterRun": true,
     "payload": {
       "kind": "agentTurn",
-      "message": "你是一个暖心的提醒助手。请用温暖、有趣的方式提醒用户：{提醒内容}。要求：(1) 不要回复HEARTBEAT_OK (2) 不要解释你是谁 (3) 直接输出一条暖心的提醒消息 (4) 可以加一句简短的鸡汤或关怀的话 (5) 控制在2-3句话以内 (6) 用emoji点缀",
-      "deliver": true,
+      "message": "你是一个暖心的提醒助手。请用温暖、有趣的方式提醒用户：{提醒内容}。要求：(1) 不要回复HEARTBEAT_OK (2) 不要解释你是谁 (3) 直接输出一条暖心的提醒消息 (4) 可以加一句简短的鸡汤或关怀的话 (5) 控制在2-3句话以内 (6) 用emoji点缀"
+    },
+    "delivery": {
+      "mode": "announce",
       "channel": "qqbot",
-      "to": "{openid}"
+      "to": "qqbot:c2c:{openid}",
+      "accountId": "{accountId}"
     }
   }
 }
@@ -96,16 +97,19 @@ metadata: { "openclaw": { "emoji": "⏰", "requires": { "config": ["channels.qqb
     "wakeMode": "now",
     "payload": {
       "kind": "agentTurn",
-      "message": "你是一个暖心的提醒助手。请用温暖、有趣的方式提醒用户：{提醒内容}。要求：(1) 不要回复HEARTBEAT_OK (2) 不要解释你是谁 (3) 直接输出一条暖心的提醒消息 (4) 可以加一句简短的鸡汤或关怀的话 (5) 控制在2-3句话以内 (6) 用emoji点缀",
-      "deliver": true,
+      "message": "你是一个暖心的提醒助手。请用温暖、有趣的方式提醒用户：{提醒内容}。要求：(1) 不要回复HEARTBEAT_OK (2) 不要解释你是谁 (3) 直接输出一条暖心的提醒消息 (4) 可以加一句简短的鸡汤或关怀的话 (5) 控制在2-3句话以内 (6) 用emoji点缀"
+    },
+    "delivery": {
+      "mode": "announce",
       "channel": "qqbot",
-      "to": "{openid}"
+      "to": "qqbot:c2c:{openid}",
+      "accountId": "{accountId}"
     }
   }
 }
 ```
 
-> 周期任务**不加** `deleteAfterRun`。群聊 `to` 格式为 `"group:{group_openid}"`。
+> 周期任务**不加** `deleteAfterRun`。群聊 `delivery.to` 格式为 `"qqbot:group:{group_openid}"`。
 
 ---
 

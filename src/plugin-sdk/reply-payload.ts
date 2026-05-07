@@ -1,13 +1,23 @@
-import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
+import type { ReplyPayload as InternalReplyPayload } from "../auto-reply/reply-payload.js";
+import type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.js";
+import { createReplyToFanout } from "../infra/outbound/reply-policy.js";
+import { normalizeLowercaseStringOrEmpty, readStringValue } from "../shared/string-coerce.js";
 
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
+export type ReplyPayload = Omit<InternalReplyPayload, "trustedLocalMedia">;
 
 export type OutboundReplyPayload = {
   text?: string;
   mediaUrls?: string[];
   mediaUrl?: string;
+  sensitiveMedia?: boolean;
   replyToId?: string;
+};
+
+export type ReasoningReplyPayload = {
+  text?: string;
+  isReasoning?: boolean;
 };
 
 export type SendableOutboundReplyParts = {
@@ -27,22 +37,51 @@ type SendPayloadAdapter = Pick<
   "sendMedia" | "sendText" | "chunker" | "textChunkLimit"
 >;
 
+const REASONING_PREFIX = "reasoning:";
+
+function trimLeadingMarkdownQuoteMarkers(text: string): string {
+  let candidate = text.trimStart();
+  while (candidate.startsWith(">")) {
+    candidate = candidate.replace(/^(?:>[ \t]?)+/, "").trimStart();
+  }
+  return candidate;
+}
+
+export function isReasoningReplyPayload(payload: ReasoningReplyPayload): boolean {
+  if (payload.isReasoning === true) {
+    return true;
+  }
+  const text = payload.text;
+  if (typeof text !== "string") {
+    return false;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(text.trimStart());
+  if (normalized.startsWith(REASONING_PREFIX)) {
+    return true;
+  }
+  return normalizeLowercaseStringOrEmpty(trimLeadingMarkdownQuoteMarkers(text)).startsWith(
+    REASONING_PREFIX,
+  );
+}
+
 /** Extract the supported outbound reply fields from loose tool or agent payload objects. */
 export function normalizeOutboundReplyPayload(
   payload: Record<string, unknown>,
 ): OutboundReplyPayload {
-  const text = typeof payload.text === "string" ? payload.text : undefined;
+  const text = readStringValue(payload.text);
   const mediaUrls = Array.isArray(payload.mediaUrls)
     ? payload.mediaUrls.filter(
         (entry): entry is string => typeof entry === "string" && entry.length > 0,
       )
     : undefined;
-  const mediaUrl = typeof payload.mediaUrl === "string" ? payload.mediaUrl : undefined;
-  const replyToId = typeof payload.replyToId === "string" ? payload.replyToId : undefined;
+  const mediaUrl = readStringValue(payload.mediaUrl);
+  const sensitiveMedia = payload.sensitiveMedia === true ? true : undefined;
+  const replyToId = readStringValue(payload.replyToId);
   return {
     text,
     mediaUrls,
     mediaUrl,
+    sensitiveMedia,
     replyToId,
   };
 }
@@ -251,7 +290,9 @@ export async function sendTextMediaPayload(params: {
   if (!text && urls.length === 0) {
     return { channel: params.channel, messageId: "" };
   }
+  const nextReplyToId = createReplyToFanout(params.ctx);
   if (urls.length > 0) {
+    const audioAsVoice = params.ctx.payload.audioAsVoice ?? params.ctx.audioAsVoice;
     const lastResult = await sendPayloadMediaSequence({
       text,
       mediaUrls: urls,
@@ -260,15 +301,24 @@ export async function sendTextMediaPayload(params: {
           ...params.ctx,
           text,
           mediaUrl,
+          ...(audioAsVoice === undefined ? {} : { audioAsVoice }),
+          replyToId: nextReplyToId(),
         }),
     });
     return lastResult ?? { channel: params.channel, messageId: "" };
   }
   const limit = params.adapter.textChunkLimit;
-  const chunks = limit && params.adapter.chunker ? params.adapter.chunker(text, limit) : [text];
+  const chunks =
+    limit && params.adapter.chunker
+      ? params.adapter.chunker(text, limit, { formatting: params.ctx.formatting })
+      : [text];
   let lastResult: Awaited<ReturnType<NonNullable<typeof params.adapter.sendText>>>;
   for (const chunk of chunks) {
-    lastResult = await params.adapter.sendText!({ ...params.ctx, text: chunk });
+    lastResult = await params.adapter.sendText!({
+      ...params.ctx,
+      text: chunk,
+      replyToId: nextReplyToId(),
+    });
   }
   return lastResult!;
 }

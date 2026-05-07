@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   listTeamsByName,
@@ -26,9 +26,18 @@ vi.mock("./graph-users.js", () => ({
 }));
 
 import {
+  looksLikeMSTeamsTargetId,
   resolveMSTeamsChannelAllowlist,
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
+
+beforeEach(() => {
+  listTeamsByName.mockReset();
+  listChannelsForTeam.mockReset();
+  normalizeQuery.mockImplementation((value: string) => value.trim().toLowerCase());
+  resolveGraphToken.mockReset().mockResolvedValue("graph-token");
+  searchGraphUsers.mockReset();
+});
 
 describe("resolveMSTeamsUserAllowlist", () => {
   it("marks empty input unresolved", async () => {
@@ -53,6 +62,39 @@ describe("resolveMSTeamsUserAllowlist", () => {
 });
 
 describe("resolveMSTeamsChannelAllowlist", () => {
+  it("keeps configured Teams conversation IDs resolved without Graph lookup", async () => {
+    const [result] = await resolveMSTeamsChannelAllowlist({
+      cfg: {},
+      entries: ["19:team-general@thread.skype/19:roadmap@thread.skype"],
+    });
+
+    expect(result).toEqual({
+      input: "19:team-general@thread.skype/19:roadmap@thread.skype",
+      resolved: true,
+      teamId: "19:team-general@thread.skype",
+      teamName: "19:team-general@thread.skype",
+      channelId: "19:roadmap@thread.skype",
+      channelName: "19:roadmap@thread.skype",
+    });
+    expect(resolveGraphToken).not.toHaveBeenCalled();
+    expect(listTeamsByName).not.toHaveBeenCalled();
+    expect(listChannelsForTeam).not.toHaveBeenCalled();
+  });
+
+  it("normalizes conversation-prefixed configured channel IDs", async () => {
+    const [result] = await resolveMSTeamsChannelAllowlist({
+      cfg: {},
+      entries: ["19:team-general@thread.tacv2/conversation:19:roadmap@thread.tacv2"],
+    });
+
+    expect(result).toMatchObject({
+      resolved: true,
+      teamId: "19:team-general@thread.tacv2",
+      channelId: "19:roadmap@thread.tacv2",
+    });
+    expect(resolveGraphToken).not.toHaveBeenCalled();
+  });
+
   it("resolves team/channel by team name + channel display name", async () => {
     // After the fix, listChannelsForTeam is called once and reused for both
     // General channel resolution and channel matching.
@@ -142,5 +184,67 @@ describe("resolveMSTeamsChannelAllowlist", () => {
       teamId: "guid-ops",
       teamName: "Operations",
     });
+  });
+});
+
+describe("looksLikeMSTeamsTargetId", () => {
+  // Regression suite for https://github.com/openclaw/openclaw/issues/58001:
+  // cron announce delivery rejected valid Teams conversation ids because the
+  // validator only matched the `conversation:`-prefixed and `@thread`-suffixed
+  // forms. It must now accept every documented Bot Framework + Graph format.
+  it.each([
+    "conversation:19:abc@thread.tacv2",
+    "conversation:a:1abc",
+    "conversation:8:orgid:2d8c2d2c-1111-2222-3333-444444444444",
+  ])("accepts conversation-prefixed ids (%s)", (raw) => {
+    expect(looksLikeMSTeamsTargetId(raw)).toBe(true);
+  });
+
+  it.each(["19:AdviChannelId@thread.tacv2", "19:abc@thread.tacv2", "19:abc@thread.skype"])(
+    "accepts bare channel/group conversation ids (%s)",
+    (raw) => {
+      expect(looksLikeMSTeamsTargetId(raw)).toBe(true);
+    },
+  );
+
+  it("accepts the Graph 1:1 chat thread format", () => {
+    expect(
+      looksLikeMSTeamsTargetId(
+        "19:40a1a0ed4ff24164a21955518990c197_2d8c2d2c11112222@unq.gbl.spaces",
+      ),
+    ).toBe(true);
+  });
+
+  it.each(["a:1abc123def", "a:1xyz-abc_def", "A:1UPPER"])(
+    "accepts Bot Framework personal chat ids (%s)",
+    (raw) => {
+      expect(looksLikeMSTeamsTargetId(raw)).toBe(true);
+    },
+  );
+
+  it.each(["8:orgid:2d8c2d2c-1111-2222-3333-444444444444", "8:orgid:user-object-id"])(
+    "accepts Bot Framework org-scoped personal chat ids (%s)",
+    (raw) => {
+      expect(looksLikeMSTeamsTargetId(raw)).toBe(true);
+    },
+  );
+
+  it("accepts Bot Framework user ids", () => {
+    expect(looksLikeMSTeamsTargetId("29:1a2b3c4d5e6f")).toBe(true);
+  });
+
+  it("accepts user:<aad-object-id> ids", () => {
+    expect(looksLikeMSTeamsTargetId("user:40a1a0ed-4ff2-4164-a219-55518990c197")).toBe(true);
+  });
+
+  it.each(["", "   ", "user:John Smith", "Product Team/Roadmap", "Engineering", "hello"])(
+    "rejects non-id inputs (%s)",
+    (raw) => {
+      expect(looksLikeMSTeamsTargetId(raw)).toBe(false);
+    },
+  );
+
+  it("normalizes leading/trailing whitespace before classifying", () => {
+    expect(looksLikeMSTeamsTargetId("  19:abc@thread.tacv2  ")).toBe(true);
   });
 });
