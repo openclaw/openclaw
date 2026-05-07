@@ -1,21 +1,10 @@
 import fs from "node:fs";
-import {
-  ensureAuthProfileStore,
-  resolveAuthProfileOrder,
-  resolveProfileUnusableUntilForDisplay,
-} from "../../../agents/auth-profiles.js";
-import { evaluateStoredCredentialEligibility } from "../../../agents/auth-profiles/credential-state.js";
 import { AGENT_MODEL_CONFIG_KEYS } from "../../../config/model-refs.js";
 import { loadSessionStore, updateSessionStore } from "../../../config/sessions/store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../../../config/sessions/targets.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { AgentRuntimePolicyConfig } from "../../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import {
-  getInstalledPluginRecord,
-  isInstalledPluginEnabled,
-  loadInstalledPluginIndex,
-} from "../../../plugins/installed-plugin-index.js";
 
 type CodexRouteHit = {
   path: string;
@@ -53,6 +42,10 @@ function isOpenAICodexModelRef(model: string | undefined): model is string {
   return normalizeString(model)?.startsWith("openai-codex/") === true;
 }
 
+function isOpenAIModelRef(model: string | undefined): model is string {
+  return normalizeString(model)?.startsWith("openai/") === true;
+}
+
 function toCanonicalOpenAIModelRef(model: string): string | undefined {
   if (!isOpenAICodexModelRef(model)) {
     return undefined;
@@ -78,7 +71,7 @@ function resolveRuntime(params: {
     normalizeString(params.env?.OPENCLAW_AGENT_RUNTIME) ??
     normalizeString(params.agentRuntime?.id) ??
     normalizeString(params.defaultsRuntime?.id) ??
-    "pi"
+    "codex"
   );
 }
 
@@ -561,47 +554,13 @@ function rewriteConfigModelRefs(params: {
   };
 }
 
-function hasUsableCodexOAuthProfile(cfg: OpenClawConfig): boolean {
-  try {
-    const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false, config: cfg });
-    const now = Date.now();
-    return resolveAuthProfileOrder({ cfg, store, provider: "openai-codex" }).some((profileId) => {
-      const credential = store.profiles[profileId];
-      if (!credential || credential.type !== "oauth") {
-        return false;
-      }
-      const unusableUntil = resolveProfileUnusableUntilForDisplay(store, profileId);
-      if (unusableUntil && now < unusableUntil) {
-        return false;
-      }
-      return evaluateStoredCredentialEligibility({ credential, now }).eligible;
-    });
-  } catch {
-    return false;
-  }
-}
-
-function isCodexPluginInstalledAndEnabled(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv): boolean {
-  const index = loadInstalledPluginIndex({ config: cfg, env });
-  const record = getInstalledPluginRecord(index, "codex");
-  if (!record || !record.startup.agentHarnesses.includes("codex")) {
-    return false;
-  }
-  return isInstalledPluginEnabled(index, "codex", cfg);
-}
-
 function resolveCodexRepairRuntime(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   codexRuntimeReady?: boolean;
 }): CodexRepairRuntime {
-  if (params.codexRuntimeReady !== undefined) {
-    return params.codexRuntimeReady ? "codex" : "pi";
-  }
-  return isCodexPluginInstalledAndEnabled(params.cfg, params.env) &&
-    hasUsableCodexOAuthProfile(params.cfg)
-    ? "codex"
-    : "pi";
+  void params;
+  return "codex";
 }
 
 function formatCodexRouteChange(hit: CodexRouteHit, runtime: CodexRepairRuntime): string {
@@ -626,7 +585,7 @@ export function collectCodexRouteWarnings(params: {
             hit.runtime ? `; current runtime is "${hit.runtime}"` : ""
           }.`,
       ),
-      '- Run `openclaw doctor --fix`: it rewrites configured model refs and stale sessions; primary routes select `agentRuntime.id: "codex"` only when Codex is installed, enabled, and has usable OAuth, otherwise they select OpenClaw PI.',
+      '- Run `openclaw doctor --fix`: it rewrites configured model refs and stale sessions to `openai/*` with `agentRuntime.id: "codex"`.',
     ].join("\n"),
   ];
 }
@@ -722,6 +681,23 @@ function clearStaleCodexAuthOverride(entry: SessionEntry, runtime: CodexRepairRu
   return true;
 }
 
+function hasOpenAIAgentRoute(entry: SessionEntry): boolean {
+  return (
+    normalizeString(entry.modelProvider) === "openai" ||
+    normalizeString(entry.providerOverride) === "openai" ||
+    isOpenAIModelRef(entry.model) ||
+    isOpenAIModelRef(entry.modelOverride)
+  );
+}
+
+function hasOpenAIPiRuntimePin(entry: SessionEntry): boolean {
+  return (
+    hasOpenAIAgentRoute(entry) &&
+    (normalizeString(entry.agentHarnessId) === "pi" ||
+      normalizeString(entry.agentRuntimeOverride) === "pi")
+  );
+}
+
 export function repairCodexSessionStoreRoutes(params: {
   store: Record<string, SessionEntry>;
   runtime: CodexRepairRuntime;
@@ -746,16 +722,16 @@ export function repairCodexSessionStoreRoutes(params: {
     const changedModelRoute = changedRuntimeModelRoute || changedOverrideModelRoute;
     const changedFallbackNotice = clearStaleCodexFallbackNotice(entry);
     const changedAuthOverride = clearStaleCodexAuthOverride(entry, params.runtime);
-    const shouldRepinCodexHarness = entry.agentHarnessId === "codex" && params.runtime !== "codex";
+    const shouldRepairOpenAIPiPin = hasOpenAIPiRuntimePin(entry);
     if (
       !changedModelRoute &&
       !changedFallbackNotice &&
       !changedAuthOverride &&
-      !shouldRepinCodexHarness
+      !shouldRepairOpenAIPiPin
     ) {
       continue;
     }
-    if (changedModelRoute || shouldRepinCodexHarness) {
+    if (changedModelRoute || shouldRepairOpenAIPiPin) {
       entry.agentHarnessId = params.runtime;
       entry.agentRuntimeOverride = params.runtime;
     }
@@ -772,6 +748,7 @@ function scanCodexSessionStoreRoutes(
   store: Record<string, SessionEntry>,
   runtime: CodexRepairRuntime,
 ): string[] {
+  void runtime;
   return Object.entries(store).flatMap(([sessionKey, entry]) => {
     if (!entry) {
       return [];
@@ -783,8 +760,7 @@ function scanCodexSessionStoreRoutes(
       isOpenAICodexModelRef(entry.modelOverride) ||
       isOpenAICodexModelRef(entry.fallbackNoticeSelectedModel) ||
       isOpenAICodexModelRef(entry.fallbackNoticeActiveModel) ||
-      (runtime !== "codex" && entry.authProfileOverride?.startsWith("openai-codex:") === true) ||
-      (runtime !== "codex" && entry.agentHarnessId === "codex");
+      hasOpenAIPiRuntimePin(entry);
     return hasLegacyRoute ? [sessionKey] : [];
   });
 }

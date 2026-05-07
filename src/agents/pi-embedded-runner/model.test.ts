@@ -120,7 +120,7 @@ vi.mock("../model-suppression.js", () => {
       }
       if (isStaleOpenAICodexModel(provider, id)) {
         const modelId = id?.trim().toLowerCase() ?? "";
-        return `Unknown model: openai-codex/${modelId}. ${modelId} is no longer supported for ChatGPT/Codex OAuth accounts. Use openai-codex/gpt-5.5 for PI OAuth, or openai/gpt-5.5 with agentRuntime.id="codex" for the native Codex runtime.`;
+        return `Unknown model: openai-codex/${modelId}. ${modelId} is no longer supported for ChatGPT/Codex OAuth accounts. Use openai/gpt-5.5 through the Codex runtime.`;
       }
       if (
         (provider === "openai" ||
@@ -1511,7 +1511,7 @@ describe("resolveModel", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe(
-      'Unknown model: openai-codex/gpt-5.3-codex. gpt-5.3-codex is no longer supported for ChatGPT/Codex OAuth accounts. Use openai-codex/gpt-5.5 for PI OAuth, or openai/gpt-5.5 with agentRuntime.id="codex" for the native Codex runtime.',
+      "Unknown model: openai-codex/gpt-5.3-codex. gpt-5.3-codex is no longer supported for ChatGPT/Codex OAuth accounts. Use openai/gpt-5.5 through the Codex runtime.",
     );
   });
 
