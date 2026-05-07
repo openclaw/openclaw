@@ -8,10 +8,10 @@ export function providerSupportsCapability(
     return false;
   }
   if (capability === "audio") {
-    return Boolean(provider.transcribeAudio);
+    return Boolean(provider.transcribeAudio) || Boolean(provider.understandAudio);
   }
   if (capability === "image") {
     return Boolean(provider.describeImage);
   }
-  return Boolean(provider.describeVideo);
+  return Boolean(provider.describeVideo) || Boolean(provider.understandVideo);
 }
