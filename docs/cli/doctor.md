@@ -25,6 +25,15 @@ openclaw doctor --repair --non-interactive
 openclaw doctor --generate-gateway-token
 ```
 
+For channel-specific permissions, use the channel probes instead of `doctor`:
+
+```bash
+openclaw channels capabilities --channel discord --target channel:<channel-id>
+openclaw channels status --probe
+```
+
+The targeted Discord capabilities probe reports the bot's effective channel permissions; the status probe audits configured Discord channels and voice auto-join targets.
+
 ## Options
 
 - `--no-workspace-suggestions`: disable workspace memory/search suggestions

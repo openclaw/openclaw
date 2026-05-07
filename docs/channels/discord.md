@@ -1157,6 +1157,12 @@ Use `/vc join|leave|status` to control sessions. The command uses the account de
 /vc leave
 ```
 
+To inspect the bot's effective permissions before joining, run:
+
+```bash
+openclaw channels capabilities --channel discord --target channel:<voice-channel-id>
+```
+
 Auto-join example:
 
 ```json5

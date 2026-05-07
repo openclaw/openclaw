@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Telegram: treat successful same-chat `message` tool outbound sends during an inbound telegram turn as delivered when deciding whether to emit the rewritten silent reply fallback (#78685). Thanks @neeravmakwana.
+- Discord/voice: make `openclaw channels capabilities --channel discord --target channel:<id>` and `channels status --probe` audit voice-channel permissions, including auto-join targets, so missing Connect/Speak/Read Message History permissions show up before `/vc join`.
 - Docs/iMessage: deprecate BlueBubbles for new OpenClaw setups, document the upstream server-release rationale, and point new iMessage deployments toward the native `imsg` path while keeping BlueBubbles as a supported legacy fallback.
 - Discord/streaming: default Discord replies to progress draft previews so tool/work activity appears in one edited Discord message unless `channels.discord.streaming.mode` is set to `off`.
 - Plugins/install: add `npm-pack:<path.tgz>` installs so local npm pack artifacts run through the same managed npm-root install, lockfile verification, dependency scan, and install-record path as registry npm plugins.
