@@ -51,9 +51,15 @@ type OriginRoutingMetadata = Pick<
 function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetadata {
   const metadata: OriginRoutingMetadata = {};
   for (const item of items) {
-    metadata.originatingChannel ??= item.originatingChannel;
-    metadata.originatingTo ??= item.originatingTo;
-    metadata.originatingAccountId ??= item.originatingAccountId;
+    if (!metadata.originatingChannel && item.originatingChannel) {
+      metadata.originatingChannel = item.originatingChannel;
+    }
+    if (!metadata.originatingTo && item.originatingTo) {
+      metadata.originatingTo = item.originatingTo;
+    }
+    if (!metadata.originatingAccountId && item.originatingAccountId) {
+      metadata.originatingAccountId = item.originatingAccountId;
+    }
     // Support both number (Telegram topic) and string (Slack thread_ts) thread IDs.
     if (
       metadata.originatingThreadId == null &&
