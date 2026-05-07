@@ -96,6 +96,42 @@
           }
         }
       },
+      "codexPlugins": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "allow_destructive_actions": {
+            "type": "boolean",
+            "default": false
+          },
+          "plugins": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "marketplaceName": {
+                  "type": "string",
+                  "enum": ["openai-curated"]
+                },
+                "pluginName": {
+                  "type": "string"
+                },
+                "allow_destructive_actions": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      },
       "appServer": {
         "type": "object",
         "additionalProperties": false,
@@ -232,6 +268,26 @@
     "computerUse.mcpServerName": {
       "label": "MCP Server Name",
       "help": "MCP server name exposed by the Computer Use plugin.",
+      "advanced": true
+    },
+    "codexPlugins": {
+      "label": "Native Codex Plugins",
+      "help": "Controls native Codex plugin availability for Codex harness turns.",
+      "advanced": true
+    },
+    "codexPlugins.enabled": {
+      "label": "Enable Native Plugins",
+      "help": "Expose explicit migrated Codex plugin entries to Codex harness turns.",
+      "advanced": true
+    },
+    "codexPlugins.allow_destructive_actions": {
+      "label": "Allow Destructive Plugin Actions",
+      "help": "Default policy for plugin app write or destructive action elicitations. Defaults to false.",
+      "advanced": true
+    },
+    "codexPlugins.plugins": {
+      "label": "Migrated Plugin Entries",
+      "help": "Explicit migration-authored plugin entries. The wildcard key * is not supported.",
       "advanced": true
     },
     "appServer": {

@@ -12,6 +12,10 @@ type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subage
 type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
 type CodexDynamicToolsProfile = "native-first" | "openclaw-compat";
 export type CodexDynamicToolsLoading = "searchable" | "direct";
+export type CodexPluginDestructivePolicy = boolean;
+
+export const CODEX_PLUGINS_MARKETPLACE_NAME = "openai-curated";
+export const CODEX_PLUGINS_UNSUPPORTED_WILDCARD_KEY = "*";
 
 export type CodexComputerUseConfig = {
   enabled?: boolean;
@@ -33,6 +37,37 @@ export type ResolvedCodexComputerUseConfig = {
   marketplaceSource?: string;
   marketplacePath?: string;
   marketplaceName?: string;
+};
+
+export type CodexPluginEntryConfig = {
+  enabled?: boolean;
+  marketplaceName?: string;
+  pluginName?: string;
+  allow_destructive_actions?: CodexPluginDestructivePolicy;
+};
+
+export type CodexPluginsConfig = {
+  enabled?: boolean;
+  allow_destructive_actions?: CodexPluginDestructivePolicy;
+  plugins?: Record<string, CodexPluginEntryConfig>;
+};
+
+export type CodexMigratedPluginIdentity = {
+  configKey: string;
+  marketplaceName: typeof CODEX_PLUGINS_MARKETPLACE_NAME;
+  pluginName: string;
+};
+
+export type ResolvedCodexPluginPolicy = CodexMigratedPluginIdentity & {
+  enabled: boolean;
+  allowDestructiveActions: CodexPluginDestructivePolicy;
+};
+
+export type ResolvedCodexPluginsPolicy = {
+  enabled: boolean;
+  allowDestructiveActions: CodexPluginDestructivePolicy;
+  migratedPlugins: CodexMigratedPluginIdentity[];
+  pluginPolicies: ResolvedCodexPluginPolicy[];
 };
 
 export type CodexAppServerStartOptions = {
@@ -66,6 +101,7 @@ export type CodexPluginConfig = {
     timeoutMs?: number;
   };
   computerUse?: CodexComputerUseConfig;
+  codexPlugins?: CodexPluginsConfig;
   appServer?: {
     mode?: CodexAppServerPolicyMode;
     transport?: CodexAppServerTransportMode;
@@ -114,6 +150,19 @@ export const CODEX_COMPUTER_USE_CONFIG_KEYS = [
   "mcpServerName",
 ] as const;
 
+export const CODEX_PLUGINS_CONFIG_KEYS = [
+  "enabled",
+  "allow_destructive_actions",
+  "plugins",
+] as const;
+
+export const CODEX_PLUGIN_ENTRY_CONFIG_KEYS = [
+  "enabled",
+  "marketplaceName",
+  "pluginName",
+  "allow_destructive_actions",
+] as const;
+
 const DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME = "computer-use";
 const DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME = "computer-use";
 const DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 60_000;
@@ -136,6 +185,34 @@ const codexAppServerServiceTierSchema = z
     z.enum(["fast", "flex"]).nullable().optional(),
   )
   .optional();
+
+const codexPluginEntryConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    marketplaceName: z.literal(CODEX_PLUGINS_MARKETPLACE_NAME).optional(),
+    pluginName: z.string().trim().min(1).optional(),
+    allow_destructive_actions: z.boolean().optional(),
+  })
+  .strict();
+
+const codexPluginsConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    allow_destructive_actions: z.boolean().optional(),
+    plugins: z
+      .record(z.string(), codexPluginEntryConfigSchema)
+      .superRefine((plugins, ctx) => {
+        if (Object.hasOwn(plugins, CODEX_PLUGINS_UNSUPPORTED_WILDCARD_KEY)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [CODEX_PLUGINS_UNSUPPORTED_WILDCARD_KEY],
+            message: 'plugins["*"] is not supported; use codexPlugins.enabled',
+          });
+        }
+      })
+      .optional(),
+  })
+  .strict();
 
 const codexPluginConfigSchema = z
   .object({
@@ -162,6 +239,7 @@ const codexPluginConfigSchema = z
       })
       .strict()
       .optional(),
+    codexPlugins: z.unknown().optional(),
     appServer: z
       .object({
         mode: codexAppServerPolicyModeSchema.optional(),
@@ -187,7 +265,53 @@ const codexPluginConfigSchema = z
 
 export function readCodexPluginConfig(value: unknown): CodexPluginConfig {
   const parsed = codexPluginConfigSchema.safeParse(value);
-  return parsed.success ? parsed.data : {};
+  if (!parsed.success) {
+    return {};
+  }
+  const { codexPlugins: rawCodexPlugins, ...config } = parsed.data;
+  const plugins = codexPluginsConfigSchema.safeParse(rawCodexPlugins);
+  if (!plugins.success) {
+    return config;
+  }
+  return { ...config, ...(plugins.data ? { codexPlugins: plugins.data } : {}) };
+}
+
+export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodexPluginsPolicy {
+  const config = readCodexPluginConfig(pluginConfig).codexPlugins;
+  const enabled = config?.enabled === true;
+  const allowDestructiveActions = config?.allow_destructive_actions ?? false;
+  const migratedPlugins = Object.entries(config?.plugins ?? {})
+    .flatMap(([configKey, entry]): CodexMigratedPluginIdentity[] => {
+      if (
+        configKey === CODEX_PLUGINS_UNSUPPORTED_WILDCARD_KEY ||
+        entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME ||
+        !entry.pluginName
+      ) {
+        return [];
+      }
+      return [
+        {
+          configKey,
+          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+          pluginName: entry.pluginName,
+        },
+      ];
+    })
+    .toSorted((left, right) => left.configKey.localeCompare(right.configKey));
+  const pluginPolicies = migratedPlugins.map((identity) => {
+    const entry = config?.plugins?.[identity.configKey];
+    return {
+      ...identity,
+      enabled: enabled && entry?.enabled !== false,
+      allowDestructiveActions: entry?.allow_destructive_actions ?? allowDestructiveActions,
+    };
+  });
+  return {
+    enabled,
+    allowDestructiveActions,
+    migratedPlugins,
+    pluginPolicies,
+  };
 }
 
 export function resolveCodexAppServerRuntimeOptions(
