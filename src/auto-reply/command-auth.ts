@@ -707,7 +707,7 @@ export function resolveCommandAuthorization(params: {
         ? senderIsOwner
         : senderIsOwnerByScope || Boolean(matchedCommandOwner);
   const nativeCommandAuthorized =
-    commandAuthorized && ctx.CommandSource === "native" && !ownerAllowlistConfigured;
+    commandAuthorized && ctx.CommandSource === "native" && !requireOwner;
   const isAuthorizedSender = resolveCommandSenderAuthorization({
     commandAuthorized,
     nativeCommandAuthorized,

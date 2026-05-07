@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { resolveCommandAuthorization } from "../command-auth.js";
+import type { MsgContext } from "../templating.js";
 import { handleStopCommand } from "./commands-session-abort.js";
 import "./commands-session-abort.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -47,6 +51,33 @@ vi.mock("./reply-run-registry.js", () => ({
     resolveSessionId: resolveSessionIdMock,
   },
 }));
+
+const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) =>
+  allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
+
+function registerOwnerEnforcingTelegramPlugin() {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "telegram",
+        plugin: {
+          ...createOutboundTestPlugin({
+            id: "telegram",
+            outbound: { deliveryMode: "direct" },
+          }),
+          commands: { enforceOwnerForCommands: true },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+            resolveAllowFrom: () => ["*"],
+            formatAllowFrom,
+          },
+        },
+        source: "test",
+      },
+    ]),
+  );
+}
 
 function buildStopParams(): HandleCommandsParams {
   return {
@@ -119,5 +150,48 @@ describe("handleStopCommand target fallback", () => {
         sessionEntry: undefined,
       }),
     );
+  });
+
+  it("rejects native stop commands from non-owner senders when the plugin enforces owner-only commands", async () => {
+    registerOwnerEnforcingTelegramPlugin();
+    const params = buildStopParams();
+    const cfg = {
+      commands: { text: true },
+      channels: { telegram: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const ctx = {
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+      From: "telegram:999",
+      SenderId: "999",
+      CommandSource: "native",
+      CommandTargetSessionKey: "agent:target:telegram:direct:123",
+    } as MsgContext;
+    const auth = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+    params.cfg = cfg;
+    params.ctx = ctx;
+    params.command.senderId = auth.senderId;
+    params.command.senderIsOwner = auth.senderIsOwner;
+    params.command.isAuthorizedSender = auth.isAuthorizedSender;
+    params.command.from = auth.from;
+    params.command.to = auth.to;
+
+    const result = await handleStopCommand(params, true);
+
+    expect(auth.senderIsOwner).toBe(false);
+    expect(auth.isAuthorizedSender).toBe(false);
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "You are not authorized to use this command." },
+    });
+    expect(replyRunAbortMock).not.toHaveBeenCalled();
+    expect(persistAbortTargetEntryMock).not.toHaveBeenCalled();
+    expect(createInternalHookEventMock).not.toHaveBeenCalled();
+    expect(stopSubagentsForRequesterMock).not.toHaveBeenCalled();
   });
 });

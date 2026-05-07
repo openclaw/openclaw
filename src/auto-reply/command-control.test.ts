@@ -202,7 +202,7 @@ describe("resolveCommandAuthorization", () => {
     expect(auth.isAuthorizedSender).toBe(false);
   });
 
-  it("allows channel-validated native commands when plugin owner enforcement has no owner allowlist", () => {
+  it("rejects channel-validated native commands when plugin owner enforcement has no owner allowlist", () => {
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -242,7 +242,7 @@ describe("resolveCommandAuthorization", () => {
     });
 
     expect(auth.senderIsOwner).toBe(false);
-    expect(auth.isAuthorizedSender).toBe(true);
+    expect(auth.isAuthorizedSender).toBe(false);
   });
 
   it("uses explicit owner allowlist when allowFrom is empty", () => {
