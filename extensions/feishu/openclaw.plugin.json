@@ -126,6 +126,10 @@
             "enum": ["auto", "raw", "card"]
           },
           "streaming": { "type": "boolean" },
+          "streamingMode": {
+            "type": "string",
+            "enum": ["card", "segment"]
+          },
           "blockStreaming": { "type": "boolean" },
           "replyInThread": {
             "type": "string",
@@ -163,6 +167,10 @@
         "enum": ["auto", "raw", "card"]
       },
       "streaming": { "type": "boolean" },
+      "streamingMode": {
+        "type": "string",
+        "enum": ["card", "segment"]
+      },
       "blockStreaming": { "type": "boolean" },
       "replyInThread": {
         "type": "string",
