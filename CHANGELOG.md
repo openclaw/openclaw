@@ -6,7 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- Gateway/security: remove `dangerouslyForceUnsafeInstall` from the gateway `skills.install` protocol schema and enforce security scans for all remote skill installations, closing a bypass that allowed attackers with gateway access to skip plugin security checks. Fixes #1. (#78735) Thanks @ishaq2321.
+- Gateway/security: remove `dangerouslyForceUnsafeInstall` as a usable gateway override for `skills.install`, tolerate legacy `false` for compatibility, and enforce security scans for all remote skill installations, closing a bypass that allowed attackers with gateway access to skip plugin security checks. Thanks @ishaq2321.
 - Google Meet/Voice Call: make Twilio dial-in joins speak through the realtime Gemini voice bridge with paced audio streaming, backpressure-aware buffering, barge-in queue clearing, same-session agent consult routing, duplicate-consult coalescing, and no TwiML fallback during realtime speech, giving Meet participants a much snappier OpenClaw voice agent. (#77064) Thanks @scoootscooob.
 - Voice Call/realtime: add opt-in OpenClaw agent voice context capsules and consult-cadence guidance so Gemini/OpenAI realtime calls can sound like the configured agent without consulting the full agent on every ordinary turn. Thanks @scoootscooob.
 - Docker/Gateway: harden the gateway container by dropping `NET_RAW` and `NET_ADMIN` capabilities and enabling `no-new-privileges` in the bundled `docker-compose.yml`. Thanks @VintageAyu.
