@@ -606,24 +606,32 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
                 ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
                 : undefined;
           const includeDisabled = Boolean(params.includeDisabled);
-          let offset = 0;
           let result: unknown;
-          let shouldContinue = true;
-          while (shouldContinue) {
+          if (!selfRemoveOnlyJobId) {
             result = await callGateway("cron.list", gatewayOpts, {
               includeDisabled,
               agentId: listAgentId,
-              ...(selfRemoveOnlyJobId ? { limit: 200, offset } : {}),
             });
-            if (!selfRemoveOnlyJobId || cronListResultHasJob(result, selfRemoveOnlyJobId)) {
-              shouldContinue = false;
-            } else {
+          } else {
+            let offset = 0;
+            let shouldContinue = true;
+            while (shouldContinue) {
+              result = await callGateway("cron.list", gatewayOpts, {
+                includeDisabled,
+                agentId: listAgentId,
+                limit: 200,
+                offset,
+              });
+              if (cronListResultHasJob(result, selfRemoveOnlyJobId)) {
+                shouldContinue = false;
+                continue;
+              }
               const nextOffset = readCronListNextOffset(result, offset);
               if (nextOffset === undefined) {
                 shouldContinue = false;
-              } else {
-                offset = nextOffset;
+                continue;
               }
+              offset = nextOffset;
             }
           }
           return jsonResult(
