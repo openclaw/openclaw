@@ -16,6 +16,7 @@ const {
   transcribeAudioFileMock,
   textToSpeechStreamMock,
   textToSpeechMock,
+  logVerboseMock,
 } = vi.hoisted(() => {
   type EventHandler = (...args: unknown[]) => unknown;
   type MockConnection = {
@@ -111,6 +112,7 @@ const {
       async (): Promise<unknown> => ({ success: false, error: "stream unavailable" }),
     ),
     textToSpeechMock: vi.fn(async () => ({ success: true, audioPath: "/tmp/voice.mp3" })),
+    logVerboseMock: vi.fn(),
   };
 });
 
@@ -151,6 +153,16 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
   return {
     ...actual,
     agentCommandFromIngress: agentCommandMock,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    logVerbose: logVerboseMock,
   };
 });
 
@@ -218,6 +230,7 @@ describe("DiscordVoiceManager", () => {
     textToSpeechStreamMock.mockResolvedValue({ success: false, error: "stream unavailable" });
     textToSpeechMock.mockReset();
     textToSpeechMock.mockResolvedValue({ success: true, audioPath: "/tmp/voice.mp3" });
+    logVerboseMock.mockClear();
     createAudioResourceMock.mockClear();
   });
 
@@ -758,6 +771,34 @@ describe("DiscordVoiceManager", () => {
         text: "hello back",
       }),
     );
+  });
+
+  it("logs a bounded inbound transcript preview for voice debugging", async () => {
+    transcribeAudioFileMock.mockResolvedValueOnce({
+      text: `hello from voice\n\n${"x".repeat(700)}`,
+    });
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Debug Speaker",
+      user: {
+        id: "u-debug",
+        username: "debug",
+        globalName: "Debug",
+        discriminator: "0001",
+      },
+    });
+    const manager = createManager({ groupPolicy: "open" }, client, {
+      commands: { useAccessGroups: false },
+    });
+
+    await processVoiceSegment(manager, "u-debug");
+
+    const transcriptLog = logVerboseMock.mock.calls
+      .map((call) => String(call[0]))
+      .find((message) => message.includes("transcript from Debug Speaker (u-debug)"));
+    expect(transcriptLog).toContain("hello from voice ");
+    expect(transcriptLog).not.toContain("\n");
+    expect(transcriptLog?.length).toBeLessThan(650);
   });
 
   it("plays streaming TTS audio before falling back to a synthesized file", async () => {
