@@ -204,6 +204,69 @@ describe("ACP translator event ledger replay", () => {
       ledgerReplay.events.filter((event) => event.update.sessionUpdate === "user_message_chunk"),
     ).toHaveLength(1);
 
+    const listedSessionStore = createInMemorySessionStore();
+    const listedConnection = createAcpConnection();
+    const listedRequestMock = vi.fn(async (method: string) => {
+      if (method === "sessions.get") {
+        throw new Error("listed session ledger replay should not call sessions.get");
+      }
+      return { ok: true };
+    });
+    const listedAgent = new AcpGatewayAgent(
+      listedConnection,
+      createAcpGateway(listedRequestMock as GatewayClient["request"]),
+      {
+        eventLedger,
+        sessionStore: listedSessionStore,
+      },
+    );
+
+    await listedAgent.loadSession(createLoadSessionRequest(firstSession.sessionKey));
+
+    expect(listedRequestMock).not.toHaveBeenCalledWith("sessions.get", expect.anything());
+    const listedReplayTypes = listedConnection.__sessionUpdateMock.mock.calls.map(
+      (call) => call[0]?.update?.sessionUpdate,
+    );
+    expect(listedReplayTypes).toEqual(
+      expect.arrayContaining(["user_message_chunk", "tool_call", "agent_message_chunk"]),
+    );
+
+    const listedPrompt = listedAgent.prompt(
+      createPromptRequest(firstSession.sessionKey, "Follow-up"),
+    );
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      if (listedRequestMock.mock.calls.some((call) => call[0] === "chat.send")) {
+        break;
+      }
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    }
+    const listedRunId = listedSessionStore.getSession(firstSession.sessionKey)?.activeRunId;
+    if (!listedRunId) {
+      throw new Error("Expected listed ACP session to have an active run");
+    }
+    await listedAgent.handleGatewayEvent(
+      createChatEvent({
+        sessionKey: firstSession.sessionKey,
+        runId: listedRunId,
+        state: "final",
+        text: "Follow-up answer",
+      }),
+    );
+    await expect(listedPrompt).resolves.toEqual({ stopReason: "end_turn" });
+
+    const canonicalReplay = await eventLedger.readReplay({
+      sessionId: created.sessionId,
+      sessionKey: firstSession.sessionKey,
+    });
+    expect(
+      canonicalReplay.events.filter((event) => event.update.sessionUpdate === "user_message_chunk"),
+    ).toHaveLength(2);
+    await expect(
+      eventLedger.readReplayBySessionId({ sessionId: firstSession.sessionKey }),
+    ).resolves.toMatchObject({ complete: false });
+
     firstSessionStore.clearAllSessionsForTest();
   });
 

@@ -19,6 +19,7 @@ export type AcpEventLedgerEntry = {
 
 export type AcpEventLedgerReplay = {
   complete: boolean;
+  sessionId?: string;
   sessionKey?: string;
   events: AcpEventLedgerEntry[];
 };
@@ -45,6 +46,7 @@ export type AcpEventLedger = {
   }) => Promise<void>;
   readReplay: (params: { sessionId: string; sessionKey: string }) => Promise<AcpEventLedgerReplay>;
   readReplayBySessionId: (params: { sessionId: string }) => Promise<AcpEventLedgerReplay>;
+  readReplayBySessionKey: (params: { sessionKey: string }) => Promise<AcpEventLedgerReplay>;
 };
 
 type LedgerSession = {
@@ -276,6 +278,13 @@ function createLedgerApi(params: {
   mutate: (fn: () => void) => Promise<void>;
   read: <T>(fn: () => T) => Promise<T>;
 }): AcpEventLedger {
+  const buildReplay = (session: LedgerSession): AcpEventLedgerReplay => ({
+    complete: true,
+    sessionId: session.sessionId,
+    sessionKey: session.sessionKey,
+    events: session.events.map((event) => cloneJsonValue(event)),
+  });
+
   return {
     async startSession(sessionParams) {
       await params.mutate(() => {
@@ -309,11 +318,7 @@ function createLedgerApi(params: {
         if (!session || session.sessionKey !== replayParams.sessionKey || !session.complete) {
           return { complete: false, events: [] };
         }
-        return {
-          complete: true,
-          sessionKey: session.sessionKey,
-          events: session.events.map((event) => cloneJsonValue(event)),
-        };
+        return buildReplay(session);
       });
     },
 
@@ -323,11 +328,21 @@ function createLedgerApi(params: {
         if (!session || !session.complete) {
           return { complete: false, events: [] };
         }
-        return {
-          complete: true,
-          sessionKey: session.sessionKey,
-          events: session.events.map((event) => cloneJsonValue(event)),
-        };
+        return buildReplay(session);
+      });
+    },
+
+    async readReplayBySessionKey(replayParams) {
+      return params.read(() => {
+        const session = Object.values(params.state.store.sessions)
+          .filter(
+            (candidate) => candidate.sessionKey === replayParams.sessionKey && candidate.complete,
+          )
+          .toSorted((a, b) => b.updatedAt - a.updatedAt)[0];
+        if (!session) {
+          return { complete: false, events: [] };
+        }
+        return buildReplay(session);
       });
     },
   };

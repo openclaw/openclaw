@@ -109,6 +109,35 @@ describe("ACP event ledger", () => {
     });
   });
 
+  it("can replay a complete session by Gateway session key", async () => {
+    const ledger = createInMemoryAcpEventLedger({ now: () => 1000 });
+    await ledger.startSession({
+      sessionId: "acp-session-1",
+      sessionKey: "acp:gateway-session-1",
+      cwd: "/work",
+      complete: true,
+    });
+    await ledger.recordUpdate({
+      sessionId: "acp-session-1",
+      sessionKey: "acp:gateway-session-1",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Answer" },
+      },
+    });
+
+    const replay = await ledger.readReplayBySessionKey({
+      sessionKey: "acp:gateway-session-1",
+    });
+
+    expect(replay.complete).toBe(true);
+    expect(replay.sessionId).toBe("acp-session-1");
+    expect(replay.sessionKey).toBe("acp:gateway-session-1");
+    expect(replay.events.map((event) => event.update.sessionUpdate)).toEqual([
+      "agent_message_chunk",
+    ]);
+  });
+
   it("ignores corrupt ledger files instead of replaying unknown state", async () => {
     await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
       const filePath = path.join(dir, "event-ledger.json");
