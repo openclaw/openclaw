@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   acquireLocalHeavyCheckLockSync,
   applyLocalTsgoPolicy,
+  getLocalNativeTypecheckRefusalError,
   shouldAcquireLocalHeavyCheckLockForTsgo,
 } from "./lib/local-heavy-check-runtime.mjs";
 import { createManagedCommandInvocation } from "./lib/managed-child-process.mjs";
@@ -130,7 +131,18 @@ function removeIfFreshMode(filePath, reuse) {
 
 function runTsgo(label, args, params = {}) {
   const { args: finalArgs, env } = applyLocalTsgoPolicy(args, process.env);
-  const releaseLock = shouldAcquireLocalHeavyCheckLockForTsgo(finalArgs, env)
+  const shouldRunHeavyCheck = shouldAcquireLocalHeavyCheckLockForTsgo(finalArgs, env);
+  const nativeTypecheckRefusalError = getLocalNativeTypecheckRefusalError({
+    args: finalArgs,
+    env,
+    shouldRunHeavyCheck,
+    toolName: "tsgo profile",
+  });
+  if (nativeTypecheckRefusalError) {
+    throw new Error(nativeTypecheckRefusalError);
+  }
+
+  const releaseLock = shouldRunHeavyCheck
     ? acquireLocalHeavyCheckLockSync({
         cwd: repoRoot,
         env,

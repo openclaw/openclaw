@@ -3,6 +3,10 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { createManagedCommandInvocation } from "./lib/managed-child-process.mjs";
+import {
+  applyLocalTsgoPolicy,
+  getLocalNativeTypecheckRefusalError,
+} from "./lib/local-heavy-check-runtime.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const tsgoPath = path.join(repoRoot, "node_modules", ".bin", "tsgo");
@@ -14,6 +18,17 @@ const coreGraphs = [
   { name: "core-test-non-agents", config: "test/tsconfig/tsconfig.core.test.non-agents.json" },
 ];
 
+const coreBoundaryRefusalError = getLocalNativeTypecheckRefusalError({
+  args: ["--listFilesOnly", ...coreGraphs.map((graph) => graph.config)],
+  env: process.env,
+  shouldRunHeavyCheck: true,
+  toolName: "core boundary tsgo",
+});
+if (coreBoundaryRefusalError) {
+  console.error(coreBoundaryRefusalError);
+  process.exit(1);
+}
+
 function normalizeFilePath(filePath) {
   const normalized = filePath.trim().replaceAll("\\", "/");
   const normalizedRoot = repoRoot.replaceAll("\\", "/");
@@ -24,12 +39,17 @@ function normalizeFilePath(filePath) {
 }
 
 function listGraphFiles(graph) {
+  const policy = applyLocalTsgoPolicy(
+    ["-p", graph.config, "--pretty", "false", "--listFilesOnly"],
+    process.env,
+  );
   const tsgo = createManagedCommandInvocation({
-    args: ["-p", graph.config, "--pretty", "false", "--listFilesOnly"],
+    args: policy.args,
     bin: tsgoPath,
   });
   const result = spawnSync(tsgo.command, tsgo.args, {
     cwd: repoRoot,
+    env: policy.env,
     encoding: "utf8",
     maxBuffer: 256 * 1024 * 1024,
     shell: tsgo.shell,
