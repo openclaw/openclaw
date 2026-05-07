@@ -132,7 +132,12 @@ function emitForKind(ast: OcAst): string {
     case "jsonl":
       return emitJsonl(ast);
     case "yaml":
-      return emitYaml(ast, { mode: "render" });
+      // Default round-trip mode preserves bytes verbatim for unmodified
+      // ASTs (so `openclaw path emit foo.yaml` is a true byte-fidelity
+      // diagnostic). After `setOcPath` mutates a YAML AST the substrate
+      // re-renders into `ast.raw` already, so round-trip mode emits the
+      // mutated bytes too — no need for the render-mode override.
+      return emitYaml(ast);
     case "md":
       return emitMd(ast);
   }

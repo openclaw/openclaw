@@ -208,8 +208,19 @@ export function parseOcPath(input: string): OcPath {
 
   const session = extractSession(queryPart);
 
+  // Unquote the file slot so `path.file` always carries the bare
+  // filesystem path. `splitRespectingBrackets` keeps a quoted file
+  // segment intact (`"skills/email-drafter"`) so the `/` inside it
+  // isn't treated as a slot separator; here we strip the surrounding
+  // quotes so consumers (CLI's `resolveFsPath`, find / resolve walkers)
+  // see `skills/email-drafter` rather than `"skills/email-drafter"`.
+  // Without this, the round-trip emits `oc://"skills/email-drafter"`
+  // and the CLI tries to `fs.readFile` a literally-quoted filename.
+  const fileSeg = segments[0];
+  const file = isQuotedSeg(fileSeg) ? unquoteSeg(fileSeg) : fileSeg;
+
   const result: OcPath = {
-    file: segments[0],
+    file,
     ...(segments[1] !== undefined ? { section: segments[1] } : {}),
     ...(segments[2] !== undefined ? { item: segments[2] } : {}),
     ...(segments[3] !== undefined ? { field: segments[3] } : {}),
@@ -263,7 +274,15 @@ export function formatOcPath(path: OcPath): string {
   const formatSlot = (slot: string): string =>
     splitRespectingBrackets(slot, '.').map(formatSubSegment).join('.');
 
-  let out = OC_SCHEME + path.file;
+  // The file slot uses simpler quoting than section/item/field: dots
+  // are normal in filenames (`AGENTS.md`) and don't need quoting; we
+  // only quote when the file contains chars that would otherwise be
+  // parsed as structure — primarily `/` which is the segment separator.
+  // `quoteSeg` already wraps + escapes when needed; we narrow the
+  // trigger so plain `AGENTS.md` round-trips bare.
+  const fileNeedsQuote = /[/[\]{}?&%"\s]/.test(path.file);
+  const formattedFile = fileNeedsQuote ? quoteSeg(path.file) : path.file;
+  let out = OC_SCHEME + formattedFile;
   if (path.section !== undefined) {out += '/' + formatSlot(path.section);}
   if (path.item !== undefined) {out += '/' + formatSlot(path.item);}
   if (path.field !== undefined) {out += '/' + formatSlot(path.field);}

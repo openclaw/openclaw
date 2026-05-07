@@ -178,4 +178,33 @@ describe('wave-07 oc-path-parse-edges', () => {
     expect(parsed.section).toBe('"foo?bar"');
     expect(parsed.session).toBe('daily');
   });
+
+  it('OP-26 file slot with `/` round-trips via quoting', () => {
+    // Closes ClawSweeper P2 on PR #78678 (round 4): `parseOcPath` stored
+    // `path.file` verbatim while `formatOcPath` prefixed it without
+    // quote-wrapping, so a file like `skills/email-drafter` couldn't
+    // round-trip — formatter output got re-parsed as file plus section,
+    // and quoted input leaked the surrounding quotes into filesystem
+    // resolution.
+    const constructed = formatOcPath({
+      file: 'skills/email-drafter',
+      section: 'Tools',
+      item: '-1',
+    });
+    expect(constructed).toBe('oc://"skills/email-drafter"/Tools/-1');
+    const parsed = parseOcPath(constructed);
+    expect(parsed.file).toBe('skills/email-drafter');
+    expect(parsed.section).toBe('Tools');
+    expect(parsed.item).toBe('-1');
+  });
+
+  it('OP-27 file slot with dot extension does NOT get quoted', () => {
+    // The file slot's quoting trigger excludes `.` because filename
+    // extensions (`AGENTS.md`, `gateway.jsonc`) are normal — quoting
+    // them would make canonical form ugly without need.
+    expect(formatOcPath({ file: 'AGENTS.md' })).toBe('oc://AGENTS.md');
+    expect(formatOcPath({ file: 'gateway.jsonc', section: 'version' })).toBe(
+      'oc://gateway.jsonc/version',
+    );
+  });
 });
