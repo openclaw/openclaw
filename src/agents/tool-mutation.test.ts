@@ -101,12 +101,16 @@ describe("tool mutation helpers", () => {
         { toolName: "edit", actionFingerprint: "tool=edit|path=/tmp/a" },
       ),
     ).toBe(true);
+    // `apply_patch` is intentionally excluded from the file-mutating set
+    // because production `apply_patch` calls only carry opaque `input` text,
+    // so real fingerprints never have a `path=` segment to compare. Even a
+    // synthetic path-bearing fingerprint must not unlock recovery.
     expect(
       isSameToolMutationAction(
         { toolName: "edit", actionFingerprint: "tool=edit|path=/tmp/a" },
         { toolName: "apply_patch", actionFingerprint: "tool=apply_patch|path=/tmp/a" },
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("does not cross-recover file mutations on different targets (#79024)", () => {
@@ -148,33 +152,6 @@ describe("tool mutation helpers", () => {
         },
       ),
     ).toBe(true);
-  });
-
-  it("requires `oldpath` to agree across cross-tool recovery (#79024)", () => {
-    expect(
-      isSameToolMutationAction(
-        {
-          toolName: "apply_patch",
-          actionFingerprint: "tool=apply_patch|path=/tmp/a|oldpath=/tmp/old",
-        },
-        {
-          toolName: "write",
-          actionFingerprint: "tool=write|path=/tmp/a|oldpath=/tmp/old",
-        },
-      ),
-    ).toBe(true);
-    expect(
-      isSameToolMutationAction(
-        {
-          toolName: "apply_patch",
-          actionFingerprint: "tool=apply_patch|path=/tmp/a|oldpath=/tmp/old",
-        },
-        {
-          toolName: "apply_patch",
-          actionFingerprint: "tool=apply_patch|path=/tmp/a|oldpath=/tmp/different",
-        },
-      ),
-    ).toBe(false);
   });
 
   it("keeps legacy name-only mutating heuristics for payload fallback", () => {

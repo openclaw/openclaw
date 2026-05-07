@@ -21,16 +21,22 @@ const MUTATING_TOOL_NAMES = new Set([
   "session_status",
 ]);
 
-// File-mutation tools that operate on the same `path`/`oldpath` target identity.
+// File-mutation tools that operate on the same `path` target identity.
 // Recovery is allowed across these even when the tool name differs (e.g.
 // edit-fails-then-write-succeeds on the same path), because the user-visible
 // invariant is "the file at this path is in the desired state."
-const FILE_MUTATING_TOOL_NAMES = new Set(["edit", "write", "apply_patch"]);
+//
+// `apply_patch` is intentionally excluded: production `apply_patch` calls take
+// only an opaque `input` patch string, so `buildToolActionFingerprint` cannot
+// extract a `path=` segment from real call args. Including `apply_patch` here
+// would only match handcrafted-fingerprint test inputs, not real recoveries.
+const FILE_MUTATING_TOOL_NAMES = new Set(["edit", "write"]);
 
-// Stable target segments produced by `buildToolActionFingerprint` that identify
-// the file being mutated. Other segments (`tool=`, `action=`, `id=`, `meta=`)
-// are call-specific and excluded from cross-tool target comparison.
-const FILE_TARGET_FINGERPRINT_KEYS = new Set(["path", "oldpath"]);
+// Stable target segment produced by `buildToolActionFingerprint` that
+// identifies the file being mutated. Other segments (`tool=`, `action=`,
+// `id=`, `meta=`) are call-specific and excluded from cross-tool target
+// comparison.
+const FILE_TARGET_FINGERPRINT_KEYS = new Set(["path"]);
 
 const READ_ONLY_ACTIONS = new Set([
   "get",
@@ -258,9 +264,9 @@ export function isSameToolMutationAction(existing: ToolActionRef, next: ToolActi
       return true;
     }
     // Cross-tool recovery: a successful file-mutation on the same `path`
-    // (and `oldpath`, where applicable) clears an unresolved file-mutation
-    // failure even when the tool name differs (e.g. edit→write self-heal).
-    // Different paths or non-file-mutating tools never qualify.
+    // clears an unresolved file-mutation failure even when the tool name
+    // differs (e.g. edit→write self-heal). Different paths or
+    // non-file-mutating tools never qualify.
     if (isFileMutatingToolName(existing.toolName) && isFileMutatingToolName(next.toolName)) {
       const existingTarget = extractFileTargetFingerprint(existing.actionFingerprint);
       const nextTarget = extractFileTargetFingerprint(next.actionFingerprint);
