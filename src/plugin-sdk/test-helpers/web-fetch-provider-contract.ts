@@ -23,18 +23,30 @@ export function describeWebFetchProviderContracts(pluginId: string) {
     pluginRegistrationContractRegistry.find((entry) => entry.pluginId === pluginId)
       ?.webFetchProviderIds ?? [];
 
+  let providerEntries:
+    | Array<{
+        pluginId: string;
+        provider: WebFetchProviderPlugin;
+        credentialValue: unknown;
+      }>
+    | undefined;
   const resolveProviders = () => {
+    if (providerEntries) {
+      return providerEntries;
+    }
     const publicArtifactProviders = resolveBundledExplicitWebFetchProvidersFromPublicArtifacts({
       onlyPluginIds: [pluginId],
     });
     if (publicArtifactProviders) {
-      return publicArtifactProviders.map((provider) => ({
+      providerEntries = publicArtifactProviders.map((provider) => ({
         pluginId: provider.pluginId,
         provider,
         credentialValue: resolveWebFetchCredentialValue(provider),
       }));
+      return providerEntries;
     }
-    return resolveWebFetchProviderContractEntriesForPluginId(pluginId);
+    providerEntries = resolveWebFetchProviderContractEntriesForPluginId(pluginId);
+    return providerEntries;
   };
 
   describe(`${pluginId} web fetch provider contract registry load`, () => {
