@@ -132,4 +132,65 @@ describe("stripInternalRuntimeScaffolding", () => {
       "<note>keep this</note>",
     );
   });
+
+  it("removes internal runtime context blocks", () => {
+    expect(
+      stripInternalRuntimeScaffolding(
+        [
+          "before",
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "internal metadata",
+          "<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>",
+          "raw child output",
+          "<<<END_UNTRUSTED_CHILD_RESULT>>>",
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "after",
+        ].join("\n"),
+      ),
+    ).toBe("before\nafter");
+  });
+
+  it("unwraps standalone untrusted child-result marker lines", () => {
+    expect(
+      stripInternalRuntimeScaffolding(
+        [
+          "before",
+          "<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>",
+          "raw child output",
+          "<<<END_UNTRUSTED_CHILD_RESULT>>>",
+          "after",
+        ].join("\n"),
+      ),
+    ).toBe("before\nraw child output\nafter");
+  });
+
+  it("fails closed on unmatched runtime context delimiters", () => {
+    expect(
+      stripInternalRuntimeScaffolding(
+        ["visible", "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>", "internal metadata"].join("\n"),
+      ),
+    ).toBe("visible");
+  });
+
+  it("preserves inline delimiter mentions", () => {
+    expect(
+      stripInternalRuntimeScaffolding("visible <<<END_OPENCLAW_INTERNAL_CONTEXT>>> inline mention"),
+    ).toBe("visible <<<END_OPENCLAW_INTERNAL_CONTEXT>>> inline mention");
+    expect(stripInternalRuntimeScaffolding("what is <<<BEGIN_UNTRUSTED_CHILD_RESULT>>>?")).toBe(
+      "what is <<<BEGIN_UNTRUSTED_CHILD_RESULT>>>?",
+    );
+  });
+
+  it("removes stray standalone marker lines", () => {
+    expect(
+      stripInternalRuntimeScaffolding(
+        ["visible", "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>", "after"].join("\n"),
+      ),
+    ).toBe("visible\nafter");
+    expect(
+      stripInternalRuntimeScaffolding(
+        ["visible", "<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>", "after"].join("\n"),
+      ),
+    ).toBe("visible\nafter");
+  });
 });

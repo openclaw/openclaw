@@ -1510,6 +1510,28 @@ describe("extractThreadCompletionFallbackText", () => {
     ).toBe("final child result");
   });
 
+  it("unwraps internal child-result markers before direct fallback", () => {
+    expect(
+      extractThreadCompletionFallbackText([
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          announceType: "subagent task",
+          taskLabel: "sample task",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: [
+            "<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>",
+            "final child result",
+            "<<<END_UNTRUSTED_CHILD_RESULT>>>",
+          ].join("\n"),
+          replyInstruction: "Summarize the result.",
+        },
+      ]),
+    ).toBe("final child result");
+  });
+
   it("falls back to task and status labels when result text is empty", () => {
     expect(
       extractThreadCompletionFallbackText([

@@ -1,5 +1,6 @@
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { stripInternalRuntimeScaffolding } from "../infra/outbound/sanitize-text.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../routing/session-key.js";
@@ -539,7 +540,7 @@ async function maybeQueueSubagentAnnounce(params: {
 }
 
 function extractTaskCompletionFallbackText(event: AgentInternalEvent): string {
-  const result = event.result.trim();
+  const result = stripInternalRuntimeScaffolding(event.result).trim();
   if (result) {
     return result;
   }
