@@ -1293,18 +1293,17 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     const serializeCommandPath = (command: string) => [...normalizedParentPath, command].join(" ");
     const commandPaths = commands.map(serializeCommandPath);
+    const commandPathSet = new Set(commandPaths);
     const existing = registry.cliRegistrars.find((entry) =>
       entry.commands
         .map((command) => [...(entry.parentPath ?? []), command].join(" "))
-        .some((commandPath) => commandPaths.includes(commandPath)),
+        .some((commandPath) => commandPathSet.has(commandPath)),
     );
     if (existing) {
-      const existingCommandPaths = existing.commands.map((command) =>
-        [...(existing.parentPath ?? []), command].join(" "),
+      const existingCommandPaths = new Set(
+        existing.commands.map((command) => [...(existing.parentPath ?? []), command].join(" ")),
       );
-      const overlap = commandPaths.find((commandPath) =>
-        existingCommandPaths.includes(commandPath),
-      );
+      const overlap = commandPaths.find((commandPath) => existingCommandPaths.has(commandPath));
       pushDiagnostic({
         level: "error",
         pluginId: record.id,

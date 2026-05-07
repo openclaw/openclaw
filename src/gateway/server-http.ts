@@ -497,7 +497,6 @@ export function createGatewayHttpServer(opts: {
     strictTransportSecurityHeader,
     handleHooksRequest,
     handlePluginRequest,
-    handlePluginUpgrade,
     shouldEnforcePluginGatewayAuth,
     resolvePluginNodeCapabilityRoute,
     resolvedAuth,

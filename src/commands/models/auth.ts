@@ -588,12 +588,9 @@ export function resolveRequestedLoginProviderOrThrow(
   return resolveRequestedProviderOrThrow(providers, rawProvider);
 }
 
-function credentialMode(credential: AuthProfileCredential): AuthProfileCredential["type"] {
+function credentialMode(credential: AuthProfileCredential): "api_key" | "oauth" | "token" {
   if (credential.type === "api_key") {
     return "api_key";
-  }
-  if (credential.type === "aws-sdk") {
-    return "aws-sdk";
   }
   if (credential.type === "token") {
     return "token";

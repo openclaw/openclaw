@@ -23,8 +23,6 @@ import {
   startConnectedServerWithClient,
   startGatewayServer,
   startServerWithClient,
-  testState,
-  testTailnetIPv4,
   trackConnectChallengeNonce,
 } from "./test-helpers.js";
 

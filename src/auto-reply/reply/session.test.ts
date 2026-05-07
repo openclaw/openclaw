@@ -729,6 +729,54 @@ describe("initSessionState RawBody", () => {
     expect(result.triggerBodyNormalized).toBe("/NEW KeepThisCase");
   });
 
+  it("drops cached skills snapshot when /new rotates an existing session", async () => {
+    const root = await makeCaseDir("openclaw-rawbody-reset-skills-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:signal:direct:uuid:reset-skills";
+    const existingSessionId = "session-with-stale-skills";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+        systemSent: true,
+        skillsSnapshot: {
+          prompt: "<available_skills><skill><name>stale</name></skill></available_skills>",
+          skills: [{ name: "stale" }],
+          version: 0,
+        },
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        resetTriggers: ["/new"],
+      },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "/new continue",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionEntry.skillsSnapshot).toBeUndefined();
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { skillsSnapshot?: unknown }
+    >;
+    expect(store[sessionKey]?.skillsSnapshot).toBeUndefined();
+  });
+
   it("drains stale system events when /new rotates an existing session", async () => {
     const root = await makeCaseDir("openclaw-rawbody-reset-system-events-");
     const storePath = path.join(root, "sessions.json");
