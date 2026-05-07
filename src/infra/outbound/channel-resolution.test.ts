@@ -255,4 +255,39 @@ describe("outbound channel resolution", () => {
     ).toBe(plugin);
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
   });
+
+  it("falls back to direct plugin lookup for channels not in the deliverable list", async () => {
+    // Simulate an external channel plugin (e.g. openclaw-weixin) that is not
+    // in the hardcoded deliverable list but is available via getChannelPlugin
+    // (bundled lazy load). This reproduces the isolated cron delivery bug #78754.
+    const plugin = { id: "openclaw-weixin" };
+    getChannelPluginMock.mockImplementation((id: string) =>
+      id === "openclaw-weixin" ? plugin : undefined,
+    );
+    const channelResolution = await importChannelResolution("fallback-external-channel");
+
+    expect(
+      channelResolution.resolveOutboundChannelPlugin({
+        channel: "openclaw-weixin",
+        cfg: {} as never,
+      }),
+    ).toBe(plugin);
+  });
+
+  it("falls back to active registry for channels not in the deliverable list", async () => {
+    const plugin = { id: "openclaw-weixin" };
+    getActivePluginRegistryMock.mockReturnValue({
+      channels: [{ plugin }],
+    });
+    getChannelPluginMock.mockReturnValue(undefined);
+    getLoadedChannelPluginMock.mockReturnValue(undefined);
+    const channelResolution = await importChannelResolution("fallback-registry-external");
+
+    expect(
+      channelResolution.resolveOutboundChannelPlugin({
+        channel: "openclaw-weixin",
+        cfg: {} as never,
+      }),
+    ).toBe(plugin);
+  });
 });

@@ -178,7 +178,19 @@ export function resolveOutboundChannelPlugin(params: {
 }): ChannelPlugin | undefined {
   const normalized = normalizeDeliverableOutboundChannel(params.channel);
   if (!normalized) {
-    return undefined;
+    // The channel may be a valid external plugin that is not yet in the
+    // deliverable list (e.g. isolated cron sessions where the plugin registry
+    // hasn't been fully populated). Fall back to direct plugin lookup.
+    const fallbackId = params.channel?.trim().toLowerCase();
+    if (!fallbackId) {
+      return undefined;
+    }
+    return (
+      getLoadedChannelPlugin(fallbackId as DeliverableMessageChannel) ??
+      resolveDirectFromActiveRegistry(fallbackId as DeliverableMessageChannel) ??
+      getChannelPlugin(fallbackId as DeliverableMessageChannel) ??
+      undefined
+    );
   }
 
   const resolveLoaded = () => getLoadedChannelPlugin(normalized);
