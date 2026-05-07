@@ -36,6 +36,7 @@ import type {
 } from "../plugins/hook-types.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronFailureAlert,
@@ -201,17 +202,25 @@ export function buildGatewayCronService(params: {
       typeof opts?.agentId === "string" && opts.agentId.trim()
         ? normalizeAgentId(opts.agentId)
         : undefined;
-    const derivedAgentId =
-      requestedAgentId ??
-      (opts?.sessionKey
+    // Derive agentId from sessionKey only when the key is agent-prefixed
+    // (`agent:<id>:...`). For relative session keys like `discord:channel:ops`,
+    // `resolveAgentIdFromSessionKey` returns the literal `DEFAULT_AGENT_ID`
+    // ("main") regardless of cfg, which would route relative keys to the
+    // hardcoded "main" agent even on non-main-default deployments. Passing
+    // `undefined` lets `resolveCronAgent` fall back to the configured default
+    // agent so wake and enqueue resolve to the same target.
+    const parsedSessionKeyAgentId =
+      opts?.sessionKey && parseAgentSessionKey(opts.sessionKey)
         ? normalizeAgentId(resolveAgentIdFromSessionKey(opts.sessionKey))
-        : undefined);
-    const runtimeConfigBase = getRuntimeConfig();
-    const runtimeConfig =
-      derivedAgentId !== undefined
-        ? mergeRuntimeAgentConfig(runtimeConfigBase, derivedAgentId)
-        : runtimeConfigBase;
-    const agentId = derivedAgentId || undefined;
+        : undefined;
+    const requestedOrDerived = requestedAgentId ?? parsedSessionKeyAgentId;
+    // Always run `resolveCronAgent`, including when no agent is requested —
+    // for relative session keys (e.g. `discord:channel:ops`) we want the
+    // configured default agent's session, which `resolveCronAgent(undefined)`
+    // returns. Leaving agentId undefined here would strand the wake on the
+    // resolveCronSessionKey branch below.
+    const { agentId: resolvedAgentId, cfg: runtimeConfig } = resolveCronAgent(requestedOrDerived);
+    const agentId = resolvedAgentId || undefined;
     const sessionKey =
       opts?.sessionKey && agentId
         ? resolveCronSessionKey({
@@ -282,9 +291,15 @@ export function buildGatewayCronService(params: {
       // When the caller passes only a sessionKey (e.g. `system event --session-key`),
       // derive agentId from that key so a non-default agent's session is not silently
       // rejected as foreign by resolveCronSessionKey and rerouted to the default agent.
+      // Only derive from agent-prefixed keys — for relative keys, let resolveCronAgent
+      // fall back to the configured default so we don't hardcode "main" on multi-agent
+      // deployments where main exists but isn't the default. (Mirrors the same fix in
+      // resolveCronWakeTarget above.)
       const derivedAgentId =
         opts?.agentId ??
-        (opts?.sessionKey ? resolveAgentIdFromSessionKey(opts.sessionKey) : undefined);
+        (opts?.sessionKey && parseAgentSessionKey(opts.sessionKey)
+          ? resolveAgentIdFromSessionKey(opts.sessionKey)
+          : undefined);
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(derivedAgentId);
       const sessionKey = resolveCronSessionKey({
         runtimeConfig,
