@@ -781,8 +781,14 @@ describe("handleInlineActions", () => {
           opts: { abortSignal: abortController.signal },
           skillCommands,
           sessionEntry: {
-            sessionId: "session-1",
+            sessionId: "wrapper-session",
             updatedAt: 0,
+          },
+          sessionStore: {
+            "s:main": {
+              sessionId: "target-session",
+              updatedAt: 0,
+            },
           },
         },
       }),
@@ -804,7 +810,7 @@ describe("handleInlineActions", () => {
         agentId: "main",
         config: expect.any(Object),
         sessionKey: "s:main",
-        sessionId: "session-1",
+        sessionId: "target-session",
         loopDetection: { enabled: true },
       }),
       signal: abortController.signal,

@@ -256,6 +256,7 @@ export async function handleInlineActions(params: {
             skillFilter,
           })
         : [];
+  const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
 
   const skillInvocation =
     allowTextCommands && skillCommands.length > 0
@@ -316,7 +317,7 @@ export async function handleInlineActions(params: {
           agentId,
           config: cfg,
           sessionKey,
-          ...(sessionEntry?.sessionId ? { sessionId: sessionEntry.sessionId } : {}),
+          ...(targetSessionEntry?.sessionId ? { sessionId: targetSessionEntry.sessionId } : {}),
           ...(command.channelId ? { channelId: command.channelId } : {}),
           loopDetection: resolveToolLoopDetectionConfig({ cfg, agentId }),
         };
@@ -375,7 +376,6 @@ export async function handleInlineActions(params: {
   };
 
   const isStopLikeInbound = isAbortRequestText(command.rawBodyNormalized);
-  const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
   if (!isStopLikeInbound && targetSessionEntry) {
     const cutoff = readAbortCutoffFromSessionEntry(targetSessionEntry);
     const incoming = resolveAbortCutoffFromContext(ctx);
