@@ -67,7 +67,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     currentSessionKey: "agent:main:main",
     currentSessionId: "session-1",
     activeChatRunId: "run-1",
-    pendingOptimisticUserMessage: false,
+    pendingOptimisticUserMessage: 0,
     historyLoaded: true,
     sessionInfo: { verboseLevel: "on" },
     initialSessionApplied: true,
@@ -597,7 +597,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
   it("binds optimistic pending messages to the first gateway run id and skips history reload", () => {
     const { state, loadHistory, isLocalRunId, handleChatEvent } = createHandlersHarness({
-      state: { activeChatRunId: null, pendingOptimisticUserMessage: true },
+      state: { activeChatRunId: null, pendingOptimisticUserMessage: 1 },
     });
 
     handleChatEvent({
@@ -607,9 +607,42 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       message: { content: [{ type: "text", text: "done" }] },
     });
 
-    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingOptimisticUserMessage).toBe(0);
     expect(state.activeChatRunId).toBeNull();
     expect(isLocalRunId("run-gateway")).toBe(false);
+    expect(loadHistory).not.toHaveBeenCalled();
+  });
+
+  it("binds every burst-sent optimistic message to its gateway run id (#3145)", () => {
+    // Simulates user sending three messages in quick succession before any
+    // gateway events arrive. Each subsequent run must still be tagged as
+    // local so its `final` event does not trigger a stray history reload —
+    // concurrent reloads are what produced the duplicate / reordered
+    // transcripts reported in NemoClaw issue #3145.
+    const { state, loadHistory, isLocalRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null, pendingOptimisticUserMessage: 3 },
+    });
+
+    for (const runId of ["run-1", "run-2", "run-3"]) {
+      handleChatEvent({
+        runId,
+        sessionKey: state.currentSessionKey,
+        state: "delta",
+        message: { content: "partial" },
+      });
+      handleChatEvent({
+        runId,
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "done" }] },
+      });
+    }
+
+    expect(state.pendingOptimisticUserMessage).toBe(0);
+    expect(state.activeChatRunId).toBeNull();
+    expect(isLocalRunId("run-1")).toBe(false);
+    expect(isLocalRunId("run-2")).toBe(false);
+    expect(isLocalRunId("run-3")).toBe(false);
     expect(loadHistory).not.toHaveBeenCalled();
   });
 
@@ -617,7 +650,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     const { state, handleChatEvent } = createHandlersHarness({
       state: {
         activeChatRunId: null,
-        pendingOptimisticUserMessage: true,
+        pendingOptimisticUserMessage: 1,
         pendingChatRunId: "run-pending",
       },
     });
@@ -1018,7 +1051,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
     currentSessionKey: "agent:main:main",
     currentSessionId: "session-1",
     activeChatRunId: null,
-    pendingOptimisticUserMessage: false,
+    pendingOptimisticUserMessage: 0,
     historyLoaded: true,
     sessionInfo: { verboseLevel: "on" },
     initialSessionApplied: true,

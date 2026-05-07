@@ -172,7 +172,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     sessionRuns.clear();
     streamAssembler = new TuiStreamAssembler();
     pendingHistoryRefresh = false;
-    state.pendingOptimisticUserMessage = false;
+    state.pendingOptimisticUserMessage = 0;
     state.pendingChatRunId = null;
     reconnectPendingRunId = null;
     clearLocalRunIds?.();
@@ -394,9 +394,10 @@ export function createEventHandlers(context: EventHandlerContext) {
     noteSessionRun(evt.runId);
     if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
       state.activeChatRunId = evt.runId;
-      if (state.pendingOptimisticUserMessage) {
+      const pendingCount = state.pendingOptimisticUserMessage ?? 0;
+      if (pendingCount > 0) {
         noteLocalRunId?.(evt.runId);
-        state.pendingOptimisticUserMessage = false;
+        state.pendingOptimisticUserMessage = pendingCount - 1;
       }
     }
     if (state.pendingChatRunId === evt.runId) {
