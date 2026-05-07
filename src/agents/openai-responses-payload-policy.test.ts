@@ -176,4 +176,29 @@ describe("openai responses payload policy", () => {
       shouldStripStore: false,
     });
   });
+
+  it("skips store:false for proxy-like responses endpoints in disable mode", () => {
+    // LiteLLM and other OpenAI-compatible proxies (custom baseUrl) should not
+    // receive store:false — forwarding it to OpenAI prevents response persistence
+    // and breaks previous_response_id multi-turn continuations (#78897).
+    const proxyPolicy = resolveOpenAIResponsesPayloadPolicy(
+      {
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://litellm.example.com/v1",
+      },
+      { storeMode: "disable" },
+    );
+    expect(proxyPolicy.explicitStore).toBeUndefined();
+
+    const nativePolicy = resolveOpenAIResponsesPayloadPolicy(
+      {
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+      },
+      { storeMode: "disable" },
+    );
+    expect(nativePolicy.explicitStore).toBe(false);
+  });
 });
