@@ -140,6 +140,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/hooks: add a `before_agent_run` pass/block gate that can stop a user prompt before model submission while preserving a redacted transcript entry for the user, and clarify that raw conversation hooks require `hooks.allowConversationAccess=true`. (#75035) Thanks @jesse-merhi.
 - Config/Nix: keep startup-derived plugin enablement, gateway auth tokens, control UI origins, and owner-display secrets runtime-only instead of rewriting `openclaw.json`; in Nix mode, config writers, mutating `openclaw update`, plugin lifecycle mutators, and doctor repair/token-generation now refuse with agent-first nix-openclaw guidance. (#78047) Thanks @joshp123.
 - Agents/context engine: invalidate cached assembled context views when source history shrinks or assembly fails, preventing stale pre-reset history from being reused. Fixes #77968. (#78163) Thanks @brokemac79 and @ChrisBot2026.
+- Talk/voice: add an additive optional `sendVideoFrame` seam plus a `videoConfig` create-request hint and matching `RealtimeVoiceVideoFrameMimeType` / `RealtimeVoiceVideoFrameOptions` / `RealtimeVoiceVideoConfig` types on the public Plugin SDK so realtime voice provider plugins can stream periodic still frames alongside audio when the existing `supportsVideoFrames` capability flag is set, without requiring any change in providers that do not opt in.
 
 ### Fixes
 
