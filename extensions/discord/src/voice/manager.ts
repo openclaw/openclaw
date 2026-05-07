@@ -462,13 +462,17 @@ export class DiscordVoiceManager {
   }
 
   private scheduleCaptureFinalize(entry: VoiceSessionEntry, userId: string, reason: string) {
+    const graceMs = resolveVoiceTimeoutMs(
+      this.params.discordConfig.voice?.captureSilenceGraceMs,
+      CAPTURE_FINALIZE_GRACE_MS,
+    );
     scheduleVoiceCaptureFinalize({
       state: entry.capture,
       userId,
-      delayMs: CAPTURE_FINALIZE_GRACE_MS,
+      delayMs: graceMs,
       onFinalize: () => {
         logVoiceVerbose(
-          `capture finalize: guild ${entry.guildId} channel ${entry.channelId} user ${userId} reason=${reason} grace=${CAPTURE_FINALIZE_GRACE_MS}ms`,
+          `capture finalize: guild ${entry.guildId} channel ${entry.channelId} user ${userId} reason=${reason} grace=${graceMs}ms`,
         );
       },
     });
