@@ -249,7 +249,7 @@ function logAgentHarnessSelection(
 }
 
 function formatOpenAIPiRuntimeError(source: string): string {
-  return `OpenAI agent model runs require the Codex harness. ${source} selected PI; remove that runtime override or run \`openclaw doctor --fix\` to repair stale OpenAI runtime pins.`;
+  return `OpenAI Codex agent model runs require the Codex harness. ${source} selected PI; remove that runtime override or run \`openclaw doctor --fix\` to repair stale Codex runtime pins.`;
 }
 
 function resolvePinnedAgentHarnessPolicy(params: {

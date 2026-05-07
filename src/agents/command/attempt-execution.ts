@@ -662,11 +662,11 @@ function resolveSessionPinnedAgentHarnessId(params: {
   }
   if (params.sessionEntry.agentHarnessId) {
     if (
-      normalizeProviderId(params.provider) === "openai" &&
+      normalizeProviderId(params.provider) === "openai-codex" &&
       normalizeEmbeddedAgentRuntime(params.sessionEntry.agentHarnessId) === "pi"
     ) {
       throw new Error(
-        "OpenAI agent model runs require the Codex harness. The existing session is pinned to PI; run `openclaw doctor --fix` to repair stale OpenAI runtime pins.",
+        "OpenAI Codex agent model runs require the Codex harness. The existing session is pinned to PI; run `openclaw doctor --fix` to repair stale Codex runtime pins.",
       );
     }
     return params.sessionEntry.agentHarnessId;

@@ -886,7 +886,7 @@ describe("embedded attempt harness pinning", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("treats legacy OpenAI sessions with history as Codex-pinned", async () => {
+  it("keeps legacy OpenAI sessions with history on PI", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "legacy-session",
       updatedAt: Date.now(),
@@ -910,7 +910,7 @@ describe("embedded attempt harness pinning", () => {
       isFallbackRetry: false,
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
-      runId: "run-legacy-pi-pin",
+      runId: "run-legacy-openai-pi",
       opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
@@ -925,7 +925,7 @@ describe("embedded attempt harness pinning", () => {
 
     expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentHarnessId: "codex",
+        agentHarnessId: "pi",
       }),
     );
   });
@@ -1005,9 +1005,9 @@ describe("embedded attempt harness pinning", () => {
     } satisfies EmbeddedPiRunResult);
 
     await runAgentAttempt({
-      providerOverride: "openai",
-      originalProvider: "openai",
-      modelOverride: "gpt-5.4",
+      providerOverride: "openai-codex",
+      originalProvider: "openai-codex",
+      modelOverride: "gpt-5.5",
       cfg: {} as OpenClawConfig,
       sessionEntry,
       sessionId: sessionEntry.sessionId,
@@ -1028,7 +1028,7 @@ describe("embedded attempt harness pinning", () => {
       resolvedVerboseLevel: undefined,
       agentDir: tmpDir,
       onAgentEvent: vi.fn(),
-      authProfileProvider: "openai",
+      authProfileProvider: "openai-codex",
       sessionHasHistory: true,
     });
 
@@ -1041,7 +1041,7 @@ describe("embedded attempt harness pinning", () => {
     );
   });
 
-  it("pins a fresh OpenAI session to the Codex harness by default", async () => {
+  it("pins a fresh OpenAI Codex session to the Codex harness by default", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "fresh-session",
       updatedAt: Date.now(),
@@ -1051,9 +1051,9 @@ describe("embedded attempt harness pinning", () => {
     } satisfies EmbeddedPiRunResult);
 
     await runAgentAttempt({
-      providerOverride: "openai",
-      originalProvider: "openai",
-      modelOverride: "gpt-5.4",
+      providerOverride: "openai-codex",
+      originalProvider: "openai-codex",
+      modelOverride: "gpt-5.5",
       cfg: {} as OpenClawConfig,
       sessionEntry,
       sessionId: sessionEntry.sessionId,
@@ -1065,7 +1065,7 @@ describe("embedded attempt harness pinning", () => {
       isFallbackRetry: false,
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
-      runId: "run-fresh-no-pin",
+      runId: "run-fresh-codex-no-pin",
       opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
@@ -1074,7 +1074,7 @@ describe("embedded attempt harness pinning", () => {
       resolvedVerboseLevel: undefined,
       agentDir: tmpDir,
       onAgentEvent: vi.fn(),
-      authProfileProvider: "openai",
+      authProfileProvider: "openai-codex",
       sessionHasHistory: false,
     });
 
@@ -1085,7 +1085,7 @@ describe("embedded attempt harness pinning", () => {
     );
   });
 
-  it("rejects stale OpenAI sessions pinned to PI", async () => {
+  it("rejects stale OpenAI Codex sessions pinned to PI", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "stale-pi-session",
       updatedAt: Date.now(),
@@ -1094,9 +1094,9 @@ describe("embedded attempt harness pinning", () => {
 
     expect(() =>
       runAgentAttempt({
-        providerOverride: "openai",
-        originalProvider: "openai",
-        modelOverride: "gpt-5.4",
+        providerOverride: "openai-codex",
+        originalProvider: "openai-codex",
+        modelOverride: "gpt-5.5",
         cfg: {} as OpenClawConfig,
         sessionEntry,
         sessionId: sessionEntry.sessionId,
@@ -1108,7 +1108,7 @@ describe("embedded attempt harness pinning", () => {
         isFallbackRetry: false,
         resolvedThinkLevel: "medium",
         timeoutMs: 1_000,
-        runId: "run-stale-openai-pi-pin",
+        runId: "run-stale-openai-codex-pi-pin",
         opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
         runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
         spawnedBy: undefined,
@@ -1117,10 +1117,10 @@ describe("embedded attempt harness pinning", () => {
         resolvedVerboseLevel: undefined,
         agentDir: tmpDir,
         onAgentEvent: vi.fn(),
-        authProfileProvider: "openai",
+        authProfileProvider: "openai-codex",
         sessionHasHistory: true,
       }),
-    ).toThrow("OpenAI agent model runs require the Codex harness");
+    ).toThrow("OpenAI Codex agent model runs require the Codex harness");
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
 

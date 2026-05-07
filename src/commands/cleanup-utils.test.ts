@@ -60,10 +60,17 @@ describe("applyAgentDefaultPrimaryModel", () => {
 });
 
 describe("applyPrimaryModel", () => {
-  it("pins official OpenAI model selections to the Codex runtime", () => {
+  it("leaves OpenAI model selections on the existing runtime", () => {
     const next = applyPrimaryModel({ agents: { defaults: {} } }, "openai/gpt-5.5");
 
     expect(next.agents?.defaults?.model).toMatchObject({ primary: "openai/gpt-5.5" });
+    expect(next.agents?.defaults?.agentRuntime).toBeUndefined();
+  });
+
+  it("pins OpenAI Codex model selections to the Codex runtime", () => {
+    const next = applyPrimaryModel({ agents: { defaults: {} } }, "openai-codex/gpt-5.5");
+
+    expect(next.agents?.defaults?.model).toMatchObject({ primary: "openai-codex/gpt-5.5" });
     expect(next.agents?.defaults?.agentRuntime).toEqual({ id: "codex" });
   });
 

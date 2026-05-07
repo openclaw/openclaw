@@ -9,6 +9,11 @@ const mocks = vi.hoisted(() => ({
   applyAuthChoice: vi.fn(),
   promptModelAllowlist: vi.fn(),
   promptDefaultModel: vi.fn(),
+  ensureCodexRuntimePluginForModelSelection: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+    cfg,
+    required: false,
+    installed: false,
+  })),
   applyPrimaryModel: vi.fn((cfg: OpenClawConfig, model: string) => ({
     ...cfg,
     agents: {
@@ -176,6 +181,7 @@ vi.mock("./model-picker.js", () => ({
   applyModelAllowlist: mocks.applyModelAllowlist,
   applyModelFallbacksFromSelection: mocks.applyModelFallbacksFromSelection,
   applyPrimaryModel: mocks.applyPrimaryModel,
+  ensureCodexRuntimePluginForModelSelection: mocks.ensureCodexRuntimePluginForModelSelection,
   promptModelAllowlist: mocks.promptModelAllowlist,
   promptDefaultModel: mocks.promptDefaultModel,
 }));
@@ -200,6 +206,7 @@ import { promptAuthConfig } from "./configure.gateway-auth.js";
 
 beforeEach(() => {
   mocks.loadStaticManifestCatalogRowsForList.mockReturnValue([]);
+  mocks.ensureCodexRuntimePluginForModelSelection.mockClear();
 });
 
 function makeRuntime(): RuntimeEnv {

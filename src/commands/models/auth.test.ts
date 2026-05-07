@@ -25,6 +25,11 @@ const mocks = vi.hoisted(() => ({
   listProfilesForProvider: vi.fn(),
   promoteAuthProfileInOrder: vi.fn(),
   clearAuthProfileCooldown: vi.fn(),
+  repairCodexRuntimePluginInstallForModelSelection: vi.fn(async () => ({
+    required: false,
+    changes: [],
+    warnings: [],
+  })),
 }));
 
 vi.mock("../../agents/auth-profiles/profiles.js", () => ({
@@ -128,6 +133,11 @@ vi.mock("../../plugins/provider-oauth-flow.js", () => ({
 
 vi.mock("../auth-token.js", () => ({
   validateAnthropicSetupToken: vi.fn(() => undefined),
+}));
+
+vi.mock("../codex-runtime-plugin-install.js", () => ({
+  repairCodexRuntimePluginInstallForModelSelection:
+    mocks.repairCodexRuntimePluginInstallForModelSelection,
 }));
 
 vi.mock("../../plugins/provider-auth-choice-helpers.js", () => {

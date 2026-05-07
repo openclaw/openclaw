@@ -66,7 +66,7 @@ describe("doctor session state provider routes", () => {
     });
   });
 
-  it("resolves implicit official OpenAI routes to the Codex runtime", () => {
+  it("keeps implicit OpenAI routes on PI", () => {
     expect(
       resolveConfiguredDoctorSessionStateRoute({
         cfg: {
@@ -82,6 +82,26 @@ describe("doctor session state provider routes", () => {
     ).toMatchObject({
       defaultProvider: "openai",
       configuredModelRefs: ["openai/gpt-5.5"],
+      runtime: "pi",
+    });
+  });
+
+  it("resolves implicit OpenAI Codex routes to the Codex runtime", () => {
+    expect(
+      resolveConfiguredDoctorSessionStateRoute({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "openai-codex/gpt-5.5" },
+            },
+          },
+        },
+        sessionKey: "agent:main:telegram:direct:1",
+        env: {},
+      }),
+    ).toMatchObject({
+      defaultProvider: "openai-codex",
+      configuredModelRefs: ["openai-codex/gpt-5.5"],
       runtime: "codex",
     });
   });

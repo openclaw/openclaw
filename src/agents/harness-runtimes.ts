@@ -3,8 +3,8 @@ import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import { resolveAgentRuntimePolicy } from "./agent-runtime-policy.js";
 import { isCliRuntimeAlias } from "./model-runtime-aliases.js";
+import { modelSelectionRequiresCodexRuntime } from "./openai-codex-routing.js";
 import { normalizeEmbeddedAgentRuntime } from "./pi-embedded-runner/runtime.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 function normalizeRuntimeId(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -38,13 +38,9 @@ function listAgentModelRefs(value: unknown): string[] {
   return refs;
 }
 
-function hasOpenAIModelRef(value: unknown): boolean {
+function hasCodexRuntimeModelRef(config: OpenClawConfig, value: unknown): boolean {
   return listAgentModelRefs(value).some((ref) => {
-    const slashIndex = ref.indexOf("/");
-    if (slashIndex <= 0) {
-      return false;
-    }
-    return normalizeProviderId(ref.slice(0, slashIndex)) === "openai";
+    return modelSelectionRequiresCodexRuntime({ model: ref, config });
   });
 }
 
@@ -71,7 +67,7 @@ export function collectConfiguredAgentHarnessRuntimes(
     runtimes.add(normalized);
   };
   const pushCodexForOpenAIModel = (model: unknown, runtime: string | undefined) => {
-    if (hasOpenAIModelRef(model) && openAIModelUsesImplicitCodexHarness(runtime)) {
+    if (hasCodexRuntimeModelRef(config, model) && openAIModelUsesImplicitCodexHarness(runtime)) {
       runtimes.add("codex");
     }
   };

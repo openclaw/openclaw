@@ -160,7 +160,7 @@ describe("runAgentHarnessAttempt", () => {
     expect(piRunAttempt).not.toHaveBeenCalled();
   });
 
-  it("uses the Codex harness by default for OpenAI agent model runs", async () => {
+  it("keeps OpenAI agent model runs on PI by default", async () => {
     registerSuccessfulCodexHarness();
 
     await expect(
@@ -170,12 +170,12 @@ describe("runAgentHarnessAttempt", () => {
         modelId: "gpt-5.4",
       }),
     ).resolves.toMatchObject({
-      sessionIdUsed: "codex",
+      sessionIdUsed: "pi",
     });
-    expect(piRunAttempt).not.toHaveBeenCalled();
+    expect(piRunAttempt).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects explicit PI runtime for OpenAI agent model runs", async () => {
+  it("allows explicit PI runtime for OpenAI agent model runs", async () => {
     await expect(
       runAgentHarnessAttempt({
         ...createAttemptParams({
@@ -184,7 +184,37 @@ describe("runAgentHarnessAttempt", () => {
         provider: "openai",
         modelId: "gpt-5.4",
       }),
-    ).rejects.toThrow("OpenAI agent model runs require the Codex harness");
+    ).resolves.toMatchObject({
+      sessionIdUsed: "pi",
+    });
+    expect(piRunAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the Codex harness by default for OpenAI Codex agent model runs", async () => {
+    registerSuccessfulCodexHarness();
+
+    await expect(
+      runAgentHarnessAttempt({
+        ...createAttemptParams(),
+        provider: "openai-codex",
+        modelId: "gpt-5.5",
+      }),
+    ).resolves.toMatchObject({
+      sessionIdUsed: "codex",
+    });
+    expect(piRunAttempt).not.toHaveBeenCalled();
+  });
+
+  it("rejects explicit PI runtime for OpenAI Codex agent model runs", async () => {
+    await expect(
+      runAgentHarnessAttempt({
+        ...createAttemptParams({
+          agents: { defaults: { agentRuntime: { id: "pi" } } },
+        }),
+        provider: "openai-codex",
+        modelId: "gpt-5.5",
+      }),
+    ).rejects.toThrow("OpenAI Codex agent model runs require the Codex harness");
     expect(piRunAttempt).not.toHaveBeenCalled();
   });
 
@@ -429,7 +459,7 @@ describe("selectAgentHarness", () => {
     ).toBe("pi");
   });
 
-  it("does not treat CLI runtime aliases as PI for OpenAI agent model runs", async () => {
+  it("does not treat CLI runtime aliases as PI for OpenAI Codex agent model runs", async () => {
     registerSuccessfulCodexHarness();
     const config: OpenClawConfig = {
       agents: {
@@ -439,13 +469,15 @@ describe("selectAgentHarness", () => {
       },
     };
 
-    expect(selectAgentHarness({ provider: "openai", modelId: "gpt-5.4", config }).id).toBe("codex");
+    expect(selectAgentHarness({ provider: "openai-codex", modelId: "gpt-5.5", config }).id).toBe(
+      "codex",
+    );
 
     await expect(
       runAgentHarnessAttempt({
         ...createAttemptParams(config),
-        provider: "openai",
-        modelId: "gpt-5.4",
+        provider: "openai-codex",
+        modelId: "gpt-5.5",
       }),
     ).resolves.toMatchObject({
       sessionIdUsed: "codex",
