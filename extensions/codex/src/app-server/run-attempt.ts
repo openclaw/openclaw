@@ -667,7 +667,6 @@ export async function runCodexAppServerAttempt(
     const pluginThreadConfigInputFingerprint = pluginThreadConfigEnabled
       ? buildCodexPluginThreadConfigInputFingerprint({
           pluginConfig,
-          appCache: defaultCodexAppInventoryCache,
           appCacheKey: pluginAppCacheKey,
         })
       : undefined;

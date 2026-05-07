@@ -67,14 +67,12 @@ export function shouldBuildCodexPluginThreadConfig(pluginConfig?: unknown): bool
 
 export function buildCodexPluginThreadConfigInputFingerprint(params: {
   pluginConfig?: unknown;
-  appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
 }): string {
   const policy = resolveCodexPluginsPolicy(params.pluginConfig);
   return fingerprintJson({
     version: 1,
     policy: policyFingerprint(policy),
-    appCacheRevision: (params.appCache ?? defaultCodexAppInventoryCache).getRevision(),
     appCacheKey: params.appCacheKey ?? null,
   });
 }
@@ -85,7 +83,6 @@ export async function buildCodexPluginThreadConfig(
   const appCache = params.appCache ?? defaultCodexAppInventoryCache;
   let inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
     pluginConfig: params.pluginConfig,
-    appCache,
     appCacheKey: params.appCacheKey,
   });
   const policy = resolveCodexPluginsPolicy(params.pluginConfig);
@@ -113,7 +110,6 @@ export async function buildCodexPluginThreadConfig(
     });
     inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
       pluginConfig: params.pluginConfig,
-      appCache,
       appCacheKey: params.appCacheKey,
     });
   }

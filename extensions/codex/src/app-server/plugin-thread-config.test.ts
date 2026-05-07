@@ -201,11 +201,10 @@ describe("Codex plugin thread config", () => {
     );
   });
 
-  it("uses app cache key and revision in the cheap input fingerprint", async () => {
+  it("uses durable policy and app cache key in the cheap input fingerprint", async () => {
     const appCache = new CodexAppInventoryCache();
     const first = buildCodexPluginThreadConfigInputFingerprint({
       pluginConfig: { codexPlugins: { enabled: true } },
-      appCache,
       appCacheKey: "runtime-a",
     });
     await appCache.refreshNow({
@@ -214,16 +213,14 @@ describe("Codex plugin thread config", () => {
     });
     const second = buildCodexPluginThreadConfigInputFingerprint({
       pluginConfig: { codexPlugins: { enabled: true } },
-      appCache,
       appCacheKey: "runtime-a",
     });
     const third = buildCodexPluginThreadConfigInputFingerprint({
       pluginConfig: { codexPlugins: { enabled: true } },
-      appCache,
       appCacheKey: "runtime-b",
     });
 
-    expect(second).not.toBe(first);
+    expect(second).toBe(first);
     expect(third).not.toBe(second);
   });
 
