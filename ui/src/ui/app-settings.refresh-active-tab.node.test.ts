@@ -120,7 +120,7 @@ vi.mock("./controllers/usage.ts", () => ({
   loadUsage: mocks.loadUsageMock,
 }));
 
-import { refreshActiveTab, setTab } from "./app-settings.ts";
+import { loadChannelsTab, refreshActiveTab, setTab } from "./app-settings.ts";
 
 function createHost() {
   return {
@@ -237,6 +237,16 @@ describe("refreshActiveTab", () => {
     expect(mocks.loadCronRunsMock).toHaveBeenCalledWith(host, "job-123");
     expect(mocks.loadAgentFilesMock).not.toHaveBeenCalled();
     expect(mocks.loadAgentSkillsMock).not.toHaveBeenCalled();
+  });
+
+  it("loads the Channels tab without automatic live probes", async () => {
+    const host = createHost();
+
+    await loadChannelsTab(host as never);
+
+    expect(mocks.loadChannelsMock).toHaveBeenCalledWith(host, false);
+    expect(mocks.loadConfigSchemaMock).toHaveBeenCalledWith(host);
+    expect(mocks.loadConfigMock).toHaveBeenCalledWith(host);
   });
 
   it("refreshes logs tab by resetting bottom-follow and scheduling scroll", async () => {
