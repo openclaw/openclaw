@@ -193,8 +193,8 @@ describe("Codex plugin activation", () => {
     });
 
     expect(result).toMatchObject({
-      ok: true,
-      reason: "installed",
+      ok: false,
+      reason: "refresh_failed",
       installAttempted: true,
     });
     expect(result.diagnostics).toContainEqual({

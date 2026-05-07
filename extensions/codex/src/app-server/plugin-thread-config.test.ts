@@ -398,6 +398,69 @@ describe("Codex plugin thread config", () => {
     expect(appListParams.some((params) => params.forceRefetch)).toBe(true);
   });
 
+  it("surfaces critical post-install refresh failures and keeps plugin apps disabled", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () => ({
+        data: [appInfo("google-calendar-app", true)],
+        nextCursor: null,
+      }),
+    });
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            "google-calendar": {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      nowMs: 1,
+      request: async (method) => {
+        if (method === "plugin/list") {
+          return pluginList([
+            pluginSummary("google-calendar", { installed: false, enabled: false }),
+          ]);
+        }
+        if (method === "plugin/read") {
+          return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
+        }
+        if (method === "plugin/install") {
+          return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
+        }
+        if (method === "skills/list") {
+          throw new Error("skills/list unavailable");
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(config.configPatch).toEqual({
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+      },
+    });
+    expect(config.policyContext.apps).toEqual({});
+    expect(config.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "plugin_activation_failed",
+        message: expect.stringContaining("skills/list unavailable"),
+      }),
+    );
+  });
+
   it("fails closed when the initial app inventory refresh fails", async () => {
     const appCache = new CodexAppInventoryCache();
     const config = await buildCodexPluginThreadConfig({

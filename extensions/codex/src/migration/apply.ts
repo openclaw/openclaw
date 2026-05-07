@@ -260,6 +260,8 @@ function codexPluginActivationReportState(result: CodexPluginActivationResult): 
     case "marketplace_missing":
     case "plugin_missing":
       return { installed: false, enabled: false };
+    case "refresh_failed":
+      return { installed: true, enabled: false };
   }
 }
 

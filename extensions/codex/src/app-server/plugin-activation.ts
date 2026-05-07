@@ -19,7 +19,8 @@ export type CodexPluginActivationReason =
   | "disabled"
   | "marketplace_missing"
   | "plugin_missing"
-  | "auth_required";
+  | "auth_required"
+  | "refresh_failed";
 
 export type CodexPluginActivationDiagnostic = {
   message: string;
@@ -85,6 +86,7 @@ export async function ensureCodexPluginActivation(
     ) satisfies v2.PluginInstallParams,
   )) as v2.PluginInstallResponse;
   const refreshDiagnostics: CodexPluginActivationDiagnostic[] = [];
+  let refreshFailed = false;
   try {
     const refreshResult = await refreshCodexPluginRuntimeState({
       request: params.request,
@@ -93,6 +95,7 @@ export async function ensureCodexPluginActivation(
     });
     refreshDiagnostics.push(...refreshResult.diagnostics);
   } catch (error) {
+    refreshFailed = true;
     refreshDiagnostics.push({
       message: `Codex plugin runtime refresh failed after install: ${
         error instanceof Error ? error.message : String(error)
@@ -102,12 +105,14 @@ export async function ensureCodexPluginActivation(
   const authRequired = installResponse.appsNeedingAuth.length > 0;
   return {
     identity: params.identity,
-    ok: !authRequired,
-    reason: authRequired
-      ? "auth_required"
-      : resolved.summary.installed && resolved.summary.enabled
-        ? "already_active"
-        : "installed",
+    ok: !authRequired && !refreshFailed,
+    reason: refreshFailed
+      ? "refresh_failed"
+      : authRequired
+        ? "auth_required"
+        : resolved.summary.installed && resolved.summary.enabled
+          ? "already_active"
+          : "installed",
     installAttempted: true,
     marketplace: resolved.marketplace,
     installResponse,
