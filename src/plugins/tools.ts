@@ -559,18 +559,29 @@ function createCachedDescriptorPluginTool(params: {
       if (!candidates || candidates.length === 0) {
         throw new Error(`plugin tool runtime unavailable (${pluginId}): ${toolName}`);
       }
-      for (const candidate of candidates) {
-        const resolved = candidate.factory(params.ctx);
-        const listRaw: unknown[] = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];
-        for (const toolRaw of listRaw) {
-          const malformedReason = describeMalformedPluginTool(toolRaw);
-          if (malformedReason) {
-            throw new Error(`plugin tool is malformed (${pluginId}): ${malformedReason}`);
+      // First try to narrow candidates using names/declaredNames when available
+      const namedCandidates = candidates.filter(
+        (candidate) => candidate.names.length > 0,
+      );
+      const candidatesToTry = namedCandidates.length > 0 ? namedCandidates : candidates;
+      for (const candidate of candidatesToTry) {
+        try {
+          const resolved = candidate.factory(params.ctx);
+          const listRaw: unknown[] = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];
+          for (const toolRaw of listRaw) {
+            const malformedReason = describeMalformedPluginTool(toolRaw);
+            if (malformedReason) {
+              throw new Error(`plugin tool is malformed (${pluginId}): ${malformedReason}`);
+            }
+            const runtimeTool = toolRaw as AnyAgentTool;
+            if (normalizeToolName(runtimeTool.name) === normalizeToolName(toolName)) {
+              return runtimeTool.execute(toolCallId, executeParams, signal, onUpdate);
+            }
           }
-          const runtimeTool = toolRaw as AnyAgentTool;
-          if (normalizeToolName(runtimeTool.name) === normalizeToolName(toolName)) {
-            return runtimeTool.execute(toolCallId, executeParams, signal, onUpdate);
-          }
+        } catch (error) {
+          // Continue to next candidate if this one fails
+          // This preserves the uncached path behavior where factory failures are isolated
+          continue;
         }
       }
       throw new Error(`plugin tool runtime missing (${pluginId}): ${toolName}`);
