@@ -32,6 +32,7 @@ export type ToolPolicyPipelineStep = {
   policy: ToolPolicyLike | undefined;
   label: string;
   stripPluginOnlyAllowlist?: boolean;
+  preservePluginAllowlist?: string[];
   suppressUnavailableCoreToolWarning?: boolean;
   suppressUnavailableCoreToolWarningAllowlist?: string[];
 };
@@ -39,9 +40,11 @@ export type ToolPolicyPipelineStep = {
 export function buildDefaultToolPolicyPipelineSteps(params: {
   profilePolicy?: ToolPolicyLike;
   profile?: string;
+  profilePreservePluginAllowlist?: string[];
   profileUnavailableCoreWarningAllowlist?: string[];
   providerProfilePolicy?: ToolPolicyLike;
   providerProfile?: string;
+  providerProfilePreservePluginAllowlist?: string[];
   providerProfileUnavailableCoreWarningAllowlist?: string[];
   globalPolicy?: ToolPolicyLike;
   globalProviderPolicy?: ToolPolicyLike;
@@ -58,6 +61,7 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
       policy: params.profilePolicy,
       label: profile ? `tools.profile (${profile})` : "tools.profile",
       stripPluginOnlyAllowlist: true,
+      preservePluginAllowlist: params.profilePreservePluginAllowlist,
       suppressUnavailableCoreToolWarningAllowlist: params.profileUnavailableCoreWarningAllowlist,
     },
     {
@@ -66,6 +70,7 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
         ? `tools.byProvider.profile (${providerProfile})`
         : "tools.byProvider.profile",
       stripPluginOnlyAllowlist: true,
+      preservePluginAllowlist: params.providerProfilePreservePluginAllowlist,
       suppressUnavailableCoreToolWarningAllowlist:
         params.providerProfileUnavailableCoreWarningAllowlist,
     },
@@ -113,7 +118,11 @@ export function applyToolPolicyPipeline(params: {
       continue;
     }
 
-    let policy: ToolPolicyLike | undefined = step.policy;
+    let policy: ToolPolicyLike | undefined = preserveExplicitPluginAllowlist({
+      policy: step.policy,
+      preserveAllowlist: step.preservePluginAllowlist,
+      pluginGroups,
+    });
     if (step.stripPluginOnlyAllowlist) {
       const resolved = analyzeAllowlistByToolType(policy, pluginGroups, coreToolNames);
       if (resolved.unknownAllowlist.length > 0) {
@@ -157,6 +166,28 @@ export function applyToolPolicyPipeline(params: {
     filtered = expanded ? filterToolsByPolicy(filtered, expanded) : filtered;
   }
   return filtered;
+}
+
+function preserveExplicitPluginAllowlist(params: {
+  policy: ToolPolicyLike | undefined;
+  preserveAllowlist?: string[];
+  pluginGroups: ReturnType<typeof buildPluginToolGroups>;
+}): ToolPolicyLike | undefined {
+  if (!params.policy?.allow || !params.preserveAllowlist || params.preserveAllowlist.length === 0) {
+    return params.policy;
+  }
+  const pluginIds = new Set(params.pluginGroups.byPlugin.keys());
+  const pluginTools = new Set(params.pluginGroups.all);
+  const preserved = params.preserveAllowlist
+    .map((entry) => normalizeToolName(entry))
+    .filter((entry) => entry === "group:plugins" || pluginIds.has(entry) || pluginTools.has(entry));
+  if (preserved.length === 0) {
+    return params.policy;
+  }
+  return {
+    ...params.policy,
+    allow: Array.from(new Set([...params.policy.allow, ...preserved])),
+  };
 }
 
 function shouldWarnAboutUnknownAllowlist(params: {

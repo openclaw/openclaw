@@ -813,9 +813,11 @@ export function createOpenClawCodingTools(options?: {
       ...buildDefaultToolPolicyPipelineSteps({
         profilePolicy: profilePolicyWithAlsoAllow,
         profile,
+        profilePreservePluginAllowlist: pluginToolAllowlist,
         profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
         providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
         providerProfile,
+        providerProfilePreservePluginAllowlist: pluginToolAllowlist,
         providerProfileUnavailableCoreWarningAllowlist: providerProfilePolicy?.allow,
         globalPolicy,
         globalProviderPolicy,
