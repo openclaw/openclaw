@@ -66,6 +66,7 @@ jobs:
       checks_node_core_dist_matrix: ${{ steps.manifest.outputs.checks_node_core_dist_matrix }}
       run_check: ${{ steps.manifest.outputs.run_check }}
       run_check_additional: ${{ steps.manifest.outputs.run_check_additional }}
+      additional_matrix: ${{ steps.manifest.outputs.additional_matrix }}
       run_build_smoke: ${{ steps.manifest.outputs.run_build_smoke }}
       run_check_docs: ${{ steps.manifest.outputs.run_check_docs }}
       run_control_ui_i18n: ${{ steps.manifest.outputs.run_control_ui_i18n }}
@@ -205,6 +206,44 @@ jobs:
             parseBoolean(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly;
           const runPromptSnapshots =
             parseBoolean(process.env.OPENCLAW_CI_RUN_PROMPT_SNAPSHOTS) && !docsOnly;
+          const additionalCheckTasks = [
+            {
+              check_name: "check-additional-boundaries-a",
+              group: "boundaries",
+              boundary_shard: "1/4",
+            },
+            {
+              check_name: "check-additional-boundaries-b",
+              group: "boundaries",
+              boundary_shard: "2/4",
+            },
+            {
+              check_name: "check-additional-boundaries-c",
+              group: "boundaries",
+              boundary_shard: "3/4",
+            },
+            {
+              check_name: "check-additional-boundaries-d",
+              group: "boundaries",
+              boundary_shard: "4/4",
+            },
+            { check_name: "check-additional-extension-channels", group: "extension-channels" },
+            { check_name: "check-additional-extension-bundled", group: "extension-bundled" },
+            {
+              check_name: "check-additional-extension-package-boundary",
+              group: "extension-package-boundary",
+            },
+            {
+              check_name: "check-additional-runtime-topology-architecture",
+              group: "runtime-topology-architecture",
+            },
+          ];
+          if (runPromptSnapshots) {
+            additionalCheckTasks.push({
+              check_name: "check-additional-prompt-snapshots",
+              group: "prompt-snapshots",
+            });
+          }
           const checksFastCoreTasks = [];
           if (runNodeFull) {
             checksFastCoreTasks.push(
@@ -270,6 +309,7 @@ jobs:
             checks_node_core_dist_matrix: createMatrix(nodeTestDistShards),
             run_check: runNodeFull,
             run_check_additional: runNodeFull,
+            additional_matrix: createMatrix(runNodeFull ? additionalCheckTasks : []),
             run_build_smoke: runNodeFull,
             run_check_docs: docsChanged,
             run_control_ui_i18n: runControlUiI18n,
@@ -1539,28 +1579,7 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - check_name: check-additional-boundaries-a
-            group: boundaries
-            boundary_shard: 1/4
-          - check_name: check-additional-boundaries-b
-            group: boundaries
-            boundary_shard: 2/4
-          - check_name: check-additional-boundaries-c
-            group: boundaries
-            boundary_shard: 3/4
-          - check_name: check-additional-boundaries-d
-            group: boundaries
-            boundary_shard: 4/4
-          - check_name: check-additional-extension-channels
-            group: extension-channels
-          - check_name: check-additional-extension-bundled
-            group: extension-bundled
-          - check_name: check-additional-extension-package-boundary
-            group: extension-package-boundary
-          - check_name: check-additional-runtime-topology-architecture
-            group: runtime-topology-architecture
+      matrix: ${{ fromJson(needs.preflight.outputs.additional_matrix) }}
     steps:
       - name: Checkout
         shell: bash
@@ -1685,6 +1704,9 @@ jobs:
           case "$ADDITIONAL_CHECK_GROUP" in
             boundaries)
               node scripts/run-additional-boundary-checks.mjs
+              ;;
+            prompt-snapshots)
+              run_check "prompt:snapshots:check" pnpm prompt:snapshots:check
               ;;
             extension-channels)
               run_check "lint:extensions:channels" pnpm run lint:extensions:channels

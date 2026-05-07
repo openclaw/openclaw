@@ -3,7 +3,6 @@ import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
 
 export const BOUNDARY_CHECKS = [
-  ["prompt:snapshots:check", "pnpm", ["prompt:snapshots:check"]],
   ["plugin-extension-boundary", "pnpm", ["run", "lint:plugins:no-extension-imports"]],
   ["lint:tmp:no-random-messaging", "pnpm", ["run", "lint:tmp:no-random-messaging"]],
   ["lint:tmp:channel-agnostic-boundaries", "pnpm", ["run", "lint:tmp:channel-agnostic-boundaries"]],
@@ -58,6 +57,11 @@ export const BOUNDARY_CHECKS = [
 ].map(([label, command, args]) => ({ label, command, args }));
 
 export const PROMPT_SNAPSHOT_CHECK_LABEL = "prompt:snapshots:check";
+export const PROMPT_SNAPSHOT_CHECK = {
+  label: PROMPT_SNAPSHOT_CHECK_LABEL,
+  command: "pnpm",
+  args: ["prompt:snapshots:check"],
+};
 
 export function resolveConcurrency(value, fallback = 4) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
