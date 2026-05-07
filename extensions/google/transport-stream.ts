@@ -38,8 +38,6 @@ import {
   resolveGoogleVertexAuthorizedUserHeaders,
 } from "./vertex-adc.js";
 
-const GOOGLE_THOUGHT_SIGNATURE_SENTINEL = "skip_thought_signature_validator";
-
 type GoogleTransportApi = "google-generative-ai" | "google-vertex";
 
 type GoogleTransportModel = Model<GoogleTransportApi> & {
@@ -136,6 +134,7 @@ type GoogleSseChunk = {
 };
 
 let toolCallCounter = 0;
+const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 
 function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -143,6 +142,10 @@ function normalizeOptionalString(value: unknown): string | undefined {
 
 function requiresToolCallId(modelId: string): boolean {
   return modelId.startsWith("claude-") || modelId.startsWith("gpt-oss-");
+}
+
+function requiresToolCallThoughtSignature(modelId: string): boolean {
+  return normalizeLowercaseStringOrEmpty(modelId).includes("gemini-3");
 }
 
 function supportsMultimodalFunctionResponse(modelId: string): boolean {
@@ -379,8 +382,13 @@ function normalizeGoogleThinkingConfig(
 
 function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
   const contents: Array<Record<string, unknown>> = [];
-  const transformedMessages = transformTransportMessages(context.messages, model, (id) =>
-    requiresToolCallId(model.id) ? normalizeToolCallId(id) : id,
+  const transformedMessages = transformTransportMessages(
+    context.messages,
+    model,
+    (id) => (requiresToolCallId(model.id) ? normalizeToolCallId(id) : id),
+    {
+      preserveCrossModelToolCallThoughtSignature: requiresToolCallThoughtSignature(model.id),
+    },
   );
   for (const msg of transformedMessages) {
     if (msg.role === "user") {
@@ -445,14 +453,16 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
           const thoughtSignature =
             typeof block.thoughtSignature === "string" && block.thoughtSignature.trim()
               ? block.thoughtSignature
-              : GOOGLE_THOUGHT_SIGNATURE_SENTINEL;
+              : requiresToolCallThoughtSignature(model.id)
+                ? GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP
+                : undefined;
           parts.push({
             functionCall: {
               name: block.name,
               args: coerceTransportToolCallArguments(block.arguments),
               ...(requiresToolCallId(model.id) ? { id: block.id } : {}),
             },
-            thoughtSignature,
+            ...(thoughtSignature ? { thoughtSignature } : {}),
           });
         }
       }

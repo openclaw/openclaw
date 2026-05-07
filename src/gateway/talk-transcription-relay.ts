@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 import type { RealtimeTranscriptionProviderConfig } from "../realtime-transcription/provider-types.js";
-import { recordTalkDiagnosticEvent } from "../talk/diagnostics.js";
+import { recordTalkObservabilityEvent } from "../talk/observability.js";
 import {
   type TalkEvent,
   type TalkEventInput,
@@ -147,7 +147,7 @@ export function createTalkTranscriptionRelaySession(
       brain: "none",
       provider: params.provider.id,
     },
-    { onEvent: recordTalkDiagnosticEvent },
+    { onEvent: recordTalkObservabilityEvent },
   );
   let relay: TranscriptionRelaySession | undefined;
   const emit = (event: TalkTranscriptionRelayEventPayload, talkEvent?: TalkEventInput): void => {

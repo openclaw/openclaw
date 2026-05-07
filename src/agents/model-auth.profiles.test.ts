@@ -270,6 +270,21 @@ const BEDROCK_PROVIDER_CFG = {
   },
 } as const;
 
+const BEDROCK_PROVIDER_CFG_WITH_PROFILE = {
+  ...BEDROCK_PROVIDER_CFG,
+  auth: {
+    order: {
+      "amazon-bedrock": ["amazon-bedrock:default"],
+    },
+    profiles: {
+      "amazon-bedrock:default": {
+        provider: "amazon-bedrock",
+        mode: "aws-sdk",
+      },
+    },
+  },
+} as const;
+
 async function resolveBedrockProvider() {
   return resolveApiKeyForProvider({
     provider: "amazon-bedrock",
@@ -289,6 +304,37 @@ async function expectBedrockAuthSource(params: {
     expect(resolved.source).toContain(params.expectedSource);
   });
 }
+
+it("resolves config-only aws-sdk profiles without stored credentials", async () => {
+  const resolved = await resolveApiKeyForProvider({
+    provider: "amazon-bedrock",
+    profileId: "amazon-bedrock:default",
+    store: { version: 1, profiles: {} },
+    cfg: BEDROCK_PROVIDER_CFG_WITH_PROFILE as never,
+  });
+
+  expect(resolved).toMatchObject({
+    mode: "aws-sdk",
+    profileId: "amazon-bedrock:default",
+    source: "profile:amazon-bedrock:default",
+  });
+  expect(resolved.apiKey).toBeUndefined();
+});
+
+it("uses configured aws-sdk profile order without stored credentials", async () => {
+  const resolved = await resolveApiKeyForProvider({
+    provider: "amazon-bedrock",
+    store: { version: 1, profiles: {} },
+    cfg: BEDROCK_PROVIDER_CFG_WITH_PROFILE as never,
+  });
+
+  expect(resolved).toMatchObject({
+    mode: "aws-sdk",
+    profileId: "amazon-bedrock:default",
+    source: "profile:amazon-bedrock:default",
+  });
+  expect(resolved.apiKey).toBeUndefined();
+});
 
 function buildDemoLocalStore(keys: string[]) {
   return {

@@ -2752,6 +2752,46 @@ describe("openai transport stream", () => {
     expect(params.tools?.[0]?.function?.strict).toBe(false);
   });
 
+  it("applies model compat unsupported schema keywords to completions tools", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "accounts/fireworks/routers/kimi-k2p5-turbo",
+        name: "Kimi K2.5 Turbo",
+        api: "openai-completions",
+        provider: "fireworks",
+        baseUrl: "https://api.fireworks.ai/inference/v1",
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 256000,
+        maxTokens: 256000,
+        compat: {
+          unsupportedToolSchemaKeywords: ["not"],
+        },
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup",
+            description: "Lookup",
+            parameters: {
+              type: "object",
+              properties: {
+                forbidden: { not: {} },
+              },
+            },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as {
+      tools?: Array<{ function?: { parameters?: { properties?: Record<string, unknown> } } }>;
+    };
+
+    expect(params.tools?.[0]?.function?.parameters?.properties?.forbidden).toEqual({});
+  });
+
   describe("Gemini thought_signature round-trip on OpenAI-compatible completions", () => {
     const geminiModel = {
       id: "gemini-3-flash-preview",

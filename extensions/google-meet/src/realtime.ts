@@ -23,7 +23,7 @@ import {
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   recordRealtimeVoiceBridgeEvent,
-  recordTalkDiagnosticEvent,
+  recordTalkObservabilityEvent,
   recordRealtimeVoiceTranscript,
   resamplePcm,
   resolveConfiguredRealtimeVoiceProvider,
@@ -407,6 +407,10 @@ export function formatGoogleMeetAgentTtsResultLog(
   ].join(" ");
 }
 
+export function formatGoogleMeetTranscriptSummaryLog(prefix: string, text: string): string {
+  return `[google-meet] ${prefix}: chars=${text.length}`;
+}
+
 function normalizeGoogleMeetTtsPromptText(text: string | undefined): string | undefined {
   const trimmed = text?.trim();
   if (!trimmed) {
@@ -495,7 +499,7 @@ export async function startCommandAgentAudioBridge(params: {
       provider: resolved.provider.id,
       turnIdPrefix: `google-meet:${params.meetingSessionId}:turn`,
     },
-    { onEvent: recordTalkDiagnosticEvent },
+    { onEvent: recordTalkObservabilityEvent },
   );
   const recentTalkEvents: TalkEvent[] = [];
   const emitTalkEvent = (input: TalkEventInput) =>
@@ -636,7 +640,7 @@ export async function startCommandAgentAudioBridge(params: {
           return;
         }
         recordGoogleMeetRealtimeTranscript(transcript, "assistant", normalized);
-        params.logger.info(`[google-meet] agent assistant: ${normalized}`);
+        params.logger.info(formatGoogleMeetTranscriptSummaryLog("agent assistant", normalized));
         const turnId = ensureTalkTurn();
         emitTalkEvent({
           type: "output.text.done",
@@ -720,9 +724,11 @@ export async function startCommandAgentAudioBridge(params: {
         payload: { meetingSessionId: params.meetingSessionId, text: trimmed, role: "user" },
       });
       recordGoogleMeetRealtimeTranscript(transcript, "user", trimmed);
-      params.logger.info(`[google-meet] agent user: ${trimmed}`);
+      params.logger.info(formatGoogleMeetTranscriptSummaryLog("agent user", trimmed));
       if (isGoogleMeetLikelyAssistantEchoTranscript({ transcript, text: trimmed })) {
-        params.logger.info(`[google-meet] agent ignored assistant echo transcript: ${trimmed}`);
+        params.logger.info(
+          formatGoogleMeetTranscriptSummaryLog("agent ignored assistant echo transcript", trimmed),
+        );
         return;
       }
       agentTalkback?.enqueue(trimmed);
@@ -1046,7 +1052,7 @@ export async function startCommandRealtimeAudioBridge(params: {
       brain: strategy === "bidi" ? "direct-tools" : "agent-consult",
       provider: resolved.provider.id,
     },
-    { onEvent: recordTalkDiagnosticEvent },
+    { onEvent: recordTalkObservabilityEvent },
   );
   const recentTalkEvents: TalkEvent[] = [];
   const rememberTalkEvent = (event: TalkEvent | undefined): void => {
@@ -1171,10 +1177,15 @@ export async function startCommandRealtimeAudioBridge(params: {
       }
       if (isFinal) {
         recordGoogleMeetRealtimeTranscript(transcript, role, text);
-        params.logger.info(`[google-meet] realtime ${role}: ${text}`);
+        params.logger.info(formatGoogleMeetTranscriptSummaryLog(`realtime ${role}`, text));
         if (role === "user" && strategy === "agent") {
           if (isGoogleMeetLikelyAssistantEchoTranscript({ transcript, text })) {
-            params.logger.info(`[google-meet] realtime ignored assistant echo transcript: ${text}`);
+            params.logger.info(
+              formatGoogleMeetTranscriptSummaryLog(
+                "realtime ignored assistant echo transcript",
+                text,
+              ),
+            );
             return;
           }
           agentTalkback?.enqueue(text);

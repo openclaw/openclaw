@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const telemetryState = vi.hoisted(() => {
   const counters = new Map<string, { add: ReturnType<typeof vi.fn> }>();
@@ -227,6 +227,20 @@ async function emitAndCaptureLog(
 function flushDiagnosticEvents() {
   return new Promise<void>((resolve) => setImmediate(resolve));
 }
+
+afterAll(() => {
+  vi.doUnmock("@opentelemetry/api");
+  vi.doUnmock("@opentelemetry/sdk-node");
+  vi.doUnmock("@opentelemetry/exporter-metrics-otlp-proto");
+  vi.doUnmock("@opentelemetry/exporter-trace-otlp-proto");
+  vi.doUnmock("@opentelemetry/exporter-logs-otlp-proto");
+  vi.doUnmock("@opentelemetry/sdk-logs");
+  vi.doUnmock("@opentelemetry/sdk-metrics");
+  vi.doUnmock("@opentelemetry/sdk-trace-base");
+  vi.doUnmock("@opentelemetry/resources");
+  vi.doUnmock("@opentelemetry/semantic-conventions");
+  vi.resetModules();
+});
 
 describe("diagnostics-otel service", () => {
   beforeEach(() => {
@@ -642,6 +656,34 @@ describe("diagnostics-otel service", () => {
     expect(
       telemetryState.counters.get("openclaw.telemetry.exporter.events")?.add,
     ).not.toHaveBeenCalled();
+
+    await service.stop?.(ctx);
+  });
+
+  test("records hook-blocked run metrics with safe blocker originator", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "run.completed",
+      runId: "run-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      outcome: "blocked",
+      blockedBy: "policy-plugin",
+      durationMs: 100,
+    });
+    await flushDiagnosticEvents();
+
+    expect(telemetryState.histograms.get("openclaw.run.duration_ms")?.record).toHaveBeenCalledWith(
+      100,
+      expect.objectContaining({
+        "openclaw.outcome": "blocked",
+        "openclaw.blocked_by": "policy-plugin",
+      }),
+    );
+    expect(JSON.stringify(telemetryState)).not.toContain("matched secret prompt");
 
     await service.stop?.(ctx);
   });

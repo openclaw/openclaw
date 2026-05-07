@@ -47,7 +47,6 @@ import {
   resolveOpenAIStrictToolFlagForInventory,
   resolveOpenAIStrictToolSetting,
 } from "./openai-tool-schema.js";
-import { GOOGLE_THOUGHT_SIGNATURE_SENTINEL } from "./pi-embedded-helpers/google.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 import {
   buildGuardedModelFetch,
@@ -59,6 +58,7 @@ import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transpor
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
 const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
+const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 const log = createSubsystemLogger("openai-transport");
 
 type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
@@ -400,10 +400,11 @@ function convertResponsesTools(
       type: "function" as const,
       name: tool.name,
       description: tool.description,
-      parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict === true) as Record<
-        string,
-        unknown
-      >,
+      parameters: normalizeOpenAIStrictToolParameters(
+        tool.parameters,
+        strict === true,
+        model.compat,
+      ) as Record<string, unknown>,
     };
     return strict === undefined ? (base as FunctionTool) : { ...base, strict };
   });
@@ -1768,7 +1769,11 @@ function convertTools(
     function: {
       name: tool.name,
       description: tool.description,
-      parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict === true),
+      parameters: normalizeOpenAIStrictToolParameters(
+        tool.parameters,
+        strict === true,
+        model.compat,
+      ),
       ...(strict === undefined ? {} : { strict }),
     },
   }));
@@ -1801,6 +1806,10 @@ function isGoogleOpenAICompatModel(model: OpenAIModeModel): boolean {
   );
 }
 
+function requiresGoogleCompatToolCallThoughtSignature(model: OpenAIModeModel): boolean {
+  return model.id.toLowerCase().includes("gemini-3");
+}
+
 function injectToolCallThoughtSignatures(
   outgoingMessages: unknown[],
   context: Context,
@@ -1810,6 +1819,9 @@ function injectToolCallThoughtSignatures(
     return;
   }
   const sigById = new Map<string, string>();
+  const fallbackSig = requiresGoogleCompatToolCallThoughtSignature(model)
+    ? GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP
+    : undefined;
   for (const msg of context.messages ?? []) {
     if ((msg as { role?: string }).role !== "assistant") {
       continue;
@@ -1825,9 +1837,19 @@ function injectToolCallThoughtSignatures(
       const id = block.id;
       const sig = block.thoughtSignature;
       if (typeof id === "string" && typeof sig === "string" && sig.length > 0) {
+        const isSameRoute =
+          source.api === model.api &&
+          source.provider === model.provider &&
+          source.model === model.id;
+        if (!isSameRoute && !fallbackSig) {
+          continue;
+        }
         sigById.set(id, sig);
       }
     }
+  }
+  if (sigById.size === 0 && !fallbackSig) {
+    return;
   }
   for (const message of outgoingMessages) {
     const toolCalls = (message as { tool_calls?: unknown }).tool_calls;
@@ -1839,7 +1861,10 @@ function injectToolCallThoughtSignatures(
       if (typeof id !== "string") {
         continue;
       }
-      const sig = sigById.get(id) ?? GOOGLE_THOUGHT_SIGNATURE_SENTINEL;
+      const sig = sigById.get(id) ?? fallbackSig;
+      if (!sig) {
+        continue;
+      }
       const extra =
         toolCall.extra_content && typeof toolCall.extra_content === "object"
           ? (toolCall.extra_content as Record<string, unknown>)

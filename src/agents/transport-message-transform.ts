@@ -45,6 +45,7 @@ export function transformTransportMessages(
     targetModel: Model<Api>,
     source: { provider: string; api: Api; model: string },
   ) => string,
+  _options?: { preserveCrossModelToolCallThoughtSignature?: boolean },
 ): Context["messages"] {
   const allowSyntheticToolResults = defaultAllowSyntheticToolResults(model.api);
   const syntheticToolResultText = CODEX_STYLE_ABORTED_OUTPUT_APIS.has(model.api)

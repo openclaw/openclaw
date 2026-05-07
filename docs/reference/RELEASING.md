@@ -59,12 +59,13 @@ the maintainer-only release runbook.
    intentionally carried.
 4. Create `release/YYYY.M.D` from current `main`; do not do normal release work
    directly on `main`.
-5. Bump every required version location for the intended tag, run
-   `pnpm plugins:sync` so publishable plugin packages share the release
-   version and compatibility metadata, then run the local deterministic preflight:
+5. Bump every required version location for the intended tag, then run
+   `pnpm release:prep`. It refreshes plugin versions, plugin inventory, config
+   schema, bundled channel config metadata, config docs baseline, plugin SDK
+   exports, and plugin SDK API baseline in the right order. Commit any generated
+   drift before tagging. Then run the local deterministic preflight:
    `pnpm check:test-types`, `pnpm check:architecture`,
-   `pnpm build && pnpm ui:build`, `pnpm plugins:sync:check`, and
-   `pnpm release:check`.
+   `pnpm build && pnpm ui:build`, and `pnpm release:check`.
 6. Run `OpenClaw NPM Release` with `preflight_only=true`. Before a tag exists,
    a full 40-character release-branch SHA is allowed for validation-only
    preflight. Save the successful `preflight_run_id`.
@@ -77,10 +78,19 @@ the maintainer-only release runbook.
    prior evidence stale.
 9. For beta, tag `vYYYY.M.D-beta.N`, then run `OpenClaw Release Publish` from
    the matching `release/YYYY.M.D` branch. It verifies `pnpm plugins:sync:check`,
-   publishes all publishable plugin packages to npm first, publishes the same
-   set to ClawHub second as ClawPack npm-pack tarballs, and then promotes the
-   prepared OpenClaw npm preflight artifact with the matching dist-tag. After
-   publish, run post-publish package
+   dispatches all publishable plugin packages to npm and the same set to
+   ClawHub in parallel, and then promotes the prepared OpenClaw npm preflight
+   artifact with the matching dist-tag as soon as plugin npm publish succeeds.
+   ClawHub publishing may still be running while OpenClaw npm publishes, but the
+   release publish workflow prints the child run IDs immediately. By default it
+   does not wait for ClawHub after dispatching it, so OpenClaw npm availability
+   is not blocked by slower ClawHub approvals or registry work; set
+   `wait_for_clawhub=true` when ClawHub must block workflow completion. The
+   ClawHub path retries transient CLI dependency install failures, publishes
+   preview-passing plugins even when one preview cell flakes, and ends with
+   registry verification for every expected plugin version so partial publishes
+   remain visible and retryable. After publish, run
+   the post-publish package
    acceptance against the published `openclaw@YYYY.M.D-beta.N` or
    `openclaw@beta` package. If a pushed or published prerelease needs a fix,
    cut the next matching prerelease number; do not delete or rewrite the old
@@ -105,12 +115,13 @@ the maintainer-only release runbook.
 - Run `pnpm build && pnpm ui:build` before `pnpm release:check` so the expected
   `dist/*` release artifacts and Control UI bundle exist for the pack
   validation step
-- Run `pnpm plugins:sync` after the root version bump and before tagging. It
-  updates publishable plugin package versions, OpenClaw peer/API compatibility
-  metadata, build metadata, and plugin changelog stubs to match the core
-  release version. `pnpm plugins:sync:check` is the non-mutating release guard;
-  the publish workflow fails before any registry mutation if this step was
-  forgotten.
+- Run `pnpm release:prep` after the root version bump and before tagging. It
+  runs every deterministic release generator that commonly drifts after a
+  version/config/API change: plugin versions, plugin inventory, base config
+  schema, bundled channel config metadata, config docs baseline, plugin SDK
+  exports, and plugin SDK API baseline. `pnpm release:check` re-runs those
+  guards in check mode and reports every generated drift failure it finds in one
+  pass before running package release checks.
 - Run the manual `Full Release Validation` workflow before release approval to
   kick off all pre-release test boxes from one entrypoint. It accepts a branch,
   tag, or full commit SHA, dispatches manual `CI`, and dispatches

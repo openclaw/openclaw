@@ -276,6 +276,7 @@ function renderPrometheusMetrics(store: PrometheusMetricStore): string {
 }
 
 function runLabels(evt: {
+  blockedBy?: string;
   channel?: string;
   model?: string;
   outcome?: string;
@@ -283,6 +284,7 @@ function runLabels(evt: {
   trigger?: string;
 }): LabelSet {
   return {
+    ...(evt.blockedBy ? { blocked_by: lowCardinalityLabel(evt.blockedBy) } : {}),
     channel: lowCardinalityLabel(evt.channel),
     model: lowCardinalityLabel(evt.model),
     outcome: lowCardinalityLabel(evt.outcome, "unknown"),

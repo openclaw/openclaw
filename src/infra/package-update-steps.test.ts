@@ -29,6 +29,10 @@ function createNpmTarget(globalRoot: string): ResolvedGlobalInstallTarget {
   };
 }
 
+function createFsError(code: string, message = code): NodeJS.ErrnoException {
+  return Object.assign(new Error(message), { code });
+}
+
 function createPnpmTarget(globalRoot: string): ResolvedGlobalInstallTarget {
   return {
     manager: "pnpm",
@@ -124,6 +128,71 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
   });
 
+  it("swaps staged npm package roots through the copy fallback when rename crosses devices", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-exdev-" }, async (base) => {
+      const prefix = path.join(base, "prefix");
+      const globalRoot = path.join(prefix, "lib", "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+
+      const realRename = fs.rename.bind(fs);
+      let exdevMoves = 0;
+      const renameSpy = vi
+        .spyOn(fs, "rename")
+        .mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+          const [from, to] = args;
+          const fromPath = String(from);
+          if (
+            exdevMoves === 0 &&
+            fromPath.includes(`${path.sep}.openclaw-update-stage-`) &&
+            path.basename(fromPath) === "openclaw" &&
+            String(to) === packageRoot
+          ) {
+            exdevMoves += 1;
+            throw createFsError("EXDEV", "cross-device link not permitted");
+          }
+          return await realRename(...args);
+        });
+
+      try {
+        const result = await runGlobalPackageUpdateSteps({
+          installTarget: createNpmTarget(globalRoot),
+          installSpec: "openclaw@2.0.0",
+          packageName: "openclaw",
+          packageRoot,
+          runCommand: createRootRunner(globalRoot),
+          runStep: async ({ name, argv, cwd }) => {
+            const prefixIndex = argv.indexOf("--prefix");
+            const stagePrefix = argv[prefixIndex + 1];
+            if (!stagePrefix) {
+              throw new Error("missing staged prefix");
+            }
+            await writePackageRoot(
+              path.join(stagePrefix, "lib", "node_modules", "openclaw"),
+              "2.0.0",
+            );
+            return {
+              name,
+              command: argv.join(" "),
+              cwd: cwd ?? process.cwd(),
+              durationMs: 1,
+              exitCode: 0,
+            };
+          },
+          timeoutMs: 1000,
+        });
+
+        expect(result.failedStep).toBeNull();
+        expect(result.afterVersion).toBe("2.0.0");
+        expect(exdevMoves).toBe(1);
+        await expect(
+          fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+        ).resolves.toContain('"version":"2.0.0"');
+      } finally {
+        renameSpy.mockRestore();
+      }
+    });
+  });
+
   it("stages pnpm-detected updates through npm when the global root has npm prefix layout", async () => {
     await withTempDir({ prefix: "openclaw-package-update-pnpm-staged-" }, async (base) => {
       const prefix = path.join(base, "prefix");
@@ -179,7 +248,8 @@ describe("runGlobalPackageUpdateSteps", () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     try {
       await withTempDir({ prefix: "openclaw-package-update-win32-pnpm-" }, async (base) => {
-        const globalRoot = path.join(base, "pnpm", "global", "5", "node_modules");
+        const globalDir = path.join(base, "pnpm", "global");
+        const globalRoot = path.join(globalDir, "5", "node_modules");
         const packageRoot = path.join(globalRoot, "openclaw");
         await writePackageRoot(packageRoot, "1.0.0");
 
@@ -187,7 +257,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           if (name !== "global update") {
             throw new Error(`unexpected step ${name}`);
           }
-          expect(argv).toEqual(["pnpm", "add", "-g", "openclaw@2.0.0"]);
+          expect(argv).toEqual(["pnpm", "add", "-g", "--global-dir", globalDir, "openclaw@2.0.0"]);
           await writePackageRoot(packageRoot, "2.0.0");
           return {
             name,
