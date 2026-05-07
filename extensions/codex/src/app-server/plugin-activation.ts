@@ -60,7 +60,7 @@ export async function ensureCodexPluginActivation(
 ): Promise<CodexPluginActivationResult> {
   if (params.identity.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME) {
     return activationFailure(params.identity, "marketplace_missing", {
-      message: `Only ${CODEX_PLUGINS_MARKETPLACE_NAME} plugins can be activated.`,
+      message: "Only " + CODEX_PLUGINS_MARKETPLACE_NAME + " plugins can be activated.",
     });
   }
 
