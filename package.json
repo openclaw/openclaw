@@ -1433,7 +1433,6 @@
     "lint:swift": "swiftlint lint --config config/swiftlint.yml && (cd apps/ios && swiftlint lint --config .swiftlint.yml)",
     "lint:tmp:channel-agnostic-boundaries": "node scripts/check-channel-agnostic-boundaries.mjs",
     "lint:tmp:dynamic-import-warts": "node scripts/check-dynamic-import-warts.mjs",
-    "lint:tmp:managed-proxy-runtime-mutation": "node scripts/check-managed-proxy-runtime-mutation.mjs",
     "lint:tmp:no-random-messaging": "node scripts/check-no-random-messaging-tmp.mjs",
     "lint:tmp:no-raw-channel-fetch": "node scripts/check-no-raw-channel-fetch.mjs",
     "lint:tmp:no-raw-http2-imports": "node scripts/check-no-raw-http2-imports.mjs",
