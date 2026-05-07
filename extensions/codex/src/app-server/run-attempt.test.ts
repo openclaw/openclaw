@@ -839,6 +839,75 @@ describe("runCodexAppServerAttempt", () => {
     expect(queueAgentHarnessMessage("session-1", "after silent turn")).toBe(false);
   });
 
+  it("keeps an accepted Codex turn alive beyond the per-request timeout", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 5;
+
+    const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 100 });
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+
+    await expect(run).resolves.toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+    });
+  });
+
+  it("extends the Codex turn idle watch on meaningful turn progress", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 60_000;
+
+    const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 30 });
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    await harness.notify({
+      method: "item/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id: "item-1", type: "reasoning", text: "thinking" },
+      },
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+
+    await expect(run).resolves.toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+    });
+  });
+
+  it("does not extend the Codex turn idle watch for account-only updates", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 60_000;
+
+    const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 20 });
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    await harness.notify(rateLimitsUpdated(Date.now() + 60_000));
+
+    await expect(run).resolves.toMatchObject({
+      aborted: true,
+      timedOut: true,
+      promptError: "codex app-server turn idle timed out waiting for turn/completed",
+    });
+  });
+
   it("applies before_prompt_build to Codex developer instructions and turn input", async () => {
     const beforePromptBuild = vi.fn(async () => ({
       systemPrompt: "custom codex system",

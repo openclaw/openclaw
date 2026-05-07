@@ -114,7 +114,7 @@ import { filterToolsForVisionInputs } from "./vision-tools.js";
 
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
 const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 3;
-const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
+const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 5 * 60_000;
 const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
 const LOG_FIELD_MAX_LENGTH = 160;
@@ -710,7 +710,7 @@ export async function runCodexAppServerAttempt(
   let turnTerminalIdleWatchArmed = false;
   let turnCompletionLastActivityAt = Date.now();
   let turnCompletionLastActivityReason = "startup";
-  let activeAppServerTurnRequests = 0;
+  let activeMeaningfulAppServerTurnRequests = 0;
 
   const clearTurnCompletionIdleTimer = () => {
     if (turnCompletionIdleTimer) {
@@ -731,7 +731,7 @@ export async function runCodexAppServerAttempt(
       completed ||
       runAbortController.signal.aborted ||
       !turnCompletionIdleWatchArmed ||
-      activeAppServerTurnRequests > 0
+      activeMeaningfulAppServerTurnRequests > 0
     ) {
       return;
     }
@@ -767,7 +767,7 @@ export async function runCodexAppServerAttempt(
       completed ||
       runAbortController.signal.aborted ||
       !turnTerminalIdleWatchArmed ||
-      activeAppServerTurnRequests > 0
+      activeMeaningfulAppServerTurnRequests > 0
     ) {
       return;
     }
@@ -804,7 +804,7 @@ export async function runCodexAppServerAttempt(
       completed ||
       runAbortController.signal.aborted ||
       !turnCompletionIdleWatchArmed ||
-      activeAppServerTurnRequests > 0
+      activeMeaningfulAppServerTurnRequests > 0
     ) {
       return;
     }
@@ -820,7 +820,7 @@ export async function runCodexAppServerAttempt(
       completed ||
       runAbortController.signal.aborted ||
       !turnTerminalIdleWatchArmed ||
-      activeAppServerTurnRequests > 0
+      activeMeaningfulAppServerTurnRequests > 0
     ) {
       return;
     }
@@ -871,7 +871,9 @@ export async function runCodexAppServerAttempt(
   };
 
   const handleNotification = async (notification: CodexServerNotification) => {
-    touchTurnCompletionActivity(`notification:${notification.method}`);
+    if (isMeaningfulCodexTurnNotification(notification, thread.threadId, turnId)) {
+      touchTurnCompletionActivity(`notification:${notification.method}`);
+    }
     userInputBridge?.handleNotification(notification);
     if (!projector || !turnId) {
       pendingNotifications.push(notification);
@@ -912,9 +914,12 @@ export async function runCodexAppServerAttempt(
 
   const notificationCleanup = client.addNotificationHandler(enqueueNotification);
   const requestCleanup = client.addRequestHandler(async (request) => {
-    activeAppServerTurnRequests += 1;
-    clearTurnCompletionIdleTimer();
-    touchTurnCompletionActivity(`request:${request.method}`);
+    const meaningfulRequest = isMeaningfulCodexTurnRequest(request.method);
+    if (meaningfulRequest) {
+      activeMeaningfulAppServerTurnRequests += 1;
+      clearTurnCompletionIdleTimer();
+      touchTurnCompletionActivity(`request:${request.method}`);
+    }
     let armCompletionWatchOnResponse = false;
     try {
       if (request.method === "account/chatgptAuthTokens/refresh") {
@@ -1018,10 +1023,15 @@ export async function runCodexAppServerAttempt(
       });
       return response as JsonValue;
     } finally {
-      activeAppServerTurnRequests = Math.max(0, activeAppServerTurnRequests - 1);
-      touchTurnCompletionActivity(`request:${request.method}:response`, {
-        arm: armCompletionWatchOnResponse,
-      });
+      if (meaningfulRequest) {
+        activeMeaningfulAppServerTurnRequests = Math.max(
+          0,
+          activeMeaningfulAppServerTurnRequests - 1,
+        );
+        touchTurnCompletionActivity(`request:${request.method}:response`, {
+          arm: armCompletionWatchOnResponse,
+        });
+      }
     }
   });
 
@@ -1176,14 +1186,15 @@ export async function runCodexAppServerAttempt(
   turnTerminalIdleWatchArmed = true;
   touchTurnCompletionActivity("turn:start");
 
-  const timeout = setTimeout(
-    () => {
-      timedOut = true;
-      projector?.markTimedOut();
-      runAbortController.abort("timeout");
-    },
-    Math.max(100, params.timeoutMs),
-  );
+  const hardTimeoutMs = resolveCodexTurnHardTimeoutMs({
+    requestTimeoutMs: params.timeoutMs,
+    terminalIdleTimeoutMs: turnTerminalIdleTimeoutMs,
+  });
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    projector?.markTimedOut();
+    runAbortController.abort("timeout");
+  }, hardTimeoutMs);
 
   const abortListener = () => {
     interruptCodexTurnBestEffort(client, {
@@ -1675,6 +1686,56 @@ function resolveCodexTurnTerminalIdleTimeoutMs(value: number | undefined): numbe
     return CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS;
   }
   return Math.max(1, Math.floor(value));
+}
+
+function resolveCodexTurnHardTimeoutMs(params: {
+  requestTimeoutMs: number;
+  terminalIdleTimeoutMs: number;
+}): number {
+  const candidates = [params.requestTimeoutMs, params.terminalIdleTimeoutMs].filter(
+    (value) => Number.isFinite(value) && value > 0,
+  );
+  return Math.max(100, ...candidates);
+}
+
+function isMeaningfulCodexTurnNotification(
+  notification: CodexServerNotification,
+  threadId: string,
+  turnId: string | undefined,
+): boolean {
+  if (notification.method.startsWith("account/")) {
+    return false;
+  }
+  const params = isJsonObject(notification.params) ? notification.params : undefined;
+  if (!params || readString(params, "threadId") !== threadId) {
+    return false;
+  }
+  if (notification.method === "thread/tokenUsage/updated") {
+    return true;
+  }
+  if (notification.method === "hook/started" || notification.method === "hook/completed") {
+    const notificationTurnId = params.turnId;
+    return !turnId || notificationTurnId === turnId || notificationTurnId === null;
+  }
+  const notificationTurnId = readNotificationTurnId(params);
+  if (turnId && notificationTurnId && notificationTurnId !== turnId) {
+    return false;
+  }
+  return (
+    notification.method.startsWith("turn/") ||
+    notification.method.startsWith("item/") ||
+    notification.method.startsWith("rawResponseItem/") ||
+    notification.method === "error"
+  );
+}
+
+function isMeaningfulCodexTurnRequest(method: string): boolean {
+  return (
+    method === "item/tool/call" ||
+    method === "item/tool/requestUserInput" ||
+    method === "mcpServer/elicitation/request" ||
+    isCodexAppServerApprovalRequest(method)
+  );
 }
 
 function readDynamicToolCallParams(

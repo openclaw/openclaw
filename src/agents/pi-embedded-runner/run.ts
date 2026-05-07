@@ -2273,9 +2273,13 @@ export async function runEmbeddedPiAgent(
           });
 
           // Timeout aborts can leave the run without payloads or with only a
-          // partial assistant fragment. Emit an explicit timeout error instead.
+          // partial assistant fragment. Emit an explicit timeout error unless
+          // the turn already committed a messaging-tool delivery; in that case
+          // a second generic timeout reply is noise and can make a successful
+          // visible update look like a failed user request.
           if (
             timedOutDuringPrompt &&
+            !attempt.didSendViaMessagingTool &&
             (!payloadsWithToolMedia?.length || hasPartialAssistantTextAfterPromptTimeout)
           ) {
             const timeoutText = idleTimedOut
