@@ -314,13 +314,22 @@ async function summarizeChunks(params: {
     params.customInstructions,
     params.summarizationInstructions,
   );
+
+  // Clamp reserveTokens to the model's maxTokens output cap.
+  // generateSummary() uses Math.floor(0.8 * reserveTokens) as max_tokens for the API call.
+  // With large context windows (1M tokens), reserveTokensFloor can be 300K+, producing
+  // max_tokens of 240K+ which exceeds model output limits (e.g. 128K for Anthropic).
+  // By clamping reserveTokens here, we ensure the downstream max_tokens stays within bounds.
+  const modelMaxTokens = params.model.maxTokens ?? 128_000;
+  const clampedReserveTokens = Math.min(params.reserveTokens, Math.floor(modelMaxTokens / 0.8));
+
   for (const chunk of chunks) {
     summary = await retryAsync(
       () =>
         generateSummary(
           chunk,
           params.model,
-          params.reserveTokens,
+          clampedReserveTokens,
           params.apiKey,
           params.headers,
           params.signal,

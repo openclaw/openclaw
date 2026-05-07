@@ -1,6 +1,6 @@
 import fsSync from "node:fs";
 import path from "node:path";
-import { openRootFileSync } from "./boundary-file-read.js";
+import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
 
 export function expectedIntegrityForUpdate(
   spec: string | undefined,
@@ -29,23 +29,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function readInstalledPackageManifest(dir: string): Record<string, unknown> | undefined {
-  const manifestPath = path.join(dir, "package.json");
-  const opened = openRootFileSync({
-    absolutePath: manifestPath,
-    rootPath: dir,
+  const result = readRootJsonObjectSync({
+    rootDir: dir,
+    relativePath: "package.json",
     boundaryLabel: "installed package directory",
   });
-  if (!opened.ok) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(fsSync.readFileSync(opened.fd, "utf-8")) as unknown;
-    return isRecord(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  } finally {
-    fsSync.closeSync(opened.fd);
-  }
+  return result.ok ? result.value : undefined;
 }
 
 export async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {

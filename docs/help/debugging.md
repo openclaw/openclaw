@@ -203,7 +203,7 @@ pnpm gateway:dev
 OPENCLAW_PROFILE=dev openclaw tui
 ```
 
-If you don’t have a global install yet, run the CLI via `pnpm openclaw ...`.
+If you don't have a global install yet, run the CLI via `pnpm openclaw ...`.
 
 What this does:
 
@@ -219,7 +219,7 @@ What this does:
    - Sets `agent.skipBootstrap=true` (no BOOTSTRAP.md).
    - Seeds the workspace files if missing:
      `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`.
-   - Default identity: **C3‑PO** (protocol droid).
+   - Default identity: **C3-PO** (protocol droid).
    - Skips channel providers in dev mode (`OPENCLAW_SKIP_CHANNELS=1`).
 
 Reset flow (fresh start):
@@ -297,7 +297,7 @@ Default file:
 
 `~/.pi-mono/logs/raw-openai-completions.jsonl`
 
-> Note: this is only emitted by processes using pi-mono’s
+> Note: this is only emitted by processes using pi-mono's
 > `openai-completions` provider.
 
 ## Safety notes

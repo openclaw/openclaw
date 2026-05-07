@@ -709,7 +709,7 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 - `channels.msteams.managedIdentityClientId`: client ID for user-assigned managed identity.
 - `channels.msteams.sharePointSiteId`: SharePoint site ID for file uploads in group chats/channels (see [Sending files in group chats](#sending-files-in-group-chats)).
 
-## Routing & Sessions
+## Routing and sessions
 
 - Session keys follow the standard agent format (see [/concepts/session](/concepts/session)):
   - Direct messages share the main session (`agent:<agentId>:<mainKey>`).
@@ -752,7 +752,7 @@ Teams recently introduced two channel UI styles over the same underlying data mo
 }
 ```
 
-## Attachments & Images
+## Attachments and images
 
 **Current limitations:**
 

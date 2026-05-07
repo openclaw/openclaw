@@ -61,3 +61,8 @@ SenseAudio can transcribe inbound audio and voice-note attachments through OpenC
 SenseAudio is batch STT only in OpenClaw. Voice Call realtime transcription
 continues to use providers with streaming STT support.
 </Note>
+
+## Related
+
+- [Media understanding (audio)](/nodes/audio)
+- [Model providers](/concepts/model-providers)

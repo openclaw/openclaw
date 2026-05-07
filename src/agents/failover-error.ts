@@ -210,7 +210,7 @@ function normalizeDirectErrorSignal(err: unknown): FailoverSignal {
   };
 }
 
-function hasSessionWriteLockTimeout(err: unknown, seen: Set<object> = new Set()): boolean {
+export function hasSessionWriteLockTimeout(err: unknown, seen: Set<object> = new Set()): boolean {
   if (isSessionWriteLockTimeoutError(err)) {
     return true;
   }

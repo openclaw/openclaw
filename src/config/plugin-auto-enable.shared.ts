@@ -1,10 +1,15 @@
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import {
-  hasPotentialConfiguredChannels,
   listPotentialConfiguredChannelPresenceSignals,
+  type ChannelPresenceSignalSource,
 } from "../channels/config-presence.js";
+import {
+  hasBundledChannelConfiguredState,
+  listBundledChannelIdsWithConfiguredState,
+} from "../channels/plugins/configured-state.js";
 import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
   type PluginManifestRecord,
   type PluginManifestRegistry,
@@ -255,11 +260,45 @@ function collectPluginIdsForConfiguredChannel(
 }
 
 function collectConfiguredChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
+  const configuredStateChannelIds = new Set(listBundledChannelIdsWithConfiguredState());
   return listPotentialConfiguredChannelPresenceSignals(cfg, env, {
     includePersistedAuthState: false,
   })
-    .map((signal) => normalizeChatChannelId(signal.channelId) ?? signal.channelId)
-    .filter((channelId) => isChannelConfigured(cfg, channelId, env));
+    .map((signal) => ({
+      source: signal.source,
+      channelId: normalizeChatChannelId(signal.channelId) ?? signal.channelId,
+    }))
+    .filter(({ channelId, source }) =>
+      isAutoEnableConfiguredChannelSignal({
+        cfg,
+        env,
+        channelId,
+        source,
+        configuredStateChannelIds,
+      }),
+    )
+    .map(({ channelId }) => channelId);
+}
+
+function isAutoEnableConfiguredChannelSignal(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  channelId: string;
+  source: ChannelPresenceSignalSource;
+  configuredStateChannelIds: ReadonlySet<string>;
+}): boolean {
+  if (
+    params.source === "env" &&
+    params.configuredStateChannelIds.has(params.channelId) &&
+    !hasBundledChannelConfiguredState({
+      channelId: params.channelId,
+      cfg: params.cfg,
+      env: params.env,
+    })
+  ) {
+    return false;
+  }
+  return isChannelConfigured(params.cfg, params.channelId, params.env);
 }
 
 function hasConfiguredWebSearchPluginEntry(cfg: OpenClawConfig): boolean {
@@ -484,38 +523,48 @@ export function configMayNeedPluginAutoEnable(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): boolean {
+  return resolvePluginAutoEnableReadiness(cfg, env).mayNeedAutoEnable;
+}
+
+export function resolvePluginAutoEnableReadiness(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): { mayNeedAutoEnable: boolean; configuredChannelIds: string[] } {
   if (arePluginsGloballyDisabled(cfg)) {
-    return false;
+    return { mayNeedAutoEnable: false, configuredChannelIds: [] };
   }
   if (hasPluginAllowlistWithMaterialEntries(cfg)) {
-    return true;
+    return { mayNeedAutoEnable: true, configuredChannelIds: [] };
   }
   if (hasConfiguredPluginConfigEntry(cfg)) {
-    return true;
+    return { mayNeedAutoEnable: true, configuredChannelIds: [] };
   }
-  if (hasPotentialConfiguredChannels(cfg, env, { includePersistedAuthState: false })) {
-    return true;
+  const configuredChannelIds = collectConfiguredChannelIds(cfg, env);
+  if (configuredChannelIds.length > 0) {
+    return { mayNeedAutoEnable: true, configuredChannelIds };
   }
   if (hasConfiguredProviderModelOrHarness(cfg, env)) {
-    return true;
+    return { mayNeedAutoEnable: true, configuredChannelIds };
   }
   if (
     hasConfiguredWebSearchProviderSelection(cfg) ||
     hasConfiguredWebSearchPluginEntry(cfg) ||
     hasConfiguredWebFetchPluginEntry(cfg)
   ) {
-    return true;
+    return { mayNeedAutoEnable: true, configuredChannelIds };
   }
   if (!hasSetupAutoEnableRelevantConfig(cfg)) {
-    return false;
+    return { mayNeedAutoEnable: false, configuredChannelIds };
   }
-  return (
-    resolvePluginSetupAutoEnableReasons({
-      config: cfg,
-      env,
-      pluginIds: resolveRelevantSetupAutoEnablePluginIds(cfg),
-    }).length > 0
-  );
+  return {
+    mayNeedAutoEnable:
+      resolvePluginSetupAutoEnableReasons({
+        config: cfg,
+        env,
+        pluginIds: resolveRelevantSetupAutoEnablePluginIds(cfg),
+      }).length > 0,
+    configuredChannelIds,
+  };
 }
 
 export function resolvePluginAutoEnableCandidateReason(
@@ -550,9 +599,11 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   registry: PluginManifestRegistry;
+  configuredChannelIds?: readonly string[];
 }): PluginAutoEnableCandidate[] {
   const changes: PluginAutoEnableCandidate[] = [];
-  for (const channelId of collectConfiguredChannelIds(params.config, params.env)) {
+  for (const channelId of params.configuredChannelIds ??
+    collectConfiguredChannelIds(params.config, params.env)) {
     for (const pluginId of collectPluginIdsForConfiguredChannel(channelId, params.registry)) {
       changes.push({ pluginId, kind: "channel-configured", channelId });
     }
@@ -889,14 +940,23 @@ export function resolvePluginAutoEnableManifestRegistry(params: {
   env: NodeJS.ProcessEnv;
   manifestRegistry?: PluginManifestRegistry;
 }): PluginManifestRegistry {
+  if (params.manifestRegistry) {
+    return params.manifestRegistry;
+  }
+  if (!configMayNeedPluginManifestRegistry(params.config, params.env)) {
+    return EMPTY_PLUGIN_MANIFEST_REGISTRY;
+  }
+  const currentSnapshot = getCurrentPluginMetadataSnapshot({
+    config: params.config,
+    env: params.env,
+    allowWorkspaceScopedSnapshot: true,
+  });
   return (
-    params.manifestRegistry ??
-    (configMayNeedPluginManifestRegistry(params.config, params.env)
-      ? loadPluginMetadataSnapshot({
-          config: params.config,
-          env: params.env,
-        }).manifestRegistry
-      : EMPTY_PLUGIN_MANIFEST_REGISTRY)
+    currentSnapshot?.manifestRegistry ??
+    loadPluginMetadataSnapshot({
+      config: params.config,
+      env: params.env,
+    }).manifestRegistry
   );
 }
 

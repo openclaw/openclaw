@@ -104,7 +104,7 @@ Rules:
 
 Per-skill fields:
 
-- `enabled`: set `false` to disable a skill even if it’s bundled/installed.
+- `enabled`: set `false` to disable a skill even if it's bundled/installed.
 - `env`: environment variables injected for the agent run (only if not already set).
 - `apiKey`: optional convenience for skills that declare a primary env var.
   Supports plaintext string or SecretRef object (`{ source, provider, id }`).

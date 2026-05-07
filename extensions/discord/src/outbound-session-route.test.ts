@@ -31,4 +31,36 @@ describe("resolveDiscordOutboundSessionRoute", () => {
     });
     expect(route?.threadId).toBeUndefined();
   });
+
+  it("routes provider-prefixed channel targets as channels", () => {
+    const route = resolveDiscordOutboundSessionRoute({
+      cfg: {},
+      agentId: "main",
+      target: "discord:channel:123",
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:discord:channel:123",
+      baseSessionKey: "agent:main:discord:channel:123",
+      chatType: "channel",
+      from: "discord:channel:123",
+      to: "channel:123",
+    });
+  });
+
+  it("keeps legacy provider-prefixed numeric targets as direct messages", () => {
+    const route = resolveDiscordOutboundSessionRoute({
+      cfg: {},
+      agentId: "main",
+      target: "discord:123",
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:main",
+      baseSessionKey: "agent:main:main",
+      chatType: "direct",
+      from: "discord:123",
+      to: "user:123",
+    });
+  });
 });
