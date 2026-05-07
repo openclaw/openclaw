@@ -1401,6 +1401,16 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
+  it("includes Codex when an OpenAI agent model uses the implicit runtime default", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        modelId: "openai/gpt-5.5",
+        enabledPluginIds: ["codex"],
+      }),
+      expected: ["demo-channel", "browser", "codex", "memory-core"],
+    });
+  });
+
   it("includes required agent harness owner plugins when an agent override forces the runtime", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({
