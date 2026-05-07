@@ -828,6 +828,9 @@ export function handleToolExecutionUpdate(
     }
   }
   const sanitized = sanitizeToolResult(partial);
+  const liveEventPartial = isExecToolName(toolName)
+    ? limitExecToolResultForLiveEvent(sanitized)
+    : sanitized;
   emitAgentEvent({
     runId: ctx.params.runId,
     stream: "tool",
@@ -835,7 +838,7 @@ export function handleToolExecutionUpdate(
       phase: "update",
       name: toolName,
       toolCallId,
-      partialResult: sanitized,
+      partialResult: liveEventPartial,
     },
   });
   const itemData: AgentItemEventData = {
