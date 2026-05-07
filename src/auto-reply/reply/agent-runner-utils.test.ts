@@ -3,14 +3,28 @@ import type { FollowupRun } from "./queue.js";
 
 const hoisted = vi.hoisted(() => {
   const resolveEffectiveModelFallbacksMock = vi.fn();
+  const resolveEffectiveToolPolicyMock = vi.fn();
+  const resolveGroupToolPolicyMock = vi.fn();
   const getChannelPluginMock = vi.fn();
   const isReasoningTagProviderMock = vi.fn();
-  return { resolveEffectiveModelFallbacksMock, getChannelPluginMock, isReasoningTagProviderMock };
+  return {
+    resolveEffectiveModelFallbacksMock,
+    resolveEffectiveToolPolicyMock,
+    resolveGroupToolPolicyMock,
+    getChannelPluginMock,
+    isReasoningTagProviderMock,
+  };
 });
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveEffectiveModelFallbacks: (...args: unknown[]) =>
     hoisted.resolveEffectiveModelFallbacksMock(...args),
+}));
+
+vi.mock("../../agents/pi-tools.policy.js", () => ({
+  resolveEffectiveToolPolicy: (...args: unknown[]) =>
+    hoisted.resolveEffectiveToolPolicyMock(...args),
+  resolveGroupToolPolicy: (...args: unknown[]) => hoisted.resolveGroupToolPolicyMock(...args),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -25,6 +39,8 @@ const {
   buildThreadingToolContext,
   buildEmbeddedRunBaseParams,
   buildEmbeddedRunContexts,
+  buildEmbeddedRunExecutionParams,
+  resolveEmbeddedRunToolsAllow,
   resolveModelFallbackOptions,
   resolveEnforceFinalTag,
   resolveProviderScopedAuthProfile,
@@ -57,6 +73,10 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
 describe("agent-runner-utils", () => {
   beforeEach(() => {
     hoisted.resolveEffectiveModelFallbacksMock.mockClear();
+    hoisted.resolveEffectiveToolPolicyMock.mockReset();
+    hoisted.resolveEffectiveToolPolicyMock.mockReturnValue({});
+    hoisted.resolveGroupToolPolicyMock.mockReset();
+    hoisted.resolveGroupToolPolicyMock.mockReturnValue(undefined);
     hoisted.getChannelPluginMock.mockReset();
     hoisted.isReasoningTagProviderMock.mockReset();
     hoisted.isReasoningTagProviderMock.mockReturnValue(false);
@@ -134,6 +154,72 @@ describe("agent-runner-utils", () => {
       bashElevated: run.bashElevated,
       timeoutMs: run.timeoutMs,
       runId: "run-1",
+    });
+  });
+
+  it("derives embedded toolsAllow from explicit config allowlists", () => {
+    const run = makeRun({
+      config: {
+        tools: {
+          allow: ["example_plugin_tool"],
+        },
+        agents: {
+          list: [
+            {
+              id: "agent-1",
+              tools: {
+                allow: ["example_plugin_tool"],
+              },
+            },
+          ],
+        },
+      },
+    });
+    hoisted.resolveEffectiveToolPolicyMock.mockReturnValue({
+      globalPolicy: { allow: ["example_plugin_tool"] },
+      agentPolicy: { allow: ["example_plugin_tool"] },
+    });
+
+    expect(resolveEmbeddedRunToolsAllow({ run, provider: "openai", model: "gpt-5.5" })).toEqual([
+      "example_plugin_tool",
+    ]);
+    expect(hoisted.resolveEffectiveToolPolicyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: run.config,
+        sessionKey: run.sessionKey,
+        agentId: run.agentId,
+        modelProvider: "openai",
+        modelId: "gpt-5.5",
+      }),
+    );
+  });
+
+  it("passes explicit embedded toolsAllow through execution params", () => {
+    const run = makeRun({
+      config: {
+        tools: {
+          allow: ["example_plugin_tool"],
+        },
+      },
+    });
+    hoisted.resolveEffectiveToolPolicyMock.mockReturnValue({
+      globalPolicy: { allow: ["example_plugin_tool"] },
+    });
+    const resolved = buildEmbeddedRunExecutionParams({
+      run,
+      sessionCtx: {
+        Provider: "feishu",
+        OriginatingChannel: "feishu",
+        SenderId: "sender-1",
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-1",
+    });
+
+    expect(resolved.runBaseParams).toMatchObject({
+      toolsAllow: ["example_plugin_tool"],
     });
   });
 
