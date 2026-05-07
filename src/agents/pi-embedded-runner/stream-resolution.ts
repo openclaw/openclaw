@@ -3,7 +3,10 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
 import { createOpenAIWebSocketStreamFn } from "../openai-ws-stream.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
-import { createBoundaryAwareStreamFnForModel } from "../provider-transport-stream.js";
+import {
+  createBoundaryAwareStreamFnForModel,
+  isTransportAwareApiSupported,
+} from "../provider-transport-stream.js";
 import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
@@ -45,6 +48,13 @@ export function describeEmbeddedAgentStreamStrategy(params: {
     return createBoundaryAwareStreamFnForModel(params.model)
       ? `boundary-aware:${params.model.api}`
       : "stream-simple";
+  }
+  // PI installs an auth wrapper that is not identity-equal to streamSimple,
+  // but for supported transport APIs we still route through boundary-aware
+  // transport to preserve stream_options.include_usage and other OpenClaw
+  // request shaping. Report regression #78661.
+  if (isTransportAwareApiSupported(params.model.api)) {
+    return `boundary-aware:${params.model.api}`;
   }
   return "session-custom";
 }
@@ -112,6 +122,23 @@ export function resolveEmbeddedAgentStreamFn(params: {
       // inject the resolved runtime key for them. Without this wrap, OAuth
       // providers (e.g. openai-codex/gpt-5.5) hit the Responses API with an
       // empty bearer and fail with 401 Missing bearer auth header.
+      return wrapEmbeddedAgentStreamFn(boundaryAwareStreamFn, {
+        runSignal: params.signal,
+        resolvedApiKey: params.resolvedApiKey,
+        authStorage: params.authStorage,
+        providerId: params.model.provider,
+      });
+    }
+    return currentStreamFn;
+  }
+
+  // PI installs an auth wrapper that is not identity-equal to streamSimple,
+  // but for supported transport APIs we still route through boundary-aware
+  // transport to preserve stream_options.include_usage and other OpenClaw
+  // request shaping. Report regression #78661.
+  if (isTransportAwareApiSupported(params.model.api)) {
+    const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
+    if (boundaryAwareStreamFn) {
       return wrapEmbeddedAgentStreamFn(boundaryAwareStreamFn, {
         runSignal: params.signal,
         resolvedApiKey: params.resolvedApiKey,

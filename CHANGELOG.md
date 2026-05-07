@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Agents/embedded: route PI auth-wrapped session streams through boundary-aware transport for supported APIs (openai-completions, openai-responses, etc.) so custom OpenAI-compatible providers receive `stream_options.include_usage: true` without requiring per-model `compat.supportsUsageInStreaming`. Fixes #78661.
 - Docs/iMessage: deprecate BlueBubbles for new OpenClaw setups, document the upstream server-release rationale, and point new iMessage deployments toward the native `imsg` path while keeping BlueBubbles as a supported legacy fallback.
 - Discord/streaming: default Discord replies to progress draft previews so tool/work activity appears in one edited Discord message unless `channels.discord.streaming.mode` is set to `off`.
 - Plugins/install: add `npm-pack:<path.tgz>` installs so local npm pack artifacts run through the same managed npm-root install, lockfile verification, dependency scan, and install-record path as registry npm plugins.

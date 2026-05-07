@@ -358,4 +358,69 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, { systemPrompt } as never, {}),
     ).resolves.toMatchObject({ systemPrompt });
   });
+
+  // Regression test for #78661: PI installs an auth wrapper that is not
+  // identity-equal to streamSimple, so embedded sessions were bypassing
+  // the boundary-aware transport and losing stream_options.include_usage.
+  it("routes PI auth-wrapped session streams through boundary-aware transport for openai-completions", async () => {
+    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+    // Simulate PI's auth wrapper (not identity-equal to streamSimple)
+    const authWrappedStreamFn = vi.fn(async (model, context, options) => {
+      const apiKey = "pi-auth-wrapper-token";
+      return streamSimple(model, context, { ...options, apiKey });
+    }) as never;
+
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: authWrappedStreamFn,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-completions",
+        provider: "llama",
+        id: "qwen36-35b-a3b",
+      } as never,
+      resolvedApiKey: "resolved-token",
+    });
+
+    // Should NOT be the auth wrapper; should be boundary-aware transport
+    expect(streamFn).not.toBe(authWrappedStreamFn);
+    expect(streamFn).not.toBe(streamSimple);
+
+    // Should inject resolved api key
+    await expect(
+      streamFn({ provider: "llama", id: "qwen36-35b-a3b" } as never, {} as never, {}),
+    ).resolves.toMatchObject({ apiKey: "resolved-token" });
+    expect(innerStreamFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("describes auth-wrapped session streams as boundary-aware for supported APIs", () => {
+    const authWrappedStreamFn = vi.fn() as never;
+    expect(
+      describeEmbeddedAgentStreamStrategy({
+        currentStreamFn: authWrappedStreamFn,
+        shouldUseWebSocketTransport: false,
+        model: {
+          api: "openai-completions",
+          provider: "llama",
+          id: "qwen36-35b-a3b",
+        } as never,
+      }),
+    ).toBe("boundary-aware:openai-completions");
+  });
+
+  it("keeps auth-wrapped session streams labeled as custom for unsupported APIs", () => {
+    const authWrappedStreamFn = vi.fn() as never;
+    expect(
+      describeEmbeddedAgentStreamStrategy({
+        currentStreamFn: authWrappedStreamFn,
+        shouldUseWebSocketTransport: false,
+        model: {
+          api: "some-unsupported-api",
+          provider: "custom",
+          id: "custom-model",
+        } as never,
+      }),
+    ).toBe("session-custom");
+  });
 });
