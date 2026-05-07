@@ -195,6 +195,10 @@ inside every shard.
   - Installs an OpenClaw package candidate in Docker, runs installed-package
     onboarding, configures Telegram through the installed CLI, then reuses the
     live Telegram QA lane with that installed package as the SUT Gateway.
+  - The wrapper mounts only the `qa-lab` harness source from the checkout; the
+    installed package owns `dist`, `openclaw/plugin-sdk`, and bundled plugin
+    runtime so the lane does not mix current checkout plugins into the package
+    under test.
   - Defaults to `OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC=openclaw@beta`; set
     `OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ=/path/to/openclaw-current.tgz` or
     `OPENCLAW_CURRENT_PACKAGE_TGZ` to test a resolved local tarball instead of
