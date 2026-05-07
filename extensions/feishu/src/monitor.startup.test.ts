@@ -4,9 +4,15 @@ import type { ClawdbotConfig } from "../runtime-api.js";
 import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
+const startFeishuEventRuntimeMock = vi.hoisted(() => vi.fn());
+const stopFeishuEventRuntimeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
+}));
+vi.mock("./event.runtime.js", () => ({
+  startFeishuEventRuntime: startFeishuEventRuntimeMock,
+  stopFeishuEventRuntime: stopFeishuEventRuntimeMock,
 }));
 
 vi.mock("./client.js", async () => {
@@ -53,6 +59,55 @@ afterEach(() => {
 });
 
 describe("Feishu monitor startup preflight", () => {
+  it("starts the event runtime for single-account startup paths", async () => {
+    const cfg = buildMultiAccountWebsocketConfig(["alpha"]);
+    const runtime = createNonExitingRuntimeEnv();
+    startFeishuEventRuntimeMock.mockResolvedValue({
+      stop: vi.fn(),
+      subscriptions: [],
+      loadResult: { skillSources: [], manifests: [], subscribers: [], diagnostics: [] },
+    });
+
+    const abortController = new AbortController();
+    const monitorPromise = monitorFeishuProvider({
+      config: cfg,
+      accountId: "alpha",
+      abortSignal: abortController.signal,
+      runtime,
+    });
+
+    abortController.abort();
+    await monitorPromise;
+
+    expect(startFeishuEventRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(startFeishuEventRuntimeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg, runtime }),
+    );
+  });
+
+  it("starts and stops the event runtime around monitor startup", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_alpha" });
+    startFeishuEventRuntimeMock.mockResolvedValue({
+      stop: vi.fn(),
+      subscriptions: [],
+      loadResult: { skillSources: [], manifests: [], subscribers: [], diagnostics: [] },
+    });
+
+    const abortController = new AbortController();
+    const monitorPromise = monitorFeishuProvider({
+      config: buildMultiAccountWebsocketConfig(["alpha"]),
+      abortSignal: abortController.signal,
+      runtime: createNonExitingRuntimeEnv(),
+    });
+
+    abortController.abort();
+    await monitorPromise;
+    stopFeishuMonitor();
+
+    expect(startFeishuEventRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(stopFeishuEventRuntimeMock).toHaveBeenCalled();
+  });
+
   it("starts account probes sequentially to avoid startup bursts", async () => {
     let inFlight = 0;
     let maxInFlight = 0;

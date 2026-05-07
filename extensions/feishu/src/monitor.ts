@@ -1,5 +1,6 @@
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { listEnabledFeishuAccounts, resolveFeishuRuntimeAccount } from "./accounts.js";
+import { startFeishuEventRuntime, stopFeishuEventRuntime } from "./event.runtime.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import {
   clearFeishuWebhookRateLimitStateForTest,
@@ -44,6 +45,10 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
     if (!account.enabled || !account.configured) {
       throw new Error(`Feishu account "${opts.accountId}" not configured or disabled`);
     }
+    await startFeishuEventRuntime({
+      cfg,
+      runtime: opts.runtime,
+    });
     const { monitorSingleAccount } = await loadMonitorAccountRuntime();
     return monitorSingleAccount({
       cfg,
@@ -61,6 +66,11 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
   log(
     `feishu: starting ${accounts.length} account(s): ${accounts.map((a) => a.accountId).join(", ")}`,
   );
+
+  await startFeishuEventRuntime({
+    cfg,
+    runtime: opts.runtime,
+  });
 
   const { monitorSingleAccount } = await loadMonitorAccountRuntime();
   const monitorPromises: Promise<void>[] = [];
@@ -96,5 +106,6 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
 }
 
 export function stopFeishuMonitor(accountId?: string): void {
+  stopFeishuEventRuntime();
   stopFeishuMonitorState(accountId);
 }

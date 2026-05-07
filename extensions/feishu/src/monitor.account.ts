@@ -16,6 +16,8 @@ import {
   recordProcessedFeishuMessage,
   warmupDedupFromDisk,
 } from "./dedup.js";
+import { wrapFeishuEventDispatcher } from "./event.hijacker.js";
+import { getActiveFeishuEventRuntimeEventTypes } from "./event.runtime.js";
 import { applyBotIdentityState, startBotIdentityRecovery } from "./monitor.bot-identity.js";
 import { createFeishuBotMenuHandler } from "./monitor.bot-menu-handler.js";
 import { createFeishuDriveCommentNoticeHandler } from "./monitor.comment-notice-handler.js";
@@ -259,7 +261,7 @@ function registerEventHandlers(
     }
   };
 
-  eventDispatcher.register({
+  const registeredHandlers: Record<string, (data: unknown) => Promise<void> | void> = {
     "im.message.receive_v1": createFeishuMessageReceiveHandler({
       cfg,
       core: getFeishuRuntime(),
@@ -398,7 +400,17 @@ function registerEventHandlers(
         error(`feishu[${accountId}]: error handling card action: ${String(err)}`);
       }
     },
-  });
+  };
+  for (const eventType of getActiveFeishuEventRuntimeEventTypes()) {
+    if (registeredHandlers[eventType]) {
+      continue;
+    }
+    registeredHandlers[eventType] = async () => {
+      // Publish-path skill subscribers still need the SDK dispatcher to accept
+      // the event so the hijacker can normalize and forward it to the topic bus.
+    };
+  }
+  eventDispatcher.register(registeredHandlers);
 }
 
 export type BotOpenIdSource =
@@ -446,7 +458,13 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
 
   let threadBindingManager: ReturnType<typeof createFeishuThreadBindingManager> | null = null;
   try {
-    const eventDispatcher = createEventDispatcher(account);
+    const eventDispatcher = wrapFeishuEventDispatcher({
+      eventDispatcher: createEventDispatcher(account),
+      accountId,
+      runtime,
+      hasProcessedEvent: hasProcessedFeishuMessage,
+      recordProcessedEvent: recordProcessedFeishuMessage,
+    });
     const chatHistories = new Map<string, HistoryEntry[]>();
     threadBindingManager = createFeishuThreadBindingManager({ accountId, cfg });
 

@@ -21,6 +21,7 @@ const createEventDispatcherMock = vi.hoisted(() => vi.fn());
 const monitorWebSocketMock = vi.hoisted(() => vi.fn(async () => {}));
 const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
 const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
+const getActiveFeishuEventRuntimeEventTypesMock = vi.hoisted(() => vi.fn(() => []));
 
 let handlers: Record<string, (data: unknown) => Promise<void>> = {};
 
@@ -44,6 +45,14 @@ vi.mock("./monitor.transport.js", () => ({
 vi.mock("./thread-bindings.js", () => ({
   createFeishuThreadBindingManager: createFeishuThreadBindingManagerMock,
 }));
+
+vi.mock("./event.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./event.runtime.js")>("./event.runtime.js");
+  return {
+    ...actual,
+    getActiveFeishuEventRuntimeEventTypes: getActiveFeishuEventRuntimeEventTypesMock,
+  };
+});
 
 const cfg = {} as ClawdbotConfig;
 
@@ -446,6 +455,7 @@ describe("monitorSingleAccount lifecycle", () => {
     createFeishuThreadBindingManagerMock.mockReset().mockImplementation(() => ({
       stop: vi.fn(),
     }));
+    getActiveFeishuEventRuntimeEventTypesMock.mockReset().mockReturnValue([]);
     createEventDispatcherMock.mockReset().mockReturnValue({
       register: vi.fn(),
     });
@@ -494,6 +504,30 @@ describe("monitorSingleAccount lifecycle", () => {
       | { stop: ReturnType<typeof vi.fn> }
       | undefined;
     expect(manager?.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("registers noop handlers for active event-runtime event types", async () => {
+    const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
+      handlers = registered;
+    });
+    getActiveFeishuEventRuntimeEventTypesMock.mockReturnValue([
+      "drive.file.bitable_record_changed_v1",
+    ]);
+    createEventDispatcherMock.mockReturnValue({ register });
+    setFeishuRuntime(createFeishuMonitorRuntime());
+
+    await monitorSingleAccount({
+      cfg: buildDebounceConfig(),
+      account: buildDebounceAccount(),
+      runtime: createNonExitingRuntimeEnv(),
+      botOpenIdSource: {
+        kind: "prefetched",
+        botOpenId: "ou_bot",
+      },
+    });
+
+    expect(register).toHaveBeenCalledTimes(1);
+    expect(handlers["drive.file.bitable_record_changed_v1"]).toBeTypeOf("function");
   });
 });
 
