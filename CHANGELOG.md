@@ -149,6 +149,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/chat: serve assistant-media binary downloads (xlsx/csv/pdf/zip/etc) with `Content-Disposition: attachment` and an RFC 5987 / 6266 `filename*=UTF-8''…` value plus an ASCII fallback so non-image documents trigger a real download instead of letting the browser render them as a webpage and offer Save As "Webpage Complete". Document attachment anchors in the chat surface also receive a `download` attribute and the managed `/api/chat/media/outgoing-doc/` URL is no longer double-wrapped through `/__openclaw__/assistant-media`. (#77912)
 - Docs/Docker: document a local Compose override for Docker Desktop DNS failures in the shared-network `openclaw-cli` sidecar, keeping the default compose setup hardened while unblocking `openclaw plugins install` when users opt in. Fixes #79018. Thanks @Jason-Vaughan.
 - Compute plugin callback authorization dynamically [AI]. (#78866) Thanks @pgondhi987.
 - fix(active-memory): require admin scope for global toggles [AI]. (#78863) Thanks @pgondhi987.

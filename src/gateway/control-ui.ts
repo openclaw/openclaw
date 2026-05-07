@@ -496,6 +496,37 @@ function safeAssistantMediaDownloadFilename(localPath: string): string {
   return cleaned || fallback;
 }
 
+/**
+ * Build an RFC 5987-compatible Content-Disposition header value for a
+ * download.
+ *
+ * Node's `ServerResponse.setHeader` validates header values against ISO-8859-1
+ * and throws `ERR_INVALID_CHAR` if a non-Latin1 byte is present. The chat
+ * surface accepts assistant filenames containing CJK / Cyrillic / accented
+ * characters (e.g. `価格.xlsx`, `résumé.docx`), so we cannot interpolate the
+ * raw filename into `filename="…"`.
+ *
+ * RFC 5987 / 6266 prescribes pairing an ASCII-only fallback `filename="…"`
+ * with a UTF-8 percent-encoded `filename*=UTF-8''…`. All modern browsers and
+ * curl prefer `filename*` when both are present.
+ */
+function buildDownloadContentDispositionHeader(safeFilename: string): string {
+  const isLatin1Safe = /^[\x20-\x7E\xA0-\xFF]*$/u.test(safeFilename);
+  const asciiFallback = safeFilename.replace(/[^\x20-\x7E]/gu, "_");
+  const utf8Encoded = encodeURIComponent(safeFilename)
+    // RFC 5987 attr-char excludes a few percent-encoding-reserved characters
+    // that encodeURIComponent leaves alone; tighten to the spec's value-chars.
+    .replace(/['()]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase())
+    .replace(/\*/g, "%2A");
+  if (isLatin1Safe && asciiFallback === safeFilename) {
+    // Pure ASCII filename: a single `filename="…"` is RFC-compliant and
+    // matches the previous behavior so we don't churn header strings on the
+    // common case.
+    return `attachment; filename="${safeFilename}"`;
+  }
+  return `attachment; filename="${asciiFallback}"; filename*=UTF-8''${utf8Encoded}`;
+}
+
 async function resolveAssistantMediaAvailability(
   source: string,
   localRoots: readonly string[],
@@ -608,7 +639,11 @@ export async function handleControlUiAssistantMediaRequest(
       mediaKind === "image" || mediaKind === "audio" || mediaKind === "video";
     if (!isInlineRenderable) {
       const downloadFilename = safeAssistantMediaDownloadFilename(localPath);
-      res.setHeader("Content-Disposition", `attachment; filename="${downloadFilename}"`);
+      // RFC 5987 / 6266: encode non-ASCII filenames with an ASCII fallback +
+      // UTF-8 `filename*` so Node's setHeader does not throw ERR_INVALID_CHAR
+      // and turn the response into a 404 for filenames like `価格.xlsx` or
+      // `résumé.docx`.
+      res.setHeader("Content-Disposition", buildDownloadContentDispositionHeader(downloadFilename));
     }
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Content-Length", String(opened.stat.size));
