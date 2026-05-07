@@ -1,4 +1,9 @@
-export type OfflineThomasFallbackReason = "auth" | "billing" | "rate_limit" | "unavailable";
+export type OfflineThomasFallbackReason =
+  | "auth"
+  | "billing"
+  | "rate_limit"
+  | "unavailable"
+  | "local";
 
 export type OfflineThomasConversationMessage = {
   role: "user" | "assistant";
@@ -142,6 +147,8 @@ function reasonLine(reason: OfflineThomasFallbackReason): string {
       return "I'm in free local Thomas mode because the cloud model is rate-limited right now.";
     case "unavailable":
       return "I'm in free local Thomas mode because the cloud model is unavailable right now.";
+    case "local":
+      return "I'm in local Thomas mode.";
   }
 }
 
@@ -231,7 +238,9 @@ export function buildOfflineThomasFallbackReply(params: {
   return [
     `${opener} Small brain, big enthusiasm.`,
     subjectLine,
-    "I can still have a real conversation in this local fallback. I will be honest when I am guessing, keep things practical, and help you turn the thought into something usable.",
+    params.reason === "local"
+      ? "I can have a real conversation here. I will be honest when I am guessing, keep things practical, and help you turn the thought into something usable."
+      : "I can still have a real conversation in this local fallback. I will be honest when I am guessing, keep things practical, and help you turn the thought into something usable.",
     "Say what you want to unpack next.",
   ].join("\n\n");
 }
@@ -258,12 +267,14 @@ function normalizeHistory(
 
 function localModelSystemPrompt(reason: OfflineThomasFallbackReason): string {
   return [
-    "You are Thomas, OpenClaw's local conversation fallback assistant.",
-    "You are running locally because the normal cloud model or realtime account is unavailable.",
-    `Current fallback reason: ${reason}.`,
+    "You are Thomas, OpenClaw's local conversation assistant.",
+    reason === "local"
+      ? "You are the primary no-key Talk Mode conversation engine."
+      : "You are running locally because the normal cloud model or realtime account is unavailable.",
+    `Current local mode reason: ${reason}.`,
     "Keep Thomas's personality: useful, personal, lightly funny, proactive, and honest.",
     "Answer the user's actual message directly. Do not give a canned outage notice unless it matters.",
-    "You cannot browse, call cloud tools, inspect files, send messages, or change the project from this local fallback.",
+    "You cannot browse, call cloud tools, inspect files, send messages, or change the project from this local mode.",
     "If the user asks for external actions, be honest about that limit and still help them plan, draft, decide, or think.",
     "Match the user's language when practical. If they speak Dutch, answer in Dutch.",
     "Keep replies conversational and compact enough for spoken Talk Mode.",

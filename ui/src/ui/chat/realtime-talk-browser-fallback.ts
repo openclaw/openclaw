@@ -1,5 +1,6 @@
 import { generateUUID } from "../uuid.ts";
 import {
+  type RealtimeTalkBrowserSpeechLocalSessionResult,
   type RealtimeTalkTransport,
   type RealtimeTalkTransportContext,
   waitForChatResult,
@@ -63,7 +64,9 @@ type TalkConfigResult = {
   };
 };
 
-const FALLBACK_ERROR_PATTERNS = [
+const LOCAL_TALK_LISTENING_DETAIL = "Listening";
+
+const LOCAL_TALK_RECOVERY_ERROR_PATTERNS = [
   /Realtime voice provider ".+" is not configured/i,
   /No realtime voice provider registered/i,
   /OpenAI API key missing/i,
@@ -77,10 +80,12 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function shouldUseBrowserFallbackForRealtimeError(error: unknown): boolean {
+export function shouldUseLocalTalkForRealtimeError(error: unknown): boolean {
   const message = errorMessage(error);
-  return FALLBACK_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+  return LOCAL_TALK_RECOVERY_ERROR_PATTERNS.some((pattern) => pattern.test(message));
 }
+
+export const shouldUseBrowserFallbackForRealtimeError = shouldUseLocalTalkForRealtimeError;
 
 function getSpeechRecognitionConstructor(): SpeechRecognitionConstructor | null {
   if (typeof window === "undefined") {
@@ -107,20 +112,23 @@ function buildAudioDataUrl(result: TalkSpeakResult): string | null {
   return `data:${result.mimeType || "audio/mpeg"};base64,${result.audioBase64}`;
 }
 
-export class BrowserFallbackRealtimeTalkTransport implements RealtimeTalkTransport {
+export class BrowserSpeechRealtimeTalkTransport implements RealtimeTalkTransport {
   private recognition: SpeechRecognitionLike | null = null;
   private closed = false;
   private processing = false;
   private restartTimer: number | null = null;
   private currentAudio: HTMLAudioElement | null = null;
 
-  constructor(private readonly ctx: RealtimeTalkTransportContext) {}
+  constructor(
+    private readonly ctx: RealtimeTalkTransportContext,
+    private readonly options: { session?: RealtimeTalkBrowserSpeechLocalSessionResult } = {},
+  ) {}
 
   async start(): Promise<void> {
     const Recognition = getSpeechRecognitionConstructor();
     if (!Recognition) {
       throw new Error(
-        "Talk needs either a configured realtime voice provider or browser speech recognition support.",
+        "Talk needs browser speech recognition support for the local Talk engine or a configured realtime voice provider.",
       );
     }
     this.closed = false;
@@ -130,7 +138,7 @@ export class BrowserFallbackRealtimeTalkTransport implements RealtimeTalkTranspo
     this.recognition.interimResults = true;
     this.recognition.onstart = () => {
       if (!this.closed && !this.processing) {
-        this.ctx.callbacks.onStatus?.("listening", "Listening with browser dictation");
+        this.ctx.callbacks.onStatus?.("listening", LOCAL_TALK_LISTENING_DETAIL);
       }
     };
     this.recognition.onend = () => {
@@ -144,7 +152,7 @@ export class BrowserFallbackRealtimeTalkTransport implements RealtimeTalkTranspo
       }
       const code = event.error?.trim();
       if (code === "no-speech" || code === "aborted") {
-        this.ctx.callbacks.onStatus?.("listening", "Listening with browser dictation");
+        this.ctx.callbacks.onStatus?.("listening", LOCAL_TALK_LISTENING_DETAIL);
         return;
       }
       this.ctx.callbacks.onStatus?.(
@@ -159,6 +167,10 @@ export class BrowserFallbackRealtimeTalkTransport implements RealtimeTalkTranspo
   }
 
   private async resolveSpeechLanguage(): Promise<string> {
+    const sessionLocale = this.options.session?.speechLocale?.trim();
+    if (sessionLocale) {
+      return sessionLocale;
+    }
     try {
       const config = await this.ctx.client.request<TalkConfigResult>("talk.config", {});
       return extractTalkSpeechLocale(config) ?? getBrowserSpeechLanguage();
@@ -187,7 +199,7 @@ export class BrowserFallbackRealtimeTalkTransport implements RealtimeTalkTranspo
     }
     try {
       this.recognition.start();
-      this.ctx.callbacks.onStatus?.("listening", "Listening with browser dictation");
+      this.ctx.callbacks.onStatus?.("listening", LOCAL_TALK_LISTENING_DETAIL);
     } catch (error) {
       const message = errorMessage(error);
       if (!/already started|recognition has already started/i.test(message)) {
@@ -248,6 +260,7 @@ export class BrowserFallbackRealtimeTalkTransport implements RealtimeTalkTranspo
       const response = await this.ctx.client.request<{ runId?: string }>("chat.send", {
         sessionKey: this.ctx.sessionKey,
         message: trimmed,
+        conversationEngine: "local-thomas",
         idempotencyKey,
       });
       const reply = await waitForChatResult({
@@ -261,7 +274,7 @@ export class BrowserFallbackRealtimeTalkTransport implements RealtimeTalkTranspo
       this.ctx.callbacks.onTranscript?.({ role: "assistant", text: reply, final: true });
       await this.speak(reply);
       if (!this.closed) {
-        this.ctx.callbacks.onStatus?.("listening", "Listening with browser dictation");
+        this.ctx.callbacks.onStatus?.("listening", LOCAL_TALK_LISTENING_DETAIL);
       }
     } catch (error) {
       if (!this.closed) {
@@ -296,3 +309,5 @@ export class BrowserFallbackRealtimeTalkTransport implements RealtimeTalkTranspo
     }
   }
 }
+
+export const BrowserFallbackRealtimeTalkTransport = BrowserSpeechRealtimeTalkTransport;

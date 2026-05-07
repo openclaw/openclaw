@@ -1,13 +1,14 @@
 import { normalizeTalkTransport } from "../../../../src/talk/talk-session-controller.js";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import {
-  BrowserFallbackRealtimeTalkTransport,
-  shouldUseBrowserFallbackForRealtimeError,
+  BrowserSpeechRealtimeTalkTransport,
+  shouldUseLocalTalkForRealtimeError,
 } from "./realtime-talk-browser-fallback.ts";
 import { GatewayRelayRealtimeTalkTransport } from "./realtime-talk-gateway-relay.ts";
 import { GoogleLiveRealtimeTalkTransport } from "./realtime-talk-google-live.ts";
 import {
   type RealtimeTalkCallbacks,
+  type RealtimeTalkBrowserSpeechLocalSessionResult,
   type RealtimeTalkEvent,
   type RealtimeTalkGatewayRelaySessionResult,
   type RealtimeTalkJsonPcmWebSocketSessionResult,
@@ -30,7 +31,12 @@ export type RealtimeTalkLaunchOptions = {
   provider?: string;
   model?: string;
   voice?: string;
-  transport?: "webrtc" | "provider-websocket" | "gateway-relay" | "managed-room";
+  transport?:
+    | "webrtc"
+    | "provider-websocket"
+    | "gateway-relay"
+    | "managed-room"
+    | "browser-speech-local";
   vadThreshold?: number;
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
@@ -56,6 +62,11 @@ function createTransport(
       session as RealtimeTalkGatewayRelaySessionResult,
       ctx,
     );
+  }
+  if (transport === "browser-speech-local") {
+    return new BrowserSpeechRealtimeTalkTransport(ctx, {
+      session: session as RealtimeTalkBrowserSpeechLocalSessionResult,
+    });
   }
   if (transport === "managed-room") {
     throw new Error("Managed-room realtime Talk sessions are not available in this UI yet");
@@ -98,13 +109,13 @@ export class RealtimeTalkSession {
       this.transport = createTransport(session, this.createTransportContext(session));
       await this.transport.start();
     } catch (error) {
-      if (!shouldUseBrowserFallbackForRealtimeError(error)) {
+      if (!shouldUseLocalTalkForRealtimeError(error)) {
         throw error;
       }
       if (this.closed) {
         return;
       }
-      await this.startBrowserFallback(this.transport);
+      await this.startLocalTalk(this.transport);
     }
   }
 
@@ -153,29 +164,29 @@ export class RealtimeTalkSession {
       callbacks: this.callbacks,
       consultThinkingLevel: session?.consultThinkingLevel,
       consultFastMode: session?.consultFastMode,
-      onRecoverableError: (error, source) => this.requestBrowserFallback(error, source),
+      onRecoverableError: (error, source) => this.requestLocalTalk(error, source),
     };
   }
 
-  private requestBrowserFallback(error: Error, source: RealtimeTalkTransport): boolean {
-    if (!shouldUseBrowserFallbackForRealtimeError(error)) {
+  private requestLocalTalk(error: Error, source: RealtimeTalkTransport): boolean {
+    if (!shouldUseLocalTalkForRealtimeError(error)) {
       return false;
     }
     if (this.closed || this.transport !== source) {
       return true;
     }
-    void this.startBrowserFallback(source).catch((fallbackError) => {
+    void this.startLocalTalk(source).catch((localTalkError) => {
       if (!this.closed) {
         this.callbacks.onStatus?.(
           "error",
-          fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+          localTalkError instanceof Error ? localTalkError.message : String(localTalkError),
         );
       }
     });
     return true;
   }
 
-  private async startBrowserFallback(source: RealtimeTalkTransport | null): Promise<void> {
+  private async startLocalTalk(source: RealtimeTalkTransport | null): Promise<void> {
     if (this.closed) {
       return;
     }
@@ -183,8 +194,8 @@ export class RealtimeTalkSession {
       return;
     }
     source?.stop();
-    const fallback = new BrowserFallbackRealtimeTalkTransport(this.createTransportContext());
-    this.transport = fallback;
-    await fallback.start();
+    const localTalk = new BrowserSpeechRealtimeTalkTransport(this.createTransportContext());
+    this.transport = localTalk;
+    await localTalk.start();
   }
 }

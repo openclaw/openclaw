@@ -911,6 +911,82 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.send can use local Thomas directly for Talk mode", async () => {
+    await withMainSessionStore(async () => {
+      const finalPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === "idem-local-thomas-direct",
+        8000,
+      );
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "Can we talk without cloud models?",
+        idempotencyKey: "idem-local-thomas-direct",
+        conversationEngine: "local-thomas",
+      });
+
+      expect(res.ok).toBe(true);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      const final = await finalPromise;
+      const text = extractFirstTextBlock(final.payload?.message);
+      expect(text).toContain("local Thomas mode");
+      expect(text).toContain("Can we talk without cloud models?");
+
+      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+      expect(historyRes.ok).toBe(true);
+      const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
+      expect(historyTexts).toEqual(
+        expect.arrayContaining([expect.stringContaining("local Thomas mode")]),
+      );
+    });
+  });
+
+  test("chat.send local Thomas creates history for a missing Talk session", async () => {
+    await withMainSessionStore(async () => {
+      const finalPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === "idem-local-thomas-new-session",
+        8000,
+      );
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "fresh-local-talk",
+        message: "Start a brand new local Talk session.",
+        idempotencyKey: "idem-local-thomas-new-session",
+        conversationEngine: "local-thomas",
+      });
+
+      expect(res.ok).toBe(true);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      const final = await finalPromise;
+      const finalText = extractFirstTextBlock(final.payload?.message);
+      expect(finalText).toContain("local Thomas mode");
+
+      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "fresh-local-talk",
+      });
+      expect(historyRes.ok).toBe(true);
+      const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
+      expect(historyTexts).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("Start a brand new local Talk session."),
+          expect.stringContaining("local Thomas mode"),
+        ]),
+      );
+    });
+  });
+
   test("chat.send falls back to local Thomas after an agent-started auth failure", async () => {
     await withMainSessionStore(async () => {
       dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {

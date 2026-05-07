@@ -8,12 +8,12 @@ const {
   relayStop,
   webRtcStart,
   webRtcStop,
+  localStart,
+  localStop,
   googleCtor,
   relayCtor,
   webRtcCtor,
-  fallbackStart,
-  fallbackStop,
-  fallbackCtor,
+  localCtor,
 } = vi.hoisted(() => ({
   googleStart: vi.fn(async () => undefined),
   googleStop: vi.fn(),
@@ -21,8 +21,8 @@ const {
   relayStop: vi.fn(),
   webRtcStart: vi.fn(async () => undefined),
   webRtcStop: vi.fn(),
-  fallbackStart: vi.fn(async () => undefined),
-  fallbackStop: vi.fn(),
+  localStart: vi.fn(async () => undefined),
+  localStop: vi.fn(),
   googleCtor: vi.fn(function () {
     return { start: googleStart, stop: googleStop };
   }),
@@ -32,8 +32,8 @@ const {
   webRtcCtor: vi.fn(function () {
     return { start: webRtcStart, stop: webRtcStop };
   }),
-  fallbackCtor: vi.fn(function () {
-    return { start: fallbackStart, stop: fallbackStop };
+  localCtor: vi.fn(function () {
+    return { start: localStart, stop: localStop };
   }),
 }));
 
@@ -50,8 +50,11 @@ vi.mock("./chat/realtime-talk-webrtc.ts", () => ({
 }));
 
 vi.mock("./chat/realtime-talk-browser-fallback.ts", () => ({
-  BrowserFallbackRealtimeTalkTransport: fallbackCtor,
+  BrowserFallbackRealtimeTalkTransport: localCtor,
+  BrowserSpeechRealtimeTalkTransport: localCtor,
   shouldUseBrowserFallbackForRealtimeError: (error: unknown) =>
+    error instanceof Error && /not configured|quota|billing|credit|429/i.test(error.message),
+  shouldUseLocalTalkForRealtimeError: (error: unknown) =>
     error instanceof Error && /not configured|quota|billing|credit|429/i.test(error.message),
 }));
 
@@ -65,12 +68,12 @@ describe("RealtimeTalkSession", () => {
     relayStop.mockClear();
     webRtcStart.mockClear();
     webRtcStop.mockClear();
-    fallbackStart.mockClear();
-    fallbackStop.mockClear();
+    localStart.mockClear();
+    localStop.mockClear();
     googleCtor.mockClear();
     relayCtor.mockClear();
     webRtcCtor.mockClear();
-    fallbackCtor.mockClear();
+    localCtor.mockClear();
   });
 
   it("starts the Google Live WebSocket transport from a generic session result", async () => {
@@ -229,7 +232,36 @@ describe("RealtimeTalkSession", () => {
     });
   });
 
-  it("falls back to browser dictation when realtime is not configured", async () => {
+  it("starts the local Talk engine when the gateway selects browser speech", async () => {
+    const request = vi.fn(async () => ({
+      provider: "local-voice",
+      transport: "browser-speech-local",
+      speechLocale: "nl-NL",
+    }));
+    const session = new RealtimeTalkSession({ request } as never, "main");
+
+    await session.start();
+    session.stop();
+
+    expect(request).toHaveBeenCalledWith("talk.client.create", { sessionKey: "main" });
+    expect(localCtor).toHaveBeenCalledTimes(1);
+    expect(localCtor).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "main" }),
+      expect.objectContaining({
+        session: expect.objectContaining({
+          transport: "browser-speech-local",
+          speechLocale: "nl-NL",
+        }),
+      }),
+    );
+    expect(localStart).toHaveBeenCalledTimes(1);
+    expect(localStop).toHaveBeenCalledTimes(1);
+    expect(webRtcCtor).not.toHaveBeenCalled();
+    expect(googleCtor).not.toHaveBeenCalled();
+    expect(relayCtor).not.toHaveBeenCalled();
+  });
+
+  it("switches to the local Talk engine when realtime is not configured", async () => {
     const request = vi.fn(async () => {
       throw new Error('Realtime voice provider "openai" is not configured');
     });
@@ -238,15 +270,15 @@ describe("RealtimeTalkSession", () => {
     await session.start();
     session.stop();
 
-    expect(fallbackCtor).toHaveBeenCalledTimes(1);
-    expect(fallbackStart).toHaveBeenCalledTimes(1);
-    expect(fallbackStop).toHaveBeenCalledTimes(1);
+    expect(localCtor).toHaveBeenCalledTimes(1);
+    expect(localStart).toHaveBeenCalledTimes(1);
+    expect(localStop).toHaveBeenCalledTimes(1);
     expect(webRtcCtor).not.toHaveBeenCalled();
     expect(googleCtor).not.toHaveBeenCalled();
     expect(relayCtor).not.toHaveBeenCalled();
   });
 
-  it("falls back to browser dictation when WebRTC setup hits OpenAI quota", async () => {
+  it("switches to the local Talk engine when WebRTC setup hits OpenAI quota", async () => {
     const request = vi.fn(async () => ({
       provider: "openai",
       transport: "webrtc-sdp",
@@ -262,12 +294,12 @@ describe("RealtimeTalkSession", () => {
 
     expect(webRtcCtor).toHaveBeenCalledTimes(1);
     expect(webRtcStop).toHaveBeenCalledTimes(1);
-    expect(fallbackCtor).toHaveBeenCalledTimes(1);
-    expect(fallbackStart).toHaveBeenCalledTimes(1);
-    expect(fallbackStop).toHaveBeenCalledTimes(1);
+    expect(localCtor).toHaveBeenCalledTimes(1);
+    expect(localStart).toHaveBeenCalledTimes(1);
+    expect(localStop).toHaveBeenCalledTimes(1);
   });
 
-  it("switches to browser dictation when an active WebRTC transport reports OpenAI quota", async () => {
+  it("switches to local Talk when an active WebRTC transport reports OpenAI quota", async () => {
     const request = vi.fn(async () => ({
       provider: "openai",
       transport: "webrtc-sdp",
@@ -284,11 +316,11 @@ describe("RealtimeTalkSession", () => {
     expect(ctx?.onRecoverableError?.(new Error("You exceeded your current quota"), transport)).toBe(
       true,
     );
-    await vi.waitFor(() => expect(fallbackStart).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(localStart).toHaveBeenCalledTimes(1));
     expect(webRtcStop).toHaveBeenCalledTimes(1);
 
     session.stop();
-    expect(fallbackStop).toHaveBeenCalledTimes(1);
+    expect(localStop).toHaveBeenCalledTimes(1);
   });
 
   it("does not mask unrelated realtime startup failures", async () => {
@@ -299,6 +331,6 @@ describe("RealtimeTalkSession", () => {
 
     await expect(session.start()).rejects.toThrow("permission denied");
 
-    expect(fallbackCtor).not.toHaveBeenCalled();
+    expect(localCtor).not.toHaveBeenCalled();
   });
 });

@@ -69,6 +69,12 @@ export type RealtimeTalkGatewayRelaySessionResult = {
   consultFastMode?: boolean;
 };
 
+export type RealtimeTalkBrowserSpeechLocalSessionResult = {
+  provider: string;
+  transport: "browser-speech-local";
+  speechLocale?: string;
+};
+
 export type RealtimeTalkManagedRoomSessionResult = {
   provider: string;
   transport: "managed-room";
@@ -85,6 +91,7 @@ export type RealtimeTalkSessionResult =
   | RealtimeTalkWebRtcSdpSessionResult
   | RealtimeTalkJsonPcmWebSocketSessionResult
   | RealtimeTalkGatewayRelaySessionResult
+  | RealtimeTalkBrowserSpeechLocalSessionResult
   | RealtimeTalkManagedRoomSessionResult;
 
 export type RealtimeTalkTransport = {

@@ -23,11 +23,13 @@ Browser realtime Talk forwards provider tool calls through `talk.client.toolCall
 
 Transcription-only Talk emits the same common Talk event envelope as realtime and STT/TTS sessions, but uses `mode: "transcription"` and `brain: "none"`. It is for captions, dictation, and observe-only speech capture; one-shot uploaded voice notes still use the media/audio path.
 
-When realtime/cloud voice or model access is unavailable because of missing credentials,
-quota, billing, rate limits, or provider outages, browser and app Talk Mode continue through
-the normal `chat.send` + `talk.speak` loop. The gateway first tries a local Ollama
-conversation fallback (`llama3.2:3b` at `http://127.0.0.1:11434`) with recent transcript
-context, then falls back to the static local Thomas reply only if the local model is down.
+In Control UI, this loop is the primary no-key Talk engine for `local-voice`, system,
+ElevenLabs, and other non-realtime speech providers. OpenAI and Google realtime voice remain
+optional configured transports. When cloud model access is unavailable because of missing
+credentials, quota, billing, rate limits, or provider outages, the normal `chat.send` path
+continues through the local Thomas conversation engine. The gateway first tries a local
+Ollama model (`llama3.2:3b` at `http://127.0.0.1:11434`) with recent transcript context,
+then uses the static local Thomas reply only if the local model is down.
 
 ## Behavior (macOS)
 
@@ -154,7 +156,7 @@ Defaults:
 - Browser realtime Talk uses `talk.client.toolCall` for `openclaw_agent_consult` instead of exposing `chat.send` to provider-owned browser sessions.
 - Transcription-only Talk uses `talk.session.create`, `talk.session.appendAudio`, `talk.session.cancelTurn`, and `talk.session.close`; clients subscribe to `talk.event` for partial/final transcript updates.
 - The gateway resolves Talk playback through `talk.speak` using the active Talk provider. Android falls back to local system TTS only when that RPC is unavailable.
-- Local conversation fallback can be tuned with `OPENCLAW_OFFLINE_THOMAS_MODEL`, `OPENCLAW_OFFLINE_THOMAS_BASE_URL`, `OPENCLAW_OFFLINE_THOMAS_TIMEOUT_MS`, or disabled for tests with `OPENCLAW_OFFLINE_THOMAS_DISABLE_MODEL=1`.
+- Local Thomas conversation can be tuned with `OPENCLAW_OFFLINE_THOMAS_MODEL`, `OPENCLAW_OFFLINE_THOMAS_BASE_URL`, `OPENCLAW_OFFLINE_THOMAS_TIMEOUT_MS`, or disabled for tests with `OPENCLAW_OFFLINE_THOMAS_DISABLE_MODEL=1`.
 - macOS local MLX playback uses the bundled `openclaw-mlx-tts` helper when present, or an executable on `PATH`. Set `OPENCLAW_MLX_TTS_BIN` to point at a custom helper binary during development.
 - `stability` for `eleven_v3` is validated to `0.0`, `0.5`, or `1.0`; other models accept `0..1`.
 - `latency_tier` is validated to `0..4` when set.

@@ -3,7 +3,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BrowserFallbackRealtimeTalkTransport,
+  BrowserSpeechRealtimeTalkTransport,
   shouldUseBrowserFallbackForRealtimeError,
+  shouldUseLocalTalkForRealtimeError,
 } from "./chat/realtime-talk-browser-fallback.ts";
 
 type GatewayListener = (event: { event: string; payload?: unknown }) => void;
@@ -72,7 +74,7 @@ function flushMicrotasks(): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, 0));
 }
 
-describe("BrowserFallbackRealtimeTalkTransport", () => {
+describe("BrowserSpeechRealtimeTalkTransport", () => {
   beforeEach(() => {
     FakeRecognition.instances = [];
     FakeAudio.instances = [];
@@ -90,7 +92,7 @@ describe("BrowserFallbackRealtimeTalkTransport", () => {
     vi.restoreAllMocks();
   });
 
-  it("uses normal chat plus Talk speech when realtime auth is unavailable", async () => {
+  it("uses normal chat plus Talk speech as the local Talk engine", async () => {
     const listeners: GatewayListener[] = [];
     const request = vi.fn(async (method: string) => {
       if (method === "talk.config") {
@@ -115,7 +117,7 @@ describe("BrowserFallbackRealtimeTalkTransport", () => {
     });
     const onStatus = vi.fn();
     const onTranscript = vi.fn();
-    const transport = new BrowserFallbackRealtimeTalkTransport({
+    const transport = new BrowserSpeechRealtimeTalkTransport({
       client: { request, addEventListener } as never,
       sessionKey: "main",
       callbacks: { onStatus, onTranscript },
@@ -137,7 +139,11 @@ describe("BrowserFallbackRealtimeTalkTransport", () => {
 
     expect(request).toHaveBeenCalledWith(
       "chat.send",
-      expect.objectContaining({ sessionKey: "main", message: "what is next" }),
+      expect.objectContaining({
+        sessionKey: "main",
+        message: "what is next",
+        conversationEngine: "local-thomas",
+      }),
     );
     expect(request).toHaveBeenCalledWith("talk.speak", { text: "Here is the answer." });
     expect(onTranscript).toHaveBeenCalledWith({
@@ -152,9 +158,18 @@ describe("BrowserFallbackRealtimeTalkTransport", () => {
     });
     expect(FakeAudio.instances[0]?.src).toBe("data:audio/mpeg;base64,UklGRg==");
     expect(onStatus).toHaveBeenCalledWith("thinking", "Asking Thomas...");
+    expect(
+      onStatus.mock.calls.every(
+        ([, detail]) => typeof detail !== "string" || !/fallback|browser dictation/i.test(detail),
+      ),
+    ).toBe(true);
   });
 
-  it("uses the gateway Talk speech locale for browser dictation", async () => {
+  it("keeps the old transport export as a compatibility alias", () => {
+    expect(BrowserFallbackRealtimeTalkTransport).toBe(BrowserSpeechRealtimeTalkTransport);
+  });
+
+  it("uses the gateway Talk speech locale for local browser speech", async () => {
     Object.defineProperty(navigator, "language", {
       value: "en-US",
       configurable: true,
@@ -165,7 +180,7 @@ describe("BrowserFallbackRealtimeTalkTransport", () => {
       }
       throw new Error(`unexpected method ${method}`);
     });
-    const transport = new BrowserFallbackRealtimeTalkTransport({
+    const transport = new BrowserSpeechRealtimeTalkTransport({
       client: { request, addEventListener: vi.fn(() => () => undefined) } as never,
       sessionKey: "main",
       callbacks: {},
@@ -178,25 +193,26 @@ describe("BrowserFallbackRealtimeTalkTransport", () => {
     expect(FakeRecognition.instances[0]?.lang).toBe("nl-NL");
   });
 
-  it("recognizes provider setup failures as fallback candidates", () => {
+  it("recognizes provider setup failures as local Talk recovery candidates", () => {
     expect(
-      shouldUseBrowserFallbackForRealtimeError(
+      shouldUseLocalTalkForRealtimeError(
         new Error('Realtime voice provider "openai" is not configured'),
       ),
     ).toBe(true);
     expect(
-      shouldUseBrowserFallbackForRealtimeError(
+      shouldUseLocalTalkForRealtimeError(
         new Error("OpenAI realtime failed with insufficient_quota"),
       ),
     ).toBe(true);
     expect(
-      shouldUseBrowserFallbackForRealtimeError(
+      shouldUseLocalTalkForRealtimeError(
         new Error("payment required: please add credits to continue"),
       ),
     ).toBe(true);
-    expect(
-      shouldUseBrowserFallbackForRealtimeError(new Error("401 unauthorized realtime request")),
-    ).toBe(true);
-    expect(shouldUseBrowserFallbackForRealtimeError(new Error("permission denied"))).toBe(false);
+    expect(shouldUseLocalTalkForRealtimeError(new Error("401 unauthorized realtime request"))).toBe(
+      true,
+    );
+    expect(shouldUseLocalTalkForRealtimeError(new Error("permission denied"))).toBe(false);
+    expect(shouldUseBrowserFallbackForRealtimeError(new Error("429 rate limit"))).toBe(true);
   });
 });

@@ -14,7 +14,8 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
-import { resolveSessionFilePath } from "../../config/sessions.js";
+import { resolveSessionFilePath, updateSessionStore } from "../../config/sessions.js";
+import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import { streamSessionTranscriptLines } from "../../config/sessions/transcript-stream.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -119,6 +120,7 @@ import {
   readRecentSessionMessagesAsync,
   resolveSessionModelRef,
 } from "../session-utils.js";
+import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
@@ -986,6 +988,60 @@ function buildChatSendTranscriptMessage(params: {
     timestamp: params.timestamp,
     ...mediaFields,
   };
+}
+
+async function appendUserTranscriptMessage(params: {
+  message: ReturnType<typeof buildChatSendTranscriptMessage>;
+  sessionId: string;
+  storePath: string | undefined;
+  sessionFile?: string;
+  agentId?: string;
+  sessionKey: string;
+  idempotencyKey?: string;
+  cfg?: OpenClawConfig;
+}): Promise<TranscriptAppendResult> {
+  const transcriptPath = resolveTranscriptPath({
+    sessionId: params.sessionId,
+    storePath: params.storePath,
+    sessionFile: params.sessionFile,
+    agentId: params.agentId,
+  });
+  if (!transcriptPath) {
+    return { ok: false, error: "transcript path not resolved" };
+  }
+
+  const ensured = ensureTranscriptFile({
+    transcriptPath,
+    sessionId: params.sessionId,
+  });
+  if (!ensured.ok) {
+    return { ok: false, error: ensured.error ?? "failed to create transcript file" };
+  }
+
+  const message = {
+    ...params.message,
+    ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+  };
+  if (
+    params.idempotencyKey &&
+    (await transcriptHasIdempotencyKey(transcriptPath, params.idempotencyKey))
+  ) {
+    return { ok: true, message };
+  }
+
+  const { messageId } = await appendSessionTranscriptMessage({
+    transcriptPath,
+    message,
+    sessionId: params.sessionId,
+    config: params.cfg,
+  });
+  emitSessionTranscriptUpdate({
+    sessionFile: transcriptPath,
+    sessionKey: params.sessionKey,
+    message,
+    messageId,
+  });
+  return { ok: true, messageId, message };
 }
 
 function stripTrailingOffloadedMediaMarkers(message: string, refs: OffloadedRef[]): string {
@@ -2043,6 +2099,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         content?: unknown;
       }>;
       timeoutMs?: number;
+      conversationEngine?: "auto" | "local-thomas";
       systemInputProvenance?: InputProvenance;
       systemProvenanceReceipt?: string;
       idempotencyKey: string;
@@ -2477,6 +2534,88 @@ export const chatHandlers: GatewayRequestHandlers = {
         })();
         await userTranscriptUpdatePromise;
       };
+      const ensureLocalThomasSessionEntry = async (): Promise<
+        | {
+            ok: true;
+          }
+        | {
+            ok: false;
+            error: string;
+          }
+      > => {
+        const latest = loadSessionEntry(sessionKey);
+        if (latest.entry?.sessionId) {
+          return { ok: true };
+        }
+        const created = await updateSessionStore(latest.storePath, async (store) => {
+          return await applySessionsPatchToStore({
+            cfg: latest.cfg,
+            store,
+            storeKey: latest.canonicalKey,
+            patch: { key: latest.canonicalKey },
+            loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+          });
+        });
+        if (!created.ok) {
+          return { ok: false, error: formatForLog(created.error) };
+        }
+        const transcriptPath = resolveTranscriptPath({
+          sessionId: created.entry.sessionId,
+          storePath: latest.storePath,
+          sessionFile: created.entry.sessionFile,
+          agentId,
+        });
+        if (!transcriptPath) {
+          return { ok: false, error: "local Thomas transcript path not resolved" };
+        }
+        const ensured = ensureTranscriptFile({
+          transcriptPath,
+          sessionId: created.entry.sessionId,
+        });
+        if (!ensured.ok) {
+          return {
+            ok: false,
+            error: ensured.error ?? "failed to create local Thomas transcript",
+          };
+        }
+        if (created.entry.sessionFile !== transcriptPath) {
+          await updateSessionStore(latest.storePath, (store) => {
+            const existing = store[latest.canonicalKey];
+            if (existing) {
+              store[latest.canonicalKey] = {
+                ...existing,
+                sessionFile: transcriptPath,
+              };
+            }
+            return { ok: true };
+          });
+        }
+        return { ok: true };
+      };
+      const appendLocalThomasUserTranscript = async () => {
+        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
+        const resolvedSessionId = latestEntry?.sessionId ?? backingSessionId;
+        if (!resolvedSessionId) {
+          throw new Error("local Thomas session entry unavailable");
+        }
+        const appended = await appendUserTranscriptMessage({
+          sessionKey,
+          sessionId: resolvedSessionId,
+          storePath: latestStorePath,
+          sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
+          agentId,
+          cfg,
+          idempotencyKey: `${clientRunId}:user`,
+          message: buildChatSendTranscriptMessage({
+            message: parsedMessage,
+            savedImages: await persistedImagesPromise,
+            timestamp: now,
+          }),
+        });
+        if (!appended.ok) {
+          throw new Error(appended.error ?? "local Thomas user transcript append failed");
+        }
+      };
       let transcriptMediaRewriteDone = false;
       const rewriteUserTranscriptMedia = async () => {
         if (transcriptMediaRewriteDone) {
@@ -2684,6 +2823,58 @@ export const chatHandlers: GatewayRequestHandlers = {
         });
         return true;
       };
+      if (p.conversationEngine === "local-thomas") {
+        void (async () => {
+          try {
+            const ensured = await ensureLocalThomasSessionEntry();
+            if (!ensured.ok) {
+              throw new Error(ensured.error);
+            }
+            await appendLocalThomasUserTranscript();
+            const applied = await appendAndBroadcastOfflineThomasFallbackIfNeeded("local");
+            if (!applied) {
+              throw new Error("local Thomas reply unavailable");
+            }
+            if (!context.chatAbortedRuns.has(clientRunId)) {
+              setGatewayDedupeEntry({
+                dedupe: context.dedupe,
+                key: `chat:${clientRunId}`,
+                entry: {
+                  ts: Date.now(),
+                  ok: true,
+                  payload: { runId: clientRunId, status: "ok" as const },
+                },
+              });
+            }
+          } catch (err) {
+            const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+            setGatewayDedupeEntry({
+              dedupe: context.dedupe,
+              key: `chat:${clientRunId}`,
+              entry: {
+                ts: Date.now(),
+                ok: false,
+                payload: {
+                  runId: clientRunId,
+                  status: "error" as const,
+                  summary: String(err),
+                },
+                error,
+              },
+            });
+            broadcastChatError({
+              context,
+              runId: clientRunId,
+              sessionKey,
+              errorMessage: String(err),
+            });
+          } finally {
+            activeRunAbort.cleanup();
+            context.removeChatRun(clientRunId, clientRunId, sessionKey);
+          }
+        })();
+        return;
+      }
       const dispatcher = createReplyDispatcher({
         ...replyPipeline,
         onError: (err) => {
