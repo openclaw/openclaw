@@ -54,7 +54,7 @@ type AcpxLaunchLeaseContext = {
   stableCommand?: string;
 };
 
-function readSessionRecordName(record: AcpSessionRecord): string {
+function readSessionRecordName(record: unknown): string {
   if (typeof record !== "object" || record === null) {
     return "";
   }
