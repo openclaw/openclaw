@@ -92,7 +92,7 @@ describe("BrowserSpeechRealtimeTalkTransport", () => {
     vi.restoreAllMocks();
   });
 
-  it("uses normal chat plus Talk speech as the local Talk engine", async () => {
+  it("uses deluxe chat plus Talk speech as the browser speech Talk engine", async () => {
     const listeners: GatewayListener[] = [];
     const request = vi.fn(async (method: string) => {
       if (method === "talk.config") {
@@ -142,7 +142,9 @@ describe("BrowserSpeechRealtimeTalkTransport", () => {
       expect.objectContaining({
         sessionKey: "main",
         message: "what is next",
-        conversationEngine: "local-thomas",
+        thinking: "off",
+        timeoutMs: 30_000,
+        conversationEngine: "deluxe-thomas",
       }),
     );
     expect(request).toHaveBeenCalledWith("talk.speak", { text: "Here is the answer." });

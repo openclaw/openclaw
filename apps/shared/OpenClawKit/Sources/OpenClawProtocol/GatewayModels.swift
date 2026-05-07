@@ -6127,6 +6127,7 @@ public struct ChatSendParams: Codable, Sendable {
     public let originatingthreadid: String?
     public let attachments: [AnyCodable]?
     public let timeoutms: Int?
+    public let conversationengine: AnyCodable?
     public let systeminputprovenance: [String: AnyCodable]?
     public let systemprovenancereceipt: String?
     public let idempotencykey: String
@@ -6144,6 +6145,7 @@ public struct ChatSendParams: Codable, Sendable {
         originatingthreadid: String?,
         attachments: [AnyCodable]?,
         timeoutms: Int?,
+        conversationengine: AnyCodable?,
         systeminputprovenance: [String: AnyCodable]?,
         systemprovenancereceipt: String?,
         idempotencykey: String)
@@ -6160,6 +6162,7 @@ public struct ChatSendParams: Codable, Sendable {
         self.originatingthreadid = originatingthreadid
         self.attachments = attachments
         self.timeoutms = timeoutms
+        self.conversationengine = conversationengine
         self.systeminputprovenance = systeminputprovenance
         self.systemprovenancereceipt = systemprovenancereceipt
         self.idempotencykey = idempotencykey
@@ -6178,6 +6181,7 @@ public struct ChatSendParams: Codable, Sendable {
         case originatingthreadid = "originatingThreadId"
         case attachments
         case timeoutms = "timeoutMs"
+        case conversationengine = "conversationEngine"
         case systeminputprovenance = "systemInputProvenance"
         case systemprovenancereceipt = "systemProvenanceReceipt"
         case idempotencykey = "idempotencyKey"

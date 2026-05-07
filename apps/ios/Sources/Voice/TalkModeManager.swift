@@ -32,7 +32,7 @@ private final class StreamFailureBox: @unchecked Sendable {
 @Observable
 final class TalkModeManager: NSObject {
     private typealias SpeechRequest = SFSpeechAudioBufferRecognitionRequest
-    private static let defaultModelIdFallback = "eleven_v3"
+    private static let defaultModelIdFallback = "eleven_flash_v2_5"
     private static let defaultTalkProvider = "elevenlabs"
     private static let defaultSilenceTimeoutMs = TalkDefaults.silenceTimeoutMs
     private static let redactedConfigSentinel = "__OPENCLAW_REDACTED__"
@@ -87,6 +87,7 @@ final class TalkModeManager: NSObject {
     private var apiKey: String?
     private var voiceAliases: [String: String] = [:]
     private var interruptOnSpeech: Bool = true
+    private var conversationEngine: String = "deluxe-thomas"
     private var gatewaySpeechLocaleID: String?
     private var mainSessionKey: String = "main"
     private var fallbackVoiceId: String?
@@ -911,8 +912,9 @@ final class TalkModeManager: NSObject {
         let payload: [String: Any] = [
             "sessionKey": self.mainSessionKey,
             "message": message,
-            "thinking": "low",
+            "thinking": "off",
             "timeoutMs": 30000,
+            "conversationEngine": self.conversationEngine,
             "idempotencyKey": UUID().uuidString,
         ]
         let data = try JSONSerialization.data(withJSONObject: payload)
@@ -2051,6 +2053,7 @@ extension TalkModeManager {
             if let interrupt = parsed.interruptOnSpeech {
                 self.interruptOnSpeech = interrupt
             }
+            self.conversationEngine = parsed.conversationEngine
             self.gatewaySpeechLocaleID = parsed.speechLocaleID
             self.silenceWindow = TimeInterval(parsed.silenceTimeoutMs) / 1000
             if parsed.normalizedPayload || parsed.defaultVoiceId != nil || parsed.rawConfigApiKey != nil {

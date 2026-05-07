@@ -117,6 +117,7 @@ class TalkModeManager internal constructor(
   // Interrupt-on-speech is disabled by default: starting a SpeechRecognizer during
   // TTS creates an audio session conflict on some OEMs. Can be enabled via gateway talk config.
   private var interruptOnSpeech: Boolean = false
+  private var conversationEngine: String = "deluxe-thomas"
   private var mainSessionKey: String = "main"
 
   @Volatile private var pendingRunId: String? = null
@@ -743,8 +744,9 @@ class TalkModeManager internal constructor(
       buildJsonObject {
         put("sessionKey", JsonPrimitive(mainSessionKey.ifBlank { "main" }))
         put("message", JsonPrimitive(message))
-        put("thinking", JsonPrimitive("low"))
+        put("thinking", JsonPrimitive("off"))
         put("timeoutMs", JsonPrimitive(30_000))
+        put("conversationEngine", JsonPrimitive(conversationEngine))
         put("idempotencyKey", JsonPrimitive(runId))
       }
     try {
@@ -1243,6 +1245,7 @@ class TalkModeManager internal constructor(
       val parsed = TalkModeGatewayConfigParser.parse(root?.get("config").asObjectOrNull())
       silenceWindowMs = parsed.silenceTimeoutMs
       parsed.interruptOnSpeech?.let { interruptOnSpeech = it }
+      conversationEngine = parsed.conversationEngine
       configLoaded = true
     } catch (_: Throwable) {
       silenceWindowMs = TalkDefaults.defaultSilenceTimeoutMs

@@ -13,6 +13,7 @@ describe("talk normalization", () => {
       consultThinkingLevel: " low ",
       consultFastMode: true,
       speechLocale: " ru-RU ",
+      conversationEngine: " deluxe-thomas ",
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
     } as unknown as never);
@@ -21,6 +22,7 @@ describe("talk normalization", () => {
       speechLocale: "ru-RU",
       consultThinkingLevel: "low",
       consultFastMode: true,
+      conversationEngine: "deluxe-thomas",
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
     });
@@ -110,6 +112,7 @@ describe("talk normalization", () => {
         },
       },
       speechLocale: "ru-RU",
+      conversationEngine: "local-thomas",
       interruptOnSpeech: true,
     });
 
@@ -129,6 +132,7 @@ describe("talk normalization", () => {
         },
       },
       speechLocale: "ru-RU",
+      conversationEngine: "local-thomas",
       interruptOnSpeech: true,
     });
   });

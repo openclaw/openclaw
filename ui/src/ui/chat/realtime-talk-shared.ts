@@ -73,6 +73,7 @@ export type RealtimeTalkBrowserSpeechLocalSessionResult = {
   provider: string;
   transport: "browser-speech-local";
   speechLocale?: string;
+  conversationEngine?: "auto" | "deluxe-thomas" | "local-thomas";
 };
 
 export type RealtimeTalkManagedRoomSessionResult = {

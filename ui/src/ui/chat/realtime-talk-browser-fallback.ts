@@ -59,6 +59,7 @@ type TalkSpeakResult = {
 type TalkConfigResult = {
   config?: {
     talk?: {
+      conversationEngine?: "auto" | "deluxe-thomas" | "local-thomas";
       speechLocale?: string;
     };
   };
@@ -103,6 +104,13 @@ function getBrowserSpeechLanguage(): string {
 function extractTalkSpeechLocale(result: TalkConfigResult): string | null {
   const value = result.config?.talk?.speechLocale?.trim();
   return value || null;
+}
+
+function extractTalkConversationEngine(
+  result: TalkConfigResult,
+): "auto" | "deluxe-thomas" | "local-thomas" | null {
+  const value = result.config?.talk?.conversationEngine;
+  return value === "auto" || value === "deluxe-thomas" || value === "local-thomas" ? value : null;
 }
 
 function buildAudioDataUrl(result: TalkSpeakResult): string | null {
@@ -176,6 +184,23 @@ export class BrowserSpeechRealtimeTalkTransport implements RealtimeTalkTransport
       return extractTalkSpeechLocale(config) ?? getBrowserSpeechLanguage();
     } catch {
       return getBrowserSpeechLanguage();
+    }
+  }
+
+  private async resolveConversationEngine(): Promise<"auto" | "deluxe-thomas" | "local-thomas"> {
+    const sessionEngine = this.options.session?.conversationEngine;
+    if (
+      sessionEngine === "auto" ||
+      sessionEngine === "deluxe-thomas" ||
+      sessionEngine === "local-thomas"
+    ) {
+      return sessionEngine;
+    }
+    try {
+      const config = await this.ctx.client.request<TalkConfigResult>("talk.config", {});
+      return extractTalkConversationEngine(config) ?? "deluxe-thomas";
+    } catch {
+      return "deluxe-thomas";
     }
   }
 
@@ -257,10 +282,13 @@ export class BrowserSpeechRealtimeTalkTransport implements RealtimeTalkTransport
     try {
       this.ctx.callbacks.onStatus?.("thinking", "Asking Thomas...");
       const idempotencyKey = generateUUID();
+      const conversationEngine = await this.resolveConversationEngine();
       const response = await this.ctx.client.request<{ runId?: string }>("chat.send", {
         sessionKey: this.ctx.sessionKey,
         message: trimmed,
-        conversationEngine: "local-thomas",
+        thinking: "off",
+        timeoutMs: 30_000,
+        conversationEngine,
         idempotencyKey,
       });
       const reply = await waitForChatResult({

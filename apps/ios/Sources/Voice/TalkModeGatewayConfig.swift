@@ -13,6 +13,7 @@ struct TalkModeGatewayConfigState {
     let interruptOnSpeech: Bool?
     let silenceTimeoutMs: Int
     let speechLocaleID: String?
+    let conversationEngine: String
 }
 
 enum TalkModeGatewayConfigParser {
@@ -55,6 +56,15 @@ enum TalkModeGatewayConfigParser {
             talk,
             fallback: defaultSilenceTimeoutMs)
         let speechLocaleID = TalkConfigParsing.resolvedSpeechLocaleID(talk)
+        let rawConversationEngine = talk?["conversationEngine"]?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let conversationEngine: String
+        switch rawConversationEngine {
+        case "auto", "deluxe-thomas", "local-thomas":
+            conversationEngine = rawConversationEngine!
+        default:
+            conversationEngine = "deluxe-thomas"
+        }
 
         return TalkModeGatewayConfigState(
             activeProvider: activeProvider,
@@ -67,6 +77,7 @@ enum TalkModeGatewayConfigParser {
             rawConfigApiKey: rawConfigApiKey,
             interruptOnSpeech: interruptOnSpeech,
             silenceTimeoutMs: silenceTimeoutMs,
-            speechLocaleID: speechLocaleID)
+            speechLocaleID: speechLocaleID,
+            conversationEngine: conversationEngine)
     }
 }

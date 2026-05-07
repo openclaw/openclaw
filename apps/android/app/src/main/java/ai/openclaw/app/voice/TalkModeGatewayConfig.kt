@@ -11,6 +11,7 @@ internal data class TalkModeGatewayConfigState(
   val mainSessionKey: String,
   val interruptOnSpeech: Boolean?,
   val silenceTimeoutMs: Long,
+  val conversationEngine: String,
 )
 
 internal object TalkModeGatewayConfigParser {
@@ -21,7 +22,16 @@ internal object TalkModeGatewayConfigParser {
       mainSessionKey = normalizeMainKey(sessionCfg?.get("mainKey").asStringOrNull()),
       interruptOnSpeech = talk?.get("interruptOnSpeech").asBooleanOrNull(),
       silenceTimeoutMs = resolvedSilenceTimeoutMs(talk),
+      conversationEngine = resolvedConversationEngine(talk),
     )
+  }
+
+  fun resolvedConversationEngine(talk: JsonObject?): String {
+    val value = talk?.get("conversationEngine").asStringOrNull()
+    return when (value) {
+      "auto", "deluxe-thomas", "local-thomas" -> value
+      else -> "deluxe-thomas"
+    }
   }
 
   fun resolvedSilenceTimeoutMs(talk: JsonObject?): Long {

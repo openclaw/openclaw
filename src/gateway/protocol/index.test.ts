@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { TALK_TEST_PROVIDER_ID } from "../../test-utils/talk-test-provider.js";
 import {
   formatValidationErrors,
+  validateChatSendParams,
   validateModelsListParams,
   validateNodeEventResult,
   validateNodePresenceAlivePayload,
@@ -410,6 +411,17 @@ describe("validateTalkSessionRelayParams", () => {
         callId: "call-1",
         result: { ok: true },
         options: { suppressResponse: true, willContinue: true },
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts the deluxe Thomas conversation engine for Talk mode", () => {
+    expect(
+      validateChatSendParams({
+        sessionKey: "agent:main:main",
+        message: "hello",
+        idempotencyKey: "deluxe-thomas-1",
+        conversationEngine: "deluxe-thomas",
       }),
     ).toBe(true);
   });

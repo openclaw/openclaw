@@ -26,6 +26,16 @@ function normalizeSilenceTimeoutMs(value: unknown): number | undefined {
   return value;
 }
 
+function normalizeTalkConversationEngine(
+  value: unknown,
+): TalkConfig["conversationEngine"] | undefined {
+  const normalized = normalizeOptionalString(value);
+  if (normalized === "auto" || normalized === "deluxe-thomas" || normalized === "local-thomas") {
+    return normalized;
+  }
+  return undefined;
+}
+
 function buildLegacyTalkProviderCompat(
   value: Record<string, unknown>,
 ): TalkProviderConfig | undefined {
@@ -159,6 +169,10 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
   if (speechLocale) {
     normalized.speechLocale = speechLocale;
   }
+  const conversationEngine = normalizeTalkConversationEngine(source.conversationEngine);
+  if (conversationEngine) {
+    normalized.conversationEngine = conversationEngine;
+  }
   if (typeof source.interruptOnSpeech === "boolean") {
     normalized.interruptOnSpeech = source.interruptOnSpeech;
   }
@@ -252,6 +266,9 @@ export function buildTalkConfigResponse(value: unknown): TalkConfigResponse | un
   }
   if (typeof normalized?.speechLocale === "string") {
     payload.speechLocale = normalized.speechLocale;
+  }
+  if (typeof normalized?.conversationEngine === "string") {
+    payload.conversationEngine = normalized.conversationEngine;
   }
   if (normalized?.providers && Object.keys(normalized.providers).length > 0) {
     payload.providers = normalized.providers;

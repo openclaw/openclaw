@@ -273,6 +273,7 @@ const TalkSchema = z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
       .optional(),
     consultFastMode: z.boolean().optional(),
+    conversationEngine: z.enum(["auto", "deluxe-thomas", "local-thomas"]).optional(),
     speechLocale: z.string().optional(),
     interruptOnSpeech: z.boolean().optional(),
     silenceTimeoutMs: z.number().int().positive().optional(),

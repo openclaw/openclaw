@@ -2099,7 +2099,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         content?: unknown;
       }>;
       timeoutMs?: number;
-      conversationEngine?: "auto" | "local-thomas";
+      conversationEngine?: "auto" | "deluxe-thomas" | "local-thomas";
       systemInputProvenance?: InputProvenance;
       systemProvenanceReceipt?: string;
       idempotencyKey: string;
