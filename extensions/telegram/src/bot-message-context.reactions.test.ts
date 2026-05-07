@@ -51,7 +51,7 @@ function createStatusReactionControllerStub() {
     clear: vi.fn(async () => undefined),
     restoreInitial: vi.fn(async () => undefined),
   };
-  const createStatusReactionController = vi.fn((params: StatusReactionControllerParams) => {
+  const createStatusReactionController = vi.fn((_params: StatusReactionControllerParams) => {
     return controller;
   });
   return { controller, createStatusReactionController };
