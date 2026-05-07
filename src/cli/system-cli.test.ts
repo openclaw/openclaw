@@ -88,14 +88,14 @@ describe("system-cli", () => {
   it("omits sessionKey from payload when --session-key not provided", async () => {
     await runCli(["system", "event", "--text", "ping"]);
 
-    const [, , params] = callGatewayFromCli.mock.calls[0]!;
+    const [, , params] = callGatewayFromCli.mock.calls[0];
     expect(params).not.toHaveProperty("sessionKey");
   });
 
   it("treats empty --session-key as omitted", async () => {
     await runCli(["system", "event", "--text", "ping", "--session-key", "  "]);
 
-    const [, , params] = callGatewayFromCli.mock.calls[0]!;
+    const [, , params] = callGatewayFromCli.mock.calls[0];
     expect(params).not.toHaveProperty("sessionKey");
   });
 
