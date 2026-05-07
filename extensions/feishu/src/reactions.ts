@@ -9,6 +9,25 @@ type FeishuReaction = {
   operatorId: string;
 };
 
+type FeishuReactionOperatorId =
+  | string
+  | {
+      open_id?: string;
+      user_id?: string;
+      union_id?: string;
+    };
+
+type FeishuReactionListItem = {
+  reaction_id?: string;
+  reaction_type?: { emoji_type?: string };
+  operator?: {
+    operator_id?: FeishuReactionOperatorId;
+    operator_type?: string;
+  };
+  operator_type?: string;
+  operator_id?: FeishuReactionOperatorId;
+};
+
 function resolveConfiguredFeishuClient(params: { cfg: ClawdbotConfig; accountId?: string }) {
   const account = resolveFeishuRuntimeAccount(params);
   if (!account.configured) {
@@ -21,6 +40,13 @@ function assertFeishuReactionApiSuccess(response: { code?: number; msg?: string 
   if (response.code !== 0) {
     throw new Error(`Feishu ${action} failed: ${response.msg || `code ${response.code}`}`);
   }
+}
+
+function normalizeFeishuReactionOperatorId(value: FeishuReactionOperatorId | undefined): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  return value?.open_id ?? value?.user_id ?? value?.union_id ?? "";
 }
 
 /**
@@ -101,23 +127,21 @@ export async function listReactionsFeishu(params: {
     code?: number;
     msg?: string;
     data?: {
-      items?: Array<{
-        reaction_id?: string;
-        reaction_type?: { emoji_type?: string };
-        operator_type?: string;
-        operator_id?: { open_id?: string; user_id?: string; union_id?: string };
-      }>;
+      items?: FeishuReactionListItem[];
     };
   };
 
   assertFeishuReactionApiSuccess(response, "list reactions");
 
   const items = response.data?.items ?? [];
-  return items.map((item) => ({
-    reactionId: item.reaction_id ?? "",
-    emojiType: item.reaction_type?.emoji_type ?? "",
-    operatorType: item.operator_type === "app" ? "app" : "user",
-    operatorId:
-      item.operator_id?.open_id ?? item.operator_id?.user_id ?? item.operator_id?.union_id ?? "",
-  }));
+  return items.map((item) => {
+    const operatorType = item.operator?.operator_type ?? item.operator_type;
+    const operatorId = item.operator?.operator_id ?? item.operator_id;
+    return {
+      reactionId: item.reaction_id ?? "",
+      emojiType: item.reaction_type?.emoji_type ?? "",
+      operatorType: operatorType === "app" ? "app" : "user",
+      operatorId: normalizeFeishuReactionOperatorId(operatorId),
+    };
+  });
 }

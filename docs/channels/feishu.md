@@ -477,6 +477,18 @@ conversion fails, OpenClaw falls back to a file attachment and logs the reason.
 - ✅ Thread replies
 - ✅ Media replies stay thread-aware when replying to a thread message
 
+In topic/thread sessions, OpenClaw keeps the session scoped to the Feishu/Lark
+topic while anchoring visible replies and typing reactions to the current inbound
+message. Feishu/Lark may report `reply_target_message_id` as the topic starter,
+so OpenClaw uses it for quoted context instead of treating it as the visible
+reply anchor. Message-tool `send` calls from a topic-scoped session also inherit
+the inbound message as the thread reply target, so text, cards, and media stay in
+the active topic without requiring the model to choose `thread-reply` manually.
+Subagent completion notices use the same inbound thread anchor.
+Direct-message topics are also preserved: when Feishu/Lark delivers a topic
+reply as a `p2p` event, OpenClaw replies to the topic root instead of sending a
+new top-level direct message.
+
 For `groupSessionScope: "group_topic"` and `"group_topic_sender"`, native
 Feishu/Lark topic groups use the event `thread_id` (`omt_*`) as the canonical
 topic session key. If a native topic starter event omits `thread_id`, OpenClaw

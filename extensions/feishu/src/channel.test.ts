@@ -578,6 +578,106 @@ describe("feishuPlugin actions", () => {
     });
   });
 
+  it("auto-threads send against the inbound trigger in group_topic sessions", async () => {
+    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_topic", chatId: "oc_group_1" });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: { to: "chat:oc_group_1", text: "topic reply" },
+      cfg,
+      accountId: undefined,
+      sessionKey: "agent:main:feishu:group:oc_group_1:topic:omt_topic",
+      toolContext: { currentMessageId: "om_inbound" },
+    } as never);
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith({
+      cfg,
+      to: "chat:oc_group_1",
+      text: "topic reply",
+      accountId: undefined,
+      replyToMessageId: "om_inbound",
+      replyInThread: true,
+    });
+  });
+
+  it("keeps plain group sends out of Feishu thread mode", async () => {
+    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_plain", chatId: "oc_group_1" });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: { to: "chat:oc_group_1", text: "plain reply" },
+      cfg,
+      accountId: undefined,
+      sessionKey: "agent:main:feishu:group:oc_group_1",
+      toolContext: { currentMessageId: "om_inbound" },
+    } as never);
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith({
+      cfg,
+      to: "chat:oc_group_1",
+      text: "plain reply",
+      accountId: undefined,
+      replyToMessageId: undefined,
+      replyInThread: false,
+    });
+  });
+
+  it("auto-threads card sends in group_topic sessions", async () => {
+    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        presentation: {
+          title: "Status",
+          blocks: [{ type: "text", text: "topic card" }],
+        },
+      },
+      cfg,
+      accountId: undefined,
+      sessionKey: "oc_group_1:topic:omt_topic",
+      toolContext: { currentMessageId: "om_inbound" },
+    } as never);
+
+    expect(sendCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_inbound",
+        replyInThread: true,
+      }),
+    );
+  });
+
+  it("auto-threads media sends in group_topic sessions", async () => {
+    feishuOutboundSendMediaMock.mockResolvedValueOnce({
+      channel: "feishu",
+      messageId: "om_media",
+      details: { messageId: "om_media", chatId: "oc_group_1" },
+    });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        media: "https://example.com/image.png",
+      },
+      cfg,
+      accountId: undefined,
+      sessionKey: "oc_group_1:topic:omt_topic",
+      toolContext: { currentMessageId: "om_inbound" },
+      mediaLocalRoots: [],
+    } as never);
+
+    expect(feishuOutboundSendMediaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat:oc_group_1",
+        mediaUrl: "https://example.com/image.png",
+        replyToId: undefined,
+        threadId: "om_inbound",
+      }),
+    );
+  });
+
   it("creates pins", async () => {
     createPinFeishuMock.mockResolvedValueOnce({ messageId: "om_pin", chatId: "oc_group_1" });
 
@@ -794,6 +894,75 @@ describe("feishuPlugin actions", () => {
       } as never),
     ).rejects.toThrow(
       "Emoji is required to add a Feishu reaction. Set clearAll=true to remove all bot reactions.",
+    );
+  });
+
+  it("defaults reactions to the current message in group_topic sessions", async () => {
+    await feishuPlugin.actions?.handleAction?.({
+      action: "react",
+      params: { emoji: "Done" },
+      cfg,
+      accountId: undefined,
+      sessionKey: "oc_group_1:topic:om_topic_root",
+      toolContext: { currentMessageId: "om_child_reply", currentThreadTs: "om_topic_root" },
+    } as never);
+
+    expect(addReactionFeishuMock).toHaveBeenCalledWith({
+      cfg,
+      messageId: "om_child_reply",
+      emojiType: "Done",
+      accountId: undefined,
+    });
+  });
+
+  it("redirects topic-root reaction aliases to the current reply message", async () => {
+    await feishuPlugin.actions?.handleAction?.({
+      action: "react",
+      params: { messageId: "om_topic_root", emoji: "Done" },
+      cfg,
+      accountId: undefined,
+      sessionKey: "oc_group_1:topic:om_topic_root",
+      toolContext: { currentMessageId: "om_child_reply", currentThreadTs: "om_topic_root" },
+    } as never);
+
+    expect(addReactionFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "om_child_reply",
+      }),
+    );
+  });
+
+  it("redirects topic container reaction ids to the current reply message", async () => {
+    await feishuPlugin.actions?.handleAction?.({
+      action: "react",
+      params: { messageId: "omt_topic_container", emoji: "Done" },
+      cfg,
+      accountId: undefined,
+      sessionKey: "oc_group_1:topic:omt_topic_container",
+      toolContext: { currentMessageId: "om_child_reply", currentThreadTs: "om_topic_root" },
+    } as never);
+
+    expect(addReactionFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "om_child_reply",
+      }),
+    );
+  });
+
+  it("keeps explicit non-root reaction message ids in group_topic sessions", async () => {
+    await feishuPlugin.actions?.handleAction?.({
+      action: "react",
+      params: { messageId: "om_specific_message", emoji: "Done" },
+      cfg,
+      accountId: undefined,
+      sessionKey: "oc_group_1:topic:om_topic_root",
+      toolContext: { currentMessageId: "om_child_reply", currentThreadTs: "om_topic_root" },
+    } as never);
+
+    expect(addReactionFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "om_specific_message",
+      }),
     );
   });
 

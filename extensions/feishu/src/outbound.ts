@@ -408,6 +408,21 @@ function resolveReplyToMessageId(params: {
   return trimmed || undefined;
 }
 
+function shouldReplyInThreadFromThreadId(params: {
+  replyToId?: string | null;
+  threadId?: string | number | null;
+}): boolean {
+  const replyToId = params.replyToId?.trim();
+  if (replyToId) {
+    return false;
+  }
+  if (params.threadId == null) {
+    return false;
+  }
+  const threadId = String(params.threadId).trim();
+  return threadId.length > 0 && !threadId.toLowerCase().startsWith("omt_");
+}
+
 async function sendCommentThreadReply(params: {
   cfg: Parameters<typeof sendMessageFeishu>[0]["cfg"];
   to: string;
@@ -456,9 +471,10 @@ async function sendOutboundText(params: {
   to: string;
   text: string;
   replyToMessageId?: string;
+  replyInThread?: boolean;
   accountId?: string;
 }) {
-  const { cfg, to, text, accountId, replyToMessageId } = params;
+  const { cfg, to, text, accountId, replyToMessageId, replyInThread } = params;
   const commentResult = await sendCommentThreadReply({
     cfg,
     to,
@@ -474,10 +490,10 @@ async function sendOutboundText(params: {
   const renderMode = account.config?.renderMode ?? "auto";
 
   if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
-    return sendMarkdownCardFeishu({ cfg, to, text, accountId, replyToMessageId });
+    return sendMarkdownCardFeishu({ cfg, to, text, accountId, replyToMessageId, replyInThread });
   }
 
-  return sendMessageFeishu({ cfg, to, text, accountId, replyToMessageId });
+  return sendMessageFeishu({ cfg, to, text, accountId, replyToMessageId, replyInThread });
 }
 
 export const feishuOutbound: ChannelOutboundAdapter = {
@@ -508,6 +524,10 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     }
 
     const replyToMessageId = resolveReplyToMessageId({
+      replyToId: ctx.replyToId,
+      threadId: ctx.threadId,
+    });
+    const replyInThread = shouldReplyInThreadFromThreadId({
       replyToId: ctx.replyToId,
       threadId: ctx.threadId,
     });
@@ -553,6 +573,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             accountId: ctx.accountId ?? undefined,
             mediaLocalRoots: ctx.mediaLocalRoots,
             replyToMessageId,
+            replyInThread,
             ...(ctx.payload.audioAsVoice === true || ctx.audioAsVoice === true
               ? { audioAsVoice: true }
               : {}),
@@ -563,7 +584,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             to: ctx.to,
             card,
             replyToMessageId,
-            replyInThread: ctx.threadId != null && !ctx.replyToId,
+            replyInThread,
             accountId: ctx.accountId ?? undefined,
           }),
       }),
@@ -582,6 +603,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       identity,
     }) => {
       const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
+      const replyInThread = shouldReplyInThreadFromThreadId({ replyToId, threadId });
       // Scheme A compatibility shim:
       // when upstream accidentally returns a local image path as plain text,
       // auto-upload and send as Feishu image message instead of leaking path text.
@@ -594,6 +616,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             mediaUrl: localImagePath,
             accountId: accountId ?? undefined,
             replyToMessageId,
+            replyInThread,
             mediaLocalRoots,
           });
         } catch (err) {
@@ -609,6 +632,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           text,
           accountId: accountId ?? undefined,
           replyToMessageId,
+          replyInThread,
         });
       }
 
@@ -629,7 +653,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           to,
           text,
           replyToMessageId,
-          replyInThread: threadId != null && !replyToId,
+          replyInThread,
           accountId: accountId ?? undefined,
           header: header?.title ? header : undefined,
         });
@@ -640,6 +664,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         text,
         accountId: accountId ?? undefined,
         replyToMessageId,
+        replyInThread,
       });
     },
     sendMedia: async ({
@@ -654,6 +679,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       threadId,
     }) => {
       const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
+      const replyInThread = shouldReplyInThreadFromThreadId({ replyToId, threadId });
       const commentTarget = parseFeishuCommentTarget(to);
       if (commentTarget) {
         const commentText = [text?.trim(), mediaUrl?.trim()].filter(Boolean).join("\n\n");
@@ -663,6 +689,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           text: commentText || mediaUrl || text || "",
           accountId: accountId ?? undefined,
           replyToMessageId,
+          replyInThread,
         });
       }
 
@@ -681,6 +708,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           text,
           accountId: accountId ?? undefined,
           replyToMessageId,
+          replyInThread,
         });
       }
 
@@ -694,6 +722,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             accountId: accountId ?? undefined,
             mediaLocalRoots,
             replyToMessageId,
+            replyInThread,
             ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
           });
           if (result.voiceIntentDegradedToFile && text?.trim()) {
@@ -703,6 +732,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
               text,
               accountId: accountId ?? undefined,
               replyToMessageId,
+              replyInThread,
             });
           }
           return result;
@@ -717,6 +747,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             text: fallbackText,
             accountId: accountId ?? undefined,
             replyToMessageId,
+            replyInThread,
           });
         }
       }
