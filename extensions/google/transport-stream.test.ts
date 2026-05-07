@@ -504,6 +504,44 @@ describe("google transport stream", () => {
     });
   });
 
+  it("uses Gemini skip-validator thought signatures for cross-provider tool-call replay", () => {
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [
+        {
+          role: "assistant",
+          provider: "anthropic",
+          api: "anthropic-messages",
+          model: "claude-opus-4-7",
+          stopReason: "toolUse",
+          timestamp: 0,
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "lookup",
+              arguments: { q: "hello" },
+            },
+          ],
+        },
+      ],
+    } as never);
+
+    expect(params.contents[0]).toMatchObject({
+      role: "model",
+      parts: [
+        {
+          thoughtSignature: "skip_thought_signature_validator",
+          functionCall: { name: "lookup", args: { q: "hello" } },
+        },
+      ],
+    });
+  });
+
   it("builds direct Gemini payloads without negative fallback thinking budgets", () => {
     const model = {
       id: "custom-gemini-model",
