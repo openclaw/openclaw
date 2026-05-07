@@ -560,7 +560,12 @@ export const OpenClawSchema = z
             z
               .object({
                 provider: z.string(),
-                mode: z.union([z.literal("api_key"), z.literal("oauth"), z.literal("token")]),
+                mode: z.union([
+                  z.literal("api_key"),
+                  z.literal("aws-sdk"),
+                  z.literal("oauth"),
+                  z.literal("token"),
+                ]),
                 email: z.string().optional(),
                 displayName: z.string().optional(),
               })

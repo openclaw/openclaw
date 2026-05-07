@@ -329,6 +329,9 @@ importers:
       '@aws-sdk/credential-provider-node':
         specifier: 3.972.39
         version: 3.972.39
+      '@smithy/shared-ini-file-loader':
+        specifier: 4.4.9
+        version: 4.4.9
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
