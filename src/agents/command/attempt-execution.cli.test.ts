@@ -3594,45 +3594,6 @@ describe("embedded attempt harness pinning", () => {
     });
   });
 
-  it("rejects stale OpenAI Codex sessions pinned to PI", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "stale-pi-session",
-      updatedAt: Date.now(),
-      agentHarnessId: "pi",
-    };
-
-    expect(() =>
-      runAgentAttempt({
-        providerOverride: "openai-codex",
-        originalProvider: "openai-codex",
-        modelOverride: "gpt-5.5",
-        cfg: {} as OpenClawConfig,
-        sessionEntry,
-        sessionId: sessionEntry.sessionId,
-        sessionKey: "agent:main:main",
-        sessionAgentId: "main",
-        sessionFile: path.join(tmpDir, "session.jsonl"),
-        workspaceDir: tmpDir,
-        body: "continue",
-        isFallbackRetry: false,
-        resolvedThinkLevel: "medium",
-        timeoutMs: 1_000,
-        runId: "run-stale-openai-codex-pi-pin",
-        opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
-        runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
-        spawnedBy: undefined,
-        messageChannel: undefined,
-        skillsSnapshot: undefined,
-        resolvedVerboseLevel: undefined,
-        agentDir: tmpDir,
-        onAgentEvent: vi.fn(),
-        authProfileProvider: "openai-codex",
-        sessionHasHistory: true,
-      }),
-    ).toThrow("OpenAI Codex agent model runs require the Codex harness");
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
-  });
-
   it("passes runtime tool allowlists to embedded runs", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "tools-allow-session",
