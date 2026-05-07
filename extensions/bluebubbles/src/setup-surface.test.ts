@@ -467,7 +467,7 @@ describe("BlueBubblesConfigSchema", () => {
     expect(parsed.success).toBe(true);
   });
 
-  it("defaults enrichGroupParticipantsFromContacts to true", () => {
+  it("defaults enrichGroupParticipantsFromContacts to false", () => {
     const parsed = BlueBubblesConfigSchema.safeParse({
       serverUrl: "http://localhost:1234",
       password: "secret", // pragma: allowlist secret
@@ -476,10 +476,10 @@ describe("BlueBubblesConfigSchema", () => {
     if (!parsed.success) {
       return;
     }
-    expect(parsed.data.enrichGroupParticipantsFromContacts).toBe(true);
+    expect(parsed.data.enrichGroupParticipantsFromContacts).toBe(false);
   });
 
-  it("defaults account enrichGroupParticipantsFromContacts to true", () => {
+  it("defaults account enrichGroupParticipantsFromContacts to false", () => {
     const parsed = BlueBubblesConfigSchema.safeParse({
       accounts: {
         work: {
@@ -495,7 +495,7 @@ describe("BlueBubblesConfigSchema", () => {
     const accountConfig = (
       parsed.data as { accounts?: { work?: { enrichGroupParticipantsFromContacts?: boolean } } }
     ).accounts?.work;
-    expect(accountConfig?.enrichGroupParticipantsFromContacts).toBe(true);
+    expect(accountConfig?.enrichGroupParticipantsFromContacts).toBe(false);
   });
 
   it("accepts explicit enrichGroupParticipantsFromContacts at channel and account scope", () => {

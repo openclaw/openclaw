@@ -148,6 +148,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- BlueBubbles: keep Contacts-based group participant enrichment opt-in by default, matching the documented `enrichGroupParticipantsFromContacts` behavior.
 - Compute plugin callback authorization dynamically [AI]. (#78866) Thanks @pgondhi987.
 - fix(active-memory): require admin scope for global toggles [AI]. (#78863) Thanks @pgondhi987.
 - Honor owner enforcement for native commands [AI]. (#78864) Thanks @pgondhi987.
