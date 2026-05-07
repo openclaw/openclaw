@@ -52,6 +52,10 @@ console verbosity and file log level are separate: Gateway `--verbose` affects
 terminal/WebSocket output, while file logs require `logging.level: "debug"` or
 `"trace"` in config. See [Gateway logging](/gateway/logging).
 
+<Note>
+In Nix mode (`OPENCLAW_NIX_MODE=1`), mutating `openclaw update` runs are disabled. Update the Nix source or flake input for this install instead; for nix-openclaw, use the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start). `openclaw update status` and `openclaw update --dry-run` remain read-only.
+</Note>
+
 <Warning>
 Downgrades require confirmation because older versions can break configuration.
 </Warning>
@@ -91,6 +95,11 @@ install method aligned:
 - `stable` → installs from npm using `latest`.
 - `beta` → prefers npm dist-tag `beta`, but falls back to `latest` when beta is
   missing or older than the current stable release.
+
+OpenClaw does not yet have an LTS or monthly support channel. We are working
+toward monthly support lines, but `--channel` currently accepts only
+`stable`, `beta`, and `dev`. Use `--tag <version-or-dist-tag>` for a one-off
+target when you need a specific package artifact.
 
 The Gateway core auto-updater (when enabled via config) launches the CLI update path
 outside the live Gateway request handler. Control-plane `update.run` package-manager

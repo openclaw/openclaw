@@ -80,6 +80,7 @@ import {
 } from "./error-policy.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { markdownToTelegramChunks, renderTelegramHtmlText } from "./format.js";
+import { beginTelegramInboundTurnDeliveryCorrelation } from "./inbound-turn-delivery.js";
 import {
   createLaneDeliveryStateTracker,
   createLaneTextDeliverer,
@@ -490,7 +491,10 @@ export const dispatchTelegramMessage = async ({
   const progressDraftGate = createChannelProgressDraftGate({
     onStart: () => renderProgressDraft({ flush: true }),
   });
-  const pushStreamToolProgress = async (line?: string, options?: { toolName?: string }) => {
+  const pushStreamToolProgress = async (
+    line?: string,
+    options?: { toolName?: string; startImmediately?: boolean },
+  ) => {
     if (!answerLane.stream) {
       return;
     }
@@ -528,6 +532,19 @@ export const dispatchTelegramMessage = async ({
           -resolveChannelProgressDraftMaxLines(telegramCfg),
         );
       }
+    }
+    if (
+      options?.startImmediately &&
+      streamToolProgressEnabled &&
+      !streamToolProgressSuppressed &&
+      normalized
+    ) {
+      const alreadyStarted = progressDraftGate.hasStarted;
+      await progressDraftGate.startNow();
+      if (alreadyStarted && progressDraftGate.hasStarted) {
+        await renderProgressDraft();
+      }
+      return;
     }
     const alreadyStarted = progressDraftGate.hasStarted;
     await progressDraftGate.noteWork();
@@ -668,6 +685,14 @@ export const dispatchTelegramMessage = async ({
     ? ctxPayload.ReplyToQuoteEntities
     : undefined;
   const deliveryState = createLaneDeliveryStateTracker();
+  const endTelegramInboundTurnDeliveryCorrelation = beginTelegramInboundTurnDeliveryCorrelation(
+    ctxPayload.SessionKey,
+    {
+      outboundTo: String(chatId),
+      outboundAccountId: route.accountId,
+      markInboundTurnDelivered: () => deliveryState.markDelivered(),
+    },
+  );
   const clearGroupHistory = () => {
     if (isGroup && historyKey) {
       clearHistoryEntriesIfEnabled({
@@ -1189,12 +1214,10 @@ export const dispatchTelegramMessage = async ({
                     : undefined,
                   suppressDefaultToolProgressMessages:
                     !streamDeliveryEnabled || Boolean(answerLane.stream),
+                  allowProgressCallbacksWhenSourceDeliverySuppressed: Boolean(answerLane.stream),
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
-                    if (statusReactionController && toolName) {
-                      await statusReactionController.setTool(toolName);
-                    }
-                    await pushStreamToolProgress(
+                    const progressPromise = pushStreamToolProgress(
                       formatChannelProgressDraftLineForEntry(
                         telegramCfg,
                         {
@@ -1205,8 +1228,12 @@ export const dispatchTelegramMessage = async ({
                         },
                         payload.detailMode ? { detailMode: payload.detailMode } : undefined,
                       ),
-                      { toolName },
+                      { toolName, startImmediately: true },
                     );
+                    if (statusReactionController && toolName) {
+                      await statusReactionController.setTool(toolName);
+                    }
+                    await progressPromise;
                   },
                   onItemEvent: async (payload) => {
                     await pushStreamToolProgress(
@@ -1336,6 +1363,7 @@ export const dispatchTelegramMessage = async ({
   } finally {
     dispatchWasSuperseded = isDispatchSuperseded();
     releaseReplyFence();
+    endTelegramInboundTurnDeliveryCorrelation();
   }
   if (dispatchWasSuperseded) {
     if (statusReactionController) {
