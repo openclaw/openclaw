@@ -551,7 +551,7 @@ export const buildTelegramMessageContext = async ({
             // Telegram replaces atomically — no removeReaction needed
           },
           initialEmoji: ackReaction,
-          emojis: resolvedStatusReactionEmojis,
+          emojis: resolvedStatusReactionEmojis ?? undefined,
           timing: statusReactionsConfig?.timing,
           onError: (err) => {
             logVerbose(`telegram status-reaction error for chat ${chatId}: ${String(err)}`);
