@@ -1,8 +1,13 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
+type DispatchPluginInteractiveHandlerResult = {
+  matched: boolean;
+  handled: boolean;
+  duplicate: boolean;
+};
 const dispatchPluginInteractiveHandlerMock = vi.hoisted(() =>
-  vi.fn(async () => ({
+  vi.fn<(arg: unknown) => Promise<DispatchPluginInteractiveHandlerResult>>(async () => ({
     matched: false,
     handled: false,
     duplicate: false,
