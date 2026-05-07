@@ -1006,6 +1006,7 @@ export function resolveSkillsPromptForRun(params: {
   config?: OpenClawConfig;
   workspaceDir: string;
   agentId?: string;
+  eligibility?: SkillEligibilityContext;
 }): string {
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
   if (snapshotPrompt) {
@@ -1016,23 +1017,31 @@ export function resolveSkillsPromptForRun(params: {
       entries: params.entries,
       config: params.config,
       agentId: params.agentId,
+      eligibility: params.eligibility,
     });
     return prompt.trim() ? prompt : "";
   }
   // prompt was stripped from the session store (not persisted to disk).
-  // Rebuild from workspace using the snapshot's skillFilter so CLI resume
-  // sees the same skill set the session was originally started with.
+  // Rebuild from workspace, restricting to the exact skill set recorded in
+  // the snapshot so CLI resume doesn't pull in newer bundled/managed/plugin
+  // skills that weren't part of the original prompt.  Eligibility is
+  // forwarded so remote-only filters (binary presence, platform) are honored
+  // the same way as during the original buildWorkspaceSkillSnapshot call.
   if (params.skillsSnapshot?.skills && params.skillsSnapshot.skills.length > 0) {
+    const snapshotSkillNames = params.skillsSnapshot.skills.map((s) => s.name);
+    const skillFilter = params.skillsSnapshot.skillFilter ?? snapshotSkillNames;
     const entries = loadWorkspaceSkillEntries(params.workspaceDir, {
       config: params.config,
-      skillFilter: params.skillsSnapshot.skillFilter,
+      skillFilter,
       agentId: params.agentId,
+      eligibility: params.eligibility,
     });
     if (entries.length > 0) {
       const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
         entries,
         config: params.config,
         agentId: params.agentId,
+        eligibility: params.eligibility,
       });
       return prompt.trim() ? prompt : "";
     }
