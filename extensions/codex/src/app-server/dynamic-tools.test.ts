@@ -118,8 +118,13 @@ describe("createCodexDynamicToolBridge", () => {
         deferLoading: true,
       }),
     );
-    expect(heartbeat).not.toHaveProperty("namespace");
-    expect(heartbeat).not.toHaveProperty("deferLoading");
+    expect(heartbeat).toEqual(
+      expect.objectContaining({
+        name: HEARTBEAT_RESPONSE_TOOL_NAME,
+        namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+        deferLoading: true,
+      }),
+    );
     expect(sessionsYield).not.toHaveProperty("namespace");
     expect(sessionsYield).not.toHaveProperty("deferLoading");
   });

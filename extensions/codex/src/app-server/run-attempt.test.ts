@@ -209,7 +209,7 @@ function createAppServerHarness(
   return {
     request,
     requests,
-    async waitForMethod(method: string) {
+    async waitForMethod(method: string, timeoutMs = 30_000) {
       await vi.waitFor(
         () => {
           if (!requests.some((entry) => entry.method === method)) {
@@ -221,7 +221,7 @@ function createAppServerHarness(
             );
           }
         },
-        { interval: 1, timeout: 30_000 },
+        { interval: 1, timeout: timeoutMs },
       );
     },
     async notify(notification: CodexServerNotification) {
@@ -558,7 +558,7 @@ describe("runCodexAppServerAttempt", () => {
     params.toolsAllow = ["message", "web_search", "heartbeat_respond"];
 
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await harness.waitForMethod("turn/start", 60_000);
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
@@ -578,8 +578,12 @@ describe("runCodexAppServerAttempt", () => {
         deferLoading: true,
       }),
     );
-    expect(heartbeat).not.toHaveProperty("namespace");
-    expect(heartbeat).not.toHaveProperty("deferLoading");
+    expect(heartbeat).toEqual(
+      expect.objectContaining({
+        namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+        deferLoading: true,
+      }),
+    );
   });
 
   it("passes the live run session key to Codex dynamic tools when sandbox policy uses another key", () => {
@@ -2957,6 +2961,9 @@ describe("runCodexAppServerAttempt", () => {
     });
     expect(buildTurnCollaborationMode(params).settings.developer_instructions).toContain(
       "The purpose of heartbeats is to make you feel magical and proactive.",
+    );
+    expect(buildTurnCollaborationMode(params).settings.developer_instructions).toContain(
+      "If `heartbeat_respond` is not already available and `tool_search` is available",
     );
 
     params.trigger = "user";

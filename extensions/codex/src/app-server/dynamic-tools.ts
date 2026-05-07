@@ -56,7 +56,7 @@ export type CodexDynamicToolBridge = {
 
 export const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
 
-const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set([HEARTBEAT_RESPONSE_TOOL_NAME, "sessions_yield"]);
+const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set(["sessions_yield"]);
 
 export function createCodexDynamicToolBridge(params: {
   tools: AnyAgentTool[];

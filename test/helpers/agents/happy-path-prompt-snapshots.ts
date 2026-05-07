@@ -46,7 +46,6 @@ const CODEX_YOLO_PERMISSION_INSTRUCTIONS = [
   "Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.",
 ].join("\n");
 const HAPPY_PATH_TOOL_NAMES = new Set([
-  "canvas",
   "nodes",
   "cron",
   "message",
@@ -320,7 +319,6 @@ function createDynamicTools(params: {
     agentId: "main",
     workspaceDir: WORKSPACE_DIR,
     agentDir: AGENT_DIR,
-    config: baseConfig,
     sessionKey: params.ctx.SessionKey,
     sessionId: `session-tools-${params.trigger}`,
     runId: `run-tools-${params.trigger}`,
@@ -487,8 +485,8 @@ function createScenarios(): PromptScenario[] {
       id: "telegram-heartbeat-codex-tool",
       title: "Telegram Direct Codex Heartbeat Tool Turn",
       notes: [
-        "Heartbeat happy path: Codex receives the structured `heartbeat_respond` dynamic tool because `messages.visibleReplies` is `message_tool`.",
-        "The heartbeat tool carries the notify/no-notify decision, outcome, summary, and optional notification text instead of relying only on final-text parsing.",
+        "Heartbeat happy path: Codex receives the structured `heartbeat_respond` dynamic tool in the searchable catalog instead of the initial tool context.",
+        "The heartbeat tool still carries the notify/no-notify decision, outcome, summary, and optional notification text instead of relying only on final-text parsing.",
       ],
       trigger: "heartbeat",
       ctx: heartbeatCtx,
@@ -757,7 +755,7 @@ function renderReadme(scenarios: PromptScenario[]): string {
     "",
     "- OpenAI model through the Codex harness and Codex app-server runtime.",
     '- `messages.visibleReplies: "message_tool"`, which is the Codex-harness default for visible source replies.',
-    "- Telegram direct chat, Discord group chat, and a heartbeat turn with `heartbeat_respond` available.",
+    "- Telegram direct chat, Discord group chat, and a heartbeat turn with `heartbeat_respond` available through searchable dynamic tools.",
     "",
     "The Markdown files show selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack: Codex `gpt-5.5` model instructions from a pinned Codex model catalog fixture, Codex permission developer instructions for the happy-path yolo profile, simulated OpenClaw workspace bootstrap config instructions, OpenClaw developer instructions, user turn input, and references to the complete dynamic tool catalog.",
     "",
