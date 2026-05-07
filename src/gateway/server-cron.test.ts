@@ -525,6 +525,84 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("derives agentId symmetrically for enqueue and wake when only an agent-prefixed sessionKey is supplied", () => {
+    // Multi-agent setup where the configured default ("primary") is NOT the
+    // agent referenced in the sessionKey ("ops"). Pre-PR, enqueue went through
+    // resolveCronSessionKey which treated a non-default agent's key as foreign
+    // and rerouted to primary's main session, while requestHeartbeat correctly
+    // derived agentId from the key — so wake hit ops while the event landed in
+    // primary's queue. Both adapter call sites now derive agentId from the
+    // session key the same way.
+    const cfg = {
+      session: { mainKey: "main" },
+      cron: { store: path.join(os.tmpdir(), `server-cron-symmetric-${Date.now()}`, "cron.json") },
+      agents: {
+        list: [
+          { id: "primary", default: true, model: "test/primary" },
+          { id: "ops", model: "test/ops" },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const cronDeps = (
+        state.cron as unknown as {
+          state?: {
+            deps?: {
+              enqueueSystemEvent?: (
+                text: string,
+                opts?: { agentId?: string; sessionKey?: string; contextKey?: string },
+              ) => void;
+              requestHeartbeat?: (opts?: {
+                agentId?: string;
+                sessionKey?: string | null;
+                source?: string;
+                intent?: string;
+                reason?: string;
+              }) => void;
+            };
+          };
+        }
+      ).state?.deps;
+
+      const foreignKey = "agent:ops:cron:nightly:run:abc-123";
+
+      cronDeps?.enqueueSystemEvent?.("hello", {
+        sessionKey: foreignKey,
+        contextKey: "cron:test",
+      });
+      cronDeps?.requestHeartbeat?.({
+        source: "cron",
+        intent: "event",
+        reason: "cron:test",
+        sessionKey: foreignKey,
+      });
+
+      // Both must derive agentId="ops" from the key, NOT fall back to the
+      // configured default "primary". The exact resolved sessionKey is
+      // delegated to resolveCronSessionKey (already covered by other tests);
+      // here we only assert the agent target is consistent across both sides.
+      const enqueueCall = enqueueSystemEventMock.mock.calls.at(-1);
+      const wakeCall = requestHeartbeatMock.mock.calls.at(-1);
+      const enqueueSessionKey = (enqueueCall?.[1] as { sessionKey?: string } | undefined)
+        ?.sessionKey;
+      const wakeOpts = wakeCall?.[0] as { agentId?: string; sessionKey?: string } | undefined;
+
+      expect(enqueueSessionKey).toBeDefined();
+      expect(enqueueSessionKey).toMatch(/^agent:ops:/);
+      expect(wakeOpts?.agentId).toBe("ops");
+      expect(wakeOpts?.sessionKey).toMatch(/^agent:ops:/);
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("preserves trust downgrades when cron enqueues system events", () => {
     const cfg = createCronConfig("server-cron-untrusted");
     loadConfigMock.mockReturnValue(cfg);
