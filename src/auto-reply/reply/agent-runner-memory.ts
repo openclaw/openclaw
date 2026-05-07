@@ -161,6 +161,7 @@ function resolveMemoryFlushModelFallbackOptions(
 export type SessionTranscriptUsageSnapshot = {
   promptTokens?: number;
   outputTokens?: number;
+  trailingBytesTokens?: number;
 };
 
 // Keep a generous near-threshold window so large assistant outputs still trigger
@@ -223,8 +224,14 @@ function resolveSessionLogPath(
 }
 
 function deriveTranscriptUsageSnapshot(
-  usage: ReturnType<typeof normalizeUsage> | undefined,
+  snapshot:
+    | {
+        usage: ReturnType<typeof normalizeUsage> | undefined;
+        trailingBytes?: number;
+      }
+    | undefined,
 ): SessionTranscriptUsageSnapshot | undefined {
+  const usage = snapshot?.usage;
   if (!usage) {
     return undefined;
   }
@@ -240,6 +247,12 @@ function deriveTranscriptUsageSnapshot(
   return {
     promptTokens,
     outputTokens,
+    trailingBytesTokens:
+      typeof snapshot.trailingBytes === "number" &&
+      Number.isFinite(snapshot.trailingBytes) &&
+      snapshot.trailingBytes > 0
+        ? Math.ceil(snapshot.trailingBytes / FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN)
+        : undefined,
   };
 }
 
@@ -330,15 +343,28 @@ async function readLastNonzeroUsageFromSessionLog(logPath: string) {
       const combined = `${chunk}${leadingPartial}`;
       const lines = combined.split(/\n+/);
       leadingPartial = lines.shift() ?? "";
+      const suffixBytesBeforeChunk = stat.size - position;
       for (let i = lines.length - 1; i >= 0; i -= 1) {
         const usage = parseUsageFromTranscriptLine(lines[i] ?? "");
         if (usage) {
-          return usage;
+          const trailingLines = lines.slice(i + 1);
+          const trailingBytesInChunk =
+            Buffer.byteLength(trailingLines.join("\n"), "utf8") + trailingLines.length;
+          return {
+            usage,
+            trailingBytes: suffixBytesBeforeChunk + trailingBytesInChunk,
+          };
         }
       }
       position = start;
     }
-    return parseUsageFromTranscriptLine(leadingPartial);
+    const usage = parseUsageFromTranscriptLine(leadingPartial);
+    return usage
+      ? {
+          usage,
+          trailingBytes: Math.max(0, stat.size - Buffer.byteLength(leadingPartial, "utf8")),
+        }
+      : undefined;
   } finally {
     await handle.close();
   }
@@ -382,17 +408,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         ? Math.ceil(snapshot.byteSize / FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN)
         : undefined;
     const promptTokens = snapshot.usage?.promptTokens;
-    if (typeof promptTokens === "number" && Number.isFinite(promptTokens) && promptTokens > 0) {
-      const outputTokens = snapshot.usage?.outputTokens;
-      return {
-        promptTokens: Math.ceil(promptTokens),
-        outputTokens:
-          typeof outputTokens === "number" && Number.isFinite(outputTokens) && outputTokens > 0
-            ? Math.ceil(outputTokens)
-            : undefined,
-        transcriptBytesTokens,
-      };
-    }
+    const trailingBytesTokens = snapshot.usage?.trailingBytesTokens;
     const messages = (await readSessionMessagesAsync(
       sessionId,
       params.storePath,
@@ -403,11 +419,27 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         maxBytes: 1024 * 1024,
       },
     )) as AgentMessage[];
-    if (messages.length === 0) {
-      return undefined;
+    const estimatedMessageTokens = (() => {
+      if (messages.length === 0) {
+        return undefined;
+      }
+      const tokens = estimateMessagesTokens(messages);
+      return Number.isFinite(tokens) && tokens > 0 ? Math.ceil(tokens) : undefined;
+    })();
+    if (typeof promptTokens === "number" && Number.isFinite(promptTokens) && promptTokens > 0) {
+      const outputTokens = snapshot.usage?.outputTokens;
+      const usagePromptTokens = Math.ceil(promptTokens) + (trailingBytesTokens ?? 0);
+      return {
+        promptTokens: Math.max(usagePromptTokens, estimatedMessageTokens ?? 0),
+        outputTokens:
+          typeof outputTokens === "number" && Number.isFinite(outputTokens) && outputTokens > 0
+            ? Math.ceil(outputTokens)
+            : undefined,
+        transcriptBytesTokens,
+      };
     }
-    const estimatedTokens = estimateMessagesTokens(messages);
-    if (!Number.isFinite(estimatedTokens) || estimatedTokens <= 0) {
+    const estimatedTokens = estimatedMessageTokens ?? transcriptBytesTokens;
+    if (estimatedTokens === undefined) {
       return undefined;
     }
     return {
@@ -509,14 +541,6 @@ export async function runPreflightCompactionIfNeeded(params: {
     : undefined;
   const transcriptPromptTokens = transcriptUsageTokens?.promptTokens;
   const transcriptOutputTokens = transcriptUsageTokens?.outputTokens;
-  const transcriptBytesProjectedTokens =
-    typeof transcriptUsageTokens?.transcriptBytesTokens === "number"
-      ? resolveEffectivePromptTokens(
-          transcriptUsageTokens.transcriptBytesTokens,
-          undefined,
-          promptTokenEstimate,
-        )
-      : undefined;
   const usageProjectedTokenCount =
     typeof transcriptPromptTokens === "number"
       ? resolveEffectivePromptTokens(
@@ -527,7 +551,6 @@ export async function runPreflightCompactionIfNeeded(params: {
       : undefined;
   const projectedTokenCount = Math.max(
     usageProjectedTokenCount ?? 0,
-    transcriptBytesProjectedTokens ?? 0,
     stalePersistedPromptTokens ?? 0,
   );
   const tokenCountForCompaction =
