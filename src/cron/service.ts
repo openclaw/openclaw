@@ -72,7 +72,7 @@ export class CronService implements CronServiceContract {
     return this.state.deps.defaultAgentId;
   }
 
-  wake(opts: { mode: CronWakeMode; text: string; sessionKey?: string }) {
+  wake(opts: { mode: "now" | "next-heartbeat"; text: string; sessionKey?: string }) {
     return ops.wakeNow(this.state, opts);
   }
 }

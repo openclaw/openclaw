@@ -178,19 +178,10 @@ export const cronHandlers: GatewayRequestHandlers = {
       text: string;
       sessionKey?: string;
     };
-    const sessionKey = p.sessionKey?.trim() || undefined;
-    if (sessionKey && isSubagentSessionKey(sessionKey)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "wake sessionKey cannot target a subagent session"),
-      );
-      return;
-    }
     const result = context.cron.wake({
       mode: p.mode,
       text: p.text,
-      ...(sessionKey ? { sessionKey } : {}),
+      ...(p.sessionKey ? { sessionKey: p.sessionKey } : {}),
     });
     respond(true, result, undefined);
   },
