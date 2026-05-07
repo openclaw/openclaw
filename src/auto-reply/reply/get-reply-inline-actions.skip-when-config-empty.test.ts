@@ -716,6 +716,7 @@ describe("handleInlineActions", () => {
 
   it("honors before-tool-call hook blocks for inline tool dispatch", async () => {
     const typing = createTypingController();
+    const abortController = new AbortController();
     const toolExecute = vi.fn(async () => ({ text: "updated" }));
     createOpenClawToolsMock.mockReturnValue([
       {
@@ -777,6 +778,7 @@ describe("handleInlineActions", () => {
           },
           agentId: "main",
           allowTextCommands: true,
+          opts: { abortSignal: abortController.signal },
           skillCommands,
           sessionEntry: {
             sessionId: "session-1",
@@ -805,6 +807,7 @@ describe("handleInlineActions", () => {
         sessionId: "session-1",
         loopDetection: { enabled: true },
       }),
+      signal: abortController.signal,
     });
     expect(toolExecute).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalled();

@@ -325,6 +325,7 @@ export async function handleInlineActions(params: {
           params: toolArgs,
           toolCallId,
           ctx: hookContext,
+          ...(opts?.abortSignal ? { signal: opts.abortSignal } : {}),
         });
         if (hookResult.blocked) {
           typing.cleanup();
