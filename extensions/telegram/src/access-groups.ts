@@ -28,5 +28,9 @@ export async function expandTelegramAllowFromWithAccessGroups(params: {
             }),
         })
       : allowFrom;
-  return expanded.filter((entry) => parseAccessGroupAllowFromEntry(entry) == null);
+  const originalEntries = new Set(allowFrom);
+  const matched = expanded.some((entry) => !originalEntries.has(entry));
+  return matched
+    ? expanded.filter((entry) => parseAccessGroupAllowFromEntry(entry) == null)
+    : expanded;
 }
