@@ -83,12 +83,40 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     harness.setNow(1_000);
     expect(harness.monitor.snapshot()).toMatchObject({
       degraded: true,
-      reasons: ["event_loop_utilization", "cpu"],
+      reasons: ["cpu"],
       intervalMs: 1_000,
       delayP99Ms: 0,
       delayMaxMs: 0,
       utilization: 1,
       cpuCoreRatio: 1,
+    });
+  });
+
+  it("does not flag event_loop_utilization when ELU is saturated but all delays are zero (#79017)", () => {
+    // WebSocket keepalives and periodic timers can saturate ELU to 1.0 even when the
+    // loop never blocks. delayP99Ms=0 and delayMaxMs=0 means the loop is genuinely idle.
+    const harness = createMonitorHarness({ cpuMsPerWallMs: 0.01, utilization: 1 });
+    harness.setNow(1_000);
+
+    expect(harness.monitor.snapshot()).toMatchObject({
+      degraded: false,
+      reasons: [],
+      utilization: 1,
+      delayP99Ms: 0,
+      delayMaxMs: 0,
+    });
+  });
+
+  it("flags event_loop_utilization when ELU is saturated and delay co-evidence is present (#79017)", () => {
+    const harness = createMonitorHarness({ cpuMsPerWallMs: 0.01, utilization: 1 });
+    harness.setDelay({ p99Ms: 30 });
+    harness.setNow(1_000);
+
+    expect(harness.monitor.snapshot()).toMatchObject({
+      degraded: true,
+      reasons: ["event_loop_utilization"],
+      utilization: 1,
+      delayP99Ms: 30,
     });
   });
 

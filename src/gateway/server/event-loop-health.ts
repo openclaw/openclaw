@@ -3,6 +3,10 @@ import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 const EVENT_LOOP_MONITOR_RESOLUTION_MS = 20;
 const EVENT_LOOP_DELAY_WARN_MS = 1_000;
 const EVENT_LOOP_UTILIZATION_WARN = 0.95;
+// ELU saturates at 1.0 when the loop wakes frequently for short async work (WebSocket
+// keepalives, periodic timers) even when each wake is sub-millisecond and the loop
+// never blocks. Require observed delay co-evidence before flagging utilization alone.
+const EVENT_LOOP_UTILIZATION_DELAY_COEVIDENCE_MS = 25;
 const CPU_CORE_RATIO_WARN = 0.9;
 const SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS = 1_000;
 
@@ -66,7 +70,12 @@ function resolveGatewayEventLoopHealthReasons(params: {
   ) {
     reasons.push("event_loop_delay");
   }
-  if (hasSustainedLoadWindow && params.utilization >= EVENT_LOOP_UTILIZATION_WARN) {
+  if (
+    hasSustainedLoadWindow &&
+    params.utilization >= EVENT_LOOP_UTILIZATION_WARN &&
+    (params.delayP99Ms >= EVENT_LOOP_UTILIZATION_DELAY_COEVIDENCE_MS ||
+      params.delayMaxMs >= EVENT_LOOP_UTILIZATION_DELAY_COEVIDENCE_MS)
+  ) {
     reasons.push("event_loop_utilization");
   }
   if (hasSustainedLoadWindow && params.cpuCoreRatio >= CPU_CORE_RATIO_WARN) {

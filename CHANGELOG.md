@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 - Agents/failover: harden state-aware lane suspension by persisting quota resume transitions, restoring configured lane concurrency, preserving non-quota failure reasons, and exporting model failover events through diagnostics OTLP. Thanks @BunsDev.
 - Channels/streaming: make progress draft labels scroll away with other progress lines, render structured tool rows as compact emoji/title/details, show web-search queries from provider-native argument shapes, and skip empty Discord apply-patch starts until a patch summary exists. (#79146)
+- Gateway/health: require observed delay co-evidence (`delayP99Ms` or `delayMaxMs` ≥ 25ms) before flagging `event_loop_utilization` degraded so idle gateways with frequent short async work (WebSocket keepalives, periodic timers) are no longer falsely reported as degraded when all delays are zero. Fixes #79017. (#79017) Thanks @hclsys.
 - Telegram: preserve the channel-specific 10-option poll cap in the unified outbound adapter so over-limit polls are rejected before send. (#78762) Thanks @obviyus.
 - Runtime/install: raise the supported Node 22 floor to `22.16+` so native SQLite query handling can rely on the `node:sqlite` statement metadata API while continuing to recommend Node 24. (#78921)
 - Discord/voice: include a bounded one-line STT transcript preview in verbose voice logs so live voice debugging shows what speakers said before the agent reply.
