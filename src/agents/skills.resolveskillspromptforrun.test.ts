@@ -4,6 +4,15 @@ import type { SkillEntry } from "./skills/types.js";
 import { resolveSkillsPromptForRun } from "./skills/workspace.js";
 
 describe("resolveSkillsPromptForRun", () => {
+  it("returns empty string when snapshot prompt was stripped and workspace has no skills", () => {
+    // Simulates CLI resume: prompt stripped from disk, nonexistent workspace → no skills loaded.
+    const prompt = resolveSkillsPromptForRun({
+      skillsSnapshot: { skills: [{ name: "demo-skill" }], skillFilter: undefined },
+      workspaceDir: "/nonexistent-workspace-for-test",
+    });
+    expect(prompt).toBe("");
+  });
+
   it("prefers snapshot prompt when available", () => {
     const prompt = resolveSkillsPromptForRun({
       skillsSnapshot: { prompt: "SNAPSHOT", skills: [] },

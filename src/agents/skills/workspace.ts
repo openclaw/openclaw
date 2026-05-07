@@ -1019,6 +1019,24 @@ export function resolveSkillsPromptForRun(params: {
     });
     return prompt.trim() ? prompt : "";
   }
+  // prompt was stripped from the session store (not persisted to disk).
+  // Rebuild from workspace using the snapshot's skillFilter so CLI resume
+  // sees the same skill set the session was originally started with.
+  if (params.skillsSnapshot?.skills && params.skillsSnapshot.skills.length > 0) {
+    const entries = loadWorkspaceSkillEntries(params.workspaceDir, {
+      config: params.config,
+      skillFilter: params.skillsSnapshot.skillFilter,
+      agentId: params.agentId,
+    });
+    if (entries.length > 0) {
+      const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
+        entries,
+        config: params.config,
+        agentId: params.agentId,
+      });
+      return prompt.trim() ? prompt : "";
+    }
+  }
   return "";
 }
 
