@@ -1836,6 +1836,9 @@ function injectToolCallThoughtSignatures(
           source.api === model.api &&
           source.provider === model.provider &&
           source.model === model.id;
+        if (!isSameRoute && !fallbackSig) {
+          continue;
+        }
         sigById.set(id, isSameRoute ? sig : (fallbackSig ?? sig));
       }
     }
