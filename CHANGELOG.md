@@ -154,6 +154,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Chat commands: make `/model default` reset the session model override instead of treating it as a literal model name. Fixes #78182.
 - Cron: make rejected `payload.model` errors show the configured `agents.defaults.models` allowlist instead of echoing the rejected model twice. Fixes #79058.
 - Agents/subagents: retry parent wake announces when the announce-summary model run fails with fallback cooldown exhaustion instead of dropping the wake on the first transient provider overload. Refs #78581.
 - Providers/network: honor IPv4 CIDR and octet-wildcard `NO_PROXY` entries such as `100.64.0.0/10` and `100.64.*` before enabling trusted env-proxy mode for model-provider requests. Fixes #79030.
