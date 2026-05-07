@@ -13,12 +13,26 @@ If a target does not match these rules, apply fails before mutating configuratio
 
 ## Plan file shape
 
-`openclaw secrets apply --from <plan.json>` expects a `targets` array of plan targets:
+`openclaw secrets apply --from <plan.json>` expects a plan with a `targets` array and optional provider modifications:
 
 ```json5
 {
   version: 1,
   protocolVersion: 1,
+  // Optional: define new providers or override existing ones
+  providerUpserts: {
+    onepassword_anthropic: {
+      source: "exec",
+      command: "/usr/bin/op",
+      args: ["read", "op://Vault/Anthropic/credential"],
+      passEnv: ["HOME", "OP_SERVICE_ACCOUNT_TOKEN"],
+      jsonOnly: false,
+      allowInsecurePath: true,
+    },
+  },
+  // Optional: remove providers
+  providerDeletes: ["legacy_provider_1"],
+  // Required: credential targets
   targets: [
     {
       type: "models.providers.apiKey",
@@ -33,6 +47,132 @@ If a target does not match these rules, apply fails before mutating configuratio
       pathSegments: ["profiles", "openai:default", "key"],
       agentId: "main",
       ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+    },
+  ],
+}
+```
+
+## Provider upserts and deletes
+
+A plan can optionally include `providerUpserts` (object) and `providerDeletes` (array) at the
+top level. These let a single plan define new exec/file/env providers in `secrets.providers`
+and remove existing ones, in addition to writing credential targets.
+
+Provider modifications are useful for atomic migrations where you need to define a provider
+and then immediately reference it in targets — all in one plan.
+
+### `providerUpserts`
+
+Object keyed by provider alias. Each value is the full provider configuration (same shape
+accepted by `secrets.providers.<alias>` in `openclaw.json`):
+
+```json5
+{
+  providerUpserts: {
+    onepassword_anthropic: {
+      source: "exec",
+      command: "/usr/bin/op",
+      args: ["read", "op://Vault/Anthropic/credential"],
+      passEnv: ["HOME", "OP_SERVICE_ACCOUNT_TOKEN"],
+      jsonOnly: false,
+      allowInsecurePath: true,
+    },
+    bitwarden_claude: {
+      source: "exec",
+      command: "/usr/bin/bw",
+      args: ["get", "password", "openclaw-claude"],
+      passEnv: ["HOME", "BW_SESSION"],
+      jsonOnly: false,
+    },
+  },
+}
+```
+
+**Rules:**
+
+- Aliases must match alphanumeric, underscore, and hyphen characters (no dots, spaces, or
+  special chars).
+- Each provider's shape must be valid for its `source` (see [Secrets Management](/gateway/secrets)
+  for provider format details).
+- `providerUpserts` are applied **before** targets are resolved, so a single plan can both
+  define a provider and reference it in targets.
+- Upserts can override existing providers with the same alias.
+
+### `providerDeletes`
+
+Array of provider aliases to remove from `secrets.providers`:
+
+```json5
+{
+  providerDeletes: ["legacy_provider_1", "legacy_provider_2"],
+}
+```
+
+**Rules:**
+
+- Deletes run **after** targets and after upserts are processed.
+- A plan that deletes a provider whose alias is still referenced by an active target will
+  refuse to apply with a validation error.
+- Only providers listed in `providerDeletes` are removed; all others remain.
+
+### Apply-time summary
+
+The CLI logs a summary of all operations when applying:
+
+```text
+Plan: targets=4, providerUpserts=2, providerDeletes=0.
+```
+
+Use `--dry-run` to preview the plan without writing:
+
+```bash
+openclaw secrets apply --from /tmp/plan.json --dry-run
+```
+
+## Use case: End-to-end provider migration
+
+A common workflow is migrating from plaintext credentials to an external provider (e.g.,
+1Password) while updating all credential references in one atomic operation.
+
+This plan:
+
+1. Defines a new 1Password exec provider (`providerUpserts`)
+2. Updates all credential targets to reference that provider
+3. (Optionally) removes the old plaintext provider (`providerDeletes`)
+
+```json5
+{
+  version: 1,
+  protocolVersion: 1,
+  providerUpserts: {
+    // Define the 1Password exec provider
+    onepassword_migration: {
+      source: "exec",
+      command: "/usr/bin/op",
+      args: ["read", "op://OpenClaw/API_Keys/credential"],
+      passEnv: ["HOME", "OP_SERVICE_ACCOUNT_TOKEN"],
+      jsonOnly: false,
+      allowInsecurePath: true,
+    },
+  },
+  providerDeletes: ["plaintext"],
+  targets: [
+    // Update Anthropic credential target
+    {
+      type: "models.providers.apiKey",
+      path: "models.providers.anthropic.apiKey",
+      pathSegments: ["models", "providers", "anthropic", "apiKey"],
+      providerId: "anthropic",
+      ref: { source: "exec", provider: "onepassword_migration", id: "anthropic-key" },
+    },
+    // Update auth profile target
+    {
+      type: "auth-profiles.api_key.key",
+      path: "profiles.anthropic:default.key",
+      pathSegments: ["profiles", "anthropic:default", "key"],
+      agentId: "main",
+      authProfileProvider: "anthropic",
+      ref: { source: "exec", provider: "onepassword_migration", id: "anthropic-key" },
     },
   ],
 }
@@ -88,7 +228,8 @@ No writes are committed for an invalid plan.
 ## Runtime and audit scope notes
 
 - Ref-only `auth-profiles.json` entries (`keyRef`/`tokenRef`) are included in runtime resolution and audit coverage.
-- `secrets apply` writes supported `openclaw.json` targets, supported `auth-profiles.json` targets, and optional scrub targets.
+- `secrets apply` writes supported `openclaw.json` targets, supported `auth-profiles.json`
+  targets, and optional scrub targets.
 
 ## Operator checks
 
@@ -104,7 +245,8 @@ openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run --allow-
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --allow-exec
 ```
 
-If apply fails with an invalid target path message, regenerate the plan with `openclaw secrets configure` or fix the target path to a supported shape above.
+If apply fails with an invalid target path message, regenerate the plan with
+`openclaw secrets configure` or fix the target path to a supported shape above.
 
 ## Related docs
 
