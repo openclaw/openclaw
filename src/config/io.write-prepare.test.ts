@@ -460,10 +460,10 @@ describe("config io write prepare", () => {
       channels: {
         imessage: {
           cliPath: "/usr/local/bin/imsg",
-          runtimeOnlyDefault: true,
         },
       },
     } satisfies OpenClawConfig;
+    (runtimeConfig.channels?.imessage as Record<string, unknown>).runtimeOnlyDefault = true;
 
     const nextConfig: OpenClawConfig = structuredClone(runtimeConfig);
     nextConfig.gateway = {
