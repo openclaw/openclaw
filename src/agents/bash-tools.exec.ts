@@ -1157,6 +1157,9 @@ function parsePackageManagerGlobalFlag(argv: readonly string[], startIndex: numb
     if (token === "--location=global") {
       return true;
     }
+    if (token === "--location" && argv[i + 1] === "global") {
+      return true;
+    }
   }
   return false;
 }

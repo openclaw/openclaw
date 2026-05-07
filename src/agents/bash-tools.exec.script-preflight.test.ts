@@ -119,6 +119,7 @@ describe("exec OpenClaw self-update guard", () => {
       "npm install -g openclaw@latest",
       "npm i --global openclaw",
       "npm update --location=global openclaw@2026.4.15",
+      "npm update --location global openclaw@latest",
       "pnpm add -g openclaw@latest",
       "bun add --global openclaw",
       "yarn global add openclaw@latest",
@@ -147,6 +148,11 @@ describe("exec OpenClaw self-update guard", () => {
     await expect(
       tool.execute("call-env-raw-openclaw-upgrade", {
         command: "env -S 'npm install -g openclaw@latest'",
+      }),
+    ).rejects.toThrow(/exec cannot run raw package-manager upgrades of OpenClaw/);
+    await expect(
+      tool.execute("call-wrapped-npm-location-raw-openclaw-upgrade", {
+        command: "sudo -u openclaw bash -lc 'npm update --location global openclaw@latest'",
       }),
     ).rejects.toThrow(/exec cannot run raw package-manager upgrades of OpenClaw/);
   });
