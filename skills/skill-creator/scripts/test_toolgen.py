@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Regression tests for toolgen.py."""
 
+import importlib.util
 from pathlib import Path
 from unittest import TestCase, main
-import importlib.util
 
 MODULE_PATH = Path(__file__).with_name("toolgen.py")
 spec = importlib.util.spec_from_file_location("toolgen", MODULE_PATH)

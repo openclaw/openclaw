@@ -14,8 +14,8 @@ Examples:
 
 import argparse
 import re
-import sys
 import subprocess
+import sys
 from pathlib import Path
 
 MAX_SKILL_NAME_LENGTH = 64
