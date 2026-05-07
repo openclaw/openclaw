@@ -1112,6 +1112,18 @@ export function parseGroupKey(
   return null;
 }
 
+function isGroupOrChannelDisplaySession(
+  entry: SessionEntry | undefined,
+  parsed: { kind?: "group" | "channel" } | null,
+): boolean {
+  return (
+    entry?.chatType === "group" ||
+    entry?.chatType === "channel" ||
+    parsed?.kind === "group" ||
+    parsed?.kind === "channel"
+  );
+}
+
 function isStorePathTemplate(store?: string): boolean {
   return typeof store === "string" && store.includes("{agentId}");
 }
@@ -1861,9 +1873,10 @@ export function buildGatewaySessionRow(params: {
   const id = parsed?.id;
   const origin = entry?.origin;
   const originLabel = origin?.label;
+  const isGroupSession = isGroupOrChannelDisplaySession(entry, parsed);
   const displayName =
     entry?.displayName ??
-    (channel
+    (isGroupSession && channel
       ? buildGroupDisplayName({
           provider: channel,
           subject,
@@ -2182,6 +2195,9 @@ function resolveSessionListSearchDisplayName(
   const parsed = parseGroupKey(key);
   const channel = entry?.channel ?? parsed?.channel;
   if (!channel) {
+    return undefined;
+  }
+  if (!isGroupOrChannelDisplaySession(entry, parsed)) {
     return undefined;
   }
   return buildGroupDisplayName({
