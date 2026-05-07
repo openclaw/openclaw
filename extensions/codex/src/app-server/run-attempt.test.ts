@@ -3480,7 +3480,7 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
-  it("reuses compatible plugin app bindings without rebuilding or resending app config", async () => {
+  it("revalidates compatible plugin app bindings without resending app config", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
@@ -3525,14 +3525,12 @@ describe("runCodexAppServerAttempt", () => {
         enabled: true,
         inputFingerprint: "plugin-apps-input-1",
         enabledPluginConfigKeys: ["google-calendar"],
-        build: async () => {
-          throw new Error("plugin thread config should not rebuild for compatible bindings");
-        },
+        build: buildPluginThreadConfig,
       },
     });
 
     expect(binding.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
-    expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
+    expect(buildPluginThreadConfig).toHaveBeenCalledTimes(2);
     expect(request.mock.calls).toEqual([
       [
         "thread/start",
@@ -3550,6 +3548,79 @@ describe("runCodexAppServerAttempt", () => {
         }),
       ],
     ]);
+  });
+
+  it("starts a new plugin app thread when full binding revalidation removes an app", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      dynamicToolsFingerprint: "[]",
+      pluginAppsFingerprint: "plugin-apps-config-1",
+      pluginAppsInputFingerprint: "plugin-apps-input-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext(),
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-revalidated");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const emptyPolicyContext = { fingerprint: "plugin-policy-empty", apps: {}, pluginAppIds: {} };
+    const buildPluginThreadConfig = vi.fn(async () => ({
+      enabled: true,
+      configPatch: {
+        apps: {
+          _default: {
+            enabled: false,
+            destructive_enabled: false,
+            open_world_enabled: false,
+          },
+        },
+      },
+      fingerprint: "plugin-apps-empty",
+      inputFingerprint: "plugin-apps-input-1",
+      policyContext: emptyPolicyContext,
+      diagnostics: [],
+    }));
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-apps-input-1",
+        enabledPluginConfigKeys: ["google-calendar"],
+        build: buildPluginThreadConfig,
+      },
+    });
+
+    expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls).toEqual([
+      [
+        "thread/start",
+        expect.objectContaining({
+          config: {
+            apps: {
+              _default: {
+                enabled: false,
+                destructive_enabled: false,
+                open_world_enabled: false,
+              },
+            },
+          },
+        }),
+      ],
+    ]);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-revalidated",
+      pluginAppsFingerprint: "plugin-apps-empty",
+      pluginAppPolicyContext: emptyPolicyContext,
+    });
   });
 
   it("rebuilds an empty plugin app binding after app inventory recovers", async () => {

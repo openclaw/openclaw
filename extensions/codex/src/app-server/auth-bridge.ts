@@ -127,6 +127,17 @@ export async function resolveCodexAppServerAuthAccountCacheKey(params: {
       ? `${resolveChatgptAccountId(profileId, credential)}:${fingerprintApiKeyAuthProfileCacheKey(apiKey)}`
       : resolveChatgptAccountId(profileId, credential);
   }
+  if (credential.type === "token") {
+    const resolved = await resolveApiKeyForProfile({
+      store,
+      profileId,
+      agentDir,
+    });
+    const accessToken = resolved?.apiKey?.trim();
+    return accessToken
+      ? `${resolveChatgptAccountId(profileId, credential)}:${fingerprintTokenAuthProfileCacheKey(accessToken)}`
+      : resolveChatgptAccountId(profileId, credential);
+  }
   return resolveChatgptAccountId(profileId, credential);
 }
 
@@ -162,6 +173,14 @@ function fingerprintApiKeyAuthProfileCacheKey(apiKey: string): string {
   hash.update("\0");
   hash.update(apiKey);
   return `api_key:sha256:${hash.digest("hex")}`;
+}
+
+function fingerprintTokenAuthProfileCacheKey(accessToken: string): string {
+  const hash = createHash("sha256");
+  hash.update("openclaw:codex:app-server-auth-profile-token:v1");
+  hash.update("\0");
+  hash.update(accessToken);
+  return `token:sha256:${hash.digest("hex")}`;
 }
 
 export function resolveCodexAppServerHomeDir(agentDir: string): string {

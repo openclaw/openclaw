@@ -86,6 +86,7 @@ export async function startOrResumeThread(params: {
           error,
           threadId: binding.threadId,
         });
+        pluginBindingStale = true;
       }
     }
     if (pluginBindingStale) {
@@ -274,31 +275,8 @@ function shouldRecheckRecoverablePluginBinding(params: {
   if (!policyContext) {
     return false;
   }
-  const boundAppEntries = Object.entries(policyContext.apps);
-  if (boundAppEntries.length === 0) {
-    return true;
-  }
   const expectedPluginConfigKeys = params.pluginThreadConfig.enabledPluginConfigKeys ?? [];
-  if (expectedPluginConfigKeys.length === 0) {
-    return false;
-  }
-  const boundAppIdsByConfigKey = new Map<string, Set<string>>();
-  for (const [appId, app] of boundAppEntries) {
-    const appIds = boundAppIdsByConfigKey.get(app.configKey) ?? new Set<string>();
-    appIds.add(appId);
-    boundAppIdsByConfigKey.set(app.configKey, appIds);
-  }
-  return expectedPluginConfigKeys.some((configKey) => {
-    const boundAppIds = boundAppIdsByConfigKey.get(configKey);
-    if (!boundAppIds || boundAppIds.size === 0) {
-      return true;
-    }
-    const expectedAppIds = policyContext.pluginAppIds[configKey];
-    if (!expectedAppIds) {
-      return true;
-    }
-    return expectedAppIds.some((appId) => !boundAppIds.has(appId));
-  });
+  return Object.keys(policyContext.apps).length === 0 || expectedPluginConfigKeys.length > 0;
 }
 
 export function buildThreadStartParams(

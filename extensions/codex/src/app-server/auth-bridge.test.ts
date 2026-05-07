@@ -431,6 +431,41 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
+  it("fingerprints token auth-profile secret refs", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai-codex:work",
+        credential: {
+          type: "token",
+          provider: "openai-codex",
+          tokenRef: { source: "env", provider: "default", id: "OPENAI_CODEX_TEST_TOKEN" },
+          email: "codex@example.test",
+        },
+      });
+      vi.stubEnv("OPENAI_CODEX_TEST_TOKEN", "first-ref-token");
+      const first = await resolveCodexAppServerAuthAccountCacheKey({
+        agentDir,
+        authProfileId: "openai-codex:work",
+      });
+
+      vi.stubEnv("OPENAI_CODEX_TEST_TOKEN", "second-ref-token");
+      const second = await resolveCodexAppServerAuthAccountCacheKey({
+        agentDir,
+        authProfileId: "openai-codex:work",
+      });
+
+      expect(first).toMatch(/^codex@example\.test:token:sha256:[a-f0-9]{64}$/);
+      expect(second).toMatch(/^codex@example\.test:token:sha256:[a-f0-9]{64}$/);
+      expect(second).not.toBe(first);
+      expect(first).not.toContain("first-ref-token");
+      expect(second).not.toContain("second-ref-token");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("applies an OpenAI Codex OAuth profile through app-server login", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
