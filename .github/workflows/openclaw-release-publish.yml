@@ -45,7 +45,7 @@ on:
 
 permissions:
   actions: write
-  contents: read
+  contents: write
 
 concurrency:
   group: openclaw-release-publish-${{ inputs.tag }}
@@ -263,6 +263,53 @@ jobs:
             wait_run_pid="$!"
           }
 
+          create_or_update_github_release() {
+            local release_version notes_version title notes_file changelog_file latest_arg prerelease_args
+            release_version="${RELEASE_TAG#v}"
+            notes_version="${release_version}"
+            if [[ "${notes_version}" =~ ^([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*)-(alpha|beta)\.[1-9][0-9]*$ ]]; then
+              notes_version="${BASH_REMATCH[1]}"
+            fi
+            title="openclaw ${release_version}"
+            changelog_file="${RUNNER_TEMP}/CHANGELOG.md"
+            notes_file="${RUNNER_TEMP}/release-notes.md"
+
+            gh api --repo "$GITHUB_REPOSITORY" "repos/${GITHUB_REPOSITORY}/contents/CHANGELOG.md?ref=${TARGET_SHA}" \
+              --jq '.content' | base64 --decode > "${changelog_file}"
+            awk -v version="${notes_version}" '
+              $0 == "## " version { in_section = 1; next }
+              /^## / && in_section { exit }
+              in_section { print }
+            ' "${changelog_file}" > "${notes_file}"
+            if [[ ! -s "${notes_file}" ]]; then
+              echo "CHANGELOG.md does not contain release notes for ${notes_version}." >&2
+              exit 1
+            fi
+
+            prerelease_args=()
+            latest_arg="--latest=false"
+            if [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_TAG}" == *"-beta."* ]]; then
+              prerelease_args=(--prerelease)
+            elif [[ "${RELEASE_NPM_DIST_TAG}" == "latest" ]]; then
+              latest_arg="--latest"
+            fi
+
+            if gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" \
+                --title "${title}" \
+                --notes-file "${notes_file}" \
+                "${prerelease_args[@]}"
+            else
+              gh release create "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" \
+                --verify-tag \
+                --title "${title}" \
+                --notes-file "${notes_file}" \
+                "${prerelease_args[@]}" \
+                "${latest_arg}"
+            fi
+            echo "- GitHub release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" >> "$GITHUB_STEP_SUMMARY"
+          }
+
           {
             echo "### Publish sequence"
             echo
@@ -344,4 +391,8 @@ jobs:
           fi
           if [[ "${failed}" != "0" ]]; then
             exit 1
+          fi
+
+          if [[ -n "${openclaw_npm_run_id}" ]]; then
+            create_or_update_github_release
           fi
