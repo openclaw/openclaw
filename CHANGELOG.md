@@ -144,6 +144,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Honor owner enforcement for native commands [AI]. (#78864) Thanks @pgondhi987.
 - Tavily: resolve dedicated `tavily_search` and `tavily_extract` tool credentials from the active runtime config snapshot, so `exec` SecretRef-backed API keys do not reach the tools unresolved. (#78610) Thanks @VACInc.
 - Gateway/sessions: clear cached skills snapshots during `/new` and `sessions.reset` so long-lived channel sessions rebuild the visible skill list after skills change. (#78873) Thanks @Evizero.
 - fix(auto-reply): gate inline skill tool dispatch [AI]. (#78517) Thanks @pgondhi987.
