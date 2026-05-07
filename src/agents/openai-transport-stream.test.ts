@@ -4288,3 +4288,252 @@ describe("openai transport stream", () => {
     ).rejects.toThrow("Exceeded tool-call argument buffer limit");
   });
 });
+
+describe("normalizeStructuredDeltaContent", () => {
+  const normalize = __testing.normalizeStructuredDeltaContent;
+
+  it("returns plain string as a single text part", () => {
+    expect(normalize("hello")).toEqual([{ kind: "text", text: "hello" }]);
+  });
+
+  it("returns empty array for empty string", () => {
+    expect(normalize("")).toEqual([]);
+  });
+
+  it("returns empty array for null/undefined", () => {
+    expect(normalize(null)).toEqual([]);
+    expect(normalize(undefined)).toEqual([]);
+  });
+
+  it("normalizes Mistral thinking array with thinking and text blocks", () => {
+    const content = [
+      { type: "thinking", thinking: "Let me think about this..." },
+      { type: "text", text: "Here is the answer." },
+    ];
+    expect(normalize(content)).toEqual([
+      { kind: "thinking", signature: "reasoning_content", text: "Let me think about this..." },
+      { kind: "text", text: "Here is the answer." },
+    ]);
+  });
+
+  it("handles Mistral thinking block with content field instead of thinking field", () => {
+    const content = [
+      { type: "thinking", content: "Reasoning here" },
+      { type: "text", text: "Output" },
+    ];
+    expect(normalize(content)).toEqual([
+      { kind: "thinking", signature: "reasoning_content", text: "Reasoning here" },
+      { kind: "text", text: "Output" },
+    ]);
+  });
+
+  it("handles text block with content field as fallback", () => {
+    const content = [{ type: "text", content: "fallback text" }];
+    expect(normalize(content)).toEqual([{ kind: "text", text: "fallback text" }]);
+  });
+
+  it("skips blocks with no recognizable string field — never produces [object Object]", () => {
+    const content = [
+      { type: "unknown", data: { nested: true } },
+      { type: "text", text: "valid" },
+    ];
+    const result = normalize(content);
+    expect(result).toEqual([{ kind: "text", text: "valid" }]);
+    // Explicitly assert no [object Object] leaks
+    for (const part of result) {
+      expect(part.text).not.toContain("[object Object]");
+    }
+  });
+
+  it("handles reasoning.text block type", () => {
+    const content = [{ type: "reasoning.text", text: "Deep reasoning" }];
+    expect(normalize(content)).toEqual([
+      { kind: "thinking", signature: "reasoning_content", text: "Deep reasoning" },
+    ]);
+  });
+
+  it("handles reasoning block type", () => {
+    const content = [{ type: "reasoning", thinking: "Step 1..." }];
+    expect(normalize(content)).toEqual([
+      { kind: "thinking", signature: "reasoning_content", text: "Step 1..." },
+    ]);
+  });
+
+  it("handles mixed string elements in array", () => {
+    const content = ["hello", "world"];
+    expect(normalize(content)).toEqual([
+      { kind: "text", text: "hello" },
+      { kind: "text", text: "world" },
+    ]);
+  });
+
+  it("skips empty and null array elements", () => {
+    const content = [null, undefined, "", { type: "text", text: "ok" }];
+    expect(normalize(content)).toEqual([{ kind: "text", text: "ok" }]);
+  });
+
+  it("handles single object (not array) with text field", () => {
+    expect(normalize({ type: "text", text: "single" })).toEqual([{ kind: "text", text: "single" }]);
+  });
+
+  it("handles single thinking object (not array)", () => {
+    expect(normalize({ type: "thinking", thinking: "hmm" })).toEqual([
+      { kind: "thinking", signature: "reasoning_content", text: "hmm" },
+    ]);
+  });
+
+  it("returns empty for unrecognized single object with no string fields", () => {
+    expect(normalize({ type: "unknown", data: [1, 2, 3] })).toEqual([]);
+  });
+});
+
+describe("processOpenAICompletionsStream — Mistral structured delta.content", () => {
+  it("routes Mistral thinking array content to thinking + text blocks without [object Object]", async () => {
+    const model = {
+      id: "mistral-small-latest",
+      name: "Mistral Small",
+      api: "openai-completions",
+      provider: "mistral",
+      baseUrl: "https://api.mistral.ai/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-completions">;
+    const output = {
+      role: "assistant" as const,
+      content: [] as Array<Record<string, unknown>>,
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+    const streamEvents: unknown[] = [];
+    const stream = {
+      push(event: unknown) {
+        streamEvents.push(event);
+      },
+    };
+
+    async function* mockStream() {
+      // Mistral returns structured content array with thinking blocks
+      yield {
+        id: "chatcmpl-mistral",
+        object: "chat.completion.chunk" as const,
+        created: 1778139463,
+        model: "mistral-small-latest",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              role: "assistant" as const,
+              content: [{ type: "thinking", thinking: "Let me reason about this." }],
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      };
+      yield {
+        id: "chatcmpl-mistral",
+        object: "chat.completion.chunk" as const,
+        created: 1778139463,
+        model: "mistral-small-latest",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: [{ type: "text", text: "Here is my answer." }],
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: "stop" as const,
+          },
+        ],
+      };
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    // Verify thinking block is present
+    const thinkingBlock = output.content.find((b) => b.type === "thinking");
+    expect(thinkingBlock).toBeDefined();
+    expect(thinkingBlock!.thinking).toBe("Let me reason about this.");
+
+    // Verify text block is present
+    const textBlock = output.content.find((b) => b.type === "text");
+    expect(textBlock).toBeDefined();
+    expect(textBlock!.text).toBe("Here is my answer.");
+
+    // Critical: NO [object Object] anywhere in the output
+    for (const block of output.content) {
+      const textValue = String(block.text || block.thinking || "");
+      expect(textValue).not.toContain("[object Object]");
+    }
+  });
+
+  it("still handles plain string delta.content for non-thinking providers", async () => {
+    const model = {
+      id: "mistral-small-latest",
+      name: "Mistral Small",
+      api: "openai-completions",
+      provider: "mistral",
+      baseUrl: "https://api.mistral.ai/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-completions">;
+    const output = {
+      role: "assistant" as const,
+      content: [] as Array<Record<string, unknown>>,
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+    const stream = { push() {} };
+
+    async function* mockStream() {
+      yield {
+        id: "chatcmpl-mistral",
+        object: "chat.completion.chunk" as const,
+        created: 1778139463,
+        model: "mistral-small-latest",
+        choices: [
+          {
+            index: 0,
+            delta: { role: "assistant" as const, content: "Normal string response" },
+            logprobs: null,
+            finish_reason: "stop" as const,
+          },
+        ],
+      };
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    const textBlock = output.content.find((b) => b.type === "text");
+    expect(textBlock).toBeDefined();
+    expect(textBlock!.text).toBe("Normal string response");
+  });
+});

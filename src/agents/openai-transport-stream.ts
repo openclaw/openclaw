@@ -1460,10 +1460,21 @@ async function processOpenAICompletionsStream(
       continue;
     }
     if (choice.delta.content) {
-      if (currentBlock?.type === "toolCall") {
-        queuePostToolCallDelta({ kind: "text", text: choice.delta.content });
-      } else {
-        appendTextDelta(choice.delta.content);
+      const contentParts = normalizeStructuredDeltaContent(choice.delta.content);
+      for (const part of contentParts) {
+        if (part.kind === "thinking") {
+          if (currentBlock?.type === "toolCall") {
+            queuePostToolCallDelta(part);
+          } else {
+            appendThinkingDelta(part);
+          }
+        } else {
+          if (currentBlock?.type === "toolCall") {
+            queuePostToolCallDelta(part);
+          } else {
+            appendTextDelta(part.text);
+          }
+        }
       }
       continue;
     }
@@ -1552,6 +1563,92 @@ async function processOpenAICompletionsStream(
   if (output.stopReason === "toolUse" && !hasToolCalls) {
     output.stopReason = "stop";
   }
+}
+
+/**
+ * Normalize `choice.delta.content` which may be:
+ * - A plain string (common case) → single text part
+ * - An array of typed blocks (Mistral thinking mode) → per-block parts
+ * - A single typed block object → extract text/thinking
+ *
+ * Mistral's native reasoning returns structured content:
+ * ```json
+ * [{"type": "thinking", "thinking": "Let me think..."}, {"type": "text", "text": "Answer"}]
+ * ```
+ * Without this normalization, arrays/objects coerce to "[object Object]" in string concat.
+ */
+function normalizeStructuredDeltaContent(content: unknown): CompletionsReasoningDelta[] {
+  // Fast path: plain string (most providers)
+  if (typeof content === "string") {
+    return content.length > 0 ? [{ kind: "text", text: content }] : [];
+  }
+
+  // Array of typed content blocks (Mistral thinking mode)
+  if (Array.isArray(content)) {
+    const parts: CompletionsReasoningDelta[] = [];
+    for (const block of content) {
+      if (!block || typeof block !== "object") {
+        if (typeof block === "string" && block.length > 0) {
+          parts.push({ kind: "text", text: block });
+        }
+        continue;
+      }
+      const typed = block as Record<string, unknown>;
+      const blockType = typeof typed.type === "string" ? typed.type : "";
+
+      // Route thinking/reasoning blocks to thinking deltas
+      if (blockType === "thinking" || blockType === "reasoning" || blockType === "reasoning.text") {
+        const thinkingText =
+          extractStringField(typed, "thinking") ||
+          extractStringField(typed, "content") ||
+          extractStringField(typed, "text") ||
+          "";
+        if (thinkingText) {
+          parts.push({ kind: "thinking", signature: "reasoning_content", text: thinkingText });
+        }
+        continue;
+      }
+
+      // Route text blocks to text deltas
+      const textContent =
+        extractStringField(typed, "text") || extractStringField(typed, "content") || "";
+      if (textContent) {
+        parts.push({ kind: "text", text: textContent });
+      }
+    }
+    return parts;
+  }
+
+  // Single object (unlikely but defensive)
+  if (typeof content === "object" && content !== null) {
+    const typed = content as Record<string, unknown>;
+    const blockType = typeof typed.type === "string" ? typed.type : "";
+    if (blockType === "thinking" || blockType === "reasoning" || blockType === "reasoning.text") {
+      const thinkingText =
+        extractStringField(typed, "thinking") ||
+        extractStringField(typed, "content") ||
+        extractStringField(typed, "text") ||
+        "";
+      if (thinkingText) {
+        return [{ kind: "thinking", signature: "reasoning_content", text: thinkingText }];
+      }
+      return [];
+    }
+    const textContent =
+      extractStringField(typed, "text") || extractStringField(typed, "content") || "";
+    if (textContent) {
+      return [{ kind: "text", text: textContent }];
+    }
+    // No recognizable string field — drop silently rather than "[object Object]"
+    return [];
+  }
+
+  return [];
+}
+
+function extractStringField(obj: Record<string, unknown>, field: string): string {
+  const value = obj[field];
+  return typeof value === "string" ? value : "";
 }
 
 type CompletionsReasoningDelta =
@@ -1977,4 +2074,5 @@ export const __testing = {
   sanitizeOpenAICodexResponsesParams,
   buildOpenAICompletionsClientConfig,
   processOpenAICompletionsStream,
+  normalizeStructuredDeltaContent,
 };
