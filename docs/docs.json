@@ -53,6 +53,10 @@
   },
   "redirects": [
     {
+      "source": "/channels/bluebubbles",
+      "destination": "/channels/imessage"
+    },
+    {
       "source": "/install/migrating-matrix",
       "destination": "/channels/matrix-migration"
     },

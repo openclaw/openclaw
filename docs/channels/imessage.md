@@ -10,6 +10,10 @@ title: "iMessage"
 For OpenClaw iMessage deployments, use `imsg` on a signed-in macOS Messages host. If your Gateway runs on Linux or Windows, point `channels.imessage.cliPath` at an SSH wrapper that runs `imsg` on the Mac.
 </Note>
 
+<Warning>
+BlueBubbles is deprecated and no longer ships as a bundled OpenClaw channel. Migrate `channels.bluebubbles` configs to `channels.imessage`; OpenClaw now supports iMessage through `imsg` only. If you still need a BlueBubbles-backed bridge, publish or install it as a third-party plugin outside core.
+</Warning>
+
 Status: native external CLI integration. Gateway spawns `imsg rpc` and communicates over JSON-RPC on stdio (no separate daemon/port).
 
 <CardGroup cols={3}>
