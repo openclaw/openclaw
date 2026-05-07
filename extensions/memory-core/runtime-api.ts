@@ -30,3 +30,21 @@ export type {
   RepairShortTermPromotionArtifactsResult,
   ShortTermAuditSummary,
 } from "./src/short-term-promotion.js";
+export {
+  DreamScheduler,
+  ensureLogAnalystSkill,
+  KnowledgeCapture,
+  LogIngestor,
+  LogMemoryStore,
+  runDreamCycle,
+} from "./src/log-memory/index.js";
+export type {
+  DreamSchedulerDeps,
+  DreamTrigger,
+  EnsureSkillResult,
+  IngestMeta,
+  IngestResult,
+  KnowledgeCaptureRecord,
+  LogMemoryHybridResult,
+  UpsertInput,
+} from "./src/log-memory/index.js";
