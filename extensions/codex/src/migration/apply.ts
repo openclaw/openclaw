@@ -263,6 +263,8 @@ function codexPluginActivationReportState(result: CodexPluginActivationResult): 
     case "refresh_failed":
       return { installed: true, enabled: false };
   }
+  const exhaustiveReason: never = result.reason;
+  return exhaustiveReason;
 }
 
 function sanitizeAppsNeedingAuth(apps: readonly v2.AppSummary[]): Array<{
