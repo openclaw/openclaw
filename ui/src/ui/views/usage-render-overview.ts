@@ -762,7 +762,11 @@ function renderUsageInsights(
     })
     .toSorted((a, b) => b.rate - a.rate)
     .slice(0, 5)
-    .map(({ rate: _rate, ...rest }) => rest);
+    .map((item) => ({
+      label: item.label,
+      value: item.value,
+      sub: item.sub,
+    }));
 
   const topModels = aggregates.byModel.slice(0, 5).map((entry) => ({
     label: entry.model ?? t("usage.common.unknown"),
