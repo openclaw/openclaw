@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -26,6 +27,64 @@ function firstMockArg(
   }
   return arg as Record<string, unknown>;
 }
+
+function parseTelegramTargetForTest(raw: string): {
+  chatId: string;
+  messageThreadId?: number;
+  chatType: "direct" | "group" | "unknown";
+} | null {
+  const withoutPrefix = raw
+    .trim()
+    .replace(/^(telegram|tg):/i, "")
+    .trim();
+  if (!withoutPrefix) {
+    return null;
+  }
+  const topicMatch = /^(.*):topic:(\d+)$/i.exec(withoutPrefix);
+  const chatId = topicMatch?.[1]?.trim() || withoutPrefix;
+  const messageThreadId = topicMatch?.[2] ? Number.parseInt(topicMatch[2], 10) : undefined;
+  const numericId = chatId.startsWith("-") ? chatId.slice(1) : chatId;
+  const chatType =
+    /^\d+$/.test(numericId) && !chatId.startsWith("-100")
+      ? "direct"
+      : chatId.startsWith("-")
+        ? "group"
+        : "unknown";
+  return { chatId, messageThreadId, chatType };
+}
+
+function normalizeTelegramTargetForTest(raw: string): string | undefined {
+  const target = parseTelegramTargetForTest(raw);
+  if (!target) {
+    return undefined;
+  }
+  const suffix = target.messageThreadId == null ? "" : `:topic:${String(target.messageThreadId)}`;
+  return `telegram:${target.chatId}${suffix}`.toLowerCase();
+}
+
+const telegramMessagingForTest: ChannelMessagingAdapter = {
+  targetPrefixes: ["telegram", "tg"],
+  normalizeTarget: normalizeTelegramTargetForTest,
+  parseExplicitTarget: ({ raw }) => {
+    const target = parseTelegramTargetForTest(raw);
+    if (!target) {
+      return null;
+    }
+    return {
+      to: target.chatId,
+      threadId: target.messageThreadId,
+      chatType: target.chatType === "unknown" ? undefined : target.chatType,
+    };
+  },
+  inferTargetChatType: ({ to }) => {
+    const target = parseTelegramTargetForTest(to);
+    return !target || target.chatType === "unknown" ? undefined : target.chatType;
+  },
+  targetResolver: {
+    looksLikeId: (raw) => normalizeTelegramTargetForTest(raw) !== undefined,
+    hint: "<chatId>",
+  },
+};
 
 describe("runMessageAction core send routing", () => {
   afterEach(() => {
@@ -156,15 +215,12 @@ describe("runMessageAction core send routing", () => {
             id: "telegram",
             outbound: {
               deliveryMode: "direct",
-              sendText: vi.fn(),
+              sendText: vi.fn().mockResolvedValue({
+                channel: "telegram",
+                messageId: "topic-test",
+              }),
             },
-            messaging: {
-              normalizeTarget: (raw) =>
-                raw === "-1001234567890:topic:42" ? "telegram:-1001234567890:topic:42" : undefined,
-              targetResolver: {
-                looksLikeId: (raw) => raw === "-1001234567890:topic:42",
-              },
-            },
+            messaging: telegramMessagingForTest,
           }),
         },
       ]),
