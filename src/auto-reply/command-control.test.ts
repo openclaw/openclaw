@@ -674,6 +674,34 @@ describe("resolveCommandAuthorization", () => {
       expect(auth.isAuthorizedSender).toBe(false);
     });
 
+    it("keeps commands.allowFrom available to non-owner command users when an owner allowlist is configured", () => {
+      const cfg = {
+        commands: {
+          ownerAllowFrom: ["discord:owner"],
+          allowFrom: {
+            discord: ["helper"],
+          },
+        },
+        channels: { discord: { allowFrom: ["*"] } },
+      } as OpenClawConfig;
+
+      const auth = resolveCommandAuthorization({
+        ctx: {
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: "group",
+          From: "discord:helper",
+          SenderId: "helper",
+          CommandSource: "native",
+        } as MsgContext,
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(auth.senderIsOwner).toBe(false);
+      expect(auth.isAuthorizedSender).toBe(true);
+    });
+
     it("does not treat conversation ids in From as sender identities", () => {
       const cfg = {
         commands: {

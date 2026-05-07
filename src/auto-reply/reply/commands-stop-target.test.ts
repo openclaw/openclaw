@@ -1,6 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
@@ -54,6 +58,8 @@ vi.mock("./reply-run-registry.js", () => ({
 
 const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) =>
   allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
+
+let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
 
 function registerOwnerEnforcingTelegramPlugin() {
   setActivePluginRegistry(
@@ -116,8 +122,17 @@ function buildStopParams(): HandleCommandsParams {
 
 describe("handleStopCommand target fallback", () => {
   beforeEach(() => {
+    previousPluginRegistry = getActivePluginRegistry();
     vi.clearAllMocks();
     persistAbortTargetEntryMock.mockResolvedValue(true);
+  });
+
+  afterEach(() => {
+    if (previousPluginRegistry) {
+      setActivePluginRegistry(previousPluginRegistry);
+    } else {
+      resetPluginRuntimeStateForTest();
+    }
   });
 
   it("does not fall back to the wrapper session when a distinct target session is missing from store", async () => {

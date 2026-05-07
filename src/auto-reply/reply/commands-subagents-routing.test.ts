@@ -1,6 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
@@ -30,6 +34,8 @@ vi.mock("./commands-subagents-control.runtime.js", () => ({
 
 const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) =>
   allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
+
+let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
 
 function registerOwnerEnforcingTelegramPlugin() {
   setActivePluginRegistry(
@@ -104,7 +110,16 @@ function buildParams(
 
 describe("subagents command dispatch", () => {
   beforeEach(() => {
+    previousPluginRegistry = getActivePluginRegistry();
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    if (previousPluginRegistry) {
+      setActivePluginRegistry(previousPluginRegistry);
+    } else {
+      resetPluginRuntimeStateForTest();
+    }
   });
 
   it("prefers native command target session keys", () => {
