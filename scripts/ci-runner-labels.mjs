@@ -66,19 +66,10 @@ export function selectRunnerLabels({
   queueThreshold = DEFAULT_QUEUE_THRESHOLD,
 } = {}) {
   const selected = {};
-  const queuedCountsByFamily = {};
-  for (const [label, count] of Object.entries(queuedCountsByLabel)) {
-    const family = Object.values(RUNNER_LABELS).find((runner) => runner.primary === label)?.family;
-    if (family) {
-      queuedCountsByFamily[family] = (queuedCountsByFamily[family] ?? 0) + count;
-    }
-  }
   for (const [outputName, label] of Object.entries(RUNNER_LABELS)) {
     const queuedCount = queuedCountsByLabel[label.primary] ?? 0;
-    const familyQueuedCount = queuedCountsByFamily[label.family] ?? 0;
     selected[outputName] =
-      !canonicalRepository ||
-      (fallbackEnabled && (queuedCount >= queueThreshold || familyQueuedCount >= queueThreshold))
+      !canonicalRepository || (fallbackEnabled && queuedCount >= queueThreshold)
         ? label.fallback
         : label.primary;
   }
