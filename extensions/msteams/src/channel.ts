@@ -1,5 +1,6 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
+import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
 import { createTopLevelChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 import type {
   ChannelMessageActionAdapter,
@@ -163,6 +164,15 @@ function jsonActionResultWithDetails(
 }
 
 const MSTEAMS_REACTION_TYPES = ["like", "heart", "laugh", "surprised", "sad", "angry"] as const;
+const MSTEAMS_MEMBER_INFO_DISABLED_ERROR =
+  "member-info is disabled via channels.msteams.actions.memberInfo=false.";
+
+function isMSTeamsMemberInfoActionEnabled(cfg: OpenClawConfig): boolean {
+  const gate = createActionGate(
+    cfg.channels?.msteams?.actions as Record<string, boolean | undefined> | undefined,
+  );
+  return gate("memberInfo");
+}
 
 function actionError(message: string) {
   return {
@@ -369,28 +379,28 @@ function describeMSTeamsMessageTool({
   const enabled =
     cfg.channels?.msteams?.enabled !== false &&
     Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams));
+  const actions: ChannelMessageActionName[] = [
+    "upload-file",
+    "poll",
+    "edit",
+    "delete",
+    "pin",
+    "unpin",
+    "list-pins",
+    "read",
+    "react",
+    "reactions",
+    "search",
+    ...(isMSTeamsMemberInfoActionEnabled(cfg) ? (["member-info"] as const) : []),
+    "channel-list",
+    "channel-info",
+    "addParticipant",
+    "removeParticipant",
+    "renameGroup",
+  ];
+
   return {
-    actions: enabled
-      ? ([
-          "upload-file",
-          "poll",
-          "edit",
-          "delete",
-          "pin",
-          "unpin",
-          "list-pins",
-          "read",
-          "react",
-          "reactions",
-          "search",
-          "member-info",
-          "channel-list",
-          "channel-info",
-          "addParticipant",
-          "removeParticipant",
-          "renameGroup",
-        ] satisfies ChannelMessageActionName[])
-      : [],
+    actions: enabled ? actions : [],
     capabilities: enabled ? ["presentation"] : [],
     schema: enabled
       ? {
@@ -966,6 +976,9 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           }
 
           if (ctx.action === "member-info") {
+            if (!isMSTeamsMemberInfoActionEnabled(ctx.cfg)) {
+              return actionError(MSTEAMS_MEMBER_INFO_DISABLED_ERROR);
+            }
             const userId = normalizeOptionalString(ctx.params.userId) ?? "";
             if (!userId) {
               return actionError("member-info requires a userId.");

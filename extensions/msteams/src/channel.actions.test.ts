@@ -306,6 +306,24 @@ describe("msteamsPlugin message actions", () => {
     });
   });
 
+  it("rejects member-info when disabled by the Teams action gate", async () => {
+    await expectActionError(
+      {
+        action: "member-info",
+        cfg: {
+          channels: {
+            msteams: {
+              actions: { memberInfo: false },
+            },
+          },
+        },
+        params: { userId: "user-1" },
+      },
+      "member-info is disabled via channels.msteams.actions.memberInfo=false.",
+    );
+    expect(getMemberInfoMSTeamsMock).not.toHaveBeenCalled();
+  });
+
   it("routes channel-list through the Teams runtime", async () => {
     await expectSuccessfulAction({
       mockFn: listChannelsMSTeamsMock,

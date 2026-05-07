@@ -1650,6 +1650,12 @@ export const MSTeamsConfigSchema = z
     heartbeat: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,
     responsePrefix: z.string().optional(),
+    actions: z
+      .object({
+        memberInfo: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     welcomeCard: z.boolean().optional(),
     promptStarters: z.array(z.string()).optional(),
     groupWelcomeCard: z.boolean().optional(),
