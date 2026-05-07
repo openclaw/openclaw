@@ -85,6 +85,36 @@ describe("runtime context prompt submission", () => {
     expect(buildCurrentTurnPromptContextSuffix({ reply: { body: "   " } })).toBe("");
   });
 
+  it("includes quote_text and quote_source_text when reply is a selected quote", () => {
+    const suffix = buildCurrentTurnPromptContextSuffix({
+      reply: {
+        senderLabel: "Alice",
+        isQuote: true,
+        body: "beta",
+        quoteText: "beta",
+        quoteSourceText: "alpha beta gamma",
+      },
+    });
+
+    expect(suffix).toContain('"is_quote": true');
+    expect(suffix).toContain('"quote_text": "beta"');
+    expect(suffix).toContain('"quote_source_text": "alpha beta gamma"');
+    expect(suffix).toContain('"body": "beta"');
+  });
+
+  it("omits quote fields when reply is not a quote", () => {
+    const suffix = buildCurrentTurnPromptContextSuffix({
+      reply: {
+        senderLabel: "Bob",
+        body: "hello world",
+      },
+    });
+
+    expect(suffix).not.toContain("quote_text");
+    expect(suffix).not.toContain("quote_source_text");
+    expect(suffix).toContain('"body": "hello world"');
+  });
+
   it("queues runtime context as a hidden next-turn custom message", async () => {
     const sentMessages: Array<{ content: string }> = [];
     const sendCustomMessage = vi.fn(async (message: { content: string }) => {

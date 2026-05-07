@@ -268,10 +268,14 @@ export function buildInboundUserContextPrefix(
 
   const replyToBody = sanitizePromptBody(ctx.ReplyToBody);
   if (replyToBody) {
+    const quoteSourceText =
+      ctx.ReplyToIsQuote === true ? sanitizePromptBody(ctx.ReplyToQuoteSourceText) : undefined;
     blocks.push(
       formatUntrustedJsonBlock("Reply target of current user message (untrusted, for context):", {
         sender_label: normalizePromptMetadataString(ctx.ReplyToSender),
         is_quote: ctx.ReplyToIsQuote === true ? true : undefined,
+        quote_text: ctx.ReplyToIsQuote === true ? sanitizePromptBody(ctx.ReplyToQuoteText) : undefined,
+        quote_source_text: quoteSourceText || undefined,
         body: replyToBody,
       }),
     );

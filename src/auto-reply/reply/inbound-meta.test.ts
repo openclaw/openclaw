@@ -479,6 +479,22 @@ describe("buildInboundUserContextPrefix", () => {
     expect(reply["body"]).toBe("quoted body");
   });
 
+  it("includes quote_text and quote_source_text for selected quote replies", () => {
+    const text = buildInboundUserContextPrefix({
+      ReplyToSender: "Alice",
+      ReplyToBody: "beta",
+      ReplyToIsQuote: true,
+      ReplyToQuoteText: "beta",
+      ReplyToQuoteSourceText: "alpha beta gamma",
+    } as TemplateContext);
+
+    const reply = parseReplyPayload(text);
+    expect(reply["is_quote"]).toBe(true);
+    expect(reply["quote_text"]).toBe("beta");
+    expect(reply["quote_source_text"]).toBe("alpha beta gamma");
+    expect(reply["body"]).toBe("beta");
+  });
+
   it("includes sender_id in conversation info", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",

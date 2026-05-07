@@ -362,6 +362,12 @@ function resolveCurrentTurnPromptContext(
         ? { senderLabel: normalizeOptionalString(ctx.ReplyToSender) }
         : {}),
       ...(ctx.ReplyToIsQuote === true ? { isQuote: true } : {}),
+      ...(ctx.ReplyToIsQuote === true && normalizeOptionalString(ctx.ReplyToQuoteText)
+        ? { quoteText: normalizeOptionalString(ctx.ReplyToQuoteText) }
+        : {}),
+      ...(ctx.ReplyToIsQuote === true && normalizeOptionalString(ctx.ReplyToQuoteSourceText)
+        ? { quoteSourceText: normalizeOptionalString(ctx.ReplyToQuoteSourceText) }
+        : {}),
     },
   };
 }

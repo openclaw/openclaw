@@ -58,6 +58,12 @@ export function buildCurrentTurnPromptContextSuffix(
       ? sanitizeCurrentTurnContextString(reply.senderLabel)
       : undefined,
     is_quote: reply.isQuote === true ? true : undefined,
+    quote_text: reply.isQuote === true && reply.quoteText
+      ? sanitizeCurrentTurnContextString(reply.quoteText)
+      : undefined,
+    quote_source_text: reply.isQuote === true && reply.quoteSourceText
+      ? sanitizeCurrentTurnContextString(reply.quoteSourceText)
+      : undefined,
     body: sanitizeCurrentTurnContextString(replyBody),
   };
   return [
