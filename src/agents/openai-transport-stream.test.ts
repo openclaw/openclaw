@@ -2752,6 +2752,46 @@ describe("openai transport stream", () => {
     expect(params.tools?.[0]?.function?.strict).toBe(false);
   });
 
+  it("applies model compat unsupported schema keywords to completions tools", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "accounts/fireworks/routers/kimi-k2p5-turbo",
+        name: "Kimi K2.5 Turbo",
+        api: "openai-completions",
+        provider: "fireworks",
+        baseUrl: "https://api.fireworks.ai/inference/v1",
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 256000,
+        maxTokens: 256000,
+        compat: {
+          unsupportedToolSchemaKeywords: ["not"],
+        },
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup",
+            description: "Lookup",
+            parameters: {
+              type: "object",
+              properties: {
+                forbidden: { not: {} },
+              },
+            },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as {
+      tools?: Array<{ function?: { parameters?: { properties?: Record<string, unknown> } } }>;
+    };
+
+    expect(params.tools?.[0]?.function?.parameters?.properties?.forbidden).toEqual({});
+  });
+
   describe("Gemini thought_signature round-trip on OpenAI-compatible completions", () => {
     const geminiModel = {
       id: "gemini-3-flash-preview",
@@ -2901,7 +2941,7 @@ describe("openai transport stream", () => {
       );
     });
 
-    it("does not replay thought_signature across a different API surface", () => {
+    it("uses the Gemini skip-validator signature across a different API surface", () => {
       const params = buildOpenAICompletionsParams(
         geminiModel,
         {
@@ -2938,12 +2978,14 @@ describe("openai transport stream", () => {
       ) as { messages: Array<Record<string, unknown>> };
 
       const assistant = params.messages.find((message) => message.role === "assistant") as
-        | { tool_calls?: Array<{ extra_content?: unknown }> }
+        | { tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }> }
         | undefined;
-      expect(assistant?.tool_calls?.[0]?.extra_content).toBeUndefined();
+      expect(assistant?.tool_calls?.[0]?.extra_content?.google?.thought_signature).toBe(
+        "skip_thought_signature_validator",
+      );
     });
 
-    it("does not emit extra_content when no thought_signature was captured", () => {
+    it("uses the Gemini skip-validator signature when no thought_signature was captured", () => {
       const params = buildOpenAICompletionsParams(
         geminiModel,
         {
@@ -2964,6 +3006,55 @@ describe("openai transport stream", () => {
               stopReason: "toolUse",
               timestamp: 1,
               content: [{ type: "toolCall", id: "call_abc", name: "echo_value", arguments: {} }],
+            },
+          ],
+          tools: [],
+        } as never,
+        undefined,
+      ) as { messages: Array<Record<string, unknown>> };
+
+      const assistant = params.messages.find((message) => message.role === "assistant") as
+        | { tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }> }
+        | undefined;
+      expect(assistant?.tool_calls?.[0]?.extra_content?.google?.thought_signature).toBe(
+        "skip_thought_signature_validator",
+      );
+    });
+
+    it("does not trust cross-route thought_signature for non-Gemini-3 Google compat models", () => {
+      const nonGemini3Model = {
+        ...geminiModel,
+        id: "gemini-2.5-pro",
+        name: "Gemini 2.5 Pro",
+      };
+      const params = buildOpenAICompletionsParams(
+        nonGemini3Model,
+        {
+          messages: [
+            {
+              role: "assistant",
+              api: "google-generative-ai",
+              provider: nonGemini3Model.provider,
+              model: nonGemini3Model.id,
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "toolUse",
+              timestamp: 1,
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_abc",
+                  name: "echo_value",
+                  arguments: { value: "repro" },
+                  thoughtSignature: "SIG-OPAQUE-ABC==",
+                },
+              ],
             },
           ],
           tools: [],

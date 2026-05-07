@@ -644,6 +644,39 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 
+  it("handles symbol-bearing header dictionaries while rewriting cross-origin redirects", async () => {
+    const lookupFn = createPublicLookup();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("https://cdn.example.com/asset"))
+      .mockResolvedValueOnce(okResponse());
+    const headers = {
+      Authorization: "Bearer secret",
+      Accept: "application/json",
+    } as Record<string, string> & { [key: symbol]: unknown };
+    Object.defineProperty(headers, Symbol("sensitiveHeaders"), {
+      value: new Set(["authorization"]),
+      enumerable: false,
+    });
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/start",
+      fetchImpl,
+      lookupFn,
+      init: { headers },
+    });
+
+    expect(result.response.status).toBe(200);
+    const firstHeaders = fetchImpl.mock.calls[0]?.[1]?.headers;
+    expect(firstHeaders).not.toBe(headers);
+    expect(Object.getOwnPropertySymbols(firstHeaders as object)).toEqual([]);
+    const secondHeaders = getSecondRequestHeaders(fetchImpl);
+    expect(secondHeaders.get("authorization")).toBeNull();
+    expect(secondHeaders.get("accept")).toBe("application/json");
+    expect(Object.getOwnPropertySymbols(headers)).toHaveLength(1);
+    await result.release();
+  });
+
   it("rewrites POST redirects to GET and clears the body for cross-origin 302 responses", async () => {
     const lookupFn = createPublicLookup();
     const fetchImpl = vi

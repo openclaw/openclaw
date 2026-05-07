@@ -81,7 +81,6 @@
   "cwd": "/tmp/openclaw-happy-path/workspace",
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "dynamicTools": [
-    "canvas",
     "nodes",
     "cron",
     "message",
@@ -96,7 +95,8 @@
     "subagents",
     "session_status",
     "web_search",
-    "web_fetch"
+    "web_fetch",
+    "canvas"
   ],
   "experimentalRawEvents": true,
   "model": "gpt-5.5",
@@ -552,7 +552,6 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
 
 ```json
 [
-  "canvas",
   "nodes",
   "cron",
   "message",
@@ -567,7 +566,8 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
   "subagents",
   "session_status",
   "web_search",
-  "web_fetch"
+  "web_fetch",
+  "canvas"
 ]
 ```
 

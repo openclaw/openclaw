@@ -37,6 +37,11 @@ on:
         required: true
         default: true
         type: boolean
+      wait_for_clawhub:
+        description: Wait for ClawHub plugin publish before marking this workflow complete
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   actions: write
@@ -166,6 +171,7 @@ jobs:
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
           PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
+          WAIT_FOR_CLAWHUB: ${{ inputs.wait_for_clawhub && 'true' || 'false' }}
         run: |
           set -euo pipefail
 
@@ -203,18 +209,30 @@ jobs:
             fi
 
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}" >&2
+            {
+              echo "- ${workflow}: dispatched (https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id})"
+            } >> "$GITHUB_STEP_SUMMARY"
             printf '%s\n' "${run_id}"
           }
 
           wait_for_run() {
             local workflow="$1"
             local run_id="$2"
-            local status conclusion url
+            local status conclusion url updated_at last_state
 
+            last_state=""
             while true; do
-              status="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json status --jq '.status')"
+              run_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json status,url,updatedAt)"
+              status="$(printf '%s' "$run_json" | jq -r '.status')"
               if [[ "$status" == "completed" ]]; then
                 break
+              fi
+              url="$(printf '%s' "$run_json" | jq -r '.url')"
+              updated_at="$(printf '%s' "$run_json" | jq -r '.updatedAt')"
+              state="${status}:${updated_at}"
+              if [[ "$state" != "$last_state" ]]; then
+                echo "${workflow} still ${status} (updated ${updated_at}): ${url}"
+                last_state="$state"
               fi
               sleep 30
             done
@@ -257,6 +275,11 @@ jobs:
             else
               echo "- OpenClaw npm publish: skipped by input"
             fi
+            if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
+              echo "- Workflow completion waits for ClawHub"
+            else
+              echo "- Workflow completion does not wait for ClawHub; monitor the dispatched ClawHub run separately"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
           npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}")
@@ -286,10 +309,16 @@ jobs:
             echo "- OpenClaw npm publish: skipped by input" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          clawhub_result="$RUNNER_TEMP/clawhub-result.txt"
-          wait_run_pid=""
-          wait_for_run_background plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${clawhub_result}"
-          clawhub_pid="${wait_run_pid}"
+          clawhub_result=""
+          clawhub_pid=""
+          if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
+            clawhub_result="$RUNNER_TEMP/clawhub-result.txt"
+            wait_run_pid=""
+            wait_for_run_background plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${clawhub_result}"
+            clawhub_pid="${wait_run_pid}"
+          else
+            echo "- plugin-clawhub-release.yml: not awaited (${plugin_clawhub_run_id})" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
           openclaw_result=""
           openclaw_pid=""
@@ -301,7 +330,7 @@ jobs:
           fi
 
           failed=0
-          if ! wait "${clawhub_pid}"; then
+          if [[ -n "${clawhub_pid}" ]] && ! wait "${clawhub_pid}"; then
             failed=1
           fi
           if [[ -n "${openclaw_pid}" ]] && ! wait "${openclaw_pid}"; then
