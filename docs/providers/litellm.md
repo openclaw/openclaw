@@ -8,6 +8,18 @@ read_when:
 
 [LiteLLM](https://litellm.ai) is an open-source LLM gateway that provides a unified API to 100+ model providers. Route OpenClaw through LiteLLM to get centralized cost tracking, logging, and the flexibility to switch backends without changing your OpenClaw config.
 
+<Warning>
+**Security advisory (March 2026):** malicious LiteLLM versions **1.82.7** and **1.82.8** were briefly published to PyPI during a supply chain compromise. If you self-host LiteLLM, do **not** install those versions. `1.82.6` is the last confirmed clean release in that range.
+
+If you previously ran `1.82.7` or `1.82.8`:
+
+- downgrade immediately to a safe version
+- rotate any API keys that were configured in or sent through the proxy
+- audit the LiteLLM host for unexpected outbound activity
+
+OpenClaw does not bundle LiteLLM directly, but users operating their own LiteLLM proxy may still have been impacted on the proxy host.
+</Warning>
+
 <Tip>
 **Why use LiteLLM with OpenClaw?**
 
@@ -47,7 +59,7 @@ read_when:
     <Steps>
       <Step title="Start LiteLLM Proxy">
         ```bash
-        pip install 'litellm[proxy]'
+        pip install 'litellm[proxy]==1.82.6'
         litellm --model claude-opus-4-6
         ```
       </Step>
