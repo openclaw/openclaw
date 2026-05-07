@@ -52,7 +52,7 @@ vi.mock("./chat/realtime-talk-webrtc.ts", () => ({
 vi.mock("./chat/realtime-talk-browser-fallback.ts", () => ({
   BrowserFallbackRealtimeTalkTransport: fallbackCtor,
   shouldUseBrowserFallbackForRealtimeError: (error: unknown) =>
-    error instanceof Error && error.message.includes("not configured"),
+    error instanceof Error && /not configured|quota|billing|credit|429/i.test(error.message),
 }));
 
 import { RealtimeTalkSession } from "./chat/realtime-talk.ts";
@@ -244,6 +244,51 @@ describe("RealtimeTalkSession", () => {
     expect(webRtcCtor).not.toHaveBeenCalled();
     expect(googleCtor).not.toHaveBeenCalled();
     expect(relayCtor).not.toHaveBeenCalled();
+  });
+
+  it("falls back to browser dictation when WebRTC setup hits OpenAI quota", async () => {
+    const request = vi.fn(async () => ({
+      provider: "openai",
+      transport: "webrtc-sdp",
+      clientSecret: "secret",
+    }));
+    webRtcStart.mockRejectedValueOnce(
+      new Error("Realtime WebRTC setup failed (429): You exceeded your current quota"),
+    );
+    const session = new RealtimeTalkSession({ request } as never, "main");
+
+    await session.start();
+    session.stop();
+
+    expect(webRtcCtor).toHaveBeenCalledTimes(1);
+    expect(webRtcStop).toHaveBeenCalledTimes(1);
+    expect(fallbackCtor).toHaveBeenCalledTimes(1);
+    expect(fallbackStart).toHaveBeenCalledTimes(1);
+    expect(fallbackStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("switches to browser dictation when an active WebRTC transport reports OpenAI quota", async () => {
+    const request = vi.fn(async () => ({
+      provider: "openai",
+      transport: "webrtc-sdp",
+      clientSecret: "secret",
+    }));
+    const session = new RealtimeTalkSession({ request } as never, "main");
+
+    await session.start();
+    const transport = webRtcCtor.mock.results[0]?.value as never;
+    const ctx = webRtcCtor.mock.calls[0]?.[1] as
+      | { onRecoverableError?: (error: Error, source: never) => boolean }
+      | undefined;
+
+    expect(ctx?.onRecoverableError?.(new Error("You exceeded your current quota"), transport)).toBe(
+      true,
+    );
+    await vi.waitFor(() => expect(fallbackStart).toHaveBeenCalledTimes(1));
+    expect(webRtcStop).toHaveBeenCalledTimes(1);
+
+    session.stop();
+    expect(fallbackStop).toHaveBeenCalledTimes(1);
   });
 
   it("does not mask unrelated realtime startup failures", async () => {

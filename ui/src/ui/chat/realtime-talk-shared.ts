@@ -98,6 +98,7 @@ export type RealtimeTalkTransportContext = {
   callbacks: RealtimeTalkCallbacks;
   consultThinkingLevel?: string;
   consultFastMode?: boolean;
+  onRecoverableError?: (error: Error, source: RealtimeTalkTransport) => boolean;
 };
 
 export function createRealtimeTalkEventEmitter(

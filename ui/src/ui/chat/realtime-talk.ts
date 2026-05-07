@@ -76,6 +76,7 @@ function compactLaunchParams(
 
 export class RealtimeTalkSession {
   private transport: RealtimeTalkTransport | null = null;
+  private session: RealtimeTalkSessionResult | null = null;
   private closed = false;
 
   constructor(
@@ -93,13 +94,8 @@ export class RealtimeTalkSession {
       if (this.closed) {
         return;
       }
-      this.transport = createTransport(session, {
-        client: this.client,
-        sessionKey: this.sessionKey,
-        callbacks: this.callbacks,
-        consultThinkingLevel: session.consultThinkingLevel,
-        consultFastMode: session.consultFastMode,
-      });
+      this.session = session;
+      this.transport = createTransport(session, this.createTransportContext(session));
       await this.transport.start();
     } catch (error) {
       if (!shouldUseBrowserFallbackForRealtimeError(error)) {
@@ -108,12 +104,7 @@ export class RealtimeTalkSession {
       if (this.closed) {
         return;
       }
-      this.transport = new BrowserFallbackRealtimeTalkTransport({
-        client: this.client,
-        sessionKey: this.sessionKey,
-        callbacks: this.callbacks,
-      });
-      await this.transport.start();
+      await this.startBrowserFallback(this.transport);
     }
   }
 
@@ -152,5 +143,48 @@ export class RealtimeTalkSession {
     this.callbacks.onStatus?.("idle");
     this.transport?.stop();
     this.transport = null;
+    this.session = null;
+  }
+
+  private createTransportContext(session = this.session): RealtimeTalkTransportContext {
+    return {
+      client: this.client,
+      sessionKey: this.sessionKey,
+      callbacks: this.callbacks,
+      consultThinkingLevel: session?.consultThinkingLevel,
+      consultFastMode: session?.consultFastMode,
+      onRecoverableError: (error, source) => this.requestBrowserFallback(error, source),
+    };
+  }
+
+  private requestBrowserFallback(error: Error, source: RealtimeTalkTransport): boolean {
+    if (!shouldUseBrowserFallbackForRealtimeError(error)) {
+      return false;
+    }
+    if (this.closed || this.transport !== source) {
+      return true;
+    }
+    void this.startBrowserFallback(source).catch((fallbackError) => {
+      if (!this.closed) {
+        this.callbacks.onStatus?.(
+          "error",
+          fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+        );
+      }
+    });
+    return true;
+  }
+
+  private async startBrowserFallback(source: RealtimeTalkTransport | null): Promise<void> {
+    if (this.closed) {
+      return;
+    }
+    if (source && this.transport !== source) {
+      return;
+    }
+    source?.stop();
+    const fallback = new BrowserFallbackRealtimeTalkTransport(this.createTransportContext());
+    this.transport = fallback;
+    await fallback.start();
   }
 }
