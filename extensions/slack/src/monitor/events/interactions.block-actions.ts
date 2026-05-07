@@ -710,7 +710,7 @@ async function resolveSlackBlockActionCommandAuthorized(params: {
   const { allowFromLower } = await resolveSlackEffectiveAllowFrom(params.ctx, {
     includePairingStore: isDirectMessage,
   });
-  const sender = await params.ctx.resolveUserName(params.parsed.userId).catch(() => ({}));
+  const sender = await params.ctx.resolveUserName(params.parsed.userId).catch(() => undefined);
   const senderName = sender?.name;
   const ownerAllowed = resolveSlackAllowListMatch({
     allowList: allowFromLower,
