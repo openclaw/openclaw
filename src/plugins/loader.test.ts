@@ -778,6 +778,13 @@ module.exports = {
     },
     outbound: { deliveryMode: "direct" },
   },
+  ${
+    params.bundledSetupRuntimeMarker
+      ? `setChannelRuntime: () => {
+    require("node:fs").writeFileSync(${JSON.stringify(params.bundledSetupRuntimeMarker)}, "loaded", "utf-8");
+  },`
+      : ""
+  }
 };`,
     "utf-8",
   );
@@ -4887,6 +4894,40 @@ module.exports = {
       expectSetupLoaded: true,
       expectedChannels: 1,
       expectBundledFullRuntimeLoaded: true,
+    },
+    {
+      name: "preserves external setupEntry runtime setter for deferred configured channel loads",
+      fixture: {
+        id: "setup-runtime-external-deferred-test",
+        label: "Setup Runtime External Deferred Test",
+        packageName: "@openclaw/setup-runtime-external-deferred-test",
+        fullBlurb: "full entry should defer while configured",
+        setupBlurb: "setup runtime external deferred",
+        configured: true,
+        startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
+        bundledSetupRuntimeMarker: path.join(makeTempDir(), "external-setup-runtime-applied.txt"),
+      },
+      load: ({ pluginDir }: { pluginDir: string }) =>
+        loadOpenClawPlugins({
+          cache: false,
+          preferSetupRuntimeForChannelPlugins: true,
+          config: {
+            channels: {
+              "setup-runtime-external-deferred-test": {
+                enabled: true,
+                token: "configured",
+              },
+            },
+            plugins: {
+              load: { paths: [pluginDir] },
+              allow: ["setup-runtime-external-deferred-test"],
+            },
+          },
+        }),
+      expectFullLoaded: false,
+      expectSetupLoaded: true,
+      expectedChannels: 1,
+      expectSetupRuntimeLoaded: true,
     },
     {
       name: "does not prefer setupEntry for configured channel loads without startup opt-in",
