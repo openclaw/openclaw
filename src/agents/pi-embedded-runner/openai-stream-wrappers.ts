@@ -100,6 +100,14 @@ function shouldFlattenOpenAICompletionMessages(model: {
   return model.api === "openai-completions" && compat?.requiresStringContent === true;
 }
 
+function shouldStripOpenAICompletionTools(model: { api?: unknown; compat?: unknown }): boolean {
+  const compat =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as { supportsTools?: unknown })
+      : undefined;
+  return model.api === "openai-completions" && compat?.supportsTools === false;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -301,6 +309,22 @@ export function createOpenAIStringContentWrapper(baseStreamFn: StreamFn | undefi
         return;
       }
       payloadObj.messages = flattenCompletionMessagesToStringContent(payloadObj.messages);
+    });
+  };
+}
+
+export function createOpenAICompletionsToolsCompatWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (!shouldStripOpenAICompletionTools(model)) {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      delete payloadObj.tools;
+      delete payloadObj.tool_choice;
+      delete payloadObj.parallel_tool_calls;
     });
   };
 }
