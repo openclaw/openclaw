@@ -6,7 +6,7 @@ import {
   getBundleHashRepoInputPaths,
   getLocalRolldownCliCandidates,
   isBundleHashInputPath,
-} from "../../extensions/canvas/scripts/bundle-a2ui.mjs";
+} from "./bundle-a2ui.mjs";
 
 describe("scripts/bundle-a2ui.mjs", () => {
   it("uses package metadata and plugin-owned A2UI sources as bundle hash inputs", () => {

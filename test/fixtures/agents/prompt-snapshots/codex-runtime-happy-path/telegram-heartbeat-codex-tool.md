@@ -81,7 +81,6 @@
   "cwd": "/tmp/openclaw-happy-path/workspace",
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "dynamicTools": [
-    "canvas",
     "nodes",
     "cron",
     "message",
@@ -215,8 +214,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 158
   },
   "dynamicToolsJson": {
-    "chars": 51684,
-    "roughTokens": 12921
+    "chars": 50057,
+    "roughTokens": 12515
   },
   "openClawDeveloperInstructions": {
     "chars": 4999,
@@ -227,8 +226,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 7693
   },
   "totalWithDynamicToolsJson": {
-    "chars": 82455,
-    "roughTokens": 20614
+    "chars": 80828,
+    "roughTokens": 20207
   },
   "userInputText": {
     "chars": 608,
@@ -574,7 +573,6 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
 
 ```json
 [
-  "canvas",
   "nodes",
   "cron",
   "message",
