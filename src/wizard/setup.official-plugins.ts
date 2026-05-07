@@ -10,6 +10,7 @@ import {
 } from "../plugins/official-external-plugin-catalog.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "./prompts.js";
+import { t } from "./i18n/index.js";
 
 const SKIP_VALUE = "__skip__";
 
@@ -97,11 +98,11 @@ export async function setupOfficialPluginInstalls(params: {
   }
 
   const selected = await params.prompter.multiselect({
-    message: "Install optional plugins",
+    message: t("Install optional plugins"),
     options: [
       {
         value: SKIP_VALUE,
-        label: "Skip for now",
+        label: t("Skip for now"),
         hint: "Continue without installing optional plugins",
       },
       ...installEntries.map((entry) => ({

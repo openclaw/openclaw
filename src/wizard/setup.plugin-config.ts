@@ -331,7 +331,7 @@ export async function setupPluginConfig(params: {
   }
 
   const selected = await params.prompter.multiselect({
-    message: "Configure plugins (select to set up now, or skip)",
+    message: t("Configure plugins (select to set up now, or skip)"),
     options: [
       {
         value: "__skip__",
@@ -387,7 +387,7 @@ export async function configurePluginConfig(params: {
   }
 
   const selected = await params.prompter.select({
-    message: "Select plugin to configure",
+    message: t("Select plugin to configure"),
     options: [
       ...configurable.map((p) => {
         const existing = getExistingPluginConfig(params.config, p.id);

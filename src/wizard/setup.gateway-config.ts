@@ -64,7 +64,7 @@ export async function configureGatewayForSetup(
       : Number.parseInt(
           normalizeWizardTextInput(
             await prompter.text({
-              message: "Gateway port",
+              message: t("Gateway port"),
               initialValue: String(localPort),
               validate: (value) => (Number.isFinite(Number(value)) ? undefined : "Invalid port"),
             }),
@@ -76,13 +76,13 @@ export async function configureGatewayForSetup(
     flow === "quickstart"
       ? quickstartGateway.bind
       : await prompter.select<GatewayWizardSettings["bind"]>({
-          message: "Gateway bind",
+          message: t("Gateway bind"),
           options: [
-            { value: "loopback", label: "Loopback (127.0.0.1)" },
-            { value: "lan", label: "LAN (0.0.0.0)" },
-            { value: "tailnet", label: "Tailnet (Tailscale IP)" },
-            { value: "auto", label: "Auto (Loopback → LAN)" },
-            { value: "custom", label: "Custom IP" },
+            { value: "loopback", label: t("Loopback (127.0.0.1)") },
+            { value: "lan", label: t("LAN (0.0.0.0)") },
+            { value: "tailnet", label: t("Tailnet (Tailscale IP)") },
+            { value: "auto", label: t("Auto (Loopback → LAN)") },
+            { value: "custom", label: t("Custom IP") },
           ],
         });
 
@@ -91,7 +91,7 @@ export async function configureGatewayForSetup(
     const needsPrompt = flow !== "quickstart" || !customBindHost;
     if (needsPrompt) {
       const input = await prompter.text({
-        message: "Custom IP address",
+        message: t("Custom IP address"),
         placeholder: "192.168.1.100",
         initialValue: customBindHost ?? "",
         validate: validateIPv4AddressInput,
@@ -104,7 +104,7 @@ export async function configureGatewayForSetup(
     flow === "quickstart"
       ? quickstartGateway.authMode
       : ((await prompter.select({
-          message: "Gateway auth",
+          message: t("Gateway auth"),
           options: [
             {
               value: "token",
@@ -120,7 +120,7 @@ export async function configureGatewayForSetup(
     flow === "quickstart"
       ? quickstartGateway.tailscaleMode
       : await prompter.select<GatewayWizardSettings["tailscaleMode"]>({
-          message: "Tailscale exposure",
+          message: t("Tailscale exposure"),
           options: [...TAILSCALE_EXPOSURE_OPTIONS],
         });
 
@@ -138,7 +138,7 @@ export async function configureGatewayForSetup(
   if (tailscaleMode !== "off" && flow !== "quickstart") {
     await prompter.note(TAILSCALE_DOCS_LINES.join("\n"), "Tailscale");
     tailscaleResetOnExit = await prompter.confirm({
-      message: "Reset Tailscale serve/funnel on exit?",
+      message: t("Reset Tailscale serve/funnel on exit?"),
       initialValue: false,
     });
   }
@@ -174,7 +174,7 @@ export async function configureGatewayForSetup(
             prompter,
             explicitMode: opts.secretInputMode,
             copy: {
-              modeMessage: "How do you want to provide the gateway token?",
+              modeMessage: t("How do you want to provide the gateway token?"),
               plaintextLabel: "Generate/store plaintext token",
               plaintextHint: "Default",
               refLabel: "Use SecretRef",
@@ -221,7 +221,7 @@ export async function configureGatewayForSetup(
         tokenInput = keep
           ? existingToken
           : await prompter.text({
-              message: "Gateway token (blank to generate)",
+              message: t("Gateway token (blank to generate)"),
               placeholder: "Needed for multi-machine or non-loopback access",
               sensitive: true,
             });
@@ -245,7 +245,7 @@ export async function configureGatewayForSetup(
         prompter,
         explicitMode: opts.secretInputMode,
         copy: {
-          modeMessage: "How do you want to provide the gateway password?",
+          modeMessage: t("How do you want to provide the gateway password?"),
           plaintextLabel: "Enter password now",
           plaintextHint: "Stores the password directly in OpenClaw config",
         },
@@ -265,7 +265,7 @@ export async function configureGatewayForSetup(
       } else {
         password = normalizeWizardTextInput(
           await prompter.text({
-            message: "Gateway password",
+            message: t("Gateway password"),
             validate: validateGatewayPasswordInput,
             sensitive: true,
           }),
