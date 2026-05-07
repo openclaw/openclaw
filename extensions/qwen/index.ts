@@ -164,14 +164,9 @@ export default defineSingleProviderPluginEntry({
     applyNativeStreamingUsageCompat: ({ providerConfig }) =>
       applyQwenNativeStreamingUsageCompat(providerConfig),
     wrapStreamFn: wrapQwenProviderStream,
-    normalizeConfig: ({ providerConfig }) => {
-      if (!isQwenCodingPlanBaseUrl(providerConfig.baseUrl)) {
-        return undefined;
-      }
-      const models = providerConfig.models?.filter((model) => model.id !== QWEN_36_PLUS_MODEL_ID);
-      return models && models.length !== providerConfig.models?.length
-        ? { ...providerConfig, models }
-        : undefined;
+    normalizeConfig: () => {
+      // No longer filter qwen3.6-plus on coding plan endpoints
+      return undefined;
     },
   },
   register(api) {

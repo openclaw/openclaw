@@ -125,7 +125,8 @@ export function isQwenCodingPlanBaseUrl(baseUrl: string | undefined): boolean {
 }
 
 export function isQwen36PlusSupportedBaseUrl(baseUrl: string | undefined): boolean {
-  return !isQwenCodingPlanBaseUrl(baseUrl);
+  // Allow qwen3.6-plus on all baseUrls, including coding plan endpoints
+  return true;
 }
 
 export function buildQwenModelCatalogForBaseUrl(
