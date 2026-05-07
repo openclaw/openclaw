@@ -1,0 +1,74 @@
+import { repairMissingConfiguredPluginInstalls } from "../../commands/doctor/shared/missing-configured-plugin-install.js";
+import { UPDATE_POST_CORE_CONVERGENCE_ENV } from "../../commands/doctor/shared/update-phase.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import {
+  runPluginPayloadSmokeCheck,
+  type PluginPayloadSmokeFailure,
+} from "./plugin-payload-validation.js";
+
+export type PostCoreConvergenceWarning = {
+  pluginId?: string;
+  reason: string;
+  message: string;
+  guidance: string[];
+};
+
+export type PostCoreConvergenceResult = {
+  changes: string[];
+  warnings: PostCoreConvergenceWarning[];
+  errored: boolean;
+  smokeFailures: PluginPayloadSmokeFailure[];
+};
+
+const REPAIR_GUIDANCE = "Run `openclaw doctor --fix` to retry plugin repair.";
+const inspectGuidance = (pluginId: string) =>
+  `Run \`openclaw plugins inspect ${pluginId} --runtime --json\` for details.`;
+
+/**
+ * Mandatory post-core convergence pass. Runs AFTER the core package files
+ * are swapped and the in-update doctor pass has already returned, but BEFORE
+ * the gateway is restarted. Failures here must block the restart so we
+ * never restart with a configured plugin whose payload is unloadable.
+ */
+export async function runPostCorePluginConvergence(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Promise<PostCoreConvergenceResult> {
+  const env: NodeJS.ProcessEnv = {
+    ...params.env,
+    [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1",
+  };
+
+  const repair = await repairMissingConfiguredPluginInstalls({
+    cfg: params.cfg,
+    env,
+  });
+
+  const warnings: PostCoreConvergenceWarning[] = repair.warnings.map((message) => ({
+    reason: message,
+    message,
+    guidance: [REPAIR_GUIDANCE],
+  }));
+
+  const records: Record<string, PluginInstallRecord> = await loadInstalledPluginIndexInstallRecords(
+    { env },
+  );
+  const smoke = await runPluginPayloadSmokeCheck({ records, env });
+  for (const failure of smoke.failures) {
+    warnings.push({
+      pluginId: failure.pluginId,
+      reason: `${failure.reason}: ${failure.detail}`,
+      message: `Plugin "${failure.pluginId}" failed post-core payload smoke check (${failure.reason}): ${failure.detail}`,
+      guidance: [REPAIR_GUIDANCE, inspectGuidance(failure.pluginId)],
+    });
+  }
+
+  return {
+    changes: repair.changes,
+    warnings,
+    errored: warnings.length > 0,
+    smokeFailures: smoke.failures,
+  };
+}
