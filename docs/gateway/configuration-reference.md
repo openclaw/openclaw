@@ -545,7 +545,7 @@ See [Multiple Gateways](/gateway/multiple-gateways).
   - `"hot"`: apply changes in-process without restarting.
   - `"hybrid"` (default): try hot reload first; fall back to restart if required.
 - `debounceMs`: debounce window in ms before config changes are applied (non-negative integer).
-- `deferralTimeoutMs`: optional maximum time in ms to wait for in-flight operations before forcing a restart. Omit it to use the default bounded wait (`300000`); set `0` to wait indefinitely and log periodic still-pending warnings.
+- `deferralTimeoutMs`: optional maximum time in ms to wait for in-flight operations before forcing a restart or channel hot reload. Omit it to use the default bounded wait (`300000`); set `0` to wait indefinitely and log periodic still-pending warnings.
 
 ---
 
@@ -651,14 +651,22 @@ Validation and safety notes:
 
 ---
 
-## Canvas host
+## Canvas plugin host
 
 ```json5
 {
-  canvasHost: {
-    root: "~/.openclaw/workspace/canvas",
-    liveReload: true,
-    // enabled: false, // or OPENCLAW_SKIP_CANVAS_HOST=1
+  plugins: {
+    entries: {
+      canvas: {
+        config: {
+          host: {
+            root: "~/.openclaw/workspace/canvas",
+            liveReload: true,
+            // enabled: false, // or OPENCLAW_SKIP_CANVAS_HOST=1
+          },
+        },
+      },
+    },
   },
 }
 ```

@@ -277,48 +277,6 @@ describe("gateway startup config validation", () => {
     });
   });
 
-  it("logs config warnings without failing startup", async () => {
-    const snapshot = buildTestConfigSnapshot({
-      path: configPath,
-      exists: true,
-      raw: `${JSON.stringify(validConfig)}\n`,
-      parsed: validConfig,
-      valid: true,
-      config: validConfig,
-      issues: [],
-      warnings: [
-        {
-          path: "tools.web.search.provider",
-          message:
-            'web_search provider is not available: brave (install or enable plugin "brave", then run openclaw doctor --fix)',
-        },
-      ],
-      legacyIssues: [],
-    });
-    const log = { info: vi.fn(), warn: vi.fn() };
-
-    await expect(
-      loadGatewayStartupConfigSnapshot({
-        minimalTestGateway: false,
-        log,
-        initialSnapshotRead: {
-          snapshot,
-          pluginMetadataSnapshot,
-        },
-      }),
-    ).resolves.toEqual({
-      snapshot,
-      wroteConfig: false,
-      pluginMetadataSnapshot,
-    });
-
-    expect(log.warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'tools.web.search.provider: web_search provider is not available: brave (install or enable plugin "brave", then run openclaw doctor --fix)',
-      ),
-    );
-  });
-
   it("preserves empty model allowlist entries through runtime-only startup auto-enable", async () => {
     const sourceConfig = {
       agents: {
