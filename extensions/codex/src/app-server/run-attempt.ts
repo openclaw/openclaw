@@ -64,7 +64,10 @@ import {
   type CodexPluginConfig,
 } from "./config.js";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
-import { applyCodexDynamicToolProfile } from "./dynamic-tool-profile.js";
+import {
+  applyCodexDynamicToolProfile,
+  normalizeCodexDynamicToolName,
+} from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
@@ -1678,10 +1681,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelHasVision,
     hasInboundImages: (params.images?.length ?? 0) > 0,
   });
-  const filteredTools =
-    params.toolsAllow && params.toolsAllow.length > 0
-      ? visionFilteredTools.filter((tool) => params.toolsAllow?.includes(tool.name))
-      : visionFilteredTools;
+  const filteredTools = filterCodexDynamicToolsForAllowlist(visionFilteredTools, params.toolsAllow);
   return normalizeAgentRuntimeTools({
     runtimePlan: params.runtimePlan,
     tools: filteredTools,
@@ -1693,6 +1693,19 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelApi: params.model.api,
     model: params.model,
   });
+}
+
+function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
+  tools: T[],
+  toolsAllow?: string[],
+): T[] {
+  if (!toolsAllow || toolsAllow.length === 0) {
+    return tools;
+  }
+  const allowSet = new Set(
+    toolsAllow.map((name) => normalizeCodexDynamicToolName(name)).filter(Boolean),
+  );
+  return tools.filter((tool) => allowSet.has(normalizeCodexDynamicToolName(tool.name)));
 }
 
 function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {
@@ -2117,6 +2130,7 @@ export const __testing = {
   buildCodexNativeHookRelayId,
   applyCodexDynamicToolProfile,
   buildDynamicTools,
+  filterCodexDynamicToolsForAllowlist,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
   resolveOpenClawCodingToolsSessionKeys,

@@ -272,6 +272,9 @@ async function resolveLoginParamsForCredential(
       ? buildChatgptAuthTokensParams(profileId, credential, accessToken)
       : undefined;
   }
+  if (credential.type !== "oauth") {
+    return undefined;
+  }
   const resolvedCredential = await resolveOAuthCredentialForCodexAppServer(profileId, credential, {
     agentDir: params.agentDir,
     forceRefresh: params.forceOAuthRefresh,
