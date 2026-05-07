@@ -149,6 +149,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/chat: serve assistant-generated outgoing document attachments (xlsx/pdf/docx/etc) through a dedicated managed-document HTTP route with `Content-Disposition: attachment; filename="<original>"` so document downloads round-trip the original filename through the gateway, not the saveMediaSource UUID basename. (#77877)
 - Docs/Docker: document a local Compose override for Docker Desktop DNS failures in the shared-network `openclaw-cli` sidecar, keeping the default compose setup hardened while unblocking `openclaw plugins install` when users opt in. Fixes #79018. Thanks @Jason-Vaughan.
 - Compute plugin callback authorization dynamically [AI]. (#78866) Thanks @pgondhi987.
 - fix(active-memory): require admin scope for global toggles [AI]. (#78863) Thanks @pgondhi987.

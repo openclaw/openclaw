@@ -760,7 +760,13 @@ export async function createManagedOutgoingDocumentBlocks(params: {
           path: savedOriginal.path,
           contentType: savedContentType,
           sizeBytes,
-          filename: toRecordFilename(savedOriginal.path) ?? label,
+          // Use the original derived label (e.g. pricing.xlsx) as the download
+          // filename rather than the saved-on-disk basename, which is a UUID
+          // (e.g. 2f09ba44-…-933f.xlsx) chosen by saveMediaSource for collision
+          // avoidance. The handler interpolates this into the
+          // `Content-Disposition: attachment; filename="…"` header, so the user
+          // sees the original filename in their browser's Save As dialog.
+          filename: label || toRecordFilename(savedOriginal.path) || "document",
         },
       };
       await writeManagedDocumentRecord(record, stateDir);

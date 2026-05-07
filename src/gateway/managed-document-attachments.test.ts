@@ -29,6 +29,7 @@ const {
   DEFAULT_MANAGED_DOCUMENT_ATTACHMENT_LIMITS,
   attachManagedOutgoingDocumentsToMessage,
   cleanupManagedOutgoingDocumentRecords,
+  createManagedOutgoingDocumentBlocks,
   handleManagedOutgoingDocumentHttpRequest,
   resolveManagedDocumentAttachmentLimits,
 } = await import("./managed-document-attachments.js");
@@ -355,6 +356,103 @@ describe("handleManagedOutgoingDocumentHttpRequest — Bug #9", () => {
     });
 
     expect(result.statusCode).toBe(405);
+  });
+
+  it("create-to-serve: preserves the original filename through Content-Disposition (Codex P2 regression for #77877)", async () => {
+    // Regression for Codex review on #77877:
+    //   `original.filename` was set to `toRecordFilename(savedOriginal.path)`,
+    //   which is the saveMediaSource-chosen UUID basename. The header
+    //   handler interpolates that into Content-Disposition, so users saw
+    //   filename="<uuid>.xlsx" instead of filename="pricing.xlsx".
+    // Fix: use the derived label (original filename) as the primary
+    // download filename. This test exercises the full create-to-serve path:
+    // real local file -> createManagedOutgoingDocumentBlocks -> on-disk record
+    // -> handleManagedOutgoingDocumentHttpRequest -> Content-Disposition.
+    const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "managed-docs-src-"));
+    const sourceFile = path.join(sourceDir, "pricing.xlsx");
+    // Real PK-prefixed bytes (xlsx is a zip). detectMime sniffs the header.
+    const xlsxBytes = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.alloc(2048, 0)]);
+    await fs.writeFile(sourceFile, xlsxBytes);
+
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    let blocks: Array<Record<string, unknown>>;
+    try {
+      blocks = (await createManagedOutgoingDocumentBlocks({
+        sessionKey: SESSION_KEY,
+        mediaUrls: [sourceFile],
+        localRoots: "any",
+        messageId: "msg-1",
+      })) as Array<Record<string, unknown>>;
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(sourceDir, { recursive: true, force: true });
+    }
+
+    expect(blocks).toHaveLength(1);
+    const block = blocks[0] as { attachment: { url: string; label: string; mimeType?: string } };
+    expect(block.attachment.label).toBe("pricing.xlsx");
+    expect(block.attachment.mimeType).toBe(XLSX_MIME);
+    const urlMatch = block.attachment.url.match(
+      /\/api\/chat\/media\/outgoing-doc\/[^/]+\/([^/]+)\/full$/,
+    );
+    expect(urlMatch).not.toBeNull();
+    const attachmentId = urlMatch![1];
+
+    // Read back the on-disk record. The bug was that this `filename` field
+    // was a UUID; the fix preserves the original `pricing.xlsx`.
+    const recordPath = path.join(
+      stateDir,
+      "media",
+      "outgoing-docs",
+      "records",
+      `${attachmentId}.json`,
+    );
+    const record = JSON.parse(await fs.readFile(recordPath, "utf-8")) as {
+      original: { filename: string; path: string };
+      label: string;
+    };
+    expect(record.label).toBe("pricing.xlsx");
+    expect(record.original.filename).toBe("pricing.xlsx");
+    // Sanity: saveMediaSource still chose a UUID-style on-disk path.
+    expect(path.basename(record.original.path)).not.toBe("pricing.xlsx");
+    expect(path.basename(record.original.path)).toMatch(/^[0-9a-f-]+\.xlsx$/);
+
+    // Now drive the HTTP handler against the record we just wrote and
+    // assert the wire-level Content-Disposition carries the original name.
+    const { result } = await requestManagedDocument({
+      stateDir,
+      pathName: block.attachment.url,
+      headers: { "x-openclaw-requester-session-key": SESSION_KEY },
+      attachmentIdInTranscript: attachmentId,
+      transcriptMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "attachment",
+              attachment: {
+                url: block.attachment.url,
+                kind: "document",
+                label: "pricing.xlsx",
+                mimeType: XLSX_MIME,
+              },
+            },
+          ],
+          __openclaw: { id: "msg-1" },
+        },
+      ],
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.headers["content-type"]).toBe(XLSX_MIME);
+    expect(result.headers["content-disposition"]).toBe('attachment; filename="pricing.xlsx"');
+    // Real bytes round-trip
+    expect(result.body.subarray(0, 4)).toEqual(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
   });
 
   it("returns false (not handled) for unrelated paths", async () => {
