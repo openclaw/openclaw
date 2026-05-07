@@ -1,0 +1,62 @@
+import { describe, expect, it } from 'vitest';
+import { emitJsonc } from '../../jsonc/emit.js';
+import { parseJsonc } from '../../jsonc/parse.js';
+import {
+  OcEmitSentinelError,
+  REDACTED_SENTINEL,
+} from '../../sentinel.js';
+
+describe('emitJsonc — round-trip', () => {
+  it('returns raw bytes verbatim by default', () => {
+    const raw = `{
+  // comment is preserved on round-trip
+  "x": 1,
+  "y": [/* inline */ 2, 3],
+}
+`;
+    const { ast } = parseJsonc(raw);
+    expect(emitJsonc(ast)).toBe(raw);
+  });
+
+  it('throws OcEmitSentinelError if the raw bytes contain the redaction sentinel', () => {
+    const raw = `{ "x": "${REDACTED_SENTINEL}" }`;
+    const { ast } = parseJsonc(raw);
+    expect(() => emitJsonc(ast, { fileNameForGuard: 'config' })).toThrow(
+      OcEmitSentinelError,
+    );
+  });
+});
+
+describe('emitJsonc — render mode', () => {
+  it('re-stringifies the structural tree (no comments)', () => {
+    const { ast } = parseJsonc('{ /* drop me */ "x": 1, "y": [2, 3] }');
+    const out = emitJsonc(ast, { mode: 'render' });
+    expect(out).not.toContain('drop me');
+    expect(JSON.parse(out)).toEqual({ x: 1, y: [2, 3] });
+  });
+
+  it('throws OcEmitSentinelError when a leaf string is the sentinel', () => {
+    const ast = parseJsonc('{ "x": "ok" }').ast;
+    const tampered = {
+      ...ast,
+      root: {
+        kind: 'object' as const,
+        entries: [
+          {
+            key: 'x',
+            line: 1,
+            value: { kind: 'string' as const, value: REDACTED_SENTINEL },
+          },
+        ],
+      },
+    };
+    expect(() => emitJsonc(tampered, { mode: 'render' })).toThrow(
+      OcEmitSentinelError,
+    );
+  });
+
+  it('renders empty AST as empty string', () => {
+    const { ast } = parseJsonc('');
+    expect(emitJsonc(ast, { mode: 'render' })).toBe('');
+  });
+});

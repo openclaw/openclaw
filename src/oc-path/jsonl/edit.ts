@@ -1,0 +1,156 @@
+/**
+ * Mutate a `JsonlAst` at an OcPath. Returns a new AST with the line
+ * (or sub-field of a line) replaced.
+ *
+ * Edit shapes:
+ *
+ *   oc://session-events/L42                    → replace line 42's whole value
+ *   oc://session-events/L42/field              → replace field on line 42
+ *   oc://session-events/L42/field.sub          → dotted descent
+ *   oc://session-events/$last/...              → resolves to most recent value
+ *
+ * Append (no existing line) is NOT a `set` — use `appendJsonlLine` for
+ * that. `setJsonlOcPath` only edits existing addresses.
+ *
+ * @module @openclaw/oc-path/jsonl/edit
+ */
+
+import type { OcPath } from '../oc-path.js';
+import type { JsoncEntry, JsoncValue } from '../jsonc/ast.js';
+import type { JsonlAst, JsonlLine } from './ast.js';
+import { emitJsonl } from './emit.js';
+
+export type JsonlEditResult =
+  | { readonly ok: true; readonly ast: JsonlAst }
+  | { readonly ok: false; readonly reason: 'unresolved' | 'not-a-value-line' };
+
+export function setJsonlOcPath(
+  ast: JsonlAst,
+  path: OcPath,
+  newValue: JsoncValue,
+): JsonlEditResult {
+  const head = path.section;
+  if (head === undefined) return { ok: false, reason: 'unresolved' };
+
+  const lineIdx = pickLineIndex(ast, head);
+  if (lineIdx === -1) return { ok: false, reason: 'unresolved' };
+  const target = ast.lines[lineIdx];
+  if (target === undefined) return { ok: false, reason: 'unresolved' };
+
+  // No item/field — replace the whole line value. Requires the line to
+  // already be a value line (we don't synthesize lines from blanks).
+  if (path.item === undefined && path.field === undefined) {
+    if (target.kind !== 'value') return { ok: false, reason: 'not-a-value-line' };
+    const newLine: JsonlLine = {
+      kind: 'value',
+      line: target.line,
+      value: newValue,
+      raw: target.raw,
+    };
+    return finalize(ast, lineIdx, newLine);
+  }
+
+  if (target.kind !== 'value') return { ok: false, reason: 'not-a-value-line' };
+
+  const segments: string[] = [];
+  if (path.item !== undefined) segments.push(...path.item.split('.'));
+  if (path.field !== undefined) segments.push(...path.field.split('.'));
+
+  const replaced = replaceAt(target.value, segments, 0, newValue);
+  if (replaced === null) return { ok: false, reason: 'unresolved' };
+  const newLine: JsonlLine = {
+    kind: 'value',
+    line: target.line,
+    value: replaced,
+    raw: target.raw,
+  };
+  return finalize(ast, lineIdx, newLine);
+}
+
+function replaceAt(
+  current: JsoncValue,
+  segments: readonly string[],
+  i: number,
+  newValue: JsoncValue,
+): JsoncValue | null {
+  const seg = segments[i];
+  if (seg === undefined) return newValue;
+  if (seg.length === 0) return null;
+
+  if (current.kind === 'object') {
+    const idx = current.entries.findIndex((e) => e.key === seg);
+    if (idx === -1) return null;
+    const child = current.entries[idx];
+    if (child === undefined) return null;
+    const replacedChild = replaceAt(child.value, segments, i + 1, newValue);
+    if (replacedChild === null) return null;
+    const newEntry: JsoncEntry = { ...child, value: replacedChild };
+    const newEntries = current.entries.slice();
+    newEntries[idx] = newEntry;
+    return {
+      kind: 'object',
+      entries: newEntries,
+      ...(current.line !== undefined ? { line: current.line } : {}),
+    };
+  }
+
+  if (current.kind === 'array') {
+    const idx = Number(seg);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) return null;
+    const child = current.items[idx];
+    if (child === undefined) return null;
+    const replacedChild = replaceAt(child, segments, i + 1, newValue);
+    if (replacedChild === null) return null;
+    const newItems = current.items.slice();
+    newItems[idx] = replacedChild;
+    return {
+      kind: 'array',
+      items: newItems,
+      ...(current.line !== undefined ? { line: current.line } : {}),
+    };
+  }
+
+  return null;
+}
+
+function pickLineIndex(ast: JsonlAst, addr: string): number {
+  if (addr === '$last') {
+    for (let i = ast.lines.length - 1; i >= 0; i--) {
+      const l = ast.lines[i];
+      if (l !== undefined && l.kind === 'value') return i;
+    }
+    return -1;
+  }
+  const m = /^L(\d+)$/.exec(addr);
+  if (m === null || m[1] === undefined) return -1;
+  const target = Number(m[1]);
+  return ast.lines.findIndex((l) => l.line === target);
+}
+
+function finalize(ast: JsonlAst, lineIdx: number, newLine: JsonlLine): JsonlEditResult {
+  const newLines = ast.lines.slice();
+  newLines[lineIdx] = newLine;
+  const next: JsonlAst = { kind: 'jsonl', raw: '', lines: newLines };
+  const rendered = emitJsonl(next, { mode: 'render' });
+  return { ok: true, ast: { ...next, raw: rendered } };
+}
+
+/**
+ * Append a new value as the next line. Useful for session checkpointing
+ * (each event is a new line). Returns a new AST. The `path` parameter
+ * is accepted for OcPath-naming consistency but jsonl append addresses
+ * the file as a whole (line numbers are assigned by the substrate).
+ */
+export function appendJsonlOcPath(ast: JsonlAst, value: JsoncValue): JsonlAst {
+  const nextLineNo =
+    ast.lines.length === 0 ? 1 : (ast.lines[ast.lines.length - 1]?.line ?? 0) + 1;
+  const newLine: JsonlLine = {
+    kind: 'value',
+    line: nextLineNo,
+    value,
+    raw: '',
+  };
+  const next: JsonlAst = { kind: 'jsonl', raw: '', lines: [...ast.lines, newLine] };
+  const rendered = emitJsonl(next, { mode: 'render' });
+  return { ...next, raw: rendered };
+}
