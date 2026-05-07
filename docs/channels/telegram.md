@@ -307,10 +307,11 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     If native draft transport is unavailable/rejected, OpenClaw automatically falls back to `sendMessage` + `editMessageText`.
 
-    Telegram-only reasoning stream:
+    Reasoning stream (live-preview channels):
 
     - `/reasoning stream` sends reasoning to the live preview while generating
     - final answer is sent without reasoning text
+    - supported on channels that expose a live-edit / typing preview surface (e.g. Telegram, Lark/Feishu)
 
   </Accordion>
 

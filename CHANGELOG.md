@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Fixes
+
+- Reasoning/stream: drop the misleading `(Telegram only)` qualifier from the `/reasoning stream` directive acknowledgement and update the Telegram channel docs to describe the feature as a live-preview channel capability that also covers Lark/Feishu. (#68317) Thanks @1aifanatic.
+
 ## 2026.4.27
 
 ### Changes
