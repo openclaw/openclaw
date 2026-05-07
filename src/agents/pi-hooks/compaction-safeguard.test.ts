@@ -1301,6 +1301,45 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(droppedCall?.customInstructions).toContain("Keep security caveats.");
   });
 
+  it("caps summarization reserve tokens to the model output limit", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("mock summary");
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture({
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    });
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    const compactionHandler = createCompactionHandler();
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock: vi.fn().mockResolvedValue("test-key"),
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "large history", timestamp: 1 } as AgentMessage,
+        ],
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 250_000,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 240_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    await compactionHandler(event, mockContext);
+
+    const call = mockSummarizeInStages.mock.calls[0]?.[0];
+    expect(call?.reserveTokens).toBe(128_000);
+  });
+
   it("adds Copilot IDE headers to built-in compaction summarization", async () => {
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages.mockResolvedValue("mock summary");
