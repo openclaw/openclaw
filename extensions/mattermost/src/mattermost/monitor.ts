@@ -11,6 +11,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
+import { resolveMattermostGroupSystemPrompt } from "../group-system-prompt.js";
 import { getMattermostRuntime } from "../runtime.js";
 import {
   resolveMattermostAccount,
@@ -702,6 +703,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           GroupSubject: kind !== "direct" ? channelDisplay : undefined,
           GroupChannel: channelName ? `#${channelName}` : undefined,
           GroupSpace: teamId,
+          GroupSystemPrompt:
+            kind !== "direct"
+              ? resolveMattermostGroupSystemPrompt({ account, channelId: opts.channelId })
+              : undefined,
           SenderName: opts.userName,
           SenderId: opts.userId,
           Provider: "mattermost" as const,
@@ -892,6 +897,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         params.kind !== "direct" ? params.channelDisplay || params.roomLabel : undefined,
       GroupChannel: params.channelName ? `#${params.channelName}` : undefined,
       GroupSpace: params.teamId,
+      GroupSystemPrompt:
+        params.kind !== "direct"
+          ? resolveMattermostGroupSystemPrompt({ account, channelId: params.channelId })
+          : undefined,
       SenderName: params.senderName,
       SenderId: params.senderId,
       Provider: "mattermost" as const,
@@ -1592,6 +1601,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           GroupSubject: kind !== "direct" ? channelDisplay || roomLabel : undefined,
           GroupChannel: channelName ? `#${channelName}` : undefined,
           GroupSpace: teamId,
+          GroupSystemPrompt:
+            kind !== "direct"
+              ? resolveMattermostGroupSystemPrompt({ account, channelId })
+              : undefined,
           SenderName: senderName,
           SenderId: senderId,
           Provider: "mattermost" as const,

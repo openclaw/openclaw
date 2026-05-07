@@ -195,6 +195,7 @@ Notes:
 - Default: `channels.mattermost.groupPolicy = "allowlist"` (mention-gated).
 - Allowlist senders with `channels.mattermost.groupAllowFrom` (user IDs recommended).
 - Per-channel mention overrides live under `channels.mattermost.groups.<channelId>.requireMention` or `channels.mattermost.groups["*"].requireMention` for a default.
+- Per-channel system prompts live under `channels.mattermost.groups.<channelId>.systemPrompt` (with optional `groups["*"].systemPrompt` wildcard fallback). The value is injected into the agent's system prompt on every turn that handles a message in that channel, matching the per-group `systemPrompt` pattern used by Discord, IRC, Slack, and Telegram. Exact channel-id matches always win over the wildcard. DMs ignore this field.
 - `@username` matching is mutable and only enabled when `channels.mattermost.dangerouslyAllowNameMatching: true`.
 - Open channels: `channels.mattermost.groupPolicy="open"` (mention-gated).
 - Runtime note: if `channels.mattermost` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
@@ -207,8 +208,11 @@ Example:
     mattermost: {
       groupPolicy: "open",
       groups: {
-        "*": { requireMention: true },
-        "team-channel-id": { requireMention: false },
+        "*": { requireMention: true, systemPrompt: "Default group persona." },
+        "team-channel-id": {
+          requireMention: false,
+          systemPrompt: "Keep responses under 3 sentences. Mirror the channel's tone.",
+        },
       },
     },
   },

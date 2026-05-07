@@ -81,6 +81,33 @@ describe("MattermostConfigSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("accepts groups with systemPrompt", () => {
+    const result = MattermostConfigSchema.safeParse({
+      groups: {
+        "*": { systemPrompt: "Default group prompt." },
+        "channel-123": {
+          requireMention: true,
+          systemPrompt: "Keep responses under 3 sentences.",
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts groups with systemPrompt on account", () => {
+    const result = MattermostConfigSchema.safeParse({
+      accounts: {
+        main: {
+          baseUrl: "https://chat.example.com",
+          groups: {
+            "channel-456": { systemPrompt: "Account-scoped prompt." },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("rejects unsupported direct-message reply threading config", () => {
     const result = MattermostConfigSchema.safeParse({
       dm: {

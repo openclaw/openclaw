@@ -12,6 +12,8 @@ const MattermostGroupSchema = z
   .object({
     /** Whether mentions are required to trigger the bot in this group. */
     requireMention: z.boolean().optional(),
+    /** Trusted system prompt addition injected on every turn that handles a message in this group. */
+    systemPrompt: z.string().optional(),
   })
   .strict();
 

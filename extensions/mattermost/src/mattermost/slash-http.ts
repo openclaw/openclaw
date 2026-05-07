@@ -8,6 +8,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { resolveMattermostGroupSystemPrompt } from "../group-system-prompt.js";
 import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
 import { getMattermostRuntime } from "../runtime.js";
 import {
@@ -815,6 +816,8 @@ async function handleSlashCommandAsync(params: {
     ChatType: chatType,
     ConversationLabel: fromLabel,
     GroupSubject: kind !== "direct" ? channelDisplay || roomLabel : undefined,
+    GroupSystemPrompt:
+      kind !== "direct" ? resolveMattermostGroupSystemPrompt({ account, channelId }) : undefined,
     SenderName: senderName,
     SenderId: senderId,
     Provider: "mattermost" as const,
