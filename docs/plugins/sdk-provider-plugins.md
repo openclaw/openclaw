@@ -394,6 +394,11 @@ API key auth, and dynamic model resolution.
       <Tab title="Custom headers">
         For providers that need custom request headers or body modifications:
 
+        `ctx.model.headers` contains sanitized static headers resolved from
+        provider and model catalog configuration. SecretRef-backed headers are
+        not exposed as raw values there. Stream wrappers should still merge
+        final per-call headers into `params.headers`.
+
         ```typescript
         // wrapStreamFn returns a StreamFn derived from ctx.streamFn
         wrapStreamFn: (ctx) => {

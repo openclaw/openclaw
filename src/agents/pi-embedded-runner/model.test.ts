@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../../test-utils/temp-dir.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -294,6 +295,31 @@ function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0): Record<stri
     throw new Error(`Expected mock call ${callIndex}`);
   }
   return call[0] as Record<string, unknown>;
+}
+
+async function resolveModelFromModelsJson(params: {
+  agentDir: string;
+  provider: string;
+  modelId: string;
+  modelsJson: unknown;
+}) {
+  fs.writeFileSync(
+    path.join(params.agentDir, "models.json"),
+    `${JSON.stringify(params.modelsJson, null, 2)}\n`,
+    "utf8",
+  );
+  const actualDiscovery = await vi.importActual<typeof import("../pi-model-discovery.js")>(
+    "../pi-model-discovery.js",
+  );
+  const authStorage = actualDiscovery.discoverAuthStorage(params.agentDir, {
+    skipCredentials: true,
+  });
+  const modelRegistry = actualDiscovery.discoverModels(authStorage, params.agentDir);
+  return resolveModel(params.provider, params.modelId, params.agentDir, {} as OpenClawConfig, {
+    authStorage,
+    modelRegistry,
+    runtimeHooks: createRuntimeHooks(),
+  });
 }
 
 describe("resolveModel", () => {
@@ -942,6 +968,64 @@ describe("resolveModel", () => {
 
     expect(model.headers).toEqual({
       "X-Static": "tenant-a",
+    });
+  });
+
+  it("includes provider catalog headers from generated models.json", async () => {
+    await withTempDir("openclaw-provider-catalog-headers-", async (agentDir) => {
+      const result = await resolveModelFromModelsJson({
+        agentDir,
+        provider: "cloudflare-unified-billing",
+        modelId: "openai/gpt-5.5",
+        modelsJson: {
+          providers: {
+            "cloudflare-unified-billing": {
+              baseUrl: "https://gateway.ai.cloudflare.com/v1/example/account/openai",
+              api: "openai-completions",
+              apiKey: "TEST_CF_TOKEN",
+              headers: {
+                "cf-aig-authorization": "Bearer TEST_CF_TOKEN",
+              },
+              models: [{ id: "openai/gpt-5.5", name: "openai/gpt-5.5" }],
+            },
+          },
+        },
+      });
+      const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
+
+      expect(model.headers).toEqual({
+        "cf-aig-authorization": "Bearer TEST_CF_TOKEN",
+      });
+    });
+  });
+
+  it("drops SecretRef marker provider catalog headers from generated models.json", async () => {
+    await withTempDir("openclaw-provider-catalog-headers-", async (agentDir) => {
+      const result = await resolveModelFromModelsJson({
+        agentDir,
+        provider: "custom",
+        modelId: "listed-model",
+        modelsJson: {
+          providers: {
+            custom: {
+              baseUrl: "http://localhost:9000",
+              api: "openai-completions",
+              apiKey: "TEST_TOKEN",
+              headers: {
+                Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
+                "X-Managed": "secretref-managed",
+                "X-Static": "tenant-a",
+              },
+              models: [{ id: "listed-model", name: "listed-model" }],
+            },
+          },
+        },
+      });
+      const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
+
+      expect(model.headers).toEqual({
+        "X-Static": "tenant-a",
+      });
     });
   });
 
