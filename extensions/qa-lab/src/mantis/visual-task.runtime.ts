@@ -291,22 +291,36 @@ async function runCommandWithExternalOutput(params: {
   command: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
+  preserveOutputOnError?: (params: { error: unknown; tempPath: string }) => Promise<boolean>;
   runner: CommandRunner;
   stdio?: "inherit" | "pipe";
-}) {
-  return await writeExternalFileWithinRoot({
+}): Promise<void> {
+  let deferredError: unknown;
+  await writeExternalFileWithinRoot({
     rootDir: path.dirname(params.outputPath),
     path: path.basename(params.outputPath),
-    write: async (tempPath) =>
-      await runCommand({
-        command: params.command,
-        args: params.buildArgs(tempPath),
-        cwd: params.cwd,
-        env: params.env,
-        runner: params.runner,
-        stdio: params.stdio,
-      }),
+    write: async (tempPath) => {
+      try {
+        await runCommand({
+          command: params.command,
+          args: params.buildArgs(tempPath),
+          cwd: params.cwd,
+          env: params.env,
+          runner: params.runner,
+          stdio: params.stdio,
+        });
+      } catch (error) {
+        if (await params.preserveOutputOnError?.({ error, tempPath })) {
+          deferredError = error;
+          return;
+        }
+        throw error;
+      }
+    },
   });
+  if (deferredError) {
+    throw deferredError;
+  }
 }
 
 async function warmupCrabbox(params: {
@@ -840,6 +854,8 @@ export async function runMantisVisualTask(
         ],
         cwd: repoRoot,
         env,
+        preserveOutputOnError: async ({ tempPath }) =>
+          (await pathExists(driverResultPath)) && (await nonEmptyFileExists(tempPath)),
         runner,
         stdio: "inherit",
       });
