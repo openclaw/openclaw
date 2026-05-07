@@ -1,4 +1,4 @@
-import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
+import { resolveDefaultAgentDir } from "../../agents/agent-scope.js";
 import {
   type AuthHealthSummary,
   type AuthProfileHealthStatus,
@@ -42,7 +42,7 @@ export type ModelAuthExpiry = {
 
 export type ModelAuthStatusProfile = {
   profileId: string;
-  type: "oauth" | "token" | "api_key";
+  type: "oauth" | "token" | "api_key" | "aws-sdk";
   status: AuthProfileHealthStatus;
   expiry?: ModelAuthExpiry;
 };
@@ -291,7 +291,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
     }
     try {
       const cfg = context.getRuntimeConfig();
-      const agentDir = resolveOpenClawAgentDir();
+      const agentDir = resolveDefaultAgentDir(cfg);
       const store = ensureAuthProfileStore(agentDir, {
         externalCli: externalCliDiscoveryForConfigStatus({ cfg }),
       });

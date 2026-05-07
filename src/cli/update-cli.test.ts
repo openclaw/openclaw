@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_BUNDLED_RUNTIME_SIDECAR_PATHS } from "../../test/helpers/bundled-runtime-sidecars.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import { writePackageDistInventory } from "../infra/package-dist-inventory.js";
@@ -64,6 +64,18 @@ vi.mock("../infra/openclaw-root.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
+  assertConfigWriteAllowedInCurrentMode: () => {
+    if (process.env.OPENCLAW_NIX_MODE === "1") {
+      throw new Error(
+        [
+          "Config is managed by Nix (`OPENCLAW_NIX_MODE=1`), so OpenClaw treats openclaw.json as immutable.",
+          "Do not run setup, onboarding, openclaw update, plugin install/update/uninstall/enable, doctor repair/token-generation, or config set against this file.",
+          "Agent-first Nix setup: https://github.com/openclaw/nix-openclaw#quick-start",
+          "OpenClaw Nix overview: https://docs.openclaw.ai/install/nix",
+        ].join("\n"),
+      );
+    }
+  },
   ConfigMutationConflictError: class ConfigMutationConflictError extends Error {
     readonly currentHash: string | null;
 
@@ -168,6 +180,8 @@ vi.mock("../utils.js", async (importOriginal) => {
 });
 
 vi.mock("../plugins/update.js", () => ({
+  resolveTrustedSourceLinkedOfficialClawHubSpec: vi.fn(() => undefined),
+  resolveTrustedSourceLinkedOfficialNpmSpec: vi.fn(() => undefined),
   syncPluginsForUpdateChannel: (...args: unknown[]) => syncPluginsForUpdateChannel(...args),
   updateNpmInstalledPlugins: (...args: unknown[]) => updateNpmInstalledPlugins(...args),
 }));
@@ -267,10 +281,17 @@ type UpdateCliScenario = {
 describe("update-cli", () => {
   const fixtureRoot = "/tmp/openclaw-update-tests";
   let fixtureCount = 0;
+  const tempDirsToCleanup = new Set<string>();
 
   const createCaseDir = (prefix: string) => {
     const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
     // Tests only need a stable path; the directory does not have to exist because all I/O is mocked.
+    return dir;
+  };
+
+  const createTrackedTempDir = async (prefix: string) => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    tempDirsToCleanup.add(dir);
     return dir;
   };
 
@@ -558,6 +579,18 @@ describe("update-cli", () => {
     setStdoutTty(false);
   });
 
+  afterEach(async () => {
+    if (tempDirsToCleanup.size === 0) {
+      return;
+    }
+    await Promise.allSettled(
+      [...tempDirsToCleanup].map(async (dir) => {
+        await fs.rm(dir, { recursive: true, force: true });
+      }),
+    );
+    tempDirsToCleanup.clear();
+  });
+
   it("bounds completion cache refresh during update follow-up", async () => {
     const root = createCaseDir("openclaw-completion-timeout");
     pathExists.mockResolvedValue(true);
@@ -574,6 +607,16 @@ describe("update-cli", () => {
         timeout: 30_000,
       }),
     );
+  });
+
+  it("refuses mutating updates in Nix mode before update side effects", async () => {
+    await withEnvAsync({ OPENCLAW_NIX_MODE: "1" }, async () => {
+      await expect(updateCommand({ yes: true })).rejects.toThrow("OPENCLAW_NIX_MODE=1");
+    });
+
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
   });
 
   it("logs friendly hint with manual refresh command when completion cache write times out", async () => {
@@ -666,6 +709,40 @@ describe("update-cli", () => {
     const spawnEnv = (spawn.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv } | undefined)?.env;
     expect(spawnEnv?.OPENCLAW_SERVICE_MARKER).toBeUndefined();
     expect(spawnEnv?.OPENCLAW_SERVICE_KIND).toBeUndefined();
+  });
+
+  it("passes pre-update plugin install records into the post-core update process", async () => {
+    setupUpdatedRootRefresh();
+    const pluginInstallRecords = {
+      demo: {
+        source: "npm",
+        spec: "@openclaw/demo@1.0.0",
+        installPath: "/tmp/openclaw-demo-plugin",
+      },
+    } as const;
+    let capturedRecords: unknown;
+    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(pluginInstallRecords);
+    spawn.mockImplementationOnce((_node, _argv, options) => {
+      const env = (options as { env?: NodeJS.ProcessEnv }).env;
+      const recordsPath = env?.OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH;
+      if (!recordsPath) {
+        throw new Error("missing post-core install records path");
+      }
+      capturedRecords = JSON.parse(fsSync.readFileSync(recordsPath, "utf-8"));
+      const child = new EventEmitter() as EventEmitter & {
+        once: EventEmitter["once"];
+      };
+      queueMicrotask(() => {
+        child.emit("exit", 0, null);
+      });
+      return child;
+    });
+
+    await updateCommand({ yes: true, restart: false });
+
+    expect(capturedRecords).toEqual(pluginInstallRecords);
+    expect(syncPluginsForUpdateChannel).not.toHaveBeenCalled();
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
   });
 
   it("respawns into the updated git root before requested channel persistence", async () => {
@@ -806,6 +883,48 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
     expect(runGatewayUpdate).not.toHaveBeenCalled();
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("post-core resume mode uses the parent install records snapshot for missing payload warnings", async () => {
+    const resultDir = createCaseDir("openclaw-post-core-records");
+    const recordsPath = path.join(resultDir, "plugin-install-records.json");
+    const installPath = path.join(resultDir, "demo-plugin");
+    await fs.mkdir(installPath, { recursive: true });
+    await fs.writeFile(
+      recordsPath,
+      `${JSON.stringify({
+        demo: {
+          source: "npm",
+          spec: "@openclaw/demo@1.0.0",
+          installPath,
+        },
+      })}\n`,
+      "utf-8",
+    );
+    pathExists.mockImplementation(async (candidate: string) => candidate === installPath);
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+        OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH: recordsPath,
+      },
+      async () => {
+        await updateCommand({ json: true, restart: false });
+      },
+    );
+
+    const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as
+      | UpdateRunResult
+      | undefined;
+    expect(jsonOutput?.postUpdate?.plugins?.status).toBe("warning");
+    expect(jsonOutput?.postUpdate?.plugins?.warnings?.[0]?.reason).toContain(
+      "package.json is missing",
+    );
+    const updateCall = updateNpmInstalledPlugins.mock.calls.at(-1)?.[0] as
+      | { skipIds?: Set<string> }
+      | undefined;
+    expect(updateCall?.skipIds?.has("demo")).toBe(true);
   });
 
   it("post-core resume mode persists the requested update channel with the updated process", async () => {
@@ -979,7 +1098,7 @@ describe("update-cli", () => {
     expect(logs.join("\n")).toContain("Plugin update aborted");
   });
 
-  it("fails json update output when post-core plugin updates fail", async () => {
+  it("keeps json update output successful when post-core plugin updates warn", async () => {
     updateNpmInstalledPlugins.mockImplementationOnce(
       async (params: {
         config: OpenClawConfig;
@@ -1025,9 +1144,9 @@ describe("update-cli", () => {
     const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as
       | UpdateRunResult
       | undefined;
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-    expect(jsonOutput?.status).toBe("error");
-    expect(jsonOutput?.reason).toBe("post-update-plugins");
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    expect(jsonOutput?.status).toBe("ok");
+    expect(jsonOutput?.reason).toBeUndefined();
     expect(jsonOutput?.postUpdate?.plugins?.integrityDrifts).toEqual([
       {
         pluginId: "demo",
@@ -1039,11 +1158,88 @@ describe("update-cli", () => {
         action: "aborted",
       },
     ]);
-    expect(jsonOutput?.postUpdate?.plugins?.status).toBe("error");
+    expect(jsonOutput?.postUpdate?.plugins?.status).toBe("warning");
+    expect(jsonOutput?.postUpdate?.plugins?.warnings?.[0]).toMatchObject({
+      pluginId: "demo",
+      guidance: [
+        "Run openclaw doctor --fix to attempt automatic repair.",
+        "Run openclaw plugins inspect demo --runtime --json for details.",
+      ],
+    });
+    expect(jsonOutput?.postUpdate?.plugins?.warnings?.[0]?.reason).toContain(
+      "npm package integrity drift",
+    );
     expect(jsonOutput?.postUpdate?.plugins?.npm.outcomes[0]?.status).toBe("error");
+    expect(jsonOutput?.postUpdate?.plugins?.npm.outcomes[0]?.message).toContain(
+      "Run openclaw doctor --fix to attempt automatic repair.",
+    );
+    expect(jsonOutput?.postUpdate?.plugins?.npm.outcomes[0]?.message).toContain(
+      "Run openclaw plugins inspect demo --runtime --json for details.",
+    );
   });
 
-  it("fails before restart when post-core plugin updates fail", async () => {
+  it("detects missing plugin payloads from persisted records before npm updates", async () => {
+    const installPath = createCaseDir("openclaw-missing-plugin-payload");
+    fsSync.mkdirSync(installPath, { recursive: true });
+    const config = {
+      plugins: {
+        entries: {
+          demo: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      parsed: config,
+      resolved: config,
+      sourceConfig: config,
+      config,
+      runtimeConfig: config,
+    });
+    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
+      demo: {
+        source: "npm",
+        spec: "@openclaw/demo@1.0.0",
+        installPath,
+      },
+    });
+    syncPluginsForUpdateChannel.mockResolvedValueOnce({
+      changed: false,
+      config,
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    });
+    pathExists.mockImplementation(async (candidate: string) => candidate === installPath);
+    vi.mocked(defaultRuntime.writeJson).mockClear();
+
+    await updateCommand({ json: true, restart: false });
+
+    const updateCall = updateNpmInstalledPlugins.mock.calls.at(-1)?.[0] as
+      | { skipIds?: Set<string> }
+      | undefined;
+    expect(updateCall?.skipIds?.has("demo")).toBe(true);
+    const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as
+      | UpdateRunResult
+      | undefined;
+    expect(jsonOutput?.status).toBe("ok");
+    expect(jsonOutput?.postUpdate?.plugins?.status).toBe("warning");
+    expect(jsonOutput?.postUpdate?.plugins?.warnings?.[0]).toMatchObject({
+      pluginId: "demo",
+    });
+    expect(jsonOutput?.postUpdate?.plugins?.warnings?.[0]?.reason).toContain(
+      "package.json is missing",
+    );
+    expect(jsonOutput?.postUpdate?.plugins?.npm.outcomes[0]).toMatchObject({
+      pluginId: "demo",
+      status: "error",
+    });
+  });
+
+  it("prints non-fatal plugin warnings in human update output", async () => {
     updateNpmInstalledPlugins.mockResolvedValueOnce({
       changed: false,
       config: baseConfig,
@@ -1055,11 +1251,10 @@ describe("update-cli", () => {
         },
       ],
     });
-    serviceLoaded.mockResolvedValue(true);
 
-    await updateCommand({ yes: true });
+    await updateCommand({ yes: true, restart: false });
 
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
     expect(runDaemonInstall).not.toHaveBeenCalled();
     expect(runDaemonRestart).not.toHaveBeenCalled();
     expect(runRestartScript).not.toHaveBeenCalled();
@@ -1068,10 +1263,67 @@ describe("update-cli", () => {
         .mocked(defaultRuntime.error)
         .mock.calls.map((call) => String(call[0]))
         .join("\n"),
-    ).toContain("Update failed during plugin post-update sync.");
+    ).not.toContain("Update failed during plugin post-update sync.");
+    const logs = vi
+      .mocked(defaultRuntime.log)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
+    expect(logs).toContain("Failed to update demo: registry timeout");
+    expect(logs).toContain("Run openclaw doctor --fix to attempt automatic repair.");
+    expect(logs).toContain("Run openclaw plugins inspect demo --runtime --json for details.");
   });
 
-  it("preserves fresh-process plugin failure details in parent json output", async () => {
+  it("marks disabled-after-failure plugin skips as post-update warnings", async () => {
+    updateNpmInstalledPlugins.mockResolvedValueOnce({
+      changed: true,
+      config: baseConfig,
+      outcomes: [
+        {
+          pluginId: "demo",
+          status: "skipped",
+          message:
+            'Disabled "demo" after plugin update failure; OpenClaw will continue without it. Failed to update demo: registry timeout',
+        },
+      ],
+    });
+    vi.mocked(defaultRuntime.writeJson).mockClear();
+
+    await updateCommand({ json: true, restart: false });
+
+    const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as
+      | UpdateRunResult
+      | undefined;
+    expect(jsonOutput?.postUpdate?.plugins?.status).toBe("warning");
+    expect(jsonOutput?.postUpdate?.plugins?.warnings?.[0]).toMatchObject({
+      pluginId: "demo",
+      guidance: [
+        "Run openclaw doctor --fix to attempt automatic repair.",
+        "Run openclaw plugins inspect demo --runtime --json for details.",
+      ],
+    });
+    expect(jsonOutput?.postUpdate?.plugins?.npm.outcomes[0]).toMatchObject({
+      pluginId: "demo",
+      status: "skipped",
+    });
+  });
+
+  it("fails unexpected post-core plugin sync exceptions", async () => {
+    syncPluginsForUpdateChannel.mockRejectedValueOnce(new Error("plugin sync invariant broke"));
+
+    await expect(updateCommand({ json: true, restart: false })).rejects.toThrow(
+      "plugin sync invariant broke",
+    );
+  });
+
+  it("fails unexpected post-core npm update exceptions", async () => {
+    updateNpmInstalledPlugins.mockRejectedValueOnce(new Error("npm update invariant broke"));
+
+    await expect(updateCommand({ json: true, restart: false })).rejects.toThrow(
+      "npm update invariant broke",
+    );
+  });
+
+  it("preserves fresh-process plugin warning details in parent json output", async () => {
     setupUpdatedRootRefresh();
     spawn.mockImplementationOnce((_node, _argv, options) => {
       const child = new EventEmitter() as EventEmitter & {
@@ -1084,8 +1336,20 @@ describe("update-cli", () => {
           await fs.writeFile(
             resultPath,
             JSON.stringify({
-              status: "error",
+              status: "warning",
               changed: false,
+              warnings: [
+                {
+                  pluginId: "demo",
+                  reason: "Failed to update demo: registry timeout",
+                  message:
+                    'Plugin "demo" could not be processed after the core update: Failed to update demo: registry timeout Run openclaw doctor --fix to attempt automatic repair. Run openclaw plugins inspect demo --runtime --json for details.',
+                  guidance: [
+                    "Run openclaw doctor --fix to attempt automatic repair.",
+                    "Run openclaw plugins inspect demo --runtime --json for details.",
+                  ],
+                },
+              ],
               sync: {
                 changed: false,
                 switchedToBundled: [],
@@ -1108,7 +1372,7 @@ describe("update-cli", () => {
             "utf-8",
           );
         }
-        child.emit("exit", 1, null);
+        child.emit("exit", 0, null);
       });
       return child;
     });
@@ -1119,9 +1383,12 @@ describe("update-cli", () => {
     const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as
       | UpdateRunResult
       | undefined;
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-    expect(jsonOutput?.status).toBe("error");
-    expect(jsonOutput?.reason).toBe("post-update-plugins");
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    expect(jsonOutput?.status).toBe("ok");
+    expect(jsonOutput?.reason).toBeUndefined();
+    expect(jsonOutput?.postUpdate?.plugins?.warnings?.[0]?.guidance).toContain(
+      "Run openclaw doctor --fix to attempt automatic repair.",
+    );
     expect(jsonOutput?.postUpdate?.plugins?.npm.outcomes[0]?.message).toContain("registry timeout");
   });
 
@@ -1630,7 +1897,7 @@ describe("update-cli", () => {
   });
 
   it("stops package post-update work when staged npm install verification fails", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-staged-fail-"));
+    const tempDir = await createTrackedTempDir("openclaw-update-staged-fail-");
     const prefix = path.join(tempDir, "prefix");
     const nodeModules = path.join(prefix, "lib", "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
@@ -1712,7 +1979,7 @@ describe("update-cli", () => {
   });
 
   it("marks package post-update doctor as update-in-progress", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-package-"));
+    const tempDir = await createTrackedTempDir("openclaw-update-package-");
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
     const entryPath = path.join(pkgRoot, "dist", "index.js");
@@ -1767,7 +2034,7 @@ describe("update-cli", () => {
   });
 
   it("stops a running managed gateway before package replacement", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-stop-service-"));
+    const tempDir = await createTrackedTempDir("openclaw-update-stop-service-");
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
     const entryPath = path.join(pkgRoot, "dist", "index.js");
@@ -1854,7 +2121,7 @@ describe("update-cli", () => {
   });
 
   it("refreshes package installs even when the current version already matches the target", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-current-"));
+    const tempDir = await createTrackedTempDir("openclaw-update-current-");
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
     const entryPath = path.join(pkgRoot, "dist", "index.js");
@@ -1937,7 +2204,7 @@ describe("update-cli", () => {
   });
 
   it("retries package updates without optional deps when npm global update fails", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-optional-"));
+    const tempDir = await createTrackedTempDir("openclaw-update-optional-");
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
     mockPackageInstallStatus(pkgRoot);
@@ -2214,6 +2481,193 @@ describe("update-cli", () => {
     );
   });
 
+  it("repairs legacy config before persisting a requested update channel", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    const legacyConfig = {
+      channels: {
+        slack: {
+          streaming: "partial",
+          nativeStreaming: false,
+        },
+        telegram: {
+          streaming: "block",
+        },
+      },
+    } as OpenClawConfig;
+    const migratedConfig = {
+      channels: {
+        slack: {
+          streaming: {
+            mode: "partial",
+            nativeTransport: false,
+          },
+        },
+        telegram: {
+          streaming: {
+            mode: "block",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot)
+      .mockResolvedValueOnce({
+        ...baseSnapshot,
+        parsed: legacyConfig,
+        resolved: legacyConfig,
+        sourceConfig: legacyConfig,
+        config: legacyConfig,
+        runtimeConfig: legacyConfig,
+        valid: false,
+        hash: "legacy-hash",
+        issues: [
+          {
+            path: "channels.slack.streaming",
+            message: "Invalid input: expected object, received string",
+          },
+        ],
+        legacyIssues: [
+          {
+            path: "channels.slack",
+            message: "legacy slack streaming keys",
+          },
+          {
+            path: "channels.telegram",
+            message: "legacy telegram streaming keys",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        ...baseSnapshot,
+        parsed: migratedConfig,
+        resolved: migratedConfig,
+        sourceConfig: migratedConfig,
+        config: migratedConfig,
+        runtimeConfig: migratedConfig,
+        valid: true,
+        hash: "migrated-hash",
+      });
+
+    await updateCommand({ channel: "beta", yes: true });
+
+    expect(replaceConfigFile).toHaveBeenCalledTimes(2);
+    expect(replaceConfigFile).toHaveBeenNthCalledWith(1, {
+      nextConfig: expect.objectContaining({
+        channels: expect.objectContaining({
+          slack: expect.objectContaining({
+            streaming: expect.objectContaining({
+              mode: "partial",
+              nativeTransport: false,
+            }),
+          }),
+          telegram: expect.objectContaining({
+            streaming: expect.objectContaining({
+              mode: "block",
+            }),
+          }),
+        }),
+      }),
+      baseHash: "legacy-hash",
+      writeOptions: {
+        allowConfigSizeDrop: true,
+        skipOutputLogs: false,
+      },
+    });
+    expect(replaceConfigFile).toHaveBeenNthCalledWith(2, {
+      nextConfig: {
+        ...migratedConfig,
+        update: {
+          channel: "beta",
+        },
+      },
+      baseHash: "migrated-hash",
+    });
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+  });
+
+  it("does not auto-repair legacy config when authored includes are present", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    const legacyConfigWithInclude = {
+      $include: "./channels.json5",
+      channels: {
+        slack: {
+          streaming: "partial",
+          nativeStreaming: false,
+        },
+      },
+    } as unknown as OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot).mockResolvedValueOnce({
+      ...baseSnapshot,
+      parsed: legacyConfigWithInclude,
+      resolved: legacyConfigWithInclude,
+      sourceConfig: legacyConfigWithInclude,
+      config: legacyConfigWithInclude,
+      runtimeConfig: legacyConfigWithInclude,
+      valid: false,
+      hash: "legacy-include-hash",
+      issues: [
+        {
+          path: "channels.slack.streaming",
+          message: "Invalid input: expected object, received string",
+        },
+      ],
+      legacyIssues: [
+        {
+          path: "channels.slack",
+          message: "legacy slack streaming keys",
+        },
+      ],
+    });
+
+    await updateCommand({ channel: "beta", yes: true });
+
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("does not repair legacy config during a dry run", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    const legacyConfig = {
+      channels: {
+        slack: {
+          streaming: "partial",
+          nativeStreaming: false,
+        },
+      },
+    } as OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot).mockResolvedValueOnce({
+      ...baseSnapshot,
+      parsed: legacyConfig,
+      resolved: legacyConfig,
+      sourceConfig: legacyConfig,
+      config: legacyConfig,
+      runtimeConfig: legacyConfig,
+      valid: false,
+      hash: "legacy-hash",
+      issues: [
+        {
+          path: "channels.slack.streaming",
+          message: "Invalid input: expected object, received string",
+        },
+      ],
+      legacyIssues: [
+        {
+          path: "channels.slack",
+          message: "legacy slack streaming keys",
+        },
+      ],
+    });
+
+    await updateCommand({ dryRun: true, channel: "beta", yes: true });
+
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("does not persist the requested channel when the package update fails", async () => {
     const tempDir = createCaseDir("openclaw-update");
     mockPackageInstallStatus(tempDir);
@@ -2325,13 +2779,14 @@ describe("update-cli", () => {
       | OpenClawConfig
       | undefined;
     const updateCall = vi.mocked(updateNpmInstalledPlugins).mock.calls[0]?.[0] as
-      | { skipDisabledPlugins?: boolean }
+      | { skipDisabledPlugins?: boolean; syncOfficialPluginInstalls?: boolean }
       | undefined;
     expect(syncConfig?.plugins?.installs).toEqual(pluginInstallRecords);
     expect(syncConfig?.update?.channel).toBe("beta");
     expect(syncConfig?.gateway?.auth).toBeUndefined();
     expect(syncConfig?.plugins?.entries).toBeUndefined();
     expect(updateCall?.skipDisabledPlugins).toBe(true);
+    expect(updateCall?.syncOfficialPluginInstalls).toBe(true);
   });
 
   it("persists channel and runs post-update work after switching from package to git", async () => {

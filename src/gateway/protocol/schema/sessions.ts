@@ -71,6 +71,7 @@ export const SessionsCleanupParamsSchema = Type.Object(
     enforce: Type.Optional(Type.Boolean()),
     activeKey: Type.Optional(NonEmptyString),
     fixMissing: Type.Optional(Type.Boolean()),
+    fixDmScope: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -113,6 +114,7 @@ export const SessionsCreateParamsSchema = Type.Object(
     label: Type.Optional(SessionLabelString),
     model: Type.Optional(NonEmptyString),
     parentSessionKey: Type.Optional(NonEmptyString),
+    emitCommandHooks: Type.Optional(Type.Boolean()),
     task: Type.Optional(Type.String()),
     message: Type.Optional(Type.String()),
   },

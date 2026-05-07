@@ -47,7 +47,7 @@ The prompt is intentionally compact and uses fixed sections:
 - **Documentation**: local path to OpenClaw docs (repo or npm package) and when to read them.
 - **Workspace Files (injected)**: indicates bootstrap files are included below.
 - **Sandbox** (when enabled): indicates sandboxed runtime, sandbox paths, and whether elevated exec is available.
-- **Current Date & Time**: user-local time, timezone, and time format.
+- **Current Date & Time**: time zone only (cache-stable; the live clock comes from `session_status`).
 - **Reply Tags**: optional reply tag syntax for supported providers.
 - **Heartbeats**: heartbeat prompt and ack behavior, when heartbeats are enabled for the default agent.
 - **Runtime**: host, OS, node, model, repo root (when detected), thinking level (one line).
@@ -137,9 +137,10 @@ collaboration-mode instructions inside the Codex runtime after OpenClaw sends
 thread and turn params.
 
 Regenerate them with `pnpm prompt:snapshots:gen` and verify drift with
-`pnpm prompt:snapshots:check`. CI runs the drift check in the additional
-boundary shard so prompt changes and snapshot updates stay attached to the same
-PR.
+`pnpm prompt:snapshots:check`. CI runs the drift check as a dedicated
+additional check for manual CI and prompt-affecting changes so prompt changes
+and snapshot updates stay attached to the same PR without slowing unrelated
+boundary shards.
 
 ## Workspace bootstrap injection
 

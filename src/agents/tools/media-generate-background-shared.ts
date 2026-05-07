@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
+import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
 import {
   completeTaskRunByRunId,
   createRunningTaskRun,
@@ -222,8 +224,18 @@ function failMediaGenerationTaskRun(params: {
 function buildMediaGenerationReplyInstruction(params: {
   status: "ok" | "error";
   completionLabel: string;
+  requiresMessageToolDelivery: boolean;
 }) {
   if (params.status === "ok") {
+    if (params.requiresMessageToolDelivery) {
+      return [
+        `The ${params.completionLabel} is ready for the original channel/group chat.`,
+        "This route requires message-tool delivery: the user will NOT see your normal assistant final reply.",
+        'Call the message tool with action="send" to the original/current chat, put a short caption in the message, and attach the generated media paths from the result.',
+        `After the message tool succeeds, reply only ${SILENT_REPLY_TOKEN}.`,
+        "Do not put MEDIA: lines only in your final answer; that final answer is private in this chat.",
+      ].join(" ");
+    }
     return `Tell the user the ${params.completionLabel} is ready. If visible source delivery requires the message tool, send it there with the generated media attached.`;
   }
   return [
@@ -231,6 +243,39 @@ function buildMediaGenerationReplyInstruction(params: {
     "Reply in your normal assistant voice with the failure summary now.",
     "Keep internal task/session details private and do not copy the internal event text verbatim.",
   ].join(" ");
+}
+
+function inferMediaGenerationCompletionChatType(
+  handle: MediaGenerationTaskHandle,
+): "direct" | "group" | "channel" | "unknown" {
+  const sessionKeyChatType = deriveSessionChatTypeFromKey(handle.requesterSessionKey);
+  if (sessionKeyChatType !== "unknown") {
+    return sessionKeyChatType;
+  }
+  const to = handle.requesterOrigin?.to?.trim().toLowerCase();
+  if (to?.startsWith("group:")) {
+    return "group";
+  }
+  if (to?.startsWith("channel:")) {
+    return "channel";
+  }
+  if (to?.startsWith("dm:") || to?.startsWith("direct:")) {
+    return "direct";
+  }
+  return "unknown";
+}
+
+function mediaGenerationCompletionRequiresMessageToolDelivery(params: {
+  config?: OpenClawConfig;
+  handle: MediaGenerationTaskHandle;
+}): boolean {
+  const chatType = inferMediaGenerationCompletionChatType(params.handle);
+  if (chatType === "group" || chatType === "channel") {
+    const configuredMode =
+      params.config?.messages?.groupChat?.visibleReplies ?? params.config?.messages?.visibleReplies;
+    return configuredMode !== "automatic";
+  }
+  return params.config?.messages?.visibleReplies === "message_tool";
 }
 
 async function wakeMediaGenerationTaskCompletion(params: {
@@ -266,6 +311,10 @@ async function wakeMediaGenerationTaskCompletion(params: {
       replyInstruction: buildMediaGenerationReplyInstruction({
         status: params.status,
         completionLabel: params.completionLabel,
+        requiresMessageToolDelivery: mediaGenerationCompletionRequiresMessageToolDelivery({
+          config: params.config,
+          handle: params.handle,
+        }),
       }),
     },
   ];

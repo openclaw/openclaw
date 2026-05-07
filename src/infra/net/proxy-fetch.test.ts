@@ -14,13 +14,13 @@ const ORIGINAL_PROXY_ENV = Object.fromEntries(
 ) as Record<(typeof PROXY_ENV_KEYS)[number], string | undefined>;
 
 const {
-  ProxyAgent,
   EnvHttpProxyAgent,
   MockUndiciFormData,
   undiciFetch,
   proxyAgentSpy,
   envAgentSpy,
   getLastAgent,
+  loadUndiciRuntimeDeps,
 } = vi.hoisted(() => {
   const undiciFetch = vi.fn();
   const proxyAgentSpy = vi.fn();
@@ -53,6 +53,12 @@ const {
       envAgentSpy(options);
     }
   }
+  const loadUndiciRuntimeDeps = vi.fn(() => ({
+    ProxyAgent,
+    EnvHttpProxyAgent,
+    FormData: MockUndiciFormData,
+    fetch: undiciFetch,
+  }));
 
   return {
     ProxyAgent,
@@ -62,16 +68,14 @@ const {
     proxyAgentSpy,
     envAgentSpy,
     getLastAgent: () => ProxyAgent.lastCreated,
+    loadUndiciRuntimeDeps,
   };
 });
 
-const mockedModuleIds = ["undici"] as const;
+const mockedModuleIds = ["./undici-runtime.js"] as const;
 
-vi.mock("undici", () => ({
-  ProxyAgent,
-  EnvHttpProxyAgent,
-  FormData: MockUndiciFormData,
-  fetch: undiciFetch,
+vi.mock("./undici-runtime.js", () => ({
+  loadUndiciRuntimeDeps,
 }));
 
 let getProxyUrlFromFetch: typeof import("./proxy-fetch.js").getProxyUrlFromFetch;
@@ -176,6 +180,31 @@ describe("makeProxyFetch", () => {
     expect(undiciFetch.mock.calls[0]?.[1]?.body).toBe(body);
   });
 
+  it("drops symbol metadata from plain header dictionaries before undici fetch", async () => {
+    undiciFetch.mockResolvedValue({ ok: true });
+
+    const proxyFetch = makeProxyFetch("http://proxy.test:8080");
+    const headers = { "Content-Type": "application/json" } as Record<string, string> & {
+      [key: symbol]: unknown;
+    };
+    Object.defineProperty(headers, Symbol("sensitiveHeaders"), {
+      value: new Set(["content-type"]),
+      enumerable: false,
+    });
+
+    await proxyFetch("https://api.example.com/json", {
+      method: "POST",
+      headers,
+      body: "{}",
+    });
+
+    const passedHeaders = undiciFetch.mock.calls[0]?.[1]?.headers;
+    expect(passedHeaders).not.toBe(headers);
+    expect(Object.getOwnPropertySymbols(passedHeaders as object)).toEqual([]);
+    expect(new Headers(passedHeaders).get("content-type")).toBe("application/json");
+    expect(Object.getOwnPropertySymbols(headers)).toHaveLength(1);
+  });
+
   it("keeps undici FormData instances unchanged", async () => {
     undiciFetch.mockResolvedValue({ ok: true });
 
@@ -248,6 +277,7 @@ describe("resolveProxyFetchFromEnv", () => {
 
   it("returns undefined when no proxy env vars are set", () => {
     expect(resolveProxyFetchFromEnv({})).toBeUndefined();
+    expect(loadUndiciRuntimeDeps).not.toHaveBeenCalled();
   });
 
   it("returns proxy fetch using EnvHttpProxyAgent when HTTPS_PROXY is set", async () => {
