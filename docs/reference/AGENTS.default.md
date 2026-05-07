@@ -127,3 +127,79 @@ git commit -m "Add Clawd workspace"
 
 - [Agent workspace](/concepts/agent-workspace)
 - [Agent runtime](/concepts/agent)
+
+<!--
+================================================================================
+Configuration notes / 配置说明
+
+These annotations help Chinese-speaking users understand key configuration items.
+These annotations do not affect agent behavior.
+
+以下是对主要配置项的中文说明，帮助中文用户理解各项配置的作用。
+这些注释不影响 AI 助手的实际行为。
+================================================================================
+
+workspace (~/.openclaw/workspace):
+  Agent 的工作目录，所有文件操作默认在此目录下进行。
+  可通过 agents.defaults.workspace 配置修改。
+
+agents.defaults.workspace:
+  配置项，用于指定 Agent 的工作区路径，支持 ~ 符号（代表用户主目录）。
+  Example: { "agents": { "defaults": { "workspace": "~/.openclaw/workspace" } } }
+
+Safety defaults (安全默认设置):
+  - 禁止在聊天中泄露目录结构和密钥
+  - 未明确要求时禁止执行破坏性命令
+  - 不向外部消息平台发送部分/流式回复（仅发送完整回复）
+
+Session start (会话启动):
+  Agent 每次启动时必须读取 SOUL.md 和 USER.md 以及当天的记忆文件。
+  若有 MEMORY.md（长期记忆）也必须读取。
+
+Soul (人格定义):
+  SOUL.md 定义了 AI 的身份、语气和行为边界。
+  如果修改了 SOUL.md，必须告知用户。
+
+Memory system (记忆系统):
+  - memory/YYYY-MM-DD.md: 每日原始记录
+  - MEMORY.md: 精心整理的长期记忆
+  - 每次会话启动时读取当天 + 昨天的记录 + 长期记忆
+
+Tools and skills (工具与技能):
+  - 工具由技能（Skill）提供，需要使用时查看对应技能的 SKILL.md
+  - 环境相关的配置信息记录在 TOOLS.md 中
+
+Backup tip (备份建议):
+  建议将工作区设为 git 仓库（最好是私有仓库），方便备份 AGENTS.md 和记忆文件。
+
+Core skills (核心技能列表):
+  以下技能可在 OpenClaw 设置 → Skills 中启用。
+  - mcporter: 管理外部技能后端的工具服务器
+  - Peekaboo: macOS 截图工具，支持 AI 视觉分析
+  - camsnap: 从 RTSP/ONVIF 安防摄像头捕获画面或告警
+  - oracle: 支持会话回放和浏览器控制的 CLI 工具
+  - imsg: iMessage 和 SMS 消息读写
+  - wacli: WhatsApp 命令行工具
+  - discord: Discord 互动（表情反应、贴纸、投票等）
+  - gog: Google 套件 CLI（Gmail、日历、云端硬盘、联系人）
+  - spotify-player: 终端 Spotify 播放控制
+  - sag: ElevenLabs 语音合成（默认输出到扬声器）
+  - OpenAI Whisper: 本地语音转文字
+  - Gemini CLI: 终端中使用 Google Gemini 模型
+
+Usage notes (使用说明):
+  - 推荐使用 openclaw CLI 编写脚本
+  - 保持心跳（heartbeat）开启，以便 AI 能定时检查日程、提醒等
+  - Canvas UI 全屏运行时，注意四边不要放置关键控件
+  - 浏览器操作可通过 openclaw browser 命令完成
+-->
+<!--
+Note to maintainers:
+If this addition is found useful, there is a follow-up plan to integrate
+an optional wizard prompt that asks Chinese users whether they want these
+annotations applied during setup. See the related PR for details.
+
+致维护者：
+如果您认为此内容有价值，后续计划在安装向导中增加一个可选项，
+询问中国用户是否需要应用这些中文注释。详情请参阅关联 PR。
+-->
