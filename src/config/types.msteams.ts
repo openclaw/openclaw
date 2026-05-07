@@ -75,6 +75,11 @@ export type MSTeamsTeamConfig = {
   channels?: Record<string, MSTeamsChannelConfig>;
 };
 
+export type MSTeamsActionConfig = {
+  /** Enable/disable Graph-backed member-info message action. Default: true when Teams is configured. */
+  memberInfo?: boolean;
+};
+
 export type MSTeamsConfig = {
   /** If false, do not start the MS Teams provider. Default: true. */
   enabled?: boolean;
@@ -172,6 +177,8 @@ export type MSTeamsConfig = {
   healthMonitor?: ChannelHealthMonitorConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /** Optional message action gates. */
+  actions?: MSTeamsActionConfig;
   /** Show a welcome Adaptive Card when the bot is added to a 1:1 chat. Default: true. */
   welcomeCard?: boolean;
   /** Custom prompt starter labels shown on the welcome card. */

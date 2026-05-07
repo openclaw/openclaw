@@ -39,6 +39,24 @@ describe("msteamsPlugin", () => {
     );
   });
 
+  it("hides member-info when disabled by the Teams action gate", () => {
+    const actions = msteamsPlugin.actions?.describeMessageTool?.({
+      cfg: {
+        channels: {
+          msteams: {
+            appId: "app-id",
+            appPassword: "secret",
+            tenantId: "tenant-id",
+            actions: { memberInfo: false },
+          },
+        },
+      },
+    })?.actions;
+
+    expect(actions).not.toContain("member-info");
+    expect(actions).toEqual(expect.arrayContaining(["upload-file", "channel-list"]));
+  });
+
   it("reuses the shared Teams target-id matcher for explicit targets", () => {
     const looksLikeId = msteamsPlugin.messaging?.targetResolver?.looksLikeId;
 
@@ -64,6 +82,15 @@ describe("msteams config schema", () => {
     expect(res.success).toBe(true);
     if (res.success) {
       expect(res.data.historyLimit).toBe(4);
+    }
+  });
+
+  it("accepts actions.memberInfo", () => {
+    const res = MSTeamsConfigSchema.safeParse({ actions: { memberInfo: false } });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.actions?.memberInfo).toBe(false);
     }
   });
 
