@@ -4,7 +4,7 @@
 # DO NOT EDIT BY HAND. Re-run the compile script after editing source rules.
 #
 # Source rules dir: security/opengrep/rules/openclaw-policy
-# Generated at    : 2026-05-07T04:40:02.803Z
+# Generated at    : 2026-04-30T09:09:41.198Z
 # Rule count      : 148
 rules:
   - id: ghsa-25gx-x37c-7pph.openclaw-novnc-x11vnc-missing-auth
