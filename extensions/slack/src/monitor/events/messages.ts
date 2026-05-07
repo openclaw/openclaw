@@ -192,31 +192,46 @@ export function registerSlackMessageEvents(params: {
   // `channel_type` field ("channel" | "group" | "im" | "mpim") distinguishes
   // the source.  Bolt rejects `app.event("message.channels")` since v4.6
   // because it is a subscription label, not a valid event type.
+  // [openclaw-fork-patch-012] BUG-051 ack-first: detach heavy processing so
+  // Bolt's auto-ack fires immediately and Slack's 3s socket-mode ack
+  // deadline is never missed under event-loop pressure (concurrent LLM
+  // turns, Firestore writes, outbound HTTP, cron bursts). The handler
+  // returns synchronously; real processing happens on the microtask queue.
   ctx.app.event("message", async ({ event, body }: SlackEventMiddlewareArgs<"message">) => {
-    await handleIncomingMessageEvent({ event, body });
+    Promise.resolve()
+      .then(() => handleIncomingMessageEvent({ event, body }))
+      .catch((err) =>
+        ctx.runtime.error?.(danger(`slack handler failed (detached): ${formatErrorMessage(err)}`)),
+      );
   });
 
   ctx.app.event("app_mention", async ({ event, body }: SlackEventMiddlewareArgs<"app_mention">) => {
-    try {
-      if (ctx.shouldDropMismatchedSlackEvent(body)) {
-        return;
-      }
+    Promise.resolve()
+      .then(async () => {
+        try {
+          if (ctx.shouldDropMismatchedSlackEvent(body)) {
+            return;
+          }
 
-      const mention = event as SlackAppMentionEvent;
+          const mention = event as SlackAppMentionEvent;
 
-      // Skip app_mention for DMs - they're already handled by message.im event
-      // This prevents duplicate processing when both message and app_mention fire for DMs
-      const channelType = normalizeSlackChannelType(mention.channel_type, mention.channel);
-      if (channelType === "im" || channelType === "mpim") {
-        return;
-      }
+          // Skip app_mention for DMs - they're already handled by message.im event
+          // This prevents duplicate processing when both message and app_mention fire for DMs
+          const channelType = normalizeSlackChannelType(mention.channel_type, mention.channel);
+          if (channelType === "im" || channelType === "mpim") {
+            return;
+          }
 
-      await handleSlackMessage(mention as unknown as SlackMessageEvent, {
-        source: "app_mention",
-        wasMentioned: true,
-      });
-    } catch (err) {
-      ctx.runtime.error?.(danger(`slack mention handler failed: ${formatErrorMessage(err)}`));
-    }
+          await handleSlackMessage(mention as unknown as SlackMessageEvent, {
+            source: "app_mention",
+            wasMentioned: true,
+          });
+        } catch (err) {
+          ctx.runtime.error?.(danger(`slack mention handler failed (detached): ${formatErrorMessage(err)}`));
+        }
+      })
+      .catch((err) =>
+        ctx.runtime.error?.(danger(`slack mention handler crashed (detached): ${formatErrorMessage(err)}`)),
+      );
   });
 }
