@@ -964,7 +964,7 @@ describe("trusted-proxy auth", () => {
       expect(res.reason).toBe("trusted_proxy_loopback_source");
     });
 
-    it("accepts local-direct password fallback when trusted-proxy auth fails", async () => {
+    it("rejects local-direct password even when credentials match (no fallback in trusted-proxy mode)", async () => {
       const limiter = createLimiterSpy();
       const res = await authorizeLocalDirect({
         password: "local-password", // pragma: allowlist secret
@@ -972,51 +972,12 @@ describe("trusted-proxy auth", () => {
         rateLimiter: limiter,
       });
 
-      expect(res).toEqual({ ok: true, method: "password" });
-      expect(limiter.check).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
-      expect(limiter.reset).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
-      expect(limiter.recordFailure).not.toHaveBeenCalled();
+      expect(res.ok).toBe(false);
+      expect(res.reason).toBe("trusted_proxy_loopback_source");
+      expect(limiter.check).not.toHaveBeenCalled();
     });
 
-    it("rejects wrong local-direct password fallback and records the failure", async () => {
-      const limiter = createLimiterSpy();
-      const res = await authorizeLocalDirect({
-        password: "local-password", // pragma: allowlist secret
-        connectPassword: "wrong-password", // pragma: allowlist secret
-        rateLimiter: limiter,
-      });
-
-      expect(res).toEqual({ ok: false, reason: "password_mismatch" });
-      expect(limiter.check).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
-      expect(limiter.recordFailure).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
-      expect(limiter.reset).not.toHaveBeenCalled();
-    });
-
-    it("enforces rate-limit lockout before local-direct password fallback", async () => {
-      const limiter = createLimiterSpy();
-      limiter.check.mockReturnValueOnce({
-        allowed: false,
-        remaining: 0,
-        retryAfterMs: 2500,
-      });
-
-      const res = await authorizeLocalDirect({
-        password: "local-password", // pragma: allowlist secret
-        connectPassword: "local-password", // pragma: allowlist secret
-        rateLimiter: limiter,
-      });
-
-      expect(res).toEqual({
-        ok: false,
-        reason: "rate_limited",
-        rateLimited: true,
-        retryAfterMs: 2500,
-      });
-      expect(limiter.recordFailure).not.toHaveBeenCalled();
-      expect(limiter.reset).not.toHaveBeenCalled();
-    });
-
-    it("keeps local-direct trusted-proxy on proxy failure when no password is supplied", async () => {
+    it("rejects local-direct request when no password is supplied", async () => {
       const res = await authorizeLocalDirect({
         password: "local-password", // pragma: allowlist secret
       });
