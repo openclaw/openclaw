@@ -206,6 +206,72 @@ describe("acp translator stable lifecycle handlers", () => {
     sessionStore.clearAllSessionsForTest();
   });
 
+  it("does not include sessions without workspace metadata in cwd-filtered lists", async () => {
+    const allRows = [
+      createSessionRow({ key: "agent:main:unknown", title: "Unknown workspace" }),
+      createSessionRow({ key: "agent:main:a1", cwd: "/work/a", title: "A1" }),
+      createSessionRow({ key: "agent:main:b1", cwd: "/work/b", title: "B1" }),
+    ];
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return createGatewaySessions(allRows);
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const sessionStore = createInMemorySessionStore();
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+      sessionStore,
+    });
+
+    const result = await agent.listSessions(createListSessionsRequest({ cwd: "/work/a" }));
+
+    expect(result.sessions.map((session) => session.sessionId)).toEqual(["agent:main:a1"]);
+    expect(result.sessions.every((session) => session.cwd === "/work/a")).toBe(true);
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("rejects session/list cursors when the cwd filter changes", async () => {
+    const allRows = [
+      createSessionRow({ key: "agent:main:a1", cwd: "/work/a", title: "A1" }),
+      createSessionRow({ key: "agent:main:a2", cwd: "/work/a", title: "A2" }),
+      createSessionRow({ key: "agent:main:b1", cwd: "/work/b", title: "B1" }),
+    ];
+    const request = vi.fn(async (method: string, params?: { limit?: number }) => {
+      if (method === "sessions.list") {
+        const limit = params?.limit ?? allRows.length;
+        return {
+          ...createGatewaySessions(allRows.slice(0, limit)),
+          totalCount: allRows.length,
+          hasMore: limit < allRows.length,
+        };
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const sessionStore = createInMemorySessionStore();
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+      sessionStore,
+    });
+
+    const unfiltered = await agent.listSessions(createListSessionsRequest({ limit: 1 }));
+    expect(unfiltered.nextCursor).toEqual(expect.any(String));
+    await expect(
+      agent.listSessions(
+        createListSessionsRequest({ cwd: "/work/a", cursor: unfiltered.nextCursor }),
+      ),
+    ).rejects.toThrow(/cursor does not match the cwd filter/i);
+
+    const filtered = await agent.listSessions(
+      createListSessionsRequest({ cwd: "/work/a", limit: 1 }),
+    );
+    expect(filtered.nextCursor).toEqual(expect.any(String));
+    await expect(
+      agent.listSessions(createListSessionsRequest({ cursor: filtered.nextCursor })),
+    ).rejects.toThrow(/cursor does not match the cwd filter/i);
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
   it("rejects relative cwd filters for session/list", async () => {
     const sessionStore = createInMemorySessionStore();
     const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {

@@ -679,8 +679,9 @@ export class AcpGatewayAgent implements Agent {
       assertAbsoluteCwd(requestedCwd, "session/list");
     }
     const fallbackCwd = requestedCwd ?? process.cwd();
-    const cursor = decodeListSessionsCursor(params.cursor);
-    if (cursor.cwd && cursor.cwd !== requestedCwd) {
+    const rawCursor = normalizeOptionalString(params.cursor);
+    const cursor = decodeListSessionsCursor(rawCursor);
+    if (rawCursor && cursor.cwd !== requestedCwd) {
       throw new Error("ACP session list cursor does not match the cwd filter.");
     }
 
@@ -696,8 +697,13 @@ export class AcpGatewayAgent implements Agent {
         includeDerivedTitles: true,
       });
       rows = result.sessions
-        .map((session) => this.mapGatewaySessionToAcpSessionInfo(session, fallbackCwd))
-        .filter((session) => !requestedCwd || session.cwd === requestedCwd);
+        .filter((session) => {
+          if (!requestedCwd) {
+            return true;
+          }
+          return normalizeOptionalString(session.spawnedWorkspaceDir) === requestedCwd;
+        })
+        .map((session) => this.mapGatewaySessionToAcpSessionInfo(session, fallbackCwd));
       if (
         rows.length > end ||
         result.hasMore !== true ||
