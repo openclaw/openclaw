@@ -105,6 +105,9 @@ the maintainer-only release runbook.
     `OpenClaw Release Publish`, reusing the successful preflight artifact via
     `preflight_run_id`; stable macOS release readiness also requires the
     packaged `.zip`, `.dmg`, `.dSYM.zip`, and updated `appcast.xml` on `main`.
+    The private macOS publish workflow publishes the signed appcast to public
+    `main` automatically after release assets verify; if branch protection blocks
+    the direct push, it opens or updates an appcast PR.
 11. After publish, run the npm post-publish verifier, optional standalone
     published-npm Telegram E2E when you need post-publish channel proof,
     dist-tag promotion when needed, verify the generated GitHub release page,
@@ -272,7 +275,9 @@ Validation` or from the `main`/release workflow ref so workflow logic and
   not describe a stale CI layout
 - Stable macOS release readiness also includes the updater surfaces:
   - the GitHub release must end up with the packaged `.zip`, `.dmg`, and `.dSYM.zip`
-  - `appcast.xml` on `main` must point at the new stable zip after publish
+  - `appcast.xml` on `main` must point at the new stable zip after publish; the
+    private macOS publish workflow commits it automatically, or opens an appcast
+    PR when direct push is blocked
   - the packaged app must keep a non-debug bundle id, a non-empty Sparkle feed
     URL, and a `CFBundleVersion` at or above the canonical Sparkle build floor
     for that release version
