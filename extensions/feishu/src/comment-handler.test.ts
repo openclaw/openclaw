@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { handleFeishuCommentEvent } from "./comment-handler.js";
 import { setFeishuRuntime } from "./runtime.js";
@@ -172,6 +172,15 @@ function createTestRuntime(overrides?: {
 }
 
 describe("handleFeishuCommentEvent", () => {
+  afterAll(() => {
+    vi.doUnmock("./monitor.comment.js");
+    vi.doUnmock("./comment-dispatcher.js");
+    vi.doUnmock("./dynamic-agent.js");
+    vi.doUnmock("./client.js");
+    vi.doUnmock("./drive.js");
+    vi.resetModules();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     maybeCreateDynamicAgentMock.mockResolvedValue({ created: false });

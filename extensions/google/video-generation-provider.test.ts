@@ -1,6 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const { createGoogleGenAIMock, downloadMock, generateVideosMock, getVideosOperationMock } =
   vi.hoisted(() => {
@@ -39,6 +39,11 @@ describe("google video generation provider", () => {
     generateVideosMock.mockReset();
     getVideosOperationMock.mockReset();
     createGoogleGenAIMock.mockClear();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./google-genai-runtime.js");
+    vi.resetModules();
   });
 
   it("declares explicit mode capabilities", () => {
